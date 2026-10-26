@@ -86,6 +86,19 @@ def test_an_unpinned_runs_named_member_is_pinned_below_the_floor(w):
     assert pick.pin is None and "at 99% of its 5-hour window" in pick.refusal
 
 
+def test_a_named_burst_moves_to_the_next_account_before_the_floor(w):
+    """The first account below the floor, COUNTING the pieces just placed
+    there: an account at 92% that just took a piece reads 97% — the next
+    named piece goes to the next account, never a refusal while one is free."""
+    rec = member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    w.svc.set_percent("c-work", 92)
+    w.svc.set_percent("c-spare", 10)
+    first = T.named_account(w.p, rec, None, scope="s", coding=False)
+    second = T.named_account(w.p, rec, None, scope="s", coding=False)
+    assert (first.pin.profile_id, second.pin.profile_id) == ("c-work", "c-spare")
+    assert first.refusal == second.refusal == ""
+
+
 def test_a_queued_member_on_an_account_at_the_floor_is_held_in_words(w):
     rec = member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
     w.svc.set_percent("c-work", 97, resets_in=5400)
@@ -176,12 +189,27 @@ def test_placements_expire_once_the_numbers_can_have_caught_up(w, monkeypatch):
     assert T.route_role(w.p, "code", scope="s", piece="p3").pin.profile_id == "c-work"
 
 
-def test_concurrent_picks_are_counted_one_at_a_time(w):
+def test_concurrent_picks_are_counted_one_at_a_time(w, monkeypatch):
     member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
     w.svc.set_percent("c-work", 70)
     w.svc.set_percent("c-spare", 70)
     barrier = threading.Barrier(6)
     out: list = []
+    # Every pick is held at the moment it has CHOSEN and not yet counted, until
+    # all six have chosen (or a second passed): without the lock all six
+    # choose the same account; with it, the first waits alone and the rest
+    # follow one by one.
+    gate = threading.Barrier(6)
+    real_note = T._note_placed
+
+    def held_note(*a, **k):
+        try:
+            gate.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            pass
+        return real_note(*a, **k)
+
+    monkeypatch.setattr(T, "_note_placed", held_note)
 
     def go(i):
         barrier.wait()
@@ -644,6 +672,60 @@ async def test_the_mission_screen_says_why_a_member_took_its_piece(w, tmp_path):
     view = mission_view(w.p, sid)
     why = {m["agent"]: m["reason"] for m in view["members"]}
     assert why == {"custom:glm": "local: no record yet for reading", "custom:named": ""}
+
+
+def test_an_older_database_gets_the_record_table_and_its_new_columns(tmp_path):
+    """The late-model rule (v1.151.2): a database from v1.394 (no table) gets
+    the whole table at boot, and one from before this review (the table
+    without its model / account / reply columns) gets the columns — read back
+    as empty, never as a crash."""
+    import sqlite3
+
+    from iron_jarvis.core.db import init_db, make_engine
+
+    old = tmp_path / "old.db"
+    con = sqlite3.connect(old)
+    con.execute("CREATE TABLE teamrolerun (id VARCHAR PRIMARY KEY, member VARCHAR, role VARCHAR, "
+                "session_id VARCHAR, scope VARCHAR, piece VARCHAR, finished BOOLEAN, check_result VARCHAR, "
+                "review VARCHAR, created_at DATETIME)")
+    con.execute("INSERT INTO teamrolerun VALUES ('trr_1', 'glm', 'code', 's1', 'build:s', '', 1, '', '', "
+                "'2026-10-25 10:00:00')")
+    con.commit()
+    con.close()
+    for db in (tmp_path / "fresh.db", old):
+        engine = make_engine(str(db))
+        init_db(engine)
+        cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(teamrolerun)")}
+        assert {"provider", "model", "account", "turn"} <= cols, db
+    engine = make_engine(str(old))
+    rec = TR.role_record(engine, "glm", "code")
+    assert (rec.runs, rec.passed) == (1, 1)
+    assert TR.scope_accounts(engine, "build:s") == []
+    assert TR.credit_review(engine, scope="build:s", review_row=TR.note_run(
+        engine, member="r", role="review", session_id="r1", scope="build:s", finished=True),
+        verdict=TR.REVIEW_BAD) == 0
+
+
+@pytest.mark.parametrize("door", ["delegate", "spawn_agent"])
+async def test_a_coding_sessions_routed_piece_runs_on_the_account_the_router_chose(w, tmp_path, door):
+    """The router chose Claude Code's OTHER account (Work Max is at 83%, past
+    80%); Phase 5's own rule for a coding session would have taken the first
+    usable one — Work Max. The helper must run where the router said."""
+    from iron_jarvis.harness import helpers as H
+
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("code",))
+    w.svc.set_percent("c-work", 83)
+    w.svc.set_percent("c-spare", 10)
+    sid = "build:t-pin"
+    parent = H.HelperParent(session_id=sid, folder=str(tmp_path), provider="codex-cli", model="subscription",
+                            pin=AccountPin(profile_id="x-plus", ij_provider="codex-cli", title="Codex Plus"),
+                            tools=("read_file",))
+    args = {"role": "code", "task": "Write util.py."}
+    with H.helper_call(parent, "c1", door, args, lambda ev, data: None):
+        res = await w.p.registry.get(door).execute(args, _ctx(w.p, sid, tmp_path))
+    assert res.ok, res.error
+    calls = [c for c in w.log if c["provider"] == "claude-cli"]
+    assert calls and all(c["pin"] is not None and c["pin"].profile_id == "c-spare" for c in calls)
 
 
 async def test_a_routed_burst_through_the_door_spreads_over_the_accounts(w, tmp_path):
