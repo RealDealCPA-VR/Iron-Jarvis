@@ -373,6 +373,76 @@ async def test_the_start_itself_refuses_a_resume_once_the_user_sent_a_newer_mess
 
 
 # --------------------------------------------------------------------------- #
+# 3b. a command, a patch and a program cut off while they ran
+# --------------------------------------------------------------------------- #
+
+_GPT = ("codex-cli", "gpt-5.5")
+_CLAUDE = ("anthropic", "claude-sonnet-4-5")
+_PATCH = "*** Begin Patch\n*** Add File: p.txt\n+patched\n*** End Patch\n"
+
+
+@pytest.mark.parametrize("who,call,real", [
+    (_CLAUDE, ToolCall(id="k2", name="Bash", arguments={"command": "echo hi"}), ("shell",)),
+    (_GPT, ToolCall(id="k2", name="apply_patch", arguments={"input": _PATCH}), ("apply_patch",)),
+    (_GPT, ToolCall(id="k2", name="exec_command", arguments={"cmd": "echo hi"}), ("process_start", "shell")),
+], ids=["claude-Bash", "codex-apply_patch", "codex-exec_command"])
+async def test_a_command_a_patch_or_a_program_cut_off_mid_run_is_never_run_again_by_the_app(
+        home, unchecked, monkeypatch, who, call, real):
+    """Judged by the REAL tool behind the dialect's name: each "may have
+    landed, check first" — and the app itself runs nothing again."""
+    from iron_jarvis.tools.registry import INTERRUPTED_MAY_HAVE_LANDED
+
+    first = create_app(home)
+    sid = new_session(first, unchecked, provider=who[0], model=who[1], approval_mode="yolo")["id"]
+    running = asyncio.Event()
+    ran: list[str] = []
+    originals = {}
+    for name in real:
+        tool = first.state.platform.registry.get(name)
+        if tool is None:
+            continue
+        originals[name] = tool.execute
+
+        async def slow(args, ctx, _name=name):
+            ran.append(_name)
+            running.set()
+            await asyncio.Event().wait()  # cut off while it runs
+
+        monkeypatch.setattr(tool, "execute", slow)
+    wire(first, Script([[call], "x"], who=who))
+    drop = asyncio.Event()
+    follower = asyncio.create_task(open_turn(first, sid, {"text": "do it", "turn_id": "bt-k"},
+                                             drop=drop, timeout=60))
+    await asyncio.wait_for(running.wait(), 30)
+    kept = json.loads(next(r for r in _records(first) if r.run_id == "build-turn:bt-k").messages_json)
+    # The real tool rides beside the model's name when they differ.
+    assert kept[-1]["tool_calls"][0]["name"] == call.name
+    assert kept[-1]["tool_calls"][0].get("tool", call.name) in real
+    await first.state.platform.turn_logs.shutdown()
+    drop.set()
+    await asyncio.wait_for(follower, 30)
+    assert len(ran) == 1
+
+    second = _reboot(home)
+    for name in real:
+        tool = second.state.platform.registry.get(name)
+        if tool is not None:
+            async def never(args, ctx, _name=name):
+                ran.append(_name)
+                raise AssertionError("the app ran a cut-off call again")
+
+            monkeypatch.setattr(tool, "execute", never)
+    script = wire(second, Script(["Checked: it had landed."], who=who))
+    assert await build_routes.resume_after_restart(second.state.d) == [sid]
+    await until(lambda: script.calls, 30)
+    sent = script.calls[0]["messages"]
+    cut = next(m for m in sent if m.role == "tool" and m.tool_call_id == "k2")
+    assert cut.content == INTERRUPTED_MAY_HAVE_LANDED and cut.name == call.name
+    await until(lambda: not second.state.platform.turn_logs.running(), 30)
+    assert len(ran) == 1, ran
+
+
+# --------------------------------------------------------------------------- #
 # 5. a LONG reply (the kind this exists for) keeps its newest rounds
 # --------------------------------------------------------------------------- #
 
