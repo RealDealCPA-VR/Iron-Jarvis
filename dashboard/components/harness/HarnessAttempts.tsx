@@ -130,7 +130,8 @@ export function AttemptsCardView({
     if (out.ok) onKept();
   }
   const lead = cardLead(card);
-  const canDiscard = canKeep && hasLiveFolders(card);
+  // (Not while a Keep is on its way: a press then would be swallowed.)
+  const canDiscard = canKeep && hasLiveFolders(card) && (busy === null || busy === "discard");
   return (
     <section data-testid="attempts-card" className="mb-2 min-w-0" aria-label="Attempts on several models">
       <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">

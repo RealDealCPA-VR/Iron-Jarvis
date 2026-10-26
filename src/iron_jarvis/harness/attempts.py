@@ -1025,6 +1025,11 @@ KEEP_CHANGED_SINCE = (
     "This session's files changed since the attempts started, so keeping one now would lose those "
     "changes. Nothing was changed. Commit or undo the newer changes, or try the work again."
 )
+KEEP_SESSION_DIRTY = (
+    "This session has changes that are not committed yet, made after the attempts started, and "
+    "keeping one would merge over them. Nothing was changed. Commit them first (the Branch pane), "
+    "then press Keep again."
+)
 KEEP_LAND_FAILED = (
     "The kept attempt's files could not be put in this session's folder ({why}). Nothing was changed."
 )
@@ -2029,6 +2034,13 @@ def keep(platform: Any, thread_id: str, turn_id: str, attempt_id: str) -> dict[s
                 raise AttemptsRefused(KEEP_MOVED, 409)
             out["adopted"] = facts.get("branch", "")
         else:
+            # Review (v1.397.0): the attempts started from a CLEAN session,
+            # and the session has changes not committed since — a merge over
+            # them is refused; said in the session's words (branches.merge
+            # names "your checkout of <branch>", the session's own worktree).
+            session_wt = Path(str((session_facts or {}).get("worktree") or ""))
+            if session_wt.is_dir() and B._porcelain(session_wt, untracked=False):  # noqa: SLF001
+                raise AttemptsRefused(KEEP_SESSION_DIRTY, 409)
             try:
                 merged = B.merge(facts)
             except B.GitRefused as exc:

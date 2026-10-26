@@ -157,6 +157,29 @@ async def test_keep_refuses_in_words_when_the_session_changed_since_the_attempts
     assert "kept" not in line[A.LINE_KEY]
 
 
+async def test_keep_after_a_clean_start_refuses_in_the_sessions_words_when_it_changed_since(
+    app, fake, repo, monkeypatch,
+):
+    """Attempts that started from a CLEAN session merge on Keep; a session
+    that has changes not committed since is refused in ITS words (the merge
+    named "your checkout of <the session's branch>"), and nothing moves."""
+    await enable(app)
+    wire_models(app, monkeypatch, World({"codex-cli": passing_script(), "ollama": failing_script()}))
+    view = await new_session(app, repo)
+    sid = view["id"]
+    wt = Path(view["git"]["worktree"])
+    card = card_of(await attempts_turn(app, sid, "Try this with Codex and the local model: fix add in calc.py.", "cs-1"))
+    assert "carried" not in card
+    codex = item_for(card, "codex-cli")
+    attempt_head = git("rev-parse", "HEAD", cwd=Path(codex["git"]["worktree"]))
+    (wt / "calc.py").write_bytes(SESSION_CALC)
+    status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
+                              {"turn_id": "cs-1", "attempt": codex["id"]})
+    assert status == 409 and body["detail"] == A.KEEP_SESSION_DIRTY, body
+    assert git("rev-parse", "HEAD", cwd=Path(codex["git"]["worktree"])) == attempt_head
+    assert (wt / "calc.py").read_bytes() == SESSION_CALC
+
+
 async def test_a_session_in_its_folder_with_uncommitted_work_moves_onto_the_kept_branch(
     app, fake, repo, monkeypatch,
 ):
