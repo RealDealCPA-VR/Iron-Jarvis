@@ -22,6 +22,17 @@ rollout. A plan, a rollout and a record are keyed by RUN (:func:`run_key`):
 the task id for repeat 1 — exactly the key a one-run plan always used — and
 ``<task id>.r<k>`` for repeat k ≥ 2.
 
+A RUN WITH SEVERAL MODELS (v1.396.0, the long-jobs plan's Phase 7): a Jarvis
+turn may hand pieces to helpers — a model TEAM's members on their own models,
+or helpers on the turn's own model. Each call is entered with WHO made it
+(:attr:`CallEntry.who`: :data:`PLANNER` for the turn's own model and any
+helper on it, else the member's name — read off the call's model hold), and
+the run record carries one PART per who (``record["parts"]``), each from its
+own receipt (the turn's done receipt; each helper's session row). The identity
+then holds three ways: every part equals the ledger's calls by that who, the
+record's totals equal the sum of its parts, and the totals equal the ledger —
+tokens exactly, money within each receipt's own rounding.
+
 Cost is kept as two numbers that are never added together (v1.300.0):
 METERED money (an API bill) and the LIST-PRICE EQUIVALENT of work a
 subscription already covers. A local model costs 0. An unknown price or token
@@ -39,6 +50,9 @@ from typing import Any, Iterable, Mapping
 TOTAL_FIELDS: tuple[str, ...] = (
     "tokens_in", "tokens_out", "cost_metered_usd", "cost_list_price_usd",
 )
+#: v1.396.0: the part of a run its turn's OWN model did (the planner of a
+#: team, the only model of a single-model run) — and any helper on that model.
+PLANNER = "planner"
 
 
 class BudgetMismatch(RuntimeError):
@@ -72,6 +86,17 @@ class CallEntry:
     #: The call offered tools (a tool round) — False for a tool-less final answer.
     with_tools: bool = False
     source: str = ""
+    #: v1.396.0: WHO made the call — :data:`PLANNER` (the turn's own model,
+    #: and any helper on it), else the model-team member's name (its hold).
+    #: "" on an entry a CLI runner wrote (one opaque rollout).
+    who: str = ""
+    #: The account the call ran on: an Iron-Proxy account id, ``this-pc``
+    #: (this PC's own sign-in: no account was in play), or "" (not known).
+    account: str = ""
+    account_name: str = ""
+    #: The vendor's usage-window readings the call's answer carried
+    #: (``usage.readings_from``) — empty when it carried none.
+    readings: list = field(default_factory=list)
 
 
 def _add(a: Any, b: Any) -> Any:
@@ -146,6 +171,39 @@ def differences(
     ]
 
 
+def receipts_of(record: Mapping[str, Any]) -> int:
+    """How many rounded receipts a run record's totals add up (each may sit
+    half a millionth away from its calls): one per part receipt, else one."""
+    parts = record.get("parts")
+    if isinstance(parts, Mapping) and parts:
+        return max(1, sum(max(1, int(p.get("receipts") or 1)) for p in parts.values() if isinstance(p, Mapping)))
+    return 1
+
+
+def part_differences(parts: Mapping[str, Any], calls: Iterable[CallEntry],
+                     record: Mapping[str, Any] | None = None) -> list[str]:
+    """Every way a run's PARTS disagree with the ledger's calls (v1.396.0):
+    a part against the calls made by its who, a call by a who no part
+    carries, and (``record``) the record's totals against the sum of its
+    parts."""
+    calls = list(calls)
+    problems: list[str] = []
+    for name, part in parts.items():
+        if not isinstance(part, Mapping):
+            problems.append(f"the part {name!r} is not readable")
+            continue
+        mine = [asdict(c) for c in calls if (c.who or PLANNER) == name]
+        problems += [f"{name}: {d}" for d in differences(
+            part, sum_fields(mine), records=max(1, int(part.get("receipts") or 1)))]
+    strays = sorted({c.who or PLANNER for c in calls} - set(parts))
+    if strays:
+        problems.append("model calls by " + ", ".join(strays) + " that no part of the run carries")
+    if record is not None:
+        summed = sum_fields(p for p in parts.values() if isinstance(p, Mapping))
+        problems += [f"the run's totals: {d}" for d in differences(record, summed, records=len(parts))]
+    return problems
+
+
 class BudgetLedger:
     """One per benchmark invocation (one configuration)."""
 
@@ -161,7 +219,12 @@ class BudgetLedger:
         """Raise :class:`BudgetMismatch` unless the run record's totals equal
         the ledger's for its rollout. Closes the rollout either way."""
         rollout.closed = True
-        diff = differences(record, rollout.totals())
+        diff = differences(record, rollout.totals(), records=receipts_of(record))
+        parts = record.get("parts")
+        if isinstance(parts, Mapping) and parts:
+            # v1.396.0: a run of several models — each part against the calls
+            # its own who made, and the totals against the parts.
+            diff += part_differences(parts, rollout.calls, record)
         if diff:
             raise BudgetMismatch(
                 f"the budget does not add up for {rollout.task_id}: " + "; ".join(diff)
@@ -202,7 +265,8 @@ class BudgetLedger:
             asdict(c) for r in self.rollouts if r.task_id not in flagged for c in r.calls
         )
         counted = [r for r in executed if record_key(r) not in flagged]
-        problems += differences(sum_fields(counted), grand, records=len(counted))
+        problems += differences(sum_fields(counted), grand,
+                                records=sum(receipts_of(r) for r in counted))
         if problems:
             raise BudgetMismatch("the run plan does not add up: " + "; ".join(problems))
 

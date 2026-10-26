@@ -86,7 +86,8 @@ INFRA_WORDS: tuple[tuple[str, str], ...] = (
      "the model server could not be reached"),
 )
 
-_RUNNER_NAMES = {"claude": "Claude Code", "codex": "Codex", "jarvis": "Iron Jarvis"}
+_RUNNER_NAMES = {"claude": "Claude Code", "codex": "Codex", "jarvis": "Iron Jarvis",
+                 "jarvis-team": "Iron Jarvis with its team"}
 
 
 @dataclass(frozen=True)

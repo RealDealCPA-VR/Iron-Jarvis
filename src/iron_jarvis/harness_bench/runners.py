@@ -69,8 +69,9 @@ from typing import Any, AsyncIterator
 
 from ..core import procs
 from ..core.claude_markers import drop_claude_session_markers
+from . import usage as _usage
 from .catalog import Task
-from .ledger import CallEntry, Rollout
+from .ledger import PLANNER, CallEntry, Rollout
 
 #: The tool rounds one benchmark turn gets — the IJ harness plan's Phase 4
 #: decision (60, measured by this benchmark).
@@ -134,6 +135,18 @@ EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 NOT_OFFERED = "not offered"
 #: How much of a final reply a record keeps.
 REPLY_CHARS = 2000
+#: v1.396.0: the clock a usage-window reading is stamped with when its call's
+#: answer arrives (wall clock: readings of several runs are put in time order
+#: across a whole benchmark). Tests put a clock of their own here.
+READING_CLOCK = time.time
+#: The fields of a helper row (the reply line's ``helpers``, the turn's
+#: ``helper`` frames) a run record keeps — who did what, never its steps.
+HELPER_KEYS: tuple[str, ...] = (
+    "id", "agent", "task", "state", "role", "reason", "provider", "model", "usage", "session",
+    "result", "since", "ended",
+)
+#: How much of a helper's task and result a record keeps.
+HELPER_TEXT_CHARS = 300
 
 
 def render_prompt(task: Task, folder: Path) -> str:
@@ -174,6 +187,24 @@ class RunOutcome:
     #: The reasoning level the run reported it applied (Jarvis's route), or
     #: ``None`` when it reported none.
     effort_reported: str | None = None
+    #: v1.396.0 (Jarvis runners): the run's PARTS — ``{who: {provider, model,
+    #: vendor, receipts, pieces, model_calls, tokens_in, tokens_out,
+    #: tokens_cached, cost_metered_usd, cost_list_price_usd}}`` where ``who`` is
+    #: ``planner`` (the turn's own model, and any helper on it) or a model
+    #: team member's name. The totals above are their sum. None for a CLI
+    #: runner (one opaque rollout).
+    parts: dict[str, Any] | None = None
+    #: v1.396.0: per ACCOUNT the vendor's usage-window readings seen during
+    #: the run (``usage.account_summary``). None for a CLI runner.
+    accounts: dict[str, Any] | None = None
+    #: v1.396.0: WHO DID WHAT — every helper the turn started, as its row on
+    #: the reply line says (member, role, the team router's reason, state,
+    #: model). None for a CLI runner.
+    helpers: list[dict[str, Any]] | None = None
+    #: v1.396.0 (the team runner): the team router's record per member and
+    #: role after the run (``team_record.records_for``), and the thresholds it
+    #: judged with. None otherwise.
+    team_records: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -250,7 +281,8 @@ def parse_sse(chunk: str) -> list[tuple[str, dict[str, Any]]]:
 
 
 def _entry_from(provider: str, model: str, usage: Any, *, with_tools: bool, source: str,
-                manager: Any) -> CallEntry:
+                manager: Any, who: str = "", account: tuple[str, str] = ("", ""),
+                extra: Any = None) -> CallEntry:
     usage = usage if isinstance(usage, dict) else {}
     metered, listed = call_cost(provider, model, usage, manager=manager)
     cached = usage.get("cache_read_input_tokens")
@@ -261,7 +293,57 @@ def _entry_from(provider: str, model: str, usage: Any, *, with_tools: bool, sour
         tokens_cached=int(cached) if isinstance(cached, (int, float)) else None,
         cost_metered_usd=metered, cost_list_price_usd=listed,
         complete=True, with_tools=with_tools, source=source,
+        who=who, account=account[0], account_name=account[1],
+        readings=_usage.readings_from(extra, at=float(READING_CLOCK())),
     )
+
+
+def call_who() -> str:
+    """WHO is making the model call now (v1.396.0): a model-team member's
+    run is held to its own model under a hold that names it
+    (``harness/helpers.pinned`` / ``model_team.member_scope``:
+    ``member:<name>``); anything else — the turn's own model, a helper on it
+    — is :data:`ledger.PLANNER`. Read in the context of the coroutine that
+    makes the call. Never raises."""
+    try:
+        from ..providers.hold import current_hold
+
+        who = str(getattr(current_hold(), "who", "") or "")
+    except Exception:  # noqa: BLE001
+        who = ""
+    name = who.split(":", 1)[1].strip() if who.startswith("member:") else ""
+    return name or PLANNER
+
+
+def call_account(platform: Any, provider: str) -> tuple[str, str]:
+    """``(account, name)`` a subscription call on ``provider`` ran on
+    (v1.396.0), read in the call's own context: the Iron-Proxy account its
+    pin names; this PC's own sign-in when Iron-Proxy is off (or holds no
+    account of that vendor); ``("", "")`` when Iron-Proxy picked one per call
+    (not known — never guessed) and for a model with no account at all."""
+    vendor = _usage.vendor_of(provider)
+    if vendor not in ("claude", "codex"):
+        return "", ""
+    try:
+        from ..iron_proxy.pin import current
+
+        pin = current()
+    except Exception:  # noqa: BLE001
+        pin = None
+    if pin is not None and _usage.vendor_of(str(getattr(pin, "ij_provider", "") or "")) == vendor:
+        return str(getattr(pin, "profile_id", "") or ""), str(getattr(pin, "title", "") or "")
+    svc = getattr(platform, "iron_proxy", None)
+    if not getattr(svc, "enabled", False):
+        return _usage.THIS_PC, _usage.THIS_PC_WORDS
+    try:
+        from ..harness import build_accounts as BA
+
+        snap = BA.snapshot(svc)
+        if snap is not None and not BA.vendor_rows(snap, vendor, include_off=True):
+            return _usage.THIS_PC, _usage.THIS_PC_WORDS
+    except Exception:  # noqa: BLE001
+        pass
+    return "", ""
 
 
 @contextlib.contextmanager
@@ -309,22 +391,27 @@ def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
 
     async def _counted(frames: AsyncIterator[dict[str, Any]], kwargs: dict[str, Any]):
         _observe(kwargs)
+        # v1.396.0: who is calling, read in the context of the coroutine that
+        # iterates this stream (a member's run iterates its own calls).
+        who = call_who()
         entry: CallEntry | None = None
         try:
             async with contextlib.aclosing(frames) as inner:
                 async for frame in inner:
                     if isinstance(frame, dict) and frame.get("type") == "final":
                         resp = frame.get("response")
+                        provider = str(frame.get("provider") or "")
                         entry = _entry_from(
-                            str(frame.get("provider") or ""), str(frame.get("model") or ""),
+                            provider, str(frame.get("model") or ""),
                             getattr(resp, "usage", None),
                             with_tools=bool(kwargs.get("tools")), source="router.stream",
-                            manager=manager,
+                            manager=manager, who=who, account=call_account(platform, provider),
+                            extra=getattr(resp, "extra", None),
                         )
                     yield frame
         finally:
             rollout.add(entry or CallEntry(
-                complete=False, with_tools=bool(kwargs.get("tools")), source="router.stream",
+                complete=False, with_tools=bool(kwargs.get("tools")), source="router.stream", who=who,
             ))
 
     def stream(*args: Any, **kwargs: Any):
@@ -332,18 +419,22 @@ def counting_router(platform: Any, rollout: Rollout, observed: dict[str, Any]):
 
     async def complete(*args: Any, **kwargs: Any):
         _observe(kwargs)
+        who = call_who()
         entry: CallEntry | None = None
         try:
             result = await real_complete(*args, **kwargs)
+            provider = str(getattr(result, "provider", "") or "")
+            response = getattr(result, "response", None)
             entry = _entry_from(
-                str(getattr(result, "provider", "") or ""), str(getattr(result, "model", "") or ""),
-                getattr(getattr(result, "response", None), "usage", None),
+                provider, str(getattr(result, "model", "") or ""),
+                getattr(response, "usage", None),
                 with_tools=bool(kwargs.get("tools")), source="router.complete", manager=manager,
+                who=who, account=call_account(platform, provider), extra=getattr(response, "extra", None),
             )
             return result
         finally:
             rollout.add(entry or CallEntry(
-                complete=False, with_tools=bool(kwargs.get("tools")), source="router.complete",
+                complete=False, with_tools=bool(kwargs.get("tools")), source="router.complete", who=who,
             ))
 
     router.stream = stream
@@ -370,6 +461,103 @@ def _module_bytes(module: Any) -> bytes:
         return Path(module.__file__).read_bytes().replace(b"\r\n", b"\n")
     except (OSError, TypeError, AttributeError):
         return repr(getattr(module, "__name__", module)).encode("utf-8")
+
+
+def _add(a: Any, b: Any) -> Any:
+    return None if a is None or b is None else a + b
+
+
+def _add_receipt(part: dict[str, Any], tokens_in: Any, tokens_out: Any,
+                 metered: Any, listed: Any) -> None:
+    """Add one receipt to a part (an unknown number stays unknown)."""
+    part["receipts"] = int(part.get("receipts") or 0) + 1
+    part["tokens_in"] = _add(part.get("tokens_in"), tokens_in)
+    part["tokens_out"] = _add(part.get("tokens_out"), tokens_out)
+    part["cost_metered_usd"] = _add(part.get("cost_metered_usd"), metered)
+    part["cost_list_price_usd"] = _add(part.get("cost_list_price_usd"), listed)
+
+
+def _on_network(provider: str, model: str, manager: Any) -> bool:
+    try:
+        from ..providers.egress import stays_on_this_network
+
+        return bool(stays_on_this_network(provider, manager, None, model))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def helper_cost(provider: str, model: str, usage: dict[str, Any], *,
+                manager: Any = None) -> tuple[float | None, float | None]:
+    """(metered, list-price equivalent) of a helper's run, read off its
+    session row's usage (``harness/helpers.HelperCall.read_usage``: its cost
+    by ``eval.pricing.recorded_cost``, flagged when a subscription served
+    it); 0 for a model on the user's own network, unknown otherwise."""
+    if "cost_usd" in usage:
+        cost = float(usage.get("cost_usd") or 0.0)
+        return (0.0, cost) if usage.get("list_price_equivalent") else (cost, 0.0)
+    return (0.0, 0.0) if _on_network(provider, model, manager) else (None, None)
+
+
+def keep_helper(helpers: dict[str, dict[str, Any]], data: dict[str, Any]) -> None:
+    """Fold one ``helper`` frame into its row (later frames win, as the reply
+    line keeps them). Never raises."""
+    try:
+        hid = str(data.get("id") or "")
+        if not hid:
+            return
+        row = helpers.setdefault(hid, {})
+        for key in HELPER_KEYS:
+            if key in data and data[key] is not None:
+                row[key] = data[key]
+    except Exception:  # noqa: BLE001 — a row never breaks a run
+        pass
+
+
+def helper_rows(helpers: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Who did what: one plain row per helper, in the order they started."""
+    out: list[dict[str, Any]] = []
+    for row in sorted(helpers.values(), key=lambda r: (int(r.get("since") or 0), str(r.get("id") or ""))):
+        agent = str(row.get("agent") or "")
+        used = row.get("usage") if isinstance(row.get("usage"), dict) else None
+        out.append({
+            "id": str(row.get("id") or ""),
+            "agent": agent,
+            "member": agent.split(":", 1)[1] if agent.startswith("custom:") else agent,
+            "role": str(row.get("role") or ""),
+            "reason": str(row.get("reason") or ""),
+            "state": str(row.get("state") or ""),
+            "provider": str(row.get("provider") or ""),
+            "model": str(row.get("model") or ""),
+            "session": str(row.get("session") or ""),
+            "task": str(row.get("task") or "")[:HELPER_TEXT_CHARS],
+            "result": str(row.get("result") or "")[:HELPER_TEXT_CHARS],
+            "usage": dict(used) if used is not None else None,
+        })
+    return out
+
+
+def _members(platform: Any) -> list[Any]:
+    try:
+        from ..agents import model_team as MT
+
+        return list(MT.team_members(platform))
+    except Exception:  # noqa: BLE001
+        return []
+
+
+#: v1.396.0: the instructions every member the TEAM benchmark makes is given
+#: (``{name}`` is the member's name). A member whose stored instructions are
+#: exactly these was made by the benchmark (:func:`_bench_made`) — the only
+#: members a run may remove. Part of the team runner's identity.
+MEMBER_PROMPT = (
+    "You are {name}, a member of this coding team. Do exactly the piece of work you are "
+    "handed, in the project folder, and finish with a short report of what you did."
+)
+
+
+def _bench_made(record: Any) -> bool:
+    name = str(getattr(record, "name", "") or "")
+    return bool(name) and str(getattr(record, "system_prompt", "") or "") == MEMBER_PROMPT.format(name=name)
 
 
 #: Entries one run's TRAJECTORY keeps (v1.370.0): every tool call's input and
@@ -433,6 +621,138 @@ class JarvisRunner:
             "model_passed": self.model,
             "effort_passed": (self.reasoning() or NOT_OFFERED) if self.effort else None,
         }
+
+    # -- v1.396.0: who did what (a single model: the planner alone) ---------- #
+
+    def member_specs(self) -> dict[str, tuple[str, str]]:
+        """The model-team members this runner's turns hand work to,
+        ``{name: (provider, model)}`` — none for a single-model run (the
+        team runner names its file's)."""
+        return {}
+
+    def check_ready(self) -> None:
+        """Refuse (``bench.BenchRefused``, in words) a single-model run in a
+        benchmark home that holds a model team made by someone else: its
+        planner would see the team and hand work to it, and the row would not
+        be one model. Members the team benchmark made itself (a run that was
+        stopped before it could remove them) are removed by :meth:`prepare`.
+        BLOCKING (a registry read)."""
+        foreign = [r.name for r in _members(self.platform) if not _bench_made(r)]
+        if foreign:
+            from .bench import BenchRefused
+
+            raise BenchRefused(
+                "This benchmark's home has model-team members (" + ", ".join(sorted(foreign))
+                + "), so a single-model run could hand its work to them. Run it with a --root that has "
+                "no team, or use --runner jarvis-team for a team."
+            )
+
+    def prepare(self) -> None:
+        """Before the first task: remove the team members the team benchmark
+        left behind (its process was stopped before it could). BLOCKING."""
+        for record in _members(self.platform):
+            if _bench_made(record):
+                self.platform.agents_registry.remove(record.name)
+
+    def close(self) -> None:
+        """After the last task (nothing to undo for a single model)."""
+
+    async def team_records_after(self) -> dict[str, Any] | None:
+        """The team router's record after a run (the team runner's); None
+        for a single model."""
+        return None
+
+    def _part_of(self, row: dict[str, Any]) -> str:
+        """The part a helper row belongs to: a model-team MEMBER on its own
+        model (the predicate its hold is armed by,
+        ``model_team.runs_elsewhere``) is its own part; any other helper ran
+        on the turn's model (``ledger.PLANNER``); a role the router could not
+        place started nothing ("")."""
+        agent = str(row.get("agent") or "")
+        if agent.startswith("role:"):
+            return ""
+        name = agent.split(":", 1)[1] if agent.startswith("custom:") else agent
+        if name in self.member_specs():
+            return name
+        try:
+            from ..agents import model_team as MT
+
+            record = self.platform.agents_registry.get(name)
+            if record is not None and MT.runs_elsewhere(record):
+                return name
+        except Exception:  # noqa: BLE001 — not readable: the turn's own model
+            pass
+        return PLANNER
+
+    def _new_part(self, provider: str, model: str) -> dict[str, Any]:
+        on = _on_network(provider, model, getattr(self.platform, "providers", None))
+        return {
+            "provider": provider, "model": model, "vendor": _usage.vendor_of(provider, on_network=on),
+            "on_this_network": on, "receipts": 0, "pieces": {}, "model_calls": 0,
+            "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0,
+            "cost_metered_usd": 0.0, "cost_list_price_usd": 0.0,
+        }
+
+    def _seed_parts(self, provider: str, model: str) -> dict[str, dict[str, Any]]:
+        parts = {PLANNER: self._new_part(provider, model)}
+        for name, (m_provider, m_model) in self.member_specs().items():
+            parts[name] = self._new_part(m_provider, m_model)
+        return parts
+
+    def _count_pieces(self, parts: dict[str, dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            name = self._part_of(row)
+            if not name:
+                continue
+            part = parts.setdefault(name, self._new_part(str(row.get("provider") or ""),
+                                                         str(row.get("model") or "")))
+            key = str(row.get("role") or "") or ("by name" if name != PLANNER else "helper")
+            part["pieces"][key] = int(part["pieces"].get(key, 0)) + 1
+
+    @staticmethod
+    def _observed(parts: dict[str, dict[str, Any]], rollout: Rollout) -> None:
+        """Each part's model calls and cached tokens, as the ledger saw them."""
+        for name, part in parts.items():
+            calls = [c for c in rollout.calls if (c.who or PLANNER) == name]
+            part["model_calls"] = len(calls)
+            cached = [c.tokens_cached for c in calls if c.complete]
+            part["tokens_cached"] = None if any(c is None for c in cached) else int(sum(cached))
+
+    def parts_from_receipts(self, usage: dict[str, Any], route: dict[str, Any],
+                            rows: list[dict[str, Any]] | None, rollout: Rollout, *,
+                            provider: str, model: str) -> dict[str, dict[str, Any]]:
+        """The run's parts from their OWN receipts (the other side of the
+        ledger identity): the planner = the turn's done receipt plus every
+        helper on its model; each member = its helpers' session rows."""
+        parts = self._seed_parts(provider, model)
+        rows = list(rows or [])
+        _add_receipt(parts[PLANNER], int(usage.get("input_tokens", 0) or 0),
+                     int(usage.get("output_tokens", 0) or 0), *lane_cost(usage, route))
+        self._count_pieces(parts, rows)
+        manager = getattr(self.platform, "providers", None)
+        for row in rows:
+            name = self._part_of(row)
+            used = row.get("usage")
+            if not name or not isinstance(used, dict):
+                continue
+            _add_receipt(parts[name], int(used.get("input_tokens", 0) or 0),
+                         int(used.get("output_tokens", 0) or 0),
+                         *helper_cost(str(row.get("provider") or ""), str(row.get("model") or ""), used,
+                                      manager=manager))
+        self._observed(parts, rollout)
+        return parts
+
+    def parts_from_calls(self, rollout: Rollout, rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+        """The parts of a turn that never reached its receipt: what the
+        ledger saw, by who."""
+        parts = self._seed_parts(self.provider, self.model)
+        self._count_pieces(parts, list(rows or []))
+        for c in rollout.calls:
+            name = c.who or PLANNER
+            part = parts.setdefault(name, self._new_part(c.provider, c.model))
+            _add_receipt(part, c.tokens_in, c.tokens_out, c.cost_metered_usd, c.cost_list_price_usd)
+        self._observed(parts, rollout)
+        return parts
 
     def _layer(self) -> Any:
         from ..harness import components
@@ -567,6 +887,8 @@ class JarvisRunner:
         deadline = time.monotonic() + float(timeout_s)
         approvals = _approvals(SimpleNamespace(platform=self.platform))
         observed: dict[str, Any] = {}
+        #: v1.396.0: the turn's helper rows by call id (``keep_helper``).
+        helpers: dict[str, dict[str, Any]] = {}
         rounds = tools = 0
         done: dict[str, Any] | None = None
         error = ""
@@ -640,15 +962,21 @@ class JarvisRunner:
                                     # is answered for this call only.
                                     if approvals.resolve(str(data.get("id") or ""), "once"):
                                         out.notes.append(f"answered an approval for {data.get('tool')}")
-                                elif event == "helper" and isinstance(data.get("ask"), dict):
-                                    # v1.372.0: a HELPER's own ask (yolo is
-                                    # never handed down — a helper asks) is
-                                    # answered the same way: this call only.
-                                    _ask = data["ask"]
-                                    if approvals.resolve(str(_ask.get("id") or ""), "once"):
-                                        out.notes.append(
-                                            f"answered a helper's approval for {_ask.get('tool')}"
-                                        )
+                                elif event == "helper":
+                                    # v1.396.0: WHO DID WHAT — each helper's
+                                    # row, as the reply line keeps it (its
+                                    # member, role, the router's reason, its
+                                    # model and what its run used).
+                                    keep_helper(helpers, data)
+                                    if isinstance(data.get("ask"), dict):
+                                        # v1.372.0: a HELPER's own ask (yolo is
+                                        # never handed down — a helper asks) is
+                                        # answered the same way: this call only.
+                                        _ask = data["ask"]
+                                        if approvals.resolve(str(_ask.get("id") or ""), "once"):
+                                            out.notes.append(
+                                                f"answered a helper's approval for {_ask.get('tool')}"
+                                            )
                                 elif event == "error":
                                     error = str(data.get("detail") or data.get("title") or "the turn failed")
                                     error_fix_kind = str(data.get("fix_kind") or "")
@@ -694,6 +1022,11 @@ class JarvisRunner:
             str(done.get("model") or "") or None if done is not None
             else (answered[-1].model if answered else None)
         )
+        # v1.396.0: who did what, and what each account's usage windows said
+        # during the run (from the calls' own answers — never guessed).
+        out.helpers = helper_rows(helpers)
+        out.accounts = _usage.account_summary(rollout.calls)
+        out.team_records = await self.team_records_after()
         if done is None:
             out.error = error or (
                 f"stopped at the {timeout_s:g} s time limit" if timed_out
@@ -704,6 +1037,8 @@ class JarvisRunner:
             out.cost_metered_usd = totals["cost_metered_usd"]
             out.cost_list_price_usd = totals["cost_list_price_usd"]
             out.usage_source = "ledger"
+            # Nothing received a receipt: each part is what the ledger saw.
+            out.parts = self.parts_from_calls(rollout, out.helpers)
             return out
         usage = done.get("usage") or {}
         route = done.get("route") or {}
@@ -717,6 +1052,24 @@ class JarvisRunner:
         cached = usage.get("cache_read_input_tokens")
         out.tokens_cached = int(cached) if isinstance(cached, (int, float)) else None
         out.cost_metered_usd, out.cost_list_price_usd = lane_cost(usage, route)
+        # v1.396.0: the run's PARTS from their own receipts — the turn's done
+        # receipt for its own model, each helper's session row for the
+        # helper — and the totals are their sum (a turn that started no
+        # helper keeps exactly the receipt's numbers above).
+        out.parts = self.parts_from_receipts(
+            usage, route, out.helpers, rollout,
+            provider=out.answered_provider or self.provider, model=out.answered_model or self.model,
+        )
+        if any(int(p.get("receipts") or 0) for name, p in out.parts.items() if name != PLANNER) or \
+                int(out.parts.get(PLANNER, {}).get("receipts") or 0) > 1:
+            from .ledger import sum_fields
+
+            totals = sum_fields(out.parts.values())
+            out.tokens_in, out.tokens_out = totals["tokens_in"], totals["tokens_out"]
+            out.cost_metered_usd = totals["cost_metered_usd"]
+            out.cost_list_price_usd = totals["cost_list_price_usd"]
+            cached_parts = [p.get("tokens_cached") for p in out.parts.values()]
+            out.tokens_cached = None if any(c is None for c in cached_parts) else int(sum(cached_parts))
         out.extra.update({
             "escalated": bool(done.get("escalate")),
             "text_only": bool(route.get("text_only")),
