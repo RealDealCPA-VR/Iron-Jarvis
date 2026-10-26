@@ -553,6 +553,66 @@ console.log(JSON.stringify({ out }));
     assert _run(script, tmp_path, "keep_awake_working")["out"] == [True, False, False, False, True]
 
 
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node not on PATH")
+def test_the_tray_menu_is_rebuilt_only_when_the_blocker_changes(tmp_path):
+    """The check runs every 15 s; the tray menu is rebuilt only when the
+    blocker is taken or let go, never on every check (the doer's pins did not
+    say so: a tick that always rebuilt stayed green)."""
+    from tests.test_keep_awake_v1391 import _BLOCKER, _decl, _fn, _run
+
+    script = "\n".join([
+        _decl("KEEP_AWAKE_MISSES_RELEASE"), _decl("KEEP_AWAKE_TYPE"), _BLOCKER,
+        """
+const ACTIVITY_PROBE_TIMEOUT_MS = 1;
+let isQuitting = false;
+let answer = null;
+function probeDaemonActivity() { return Promise.resolve(answer); }
+let refreshes = 0;
+function refreshTrayMenu() { refreshes += 1; }
+function desktopLog() {}
+const powerSaveBlocker = blocker;
+const keepAwakeState = { id: null, misses: 0 };
+""",
+        _fn("keepAwakeDecision"), _fn("applyKeepAwake"), _fn("keepAwakeTick"),
+        """
+const flush = () => new Promise((r) => setTimeout(r, 0));
+(async () => {
+  const seen = [];
+  for (const a of [
+    { busy: true, working: true, keep_awake: true },
+    { busy: true, working: true, keep_awake: true },
+    { busy: true, working: true, keep_awake: true },
+    { busy: false, working: false, keep_awake: true },
+    { busy: false, working: false, keep_awake: true },
+  ]) { answer = a; keepAwakeTick(); await flush(); seen.push(refreshes); }
+  console.log(JSON.stringify({ seen }));
+})();
+""",
+    ])
+    assert _run(script, tmp_path, "tray_refresh")["seen"] == [1, 1, 1, 2, 2]
+
+
+def test_the_take_never_moves_a_list_parked_on_the_user_and_the_pass_refuses_one(home):
+    """Both layers, each on its own: the take (moving the list to the
+    carrying-on turn) refuses a ``waiting`` list, and the pass's own refusal
+    says why before any take is tried."""
+    app = create_app(home)
+    engine = app.state.platform.engine
+    with session_scope(engine) as db:
+        db.add(RunTranscript(run_id=RR.run_id_for("t-w"), session_id="build:s", messages_json="[]",
+                             waiting=True))
+        db.add(RunTranscript(run_id=RR.run_id_for("t-x"), session_id="build:s", messages_json="[]"))
+        db.commit()
+    assert RR.claim(engine, "t-w", "t-new") is False
+    assert RR.has_record(engine, "t-w") and not RR.has_record(engine, "t-new")
+    assert RR.claim(engine, "t-x", "t-new") is True
+    assert not RR.has_record(engine, "t-x") and RR.has_record(engine, "t-new")
+    assert RR.claim(engine, "t-x", "t-other") is False, "taken once"
+    assert build_routes.resume_refusal(engine, "s", "t-w", True) == (
+        "it was waiting on you when Iron Jarvis stopped"
+    )
+
+
 def _activity(app) -> dict:
     from fastapi.testclient import TestClient
 
