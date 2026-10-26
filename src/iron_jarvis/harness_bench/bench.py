@@ -679,6 +679,42 @@ async def _run_in_agent_folder(
     return record
 
 
+async def _crashed_run(
+    task: Task, runner: Any, config: Configuration, cfg_dir: Path, ledger: BudgetLedger, *,
+    repeat: int, label: str, exc: BaseException, echo: Callable[[str], None],
+) -> dict[str, Any]:
+    """The record of a run the bench ITSELF crashed on (v1.396.0 review):
+    "did not run" (infrastructure, no completion marker) with the crash in
+    words, its numbers what the ledger saw for it (its rollout when it had
+    begun, else a new empty one) so the plan still adds up. Never raises."""
+    key = run_key(task.id, repeat)
+    rollout = next((r for r in reversed(ledger.rollouts) if r.task_id == key), None) or ledger.begin(
+        key, getattr(runner, "name", ""))
+    totals = rollout.totals()
+    detail = " ".join(str(exc).split())[:200]
+    reason = f"the benchmark itself failed ({type(exc).__name__}: {detail})" if detail else (
+        f"the benchmark itself failed ({type(exc).__name__})")
+    outcome = RunOutcome(error=reason, tokens_in=totals["tokens_in"], tokens_out=totals["tokens_out"],
+                         cost_metered_usd=totals["cost_metered_usd"],
+                         cost_list_price_usd=totals["cost_list_price_usd"], usage_source="ledger",
+                         facts={"bench_failed": reason})
+    record = _record(task, config, config.fingerprint(task, repeat), outcome, None, wall_s=0.0, started=_now(),
+                     files_outside=[], model_calls=len(rollout.calls), passed_as=passed_facts(runner, config),
+                     repeat=repeat)
+    try:
+        ledger.verify_record(record, rollout)
+        record["ledger_ok"] = True
+    except BudgetMismatch as mismatch:
+        record["ledger_ok"] = False
+        record["error"] = record["error"] + "; " + str(mismatch)
+    try:
+        await asyncio.to_thread(_write_json, cfg_dir / "runs" / key / RESULT_NAME, record)
+    except Exception:  # noqa: BLE001 — the record still reaches results.json
+        pass
+    echo(f"  {label}: did not run ({reason})")
+    return record
+
+
 def check_effort(effort: str) -> str:
     """The effort, lowered — or :class:`BenchRefused` in plain words."""
     value = (effort or "").strip().lower()
@@ -889,8 +925,18 @@ async def run_bench(
             await asyncio.to_thread(prepare)
         for task, k in plan:
             label = f"{task.id} (repeat {k} of {repeats})" if repeats > 1 else task.id
-            result.records.append(await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
-                                                 repeat=k, label=label))
+            try:
+                record = await run_task(task, runner, config, cfg_dir, ledger, echo=echo,
+                                        repeat=k, label=label)
+            except Exception as exc:  # noqa: BLE001 — one run's crash never ends the invocation
+                # v1.396.0 review: a crash in the bench's OWN step for one run
+                # (grading, bringing the work home — a file a leftover program
+                # holds) used to end the whole invocation: an unattended night
+                # stopped at that task. The run is "did not run" (no marker,
+                # tried again next time) and the next task runs.
+                record = await _crashed_run(task, runner, config, cfg_dir, ledger, repeat=k,
+                                            label=label, exc=exc, echo=echo)
+            result.records.append(record)
     finally:
         if callable(close):
             await asyncio.to_thread(close)

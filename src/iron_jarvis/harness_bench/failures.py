@@ -64,8 +64,9 @@ FACT_KEYS = frozenset({
     "demo_answered", "answered_by", "refused", "fix_kind", "acted",
     "sandbox_refused", "setup_failed",
     # v1.396.0 review: a helper (a team member) could not do its piece for an
-    # infrastructure reason (:func:`helper_infra`'s words).
-    "member_infra",
+    # infrastructure reason (:func:`helper_infra`'s words); the bench's own
+    # step crashed on the run (``bench._crashed_run``'s words).
+    "member_infra", "bench_failed",
 })
 
 #: An infrastructure failure, by its own words → the plain reason. First
@@ -167,6 +168,8 @@ def classify_failure(runner: str, ok_run: bool, facts: Mapping[str, Any], error:
         return Failure(INFRASTRUCTURE, str(f["refused"]))
     if f.get("setup_failed"):
         return Failure(INFRASTRUCTURE, str(f["setup_failed"]))
+    if f.get("bench_failed"):
+        return Failure(INFRASTRUCTURE, str(f["bench_failed"]))
     if f.get("cli_missing"):
         return Failure(INFRASTRUCTURE, f"{name} is not installed on this PC")
     if f.get("start_failed"):

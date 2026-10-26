@@ -268,6 +268,44 @@ async def test_the_report_says_the_router_had_no_usage_numbers_and_shows_pieces_
 
 
 # --------------------------------------------------------------------------- #
+# one task crashing never stops the night
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_task_the_bench_itself_crashes_on_never_stops_the_rest(world, tmp_path, monkeypatch):
+    """A crash in the bench's own step for one run (here: grading raises, as
+    a file a leftover program holds would) used to end the whole invocation
+    — at 3 AM, the rest of the night. Now that run is "did not run" (no
+    marker: tried again next time), the next task runs, the members are
+    still removed at the end and the ledger still adds up."""
+    from iron_jarvis.harness_bench import bench as bench_mod
+
+    real = bench_mod.grade
+
+    def grade(task, work, out):
+        if task.id == W.TASK_A:
+            raise PermissionError(13, "The process cannot access the file", str(work / "held.txt"))
+        return real(task, work, out)
+
+    monkeypatch.setattr(bench_mod, "grade", grade)
+    res = await _run(world, _runner(world, tmp_path), names=[W.TASK_A, W.TASK_B])
+    by = {r["task_id"]: r for r in res.records}
+    assert set(by) == {W.TASK_A, W.TASK_B}
+    crashed = by[W.TASK_A]
+    assert crashed["passed"] is None and crashed["unscored_by"] == "infrastructure"
+    assert crashed["failure_reason"].startswith("the benchmark itself failed (PermissionError"), crashed
+    assert crashed["ledger_ok"] is True
+    assert by[W.TASK_B]["passed"] is False and by[W.TASK_B]["ledger_ok"] is True  # it ran and was graded
+    assert not [r for r in world.platform.agents_registry.list() if r.name in ("glm", "codex")]
+    # The crashed run is tried again next time; the graded one is reused.
+    monkeypatch.setattr(bench_mod, "grade", real)
+    again = await _run(world, _runner(world, tmp_path), names=[W.TASK_A, W.TASK_B], dry_run=True)
+    text = "\n".join(again.plan_lines)
+    assert f"{W.TASK_A} [frontier, bugfix]: would run" in text
+    assert f"{W.TASK_B} [frontier, trap]: would reuse the stored result" in text
+
+
+# --------------------------------------------------------------------------- #
 # the refine ledger still refuses a real mismatch
 # --------------------------------------------------------------------------- #
 
