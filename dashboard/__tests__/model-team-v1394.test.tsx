@@ -337,6 +337,18 @@ describe("Settings › Model team", () => {
   });
 });
 
+describe("where it lives", () => {
+  it("is a Settings section under Models, reached at /settings?section=models-team", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(process.cwd(), "components", "settings", "SettingsHome.tsx"), "utf8").replace(/\r\n/g, "\n");
+    const models = src.slice(src.indexOf("  models: ["), src.indexOf("  connections: ["));
+    expect(models).toContain('id: "models-team"');
+    expect(models).toContain('label: "Model team"');
+    expect(models).toContain('import("@/components/settings/ModelTeam"), "ModelTeam"');
+  });
+});
+
 /* ------------------------------------------------- the agent's own card --- */
 
 const MEMBER: DynamicAgentFull = {
