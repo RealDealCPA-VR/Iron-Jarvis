@@ -688,6 +688,10 @@ class _ReplyWatch:
         #: rounds (the ``summarized`` frame, ``harness/reply_summary``) —
         #: kept on the line as ``summarized`` ({steps, times}).
         self.summarized: dict[str, Any] | None = None
+        #: v1.393.0 (the long-jobs plan's Phase 4): this turn carries the
+        #: reply on with ANOTHER account of the same group ({from, fromName,
+        #: to, toName, group}) — kept on the line as ``accountMove``.
+        self.account_move: dict[str, Any] | None = None
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
@@ -1038,6 +1042,10 @@ class _ReplyWatch:
         if self.resumed_from:
             # v1.391.0: this reply carried on a reply a restart cut off.
             line["resumedFrom"] = self.resumed_from
+        if self.account_move:
+            # v1.393.0: this reply carried on with another account of the
+            # group ("<A> reached its limit; carried on with <B>").
+            line["accountMove"] = dict(self.account_move)
         if self.summarized:
             # v1.392.0: "Summarized N earlier steps to fit the model".
             line["summarized"] = dict(self.summarized)
@@ -1350,13 +1358,93 @@ def _with_limit_words(chunk: str, limit: "dict[str, Any]") -> str:
     return _durable.sse("error", data)
 
 
+#: v1.393.0 (the long-jobs plan's Phase 4): at most this many moves within
+#: an account group in a row (since the last turn an account SERVED). A move
+#: is made from the cached snapshot, which can be a little behind: an account
+#: that turns out to be at its limit too ends the chain on a wait instead of
+#: handing the conversation round the group forever.
+MAX_GROUP_MOVES = 4
+
+
+def auto_wait(platform: Any, setup: dict[str, Any], limit: "dict[str, Any] | None") -> "dict[str, Any] | None":
+    """The wait a limit card ARMS BY ITSELF (v1.393.0, the long-jobs plan's
+    Phase 4, decision 4), or None (the card waits for the user's press, as
+    before v1.393.0). The same record "Resume when ready" writes
+    (:func:`wait_record`), plus:
+
+    * ``auto`` — armed with no press;
+    * ``group`` — the account shares a group with another account of its own
+      vendor and the limit is one a takeover answers (``MOVE_KINDS``): the
+      wait loop looks AT ONCE for another account of the group to carry on
+      with (``next_check_at`` = now), and every pass after that;
+    * ``once`` — the user turned the self-arming wait off
+      (``build_auto_resume``) but made a group: only the move is tried, and
+      with nothing usable in the group the wait ends (the card waits for the
+      press).
+
+    Never for an account that cannot come back (``resumable`` False), a
+    Local only session, or a card about an account the session no longer
+    runs on. Cached reads only; never raises."""
+    try:
+        from ...harness import build_accounts as BA
+
+        if platform is None or not isinstance(limit, dict) or not limit:
+            return None
+        if limit.get("resumable") is False or setup.get("local_only") is True:
+            return None
+        account = str(limit.get("account") or "")
+        if not account or account != str(setup.get("account") or ""):
+            return None
+        cfg = getattr(platform, "config", None)
+        auto = bool(getattr(cfg, "build_auto_resume", True))
+        group = ""
+        if _may_move(setup, limit):
+            group = BA.group_partners(_svc_of(platform), getattr(cfg, "account_groups", None), account)
+        if not auto and not group:
+            return None
+        wait = wait_record(setup, limit.get("resets_at"))
+        wait["auto"] = True
+        if group:
+            wait["group"] = group
+            wait["next_check_at"] = wait["armed_at"]  # the loop looks at once
+        if not auto:
+            wait["once"] = True
+        return wait
+    except Exception:  # noqa: BLE001 — no self-armed wait is the safe answer (the press)
+        log.warning("arming a build session's wait by itself failed", exc_info=True)
+        return None
+
+
+def _may_move(setup: dict[str, Any], limit: "dict[str, Any] | None" = None) -> bool:
+    """May the session move to another account of its group (v1.393.0)?
+    Not under Local only, only for a limit a takeover answers
+    (``build_accounts.MOVE_KINDS``), and only while :data:`MAX_GROUP_MOVES`
+    is not used up. Whether a group exists is the caller's (it reads the LIVE
+    groups)."""
+    from ...harness import build_accounts as BA
+
+    if setup.get("local_only") is True:
+        return False
+    card = limit if isinstance(limit, dict) else setup.get("account_limit")
+    kind = str(card.get("kind") or "unknown") if isinstance(card, dict) else "unknown"
+    if kind not in BA.MOVE_KINDS:
+        return False
+    moves = setup.get("account_moves")
+    return not (isinstance(moves, int) and moves >= MAX_GROUP_MOVES)
+
+
 async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
-                              limit: "dict[str, Any] | None", *, done: bool) -> None:
+                              limit: "dict[str, Any] | None", *, done: bool,
+                              platform: Any = None) -> None:
     """The RECORD half of a turn's account outcome: keep the session's limit
     card across a reload (``setup.account_limit``) — or clear it (and a
     "Resume when ready" wait) when a turn on the account was served. Written
     BEFORE the turn's terminal frame reaches anyone (v1.369.0 review), so a
     client that reads the session the moment the turn ends sees the card.
+
+    v1.393.0 (the long-jobs plan's Phase 4): with ``platform``, a card the
+    account can come back from ARMS ITS WAIT BY ITSELF in the same write
+    (:func:`auto_wait`) — the screen's one re-read shows the waiting card.
     Off the loop; never raises."""
     try:
         if limit:
@@ -1364,21 +1452,50 @@ async def _keep_account_limit(engine: Any, thread_id: str, turn_id: str,
                 **{k: v for k, v in limit.items() if v is not None},
                 "at": utcnow().isoformat(), "turn_id": turn_id,
             }
-            await asyncio.to_thread(S.update, engine, thread_id, setup={"account_limit": record})
+            changes: dict[str, Any] = {"account_limit": record}
+            if platform is not None:
+                row = await asyncio.to_thread(S.get_row, engine, thread_id)
+                if row is not None and getattr(row, "archived_at", None) is None:
+                    wait = auto_wait(platform, _setup_of(row), limit)
+                    if wait is not None:
+                        changes["account_wait"] = wait
+            await asyncio.to_thread(S.update, engine, thread_id, setup=changes)
         elif done:
             # The account served the turn (it finished, or the user's own turn
             # ran on it and then failed for another reason or was stopped):
             # the card goes, and so does a "Resume when ready" wait (the user
             # carried on themselves — a later continuation would answer a
-            # question nobody asked).
+            # question nobody asked). v1.393.0: and the count of moves within
+            # its group (an account served: the next limit may move again).
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
             setup = _setup_of(row) if row is not None else {}
-            if setup.get("account_limit") or setup.get("account_wait"):
+            if setup.get("account_limit") or setup.get("account_wait") or setup.get("account_moves"):
                 await asyncio.to_thread(S.update, engine, thread_id, setup={
-                    "account_limit": None, "account_wait": None,
+                    "account_limit": None, "account_wait": None, "account_moves": None,
                 })
     except Exception:  # noqa: BLE001 — the turn never fails on its session record
         log.warning("recording build session %s's account limit failed", thread_id, exc_info=True)
+
+
+async def _publish_account_limit(platform: Any, thread_id: str, title: str,
+                                 limit: "dict[str, Any]", *, waiting: bool) -> None:
+    """``build.account_limit`` for the bell. v1.393.0: ``waiting`` — the
+    reply waits for the reset and carries on BY ITSELF (a self-armed wait):
+    news, not a question (there is nothing to press)."""
+    bus = getattr(platform, "event_bus", None)
+    if bus is None:
+        return
+    from ...core.events import EventType
+
+    await bus.publish(EventType.BUILD_ACCOUNT_LIMIT, {
+        "thread_id": thread_id,
+        "title": title,
+        "account_name": limit.get("account_name") or "",
+        "vendor": limit.get("vendor") or "",
+        "kind": limit.get("kind") or "",
+        "resets_at": limit.get("resets_at"),
+        "waiting": bool(waiting),
+    }, session_id=S.session_id_for(thread_id))
 
 
 async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[str, Any]") -> None:
@@ -1386,25 +1503,29 @@ async def _announce_account_limit(platform: Any, thread_id: str, limit: "dict[st
     chip and the list say "Limit reached" at once instead of at the next watch
     cycle) and tell the bell. Runs AFTER the terminal frame — Iron-Proxy is
     never waited on before the user sees the turn end. Off the loop; never
-    raises."""
+    raises.
+
+    v1.393.0 (ONE notice per outcome): a limit whose wait looks for another
+    account of the GROUP is said by the wait loop instead — "carried on with
+    <B>" when it moves (``build.resumed``), or this same limit when nothing in
+    the group can serve — never both."""
     engine = platform.engine
     try:
         svc = _svc_of(platform)
         if svc is not None and hasattr(svc, "refresh_accounts"):
             await asyncio.to_thread(svc.refresh_accounts)
         row = await asyncio.to_thread(S.get_row, engine, thread_id)
-        bus = getattr(platform, "event_bus", None)
-        if bus is not None:
-            from ...core.events import EventType
-
-            await bus.publish(EventType.BUILD_ACCOUNT_LIMIT, {
-                "thread_id": thread_id,
-                "title": getattr(row, "title", "") or "",
-                "account_name": limit.get("account_name") or "",
-                "vendor": limit.get("vendor") or "",
-                "kind": limit.get("kind") or "",
-                "resets_at": limit.get("resets_at"),
-            }, session_id=S.session_id_for(thread_id))
+        setup = _setup_of(row) if row is not None else {}
+        wait = setup.get("account_wait") if isinstance(setup.get("account_wait"), dict) else None
+        if wait is not None and wait.get("account") != limit.get("account"):
+            wait = None
+        if wait is not None and wait.get("group") and not wait.get("told"):
+            # The group's move is still to be looked for: the loop speaks.
+            return
+        await _publish_account_limit(
+            platform, thread_id, getattr(row, "title", "") or "", limit,
+            waiting=bool(wait is not None and wait.get("auto") and not wait.get("once")),
+        )
     except Exception:  # noqa: BLE001 — the turn never fails on its session record
         log.warning("announcing build session %s's account limit failed", thread_id, exc_info=True)
 
@@ -1465,7 +1586,7 @@ async def _note_account_limit(platform: Any, thread_id: str, turn_id: str,
                               limit: "dict[str, Any] | None", *, done: bool) -> None:
     """Both halves at once (:func:`_keep_account_limit` then
     :func:`_announce_account_limit`). Off the loop; never raises."""
-    await _keep_account_limit(platform.engine, thread_id, turn_id, limit, done=done)
+    await _keep_account_limit(platform.engine, thread_id, turn_id, limit, done=done, platform=platform)
     if limit:
         await _announce_account_limit(platform, thread_id, limit)
 
@@ -1492,7 +1613,8 @@ async def _record_turn_end(engine: Any, thread_id: str, turn_id: str, watch: "_R
             await asyncio.to_thread(S.append_lines, engine, thread_id, lines)
     served = _turn_served(pin, status)
     if pin is not None and platform is not None and (watch.account_limit or served):
-        await _keep_account_limit(engine, thread_id, turn_id, watch.account_limit, done=served)
+        await _keep_account_limit(engine, thread_id, turn_id, watch.account_limit, done=served,
+                                  platform=platform)
 
 
 #: v1.391.0: the frames that PARK a reply on the user (an approval card — a
@@ -1548,7 +1670,7 @@ def _parks_or_answers(parsed: "list[tuple[str, str]]") -> bool:
 
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None, no_limit: bool = False,
-                        record: Any = None):
+                        record: Any = None, account_move: "dict[str, Any] | None" = None):
     """``frames`` (the lane's SSE iterator), passed through unchanged, with
     the session kept up to date: an approved plan and a conversation grant
     land as they happen, and the reply line (plus any steer notes) is written
@@ -1571,6 +1693,9 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     watch = _ReplyWatch()
     watch.no_limit = bool(no_limit)
     watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
+    # v1.393.0: a turn that carries the reply on with another account of the
+    # group names both accounts on its line.
+    watch.account_move = dict(account_move) if isinstance(account_move, dict) and account_move else None
     open_asks: set[str] = set()
     # v1.392.0 (never stalls silently, the long-jobs plan's Phase 3): ten
     # minutes with no frame and no tool output is said on the live line and
@@ -2080,7 +2205,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            command: str = "",
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None,
-                           resume_turn: str = "") -> Any:
+                           resume_turn: str = "",
+                           account_move: "dict[str, Any] | None" = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2134,7 +2260,17 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     — it gets HERE, never on a second path. The kept conversation is TAKEN
     (``reply_record.claim``) right before the question line is written: of
     two resumes of one turn exactly one starts (:class:`ResumeGone`). The
-    question line is a hidden continuation with ``resumedFrom``."""
+    question line is a hidden continuation with ``resumedFrom``.
+
+    v1.393.0 (the long-jobs plan's Phase 4): ``account_move`` (the wait loop
+    only, with ``resume_of``) — ``{"patch": <account_patch's own changes>,
+    "line": {from, fromName, to, toName, group}}``: carry the reply on with
+    ANOTHER account of the same group. The turn runs on that account (its
+    pin, its provider — the same vendor, so the same model); the patch lands
+    in the SAME locked write that takes the wait (``take_wait(then=)``), so a
+    Cancel, a Choose account or the user's own message that landed meanwhile
+    moves nothing and starts nothing. The question line and the reply line
+    keep ``accountMove``."""
     from .chat import _turn_logs
     from ...harness import reply_record as RR
     from ...iron_proxy.pin import reset_pin, set_pin
@@ -2315,6 +2451,19 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         elif not continuation and shown != kept:
             await asyncio.to_thread(S.update, platform.engine, thread_id,
                                     setup={"preview_url": shown or None})
+        move_patch: "dict[str, Any] | None" = None
+        move_line: "dict[str, Any] | None" = None
+        if account_move is not None and resume_of is not None:
+            # v1.393.0: the turn is built on the account it moves to (the
+            # session itself moves only at the take, below).
+            move_patch = dict(account_move.get("patch") or {})
+            move_line = dict(account_move.get("line") or {}) or None
+            setup = dict(setup)
+            for key, value in move_patch.items():
+                if value is None:
+                    setup.pop(key, None)
+                else:
+                    setup[key] = value
         pin, account_provider = await asyncio.to_thread(turn_account, platform, thread_id, setup)
         from ...projects.locate import project_for_path
 
@@ -2485,6 +2634,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 took = await asyncio.to_thread(
                     S.take_wait, platform.engine, thread_id,
                     str(resume_of.get("armed_at") or ""), str(resume_of.get("account") or ""),
+                    then=move_patch,
                 )
                 if not took:
                     with contextlib.suppress(Exception):
@@ -2513,6 +2663,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 question["skillSource"] = "yours" if chat_body.skill else "folder"
             if continuation:
                 question["continuation"] = True
+            if move_line:
+                question["accountMove"] = move_line
             saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
             if not saved.get("ok"):
                 with contextlib.suppress(Exception):
@@ -2520,8 +2672,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(status_code=404, detail="no such Build session")
             lg = logs.start(turn_id, thread_id, recorded_turn(
                 platform.engine, thread_id, turn_id, gen, pin=pin, platform=platform,
-                no_limit=no_limit, record=record,
+                no_limit=no_limit, record=record, account_move=move_line,
             ))
+            # v1.393.0: the wait loop looks again the moment a turn ENDS — a
+            # limit it ended on armed its wait by itself, and a move within
+            # the account's group should not wait for the loop's next minute.
+            # The task is done once the log is no longer running (the loop
+            # skips a running session).
+            with contextlib.suppress(Exception):
+                lg.task.add_done_callback(lambda _t: wake_wait_loop())
             started = True
         finally:
             _cmd_shell.reset_turn_rule(command_token)
@@ -2600,6 +2759,65 @@ def wait_record(setup: dict[str, Any], resets_at: Any = None) -> dict[str, Any]:
     }
 
 
+async def _move_within_group(d: Any, thread_id: str, setup: dict[str, Any],
+                             wait: dict[str, Any], target: dict[str, Any]) -> str:
+    """Carry the reply on with ``target`` — another account of the SAME group
+    and vendor (``build_accounts.takeover``) — through the Choose account path:
+    ``account_patch`` (the same validation; the same vendor keeps the model)
+    and ``start_build_turn(continuation=True)``. The patch lands in the SAME
+    locked write that takes the wait (``account_move``), so a Cancel, a Choose
+    account or the user's own message that landed meanwhile moves nothing.
+    The bell hears ONE thing: it carried on with the other account
+    (``build.resumed`` with ``moved_from``). Answers ``moved`` | ``raced``
+    (someone else acted first: nothing happened) | ``failed`` (the start was
+    refused: the wait goes on)."""
+    from ...core.events import EventType
+
+    platform = d.platform
+    to = str(target.get("id") or "")
+    try:
+        patch = await asyncio.to_thread(account_patch, platform, setup, to, None)
+    except HTTPException as exc:
+        log.info("moving build session %s within its group was refused: %s", thread_id, exc.detail)
+        return "failed"
+    patch.pop("account_wait", None)
+    patch.pop("account_limit", None)
+    moves = setup.get("account_moves")
+    patch["account_moves"] = (moves if isinstance(moves, int) and not isinstance(moves, bool) else 0) + 1
+    line = {
+        "from": str(setup.get("account") or ""),
+        "fromName": str(setup.get("account_name") or wait.get("account_name") or ""),
+        "to": to,
+        "toName": str(target.get("name") or to),
+        "group": str(target.get("group") or ""),
+    }
+    turn_id = "bt_" + secrets.token_hex(8)
+    try:
+        lg = await start_build_turn(
+            d, thread_id, CONTINUE_TEXT, turn_id, continuation=True, resume_of=wait,
+            account_move={"patch": patch, "line": line},
+        )
+    except (SessionBusy, WaitEnded):
+        return "raced"
+    except HTTPException as exc:
+        log.info("moving build session %s within its group did not start: %s", thread_id, exc.detail)
+        return "failed"
+    row = await asyncio.to_thread(S.get_row, platform.engine, thread_id)
+    bus = getattr(platform, "event_bus", None)
+    if bus is not None:
+        await bus.publish(EventType.BUILD_RESUMED, {
+            "thread_id": thread_id,
+            "title": getattr(row, "title", "") or "",
+            "account": line["to"],
+            "account_name": line["toName"],
+            "turn_id": lg.turn_id,
+            "moved_from": line["from"],
+            "moved_from_name": line["fromName"],
+            "group": line["group"],
+        }, session_id=S.session_id_for(thread_id))
+    return "moved"
+
+
 async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     """ONE pass of the wait loop: every session whose "Resume when ready" wait
     is due (its reset passed, or the next re-check) has its account checked
@@ -2608,10 +2826,23 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     a still-parked one moves the next check to its new reset (or a few
     minutes on). A session that is running, archived, or moved to another
     account is skipped / its wait cleared. Returns the thread ids resumed.
-    Survives a restart: the waits live on the sessions."""
+    Survives a restart: the waits live on the sessions.
+
+    v1.393.0 (the long-jobs plan's Phase 4, decision 4): a session whose
+    account is in one of the user's ACCOUNT GROUPS (``Config.account_groups``,
+    read live) is looked at on EVERY pass, due or not: when another account of
+    the same group and vendor is usable now (``build_accounts.takeover`` — the
+    cached snapshot, never a vendor call) the reply carries on with it
+    (:func:`_move_within_group`). Its own account is checked first when its
+    wait is due (the user's pick wins). A grouped wait's limit is said on the
+    bell HERE, once (``told``), when nothing in the group could take over —
+    and a wait the user turned off (``once``) then ends. Every write of a
+    wait after a check is conditional (``S.amend_wait``): a Cancel or a
+    Choose account that landed meanwhile is never undone."""
     from datetime import timedelta
 
     from ...core.events import EventType
+    from ...harness import build_accounts as BA
 
     platform = d.platform
     svc = _svc_of(platform)
@@ -2620,61 +2851,105 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
     engine = platform.engine
     waits = await asyncio.to_thread(S.waiting_sessions, engine)
     when = now or utcnow()
+    groups = getattr(getattr(platform, "config", None), "account_groups", None) or {}
     resumed: list[str] = []
     for thread_id, setup in waits:
         wait = setup.get("account_wait") or {}
-        due = _parse_iso(wait.get("next_check_at")) or _parse_iso(wait.get("resets_at")) or when
-        if due > when:
+        account = str(setup.get("account") or "")
+        due_at = _parse_iso(wait.get("next_check_at")) or _parse_iso(wait.get("resets_at")) or when
+        once = wait.get("once") is True
+        due = due_at <= when
+        grouped = bool(account) and _may_move(setup) and BA.group_of(groups, account) is not None
+        # A grouped wait's limit not yet said on the bell (the group may have
+        # been changed since it was armed) is looked at now, due or not.
+        untold = bool(wait.get("group") or once) and not wait.get("told")
+        if not due and not grouped and not untold:
             continue
         if thread_id in _STARTING or _running_turn(d, thread_id):
             continue
-        if not setup.get("account") or wait.get("account") != setup.get("account"):
+        if not account or wait.get("account") != account:
             # The session moved to another account: this wait is not its.
             await asyncio.to_thread(S.update, engine, thread_id, setup={"account_wait": None})
             continue
-        limit = await asyncio.to_thread(check_account, platform, setup)
-        if limit is None:
-            turn_id = "bt_" + secrets.token_hex(8)
-            try:
-                # The wait is TAKEN inside the start (one locked write, right
-                # before the question): the check above can take seconds, and
-                # a Cancel / Choose account that landed meanwhile must start
-                # nothing — and no clear may run after the continuation began
-                # (it would wipe the card that turn's own limit wrote).
-                lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
-                                            resume_of=wait)
-            except (SessionBusy, WaitEnded):
+        armed_at = str(wait.get("armed_at") or "")
+        limit: "dict[str, Any] | None" = None
+        if due and not once:
+            # (A wait the user turned off — `once` — never carries on by
+            # itself on its own account: only a move was asked for.)
+            limit = await asyncio.to_thread(check_account, platform, setup)
+            if limit is None:
+                turn_id = "bt_" + secrets.token_hex(8)
+                try:
+                    # The wait is TAKEN inside the start (one locked write,
+                    # right before the question): the check above can take
+                    # seconds, and a Cancel / Choose account that landed
+                    # meanwhile must start nothing — and no clear may run
+                    # after the continuation began (it would wipe the card
+                    # that turn's own limit wrote).
+                    lg = await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
+                                                resume_of=wait)
+                except (SessionBusy, WaitEnded):
+                    continue
+                except HTTPException as exc:
+                    log.info("resuming build session %s did not start: %s", thread_id, exc.detail)
+                    continue
+                row = await asyncio.to_thread(S.get_row, engine, thread_id)
+                bus = getattr(platform, "event_bus", None)
+                if bus is not None:
+                    await bus.publish(EventType.BUILD_RESUMED, {
+                        "thread_id": thread_id,
+                        "title": getattr(row, "title", "") or "",
+                        "account": account,
+                        "account_name": str(setup.get("account_name") or ""),
+                        "turn_id": lg.turn_id,
+                    }, session_id=S.session_id_for(thread_id))
+                resumed.append(thread_id)
                 continue
-            except HTTPException as exc:
-                log.info("resuming build session %s did not start: %s", thread_id, exc.detail)
-                continue
+        if grouped:
+            target = BA.takeover(svc, groups, account)
+            if target is not None:
+                outcome = await _move_within_group(d, thread_id, setup, wait, target)
+                if outcome == "moved":
+                    resumed.append(thread_id)
+                    continue
+                if outcome == "raced":
+                    continue
+                # "failed": the start was refused — the wait goes on below.
+        if untold:
+            # Nothing in the group took over: the limit is said on the bell
+            # now (`_announce_account_limit` left it to this pass), ONCE.
+            card = setup.get("account_limit")
+            if not isinstance(card, dict) or card.get("account") != account:
+                card = {"account": account, "account_name": str(setup.get("account_name") or "")}
             row = await asyncio.to_thread(S.get_row, engine, thread_id)
-            bus = getattr(platform, "event_bus", None)
-            if bus is not None:
-                await bus.publish(EventType.BUILD_RESUMED, {
-                    "thread_id": thread_id,
-                    "title": getattr(row, "title", "") or "",
-                    "account": str(setup.get("account") or ""),
-                    "account_name": str(setup.get("account_name") or ""),
-                    "turn_id": lg.turn_id,
-                }, session_id=S.session_id_for(thread_id))
-            resumed.append(thread_id)
-            continue
+            changed = await asyncio.to_thread(
+                S.amend_wait, engine, thread_id, armed_at, account, None if once else {"told": True},
+            )
+            if not changed:
+                continue  # cancelled, chosen or carried on meanwhile: nothing to say
+            await _publish_account_limit(
+                platform, thread_id, getattr(row, "title", "") or "", card, waiting=not once,
+            )
+            if once:
+                continue  # the user turned the wait off: the card waits for a press
+            wait = {**wait, "told": True}
+        if limit is None:
+            continue  # not due: its own account is looked at at its reset
         if limit.get("resumable") is False:
             # The account is gone: no reset will bring it back. The card
             # says so (choose another account); the wait ends.
-            await asyncio.to_thread(S.update, engine, thread_id, setup={
-                "account_wait": None,
-                "account_limit": {**{k: v for k, v in limit.items() if v is not None},
-                                  "at": when.isoformat()},
-            })
+            if await asyncio.to_thread(S.amend_wait, engine, thread_id, armed_at, account, None):
+                await asyncio.to_thread(S.update, engine, thread_id, setup={
+                    "account_limit": {**{k: v for k, v in limit.items() if v is not None},
+                                      "at": when.isoformat()},
+                })
             continue
         reset = _parse_iso(limit.get("resets_at"))
         nxt = reset if reset is not None and reset > when else when + timedelta(seconds=WAIT_RECHECK_S)
-        new_wait = {**wait, "next_check_at": nxt.isoformat()}
+        changes = {"next_check_at": nxt.isoformat()}
         if reset is not None:
-            new_wait["resets_at"] = reset.isoformat()
-        await asyncio.to_thread(S.update, engine, thread_id, setup={"account_wait": new_wait})
+            changes["resets_at"] = reset.isoformat()
+        await asyncio.to_thread(S.amend_wait, engine, thread_id, armed_at, account, changes)
     return resumed
 
 
