@@ -883,6 +883,9 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     const title = typeof p.title === "string" ? p.title.trim() : "";
     const name = typeof p.account_name === "string" ? p.account_name.trim() : "";
     const limitRow = e.type === "build.account_limit";
+    // v1.391.0 (long jobs, Phase 2): a reply a restart cut off while it
+    // worked, carried on by itself at the next start (`reason: "restart"`).
+    const restartRow = !limitRow && p.reason === "restart";
     return {
       id: e.id,
       ts: e.ts,
@@ -890,7 +893,9 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       icon: limitRow ? AlertTriangle : CheckCircle2,
       title: limitRow
         ? buildLimitHeadline(p.kind, name)
-        : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+        : restartRow
+          ? `A ${CODING_SESSION} carried on after Iron Jarvis restarted`
+          : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
       body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
       ...(limitRow ? { attention: true } : {}),
     };

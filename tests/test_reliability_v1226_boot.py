@@ -274,7 +274,9 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
     # see a chat reply being written (session_id "chat", no Session row) and a
     # Build pane with work in it. Still an EXACT match — the update dialog
     # reads these keys by name, so a silently dropped one is a warning that
-    # stops warning.
+    # stops warning. v1.391.0, MOVED ON PURPOSE: the desktop's keep-awake check
+    # reads the "Keep this PC awake while work runs" setting from this same
+    # answer (`keep_awake`, on by default — tests/test_keep_awake_v1391.py).
     assert idle == {
         "active_sessions": 0,
         "running_workflow_runs": 0,
@@ -283,6 +285,7 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
         "busy_panes": 0,
         "busy_pane_clis": [],
         "busy": False,
+        "keep_awake": True,
     }
     with session_scope(app.state.platform.engine) as db:
         s = Session(task="t", status=SessionStatus.ACTIVE)

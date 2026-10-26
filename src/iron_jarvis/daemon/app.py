@@ -1916,16 +1916,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # destroyed with the loop, nothing saved).
             # v1.391.0: so does the resume pass (a reply it carried on after
             # this point would be cut off again at once).
-            for _first in ("build_accounts", "build_resume"):
-                _build_waits = bg_tasks.pop(_first, None)
-                if _build_waits is not None:
-                    _build_waits.cancel()
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.gather(_build_waits, return_exceptions=True), timeout=5.0
-                        )
-                    except Exception:  # noqa: BLE001 — shutdown never raises
-                        pass
+            _build_resume = bg_tasks.pop("build_resume", None)
+            if _build_resume is not None:
+                _build_resume.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_build_resume, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
+            _build_waits = bg_tasks.pop("build_accounts", None)
+            if _build_waits is not None:
+                _build_waits.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_build_waits, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
             # v1.336.0: daemon-owned chat turns are cut off HERE, with what
             # they wrote saved and an "interrupted" end on their log — not
             # destroyed with the loop, which saved nothing.

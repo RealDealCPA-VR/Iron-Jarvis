@@ -39,6 +39,7 @@ import { ApiError, get, post, put } from "@/lib/api";
 // Harness gaps (fix 2, fix 3): the chat's failure line and receipt facts.
 import { FailureDetails, HarnessFailureLine } from "@/components/harness/HarnessFailure";
 import { retryItemFor, retryOffered } from "@/lib/buildRetry";
+import { RESUMED_LINE, carriedOn, carriedOnTurns, resumedFrom } from "@/lib/buildResume";
 import { receiptFacts } from "@/lib/receiptFacts";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
@@ -1925,6 +1926,9 @@ export function HarnessSession({
   // after it — one stopped before a word — means it is no longer the one to
   // retry or to fix).
   const newestReply = lastReply && shown[shown.length - 1] === lastReply ? lastReply : undefined;
+  // v1.391.0: the replies a restart cut off that the app carried on by
+  // itself (a later line names them — lib/buildResume).
+  const carried = carriedOnTurns(view?.messages ?? []);
   /** Retry: send the failed reply's question again, as a new turn (its
    *  words, uploads, "@" files and "/" skill — lib/buildRetry). The box keeps
    *  whatever the user has typed. */
@@ -2287,6 +2291,12 @@ export function HarnessSession({
               )
             ) : (
               <div key={i} data-testid="harness-reply" className="group/msg min-w-0">
+                {/* v1.391.0: this reply carried on one a restart cut off. */}
+                {resumedFrom(m) ? (
+                  <p data-testid="harness-resumed-line" className="mb-1 text-[12px] text-zinc-400">
+                    {RESUMED_LINE}
+                  </p>
+                ) : null}
                 <WorkLine
                   {...paneWorkInput(m)}
                   cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
@@ -2358,6 +2368,7 @@ export function HarnessSession({
                   onRetry={() => retryReply(i)}
                   canRewind={canRewindHere}
                   onRewind={() => setRewindOpen(true)}
+                  carriedOn={carriedOn(m, carried)}
                 />
                 <ReplyChanges
                   turn={(() => {

@@ -520,6 +520,14 @@ class Config(BaseModel):
     #: install token; each door its own). Read by ``routes/agents.reachability``
     #: so the doors' sentence points at THIS setting, never a command line.
     lan_access: bool = False
+    #: v1.391.0 (the long-jobs plan's Phase 2, decision 1): the desktop app
+    #: keeps this PC from SLEEPING while work runs (a reply, an agent run or a
+    #: mission, a workflow run, a coding tool working in a Build terminal) and
+    #: lets it sleep the moment nothing does. The screen can still turn off.
+    #: Read LIVE: ``GET /system/activity`` answers it beside ``busy``, and the
+    #: desktop's keep-awake check reads both (desktop/main.js) — a change
+    #: applies at the next check, no restart.
+    keep_awake: bool = True
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through

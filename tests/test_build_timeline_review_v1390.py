@@ -238,7 +238,14 @@ def test_a_reply_a_crash_cut_off_is_rebuilt_with_no_times(app, work):
     marked interrupted, and NO ``timing`` — the one line the reply's own
     writer did not write. The Timeline reads exactly that to say "Iron Jarvis
     stopped while answering" (lib/buildTimeline ``noTimelineReason``), never
-    "made before Iron Jarvis kept the time of each step"."""
+    "made before Iron Jarvis kept the time of each step".
+
+    v1.391.0, MOVED ON PURPOSE: that is now true only of a reply whose stored
+    frames carry NO offsets (a record stored before the Timeline). Frames
+    stamped by the reply's clock — every reply since v1.390.0 — are rebuilt
+    WITH their steps, calls and times (``test_build_cutoff_timeline_v1391``,
+    the Phase 1 review's open item); this pin's frames lost their offsets so
+    it keeps its own point."""
     from iron_jarvis.core.db import session_scope
     from iron_jarvis.core.models import ChatTurnRecord
     from iron_jarvis.harness import sessions as S
@@ -246,9 +253,9 @@ def test_a_reply_a_crash_cut_off_is_rebuilt_with_no_times(app, work):
     sid = new_session(app, work)
     S.append_lines(app.state.platform.engine, sid, [{"role": "user", "content": "go", "turnId": "tlr-cut"}])
     frames = [
-        ["round", json.dumps({"round": 0, "start": 4})],
+        ["round", json.dumps({"round": 0})],
         ["token", json.dumps({"text": "Half"})],
-        ["model_call", json.dumps({"ms": 5, "provider": "p", "model": "m", "usage": {}, "start": 4})],
+        ["model_call", json.dumps({"ms": 5, "provider": "p", "model": "m", "usage": {}})],
     ]
     with session_scope(app.state.platform.engine) as db:
         db.add(ChatTurnRecord(id="tlr-cut", thread_id=sid, status="interrupted", frames_json=json.dumps(frames)))

@@ -21,6 +21,7 @@ import { cleanStepDetail, type StepDetail } from "@/lib/stepDetail";
 import { turnUsageFrom, type TurnUsage } from "@/lib/types";
 import { stepTarget } from "@/lib/workTarget";
 import type { BuildMessage } from "@/lib/buildSessions";
+import { CARRIED_CHOICE, resumedFrom } from "@/lib/buildResume";
 
 /** The daemon's caps (routes/build MAX_STEPS / MAX_COUNTED_STEPS, harness/
  *  timeline MAX_CALLS, harness/helpers MAX_SAVED_STEPS): the live view keeps
@@ -768,7 +769,10 @@ export function replyChoices(messages: readonly BuildMessage[], live: string | n
     const words = question.replace(/\s+/g, " ").trim();
     const short = words.length > 48 ? `${words.slice(0, 47)}…` : words;
     const when = clock(typeof m.at === "string" ? m.at : "");
-    found.push({ value: String(i), label: [when, short || "A reply"].filter(Boolean).join(" · ") });
+    // v1.391.0: a reply that carried on one a restart cut off answers the
+    // same question — the list says which is which.
+    const name = `${short || "A reply"}${resumedFrom(m) ? ` ${CARRIED_CHOICE}` : ""}`;
+    found.push({ value: String(i), label: [when, name].filter(Boolean).join(" · ") });
   }
   return [...out, ...found.reverse()];
 }

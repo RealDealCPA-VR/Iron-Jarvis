@@ -484,6 +484,15 @@ SETTINGS: tuple[SettingDef, ...] = (
       section="Backups", aliases=("backup folder",)),
     S("backup_mirror_media", "Copy media with backups", "system", "bool",
       "Include generated media in the backup copy.", tier="allow", section="Backups"),
+    # v1.391.0 (long jobs, Phase 2, decision 1): the desktop app holds off
+    # sleep while work runs. Read LIVE by the desktop through /system/activity
+    # (no restart); never keeps the screen on.
+    S("keep_awake", "Keep this PC awake while work runs", "system", "bool",
+      "While a reply, an agent run, a workflow or a coding tool in a Build terminal is working, "
+      "the desktop app keeps Windows from going to sleep, so the work can finish. The screen can "
+      "still turn off. When nothing is working, the PC sleeps as usual.",
+      tier="allow", section="Power",
+      aliases=("keep awake", "prevent sleep", "stay awake", "sleep", "power")),
     S("pi_sessions_dir", "Pi sessions folder", "system", "string", "Where Pi coding sessions are read from.",
       tier="ask", advanced=True),
     S("opencode_data_dir", "OpenCode data folder", "system", "string", "Where OpenCode keeps its data.",

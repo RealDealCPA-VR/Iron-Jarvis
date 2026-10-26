@@ -51,6 +51,7 @@ import {
   type TimelineStep,
 } from "@/lib/buildTimeline";
 import { helperName } from "@/lib/buildHelpers";
+import { carriedOnTurns, timelineResumeNote } from "@/lib/buildResume";
 import type { BuildSessionView } from "@/lib/buildSessions";
 import { providerDisplay } from "@/lib/onboarding";
 import { kindWords, rowSubject, stepPhrase, stepPhraseText } from "@/lib/stepWords";
@@ -673,6 +674,17 @@ export const HarnessTimeline = memo(function HarnessTimeline({
                 .filter(Boolean)
                 .join(" · ")}
             </p>
+            {(() => {
+              // v1.391.0: a reply a stop cut off (it kept what ran), and the
+              // reply that carried it on, say so.
+              const saved = effective !== null && effective !== "live" ? view.messages[Number(effective)] : null;
+              const note = timelineResumeNote(saved, carriedOnTurns(view.messages));
+              return note ? (
+                <p data-testid="timeline-resume-note" className="text-[12px] text-zinc-400">
+                  {note}
+                </p>
+              ) : null;
+            })()}
             {totals.helpers ? (
               <p data-testid="timeline-helpers-apart" className="text-[12px] text-zinc-500">
                 {`${plural(totals.helpers, "helper")}: ${[plural(totals.helperSteps, "step"), helperCost, helperTokens]
