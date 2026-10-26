@@ -21,6 +21,7 @@ const hooks = vi.hoisted(() => ({
   api: {} as Record<string, unknown>,
   patches: [] as Array<{ path: string; body: Record<string, unknown> }>,
   release: [] as Array<() => void>,
+  refuse: false,
 }));
 
 vi.mock("@/lib/useApi", () => ({
@@ -58,7 +59,9 @@ vi.mock("@/lib/api", () => {
     post: () => Promise.resolve({}),
     patch: (path: string, body: Record<string, unknown>) => {
       hooks.patches.push({ path, body });
-      return new Promise<Record<string, unknown>>((resolve) => hooks.release.push(() => resolve({})));
+      return new Promise<Record<string, unknown>>((resolve, reject) =>
+        hooks.release.push(() => (hooks.refuse ? reject(new ApiError("That account is not listed.", 422)) : resolve({}))),
+      );
     },
   };
 });
@@ -96,6 +99,7 @@ beforeEach(() => {
   };
   hooks.patches = [];
   hooks.release = [];
+  hooks.refuse = false;
 });
 afterEach(() => cleanup());
 
@@ -135,6 +139,16 @@ describe("Settings › Model team keeps what it last sent", () => {
     await answerLastPatch();
     await waitFor(() => expect(select().disabled).toBe(false));
     expect(select().value).toBe("x-team");
+  });
+
+  it("a refused save puts the row back and says why", async () => {
+    hooks.refuse = true;
+    render(<ModelTeam />);
+    fireEvent.click(box("read"));
+    await waitFor(() => expect(hooks.patches).toHaveLength(1));
+    await answerLastPatch();
+    await screen.findByText("That account is not listed.");
+    expect([box("read").checked, box("code").checked]).toEqual([false, true]);
   });
 
   it("the empty account choice says what is true in a coding session too", () => {
