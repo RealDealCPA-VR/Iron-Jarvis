@@ -359,25 +359,30 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
     both = sorted(set(t_by) & set(a_by))
     if not both:
         return f"{NOT_ENOUGH}: the team and {label} alone have no run of the same task and repeat."
-    x, y = _scored(t_by[k] for k in both)
-    a, b = _scored(a_by[k] for k in both)
-    if not y or not b:
-        return f"{NOT_ENOUGH}: {'the team' if not y else label + ' alone'} has no scored run among the runs both made."
-    line = f"passed {x} of {y} vs {label} alone {a} of {b}"
+    # Only runs BOTH sides had a fair go at and were scored on: a run one
+    # side did not run (an account limit, an unreachable model) would count
+    # its near-zero usage against the other side's whole one.
+    keys = [k for k in both if t_by[k].get("passed") is not None and a_by[k].get("passed") is not None]
+    if not keys:
+        return f"{NOT_ENOUGH}: no run both made was scored for both the team and {label} alone."
+    x, n = _scored(t_by[k] for k in keys)
+    a, _n = _scored(a_by[k] for k in keys)
+    line = f"passed {x} of {n} vs {label} alone {a} of {n}"
+    runs = f"the {n} run{'' if n == 1 else 's'} both made and both were scored on"
     vendor = _vendor_of_planner(str(t_config.get("provider") or ""))
     if vendor not in ("claude", "codex"):
-        return line + f" (over the {len(both)} runs both made; the planner has no list price to compare)."
-    t_cost = _vendor_list_price(t_config, [t_by[k] for k in both], vendor)
-    a_cost = _vendor_list_price(a_config, [a_by[k] for k in both], vendor)
+        return line + f" (over {runs}; the planner has no list price to compare)."
+    t_cost = _vendor_list_price(t_config, [t_by[k] for k in keys], vendor)
+    a_cost = _vendor_list_price(a_config, [a_by[k] for k in keys], vendor)
     name = {"claude": "Claude", "codex": "Codex"}[vendor]
     if t_cost is None or a_cost is None:
-        return line + f" (over the {len(both)} runs both made); {name} list-price is not known for every run, so the usage is not compared."
+        return line + f" (over {runs}); {name} list-price is not known for every run, so the usage is not compared."
     if a_cost <= 0:
-        return line + f" (over the {len(both)} runs both made); {label} alone used no {name} list-price, so there is no percent to compare."
+        return line + f" (over {runs}); {label} alone used no {name} list-price, so there is no percent to compare."
     pct = (a_cost - t_cost) / a_cost * 100
     more = "less" if pct >= 0 else "more"
     return (line + f", using {abs(pct):.0f}% {more} {name} list-price "
-            f"({_money(t_cost)} vs {_money(a_cost)}, over the {len(both)} runs both made).")
+            f"({_money(t_cost)} vs {_money(a_cost)}, over {runs}).")
 
 
 def _vendor_list_price(config: Mapping[str, Any], records: list[Mapping[str, Any]], vendor: str) -> float | None:

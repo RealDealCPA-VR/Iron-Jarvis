@@ -156,7 +156,7 @@ async def test_the_team_row_beside_claude_alone_answers_the_question(world, tmp_
     alone_lp = sum(r["cost_list_price_usd"] for r in alone.records)
     pct = round((alone_lp - team_lp) / alone_lp * 100)
     assert (f"**The answer:** passed 2 of 4 vs Claude alone 2 of 4, using {pct}% less Claude list-price "
-            f"(${team_lp:.4f} vs ${alone_lp:.4f}, over the 4 runs both made).") in section
+            f"(${team_lp:.4f} vs ${alone_lp:.4f}, over the 4 runs both made and both were scored on).") in section
     # It counts the task each passes that the other fails.
     assert f"- {W.TASK_A}: 2/2 / 0/2" in section and f"- {W.TASK_B}: 0/2 / 2/2" in section
     # Exact AND measured usage on the team's row, beside its pass rate per
@@ -503,6 +503,25 @@ def test_the_answer_says_not_enough_runs_when_the_numbers_cannot_answer():
     words = TRP.answer((team_cfg, [rec]), (alone_cfg, [unknown]))
     assert words.startswith("passed 1 of 1 vs Claude alone 1 of 1") and "not known for every run" in words
     assert "%" not in words
+
+
+def test_the_answer_counts_only_runs_both_setups_had_a_fair_go_at():
+    """A run one side did not run (an account limit, say) is left out of the
+    pass counts AND the list price: its near-zero usage would otherwise read
+    as the team using less."""
+    team_cfg = {"runner": "jarvis-team", "provider": "claude-cli", "model": "m"}
+    alone_cfg = {"runner": "jarvis", "provider": "claude-cli", "model": "m"}
+
+    def rec(task, passed, cost):
+        return {"task_id": task, "passed": passed, "tokens_in": 1, "tokens_out": 1, "cost_list_price_usd": cost,
+                "parts": {PLANNER: {"vendor": "claude", "cost_list_price_usd": cost, "tokens_in": 1,
+                                    "tokens_out": 1, "model_calls": 1}}}
+
+    team = [rec("a", True, 0.1), rec("b", None, 0.0)]  # b did not run for the team
+    alone = [rec("a", True, 0.2), rec("b", True, 0.5)]
+    assert TRP.answer((team_cfg, team), (alone_cfg, alone)) == (
+        "passed 1 of 1 vs Claude alone 1 of 1, using 50% less Claude list-price "
+        "($0.1000 vs $0.2000, over the 1 run both made and both were scored on).")
 
 
 # --------------------------------------------------------------------------- #
