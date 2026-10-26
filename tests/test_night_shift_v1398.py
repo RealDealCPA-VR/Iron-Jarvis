@@ -102,6 +102,28 @@ def test_the_settings_are_tolerant_at_load_and_refused_in_words_by_the_writer(tm
         assert key in schema.daemon_keys()
 
 
+def test_the_settings_page_saves_the_night_window_and_refuses_a_time_that_is_not_one(tmp_path):
+    from fastapi.testclient import TestClient
+
+    app = create_app(str(tmp_path / "s"))
+    client = TestClient(app)
+    cfg = app.state.platform.config
+    r = client.put("/settings/values", json={"values": {
+        "night_window_start": "22:30", "night_window_end": "6:15", "night_max_at_once": 1,
+        "night_task_minutes": 45, "night_card_wait_minutes": 5,
+    }})
+    assert r.status_code == 200, r.text
+    assert (cfg.night_window_start, cfg.night_window_end) == ("22:30", "06:15")
+    assert (cfg.night_max_at_once, cfg.night_task_minutes, cfg.night_card_wait_minutes) == (1, 45, 5)
+    bad = client.put("/settings/values", json={"values": {"night_window_start": "25:00"}})
+    assert bad.status_code == 400 and "time of day" in bad.text
+    assert cfg.night_window_start == "22:30"
+    listed = client.get("/build/night").json()
+    assert listed["window"]["start"] == "22:30" and listed["limits"] == {
+        "at_once": 1, "task_minutes": 45, "card_wait_minutes": 5,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 2. the Tonight routes
 # --------------------------------------------------------------------------- #
