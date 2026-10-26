@@ -1882,6 +1882,19 @@ def register(app: FastAPI, d) -> None:
             )
         return ""
 
+    def _team_on_demo(provider: Any, roles: Any) -> None:
+        """v1.394.0 review: the demo model is never a team member — its
+        answers are scripted, and the planner would hand it real work. 422 in
+        words; nothing written."""
+        if roles and str(provider or "").strip() == "mock":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The demo model (scripted) cannot be on the model team: its answers are "
+                    "scripted. Pick a real model for this agent first, or take its roles off."
+                ),
+            )
+
     def _employee_fields(
         body: Any, *, name: str, creating: bool, provider: str = ""
     ) -> dict[str, Any]:
@@ -2056,6 +2069,7 @@ def register(app: FastAPI, d) -> None:
                 ),
             )
         fields = _employee_fields(body, name=name, creating=True, provider=body.provider)
+        _team_on_demo(body.provider, fields.get("roles") or [])
         rec = d.platform.agents_registry.register(
             name,
             body.system_prompt,
@@ -3682,16 +3696,30 @@ def register(app: FastAPI, d) -> None:
         # leave its runs pinned to an account that cannot serve them — said
         # here, never cleared behind the user's back.
         stored_account = str(getattr(rec, "account", "") or "")
-        if body.provider is not None and stored_account and "account" not in fields:
+        _mgr = getattr(d.platform, "providers", None)
+        # v1.394.0 review: a model change WITHIN the account's vendor keeps an
+        # account that still applies — nothing to refuse (the check refused
+        # every model change while Iron-Proxy was off or not read yet).
+        _same_vendor = bool(body.provider is not None and stored_account) and (
+            _team._served_cli(body.provider, _mgr) != ""
+            and _team._served_cli(body.provider, _mgr) == _team._served_cli(rec.provider, _mgr)
+        )
+        if body.provider is not None and stored_account and "account" not in fields and not _same_vendor:
             problem = _team_account_problem(stored_account, body.provider)
             if problem:
                 raise HTTPException(
                     status_code=422,
                     detail=(
                         f"{rec.name} runs on an Iron-Proxy account of its own — {problem}. "
-                        "Clear its account (account: \"\") in the same change to move it."
+                        "Set its account to \"No account of its own\" in Settings › Model team "
+                        "first, then pick the new model."
                     ),
                 )
+        # The demo model is never on the team (its answers are scripted).
+        _team_on_demo(
+            body.provider if body.provider is not None else rec.provider,
+            fields["roles"] if "roles" in fields else _team.roles_of(rec),
+        )
         updated = d.platform.agents_registry.register(
             name,
             body.system_prompt if body.system_prompt is not None else rec.system_prompt,

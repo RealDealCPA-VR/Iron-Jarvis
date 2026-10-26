@@ -209,7 +209,8 @@ async def test_an_account_must_be_one_iron_proxy_lists_and_of_the_agents_vendor(
     # Moving it to another vendor's model while it keeps the account is
     # refused in words — never cleared behind the user's back.
     status, body = await asgi(app, "PATCH", "/agents/cx", {"provider": "claude-cli"})
-    assert status == 422 and "Clear its account" in body["detail"]
+    # (v1.394.0 review: the words name the page, never the API's field.)
+    assert status == 422 and "No account of its own" in body["detail"]
     status, body = await asgi(app, "PATCH", "/agents/cx", {"provider": "claude-cli", "account": ""})
     assert status == 200 and body["account"] == ""
 

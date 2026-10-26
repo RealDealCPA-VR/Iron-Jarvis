@@ -913,7 +913,12 @@ def _block_line(entry: RosterEntry, platform=None) -> str:
 
         facts = f"[{facts_words(platform, entry.team)}]"
         tail = f"{facts} {suffix}"
-        room = max(len(entry.name), _MEMBER_LINE_CHARS - len(tail) - 1)
+        room = _MEMBER_LINE_CHARS - len(tail) - 1
+        # v1.394.0 review: the NAME is never cut — it is what the planner
+        # hands the work to ("custom:<name>"). With no room for a description
+        # beside long facts, the line is the name alone.
+        if room < len(entry.name) + 4:
+            return f"{entry.name} {tail}"
         return f"{_clamp(_one_line(head), room)} {tail}"
     return f"{_clamp(_one_line(head), _BLOCK_LINE_CHARS - len(suffix) - 1)} {suffix}"
 
