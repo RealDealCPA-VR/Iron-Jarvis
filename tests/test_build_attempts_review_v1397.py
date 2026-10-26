@@ -702,6 +702,35 @@ async def test_the_git_guard_cards_an_attempts_commit_once_only_even_in_yolo(app
     assert git("rev-list", "--count", "HEAD", cwd=wt) == git("rev-list", "--count", "HEAD", cwd=repo)
 
 
+async def test_a_project_commands_recorded_line_cards_once_only_inside_an_attempt(app, fake, repo, monkeypatch):
+    """v1.381.0's rule reaches the attempts: a line a project's command asked
+    for earlier in the session asks before it runs again, once-only, even
+    in yolo — on the attempt's own row."""
+    import asyncio
+
+    from iron_jarvis.harness import sessions as S
+    from tests.test_build_attempts_v1397 import shell
+
+    await enable(app)
+    wire_models(app, monkeypatch, World({
+        "codex-cli": ["Nothing to do."],
+        "ollama": [shell("c1", "echo deploying && echo done"), "Ran it."],
+    }))
+    view = await new_session(app, repo, approval_mode="yolo")
+    sid = view["id"]
+    S.update(app.state.platform.engine, sid, setup={"command_shell": [
+        {"name": "deploy", "source": "project", "turn_id": "t-old", "lines": ["echo deploying"]},
+    ]})
+    task = asyncio.create_task(open_turn(app, sid, {"text": TRY2, "turn_id": "cm-1"}, timeout=120.0))
+    row = await _asking_row(app, "cm-1", "ollama")
+    assert row is not None, "the recorded line asked on the attempt's row"
+    assert row["ask"].get("once_only") is True and row["ask"].get("once_reason") == "command", row["ask"]
+    status, _ = await asgi(app, "POST", f"/chat/approvals/{row['ask']['id']}", {"decision": "deny"})
+    assert status == 200
+    status, raw = await task
+    assert status == 200 and frames_of(raw)[-1][0] == "done"
+
+
 async def test_a_local_only_attempts_command_cards_once_only(app, fake, repo, monkeypatch):
     import asyncio
 
