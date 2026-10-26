@@ -156,6 +156,50 @@ def test_the_watch_names_the_model_that_answered_the_reply_so_far(clock):
 
 
 # --------------------------------------------------------------------------- #
+# 4. every NEW sentence a person reads says "coding session"
+# --------------------------------------------------------------------------- #
+#
+# v1.389.0 named the view "Coding sessions" (dashboard lib/buildWords
+# CODING_SESSION); "Build session" stays only where an EXISTING fixture holds
+# it equal (VOCABULARY.md). Phase 3's bell headline, tray notice and phone
+# words were new and said "Build session".
+
+
+def _fixture_case(name: str) -> dict:
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "dashboard" / "__tests__" / "fixtures" / "one-notice-v13600.json"
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    return next(c for c in cases if c["case"] == name)
+
+
+def test_the_stall_notice_and_the_phone_say_coding_session():
+    from iron_jarvis.comm import notifier as N
+
+    assert N.CODING_SESSION == "coding session"
+    assert N.BUILD_STALLED_HEADLINE == "Your coding session has stopped making progress"
+    stalled = _fixture_case("build-turn-stalled")
+    assert stalled["title"] == N.BUILD_STALLED_HEADLINE
+    assert N.format_event(stalled["event"]).startswith("Your coding session has stopped making progress — ")
+    payload = {"approval_id": "apr_x", "tool": "shell", "surface": "build", "title": "Fix the nav bar",
+               "thread_id": "bs1", "timeout_s": 0}
+    assert N.build_ask_words(payload).startswith("Your coding session “Fix the nav bar” is waiting for your OK to ")
+    assert N.build_ask_words({**payload, "title": ""}).startswith("Your coding session is waiting")
+    line = N.format_event({"type": "approval.requested", "payload": payload})
+    for said in (line, N.format_event(stalled["event"]), N.build_ask_words(payload)):
+        assert "Build session" not in said, said
+
+
+def test_the_tray_says_coding_session_too():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "desktop" / "main.js").read_text(encoding="utf-8")
+    block = src[src.index('if (entry.type === "build.turn_stalled")'):src.index('if (entry.type === "build.turn_finished")')]
+    assert 'title: "Your coding session has stopped making progress"' in block
+    assert "Build session" not in block.split("title:", 1)[1].split("\n", 1)[0]
+
+
+# --------------------------------------------------------------------------- #
 # 3. a step its own deadline ends is not announced as a stall
 # --------------------------------------------------------------------------- #
 #

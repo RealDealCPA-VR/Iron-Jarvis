@@ -324,7 +324,7 @@
       "pings": true,
       "attention": true,
       "phone": false,
-      "title": "Your Build session has stopped making progress",
+      "title": "Your coding session has stopped making progress",
       "body": "Port the parser · No progress for 10 minutes — waiting on this step: running a command (pytest)",
       "href": "/terminals?session=bs_stuck"
     }

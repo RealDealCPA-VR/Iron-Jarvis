@@ -148,7 +148,9 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
         await _looks(ticks)
         assert len(ch.sent) == 1
         line = ch.sent[0]
-        assert "Your Build session" in line and "Fix the nav bar" in line
+        # v1.392.0 review (moved on purpose): a NEW sentence says "coding
+        # session" (lib/buildWords, v1.389.0).
+        assert "Your coding session" in line and "Fix the nav bar" in line
         assert "approve / deny" in line and "echo phoned" not in line  # names, never arguments
         # "This PC" says nothing (the bell and the session's own row do).
         assert desk_sent == []
@@ -309,9 +311,10 @@ def test_the_phone_line_names_the_session_and_the_call_in_the_cards_words():
     payload = {"approval_id": "apr_x", "tool": "shell", "surface": "build", "title": "Fix the nav bar",
                "thread_id": "bs1", "timeout_s": 0}
     words = build_ask_words(payload)
-    assert words.startswith("Your Build session “Fix the nav bar” is waiting for your OK to ")
+    # v1.392.0 review (moved on purpose): "coding session", the user's word.
+    assert words.startswith("Your coding session “Fix the nav bar” is waiting for your OK to ")
     line = format_event({"type": "approval.requested", "payload": payload})
-    assert line.startswith("⏸ Your Build session") and line.endswith("reply here: approve / deny.")
+    assert line.startswith("⏸ Your coding session") and line.endswith("reply here: approve / deny.")
     # An agent's ask keeps its exact words.
     agent = format_event({"type": "approval.requested", "payload": {"approval_id": "a", "tool": "shell"}})
     assert agent == ("⏸ An agent is asking to use shell — approve from the dashboard bell, or reply here: "
