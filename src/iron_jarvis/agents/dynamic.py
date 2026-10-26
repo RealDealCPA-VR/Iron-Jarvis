@@ -135,6 +135,10 @@ _JOB_CARD_DEFAULTS: dict[str, Any] = {
     "reports_to": "",
     "skills_json": "[]",
     "deny_tools_json": "[]",
+    # v1.394.0 (the model team): a row written before this release has no
+    # roles (not a member) and no account.
+    "roles_json": "[]",
+    "account": "",
 }
 
 
@@ -223,6 +227,8 @@ class DynamicAgentRegistry:
         reports_to: str | Any = _KEEP,
         skills: list[str] | None | Any = _KEEP,
         deny_tools: list[str] | None | Any = _KEEP,
+        roles: list[str] | None | Any = _KEEP,
+        account: str | Any = _KEEP,
         prompt_reason: str = "edit",
     ) -> DynamicAgentRecord:
         """Create or update a dynamic agent (upsert by unique ``name``).
@@ -242,6 +248,11 @@ class DynamicAgentRegistry:
         ``deny_tools`` take lists (stored as JSON). ``approval_mode`` outside
         ``_APPROVAL_MODES`` is stored as ``""`` — never ``yolo``. Pausing is
         NOT a register concern: see :meth:`set_paused` / :meth:`resume`.
+
+        THE MODEL TEAM (v1.394.0): ``roles`` (a list; only the known role ids
+        are stored — ``agents.model_team.clean_roles``) makes the agent a team
+        member when non-empty; ``account`` names the Iron-Proxy account its
+        runs use. Both keep the stored value when omitted, like the job card.
         """
         tools_json = json.dumps(list(tools or []))
         with session_scope(self.engine) as db:
@@ -275,6 +286,8 @@ class DynamicAgentRegistry:
                 reports_to=reports_to,
                 skills=skills,
                 deny_tools=deny_tools,
+                roles=roles,
+                account=account,
             )
             db.add(record)
             db.commit()
@@ -294,6 +307,8 @@ class DynamicAgentRegistry:
         reports_to: Any,
         skills: Any,
         deny_tools: Any,
+        roles: Any = _KEEP,
+        account: Any = _KEEP,
     ) -> None:
         """Write the job-card kwargs that were GIVEN onto ``record``; ``_KEEP``
         leaves a column untouched. Each value is coerced defensively — a bad
@@ -323,6 +338,12 @@ class DynamicAgentRegistry:
             record.skills_json = json.dumps(_names(skills))
         if deny_tools is not _KEEP:
             record.deny_tools_json = json.dumps(_names(deny_tools))
+        if roles is not _KEEP:
+            from .model_team import clean_roles
+
+            record.roles_json = json.dumps(clean_roles(roles))
+        if account is not _KEEP:
+            record.account = " ".join(str(account or "").split())
 
     # --- the day off (v1.295.0) -------------------------------------------
 

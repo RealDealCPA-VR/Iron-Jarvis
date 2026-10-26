@@ -1854,6 +1854,11 @@ class AgentCreate(BaseModel):
     # The job card: skill names it is hired for, and tools it must never hold.
     skills: list[str] = []
     deny_tools: list[str] = []
+    # The model team (v1.394.0): one or more ROLES (read, code, review, test)
+    # make the agent a team member; ``account`` is the Iron-Proxy account its
+    # runs use ("" = the provider's normal pick). Validated at the route.
+    roles: list[str] = []
+    account: str = ""
 
     @field_validator("max_steps", mode="before")
     @classmethod
@@ -2070,6 +2075,10 @@ class AgentPatch(BaseModel):
     reports_to: str | None = None
     skills: list[str] | None = None
     deny_tools: list[str] | None = None
+    # The model team (v1.394.0) — same validation as AgentCreate, at the route.
+    # ``roles: []`` takes the agent off the team; ``account: ""`` clears it.
+    roles: list[str] | None = None
+    account: str | None = None
     # ``max_steps: null`` means KEEP on a PATCH, so clearing a stored budget
     # (back to the configured default) needs its own explicit flag — the same
     # reason RemoteAgentPatch has ``clear_token``. Sent together with a

@@ -3434,6 +3434,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import coach as _coach_routes
 
     _coach_routes.register(app, d)
+    # Your model team (v1.394.0): Settings › Model team's list and the
+    # "Make a starter team" preview + create.
+    from .routes import team as _team_routes
+
+    _team_routes.register(app, d)
     # Preferences you approve (v1.305.0): kept / suggested / never-ask rows,
     # and the consent-per-press look through Claude Code / Codex messages.
     from .routes import preferences as _preferences_routes

@@ -24,6 +24,13 @@ two doors read it (:func:`parent_for`):
   turn's choice. A custom agent pinned to another provider or model is
   refused in words (:func:`target_refusal`), never run on its own pin; a
   ``remote:`` agent is refused (another computer is another provider).
+  v1.394.0 (the long-jobs plan's Phase 5, decision 5): a MODEL TEAM MEMBER
+  (a custom agent with roles, ``agents/model_team``) is the one exception —
+  it runs on ITS OWN model (:func:`for_member`), held to it, on its own
+  account when it names one, else its provider's normal pick (never the
+  session's account); under Local only a member whose model leaves the
+  network is refused in words. The session's own model and account stay
+  held for the main reply.
 * THE ACCOUNT: the turn's Iron-Proxy :class:`~iron_jarvis.iron_proxy.pin.
   AccountPin` rides the context anyway (``asyncio`` copies it into every task
   the call makes); it is ALSO set explicitly around the creation of the
@@ -186,6 +193,11 @@ class HelperParent:
     #: narrowing, and under Local only an "ask" for every tool that reaches
     #: outside this PC (the parent cards those every time).
     rules: tuple[tuple[str, str], ...] = ()
+    #: v1.394.0: True for a MODEL TEAM MEMBER on its own model
+    #: (:func:`for_member`): ``provider``/``model`` are the member's and
+    #: ``pin`` is the member's own account pin — or None, which is then SET
+    #: (its provider's normal pick), never left to inherit the session's.
+    own_model: bool = False
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:
@@ -249,14 +261,19 @@ def _same_provider(manager: Any, a: str, b: str) -> bool:
 
 
 def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str = "",
-                   record: Any = None, manager: Any = None) -> str:
+                   record: Any = None, manager: Any = None, platform: Any = None) -> str:
     """The sentence a harness turn's helper is refused with, or "".
 
     A REMOTE agent is another computer (and, as far as this session can
     know, another provider): refused. A CUSTOM agent pinned to a provider or
     model other than the session's own: refused in words — the user's rule is
     "always on the session's own account and model", so the pin is neither
-    obeyed nor silently overridden."""
+    obeyed nor silently overridden.
+
+    v1.394.0 (decision 5): a MODEL TEAM MEMBER with a model of its own is
+    the exception — allowed (it runs on its own model, :func:`for_member`),
+    except under Local only when that model leaves the network: refused in
+    words (``model_team.local_only_refusal``)."""
     if parent is None:
         return ""
     name = str(getattr(entry, "name", "") or raw or "").strip()
@@ -268,6 +285,12 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
             "(researcher, builder or reviewer)."
         )
     if record is not None:
+        from ..agents import model_team as _mt
+
+        if _mt.runs_elsewhere(record):
+            if parent.local_only:
+                return _mt.local_only_refusal(platform, record, name)
+            return ""
         prov = str(getattr(record, "provider", "") or "").strip()
         mod = str(getattr(record, "model", "") or "").strip()
         # v1.372.0 review: an ALIAS of the session's provider is the session's
@@ -282,6 +305,29 @@ def target_refusal(parent: "HelperParent | None", *, entry: Any = None, raw: str
                 + ") — pick a helper with no model of its own (researcher, builder, reviewer)."
             )
     return ""
+
+
+def for_member(parent: "HelperParent | None", platform: Any, record: Any) -> "HelperParent | None":
+    """The parent a MODEL TEAM MEMBER's helper runs from (v1.394.0, decision
+    5): the same session, folder, posture, grants, trust and Local only — but
+    ITS OWN provider + model (held by :func:`pinned`) and ITS OWN account pin
+    (``model_team.member_pin``: its ``account`` when it names one, else None —
+    its provider's normal pick, never the session's account: a helper on
+    Codex must not lease under the session's Claude pin). Anyone who is not a
+    member with a model of its own gets ``parent`` back unchanged."""
+    if parent is None or record is None:
+        return parent
+    from ..agents import model_team as _mt
+
+    if not _mt.runs_elsewhere(record):
+        return parent
+    return replace(
+        parent,
+        provider=str(getattr(record, "provider", "") or "").strip(),
+        model=_mt.pinned_model(platform, record),
+        pin=_mt.member_pin(platform, record),
+        own_model=True,
+    )
 
 
 #: Never handed to a helper even when its turn holds them: the helper doors
@@ -325,6 +371,11 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
     if parent is None or not parent.tools or definition is None:
         return definition
     from .mode import PLAN_MODE_TOOLS
+    # v1.394.0: a MODEL TEAM MEMBER that stores no tool list of its own works
+    # like the built-in it is based on (the builder gets the turn's whole set,
+    # a read-only base the turn's read-only part) — its base type's roster is
+    # written for office work and lacks the coding tools. Callers pass
+    # ``custom=False`` for such a member (``model_team.inherits_tools``).
 
     turn = [t for t in dict.fromkeys(parent.tools) if t not in NOT_FOR_HELPERS]
     kind = str(getattr(getattr(definition, "type", None), "value", "") or "")
@@ -379,7 +430,10 @@ def pinned(parent: "HelperParent | None") -> Iterator[None]:
     from .command_shell import reset_turn_rule, set_turn_rule
 
     scope_token = MCP_SCOPE.set(None)
-    token = set_pin(parent.pin) if parent.pin is not None else None
+    # v1.394.0: a member on its own model takes ITS pin — None included (its
+    # provider's normal pick): leaving the session's pin in the copied
+    # context would lease a Codex helper under the session's Claude account.
+    token = set_pin(parent.pin) if (parent.pin is not None or parent.own_model) else None
     hold_token = set_hold(parent.provider, parent.model)
     rule_token = set_turn_rule(parent.command_rule)
     try:
@@ -959,7 +1013,7 @@ async def until_stopped(aw: Any, handle: Any) -> tuple[Any, bool]:
 
 __all__ = [
     "AGENT_TOOLS", "ASK_POLL_S", "FINAL_STATES", "HELPER_EVENT", "HELPER_ORIGIN",
-    "HELPER_PARENT", "HELPER_TOOLS", "HelperCall", "HelperParent", "MAX_HELPERS",
+    "HELPER_PARENT", "HELPER_TOOLS", "HelperCall", "HelperParent", "MAX_HELPERS", "for_member",
     "NOT_FOR_HELPERS", "READ_ONLY_TYPES",
     "SKILL_TOOLS", "STOPPED_RESULT", "asking", "call_target", "child_started", "helper_call",
     "helper_definition",

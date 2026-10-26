@@ -29,7 +29,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardE
 import { Bot, ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
 import { STEP_ICON, StepDetailPanel } from "@/components/chat/WorkLine";
 import { secondsText } from "@/components/chat/TurnReceipt";
-import { answeredModelName, type CatalogRow } from "@/lib/answeredModel";
+import type { CatalogRow } from "@/lib/answeredModel";
 import {
   LIVE_CHOICE,
   axisTicks,
@@ -50,11 +50,10 @@ import {
   type TimelineRow,
   type TimelineStep,
 } from "@/lib/buildTimeline";
-import { helperName } from "@/lib/buildHelpers";
+import { helperName, workerModelName } from "@/lib/buildHelpers";
 import { carriedOnTurns, timelineResumeNote } from "@/lib/buildResume";
 import type { BuildSessionView } from "@/lib/buildSessions";
 import { accountUsageLine, type BuildAccount } from "@/lib/buildAccounts";
-import { providerDisplay } from "@/lib/onboarding";
 import { kindWords, rowSubject, stepPhrase, stepPhraseText } from "@/lib/stepWords";
 import { summarizedWords } from "@/lib/buildLongJobs";
 import { LIST_PRICE_TITLE, type TurnUsage } from "@/lib/types";
@@ -150,11 +149,10 @@ const STATE_WORDS: Record<BarState, string> = {
 };
 
 function modelName(provider: string, model: string, models: readonly CatalogRow[]): string {
-  if (!provider && !model) return "The model";
-  // The demo model is named as the composer names it ("Demo model
-  // (scripted)"), never by its scripted id.
-  if (provider === "mock") return providerDisplay(provider);
-  return answeredModelName({ provider, model }, models) || providerDisplay(provider) || model;
+  // v1.394.0: ONE rule with the helper row (lib/buildHelpers
+  // workerModelName) — the demo model by the composer's name, else the
+  // catalog's label, the provider's name, the id.
+  return workerModelName(provider, model, models) || "The model";
 }
 
 /** A step in the run log's words: "Read app.py", "Reading app.py"; a check

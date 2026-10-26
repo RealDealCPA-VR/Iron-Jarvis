@@ -1,0 +1,175 @@
+{
+ "_doc": "v1.394.0: a REAL recorded coding reply on Claude that handed reading to a local team member and coding to a Codex member (tests/test_model_team_live_v1394.py). Regenerate with IJ_REGEN_TEAM_TIMELINE=1.",
+ "question": {
+  "role": "user",
+  "content": "Use the team.",
+  "turnId": "team-1",
+  "at": "2026-10-26T10:01:24.616733+00:00"
+ },
+ "line": {
+  "role": "assistant",
+  "content": "Done: read by the local member, written by Codex.",
+  "turnId": "team-1",
+  "route": {
+   "requested": "claude-cli",
+   "provider": "claude-cli",
+   "model": "claude-sonnet-4-5",
+   "reason": "explicit",
+   "from": "",
+   "why": "",
+   "reasoning": "",
+   "label": "",
+   "text_only": false,
+   "local_only": false,
+   "allowed_once": false,
+   "on_this_network": false,
+   "harness": {
+    "family": "claude",
+    "dialect": "claude",
+    "fingerprint": "400d7132af4ab0ecdb012409313a9db3b48f642dcc7645c47ca012d96cf82480",
+    "layers": [
+     "default",
+     "family:claude"
+    ],
+    "nudged": false,
+    "map": {
+     "files": 1,
+     "chars": 211,
+     "limit": 2560,
+     "complete": true
+    }
+   },
+   "account": {
+    "id": "c-work",
+    "name": "Work Max"
+   }
+  },
+  "toolsUsed": [
+   "delegate",
+   "delegate"
+  ],
+  "documents": [],
+  "deniedTools": [],
+  "usage": {
+   "input_tokens": 20,
+   "output_tokens": 8,
+   "cost_usd": 0.00018,
+   "list_price_equivalent": true
+  },
+  "steps": [
+   {
+    "name": "delegate",
+    "ok": true,
+    "ms": 275,
+    "start": 345,
+    "helper": true,
+    "detail": {
+     "input": "{\"agent_type\": \"custom:local-reader\", \"task\": \"local-reader\\n\\nRead app.py and summarize it.\"}",
+     "output": "[custom:local-reader agent_run_id=run_9998ddda5344 session=session_a6188fb2d8a3]\nollama did: local-reader\n\nRead app.py and summarize it."
+    }
+   },
+   {
+    "name": "delegate",
+    "ok": true,
+    "ms": 256,
+    "start": 345,
+    "helper": true,
+    "detail": {
+     "input": "{\"agent_type\": \"custom:codex-coder\", \"task\": \"codex-coder\\n\\nWrite util.py with a helper.\"}",
+     "output": "[custom:codex-coder agent_run_id=run_508e05476ff8 session=session_80f82261d825]\ncodex-cli did: codex-coder\n\nWrite util.py with a helper."
+    }
+   }
+  ],
+  "truncated": false,
+  "folderRules": [],
+  "approved": [],
+  "doors": [],
+  "timing": {
+   "startedAt": 1793008884618,
+   "firstTokenAt": 1793008885267,
+   "endedAt": 1793008885272,
+   "ms": 654
+  },
+  "helpers": [
+   {
+    "id": "h-read",
+    "work": [],
+    "steps": 0,
+    "agent": "custom:local-reader",
+    "task": "local-reader Read app.py and summarize it.",
+    "state": "done",
+    "startedAt": 1793008884964,
+    "start": 346,
+    "session": "session_a6188fb2d8a3",
+    "provider": "ollama",
+    "model": "qwen3:8b",
+    "result": "ollama did: local-reader Read app.py and summarize it.",
+    "endedAt": 1793008885239,
+    "end": 620,
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "cost_usd": 0.0
+    }
+   },
+   {
+    "id": "h-code",
+    "work": [],
+    "steps": 0,
+    "agent": "custom:codex-coder",
+    "task": "codex-coder Write util.py with a helper.",
+    "state": "done",
+    "startedAt": 1793008884964,
+    "start": 346,
+    "session": "session_80f82261d825",
+    "provider": "codex-cli",
+    "model": "subscription",
+    "result": "codex-cli did: codex-coder Write util.py with a helper.",
+    "endedAt": 1793008885219,
+    "end": 601,
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "list_price_equivalent": true
+    }
+   }
+  ],
+  "context": {
+   "window": 32000,
+   "used": 1351,
+   "tokens": 1351,
+   "percent": 4,
+   "suggest_at": 70,
+   "auto_at": 92,
+   "level": "ok",
+   "window_known": false
+  },
+  "calls": [
+   {
+    "start": 337,
+    "ms": 6,
+    "provider": "claude-cli",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "cost_usd": 9e-05,
+     "list_price_equivalent": true
+    }
+   },
+   {
+    "start": 624,
+    "ms": 25,
+    "provider": "claude-cli",
+    "model": "claude-sonnet-4-5",
+    "usage": {
+     "input_tokens": 10,
+     "output_tokens": 4,
+     "cost_usd": 9e-05,
+     "list_price_equivalent": true
+    }
+   }
+  ],
+  "at": "2026-10-26T10:01:25.274691+00:00"
+ }
+}

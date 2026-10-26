@@ -20,6 +20,8 @@ import type { ToolCard, TurnStep } from "@/lib/useChatStream";
 import { agentPhrase, agentRunName, type AgentRunStamp } from "@/lib/agentRun";
 import { readSavedPlan, settlePlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 import { onceReasonOf, type OnceReason } from "@/lib/onceReason";
+import { answeredModelName, type CatalogRow } from "@/lib/answeredModel";
+import { providerDisplay } from "@/lib/onboarding";
 
 export type HelperState = "starting" | "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 
@@ -79,6 +81,10 @@ export interface HelperView {
    *  lane) — the daemon's own checklist, sent on the row's frame each time
    *  the run moves on (harness/helpers `helper_plan`); absent for most. */
   plan?: PlanView | null;
+  /** v1.394.0 (the model team): the provider + model its run is served by
+   *  ("" until its run says) — a team member runs on its OWN model. */
+  provider?: string;
+  model?: string;
 }
 
 /** One helper as the reply keeps it. */
@@ -96,6 +102,9 @@ export interface SavedHelper {
   /** v1.374.0: the helper's own plan when its run planned its work (the
    *  decomposed lane) — the checklist's saved form, settled; absent else. */
   plan?: SavedPlan;
+  /** v1.394.0: the model it ran on (the saved line keeps it, v1.390.0). */
+  provider?: string;
+  model?: string;
 }
 
 const rec = (v: unknown): Record<string, unknown> | null =>
@@ -174,6 +183,11 @@ export function applyHelperFrame(prev: readonly HelperView[], data: Record<strin
   if (result) h.result = result;
   const note = str(data.note, 200);
   if (note) h.note = note;
+  // v1.394.0: the model the helper's run is served by.
+  const provider = str(data.provider, 120);
+  if (provider) h.provider = provider;
+  const model = str(data.model, 200);
+  if (model) h.model = model;
   if (typeof data.phase === "string" && data.phase) {
     h.phase = str(data.phase, 60);
     h.phaseDetail = str(data.detail, 200);
@@ -254,6 +268,9 @@ export function decodeSavedHelpers(raw: unknown): SavedHelper[] {
       endedAt: int(r.endedAt),
       result: str(r.result, 2000),
       work,
+      // v1.394.0: the model it ran on, when the line kept one.
+      ...(str(r.provider, 120) ? { provider: str(r.provider, 120) } : {}),
+      ...(str(r.model, 200) ? { model: str(r.model, 200) } : {}),
       // v1.374.0: read as untrusted as the rest; a malformed plan is none.
       ...(() => {
         const plan = toSavedPlan(readSavedPlan(r.plan));
@@ -302,6 +319,8 @@ export function settledFromLive(h: HelperView): SavedHelper | null {
     startedAt: h.since,
     endedAt: h.ended,
     result: h.result,
+    ...(h.provider ? { provider: h.provider } : {}),
+    ...(h.model ? { model: h.model } : {}),
     work: h.tools
       .filter((t) => t.status === "done")
       .map((t) => ({
@@ -311,6 +330,17 @@ export function settledFromLive(h: HelperView): SavedHelper | null {
         ...(t.detail ? { detail: t.detail } : {}),
       })),
   };
+}
+
+/** v1.394.0 (the model team): a worker's model in the model menu's words —
+ *  the catalog's label, the provider's own name for its default model, else a
+ *  friendly id — or "" when nothing names it. ONE rule for the helper row and
+ *  the Timeline (components/harness/HarnessTimeline). */
+export function workerModelName(provider: string, model: string, models: readonly CatalogRow[]): string {
+  if (!provider && !model) return "";
+  // The demo model is named as the composer names it, never by its id.
+  if (provider === "mock") return providerDisplay(provider);
+  return answeredModelName({ provider, model }, models) || providerDisplay(provider) || model;
 }
 
 /** What the row says the helper was asked: "Asked: find config reads". */

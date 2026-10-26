@@ -986,7 +986,9 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         "most 3 at once; more wait for a free slot) — use that to search different parts of the "
         "code in parallel. Give each a complete prompt: it cannot see this conversation. "
         "subagent_type: general-purpose (can change files, default), Explore (reads and "
-        "searches), or a name from list_agents. model and effort are not used here.",
+        "searches), or a name from list_agents — a member of the user's model team (listed "
+        "under 'Your model team') works on its OWN model instead. model and effort are not "
+        "used here.",
         _obj({
             "description": _d("A short (3-5 word) description of the task", _S),
             "prompt": _d("The task for the agent to perform", _S),
@@ -1144,7 +1146,8 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
         "message run at the same time (at most 3 at once; more wait for a free slot). The "
         "sub-agent cannot see this conversation: put everything it needs in message. "
         "agent_type: default or worker (can change files), explorer (reads and searches), or a "
-        "name from list_agents.",
+        "name from list_agents — a member of the user's model team (listed under 'Your model "
+        "team') works on its OWN model instead.",
         # Codex 0.157.0's multi_agent_v1.spawn_agent arguments that mean
         # something here (v2's task_name is still accepted by the translation).
         _obj({
