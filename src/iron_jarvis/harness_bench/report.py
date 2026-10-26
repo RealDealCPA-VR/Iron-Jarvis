@@ -27,6 +27,12 @@ v1.383.0 (IJ harness part 3, Phase 1):
   invocation ran, from a repeat beyond this invocation's count (left by an
   earlier invocation that asked for more), is STALE: left out of every number
   and said in one line (``bench`` marks it; results.json keeps it).
+* v1.396.0 (the long-jobs plan's Phase 7, MEASURED): a Jarvis setup's report
+  gains its USAGE (exact tokens and list price per vendor; the measured
+  percent of each subscription window), WHO DID WHAT and the team router's
+  record; the combined report sets every TEAM setup beside the single-model
+  setups of the same tiers and repeats and ANSWERS the plan's question from
+  the numbers both hold (:mod:`.team_report`).
 * THE EXACT MODEL. Every report names the model AS PASSED (and the effort),
   what the runs REPORTED they ran on ("model not reported" when a run named
   none — never "default"), and flags each run whose reported model differs
@@ -541,6 +547,11 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
     lines += ["", "## By category", "", "| Category | Passed / scored | Unscored |", "|---|---|---|"]
     for category, c in s["per_category"].items():
         lines.append(f"| {category} | {c['passed']} / {c['scored']} | {c['unscored']} |")
+    # v1.396.0: usage per vendor, who did what, the router's record (a
+    # setup whose runs carry neither parts nor readings adds nothing).
+    from .team_report import usage_section
+
+    lines += usage_section(config, records)
     lines += [
         "",
         f"Means per run: {_num(s['mean_tool_calls'])} tool calls, {_num(s['mean_model_rounds'])} model "
@@ -667,6 +678,10 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             f"| {config.get('runner')} | {config.get('model') or NOT_NAMED} | "
             f"{_setup(config)} | " + " | ".join(cells) + " |"
         )
+    # v1.396.0: a TEAM setup beside the single-model ones, and the answer.
+    from .team_report import side_by_side
+
+    lines += side_by_side(summaries)
     if not configs:
         lines += ["", "No benchmark runs were found yet."]
     lines.append("")
