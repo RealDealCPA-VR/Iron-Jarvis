@@ -498,3 +498,40 @@ async def test_an_open_card_on_the_phone_is_taken_and_an_expired_one_never_is(pl
     assert res["status"] == "approval_answered", res
     await asyncio.sleep(0)
     assert open_fut.done() and open_fut.result() == "once"
+
+
+@pytest.mark.parametrize("by", ["night", "wait", "restart"])
+async def test_emergency_stop_stops_every_kind_iron_jarvis_starts_by_itself(tmp_path, by):
+    """Every daemon-started kind (a night task's turn, Resume when ready and a
+    move within a group — both "wait" —, a reply carried on after a restart)
+    through the REAL stop path; a person's turn beside it keeps going."""
+    from iron_jarvis.daemon.routes import build as build_routes
+    from tests.test_build_resume_v1391 import Hold
+    from tests.test_build_sessions_v1367 import new_session, open_turn, until
+
+    app = create_app(str(tmp_path / "home"))
+    work = tmp_path / "w"
+    work.mkdir()
+    auto_sid = new_session(app, work)["id"]
+    person_sid = new_session(app, work)["id"]
+    hold_auto, hold_person = Hold(), Hold()
+
+    class TwoScripts(Script):
+        async def _next(self, system, messages, tools):
+            text = " ".join(str(getattr(m, "content", "")) for m in messages)
+            return await (hold_auto if "AUTO" in text else hold_person)(self)
+
+    wire(app, TwoScripts([]))
+    lg = await build_routes.start_build_turn(app.state.d, auto_sid, "AUTO carry on", f"bt-{by}", started_by=by)
+    person = asyncio.create_task(open_turn(app, person_sid, {"text": "PERSON hi", "turn_id": "bt-me"}, timeout=60))
+    await asyncio.wait_for(hold_auto.reached.wait(), 30)
+    await asyncio.wait_for(hold_person.reached.wait(), 30)
+    app.state.platform.config.autonomy_kill_switch = True
+    stopped = await asyncio.to_thread(app.state.platform.orchestrator.stop_unattended)
+    assert f"turn:bt-{by}" in stopped and "turn:bt-me" not in stopped, stopped
+    await until(lambda: lg.status != "running", 30)
+    assert lg.status != "running"
+    assert app.state.platform.turn_logs.get("bt-me").status == "running", "a person's turn keeps going"
+    hold_auto.gate.set()
+    hold_person.gate.set()
+    await asyncio.wait_for(person, 60)
