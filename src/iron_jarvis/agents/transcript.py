@@ -124,31 +124,38 @@ def has_transcript(engine: Any, run_id: str) -> bool:
         return row is not None and (row.messages_json or "[]") != "[]"
 
 
-def _cut_off_note(engine: Any, run_id: str, call: Any, registry: Any) -> str:
+def _cut_off_note(engine: Any, run_id: str, call: Any, registry: Any, *,
+                  tool_name: str = "", since: Any = None) -> str:
     """What became of a tool call the stop cut off: the reconcile's note on
     its ledger row (matched by run, tool and arguments), else the words
-    ``replay_safe`` chooses."""
+    ``replay_safe`` chooses.
+
+    v1.391.0: ``tool_name`` — the REAL tool when the call carries a model's
+    own name for it (a coding session's dialect: ``Bash`` for ``shell``);
+    ``since`` — only ledger rows written from then on (a coding session's
+    ledger key is the whole SESSION, so an older reply's cut-off row of the
+    same tool must not answer for this one). Both omitted: exactly as before."""
     from sqlmodel import select
 
     from ..core.models import ToolInvocation
     from ..tools.base import replay_safe
     from ..tools.registry import INTERRUPTED_MAY_HAVE_LANDED, INTERRUPTED_SAFE, interrupted_note
 
+    name = tool_name or call.name
     try:
         with session_scope(engine) as db:
-            rows = list(
-                db.exec(
-                    select(ToolInvocation).where(
-                        ToolInvocation.agent_run_id == run_id, ToolInvocation.tool == call.name
-                    )
-                ).all()
+            stmt = select(ToolInvocation).where(
+                ToolInvocation.agent_run_id == run_id, ToolInvocation.tool == name
             )
+            if since is not None:
+                stmt = stmt.where(ToolInvocation.created_at >= since)
+            rows = list(db.exec(stmt).all())
         for r in reversed(rows):
             if r.output in (INTERRUPTED_SAFE, INTERRUPTED_MAY_HAVE_LANDED):
                 return r.output
     except Exception:  # noqa: BLE001
         pass
-    tool = registry.get(call.name) if registry is not None else None
+    tool = registry.get(name) if registry is not None else None
     return interrupted_note(replay_safe(tool))
 
 
@@ -359,10 +366,31 @@ def plan_checklist(stored: dict[str, Any], *, awaiting_approval: bool = False) -
     return out
 
 
-def load_for_resume(engine: Any, run_id: str, registry: Any = None) -> list[Any] | None:
+def real_tool_names(rows: Any) -> dict[str, str]:
+    """``{call id: real tool}`` from a stored list whose calls carry the real
+    tool beside the model's own name (``"tool"``, v1.391.0 — a coding
+    session's dialect). Empty for every agent run's list. Never raises."""
+    out: dict[str, str] = {}
+    for r in rows if isinstance(rows, list) else []:
+        if not isinstance(r, dict):
+            continue
+        for c in r.get("tool_calls") or []:
+            if isinstance(c, dict) and c.get("id") and isinstance(c.get("tool"), str) and c["tool"]:
+                out[str(c["id"])] = c["tool"]
+    return out
+
+
+def load_for_resume(engine: Any, run_id: str, registry: Any = None, *,
+                    ledger_run_id: str = "", since: Any = None) -> list[Any] | None:
     """The messages a resumed run starts from, or None when run ``run_id``
     kept none. Every tool call without a result gets one (see the module
-    doc); the caller appends its own instruction after them."""
+    doc); the caller appends its own instruction after them.
+
+    v1.391.0 (a coding session's reply): ``ledger_run_id`` — the key its tool
+    calls are ledgered under when it is not ``run_id`` (a session's
+    ``build:<id>``), ``since`` — the reply's start (only its own cut-off rows
+    answer); a stored call's REAL tool (``"tool"`` beside the model's name)
+    decides both the ledger match and ``replay_safe``. Omitted: as before."""
     from ..providers.adapters.base import LLMMessage
 
     with session_scope(engine) as db:
@@ -371,11 +399,14 @@ def load_for_resume(engine: Any, run_id: str, registry: Any = None) -> list[Any]
             return None
         text = row.messages_json or "[]"
     try:
-        messages = _decode(json.loads(text))
+        raw = json.loads(text)
+        messages = _decode(raw)
     except ValueError:
         return None
     if not messages:
         return None
+    real = real_tool_names(raw)
+    ledger_key = ledger_run_id or run_id
     out: list[Any] = []
     i = 0
     while i < len(messages):
@@ -395,7 +426,10 @@ def load_for_resume(engine: Any, run_id: str, registry: Any = None) -> list[Any]
                             role="tool",
                             tool_call_id=call.id,
                             name=call.name,
-                            content=_cut_off_note(engine, run_id, call, registry),
+                            content=_cut_off_note(
+                                engine, ledger_key, call, registry,
+                                tool_name=real.get(call.id, ""), since=since,
+                            ),
                         )
                     )
     return out
