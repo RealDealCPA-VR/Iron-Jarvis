@@ -245,6 +245,12 @@ async def test_a_wait_cancelled_during_a_slow_check_is_never_armed_again(app, fa
     """The loop's write after its check used to put back a wait the user
     cancelled while Iron-Proxy was asked (S.update of the old record)."""
     beh, sid = await _limit(app, fake, work, monkeypatch)
+    # Armed by the press too (the race is the same for both).
+    status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/resume-when-ready")
+    assert status == 200 and setup_of(app, sid)["account_wait"]["account"] == "c-work"
+    wait = setup_of(app, sid)["account_wait"]
+    wait["next_check_at"] = iso(-5)
+    S.update(app.state.platform.engine, sid, setup={"account_wait": wait})
 
     def slow_check(platform, setup):
         S.update(app.state.platform.engine, sid, setup={"account_wait": None})  # the user's Cancel
@@ -493,8 +499,12 @@ async def test_with_the_setting_off_a_group_still_moves_once_and_never_waits(app
     beh, sid = await _limit(app, fake, work, monkeypatch, groups={"Work": ["c-work", "c-gone"]})
     assert setup_of(app, sid)["account_wait"]["once"] is True
     # Nothing in the group can serve: the wait ENDS (the card waits for a
-    # press), and the limit is said as a question that needs the user.
-    assert await build_routes.resume_due(app.state.d) == []
+    # press), and the limit is said as a question that needs the user. Even
+    # with c-work's own reset already past, it is NOT carried on by itself:
+    # the user turned that off (only the move was asked for).
+    _reset(fake)
+    assert await build_routes.resume_due(app.state.d, now=_later()) == []
+    assert len(beh.calls) == 1
     assert "account_wait" not in setup_of(app, sid)
     [said] = _events(app, "build.account_limit")
     assert said["waiting"] is False
