@@ -4697,13 +4697,21 @@ async def chat_stream(
                 _eff_msgs, _eff_system = msgs, system
                 if _reply_summary is not None:
                     _sum_calls: list[tuple[Any, float]] = []
-                    _sum = await _reply_summary.step(
+                    # v1.392.0 review: RACED against Stop like every other
+                    # slow stage of a named turn (`_prep_step` — its rule
+                    # names "the automatic summary's model call"): a Stop
+                    # pressed while the summary is written ends the reply now,
+                    # not when the call (up to 240 s) comes back.
+                    _sum = await _prep_step(_reply_summary.step(
                         d, msgs, system, _head,
                         provider=route_provider or provider_choice,
                         model=route_model or model_choice,
                         round_index=_round,
                         on_call=lambda _r, _ms: _sum_calls.append((_r, _ms)),
-                    )
+                    ))
+                    if _sum is _PREP_STOPPED:
+                        _persist_once(AgentState.CANCELLED)
+                        return
                     for _r, _ms in _sum_calls:
                         _su = getattr(getattr(_r, "response", None), "usage", None) or {}
                         _sp = str(getattr(_r, "provider", "") or route_provider)

@@ -330,6 +330,45 @@ async def test_the_summary_is_asked_of_the_replys_own_model_pinned_held_and_loca
     assert all(s["local_only"] is True for s in summ), "the summary ran outside the turn's Local only"
 
 
+async def test_stop_lands_while_the_reply_is_writing_its_summary(app, work):
+    """The summary's model call (up to SUMMARY_TIMEOUT_S, 240 s) is raced
+    against Stop like every other stage of a named turn (`_prep_step`'s own
+    rule names "the automatic summary's model call"): a Stop pressed while it
+    is being written ends the reply at once, never four minutes later."""
+    from iron_jarvis.context import compaction as C
+    from iron_jarvis.core.turns import TURNS
+    from tests.test_build_reply_summary_v1392 import LongReply, _wire
+
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+
+    class Slow(LongReply):
+        async def complete(self, *, provider=None, model=None, system="", messages=(), tools=None,
+                           task_class=None, **kw):
+            if system.startswith(C.COMPACT_PROMPT[:40]):
+                entered.set()
+                await gate.wait()
+            return await super().complete(provider=provider, model=model, system=system, messages=messages,
+                                          tools=tools, task_class=task_class, **kw)
+
+    _wire(app, Slow(app, rounds=200))
+    sid = new_session(app, work, approval_mode="yolo")["id"]
+    drop = asyncio.Event()
+    task = asyncio.create_task(open_turn(app, sid, {"text": "write the modules", "turn_id": "bt-sum-stop"},
+                                         drop=drop, timeout=120))
+    try:
+        await asyncio.wait_for(entered.wait(), 60)
+        assert TURNS.stop("bt-sum-stop")
+        lg = turn_log(app, "bt-sum-stop")
+        assert await until(lambda: lg.status != "running", 20), "Stop waited for the summary to be written"
+        assert not gate.is_set()
+    finally:
+        gate.set()
+        drop.set()
+        await task
+    assert [e for e, _ in turn_frames(app, "bt-sum-stop") if e == "summarized"] == []
+
+
 # --------------------------------------------------------------------------- #
 # 3. a step its own deadline ends is not announced as a stall
 # --------------------------------------------------------------------------- #
@@ -422,6 +461,14 @@ async def test_a_hung_step_under_the_default_deadline_is_said_only_once_it_outli
         clock.advance(stall.DEADLINE_GRACE_S)
         got = await until(lambda: _stalls(app, "bt-dl"), 30)
         assert got and got[0]["step"]["id"] == "c1"
+        # Another session's id, or another reply's id, stops nothing.
+        other = new_session(app, work, approval_mode="yolo")["id"]
+        status, _ = await asgi(app, "POST", f"/build/sessions/{other}/stop-step", {"step_id": "c1"})
+        assert status == 404
+        status, _ = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step",
+                               {"step_id": "c1", "turn_id": "bt-not-this-one"})
+        assert status == 404
+        assert stall.running_steps("bt-dl") == ["c1"], "a wrong id stopped the step"
         status, out = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "c1"})
         assert status == 200, out
         lg = turn_log(app, "bt-dl")
