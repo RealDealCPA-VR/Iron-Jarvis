@@ -99,7 +99,9 @@ def test_a_local_member_whose_record_is_not_good_comes_after_the_cloud(w):
 
 def test_two_failures_in_a_row_stop_a_local_member_getting_the_role_first_until_it_passes(w):
     team(w)
-    note(w.p, "glm", "code", [True, True, True, True, False, False])
+    # 8 of 10 passed — a GOOD rate: only the two failures in a row demote it.
+    note(w.p, "glm", "code", [True] * 8 + [False, False])
+    assert TR.role_record(w.p.engine, "glm", "code").rate >= TR.GOOD_RATE
     pick = T.route_role(w.p, "code")
     assert pick.record.name != "glm"
     assert "the local member failed coding 2 times in a row" in pick.reason
