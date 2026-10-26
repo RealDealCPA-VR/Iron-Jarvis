@@ -196,6 +196,23 @@ async def test_the_time_limit_is_the_tasks_across_its_turns(tmp_path, clock):
     assert refused.value.detail == N.TIME_USED_UP
 
 
+def test_a_queued_task_keeps_the_pc_awake_from_the_evening_not_only_once_the_window_opens(tmp_path):
+    """The plan: "keep-awake holds while a night task is queued or running".
+    The first cut held only inside the window, so a PC that sleeps after an
+    idle half hour slept through 11 PM with tonight's tasks queued."""
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    cfg = app.state.platform.config
+    assert N.awake_needed(engine, cfg, _local(22, 30)) is False, "nothing queued"
+    N.add_task(engine, folder=str(tmp_path), words="tonight")
+    assert N.awake_needed(engine, cfg, _local(22, 30)) is True
+    assert N.awake_needed(engine, cfg, _local(18, 0)) is True
+    assert N.awake_needed(engine, cfg, _local(23, 30)) is True
+    assert N.awake_needed(engine, cfg, _local(9, 0)) is False, "not all day"
+    cfg.autonomy_kill_switch = True
+    assert N.awake_needed(engine, cfg, _local(22, 30)) is False
+
+
 def test_a_carry_on_turn_is_capped_at_what_is_left_of_the_tasks_minutes(tmp_path):
     cfg = Config(home=tmp_path, project_root=tmp_path, night_task_minutes=90)
     assert N.posture_setup({}, cfg, {"ran_s": 60 * 60})["cap"] == {"minutes": 30}

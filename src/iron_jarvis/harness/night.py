@@ -610,11 +610,17 @@ def window_view(config: Any, now: "datetime | None" = None) -> dict[str, Any]:
     }
 
 
+#: How long before the night window opens a QUEUED task keeps the PC awake
+#: (v1.398.0 review): from 5 PM for the default 11 PM window.
+AWAKE_BEFORE_S = 6 * 3600.0
+
+
 def awake_needed(engine: Any, config: Any, now: "datetime | None" = None) -> bool:
     """Should the PC stay awake for night shift (``/system/activity``'s
     ``night_shift``, read by the desktop's sleep blocker)? A night task is
-    RUNNING, or one is QUEUED while the window is open and Emergency stop is
-    off (it would start on the loop's next pass). BLOCKING; never raises."""
+    RUNNING, or one is QUEUED while Emergency stop is off and the window is
+    open or opens within :data:`AWAKE_BEFORE_S` (it starts on the loop's
+    first pass inside it). BLOCKING; never raises."""
     try:
         with session_scope(engine) as db:
             running = db.exec(
@@ -629,7 +635,22 @@ def awake_needed(engine: Any, config: Any, now: "datetime | None" = None) -> boo
             return False
         from ..agents.orchestrator import emergency_stop_on
 
-        return window_open(config, now) and not emergency_stop_on(config)
+        if emergency_stop_on(config):
+            return False
+        if window_open(config, now):
+            return True
+        # v1.398.0 review: the plan's own words — "keep-awake holds while a
+        # night task is QUEUED or running". Holding only once the window was
+        # open let a PC set to sleep after an idle half hour fall asleep at
+        # 10:30 PM with tonight's tasks queued, and the night never came. It
+        # holds from AWAKE_BEFORE_S before the window opens (not all day: a
+        # task queued in the morning does not keep a laptop awake till night).
+        from .night_window import next_start
+
+        at = now or now_local()
+        start, end = window_of(config)
+        nxt = next_start(at, start, end)
+        return nxt is not None and 0 <= (nxt - at).total_seconds() <= AWAKE_BEFORE_S
     except Exception:  # noqa: BLE001 — no table yet: nothing to keep awake for
         return False
 
