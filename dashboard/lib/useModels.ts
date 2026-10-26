@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { useApi, type ApiState } from "./useApi";
 import type { ModelOption } from "./types";
 
@@ -37,12 +39,21 @@ export interface ModelCatalog extends ApiState<{ models: ModelOption[] }> {
   usable: ModelOption[];
 }
 
+/** v1.390.0: ONE empty list for "no catalog yet" — a fresh `[]` per render
+ *  made every reader that memoizes on the list (the coding session's Timeline)
+ *  redraw on every streamed word until `/models` answered, or forever when it
+ *  failed. */
+const NO_MODELS: ModelOption[] = [];
+
 export function useModels(): ModelCatalog {
   const state = useApi<{ models: ModelOption[] }>("/models");
-  const models = state.data?.models ?? [];
+  const models = state.data?.models ?? NO_MODELS;
+  // Same list, same `usable`: a fresh filter per render broke every memo
+  // downstream the same way.
+  const usable = useMemo(() => models.filter((m) => m.available !== false), [models]);
   return {
     ...state,
     models,
-    usable: models.filter((m) => m.available !== false),
+    usable,
   };
 }
