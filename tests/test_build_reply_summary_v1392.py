@@ -17,7 +17,6 @@ the window is a pin small enough that 300 rounds overflow it many times.
 
 from __future__ import annotations
 
-import asyncio
 import re
 
 import pytest

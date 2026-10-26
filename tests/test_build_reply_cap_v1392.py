@@ -14,7 +14,6 @@ The wall clock a cap reads is ``harness.reply_cap.WALL``, moved by the test.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -23,7 +22,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.daemon.routes import build as build_routes
 from iron_jarvis.daemon.routes.chat import _clean_setup
 from iron_jarvis.harness import reply_cap as RC
-from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
+from iron_jarvis.providers.adapters.base import LLMResponse
 from tests.test_build_resume_v1391 import _cut_off_mid_reply, _reboot, _write
 from tests.test_build_sessions_v1367 import (
     Script,
