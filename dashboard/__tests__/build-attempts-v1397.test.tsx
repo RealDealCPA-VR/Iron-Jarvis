@@ -92,6 +92,7 @@ import {
   decodeAttemptsCard,
   togglePick,
   tryOnChoices,
+  tryOnMenuPosition,
   usageWords,
   type TryOnPick,
 } from "@/lib/buildAttempts";
@@ -334,7 +335,7 @@ describe("when they end: one card, side by side, and Keep", () => {
     await waitFor(() => expect(screen.getAllByTestId("attempt-column")).toHaveLength(3));
     expect(screen.getByTestId("attempts-card")).toBeInTheDocument();
     // The line decoder keeps `attempts` (the daemon's LINE_KEYS).
-    const line = decodeMessage({ role: "assistant", content: "", attempts: CARD, junk: 1 }) as Record<string, unknown>;
+    const line = decodeMessage({ role: "assistant", content: "", attempts: CARD, junk: 1 }) as unknown as Record<string, unknown>;
     expect(line.attempts).toEqual(CARD);
     expect("junk" in line).toBe(false);
   });
@@ -379,6 +380,23 @@ describe("the \"Try on…\" control: opt-in, for the next message, at most three
     expect(picks).toHaveLength(MAX_ATTEMPTS);
     picks = togglePick(picks, picks[0]);
     expect(picks).toHaveLength(2);
+  });
+
+  it("its list is always inside the window: a phone, a chip mid-row, a chip at the edge", () => {
+    for (const [vw, vh, left, top] of [
+      [390, 844, 250, 760],
+      [390, 844, 10, 760],
+      [1280, 720, 1200, 650],
+      [1024, 640, 300, 120],
+    ] as const) {
+      const p = tryOnMenuPosition({ left, top }, { width: vw, height: vh });
+      expect(p.left).toBeGreaterThanOrEqual(16);
+      expect(p.left + p.width).toBeLessThanOrEqual(vw - 16);
+      expect(p.width).toBeLessThanOrEqual(320);
+      // Hung just above the chip; never taller than the room above it.
+      expect(vh - p.bottom).toBeLessThanOrEqual(top);
+      expect(p.maxHeight).toBeGreaterThan(0);
+    }
   });
 
   it("opens, ticks up to three, Escape closes and gives the focus back", () => {

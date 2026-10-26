@@ -418,6 +418,22 @@ export function tryOnBody(picks: readonly TryOnPick[]): { provider: string; mode
   return picks.map((p) => ({ provider: p.provider, model: p.model }));
 }
 
+/** The control's list, FIXED to the window above its chip (a portal: the
+ *  session's columns clip what overflows them) and always inside the window —
+ *  16 px from either side, as wide as fits up to 320 px, its height capped to
+ *  the room above the chip. Pure. */
+export function tryOnMenuPosition(
+  anchor: { left: number; top: number },
+  viewport: { width: number; height: number },
+): { left: number; bottom: number; width: number; maxHeight: number } {
+  const EDGE = 16;
+  const width = Math.max(0, Math.min(320, viewport.width - 2 * EDGE));
+  const left = Math.max(EDGE, Math.min(anchor.left, viewport.width - width - EDGE));
+  const bottom = Math.max(EDGE, viewport.height - anchor.top + 8);
+  const maxHeight = Math.max(120, anchor.top - 8 - EDGE);
+  return { left: Math.round(left), bottom: Math.round(bottom), width: Math.round(width), maxHeight: Math.round(maxHeight) };
+}
+
 /** The chip's words once models are picked. */
 export function tryOnChipWords(picks: readonly TryOnPick[]): string {
   if (!picks.length) return "Try on…";
