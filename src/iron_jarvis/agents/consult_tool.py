@@ -360,6 +360,20 @@ class ConsultTool(Tool):
             refusal = _model_team.account_refusal(self.platform, row)
             if refusal:
                 return _Consultation(error=refusal)
+            # v1.395.0 review: decision 8 for a question too — a pay-per-use
+            # member answers only under the pay-per-use limit (a model asking
+            # spends the money), and nothing new starts on an account at the
+            # floor (95% of a window). Off the loop (``_resolve`` runs in a
+            # worker thread); the pin is the caller's, as ``member_scope``
+            # will read it.
+            refusal = _model_team.pay_refusal(self.platform, row, tail=_model_team.QUESTION_TAIL)
+            if not refusal and _model_team.runs_elsewhere(row):
+                from ..iron_proxy.pin import current as _current_pin
+
+                _pin = _model_team.member_account(self.platform, row, _current_pin())[0]
+                refusal = _model_team.floor_refusal(self.platform, row, _pin, tail=_model_team.QUESTION_TAIL)
+            if refusal:
+                return _Consultation(error=refusal)
         else:
             from .threads import AgentThreads
 

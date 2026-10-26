@@ -583,6 +583,26 @@ async def test_a_model_naming_a_pay_per_use_member_at_the_default_limit_is_refus
     assert res.ok, res.error
 
 
+async def test_a_question_to_a_member_is_under_the_same_limits(w, tmp_path):
+    """``consult`` asks a member one question — a model call on its model and
+    account: a pay-per-use member answers only under the limit, and nothing new
+    starts on an account at the floor."""
+    member(w.p, "gpt", "openai", "gpt-5", roles=("review",))
+    member(w.p, "claude-code", "claude-cli", "subscription", roles=("review",))
+    w.svc.set_percent("c-work", 97, resets_in=5400)
+    w.svc.set_percent("c-spare", 99, resets_in=900)
+    sid = await _parent(w.p)
+    consult = w.p.registry.get("consult")
+    paid = await consult.execute({"agent": "custom:gpt", "question": "Is this right?"}, _ctx(w.p, sid, tmp_path))
+    assert not paid.ok
+    assert paid.error.startswith("'gpt' is a pay-per-use member") and paid.error.endswith(
+        "Ask another member, or answer it yourself.")
+    full = await consult.execute({"agent": "custom:claude-code", "question": "Is this right?"},
+                                 _ctx(w.p, sid, tmp_path))
+    assert not full.ok and "nothing new starts on an account at 95% or more" in full.error
+    assert not [c for c in w.log if c["provider"] in ("openai", "claude-cli", "codex-cli")]
+
+
 async def test_a_task_the_user_queued_for_a_pay_member_runs_and_one_an_agent_queued_is_held(w):
     from iron_jarvis.agents.orchestrator import Orchestrator
     from iron_jarvis.assignments.dispatcher import AssignmentDispatcher

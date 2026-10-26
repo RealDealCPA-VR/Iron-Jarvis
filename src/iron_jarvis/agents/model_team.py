@@ -1400,7 +1400,13 @@ def _floor_words() -> str:
     return f"{int(TAKEOVER_MAX_PERCENT)}%"
 
 
-def floor_refusal(platform: Any, record: Any, pin: Any, now: Any = None) -> str:
+#: How a refusal ends for a PIECE of work, and for a QUESTION (``consult``).
+PIECE_TAIL = " Hand this piece to another member, or do it yourself."
+QUESTION_TAIL = " Ask another member, or answer it yourself."
+
+
+def floor_refusal(platform: Any, record: Any, pin: Any, now: Any = None, *,
+                  tail: str = PIECE_TAIL) -> str:
     """DECISION 8'S FLOOR for a piece a member is about to start (v1.395.0
     review): "never start new work on an account at 95%" — for a member the
     planner NAMED as much as for one the router picked (the router's 80% is
@@ -1424,7 +1430,6 @@ def floor_refusal(platform: Any, record: Any, pin: Any, now: Any = None) -> str:
         who = str(getattr(record, "name", "") or "This member")
         label = BA.VENDORS.get(str(row.get("vendor") or ""), {}).get("label") or "its account"
         name = f"{label} ({row.get('name')})" if row.get("name") else label
-        tail = " Hand this piece to another member, or do it yourself."
         if row.get("status") == BA.LIMIT:
             when = _reset_words(row.get("resets_at"))
             return (f"'{who}' would run on {name}, which is at its usage limit"
@@ -1450,7 +1455,7 @@ def floor_refusal(platform: Any, record: Any, pin: Any, now: Any = None) -> str:
         return ""
 
 
-def pay_refusal(platform: Any, record: Any, now: Any = None) -> str:
+def pay_refusal(platform: Any, record: Any, now: Any = None, *, tail: str = PIECE_TAIL) -> str:
     """DECISION 8's pay-per-use rule for a member a MODEL hands work to by
     name (v1.395.0 review): "Pay-per-use only with a monthly cap you set
     (default $0)" — and the plan's promise that nothing spends pay-per-use
@@ -1474,17 +1479,14 @@ def pay_refusal(platform: Any, record: Any, now: Any = None) -> str:
         who = str(getattr(record, "name", "") or "This member")
         if cap <= 0:
             return (f"'{who}' is a pay-per-use member, and your model team's pay-per-use limit is $0 a "
-                    f"month ({PAY_PLACE}), so no pay-per-use work is handed out. Hand this piece to another "
-                    "member, or do it yourself.")
+                    f"month ({PAY_PLACE}), so no pay-per-use work is handed out." + tail)
         spend = paid_spend_this_month(platform, now)
         if spend >= cap:
             return (f"'{who}' is a pay-per-use member, and this month's pay-per-use spend (${spend:.2f}) "
-                    f"has reached your ${cap:.2f} limit ({PAY_PLACE}). Hand this piece to another member, "
-                    "or do it yourself.")
+                    f"has reached your ${cap:.2f} limit ({PAY_PLACE})." + tail)
     except Exception:  # noqa: BLE001 — unsure: refused (the honest side for money)
         log.debug("model team pay check failed", exc_info=True)
-        return ("This member's cost could not be checked, so it takes no pay-per-use work now. Hand this "
-                "piece to another member, or do it yourself.")
+        return "This member's cost could not be checked, so it takes no pay-per-use work now." + tail
     return ""
 
 
@@ -2187,6 +2189,7 @@ __all__ += [
     "piece_key", "provider_ready", "queued_refusal", "review_task", "role_id", "role_named",
     "route_for_call", "route_role", "run_as_member", "unknown_role_refusal",
     # v1.395.0 review
-    "AccountPick", "PAY_PLACE", "PIECE_PERCENT", "PLACED_RECENT_S", "UNKNOWN_BURST_MAX",
+    "AccountPick", "PAY_PLACE", "PIECE_PERCENT", "PIECE_TAIL", "PLACED_RECENT_S", "QUESTION_TAIL",
+    "UNKNOWN_BURST_MAX",
     "floor_refusal", "named_account", "pay_refusal", "work_group",
 ]
