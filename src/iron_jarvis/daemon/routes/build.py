@@ -1584,10 +1584,29 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     # driver task runs inside `start_build_turn`'s hold) until a model call
     # says who answered.
     _held = current_hold()
+
+    def _step_deadline(name: str) -> "float | None":
+        # v1.392.0 review: the deadline the registry puts on this step (the
+        # lane passes `chat_tool_deadline` to every call; a tool that waits on
+        # a person or runs a whole helper is exempt). Read live, like the lane.
+        if platform is None:
+            return None
+        from ..chat_turn import chat_tool_deadline
+
+        deadline = chat_tool_deadline(platform)
+        if deadline is None:
+            return None
+        registry = getattr(platform, "registry", None)
+        tool = registry.get(name) if registry is not None else None
+        if tool is not None and getattr(tool, "deadline_exempt", False):
+            return None
+        return deadline
+
     stall_watch = _stall.StallWatch(
         parked=lambda: bool(open_asks),
         provider=_held.provider if _held is not None else "",
         manager=getattr(platform, "providers", None) if platform is not None else None,
+        step_deadline=_step_deadline,
     )
 
     async def _announce_stall(notice: dict[str, Any]) -> None:

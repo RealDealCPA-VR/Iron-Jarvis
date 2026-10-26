@@ -80,6 +80,18 @@ def clock(monkeypatch):
 
 
 @pytest.fixture()
+def no_deadline(app):
+    """v1.392.0 review (moved on purpose): with the default per-call deadline
+    (``tool_call_timeout_s`` 600 — the window itself) the deadline, not a
+    stall notice, ends a hung step at ten minutes
+    (tests/test_build_stall_review_v1392.py). These tests are the case the
+    notice exists for: a step nothing else will end — here, the user turned
+    the per-call deadline off."""
+    app.state.platform.config.tool_call_timeout_s = 0
+    return app
+
+
+@pytest.fixture()
 def checks(monkeypatch):
     """How many times the watch has looked (a negative check waits for looks,
     never for a length of time)."""
@@ -149,7 +161,7 @@ def _alive(pid: int) -> bool:
 
 
 async def test_a_hung_step_is_said_once_at_ten_minutes_and_stop_the_step_ends_only_it(
-    app, work, tmp_path, clock, checks,
+    app, work, tmp_path, clock, checks, no_deadline,
 ):
     sid = new_session(app, work, approval_mode="yolo")["id"]
     pidfile = tmp_path / "hang.pid"
@@ -211,7 +223,7 @@ async def test_a_hung_step_is_said_once_at_ten_minutes_and_stop_the_step_ends_on
 
 
 async def test_stop_the_step_ends_exactly_that_calls_process_and_nothing_else_the_session_runs(
-    app, work, tmp_path, clock, checks,
+    app, work, tmp_path, clock, checks, no_deadline,
 ):
     """A program the reply started earlier (a dev server, ``process_start``)
     keeps running: only the stopped call's process is gone — by pid."""

@@ -63,6 +63,12 @@ STALL_AFTER_S = 600.0
 PHONE_AFTER_S = 300.0
 #: How often the watch looks (the notice lands within this of the window).
 TICK_S = 5.0
+#: v1.392.0 review: how long past its own DEADLINE (the registry's
+#: ``config.tool_call_timeout_s``, 600 s by default — the window itself) a
+#: step may still run before it is a stall: the deadline's cancel, the
+#: command tree's kill and the ledger row take a moment. A hang detector,
+#: never a speed bar.
+DEADLINE_GRACE_S = 60.0
 #: The clock every interval here is measured on (monotonic seconds). Tests
 #: replace it with a clock they move by hand.
 CLOCK: Callable[[], float] = time.monotonic
@@ -185,13 +191,20 @@ class StallWatch:
 
     def __init__(self, *, parked: "Callable[[], bool] | None" = None,
                  after_s: "float | None" = None, provider: str = "",
-                 manager: Any = None) -> None:
+                 manager: Any = None,
+                 step_deadline: "Callable[[str], float | None] | None" = None) -> None:
         self.after_s = float(STALL_AFTER_S if after_s is None else after_s)
         self._parked = parked or (lambda: False)
         self._last = now()
-        #: call id -> (tool name, its redacted args) of a step that started
-        #: and has not finished, in the order they started.
-        self._running: dict[str, tuple[str, Any]] = {}
+        #: call id -> (tool name, its redacted args, when it started) of a
+        #: step that started and has not finished, in the order they started.
+        self._running: dict[str, tuple[str, Any, float]] = {}
+        #: v1.392.0 review: the deadline the registry puts on a step by its
+        #: tool name (None = none: no deadline, or a tool exempt from it). A
+        #: step its own deadline ends AT the window is not a stall — the
+        #: notice would land a moment before the deadline ended it, with a
+        #: "Stop the step" that could only answer "already finished".
+        self._step_deadline = step_deadline
         self._helper_calls: set[str] = set()
         #: v1.392.0 review: WHO the reply waits on when no step runs — the
         #: turn's held model (``routes/build.recorded_turn`` passes it), then
@@ -238,7 +251,7 @@ class StallWatch:
             else:
                 cid = str(frame.get("id") or "")
                 if frame.get("status") == "started":
-                    self._running[cid] = (str(frame.get("name") or ""), frame.get("args"))
+                    self._running[cid] = (str(frame.get("name") or ""), frame.get("args"), now())
                 elif frame.get("status") == "finished":
                     self._running.pop(cid, None)
         return True
@@ -249,11 +262,36 @@ class StallWatch:
         """``(words, step)`` — what the reply waits on now; ``step`` is
         ``{id, name}`` of the oldest running tool call (None when the model
         is answering, or the step is a helper's own call)."""
-        for cid, (name, args) in self._running.items():
+        for cid, (name, args, _started) in self._running.items():
             if cid in self._helper_calls:
                 return f"the helper it started ({step_words(name, args)})", None
             return f"this step: {step_words(name, args)}", {"id": cid, "name": name}
         return model_words(self.provider, self.manager), None
+
+    def _held_by_deadline(self) -> bool:
+        """Is the step the reply waits on one its OWN deadline is ending at
+        (or before) the window? Then the deadline is the notice: it ends the
+        step with a failed result the model reads, and the reply goes on.
+        Only a step that OUTLIVES its deadline by :data:`DEADLINE_GRACE_S`
+        (something the deadline could not stop) is a stall. A deadline
+        longer than the window does not hold the notice. Never raises."""
+        if self._step_deadline is None:
+            return False
+        for cid, (name, _args, started) in self._running.items():
+            if cid in self._helper_calls:
+                return False
+            try:
+                deadline = self._step_deadline(name)
+            except Exception:  # noqa: BLE001 — a notice is never lost to a lookup
+                return False
+            if not deadline or deadline <= 0:
+                return False
+            ends = float(started) + float(deadline)
+            return (
+                ends <= self._last + self.after_s + DEADLINE_GRACE_S
+                and now() < ends + DEADLINE_GRACE_S
+            )
+        return False
 
     def check(self) -> "dict[str, Any] | None":
         """The frame data to send now, or None: a NEW episode's notice once
@@ -271,6 +309,8 @@ class StallWatch:
             # the answer (its frame is progress).
             return None
         if idle < self.after_s:
+            return None
+        if self._held_by_deadline():
             return None
         words, step = self.waiting_on()
         notice: dict[str, Any] = {
@@ -590,7 +630,7 @@ class PhoneAsk:
 
 
 __all__ = [
-    "CLOCK", "PHONE_AFTER_S", "SAFETY_REASONS", "STALL_AFTER_S", "STALL_FRAME", "STOPPED_LEDGER_NOTE",
+    "CLOCK", "DEADLINE_GRACE_S", "PHONE_AFTER_S", "SAFETY_REASONS", "STALL_AFTER_S", "STALL_FRAME", "STOPPED_LEDGER_NOTE",
     "StallWatch", "TICK_S", "keep", "listening", "minutes_words", "model_words", "notice_words", "now",
     "phone_may_ask", "progress_scope", "run_step", "running_steps", "step_words", "stop_step",
     "stopped_by_user", "stopped_result", "touch", "watched",

@@ -18,15 +18,19 @@ Every interval is read through ``harness.stall.CLOCK`` (moved by the test).
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 
 import pytest
 
-from iron_jarvis.core import progress
+from iron_jarvis.core import procs, progress
 from iron_jarvis.core.events import EventBus, EventType
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.harness import stall
+from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_sessions_v1367 import (
     Script,
+    asgi,
     new_session,
     open_turn,
     turn_frames,
@@ -142,8 +146,6 @@ async def test_a_model_that_says_nothing_for_ten_minutes_is_named_by_the_session
 def test_the_watch_names_the_model_that_answered_the_reply_so_far(clock):
     """A ``model_call`` frame (the Timeline's) names who answered; the next
     silence waits on THAT model."""
-    import json
-
     w = stall.StallWatch(provider="codex-cli")
     clock.advance(601)
     assert w.check()["words"].endswith("waiting on Codex's answer")
@@ -151,3 +153,105 @@ def test_the_watch_names_the_model_that_answered_the_reply_so_far(clock):
     assert w.ended() == {"over": True}
     clock.advance(601)
     assert w.check()["words"].endswith("waiting on Claude Code's answer")
+
+
+# --------------------------------------------------------------------------- #
+# 3. a step its own deadline ends is not announced as a stall
+# --------------------------------------------------------------------------- #
+#
+# Every tool call of a coding reply runs under the registry's deadline
+# (`config.tool_call_timeout_s`, 600 s by default — the stall window). The
+# watch ticked from the `started` frame and the deadline from a moment later,
+# so a hung step was announced (bell, tray) a few milliseconds before its own
+# deadline ended it — a notice whose "Stop the step" could only answer "That
+# step had already finished". The watch now holds a notice for a step whose
+# deadline ends it at the window, and says it only when the step outlives its
+# deadline (something the deadline could not stop).
+
+
+def _started(cid: str, name: str = "shell", args: dict | None = None) -> str:
+    frame = {"id": cid, "name": name, "status": "started", "args": args or {"command": "pytest"}}
+    return "event: tool_call\ndata: " + json.dumps(frame) + "\n\n"
+
+
+def test_a_step_its_deadline_ends_at_the_window_is_not_announced_until_it_outlives_it(clock):
+    w = stall.StallWatch(step_deadline=lambda name: 600.0)
+    w.saw(_started("c1"))
+    clock.advance(601)
+    assert w.check() is None, "a step its own deadline is ending was announced as a stall"
+    clock.advance(stall.DEADLINE_GRACE_S)
+    notice = w.check()
+    assert notice and notice["step"] == {"id": "c1", "name": "shell"}
+
+
+def test_a_deadline_longer_than_the_window_does_not_hold_the_notice(clock):
+    w = stall.StallWatch(step_deadline=lambda name: 3600.0)
+    w.saw(_started("c1"))
+    clock.advance(601)
+    assert w.check() is not None
+
+
+def test_no_deadline_and_the_model_are_announced_at_the_window(clock):
+    w = stall.StallWatch(step_deadline=lambda name: None)
+    w.saw(_started("c1"))
+    clock.advance(601)
+    assert w.check() is not None
+    m = stall.StallWatch(step_deadline=lambda name: 600.0)
+    clock.advance(601)
+    assert m.check() is not None  # no step runs: the model is what it waits on
+
+
+def test_a_resolver_that_raises_never_holds_a_notice(clock):
+    def boom(name):
+        raise RuntimeError("x")
+
+    w = stall.StallWatch(step_deadline=boom)
+    w.saw(_started("c1"))
+    clock.advance(601)
+    assert w.check() is not None
+
+
+def _hang(pidfile) -> str:
+    return (
+        f'"{sys.executable}" -c "import os,time,pathlib; '
+        f"pathlib.Path('{pidfile.as_posix()}').write_text(str(os.getpid())); time.sleep(600)\""
+    )
+
+
+async def test_a_hung_step_under_the_default_deadline_is_said_only_once_it_outlives_it(
+    app, work, tmp_path, clock, monkeypatch,
+):
+    """End to end on the real app, default `tool_call_timeout_s` (600): ten
+    minutes and one second of a hung command is not yet a stall (its deadline
+    ends it then); past the deadline and its grace it is."""
+    assert app.state.platform.config.tool_call_timeout_s == 600
+    seen = {"n": 0}
+    real = stall.StallWatch.check
+
+    def counted(self):
+        seen["n"] += 1
+        return real(self)
+
+    monkeypatch.setattr(stall.StallWatch, "check", counted)
+    sid = new_session(app, work, approval_mode="yolo")["id"]
+    pidfile = tmp_path / "hang.pid"
+    wire(app, Script([[ToolCall(id="c1", name="Bash", arguments={"command": _hang(pidfile)})], "Moved on."]))
+    drop = asyncio.Event()
+    task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-dl"}, drop=drop, timeout=120))
+    try:
+        assert await until(lambda: pidfile.exists() and pidfile.read_text(encoding="utf-8").strip(), 60)
+        clock.advance(601)
+        start = seen["n"]
+        assert await until(lambda: seen["n"] >= start + 5, 30)
+        assert _stalls(app, "bt-dl") == [], "announced a step its own deadline is about to end"
+        clock.advance(stall.DEADLINE_GRACE_S)
+        got = await until(lambda: _stalls(app, "bt-dl"), 30)
+        assert got and got[0]["step"]["id"] == "c1"
+        status, out = await asgi(app, "POST", f"/build/sessions/{sid}/stop-step", {"step_id": "c1"})
+        assert status == 200, out
+        lg = turn_log(app, "bt-dl")
+        assert await until(lambda: lg.status != "running", 60)
+    finally:
+        drop.set()
+        await task
+        procs.end_session(f"build:{sid}")
