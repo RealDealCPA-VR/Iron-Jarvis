@@ -102,7 +102,7 @@ from .bench import (
     TRAJECTORY_NAME,
 )
 from .catalog import Task, TaskError, load_tasks, select_tasks
-from .ledger import BudgetLedger, BudgetMismatch, Rollout, differences, sum_fields
+from .ledger import BudgetLedger, BudgetMismatch, Rollout, differences, receipts_of, sum_fields
 from .runners import (
     DEFAULT_ROUNDS,
     JARVIS_APPROVAL_MODE,
@@ -286,7 +286,9 @@ class RefineLedger:
     def problems(self) -> list[str]:
         """Every way the ledger does not add up (empty = it does)."""
         out: list[str] = []
-        counts = [sum(1 for r in s.records if not r.get("reused")) for s in self.stages]
+        # v1.396.0: a record of several receipts (a turn and its helpers)
+        # may sit one rounding per receipt away from its calls.
+        counts = [sum(receipts_of(r) for r in s.records if not r.get("reused")) for s in self.stages]
         for s, n in zip(self.stages, counts):
             diff = differences(s.record_totals(), s.totals(), records=n)
             if diff:
