@@ -85,6 +85,11 @@ from ...harness.checkers import CALLED_AS as _checkers_called_as
 from ...providers import turn_scope as _turn_scope
 # v1.390.0 (the Timeline): a harness turn says each billed model call.
 from ...harness import timeline as _timeline_mod
+# v1.392.0 (the long-jobs plan's Phase 3): a coding session's reply never
+# stalls silently — Stop the step, the phone, the summary mid-reply, the cap.
+from ...harness import stall as _stall
+from ...harness import reply_cap as _reply_cap_mod
+from ...harness.reply_summary import SUMMARY_FRAME as _SUMMARY_FRAME
 from ..chat_turn import (
     preference_block,
     remembered_from_result,
@@ -1116,6 +1121,16 @@ def _clean_setup(raw: Any) -> str:
     command_shell = _clean_command_shell(raw.get(_CMD_SHELL_KEY))
     if command_shell:
         out[_CMD_SHELL_KEY] = command_shell
+    # v1.392.0 (the long-jobs plan's Phase 3, decision 8): a Build session's
+    # OPTIONAL cap on a reply's time ({minutes}) and/or list-price cost
+    # ({usd}), set in its ⋯ menu (PATCH /build/sessions/{id}) — by its own
+    # whitelist (``harness/reply_cap.clean``). Absent = no cap, the default.
+    from ...harness.reply_cap import SETUP_KEY as _CAP_KEY
+    from ...harness.reply_cap import clean as _clean_cap
+
+    cap = _clean_cap(raw.get(_CAP_KEY))
+    if cap:
+        out[_CAP_KEY] = cap
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -1446,6 +1461,13 @@ def register(app: FastAPI, d) -> None:
             aid = payload.get("approval_id")
             if not isinstance(aid, str) or aid not in pending or aid in meta:
                 continue  # newest-first scan: the first hit per id wins
+            if payload.get("surface") == _stall.PHONE_SURFACE:
+                # v1.392.0 (decision 3): a coding session's card sent on to
+                # the phone. Its ONE row on this PC is the session's own
+                # waiting row below (`waiting_unwatched`, shown only while no
+                # window shows the card) — never a second row as an agent's.
+                meta[aid] = {}
+                continue
             # ONLY these keys, copied explicitly — never the payload itself,
             # so args (or anything else that rides the event) cannot leak.
             meta[aid] = {
@@ -1480,7 +1502,7 @@ def register(app: FastAPI, d) -> None:
         # mislabel the user's own question as an agent run and double-surface
         # it on every page. The runtime lane always publishes the event, so a
         # real agent ask can never be dropped by this filter.
-        listed = [meta[a] for a in ids if a in meta]
+        listed = [meta[a] for a in ids if meta.get(a)]
         # WHERE THE ASK LIVES (v1.310.0, W2-5): additive ``mission_id`` (the
         # mission ROOT when the asking session is a mission coordinator or one
         # of its teammates — a teammate is never a mission of its own) and
@@ -2951,6 +2973,7 @@ async def stream_chat_turn(
     session_id: "str | None" = None,
     plan_mode: bool = False,
     reply_record=None,
+    reply_cap=None,
 ):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
@@ -3111,6 +3134,16 @@ async def stream_chat_turn(
     benchmark), every byte is what it was. STREAM LANE ONLY, on purpose: a
     coding session's turn never runs through the POST lane
     (``chat_turn.run_chat_turn`` has no coding session to keep — pinned).
+
+    ``reply_cap`` (v1.392.0, the long-jobs plan's Phase 3, decision 8) — a
+    coding session's OPTIONAL cap on its reply's time and/or list-price cost
+    (``harness.reply_cap.ReplyCap``, None = no cap, the default): at the cap
+    the reply ends the step-limit way (one tool-less progress report, ``cap``
+    on the done frame). With a reply record (a coding session's turn) the
+    lane also gives the reply Stop the step, the phone for a card nobody
+    answers in the app, and the summary of its own older rounds
+    (``harness/stall``, ``harness/reply_summary``). Keyword only; STREAM LANE
+    ONLY, like ``reply_record`` (the POST lane has no coding session).
     """
     _eager_checks(platform, body)
     round_budget = _chat_turn.turn_round_budget(round_budget)
@@ -3158,6 +3191,9 @@ async def stream_chat_turn(
         prep=_prep, round_budget=round_budget, stay_in_chat=stay_in_chat,
         harness=harness, session_id=session_id, plan_mode=plan_mode,
         reply_record=reply_record,
+        # v1.392.0: passed only when set (a lane double that predates the cap
+        # sees the call it always saw).
+        **({"reply_cap": reply_cap} if reply_cap is not None else {}),
     ), _prep), _lo_scope))
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
@@ -3320,6 +3356,7 @@ async def chat_stream(
     session_id: "str | None" = None,
     plan_mode: bool = False,
     reply_record=None,
+    reply_cap=None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -3358,6 +3395,14 @@ async def chat_stream(
     # v1.367.0: the same for the Build session's knobs.
     _tool_session = _chat_turn.turn_session_id(session_id)
     plan_mode = _chat_turn.turn_plan_mode(plan_mode, harness)
+    # v1.392.0 (the long-jobs plan's Phase 3): a CODING SESSION's turn — the
+    # one caller that hands the lane a reply record (`routes/build.
+    # start_build_turn`) — gets Stop the step, the phone for a card nobody
+    # answers in the app, the summary mid-reply and the optional cap. Every
+    # other turn (chat, the sidebar, the benchmark, POST /chat): none of it.
+    _coding_session = reply_record is not None
+    _step_turn = str(getattr(body, "turn_id", "") or "").strip()
+    from ...tools.base import ToolResult as _ToolResult
 
     # (The 400 for empty messages is `_eager_checks`, run by
     # `stream_chat_turn` before this generator exists — v1.312.0.)
@@ -4578,6 +4623,25 @@ async def chat_stream(
         # answer; the final-answer wording is chosen by the same helper.
         _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
         _cut_office = False
+        # v1.392.0 (the long-jobs plan's Phase 3, decision 8): the cap a
+        # coding session's reply met ({kind, limit}), None while it has not
+        # (or the session has none — the default).
+        _cap_met: "dict[str, Any] | None" = None
+        # v1.392.0: a coding session's reply summarizes its own older rounds
+        # past ~90% of the model's window (the agent runtime's machinery —
+        # harness/reply_summary). None on every other turn.
+        _reply_summary = None
+        if _coding_session and _harness is not None:
+            from ...harness.reply_summary import ReplySummary as _ReplySummary
+            from ...harness.rewind import _naive_utc
+
+            # The ledger that may back the summary: what this reply did since
+            # its question (a reply carried on after a restart: since the
+            # question it carries on).
+            _reply_summary = _ReplySummary(
+                d.platform, str(getattr(body, "thread_id", "") or ""),
+                since=_naive_utc(getattr(reply_record, "origin_at", None) or turn_started),
+            )
         # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
         # history; each completion sends `msgs` FITTED to the window (the
         # rounds grow it). MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
@@ -4593,6 +4657,16 @@ async def chat_stream(
                     # client walked away — keep the ledger honest.
                     _persist_once(AgentState.CANCELLED)
                     return
+                if reply_cap is not None and _cap_met is None:
+                    # THE SESSION'S CAP (v1.392.0, decision 8 — off unless the
+                    # user set one): its time since the reply's ORIGINAL
+                    # question, or its list-price cost so far, at the cap ends
+                    # the reply the step-limit way — no tool runs again; one
+                    # tool-less progress report below (`_cut_office`).
+                    _cap_met = reply_cap.met(_tally.cost_usd)
+                    if _cap_met is not None:
+                        _cut_office = True
+                        break
                 # STEER (v1.242.0): a note queued from another window joins
                 # the conversation as the user's own next message, here at the
                 # round boundary and nowhere else. AFTER the stop check on
@@ -4613,6 +4687,39 @@ async def chat_stream(
                     # (and any note above) in, before the model is asked
                     # again. Off the loop; never fails the turn.
                     await reply_record.save(msgs, _head)
+                # THE SUMMARY MID-REPLY (v1.392.0): past ~90% of the model's
+                # window a coding reply has its own model write a summary of
+                # its older rounds (checked against the ledger), which rides
+                # the system prompt from here on while the rounds it covers
+                # leave what is SENT (whole units; `msgs` itself and the
+                # reply's record keep everything). Its call is billed on the
+                # receipt and drawn on the Timeline. None: as before.
+                _eff_msgs, _eff_system = msgs, system
+                if _reply_summary is not None:
+                    _sum_calls: list[tuple[Any, float]] = []
+                    _sum = await _reply_summary.step(
+                        d, msgs, system, _head,
+                        provider=route_provider or provider_choice,
+                        model=route_model or model_choice,
+                        round_index=_round,
+                        on_call=lambda _r, _ms: _sum_calls.append((_r, _ms)),
+                    )
+                    for _r, _ms in _sum_calls:
+                        _su = getattr(getattr(_r, "response", None), "usage", None) or {}
+                        _sp = str(getattr(_r, "provider", "") or route_provider)
+                        _sm = str(getattr(_r, "model", "") or route_model)
+                        usage_in += int(_su.get("input_tokens", 0) or 0)
+                        usage_out += int(_su.get("output_tokens", 0) or 0)
+                        _tally.add(_sp, _sm, _su)
+                        completions += 1
+                        if _timeline:
+                            yield _sse(_timeline_mod.MODEL_CALL_EVENT, {
+                                **_timeline_mod.model_call_frame(_sp, _sm, _su, _ms, "summary"),
+                                **({"summarized": _sum["steps"]} if _sum is not None else {}),
+                            })
+                    if _sum is not None:
+                        yield _sse(_SUMMARY_FRAME, _sum)
+                    _eff_msgs, _eff_system = _reply_summary.apply(msgs, system, _head)
                 # v1.278.0: the note rides the round frame it joined, so a
                 # caller with no socket of its own (the chat page) learns it
                 # landed — consumption is still the only signal; an unread
@@ -4622,7 +4729,7 @@ async def chat_stream(
                 )
                 final_resp = None
                 _send, _send_system = _fit_turn_transcript(
-                    d, msgs, system, provider_choice, model_choice, head=_head
+                    d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head
                 )
                 _call_t0 = time.perf_counter()  # v1.390.0: this call's start (Timeline)
                 # v1.287.0: raced against Stop (see `_frames_until_stop`), so a
@@ -4635,7 +4742,7 @@ async def chat_stream(
                     # first word is shrunk and tried ONCE more (lock-step:
                     # chat_turn's _complete_refitting).
                     refit=_chat_turn._overflow_refit(
-                        d, msgs, system, provider_choice, model_choice, head=_head,
+                        d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head,
                         record=_refit_note,
                     ),
                     provider=provider_choice or None,
@@ -5363,6 +5470,26 @@ async def chat_stream(
                                 if CHAT_ASK_TIMEOUT_S else None
                             )
                             _beat = _aloop.time()
+                            # THE PHONE (v1.392.0, decision 3): a coding
+                            # session's card nobody answers in the app for
+                            # `stall.PHONE_AFTER_S` becomes the agent runtime's
+                            # own `approval.requested`, so a phone channel
+                            # gets the one answerable line (comm/prompts +
+                            # the notifier) and its approve / deny resolves
+                            # THIS card through the one registry. Never a
+                            # safety card (once-only, Local only, priced).
+                            _phone = (
+                                _stall.PhoneAsk(
+                                    d.platform, _ap_id, tc.name,
+                                    thread_id=str(getattr(body, "thread_id", "") or ""),
+                                    count=_count,
+                                )
+                                if _coding_session and _stall.phone_may_ask(
+                                    once_only=bool(_once_only), local_ask=bool(_local_ask),
+                                    priced=bool(_spend_card),
+                                )
+                                else None
+                            )
                             try:
                                 while True:
                                     _now = _aloop.time()
@@ -5389,6 +5516,8 @@ async def chat_stream(
                                         if await _stop():
                                             _stopped = True
                                             break
+                                        if _phone is not None:
+                                            _phone.tick()
                                         if _aloop.time() - _beat >= 15.0:
                                             _beat = _aloop.time()
                                             # SSE comment — keeps the
@@ -5400,6 +5529,10 @@ async def chat_stream(
                                 _apr.pop(_ap_id)
                                 if thread_turn is not None:
                                     thread_turn.unpark()
+                                if _phone is not None:
+                                    # The phone's prompt expires with the card
+                                    # (`approval.resolved`, only when it went).
+                                    _phone.close("stopped" if _stopped else _decision)
                             if _stopped:
                                 # Completed rounds were billed; the ledger
                                 # says CANCELLED through the one writer, and
@@ -5577,6 +5710,23 @@ async def chat_stream(
                                 )
                                 if _stopped:
                                     return None, _HELPER_STOPPED
+                                return result, ""
+                            if _coding_session and _step_turn:
+                                # v1.392.0 (never stalls silently): a coding
+                                # session's call runs as its OWN task, so
+                                # "Stop the step" cancels exactly it — its
+                                # command's tree killed, its row "stopped by
+                                # you" — and the model is told; the reply
+                                # carries on. Every other turn: as before.
+                                result = await _stall.run_step(
+                                    _step_turn, tc.id, tc.name,
+                                    lambda: _registry_invoke(
+                                        tc, _p, _low_kw, _deny_reason, _deny_label,
+                                    ),
+                                    lambda: _ToolResult(
+                                        ok=False, error=_stall.stopped_result(tc.name),
+                                    ),
+                                )
                                 return result, ""
                             result = await _registry_invoke(
                                 tc, _p, _low_kw, _deny_reason, _deny_label,
@@ -6050,8 +6200,14 @@ async def chat_stream(
         try:
             # Both post-loop completions send the transcript FITTED (v1.287.0,
             # lock-step).
+            # v1.392.0: a coding reply's own summary (when it wrote one) stands
+            # in for the rounds it covers here too.
+            _fin_msgs, _fin_system = (
+                _reply_summary.apply(msgs, system, _head) if _reply_summary is not None
+                else (msgs, system)
+            )
             _send, _send_system = _fit_turn_transcript(
-                d, msgs, system, provider_choice, model_choice, head=_head
+                d, _fin_msgs, _fin_system, provider_choice, model_choice, head=_head
             )
             # v1.387.0: never the no-tools nudge after a turn that ENDED on a
             # cut-off reply (lock-step: chat_turn).
@@ -6075,9 +6231,14 @@ async def chat_stream(
                             _send,
                             # v1.384.0: a harness turn's own wording (a
                             # progress report; lock-step with chat_turn).
-                            _out_of_rounds_instruction(
-                                {*armed, *ask_armed},
-                                harness=_harness is not None, limit=_rounds,
+                            # v1.392.0: a reply that met its session's cap
+                            # gets the same report, worded for the cap.
+                            (
+                                _reply_cap_mod.instruction(_cap_met) if _cap_met is not None
+                                else _out_of_rounds_instruction(
+                                    {*armed, *ask_armed},
+                                    harness=_harness is not None, limit=_rounds,
+                                )
                             )
                             if _cut_office else "",
                         ),
@@ -6464,9 +6625,18 @@ async def chat_stream(
         # ONLY then (a Build reply line keeps it; the screen offers "Keep
         # going"). MIRROR NOTE (lock-step): chat_turn.py's response carries
         # the same conditional key — edit both or neither.
-        _step_limit = _chat_turn.step_limit_receipt(round_budget, _cut_office, _rounds)
+        _step_limit = _chat_turn.step_limit_receipt(
+            round_budget, _cut_office and _cap_met is None, _rounds,
+        )
         if _step_limit is not None:
             done_frame["step_limit"] = _step_limit
+        # v1.392.0 (decision 8): the session's cap the reply met — which cap
+        # and its limit — ONLY then (a coding session's turn; the stream lane
+        # only: the POST lane has no coding session). The reply line keeps it
+        # (`capMet`) and the page offers Keep going.
+        _cap_receipt = _reply_cap_mod.receipt(_cap_met)
+        if _cap_receipt is not None:
+            done_frame["cap"] = _cap_receipt
         # ESCALATION CARRIES THE TURN (v1.344.0, P1): present on EVERY
         # escalation (possibly []), absent otherwise — the page hands it to
         # POST /sessions. MIRROR NOTE (lock-step): chat_turn.py's response

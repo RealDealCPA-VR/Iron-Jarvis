@@ -335,8 +335,16 @@ async def _wait_for_output(
     ``exec_command`` semantics, which the IJ harness's gpt dialect maps here
     (a test run that pauses between lines is not "still running" yet). Polls
     with ``asyncio.sleep`` (never blocks the loop)."""
+    from ..core.progress import touch
+
     deadline = time.monotonic() + wait_ms / 1000.0
+    seen = mp.total
     while time.monotonic() < deadline:
+        if mp.total != seen:
+            # v1.392.0: output arriving while the call waits is progress (a
+            # coding session's stall watch hears it; a no-op elsewhere).
+            seen = mp.total
+            touch()
         if not mp.running() and mp.eof:
             return
         if (

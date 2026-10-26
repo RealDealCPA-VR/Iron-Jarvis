@@ -221,6 +221,16 @@ class EventType:
     # desktop app from the tray); "This PC" stays quiet for it
     # (comm/notifier.bell_pings). session_id = "build:<thread id>".
     BUILD_TURN_FINISHED = "build.turn_finished"
+    # The long-jobs plan's Phase 3 (v1.392.0, never stalls silently). A Build
+    # reply made NO PROGRESS — no frame, no tool output — for ten minutes
+    # while it was not waiting on the user: {thread_id, turn_id, title,
+    # words, minutes, step?} (words = the live line's own sentence, "No
+    # progress for 10 minutes — waiting on …"; step = {id, name} of the call
+    # "Stop the step" would stop). ONE per stall episode; the bell says it
+    # (and the desktop app from the tray) unless the user is looking at that
+    # session; "This PC" stays quiet for it (comm/notifier.bell_pings).
+    # session_id = "build:<thread id>".
+    BUILD_TURN_STALLED = "build.turn_stalled"
     # The experience library proposed something for a project folder — a
     # lesson to keep, or an edit to the folder's harness files — that waits
     # for the user's Accept: {id, kind, folder_name, thread_id, summary}

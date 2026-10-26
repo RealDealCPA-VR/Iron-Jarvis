@@ -261,6 +261,32 @@ def build_took_words(seconds: Any) -> str:
     return f"took {minutes} min {rest} s" if rest else f"took {minutes} min"
 
 
+def build_ask_words(payload: dict) -> str:
+    """A coding session's card on the phone (v1.392.0, decision 3): "Your
+    Build session “Fix the nav bar” is waiting for your OK to run a command"
+    — the session's title, and the call in the card's own words
+    (``agents/mission.card_words``). Names only; never the call's
+    arguments. Never raises."""
+    if not isinstance(payload, dict):
+        payload = {}
+    title = _text(payload.get("title"))
+    title = title if len(title) <= 80 else title[:79] + "…"
+    subject = f"Your Build session “{title}”" if title else "Your Build session"
+    tool = _text(payload.get("tool"))
+    try:
+        from ..agents.mission import card_words
+
+        what = card_words(tool) if tool else "use a tool"
+    except Exception:  # noqa: BLE001 — wording only
+        what = f"use {tool}" if tool else "use a tool"
+    count = payload.get("count")
+    many = (
+        f" ({count} calls)"
+        if isinstance(count, int) and not isinstance(count, bool) and count > 1 else ""
+    )
+    return f"{subject} is waiting for your OK to {what}{many}"
+
+
 def build_finished_title(payload: dict) -> str:
     """The bell's headline for ``build.turn_finished`` (v1.374.0)."""
     return (
@@ -278,6 +304,32 @@ def _build_finished_line(payload: dict) -> str:
     title = title if len(title) <= 120 else title[:119] + "…"
     bits = [b for b in (title, build_took_words(payload.get("seconds"))) if b]
     return build_finished_title(payload) + (f" — {' · '.join(bits)}" if bits else "")
+
+
+#: v1.392.0: the bell's headline for ``build.turn_stalled`` (the twin of the
+#: dashboard's ``lib/buildLinks.BUILD_STALLED_HEADLINE`` and desktop/main.js —
+#: one fixture, one-notice-v13600).
+BUILD_STALLED_HEADLINE = "Your Build session has stopped making progress"
+
+
+def build_stalled_body(payload: dict) -> str:
+    """The bell's body for ``build.turn_stalled``: the session's title and
+    the live line's own sentence ("No progress for 10 minutes — waiting on
+    …"), joined like a finished turn's."""
+    if not isinstance(payload, dict):
+        payload = {}
+    title = _text(payload.get("title"))
+    title = title if len(title) <= 120 else title[:119] + "…"
+    words = _text(payload.get("words"))
+    return " · ".join(b for b in (title, words) if b)
+
+
+def _build_stalled_line(payload: dict) -> str:
+    """A Build reply made no progress for ten minutes (v1.392.0) — said on a
+    destination that subscribed the type (never "This PC": the bell / the
+    tray watcher say it there)."""
+    body = build_stalled_body(payload)
+    return BUILD_STALLED_HEADLINE + (f" — {body}" if body else "")
 
 
 def _provider_name(provider: str) -> str:
@@ -357,6 +409,11 @@ def format_event(event: Any) -> str:
         # here (comm/prompts.py registers the answerable prompt that makes
         # "reply here" true on chat-enabled destinations).
         tool = str(payload.get("tool") or "").strip() or "a tool"
+        if isinstance(payload, dict) and payload.get("surface") == "build":
+            # v1.392.0 (decision 3): a coding session's card nobody answered
+            # in the app for five minutes — the session by its title, what
+            # the call would do in the card's own words.
+            return f"⏸ {build_ask_words(payload)} — answer in Iron Jarvis, or reply here: approve / deny."
         return (
             f"⏸ An agent is asking to use {tool} — approve from the "
             "dashboard bell, or reply here: approve / deny."
@@ -403,6 +460,8 @@ def format_event(event: Any) -> str:
         return "Iron Jarvis ran an action on its own — see it on the Autonomy page."
     if etype == EventType.BUILD_TURN_FINISHED:
         return _build_finished_line(payload)
+    if etype == EventType.BUILD_TURN_STALLED:
+        return _build_stalled_line(payload)
     words = EVENT_WORDS.get(str(etype or ""))
     if words:
         return _with_summary(f"Iron Jarvis: {words}", payload.get("summary"))
@@ -481,7 +540,9 @@ def bell_pings(event: Any) -> bool:
             return False
         if etype == EventType.WORKFLOW_COMPLETED:
             return _text(payload.get("status")) == "failed"
-        if etype == EventType.BUILD_TURN_FINISHED:
+        if etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED):
+            # v1.392.0: a Build reply that made no progress for ten minutes
+            # rings exactly like a long one that ended (one per episode).
             return bool(_text(payload.get("thread_id")) or _text(_event_field(event, "session_id")))
         if etype != EventType.SESSION_COMPLETED:
             return False
@@ -686,7 +747,7 @@ class Notifier:
             # only while a window is) added a second toast beside the first.
             # The phone and every other destination keep their one line.
             targets = self.without_desktop(targets)
-        elif etype == EventType.BUILD_TURN_FINISHED:
+        elif etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED):
             # v1.374.0: a long Build turn that ended is said on this PC by the
             # bell (a window is open) or the desktop app's tray watcher (none
             # is) — never a second toast from "This PC". A destination that

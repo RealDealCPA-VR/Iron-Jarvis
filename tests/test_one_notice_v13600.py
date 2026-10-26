@@ -538,7 +538,9 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
     hide = src[src.index("function hideToTray") : src.index("// --- Start at login")]
     assert "runOutcomeWindowSeenAt = Date.now()" in hide
     # The audit types are exactly the bell's run-outcome types — v1.374.0
-    # (moved on purpose): and a long Build turn that ended.
+    # (moved on purpose): and a long Build turn that ended; v1.392.0 (moved
+    # on purpose): and a Build reply that made no progress for ten minutes.
     assert (
-        'const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished";' in src
+        'const RUN_OUTCOME_AUDIT_TYPES = '
+        '"session.completed,workflow.completed,build.turn_finished,build.turn_stalled";' in src
     )

@@ -3273,7 +3273,10 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // than a minute and ended (`build.turn_finished`), said once from the tray in
 // the bell's words ("Your Build session finished"); the click opens Build on
 // that session.
-const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished";
+// v1.392.0 (long jobs, Phase 3): and a Build reply that made no progress for
+// ten minutes (`build.turn_stalled`, once per stall episode), said in the
+// bell's words ("Your Build session has stopped making progress").
+const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished,build.turn_stalled";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -3358,6 +3361,25 @@ function runOutcomeNotice(entry) {
   const id = typeof entry.id === "string" ? entry.id : "";
   const p = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
   if (!id) return null;
+  if (entry.type === "build.turn_stalled") {
+    // v1.392.0: a Build reply that made no progress for ten minutes (the
+    // bell's row, word for word: lib/buildLinks BUILD_STALLED_HEADLINE).
+    const sid = typeof entry.session_id === "string" ? entry.session_id : "";
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      (sid.startsWith("build:") ? sid.slice("build:".length) : "");
+    if (!thread) return null;
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const words = typeof p.words === "string" ? p.words.trim() : "";
+    const bits = [title.length > 120 ? `${title.slice(0, 119)}…` : title, words].filter((b) => b);
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title: "Your Build session has stopped making progress",
+      body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
+      href: `/terminals?session=${encodeURIComponent(thread)}`,
+    };
+  }
   if (entry.type === "build.turn_finished") {
     // v1.374.0: a long Build turn that ended (the bell's row, word for word).
     const sid = typeof entry.session_id === "string" ? entry.session_id : "";

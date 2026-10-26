@@ -601,6 +601,18 @@ def handle_approval_requested(
             return []
         tool = str(payload.get("tool") or "").strip() or "a tool"
         question = approval_question(tool)
+        thread_line = approval_prompt_line(tool)
+        if payload.get("surface") == "build":
+            # v1.392.0 (decision 3): a coding session's card, sent on after
+            # five minutes unanswered in the app — named as the session's,
+            # in the card's own words (the notifier's phone line says the
+            # same, ``notifier.build_ask_words``).
+            from .notifier import build_ask_words
+
+            question = build_ask_words(payload)[:_QUESTION_CAP]
+            thread_line = (
+                f"⏸ {question} — reply approve or deny (or 1 / 2), or answer in Iron Jarvis."
+            )
 
         out: list[dict[str, Any]] = []
         for name in notifier.channels():
@@ -644,9 +656,7 @@ def handle_approval_requested(
                         continue
                     if thread_store is not None and thread_id:
                         try:
-                            thread_store.append(
-                                thread_id, "assistant", approval_prompt_line(tool)
-                            )
+                            thread_store.append(thread_id, "assistant", thread_line)
                         except Exception:  # noqa: BLE001 — row registered anyway
                             log.warning(
                                 "approval prompt line could not land on thread %s",
