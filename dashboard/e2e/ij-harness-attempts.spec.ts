@@ -146,10 +146,16 @@ for (const { width, height } of [
     await card.scrollIntoViewIfNeeded();
     const fit = await page.evaluate(() => {
       const c = document.querySelector('[data-testid="attempts-card"]')!.getBoundingClientRect();
-      const cols = Array.from(document.querySelectorAll('[data-testid="attempt-column"]')).map((el) => {
+      const cols = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="attempt-column"]')).map((el) => {
         const r = el.getBoundingClientRect();
-        const parts = Array.from(el.querySelectorAll("h3, dd, dt, p, button")).map((p) => p.getBoundingClientRect());
-        return { left: r.left, right: r.right, parts: parts.filter((p) => p.width > 0).map((p) => [p.left, p.right]) };
+        const nodes = Array.from(el.querySelectorAll<HTMLElement>("h3, dd, dt, p, button"));
+        const parts = nodes.map((p) => p.getBoundingClientRect());
+        // Text that runs past its own box (a long branch that never wraps)
+        // overflows even when the box itself sits inside the column.
+        const spill = [el, ...nodes]
+          .filter((n) => n.scrollWidth > n.clientWidth + 1)
+          .map((n) => `${n.tagName.toLowerCase()} ${(n.textContent || "").trim().slice(0, 40)}`);
+        return { left: r.left, right: r.right, spill, parts: parts.filter((p) => p.width > 0).map((p) => [p.left, p.right]) };
       });
       return {
         vw: document.documentElement.clientWidth,
@@ -162,6 +168,7 @@ for (const { width, height } of [
     expect(fit.card[0]).toBeGreaterThanOrEqual(0);
     expect(fit.card[1]).toBeLessThanOrEqual(fit.vw + 0.5);
     for (const col of fit.cols) {
+      expect(col.spill, "text runs past its box").toEqual([]);
       expect(col.left).toBeGreaterThanOrEqual(fit.card[0] - 0.5);
       expect(col.right).toBeLessThanOrEqual(fit.card[1] + 0.5);
       for (const [l, r] of col.parts) {
