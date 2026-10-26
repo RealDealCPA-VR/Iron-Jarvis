@@ -520,6 +520,33 @@ async def test_with_the_setting_off_a_usable_group_account_still_takes_over(app,
     assert _events(app, "build.resumed")[-1]["account"] == "c-spare"
 
 
+def test_a_moved_reply_a_crash_cut_off_still_names_both_accounts(tmp_path):
+    """The boot's line for a cut-off reply copies the move from its hidden
+    question, as it copies ``resumedFrom``."""
+    import json
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatTurnRecord
+    from iron_jarvis.daemon import durable_turns
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    row = S.create(engine, str(tmp_path), "", {})
+    move = {"from": "c-work", "fromName": "Work Max", "to": "c-spare", "toName": "Spare", "group": "Work"}
+    S.append_lines(engine, row.id, [
+        {"role": "user", "content": build_routes.CONTINUE_TEXT, "turnId": "mv-1", "continuation": True,
+         "accountMove": move},
+    ])
+    frames = [["token", json.dumps({"text": "half"})]]
+    with session_scope(engine) as db:
+        db.add(ChatTurnRecord(id="mv-1", thread_id=row.id, status="running", frames_json=json.dumps(frames)))
+        db.commit()
+    durable_turns.reconcile_interrupted_turns(engine)
+    S.reconcile_interrupted_turns(engine)
+    line = messages_of(app, row.id)[-1]
+    assert line["role"] == "assistant" and line["interrupted"] is True and line["accountMove"] == move
+
+
 async def test_a_move_survives_a_restart(tmp_path, app, fake, work, monkeypatch):
     beh, sid = await _limit(app, fake, work, monkeypatch, groups={"Work": ["c-work", "c-spare"]})
     second = create_app(str(tmp_path / "home"))
