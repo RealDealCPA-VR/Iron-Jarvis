@@ -100,6 +100,19 @@ def _wait_for(predicate, what: str, cap_s: float = 10.0) -> None:
         time.sleep(0.02)
 
 
+def _wait_quiet(ticks: list, *, quiet_s: float, cap_s: float) -> None:
+    """Return once ``ticks`` has not grown for ``quiet_s``, or after ``cap_s``
+    (never an assertion: the caller's own count decides)."""
+    deadline = time.monotonic() + cap_s
+    seen, since = len(ticks), time.monotonic()
+    while time.monotonic() < deadline:
+        time.sleep(0.02)
+        if len(ticks) != seen:
+            seen, since = len(ticks), time.monotonic()
+        elif time.monotonic() - since >= quiet_s:
+            return
+
+
 def test_an_idle_paired_browser_socket_does_not_wake_between_keepalives(tmp_path, monkeypatch):
     monkeypatch.setattr(browser_routes, "KEEPALIVE_S", 60.0)
     monkeypatch.setattr(browser_routes, "_ACCESS_POLL_S", 60.0)
@@ -111,6 +124,12 @@ def test_an_idle_paired_browser_socket_does_not_wake_between_keepalives(tmp_path
         with BrowserPeer(client, token=app.token) as peer:
             peer.expect_ready()
             _wait_for(lambda: app.backend.connected, "the socket became authoritative")
+            # v1.400.5: the read loop SEEDS itself with one read just after it
+            # starts (`announced_access`); on a loaded runner that lands after
+            # `connected` flips, inside the counted second (CI read [1]). Wait
+            # for a quiet half second first. A loop that keeps re-reading never
+            # goes quiet, so the cap runs out and the count below still fails.
+            _wait_quiet(ticks, quiet_s=0.5, cap_s=3.0)
             ticks.clear()
             time.sleep(1.0)  # an idle second: the old loop re-read the word 4 times
             assert ticks == []

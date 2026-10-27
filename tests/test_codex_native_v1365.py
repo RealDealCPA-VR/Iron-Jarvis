@@ -1143,9 +1143,18 @@ async def test_review_a_slow_start_falls_back_for_that_call_and_caches_nothing(t
     # Only THIS request is given a short clock (initialize keeps its 30 s: a
     # loaded runner can take seconds to start the fake's interpreter).
     real_request = S.CodexSession.request
+    # v1.400.5: only the FIRST call of that request gets the short clock. The
+    # second call's own `method` used to get 0.5 s too, and on a loaded runner
+    # the healthy second session took longer than that, fell back as well, and
+    # read "answer from the text path" where "native" was due.
+    asked = {"n": 0}
 
     async def short_for_target(self, m, params, timeout):
-        return await real_request(self, m, params, 0.5 if m == method else timeout)
+        if m == method:
+            asked["n"] += 1
+            if asked["n"] == 1:
+                timeout = 0.5
+        return await real_request(self, m, params, timeout)
 
     monkeypatch.setattr(S.CodexSession, "request", short_for_target)
     fake = Fake(tmp_path, monkeypatch, [{"hang_before": {method: 30}, "steps": [{"text": "never"}]},

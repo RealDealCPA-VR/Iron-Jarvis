@@ -757,6 +757,20 @@ does not need a bump, stop and bump it.
   allows exactly that one wait inside the retry branch (the serial-wait
   mutation still fails it). Pins: `tests/test_boot_watch_v14004.py` (8
   mutations red).
+  v1.400.4 WAS NOT PUBLISHED (Tests and Release each red on a different OLD
+  timing test; v1.400.5 ships it): (1) `test_idle_wakeups_v1333::test_an_idle_
+  paired_browser_socket_does_not_wake_between_keepalives` read `[1]`: the read
+  loop SEEDS itself with one `access_word()` just after `connected` flips, and
+  on a loaded runner that seed landed inside the counted second; the test now
+  waits for a quiet half second first (`_wait_quiet`, capped, never an
+  assertion), and a loop that wakes every 0.25 s still fails it ([1,1,1,1]).
+  (2) `test_codex_native_v1365::test_review_a_slow_start_falls_back_for_that_
+  call_and_caches_nothing` gave the SECOND call of the target request the
+  0.5 s clock too, so a healthy second session that was slow on the runner fell
+  back as well; only the first call gets it now. Both reproduced on this PC with
+  a plugin that delays the one step (the loop's seed read 0.3 s; the second
+  call's request 0.7 s inside its own clock): old shapes CI's exact errors, new
+  green.
 - **A backup that never leaves the disk it protects is one failure from
   nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
   `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND
