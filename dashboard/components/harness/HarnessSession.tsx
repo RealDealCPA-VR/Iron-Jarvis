@@ -59,7 +59,8 @@ import { useLiveThinking } from "@/lib/liveThinking";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { answeredModelName } from "@/lib/answeredModel";
-import { composerChipClass } from "@/lib/composerChips";
+import { FIT_ICON_CHIP, FIT_WORDS, composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
+import { FIT_ICONS, FIT_TIGHT, useToolbarFit } from "@/lib/toolbarFit";
 import { asPermissionMode } from "@/lib/permissionLevels";
 import { phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
@@ -582,6 +583,13 @@ export function HarnessSession({
   const [rewindOpen, setRewindOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // v1.400.0: the box's toolbar is ONE ROW whatever model is picked, as the
+  // chat's is (lib/toolbarFit): the model's name truncates first, then the
+  // chips on the left drop their words, then the reasoning chip shortens its
+  // words; only a box too narrow even for that wraps as before.
+  const [harnessFitRef, harnessFit] = useToolbarFit();
+  const harnessIcons = harnessFit >= FIT_ICONS;
+  const harnessShort = harnessFit >= FIT_TIGHT;
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   // v1.392.0 (long jobs, Phase 3): the running reply's stall notice (the
@@ -2951,28 +2959,46 @@ export function HarnessSession({
               }}
               className={HARNESS_COMPOSER_BOX}
             />
-            <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">
+            {/* v1.400.0: one row whatever model is picked (lib/toolbarFit) —
+                the chat's toolbar rules: `data-fit-row` keeps it one line (the
+                right group gives way through the model chip's name),
+                `data-fit-icons` makes the chips on the left icons,
+                `data-fit-short` cuts the reasoning chip's words; none of them
+                (a phone, or a box too narrow even for that) wraps as before. */}
+            <div
+              ref={harnessFitRef}
+              data-testid="harness-composer-toolbar"
+              className="group/fit flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2 data-[fit-row]:flex-nowrap"
+            >
               <AttachButton onPick={(picked) => void att.add(picked)} disabled={offline} />
               <PermissionChip
                 value={view.setup.approvalMode || "approve_for_me"}
                 onChange={(mode) => void patchSetup({ approval_mode: asPermissionMode(mode) })}
                 iconOnlyOnPhone
+                iconOnly={harnessIcons}
               />
-              <button
-                type="button"
-                data-testid="harness-plan-mode"
-                aria-pressed={view.mode === "plan"}
-                onClick={() => void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" })}
-                title={
+              {(() => {
+                const words = view.mode === "plan" ? "Planning" : "Plan first";
+                const title =
                   view.mode === "plan"
                     ? "Plan mode is on: the session only reads and plans, then asks you to approve the plan. Press to let it work."
-                    : "Plan first: the session only reads and writes a plan for you to approve before it changes anything."
-                }
-                className={composerChipClass(view.mode === "plan")}
-              >
-                <ListChecks size={14} aria-hidden className="shrink-0" />
-                <span>{view.mode === "plan" ? "Planning" : "Plan first"}</span>
-              </button>
+                    : "Plan first: the session only reads and writes a plan for you to approve before it changes anything.";
+                return (
+                  <button
+                    type="button"
+                    data-testid="harness-plan-mode"
+                    aria-pressed={view.mode === "plan"}
+                    // v1.400.0: its words were its name; they can go now.
+                    aria-label={words}
+                    onClick={() => void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" })}
+                    title={harnessIcons ? iconOnlyTitle(words, title) : title}
+                    className={`${composerChipClass(view.mode === "plan")} ${FIT_ICON_CHIP}`}
+                  >
+                    <ListChecks size={14} aria-hidden className="shrink-0" />
+                    <span className={FIT_WORDS}>{words}</span>
+                  </button>
+                );
+              })()}
               {/* v1.397.0: try the next message on up to three models, each on
                   its own branch (the words "try this with …" ask the same). */}
               <TryOnControl
@@ -2981,6 +3007,7 @@ export function HarnessSession({
                 picks={tryOn}
                 onChange={setTryOn}
                 disabled={view.archived || view.mode === "plan"}
+                iconOnly={harnessIcons}
               />
               {/* Review (v1.374.0): this group may WRAP, right-aligned, and
                   never grows past the row. With the meter added, a model that
@@ -2990,7 +3017,7 @@ export function HarnessSession({
                   a real browser); a row that fits is unchanged. */}
               <div
                 data-testid="harness-box-actions"
-                className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1"
+                className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1 group-data-[fit-row]/fit:flex-nowrap group-data-[fit-row]/fit:justify-start group-data-[fit-row]/fit:pl-3"
               >
                 {/* v1.374.0: how full the conversation is for this model
                     (the daemon's reading of the newest reply), and Compact
@@ -3008,6 +3035,7 @@ export function HarnessSession({
                     levels={levels}
                     value={view.setup.reasoning}
                     def={reasoningDef}
+                    short={harnessShort}
                     onChange={(level) => void patchSetup({ reasoning: level })}
                   />
                 ) : null}
