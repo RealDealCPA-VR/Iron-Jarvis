@@ -9,6 +9,8 @@ from orderdesk.cli import main
 from orderdesk.customers import parse_customer
 from orderdesk.discounts import order_discount_percent, tier_percent
 from orderdesk.invoice import render_invoice
+from orderdesk.points import points_earned, points_value_cents
+from orderdesk.refunds import points_to_take_back
 from orderdesk.report import sales_by_tier
 from orderdesk.shipping import shipping_cents
 
@@ -67,7 +69,31 @@ class InvoiceTierTest(unittest.TestCase):
         text = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES, coupon="SAVE10")
         self.assertIn("Discount (20%): -$14.00", text)
         self.assertIn("Shipping: free", text)
-        self.assertTrue(text.endswith("Total: $56.00"))
+        self.assertTrue(text.endswith("Total: $56.00\nPoints earned: 112"))
+
+
+class PointsTest(unittest.TestCase):
+    def test_points_per_tier(self):
+        self.assertEqual(points_earned(5670, "bronze"), 56)
+        self.assertEqual(points_earned(5500, "silver"), 82)
+        self.assertEqual(points_earned(5600, "gold"), 112)
+
+    def test_nothing_for_nothing(self):
+        self.assertEqual(points_earned(0, "gold"), 0)
+
+    def test_a_point_is_a_cent(self):
+        self.assertEqual(points_value_cents(250), 250)
+
+
+class RefundPointsTest(unittest.TestCase):
+    def test_in_proportion(self):
+        self.assertEqual(points_to_take_back(112, 1000, 5600), 20)
+
+    def test_rounded_up(self):
+        self.assertEqual(points_to_take_back(112, 1001, 5600), 21)
+
+    def test_never_more_than_earned(self):
+        self.assertEqual(points_to_take_back(10, 9999, 5000), 10)
 
 
 class ReportTierTest(unittest.TestCase):

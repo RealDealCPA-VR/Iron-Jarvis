@@ -30,7 +30,8 @@ PATCH_TESTS = [
     "test_any_case_and_spaces", "test_the_default_is_bronze", "test_an_unknown_tier", "test_tier_percent",
     "test_coupon_and_tier_add_up", "test_never_more_than_25_percent", "test_gold_ships_free_from_50_dollars",
     "test_the_others_are_unchanged", "test_the_tier_line", "test_no_tier_line_for_bronze", "test_a_gold_invoice",
-    "test_sales_by_tier", "test_the_tier_option",
+    "test_sales_by_tier", "test_the_tier_option", "test_points_per_tier", "test_nothing_for_nothing",
+    "test_a_point_is_a_cent", "test_in_proportion", "test_rounded_up", "test_never_more_than_earned",
 ]
 ADA = {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com"}
 LINES = [{"name": "Notebook", "price_cents": 1250, "qty": 2}, {"name": "Fountain pen", "price_cents": 4500, "qty": 1}]
@@ -105,7 +106,7 @@ class HiddenInvoice(unittest.TestCase):
     def test_a_the_cap_on_an_invoice(self):
         lines = self.render("gold", "SAVE20")
         self.assertIn("Discount (25%): -$17.50", lines)
-        self.assertEqual(lines[-2:], ["Shipping: free", "Total: $52.50"])
+        self.assertEqual(lines[-3:], ["Shipping: free", "Total: $52.50", "Points earned: 104"])
 
     def test_b_a_whole_silver_invoice(self):
         self.assertEqual(self.render("Silver", "save10"), [
@@ -117,6 +118,7 @@ class HiddenInvoice(unittest.TestCase):
             "Discount (15%): -$10.50",
             "Shipping: $5.99",
             "Total: $65.49",
+            "Points earned: 88",
         ])
 
     def test_c_bronze_is_as_before(self):
@@ -175,6 +177,34 @@ class HiddenReport(unittest.TestCase):
         ]
         self.assertEqual(sales_by_tier(orders), {"bronze": 1100, "silver": 0, "gold": 8600})
         self.assertEqual(sales_by_tier([]), {"bronze": 0, "silver": 0, "gold": 0})
+
+
+class HiddenPoints(unittest.TestCase):
+    def test_a_points_earned(self):
+        from orderdesk.points import points_earned, points_value_cents
+
+        cases = [
+            ((5999, "silver"), 88), ((99, "gold"), 0), ((100, "silver"), 1), ((300, "silver"), 4),
+            ((-500, "gold"), 0), ((0, "bronze"), 0), ((12345, "bronze"), 123), ((12345, "gold"), 246),
+            ((12345, "silver"), 184),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(points_earned(*args), expected)
+        self.assertEqual(points_value_cents(7), 7)
+
+    def test_b_points_taken_back(self):
+        from orderdesk.refunds import points_to_take_back
+
+        cases = [
+            ((112, 1000, 5600), 20), ((112, 1001, 5600), 21), ((10, 9999, 5000), 10), ((0, 500, 1000), 0),
+            ((7, 1, 1000), 1), ((100, 0, 1000), 0), ((88, 5950, 5950), 88), ((88, 2975, 5950), 44),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(points_to_take_back(*args), expected)
+        with self.assertRaises(ValueError):
+            points_to_take_back(10, 100, 0)
 
 
 class HiddenKept(unittest.TestCase):

@@ -5,8 +5,8 @@ repeats) handed ZERO pieces to a member: each frontier task took about a
 minute, and doing the work was always quicker than writing a helper a brief.
 The team tier holds tasks made of several independent pieces a planner can
 hand out from a written brief: a sixty-module package to read, three modules
-from one specification, fifteen failing tests from four unrelated bugs, an
-eight-file change to apply and review, a rename across code, command line,
+from one specification, twenty failing tests from six unrelated bugs, a
+ten-file change to apply and review, a rename across code, command line,
 environment and docs, five functions to port from a JavaScript reference.
 
 Pinned here, each through the real code (``load_tasks``, ``prepare_workspace``,
@@ -54,9 +54,9 @@ TEAM_HASHES = {
     "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
-    "team-review-patch": "567ecd37d75b7e5739484b91e7f031bd594c8326659bde61ad7bdec6dc9c16cf",
+    "team-review-patch": "43fcee1ffdfab3b1d53eedca06f69bc5634e149298a45c860bacdea10bf017c2",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
-    "team-test-triage": "ba36744c65721af0550d4fde3441546b1031fc1b2aa12bf91ad9f0dfa81f25b8",
+    "team-test-triage": "61e86752e8ca96a19d84c20eabf9f9f813d0f33502b55608c0d57da89293fb1b",
 }
 #: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none).
 FRONTIER_HASHES = {
@@ -123,7 +123,7 @@ def test_the_team_tier_holds_six_tasks_of_independent_pieces():
     kinds = {
         "read across a sixty-module package": ("team-audit-events", "explain"),
         "three modules from one specification": ("team-spec-modules", "feature"),
-        "fifteen failing tests from unrelated bugs": ("team-test-triage", "bugfix"),
+        "twenty failing tests from unrelated bugs": ("team-test-triage", "bugfix"),
         "a change reviewed and fixed": ("team-review-patch", "trap"),
         "a rename across code and docs": ("team-rename-option", "refactor"),
         "functions ported from another language": ("team-port-js", "feature"),

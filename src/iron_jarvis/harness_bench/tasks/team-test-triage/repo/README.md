@@ -8,6 +8,8 @@ The small helper packages behind our online shop's back office.
 | `inventory/` | stock on hand and reservations (`stock.py`), order cancellation (`orders.py`), the catalog (`catalog.py`) |
 | `scheduling/` | monthly billing dates (`billing.py`), business days (`business_days.py`) |
 | `textkit/` | URL slugs (`slug.py`), shortening text (`truncate.py`) |
+| `reports/` | sales totals by day (`aggregate.py`), top customers (`ranking.py`) |
+| `shipping/` | parcel weights (`weights.py`), choosing a box (`boxes.py`) |
 
 Each function's docstring is its contract. Amounts are `int` cents.
 

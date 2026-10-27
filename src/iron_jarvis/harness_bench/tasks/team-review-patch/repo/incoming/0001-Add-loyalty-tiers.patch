@@ -23,18 +23,34 @@ Customers now have a loyalty tier: bronze (the default), silver or gold.
 * report.py: sales_by_tier(orders) sums the subtotals per tier, every
   tier present (0 when it has no orders); a customer with no tier is
   bronze.
-* README.md: the tiers.
+* points.py (new): points_earned(total_cents, tier) gives an order's
+  loyalty points: for every WHOLE dollar of the total after the discount
+  (shipping not counted), 1 point for bronze, 1.5 for silver and 2 for
+  gold, rounded down to a whole point; nothing for a total of 0 or less.
+  points_value_cents(points): a point is worth one cent.
+* invoice.py: a silver or gold invoice ends with "Points earned: N" after
+  the Total line; a bronze invoice shows no points.
+* refunds.py (new): points_to_take_back(points_earned, refunded_cents,
+  paid_cents) takes back the order's points in proportion to the refunded
+  part of what was paid, rounded UP to a whole point, never more than the
+  order earned (nothing for a refund of 0); paid_cents must be more than 0
+  (ValueError otherwise).
+* README.md: the tiers and the points.
 * test_loyalty.py: tests for all of it.
 ---
- README.md              |  17 +++++++++++++++--
+ README.md              |  27 +++++++++++++++++++++++++--
  orderdesk/cli.py       |   8 ++++++--
  orderdesk/customers.py |  16 +++++++++++++++-
  orderdesk/discounts.py |  17 +++++++++++++++++
- orderdesk/invoice.py   |  13 ++++++++-----
+ orderdesk/invoice.py   |  17 ++++++++++++-----
+ orderdesk/points.py    |  19 +++++++++++++++++++
+ orderdesk/refunds.py   |  13 +++++++++++++
  orderdesk/report.py    |  11 +++++++++++
  orderdesk/shipping.py  |  10 ++++++----
- test_loyalty.py        |  94 ++++++++++++++++++++++++++++++++++++++++
- 8 files changed, 172 insertions(+), 14 deletions(-)
+ test_loyalty.py        | 120 ++++++++++++++++++++++++++++++++++++++++
+ 10 files changed, 244 insertions(+), 14 deletions(-)
+ create mode 100644 orderdesk/points.py
+ create mode 100644 orderdesk/refunds.py
  create mode 100644 test_loyalty.py
 
 diff --git a/README.md b/README.md
@@ -63,7 +79,7 @@ diff --git a/README.md b/README.md
  
  The exit code is 0, or 2 when the order file is wrong (the reason is
  printed).
-@@ -32,6 +34,17 @@
+@@ -32,6 +34,27 @@
  Shipping is free on orders of $100.00 or more (the subtotal before any
  discount), otherwise $5.99.
  
@@ -77,6 +93,16 @@ diff --git a/README.md b/README.md
 +tier instead of the order file's.
 +
 +`orderdesk.report.sales_by_tier(orders)` sums the subtotals per tier.
++
++## Loyalty points
++
++Every order earns points on its total after the discount, shipping not
++counted: per whole dollar, 1 point for bronze, 1.5 for silver and 2 for gold,
++rounded down (`orderdesk.points.points_earned`). A point is worth one cent.
++Silver and gold invoices end with a "Points earned" line. A refund takes back
++the order's points in proportion to the refunded part of what was paid,
++rounded up and never more than the order earned
++(`orderdesk.refunds.points_to_take_back`).
 +
  ## Tests
  
@@ -188,11 +214,12 @@ diff --git a/orderdesk/discounts.py b/orderdesk/discounts.py
 diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
 --- a/orderdesk/invoice.py
 +++ b/orderdesk/invoice.py
-@@ -1,24 +1,27 @@
+@@ -1,24 +1,31 @@
  """The invoice text."""
  
 -from .discounts import coupon_percent, discount_cents
 +from .discounts import discount_cents, order_discount_percent
++from .points import points_earned
  from .pricing import line_total, money, subtotal
  from .shipping import shipping_cents
  
@@ -202,7 +229,8 @@ diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
 -    the subtotal, the discount (when there is one), shipping and the total."""
 +    """The invoice of an order, as text: the customer (and the loyalty tier,
 +    for silver and gold), one line per order line, the subtotal, the discount
-+    (when there is one), shipping and the total."""
++    (when there is one), shipping and the total, and for silver and gold the
++    points the order earns."""
      out = [f"Invoice for {customer.name} <{customer.email}>"]
 +    if customer.tier != "bronze":
 +        out.append(f"Tier: {customer.tier.capitalize()}")
@@ -220,7 +248,51 @@ diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
 +    ship = shipping_cents(sub, customer.tier)
      out.append(f"Shipping: {money(ship)}" if ship else "Shipping: free")
      out.append(f"Total: {money(sub - off + ship)}")
++    if customer.tier != "bronze":
++        out.append(f"Points earned: {points_earned(sub - off, customer.tier)}")
      return "\n".join(out)
+diff --git a/orderdesk/points.py b/orderdesk/points.py
+new file mode 100644
+--- /dev/null
++++ b/orderdesk/points.py
+@@ -0,0 +1,19 @@
++"""Loyalty points."""
++
++#: Points per whole dollar, as (numerator, denominator), by tier.
++POINTS_PER_DOLLAR = {"bronze": (1, 1), "silver": (3, 2), "gold": (2, 1)}
++
++
++def points_earned(total_cents, tier):
++    """The points an order earns: for every WHOLE dollar of ``total_cents``
++    (the total after the discount, without shipping), 1 point for bronze, 1.5
++    for silver and 2 for gold, rounded down to a whole point."""
++    if total_cents <= 0:
++        return 0
++    numerator, denominator = POINTS_PER_DOLLAR[tier]
++    return (total_cents // 100) * numerator // denominator
++
++
++def points_value_cents(points):
++    """What points are worth when spent: one cent each."""
++    return points
+diff --git a/orderdesk/refunds.py b/orderdesk/refunds.py
+new file mode 100644
+--- /dev/null
++++ b/orderdesk/refunds.py
+@@ -0,0 +1,13 @@
++"""Refunds and the loyalty points they take back."""
++
++
++def points_to_take_back(points_earned, refunded_cents, paid_cents):
++    """The points a refund takes back: the order's points in proportion to the
++    refunded part of what was paid, rounded UP to a whole point, and never more
++    than the order earned. ``paid_cents`` must be more than 0."""
++    if paid_cents <= 0:
++        raise ValueError("paid_cents must be more than 0")
++    if refunded_cents <= 0:
++        return 0
++    share = -(-points_earned * refunded_cents // paid_cents)
++    return min(share, points_earned)
 diff --git a/orderdesk/report.py b/orderdesk/report.py
 --- a/orderdesk/report.py
 +++ b/orderdesk/report.py
@@ -270,7 +342,7 @@ diff --git a/test_loyalty.py b/test_loyalty.py
 new file mode 100644
 --- /dev/null
 +++ b/test_loyalty.py
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,120 @@
 +import contextlib
 +import io
 +import json
@@ -282,6 +354,8 @@ new file mode 100644
 +from orderdesk.customers import parse_customer
 +from orderdesk.discounts import order_discount_percent, tier_percent
 +from orderdesk.invoice import render_invoice
++from orderdesk.points import points_earned, points_value_cents
++from orderdesk.refunds import points_to_take_back
 +from orderdesk.report import sales_by_tier
 +from orderdesk.shipping import shipping_cents
 +
@@ -336,7 +410,31 @@ new file mode 100644
 +        text = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES, coupon="SAVE10")
 +        self.assertIn("Discount (20%): -$14.00", text)
 +        self.assertIn("Shipping: free", text)
-+        self.assertTrue(text.endswith("Total: $56.00"))
++        self.assertTrue(text.endswith("Total: $56.00\nPoints earned: 112"))
++
++
++class PointsTest(unittest.TestCase):
++    def test_points_per_tier(self):
++        self.assertEqual(points_earned(5670, "bronze"), 56)
++        self.assertEqual(points_earned(5500, "silver"), 82)
++        self.assertEqual(points_earned(5600, "gold"), 112)
++
++    def test_nothing_for_nothing(self):
++        self.assertEqual(points_earned(0, "gold"), 0)
++
++    def test_a_point_is_a_cent(self):
++        self.assertEqual(points_value_cents(250), 250)
++
++
++class RefundPointsTest(unittest.TestCase):
++    def test_in_proportion(self):
++        self.assertEqual(points_to_take_back(112, 1000, 5600), 20)
++
++    def test_rounded_up(self):
++        self.assertEqual(points_to_take_back(112, 1001, 5600), 21)
++
++    def test_never_more_than_earned(self):
++        self.assertEqual(points_to_take_back(10, 9999, 5000), 10)
 +
 +
 +class ReportTierTest(unittest.TestCase):

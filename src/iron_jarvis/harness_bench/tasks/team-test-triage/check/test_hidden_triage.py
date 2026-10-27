@@ -17,6 +17,9 @@ sys.path.insert(0, HERE)
 CRLF = bytes([13, 10])
 LF = bytes([10])
 UNCHANGED = {
+    "test_aggregate.py": "99a1cac877f320fa944f41ad8f487272ee907fc72895bd8424648e6a55b9156f",
+    "test_ranking.py": "55d8e89094a4a60fc081b8e0b1a1faebfd702da48de30e7e12dfe97a0ec97e14",
+    "test_weights.py": "5e57c45b3c2ce428693f2bbf688423435e978e5a7c1fdb701f8ca1b70129acde",
     "test_billing.py": "2290da15904206b99188a2c237975a21637c7fb1c6ccb601c6e1c420a170d509",
     "test_business_days.py": "efb63e53b2982f4fd6a9db901dde32ecd80b6c89ab656daa85732fe468705d2a",
     "test_catalog.py": "871281b06c96c8c4659ecbf8d2518fa26274952179e40a0ac94619cc5004857e",
@@ -173,6 +176,54 @@ class HiddenSlug(unittest.TestCase):
 
         self.assertEqual(slugify("Ångström units and more words", max_length=14), "angstrom-units")
         self.assertEqual(slugify("Ｒｅｐｏｒｔ", max_length=3), "rep")
+
+
+class HiddenReports(unittest.TestCase):
+    DAYS = [
+        ("2026-03-02T03:00:00+05:30", "2026-03-01"), ("2026-12-31T22:00:00-03:00", "2027-01-01"),
+        ("2026-03-01T00:00:00+00:00", "2026-03-01"), ("2026-03-01T23:59:59.500-01:00", "2026-03-02"),
+        ("2026-03-01T19:45:00-04:30", "2026-03-02"), ("2028-02-28T20:00:00-05:00", "2028-02-29"),
+        ("2026-01-01T00:30:00+01:00", "2025-12-31"), ("2026-06-15T12:00:00Z", "2026-06-15"),
+        ("2026-06-15T05:00:00+14:00", "2026-06-14"), ("2026-06-15T13:00:00-11:00", "2026-06-16"),
+    ]
+
+    def test_a_order_day(self):
+        from reports.aggregate import order_day
+
+        for created, day in self.DAYS:
+            with self.subTest(created=created):
+                self.assertEqual(order_day({"created": created, "total_cents": 1}), day)
+
+    def test_b_totals_and_the_busiest_day(self):
+        from reports.aggregate import busiest_day, daily_totals
+
+        orders = [
+            {"created": "2026-03-02T03:00:00+05:30", "total_cents": 700},
+            {"created": "2026-03-01T20:00:00Z", "total_cents": 100},
+            {"created": "2026-03-02T01:00:00+02:00", "total_cents": 50},
+            {"created": "2026-03-01T22:00:00-05:00", "total_cents": 1000},
+        ]
+        self.assertEqual(daily_totals(orders), {"2026-03-01": 850, "2026-03-02": 1000})
+        self.assertEqual(busiest_day(orders), "2026-03-01")
+
+
+class HiddenWeights(unittest.TestCase):
+    CASES = [
+        ([(1, "0.1", "g"), (1, "0.2", "g"), (1, "0.7", "g")], 1), ([(3, "0.1", "kg")], 300),
+        ([(1, "1", "lb")], 454), ([(5, "0.2", "oz")], 29), ([(1, Decimal("0.001"), "g")], 1),
+        ([(2, "0.75", "lb"), (1, 250, "g")], 931), ([(7, "0.01", "kg")], 70),
+        ([(3, "0.3", "oz"), (1, "0.1", "oz")], 29), ([(10, "0.1", "g"), (1, "0.25", "kg")], 251),
+        ([(1, "0.5", "kg"), (1, "0.5", "kg")], 1000),
+    ]
+
+    def test_parcel_grams(self):
+        from shipping.weights import parcel_grams
+
+        for items, grams in self.CASES:
+            with self.subTest(items=items):
+                got = parcel_grams(items)
+                self.assertEqual(got, grams)
+                self.assertIs(type(got), int, "whole grams are an int")
 
 
 class HiddenUnchanged(unittest.TestCase):

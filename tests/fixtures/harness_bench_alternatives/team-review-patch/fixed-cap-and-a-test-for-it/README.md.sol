@@ -45,6 +45,16 @@ tier instead of the order file's.
 
 `orderdesk.report.sales_by_tier(orders)` sums the subtotals per tier.
 
+## Loyalty points
+
+Every order earns points on its total after the discount, shipping not
+counted: per whole dollar, 1 point for bronze, 1.5 for silver and 2 for gold,
+rounded down (`orderdesk.points.points_earned`). A point is worth one cent.
+Silver and gold invoices end with a "Points earned" line. A refund takes back
+the order's points in proportion to the refunded part of what was paid,
+rounded up and never more than the order earned
+(`orderdesk.refunds.points_to_take_back`).
+
 ## Tests
 
     python -m unittest discover -s . -p "test_*.py"

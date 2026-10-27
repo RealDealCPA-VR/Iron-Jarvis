@@ -1,6 +1,6 @@
 category = "trap"
 tier = "team"
-title = "Apply a colleague's eight-file change and fix the one edit that does not match its description"
+title = "Apply a colleague's ten-file change and fix the one edit that does not match its description"
 timeout_s = 2400
 check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
 check_timeout_s = 120
