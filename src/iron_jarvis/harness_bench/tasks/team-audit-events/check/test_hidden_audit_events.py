@@ -176,8 +176,10 @@ class HiddenAuditEvents(unittest.TestCase):
     def setUp(self):
         path = os.path.join(HERE, "answer.json")
         self.assertTrue(os.path.isfile(path), "answer.json was not written")
-        with open(path, encoding="utf-8-sig") as fh:
-            self.answer = json.load(fh)
+        # json.loads on the BYTES reads UTF-8 (with or without a BOM) and the
+        # UTF-16 that Windows PowerShell 5.1's Out-File writes.
+        with open(path, "rb") as fh:
+            self.answer = json.loads(fh.read())
         self.assertIsInstance(self.answer, dict, "answer.json must hold a JSON object")
 
     def test_a_the_project_was_not_changed(self):

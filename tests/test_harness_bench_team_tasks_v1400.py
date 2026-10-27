@@ -61,7 +61,7 @@ PATCH_CONFLICTS = {"README.md", "orderdesk/cli.py", "orderdesk/invoice.py", "ord
 
 #: The content hash of every team task as v1.400.0 ships them.
 TEAM_HASHES = {
-    "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
+    "team-audit-events": "232bf1acd37bd2a453de8dc2412d3e77bf51840fd2f44e16d6ce6c3802bfea3d",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
     "team-review-patch": "c3c6b067e5fad22bb5da2cf5f48f624a1780cf63930c4a0d00add417d9b016e8",
