@@ -332,7 +332,7 @@ def select_tasks(
     keeps only those tiers, and ``max_tasks`` keeps the first N after that.
     Several tiers keep the one shuffled order: ``frontier,team`` is the
     frontier and team tasks exactly as ``all`` orders them."""
-    wanted = set(tier_names(tier))
+    tiers = set(tier_names(tier))
     by_id = {t.id: t for t in tasks}
     order = sorted(by_id)
     random.Random(int(seed)).shuffle(order)
@@ -345,8 +345,8 @@ def select_tasks(
             )
         keep = set(wanted)
         order = [i for i in order if i in keep]
-    if wanted != set(TIERS):
-        order = [i for i in order if by_id[i].tier in wanted]
+    if tiers != set(TIERS):
+        order = [i for i in order if by_id[i].tier in tiers]
     if max_tasks is not None:
         if max_tasks < 1:
             raise TaskError("max_tasks must be at least 1")

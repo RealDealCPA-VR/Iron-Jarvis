@@ -53,7 +53,20 @@ def test_several_tiers_select_each_of_them_in_the_order_all_gives():
     assert [t.id for t in select_tasks(tasks, tier="team,frontier", seed=11, max_tasks=4)] == both[:4]
 
 
-@pytest.mark.parametrize("bad", ["medium", "frontier,medium", "all,team", "team,all", "", " ", ",", "Team"])
+def test_named_tasks_still_pick_through_every_tier_selection():
+    """--tasks with --tier (the default "all" included): the review's first
+    cut reused one variable for both and returned NO task for a named one
+    (81 benchmark pins went red; the tier pins named none)."""
+    tasks = list(TASKS.values())
+    names = ["bugfix-leap-year", FRONTIER[0], TEAM[0]]
+    picked = {tier: {t.id for t in select_tasks(tasks, names=names, tier=tier)}
+              for tier in ("all", "core", "frontier,team", "team", "hard")}
+    assert picked == {"all": set(names), "core": {"bugfix-leap-year"}, "frontier,team": {FRONTIER[0], TEAM[0]},
+                      "team": {TEAM[0]}, "hard": set()}
+    assert [t.id for t in select_tasks(tasks, names=["bugfix-leap-year"])] == ["bugfix-leap-year"]
+
+
+@pytest.mark.parametrize("bad",["medium", "frontier,medium", "all,team", "team,all", "", " ", ",", "Team"])
 def test_a_tier_list_with_a_wrong_name_is_refused(bad):
     with pytest.raises(TaskError, match="--tier must be one of core, hard, frontier, team, all, or several"):
         select_tasks(list(TASKS.values()), tier=bad)
