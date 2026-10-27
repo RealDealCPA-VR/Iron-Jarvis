@@ -35,16 +35,69 @@ export function composerChipClass(on = false, tone: "accent" | "success" = "acce
 
 /**
  * v1.400.0: ONE ROW whatever model is picked (lib/toolbarFit). When the
- * toolbar is too tight for every chip's words it sets `data-fit-icons` on
- * itself (a `group/fit`), and a chip carrying these classes becomes a 30px
- * square holding its icon — the shape it has on a phone — while its
- * aria-label, tooltip and every non-colour cue (the Local only glow, the
- * no-ask level's amber shield) stay. Outside a fit toolbar they do nothing.
+ * toolbar is too tight for every chip's words it gives them up ONE CHIP AT A
+ * TIME, setting `data-fit-<step>` on itself (a `group/fit`) for each step it
+ * has taken. A chip carrying its step's classes then becomes a 30px square
+ * holding its icon — the shape it has on a phone — while its aria-label,
+ * tooltip and every non-colour cue (the Local only glow, the no-ask level's
+ * amber shield) stay. Outside a fit toolbar they do nothing.
+ *
+ * The classes are written out whole, one row per step, because Tailwind only
+ * builds a class it finds spelled in the source.
  */
-export const FIT_ICON_CHIP =
-  "group-data-[fit-icons]/fit:w-[30px] group-data-[fit-icons]/fit:justify-center group-data-[fit-icons]/fit:px-0";
-/** A chip's words (and chevron), gone while the toolbar shows icons only. */
-export const FIT_WORDS = "group-data-[fit-icons]/fit:hidden";
+export type FitChipStep = "project" | "web" | "tools" | "local" | "ask" | "tryon" | "plan";
+
+const FIT_CHIP_CLASSES: Readonly<Record<FitChipStep, { chip: string; words: string; shows: string }>> = {
+  project: {
+    chip: "group-data-[fit-project]/fit:w-[30px] group-data-[fit-project]/fit:justify-center group-data-[fit-project]/fit:px-0",
+    words: "group-data-[fit-project]/fit:hidden",
+    shows: "group-data-[fit-project]/fit:inline",
+  },
+  web: {
+    chip: "group-data-[fit-web]/fit:w-[30px] group-data-[fit-web]/fit:justify-center group-data-[fit-web]/fit:px-0",
+    words: "group-data-[fit-web]/fit:hidden",
+    shows: "group-data-[fit-web]/fit:inline",
+  },
+  tools: {
+    chip: "group-data-[fit-tools]/fit:w-[30px] group-data-[fit-tools]/fit:justify-center group-data-[fit-tools]/fit:px-0",
+    words: "group-data-[fit-tools]/fit:hidden",
+    shows: "group-data-[fit-tools]/fit:inline",
+  },
+  local: {
+    chip: "group-data-[fit-local]/fit:w-[30px] group-data-[fit-local]/fit:justify-center group-data-[fit-local]/fit:px-0",
+    words: "group-data-[fit-local]/fit:hidden",
+    shows: "group-data-[fit-local]/fit:inline",
+  },
+  ask: {
+    chip: "group-data-[fit-ask]/fit:w-[30px] group-data-[fit-ask]/fit:justify-center group-data-[fit-ask]/fit:px-0",
+    words: "group-data-[fit-ask]/fit:hidden",
+    shows: "group-data-[fit-ask]/fit:inline",
+  },
+  tryon: {
+    chip: "group-data-[fit-tryon]/fit:w-[30px] group-data-[fit-tryon]/fit:justify-center group-data-[fit-tryon]/fit:px-0",
+    words: "group-data-[fit-tryon]/fit:hidden",
+    shows: "group-data-[fit-tryon]/fit:inline",
+  },
+  plan: {
+    chip: "group-data-[fit-plan]/fit:w-[30px] group-data-[fit-plan]/fit:justify-center group-data-[fit-plan]/fit:px-0",
+    words: "group-data-[fit-plan]/fit:hidden",
+    shows: "group-data-[fit-plan]/fit:inline",
+  },
+};
+
+/** A chip that becomes its icon alone (a 30px square) at its step. */
+export function fitIconChip(step: FitChipStep): string {
+  return FIT_CHIP_CLASSES[step].chip;
+}
+/** A chip's words (and chevron), gone once its step is taken. */
+export function fitWords(step: FitChipStep): string {
+  return FIT_CHIP_CLASSES[step].words;
+}
+/** Shown only once the step is taken (a short word or a count that stands
+ *  in for the words); pair it with `hidden` or `sm:hidden`. */
+export function fitShows(step: FitChipStep): string {
+  return FIT_CHIP_CLASSES[step].shows;
+}
 
 /**
  * The tooltip of a chip showing its icon alone leads with the words it no

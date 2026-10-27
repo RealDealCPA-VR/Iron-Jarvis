@@ -57,6 +57,20 @@ export function defaultWords(def: string): string {
   return "";
 }
 
+/**
+ * v1.400.0 (review): what the chip says in a composer toolbar out of room
+ * (lib/toolbarFit's `short` step). `null` = its words stay: a level ("Low",
+ * "Medium", "High") is already short. Otherwise the chip shows a brain icon,
+ * with "Off" for a model that does not think first, and nothing more for
+ * "Reasoning" or "Model decides" (the tooltip leads with the whole words).
+ * The first cut cut the words to about four letters ("Reaso…"), which saved
+ * seven pixels for "Reasoning" and read as a broken word.
+ */
+export function reasoningShortLabel(picked: string, def: string): string | null {
+  if (LEVELS.includes(picked) || LEVELS.includes(def)) return null;
+  return def === "off" ? "Off" : "";
+}
+
 /** What the chip shows: the picked level, else the model's default, else "Reasoning". */
 export function reasoningChipLabel(picked: string, def: string): string {
   if (LEVELS.includes(picked)) return cap(picked);

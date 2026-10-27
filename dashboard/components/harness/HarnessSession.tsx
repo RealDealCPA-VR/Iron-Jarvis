@@ -59,8 +59,8 @@ import { useLiveThinking } from "@/lib/liveThinking";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { answeredModelName } from "@/lib/answeredModel";
-import { FIT_ICON_CHIP, FIT_WORDS, composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
-import { FIT_ICONS, FIT_TIGHT, useToolbarFit } from "@/lib/toolbarFit";
+import { composerChipClass, fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
+import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit } from "@/lib/toolbarFit";
 import { asPermissionMode } from "@/lib/permissionLevels";
 import { phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
@@ -584,12 +584,12 @@ export function HarnessSession({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   // v1.400.0: the box's toolbar is ONE ROW whatever model is picked, as the
-  // chat's is (lib/toolbarFit): the model's name truncates first, then the
-  // chips on the left drop their words, then the reasoning chip shortens its
-  // words; only a box too narrow even for that wraps as before.
-  const [harnessFitRef, harnessFit] = useToolbarFit();
-  const harnessIcons = harnessFit >= FIT_ICONS;
-  const harnessShort = harnessFit >= FIT_TIGHT;
+  // chat's is (lib/toolbarFit): it gives up space one step at a time
+  // (HARNESS_FIT_ORDER: "Try on…", then the model's name truncates, then
+  // "Plan first", the permission level, the reasoning words); only a box too
+  // narrow even for that wraps as before.
+  const [harnessFitRef, harnessFit] = useToolbarFit(HARNESS_FIT_ORDER);
+  const harnessOn = (step: Parameters<typeof fitStepOn>[2]) => fitStepOn(HARNESS_FIT_ORDER, harnessFit, step);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   // v1.392.0 (long jobs, Phase 3): the running reply's stall notice (the
@@ -2961,10 +2961,10 @@ export function HarnessSession({
             />
             {/* v1.400.0: one row whatever model is picked (lib/toolbarFit) —
                 the chat's toolbar rules: `data-fit-row` keeps it one line (the
-                right group gives way through the model chip's name),
-                `data-fit-icons` makes the chips on the left icons,
-                `data-fit-short` cuts the reasoning chip's words; none of them
-                (a phone, or a box too narrow even for that) wraps as before. */}
+                right group gives way through the model chip's name), and one
+                `data-fit-<step>` per step taken in HARNESS_FIT_ORDER, each
+                read by its own chip; no `data-fit-row` (a phone, or a box too
+                narrow even for that) wraps as before. */}
             <div
               ref={harnessFitRef}
               data-testid="harness-composer-toolbar"
@@ -2975,10 +2975,11 @@ export function HarnessSession({
                 value={view.setup.approvalMode || "approve_for_me"}
                 onChange={(mode) => void patchSetup({ approval_mode: asPermissionMode(mode) })}
                 iconOnlyOnPhone
-                iconOnly={harnessIcons}
+                iconOnly={harnessOn("ask")}
               />
               {(() => {
-                const words = view.mode === "plan" ? "Planning" : "Plan first";
+                const planning = view.mode === "plan";
+                const words = planning ? "Planning" : "Plan first";
                 const title =
                   view.mode === "plan"
                     ? "Plan mode is on: the session only reads and plans, then asks you to approve the plan. Press to let it work."
@@ -2991,11 +2992,14 @@ export function HarnessSession({
                     // v1.400.0: its words were its name; they can go now.
                     aria-label={words}
                     onClick={() => void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" })}
-                    title={harnessIcons ? iconOnlyTitle(words, title) : title}
-                    className={`${composerChipClass(view.mode === "plan")} ${FIT_ICON_CHIP}`}
+                    title={harnessOn("plan") && !planning ? iconOnlyTitle(words, title) : title}
+                    // Review: only "Plan first" (off) gives up its words. On,
+                    // "Planning" is the session's mode, and the list icon in
+                    // the accent alone would tell it by hue.
+                    className={`${composerChipClass(planning)}${planning ? "" : ` ${fitIconChip("plan")}`}`}
                   >
                     <ListChecks size={14} aria-hidden className="shrink-0" />
-                    <span className={FIT_WORDS}>{words}</span>
+                    <span className={planning ? undefined : fitWords("plan")}>{words}</span>
                   </button>
                 );
               })()}
@@ -3007,7 +3011,7 @@ export function HarnessSession({
                 picks={tryOn}
                 onChange={setTryOn}
                 disabled={view.archived || view.mode === "plan"}
-                iconOnly={harnessIcons}
+                iconOnly={harnessOn("tryon")}
               />
               {/* Review (v1.374.0): this group may WRAP, right-aligned, and
                   never grows past the row. With the meter added, a model that
@@ -3035,7 +3039,7 @@ export function HarnessSession({
                     levels={levels}
                     value={view.setup.reasoning}
                     def={reasoningDef}
-                    short={harnessShort}
+                    short={harnessOn("short")}
                     onChange={(level) => void patchSetup({ reasoning: level })}
                   />
                 ) : null}

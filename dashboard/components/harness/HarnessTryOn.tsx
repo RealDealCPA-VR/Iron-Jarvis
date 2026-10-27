@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Layers, X } from "lucide-react";
-import { FIT_ICON_CHIP, FIT_WORDS, composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
+import { composerChipClass, fitIconChip, fitShows, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 import { workerModelName } from "@/lib/buildHelpers";
 import {
   MAX_ATTEMPTS,
@@ -51,9 +51,9 @@ export function TryOnControl({
   picks: readonly TryOnPick[];
   onChange: (next: TryOnPick[]) => void;
   disabled?: boolean;
-  /** v1.400.0: the composer's toolbar (lib/toolbarFit) shows icons only; the
-   *  chip's tooltip then leads with its words. Its shape follows the
-   *  toolbar's `data-fit-icons` (CSS). */
+  /** v1.400.0: the composer's toolbar (lib/toolbarFit) has taken its
+   *  `tryon` step; the chip's tooltip then leads with its words. Its shape
+   *  follows the toolbar's `data-fit-tryon` (CSS). */
   iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -202,10 +202,13 @@ export function TryOnControl({
             ? iconOnlyTitle(tryOnChipWords(picks), TRY_ON_TITLE)
             : TRY_ON_TITLE
         }
-        className={`${composerChipClass(picks.length > 0)} ${FIT_ICON_CHIP}`}
+        className={`${composerChipClass(picks.length > 0)}${picks.length > 0 ? "" : ` ${fitIconChip("tryon")}`}`}
       >
         <Layers size={14} aria-hidden className="shrink-0" />
-        <span className={FIT_WORDS}>{tryOnChipWords(picks)}</span>
+        <span className={fitWords("tryon")}>{tryOnChipWords(picks)}</span>
+        {/* Review: with models picked, a layers icon alone would tell it by
+            hue; the chip keeps the count, as the chat's tools chip does. */}
+        {picks.length > 0 ? <span className={`hidden ${fitShows("tryon")}`}>{picks.length}</span> : null}
       </button>
       {picks.length > 0 && !open ? (
         <button

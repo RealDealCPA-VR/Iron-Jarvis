@@ -37,7 +37,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Shield, ShieldAlert } from "lucide-react";
+import { Check, ChevronDown, Shield, ShieldAlert, ShieldQuestion } from "lucide-react";
 import {
   PERMISSION_MODES,
   asPermissionMode,
@@ -47,7 +47,7 @@ import {
   type PermissionMode,
 } from "@/lib/permissionLevels";
 import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
-import { FIT_ICON_CHIP, FIT_WORDS, iconOnlyTitle } from "@/lib/composerChips";
+import { fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 
 export interface PermissionChipProps {
   /** The conversation's level (a wire value; an unknown one reads as the default). */
@@ -66,9 +66,10 @@ export interface PermissionChipProps {
    *  chip unmounts with it open), so the page can keep "Jump to latest" off
    *  an open menu. Not called on mount. */
   onOpenChange?: (open: boolean) => void;
-  /** v1.400.0: the toolbar it sits in (lib/toolbarFit) shows icons only, so
-   *  the chip is its shield alone: its tooltip leads with the level's name.
-   *  The shape itself follows the toolbar's `data-fit-icons` (CSS). */
+  /** v1.400.0: the toolbar it sits in (lib/toolbarFit) has taken its `ask`
+   *  step, so the chip is its shield alone: its tooltip leads with the
+   *  level's name. The shape itself follows the toolbar's `data-fit-ask`
+   *  (CSS). */
   iconOnly?: boolean;
 }
 
@@ -369,16 +370,20 @@ export function PermissionChip({
   }
 
   const warn = level.tone === "warn";
-  const Icon = warn ? ShieldAlert : Shield;
+  // v1.400.0 (review): each level has its OWN shield, so the shield alone (a
+  // phone, or a desktop toolbar out of room) still says which level is on —
+  // "Ask first" and "Ask when risky" used to share one plain shield, and with
+  // their words gone nothing told them apart (not even a hue).
+  const Icon = warn ? ShieldAlert : current === "always_ask" ? ShieldQuestion : Shield;
   const chipTone = warn
     ? "text-tone-warn hover:bg-tone-warn/10"
     : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200";
   // On a phone the chip is a 30px square holding the shield; the words and the
   // chevron come back from sm up.
-  // v1.400.0: so is a chip in a toolbar that has given up its chips' words
-  // (lib/toolbarFit: FIT_ICON_CHIP / FIT_WORDS, read off the toolbar's
-  // `data-fit-icons`), keeping the amber shield of the no-ask level; its
-  // tooltip then names the level (`iconOnly`).
+  // v1.400.0: so is a chip in a toolbar that has given up its words
+  // (lib/toolbarFit's `ask` step: fitIconChip / fitWords, read off the
+  // toolbar's `data-fit-ask`), keeping its level's own shield and the amber
+  // of the no-ask level; its tooltip then names the level (`iconOnly`).
   const phoneChip = iconOnlyOnPhone ? " max-sm:w-[30px] max-sm:justify-center max-sm:px-0" : "";
   const phoneHide = iconOnlyOnPhone ? " max-sm:hidden" : "";
 
@@ -462,11 +467,11 @@ export function PermissionChip({
         aria-controls={open ? menuId : undefined}
         aria-label={`Permissions: ${level.label}`}
         title={iconOnly ? iconOnlyTitle(level.label, level.description) : level.description}
-        className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg bg-transparent px-2.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${chipTone}${phoneChip} ${FIT_ICON_CHIP}`}
+        className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg bg-transparent px-2.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${chipTone}${phoneChip} ${fitIconChip("ask")}`}
       >
         <Icon size={14} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
-        <span className={`${phoneHide.trim()} ${FIT_WORDS}`.trim()}>{level.label}</span>
-        <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide} ${FIT_WORDS}`} />
+        <span className={`${phoneHide.trim()} ${fitWords("ask")}`.trim()}>{level.label}</span>
+        <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide} ${fitWords("ask")}`} />
       </button>
       {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}
     </div>

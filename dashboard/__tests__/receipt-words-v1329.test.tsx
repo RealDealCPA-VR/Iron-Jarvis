@@ -347,10 +347,12 @@ describe("the reasoning chip and the ask card", () => {
     const at = chip.indexOf('aria-label="Reasoning level"');
     expect(at).toBeGreaterThan(0);
     const select = chip.slice(at, at + 900);
-    // v1.400.0 (updated on purpose): the same sentence; a toolbar at its
-    // tightest cuts the chip's words short, and the tooltip then leads with
-    // the whole words.
-    expect(select).toMatch(/title=\{short \? iconOnlyTitle\(words, reasoningTitle\(def\)\) : reasoningTitle\(def\)\}/);
+    // v1.400.0 (updated on purpose): the same sentence; a toolbar out of
+    // room gives the chip's words up for a brain (a level keeps its word),
+    // and the tooltip then leads with the whole words.
+    expect(select).toMatch(
+      /title=\{short && shortWords !== null \? iconOnlyTitle\(words, reasoningTitle\(def\)\) : reasoningTitle\(def\)\}/,
+    );
     const page = read("app/chat/page.tsx");
     expect(page).toMatch(/<ReasoningChip[\s\S]{0,200}?def=\{reasoningDefaultFor\(choice\)\}/);
     const title = reasoningTitle("");
