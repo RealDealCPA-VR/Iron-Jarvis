@@ -42,8 +42,11 @@ from typing import Any
 MAX_COMMIT_FILE_BYTES = 50 * 1024 * 1024
 #: The record keeps at most this many left-out paths (the count is kept too).
 MAX_LEFT_OUT_KEPT = 200
-#: The words name at most this many paths.
+#: The words name at most this many paths…
 WORDS_PATHS = 8
+#: …and are at most this long (the Last night view shows a row's line up to
+#: 400 characters, ``lib/nightShift.decodeRow``).
+WORDS_CHARS = 380
 
 #: Why a file was left out → the record's code.
 SECRET = "secret"
@@ -302,12 +305,26 @@ def left_out_words(left: list[dict[str, Any]], total: "int | None" = None) -> st
     n = int(total if total is not None else len(left))
     if n <= 0:
         return ""
-    shown = [f"{x.get('path')} ({why_words(str(x.get('why') or ''))})" for x in left[:WORDS_PATHS]]
+    files = "1 file was" if n == 1 else f"{n} files were"
+    head = f"{files} not committed and {'is' if n == 1 else 'are'} still in its branch folder: "
+    foot = (". Look at it before you commit or push it yourself." if n == 1
+            else ". Look at them before you commit or push them yourself.")
+    # The row shows at most WORDS_CHARS of it (the Last night view cuts a
+    # longer line mid-name): names are added while they fit.
+    shown: list[str] = []
+    for x in left[:WORDS_PATHS]:
+        path = str(x.get("path") or "")
+        if len(path) > 80:
+            path = "…" + path[-79:]
+        item = f"{path} ({why_words(str(x.get('why') or ''))})"
+        more_after = n - len(shown) - 1
+        tail = f", and {more_after} more" if more_after > 0 else ""
+        if shown and len(head) + len(", ".join([*shown, item])) + len(tail) + len(foot) > WORDS_CHARS:
+            break
+        shown.append(item)
     more = n - len(shown)
     tail = f", and {more} more" if more > 0 else ""
-    files = "1 file was" if n == 1 else f"{n} files were"
-    return (f"{files} not committed and {'is' if n == 1 else 'are'} still in its branch folder: "
-            + ", ".join(shown) + tail + ". Look at them before you commit or push them yourself.")
+    return head + ", ".join(shown) + tail + foot
 
 
 __all__ = [

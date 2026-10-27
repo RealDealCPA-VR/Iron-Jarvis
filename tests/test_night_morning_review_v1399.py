@@ -753,3 +753,20 @@ def test_the_night_is_the_date_its_window_opened_across_a_clock_change(wall, fol
     # And a task an older Iron Jarvis started is placed by its UTC start the same way.
     began = at.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
     assert M.night_key(M._parse_iso(began).astimezone(ZoneInfo("America/New_York")), "23:00") == want
+
+
+def test_the_left_out_line_fits_the_row_and_counts_what_it_does_not_name():
+    """The Last night view shows a row's line up to 400 characters
+    (lib/nightShift.decodeRow): the sentence about what the commit left out
+    fits, names whole paths, and counts the rest."""
+    left = [{"path": f"very/long/folder/name/number-{i:02d}/" + "x" * 50 + ".env", "why": NC.SECRET}
+            for i in range(30)]
+    words = NC.left_out_words(left)
+    assert len(words) <= NC.WORDS_CHARS <= 400, len(words)
+    assert words.startswith("30 files were not committed and are still in its branch folder: ")
+    named = words.count("(looks like a secret)")
+    assert 1 <= named < 30 and f", and {30 - named} more." in words
+    assert words.endswith("Look at them before you commit or push them yourself.")
+    one = NC.left_out_words([{"path": ".env", "why": NC.SECRET}])
+    assert one == ("1 file was not committed and is still in its branch folder: .env (looks like a secret). "
+                   "Look at it before you commit or push it yourself.")
