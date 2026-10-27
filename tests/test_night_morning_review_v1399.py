@@ -150,7 +150,8 @@ async def test_the_night_commit_never_takes_a_secret_a_huge_file_or_a_dependency
     said = " ".join(row["needs"])
     assert "not committed" in said and ".env" in said and "big.txt" in said, row["needs"]
     note = next(n["text"] for n in ended["notes"] if n["kind"] == "commit" and "not committed" in n["text"])
-    assert "src/client.py" in note and "secret" in note, note
+    assert note.startswith("7 files were not committed") and ".env (looks like a secret)" in note, note
+    assert "big.txt (larger than 4 KB)" in note, note
     # The masked words never carry a value either.
     assert OPENAI_SHAPE not in json.dumps(summary)
 

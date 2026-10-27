@@ -292,7 +292,8 @@ def why_words(why: str) -> str:
     if why == SECRET:
         return "looks like a secret"
     if why == LARGE:
-        return f"larger than {MAX_COMMIT_FILE_BYTES // (1024 * 1024)} MB"
+        size = MAX_COMMIT_FILE_BYTES
+        return f"larger than {size // (1024 * 1024)} MB" if size >= 1024 * 1024 else f"larger than {size // 1024} KB"
     if why == DEPENDENCY:
         return "in a dependency or cache folder"
     return "left out"
