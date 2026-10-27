@@ -771,3 +771,44 @@ def test_the_left_out_line_fits_the_row_and_counts_what_it_does_not_name():
     one = NC.left_out_words([{"path": ".env", "why": NC.SECRET}])
     assert one == ("1 file was not committed and is still in its branch folder: .env (looks like a secret). "
                    "Look at it before you commit or push it yourself.")
+
+
+@pytest.mark.parametrize("plant", ["hook", "config"])
+async def test_a_command_that_plants_a_git_hook_or_setting_is_caught_by_the_guard(tmp_path, monkeypatch, plant):
+    """A night task's command writes a hook into the repository's shared hooks
+    folder (or changes its .git/config): Iron Jarvis's own commit of the
+    night's work RUNS that hook unattended, and so does every commit the user
+    makes afterwards. The guard says so, and the task needs the user."""
+    repo = make_repo(tmp_path / "proj")
+    # A plain file write (a `git config` command would be carded and declined
+    # at night — the guard is for what slips past that).
+    if plant == "hook":
+        cmd = f"echo 'exit 0' > \"{(repo / '.git' / 'hooks' / 'post-commit').as_posix()}\""
+    else:
+        cmd = f"echo '# planted' >> \"{(repo / '.git' / 'config').as_posix()}\""
+    app, d = await _night(tmp_path, monkeypatch, {"TASK-PLANT": [
+        _write("p1", "mine.txt", "mine\n"),
+        [ToolCall(id="p2", name="Bash", arguments={"command": cmd})],
+        "Done TASK-PLANT.",
+    ]})
+    task = await _add(app, repo, "TASK-PLANT: write mine.txt")
+    await night_routes.night_pass(d)
+    ended = await _ended(app, d, task["id"])
+    if plant == "hook":
+        assert (repo / ".git" / "hooks" / "post-commit").is_file(), ended["notes"]
+    else:
+        assert "# planted" in (repo / ".git" / "config").read_text(), ended["notes"]
+    assert ended["main_changed"] is True and ended["state"] == N.NEEDS_YOU, ended["notes"]
+    outside = next(n["text"] for n in ended["notes"] if n["kind"] == "outside")
+    want = "its git hooks changed" if plant == "hook" else "its git settings changed"
+    assert want in outside, outside
+
+
+def test_a_snapshot_an_older_iron_jarvis_took_is_never_read_as_a_hook_or_setting_change():
+    from iron_jarvis.harness import night_guard as G
+
+    old = {"head": "a", "ref": "refs/heads/main", "status": "s", "diff": "d", "stash": "", "refs": "r", "env": ""}
+    new = dict(old, hooks="h1", config="c1")
+    assert G.changes(old, new) == []
+    assert G.changes(dict(new, hooks="h0"), new) == [G._WHAT["hooks"]]
+    assert G.changes(dict(new, config="c0"), new) == [G._WHAT["config"]]
