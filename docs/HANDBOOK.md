@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.399.4 (2026-10-25).*
+holds itself to. Current as of v1.400.0 (2026-10-25).*
 
 ---
 
@@ -1927,6 +1927,36 @@ handed it a piece: nothing told it you wanted to save its usage.
   usage onto other models and accounts. Turning it off does not ask.
 - **It reaches coding sessions only.** An objective's coordinator does not
   get these words yet.
+
+## Benchmark tasks big enough for a team (v1.400.0)
+
+The team benchmark (`ironjarvis bench-harness`, a developer tool) has a new
+group of tasks, the **team** tier. Each task is large and splits into
+separate pieces a helper could do from a written brief:
+
+- **team-audit-events:** find every place 75 files write an event.
+- **team-port-js:** port five JavaScript string helpers to Python.
+- **team-spec-modules:** build three modules from a written spec (durations,
+  version ranges, splitting money).
+- **team-rename-option:** rename a setting everywhere it appears, keeping
+  the old name working with a warning.
+- **team-review-patch:** apply a colleague's patch made against an older
+  copy. Some parts must be merged by hand, and some edits don't match the
+  patch's own description.
+- **team-test-triage:** make about 30 failing tests pass, caused by 13 bugs
+  in ten packages.
+
+How to use them:
+
+- **Several tiers in one run.** `--tier` takes a list: `--tier frontier,team`
+  runs both. The order you type them in doesn't matter, and adding a tier
+  doesn't change where earlier results are kept.
+- **Team first in a team file.** Add `team_first = true` under `[planner]`
+  to run the team with **Hand work to my team first** turned on. The report
+  shows it as its own setup, "jarvis-team (team-first)", next to the plain
+  team and the planner alone.
+- **The team at work.** Each team's answer starts by saying in how many runs
+  the planner handed at least one piece to a team member.
 
 ## The chat box stays on one row (v1.400.0)
 

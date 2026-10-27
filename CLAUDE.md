@@ -3732,6 +3732,34 @@ does not need a bump, stop and bump it.
   `tests/test_team_first_{setting,prompt,bench,report_review,words_review,
   tonight}_v1400.py`, `dashboard/__tests__/team-first-setting-v1400.test.tsx`.
 
+- **The bench's TEAM tier: six tasks that split into pieces; `--tier` takes
+  a comma list** (v1.400.0; a doer + a reviewer that found 5 more defects,
+  three of them hidden checks failing a correct answer). `harness_bench/
+  tasks/team-*`: audit-events (rubric, 75 files / 120 writes),
+  port-js (expected values from node, pinned; the check never runs node),
+  spec-modules, rename-option (deprecated aliases warn once), review-patch
+  (a format-patch against an older copy: 4 files need a hand merge, 3 edits
+  do not match its description) and test-triage (13 bugs, 10 packages; still
+  quick — measures what handing out costs). Each has a solution, a decoy,
+  more decoys and ≥ 2 alternatives under `tests/fixtures/`, and
+  `TEAM_HASHES` pins the content. CHECKS MUST ACCEPT WHAT A WINDOWS AGENT
+  WRITES: an `answer.json` saved by PowerShell 5.1 is UTF-16 LE with a BOM
+  (`json.loads` on the RAW BYTES reads UTF-8/16/32); an argparse
+  `SystemExit(2)` is an exit code; a CHANGELOG names a rename in any
+  spelling. `frontier-legacy-callers` and core `run_rubric` still read UTF-8
+  only (a fix changes the frontier hash — the user's call). `catalog.TIERS`
+  gains "team"; `catalog.tier_names` / `canonical_tier` (`team,frontier` →
+  `frontier,team`; `all` beside another refused); a tier never enters a
+  setup's identity (pinned), the refine key spells a multi-tier selection
+  one way and keeps single tiers and `all` unchanged; `--tasks` beside
+  `--tier` keeps working (the first cut reused a variable and emptied it —
+  81 red). The audit repo, the patch and its fixtures regenerate
+  byte-identical from `scripts/bench_task_generators/` (not shipped, not
+  collected). `edge_installed()` compiles the check in memory (it left a
+  `.pyc` of a hidden check in the source tree with bytecode on). Pins:
+  `tests/test_harness_bench_{team_tasks,team_review,tiers,team_generators}
+  _v1400.py`.
+
 - **The chat toolbar stays ONE ROW; it gives up words one chip at a time,
   least needed first** (v1.400.0, a USER BUG: "Qwen3.8-27B (RTX)" + the
   Reasoning chip wrapped the right group to a second line). `lib/toolbarFit.ts`
