@@ -213,15 +213,18 @@ def test_the_tier_chooses_the_tasks():
     hard = [t.id for t in select_tasks(tasks, tier="hard", seed=5)]
     core = [t.id for t in select_tasks(tasks, tier="core", seed=5)]
     frontier = [t.id for t in select_tasks(tasks, tier="frontier", seed=5)]
+    # v1.400.0: the team tier (tasks where splitting pays) is its own fourth tier.
+    team = [t.id for t in select_tasks(tasks, tier="team", seed=5)]
     every = [t.id for t in select_tasks(tasks, tier="all", seed=5)]
     assert sorted(hard) == HARD
     assert core and frontier and not set(core) & set(hard) and not set(frontier) & (set(core) | set(hard))
-    assert sorted(core + hard + frontier) == sorted(TASKS)
+    assert team and not set(team) & (set(core) | set(hard) | set(frontier))
+    assert sorted(core + hard + frontier + team) == sorted(TASKS)
     assert every == [t.id for t in select_tasks(tasks, seed=5)] and sorted(every) == sorted(TASKS)
     assert hard == [i for i in every if i in set(hard)]
     picked = select_tasks(tasks, names=["bugfix-leap-year", HARD[0]], tier="hard")
     assert [t.id for t in picked] == [HARD[0]]
-    with pytest.raises(TaskError, match="--tier must be one of core, hard, frontier, all"):
+    with pytest.raises(TaskError, match="--tier must be one of core, hard, frontier, team, all"):
         select_tasks(tasks, tier="medium")
 
 
@@ -718,7 +721,7 @@ def test_the_command_line_takes_the_tier(tmp_path):
     assert [line.split(" [")[0].strip() for line in out.output.splitlines() if "would run" in line] == [
         "bugfix-leap-year"]
     out = CliRunner().invoke(bench_app, [*base, "--tier", "medium"])
-    assert out.exit_code == 2 and "--tier must be one of core, hard, frontier, all" in out.output
+    assert out.exit_code == 2 and "--tier must be one of core, hard, frontier, team, all" in out.output
 
 
 def test_the_bench_never_uses_the_apps_own_folder(tmp_path, monkeypatch):

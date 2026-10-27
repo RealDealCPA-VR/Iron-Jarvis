@@ -1,0 +1,6 @@
+category = "feature"
+tier = "team"
+title = "Port five independent string helpers from a JavaScript reference, edge cases and all"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

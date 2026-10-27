@@ -1,0 +1,5 @@
+Our web front end has five string helpers in `reference/strutil.js`; the back end needs the same five in Python. Please port them to the package `strutil/` exactly as `PORTING.md` describes: which Python function and module each helper becomes, how its options and errors map, and what "the same" means. The modules are there with their signatures and raise `NotImplementedError` today.
+
+The port must give the reference's result for every input, including every edge case the reference handles — that is what will be checked, with many more cases than the few tests in `test_sizes.py`, `test_query.py`, `test_natural.py`, `test_wrap.py` and `test_titles.py` (they fail today). Read the reference itself, line by line, not only its comments: JavaScript and Python differ in places that matter here (how numbers are rounded, how strings are measured, cut and compared, what a regular expression matches), and `PORTING.md` names them. The five helpers do not depend on each other.
+
+Do not change the existing tests (add your own in new files if you want). Python 3.12, standard library only. Nothing may run the JavaScript file: read it.

@@ -58,8 +58,15 @@ CATEGORIES: tuple[str, ...] = (
 #: generated repository of ~2,000 files, a project that will not build, a
 #: merge in progress, a program debugged while it runs, fixes whose obvious
 #: form breaks something else. A careful harness that plans, explores,
-#: verifies and cleans up passes them; small careful work does not.
-TIERS: tuple[str, ...] = ("core", "hard", "frontier")
+#: verifies and cleans up passes them; small careful work does not. ``team``
+#: (v1.400.0) — tasks where SPLITTING PAYS: each is several independent
+#: pieces (many files to read, separate modules from one spec, failing tests
+#: from unrelated bugs, a change reviewed file by file, a rename across code
+#: and docs, functions ported one by one), big enough that one model alone
+#: takes several minutes and a planner can hand each piece to a helper from a
+#: written brief. The first live team run (the frontier tier) handed nothing
+#: out: each frontier task was quicker to do than to describe.
+TIERS: tuple[str, ...] = ("core", "hard", "frontier", "team")
 
 #: Every hidden check file carries this text, so a leak is recognisable even
 #: when the file was renamed or pasted into another one.
@@ -280,7 +287,7 @@ def select_tasks(
     the same seed gives the same order on every machine. ``names`` keeps only
     those tasks (in the shuffled order; an unknown name is an error, never
     silently skipped), ``tier`` (``core`` / ``hard`` / ``frontier`` /
-    ``all``) keeps only that tier, and ``max_tasks`` keeps the first N after
+    ``team`` / ``all``) keeps only that tier, and ``max_tasks`` keeps the first N after
     that."""
     if tier not in (*TIERS, "all"):
         raise TaskError(f"--tier must be one of {', '.join((*TIERS, 'all'))}")
