@@ -47,6 +47,20 @@ follows the menu when the composer moves, an ancestor with a `transform` /
 `backdrop-filter` cannot move the menu (the portal), the app's palette covers
 an open menu, and the IJ harness's Ctrl+K from a row of the menu stays in it.
 
+`e2e/composer-one-row-v1400.spec.ts` (v1.400.0, the composer's toolbar is
+one row whatever model is picked) stubs `/models` with a short-named model,
+the user's "Qwen3.8-27B (RTX)" with reasoning levels, two longer names and one
+of 50 characters, and measures the toolbar of a new chat, a saved chat and the
+IJ harness (one Build session per model) at 2000 × 1103, 1406 × 857,
+1280 × 720, 1024 × 640 and 390 × 844: never a sideways pan, every control
+inside the card and none over another; from a 640 px composer up, one
+vertical centre, Send right-most and at least six characters of the model's
+name. Its other cases: the user's own case on a light theme, typing and every
+toolbar menu leaving the row still, the order (the model's name truncates
+before the chips drop their words) and the hysteresis (a few pixels of jitter
+never flickers the chips' words). `IJ_ROW_OUT=<folder>` writes each case's
+measurements and a screenshot.
+
 `e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
 with GET /team, /build/accounts and /team/starter stubbed to members and
 accounts with long names, at 390 × 844 and 1280 × 720: every part of a
