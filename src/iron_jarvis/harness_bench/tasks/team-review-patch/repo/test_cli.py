@@ -34,6 +34,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Discount (20%): -$5.00", out)
 
+    def test_express_option(self):
+        code, out, _ = self.run_cli(ORDER, "--express")
+        self.assertEqual(code, 0)
+        self.assertIn("Shipping (express): $12.99", out)
+        self.assertIn("Total: $37.99", out)
+
+    def test_output_option(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "invoice.txt")
+            code, out, _ = self.run_cli(ORDER, "--output", target)
+            self.assertEqual(code, 0)
+            self.assertEqual(out.strip(), f"wrote {target}")
+            with open(target, encoding="utf-8") as fh:
+                self.assertIn("Total: $30.99", fh.read())
+
     def test_a_bad_order(self):
         code, _, err = self.run_cli({"lines": []})
         self.assertEqual(code, 2)

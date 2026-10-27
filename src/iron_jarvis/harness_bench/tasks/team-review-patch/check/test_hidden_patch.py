@@ -1,7 +1,8 @@
 # IJ-BENCH-HIDDEN-CHECK team-review-patch
 """Hidden check: the change in incoming/0001-Add-loyalty-tiers.patch is in the
 code, every point of its description holds (including the cases its own tests
-do not cover), its tests are kept, and the older tests are unchanged."""
+do not cover), the project's own newer features (express shipping, --output)
+still work with it, its tests are kept, and the older tests are unchanged."""
 import contextlib
 import hashlib
 import io
@@ -18,13 +19,13 @@ sys.path.insert(0, HERE)
 CRLF = bytes([13, 10])
 LF = bytes([10])
 UNCHANGED = {
-    "test_cli.py": "41e30c931c6f7f52e5538d53400eed0e61c921a3ffc92a9948bd4e4b098c9699",
+    "test_cli.py": "90d9b6283b64868aae5e4e24f04905541a034d2c7dba8156396e77cf37d20732",
     "test_customers.py": "5d46af1df3858749cc4d9bd16bfcc9125bdd9c01824fb5dc629566c89c0d1d5e",
     "test_discounts.py": "030ffdc728c85a98f2919cab8a4929a5541a6327823974c7503635bfefa9f29a",
-    "test_invoice.py": "0286be5494ac69463ed9a29a641680b3a5c687969ff97d2bf8f5de48b59018cb",
+    "test_invoice.py": "d8bcc9684050ed45275e8fd60b401b70419bbbcf8b36a635a7505f87b477d7d1",
     "test_pricing.py": "333cbe074a9c32fa71a63b0c3da31bc73198d372de8b9db41dd4515d68136576",
     "test_report.py": "ab23820d114a01c974ddf7cc379b454d4a106289594b65b836fe185eb2e6c5a5",
-    "test_shipping.py": "585bd9652309e7cf0dc039e4f4f251b13b617eb12aa83845f5d7ea18a4b40076",
+    "test_shipping.py": "d38868586ae9f87d4730b0c0eaa13a929cdc197c7d1482c176fce99ceb484b48",
 }
 PATCH_TESTS = [
     "test_any_case_and_spaces", "test_the_default_is_bronze", "test_an_unknown_tier", "test_tier_percent",
@@ -72,6 +73,14 @@ class HiddenShipping(unittest.TestCase):
         for args, expected in cases:
             with self.subTest(args=args):
                 self.assertEqual(shipping_cents(*args), expected)
+
+    def test_express_is_never_free(self):
+        from orderdesk.shipping import shipping_cents
+
+        for args in ((25000,), (6000, "gold"), (5000, "gold"), (25000, "gold"), (10000, "silver"), (100, "bronze")):
+            with self.subTest(args=args):
+                self.assertEqual(shipping_cents(*args, express=True), 1299)
+        self.assertEqual(shipping_cents(6000, "gold", express=False), 0)
 
 
 class HiddenCustomers(unittest.TestCase):
@@ -122,6 +131,21 @@ class HiddenInvoice(unittest.TestCase):
             "Total: $65.49",
             "Points earned: 88",
         ])
+
+    def test_d_express_with_a_tier_and_credit(self):
+        from orderdesk.customers import parse_customer
+        from orderdesk.invoice import render_invoice
+
+        gold = parse_customer({**ADA, "tier": "gold"})
+        self.assertEqual(render_invoice(gold, LINES, coupon="SAVE20", express=True).splitlines()[-4:], [
+            "Discount (25%): -$17.50", "Shipping (express): $12.99", "Total: $65.49", "Points earned: 104",
+        ])
+        silver = parse_customer({**ADA, "tier": "silver"})
+        self.assertEqual(render_invoice(silver, LINES, credit_cents=10000, express=True).splitlines()[-5:], [
+            "Shipping (express): $12.99", "Total: $79.49", "Store credit: -$79.49", "Amount due: $0.00",
+            "Points earned: 99",
+        ])
+        self.assertEqual(render_invoice(silver, LINES).splitlines()[-3:-1], ["Shipping: $5.99", "Total: $72.49"])
 
     def test_c_bronze_is_as_before(self):
         self.assertEqual(self.render(), [
@@ -182,6 +206,22 @@ class HiddenCli(unittest.TestCase):
         code, out, _ = self.run_cli({"customer": ADA, "lines": LINES})
         self.assertEqual(code, 0)
         self.assertNotIn("Store credit", out)
+
+    def test_f_output_and_express_with_the_new_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "out", "invoice.txt")
+            os.makedirs(os.path.dirname(target))
+            code, out, _ = self.run_cli({"customer": ADA, "lines": LINES}, "--tier", "gold", "--credit", "500",
+                                        "--express", "--output", target)
+            self.assertEqual(code, 0)
+            self.assertEqual(out.strip(), f"wrote {target}")
+            with open(target, encoding="utf-8") as fh:
+                written = fh.read().splitlines()
+        self.assertEqual(written[1], "Tier: Gold")
+        self.assertEqual(written[-5:], [
+            "Shipping (express): $12.99", "Total: $75.99", "Store credit: -$5.00", "Amount due: $70.99",
+            "Points earned: 126",
+        ])
 
     def test_e_a_wrong_credit_is_an_error(self):
         for args, order_credit in ((("--credit", "-5"), None), (("--credit", "ten"), None), (("--credit", "12.5"), None),
@@ -292,7 +332,7 @@ class HiddenKept(unittest.TestCase):
     def test_b_the_readme_documents_the_tiers(self):
         with open(os.path.join(HERE, "README.md"), encoding="utf-8") as fh:
             text = fh.read().lower()
-        for word in ("bronze", "silver", "gold", "--tier"):
+        for word in ("bronze", "silver", "gold", "--tier", "--credit", "store credit", "--express", "--output"):
             self.assertIn(word, text, f"README.md does not mention {word}")
 
     def test_c_the_older_tests_are_unchanged(self):

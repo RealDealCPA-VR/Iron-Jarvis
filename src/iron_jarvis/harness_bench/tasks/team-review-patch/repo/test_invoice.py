@@ -24,6 +24,11 @@ class InvoiceTest(unittest.TestCase):
         self.assertIn("Discount (10%): -$7.00", text)
         self.assertTrue(text.endswith("Total: $68.99"))
 
+    def test_express(self):
+        text = render_invoice(parse_customer(ADA), LINES, express=True)
+        self.assertIn("Shipping (express): $12.99", text)
+        self.assertTrue(text.endswith("Total: $82.99"))
+
 
 if __name__ == "__main__":
     unittest.main()

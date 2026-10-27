@@ -23,6 +23,11 @@ whole example.
     python -m orderdesk.cli examples/order.json --coupon WELCOME5
     python -m orderdesk.cli examples/order.json --tier gold
     python -m orderdesk.cli examples/order.json --credit 1500
+    python -m orderdesk.cli examples/order.json --express
+    python -m orderdesk.cli examples/order.json --output invoice.txt
+
+`--output FILE` writes the invoice to FILE instead of printing it (and prints
+"wrote FILE").
 
 The exit code is 0, or 2 when the order file is wrong (the reason is
 printed).
@@ -33,7 +38,8 @@ Coupons: `WELCOME5` (5% off), `SAVE10` (10% off), `SAVE20` (20% off), in any
 case. The discount is taken off the subtotal, a half cent rounded up.
 
 Shipping is free on orders of $100.00 or more (the subtotal before any
-discount), otherwise $5.99.
+discount), otherwise $5.99. Express shipping (`--express`) costs $12.99 on
+any order: it is never free.
 
 ## Loyalty tiers
 

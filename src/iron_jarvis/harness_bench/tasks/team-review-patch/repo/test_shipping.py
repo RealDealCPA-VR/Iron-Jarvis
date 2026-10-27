@@ -11,6 +11,10 @@ class ShippingTest(unittest.TestCase):
     def test_flat_fee_below(self):
         self.assertEqual(shipping_cents(9999), 599)
 
+    def test_express_is_never_free(self):
+        self.assertEqual(shipping_cents(25000, express=True), 1299)
+        self.assertEqual(shipping_cents(500, express=True), 1299)
+
 
 if __name__ == "__main__":
     unittest.main()

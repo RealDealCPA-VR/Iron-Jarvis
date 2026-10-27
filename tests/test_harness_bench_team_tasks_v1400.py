@@ -6,9 +6,9 @@ minute, and doing the work was always quicker than writing a helper a brief.
 The team tier holds tasks made of several independent pieces a planner can
 hand out from a written brief: a sixty-module package to read, three modules
 from one specification, about thirty failing tests from eleven unrelated bugs,
-an eleven-file change to apply and review (three of its edits to fix), a
-rename across code, command line, environment and docs, five functions to
-port from a JavaScript reference.
+an eleven-file change to bring into a project that moved on since and review
+(three of its edits to fix), a rename across code, command line, environment
+and docs, five functions to port from a JavaScript reference.
 
 Pinned here, each through the real code (``load_tasks``, ``prepare_workspace``,
 ``grade``):
@@ -23,7 +23,9 @@ Pinned here, each through the real code (``load_tasks``, ``prepare_workspace``,
   tiers' hashes and task lists are unchanged;
 * ``--tier team`` selects exactly the team tasks, ``--tier all`` includes them;
 * the answer keys are honest: the audit list is what an ``ast`` resolver finds,
-  the patch applies cleanly and its own tests pass WITH its bugs, and (where
+  the patch applies cleanly to the older project it was made against and its
+  own tests pass there WITH its bugs, on the project as it is now exactly the
+  hunks in the files the project changed since are rejected, and (where
   ``node`` is installed) the port's expected values are what the JavaScript
   reference really returns.
 """
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import sys
 import time
@@ -49,13 +52,19 @@ from tests.test_harness_bench_v1363 import DECOYS, FIXTURES, SOLUTIONS, TASKS, _
 TEAM = sorted(t.id for t in TASKS.values() if t.tier == "team")
 ALTERNATIVES = FIXTURES / "harness_bench_alternatives"
 MORE_DECOYS = FIXTURES / "harness_bench_decoys_more"
+#: The review-patch project as it was when the colleague made the change (the
+#: files the project changed since, laid over the task's repo like a solution).
+PATCH_BASE = FIXTURES / "harness_bench_team_patch_base"
+#: The files the project changed after the patch was made: the patch's hunks
+#: there do not apply and are brought in by hand.
+PATCH_CONFLICTS = {"README.md", "orderdesk/cli.py", "orderdesk/invoice.py", "orderdesk/shipping.py"}
 
 #: The content hash of every team task as v1.400.0 ships them.
 TEAM_HASHES = {
     "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
-    "team-review-patch": "2e8aaec34a86f513bd5f8d14854beec8c68a9ef1d1db6db8139ba5fffabff405",
+    "team-review-patch": "66c79495a2ce93fd8401cf696ff89aa050ddf9debe01b639e30136fd0d20c9f7",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
     "team-test-triage": "9a1992cb4b0ce94581bc4fb912a1033655d21012b89fb40f85f2eaac7ff1d87a",
 }
@@ -361,25 +370,60 @@ def test_the_audit_answer_key_is_what_a_real_resolver_finds(tmp_path):
     assert got - expected and expected - got
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="needs git to apply the patch")
-def test_the_patch_applies_cleanly_and_its_own_tests_pass_with_its_bugs(tmp_path):
-    """The incoming change is a real patch: ``git apply`` takes it as written,
-    the result is exactly the pinned decoy (the change as sent, bugs included),
-    and every test — the patch's own included — passes with the bugs in."""
-    task = TASKS["team-review-patch"]
-    work = prepare_workspace(task, tmp_path / "w")
-    # A checkout with autocrlf has CRLF in the patch AND in its targets; the
-    # patch is about content, so compare and apply on LF (as an LF checkout is).
+PATCH = "incoming/0001-Add-loyalty-tiers.patch"
+
+
+def _on_lf(work: Path) -> Path:
+    """A checkout with autocrlf has CRLF in the patch AND in its targets; the
+    patch is about content, so compare and apply on LF (as an LF checkout is)."""
     for path in work.rglob("*"):
         if path.is_file():
             path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
-    patch = "incoming/0001-Add-loyalty-tiers.patch"
-    applied = procs.run(["git", "apply", patch], cwd=work, timeout=60)
+    return work
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git to apply the patch")
+def test_the_patch_applies_to_its_own_base_and_its_tests_pass_with_its_bugs(tmp_path):
+    """The incoming change is a real patch, made against an older copy of the
+    project: there ``git apply`` takes it as written, and every test — the
+    patch's own included — passes with its three wrong edits in."""
+    task = TASKS["team-review-patch"]
+    base = prepare_workspace(task, tmp_path / "base")
+    apply_solution(task.id, base, root=PATCH_BASE)
+    applied = procs.run(["git", "apply", PATCH], cwd=_on_lf(base), timeout=60)
     assert applied.returncode == 0, procs.text(applied.stderr, "utf-8")
+    assert (base / "orderdesk" / "credit.py").is_file() and (base / "test_loyalty.py").is_file()
+    _visible_tests_pass(base)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git to apply the patch")
+def test_on_the_project_as_it_is_now_only_the_files_it_changed_since_conflict(tmp_path):
+    """On the task's repo (the project moved on: express shipping, --output),
+    ``git apply`` refuses the patch, and the hunks it cannot place are exactly
+    those in the files the project changed since. Every other file the patch
+    touches comes out exactly as the decoy has it (the change as sent, merged,
+    bugs included), and the project's newer tests pass on the decoy."""
+    task = TASKS["team-review-patch"]
+    now = _on_lf(prepare_workspace(task, tmp_path / "now"))
+    assert procs.run(["git", "apply", "--check", PATCH], cwd=now, timeout=60).returncode != 0
+    tried = procs.run(["git", "apply", "--reject", PATCH], cwd=now, timeout=60)
+    assert tried.returncode != 0
+    failed = set(re.findall(r"patch failed: (\S+):\d+", procs.text(tried.stderr, "utf-8")))
+    assert failed == PATCH_CONFLICTS, failed
+    rejects = {p.relative_to(now).as_posix()[: -len(".rej")] for p in now.rglob("*.rej")}
+    assert rejects == PATCH_CONFLICTS, rejects
     for sol in sorted((DECOYS / task.id).rglob("*.sol")):
         rel = sol.relative_to(DECOYS / task.id).as_posix()[: -len(".sol")]
-        assert (work / rel).read_bytes().replace(b"\r\n", b"\n") == sol.read_bytes().replace(b"\r\n", b"\n"), rel
-    _visible_tests_pass(work)
+        if rel not in PATCH_CONFLICTS:
+            assert (now / rel).read_bytes() == sol.read_bytes().replace(b"\r\n", b"\n"), rel
+    decoy = prepare_workspace(task, tmp_path / "decoy")
+    apply_solution(task.id, decoy, root=DECOYS)
+    out = procs.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-v"],
+                    cwd=decoy, timeout=120)
+    text = procs.text(out.stderr, "utf-8")
+    assert out.returncode == 0, text[-2000:]
+    for newer in ("test_express_option", "test_output_option", "test_express", "test_express_is_never_free"):
+        assert f"{newer} " in text, newer
 
 
 NODE_HARNESS = r'''

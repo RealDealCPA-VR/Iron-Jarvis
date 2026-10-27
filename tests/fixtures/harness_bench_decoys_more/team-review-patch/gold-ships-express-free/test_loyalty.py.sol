@@ -141,18 +141,5 @@ class CliTierTest(unittest.TestCase):
         self.assertIn("Store credit: -$25.00\nAmount due: $50.99", out.getvalue())
 
 
-class ReviewFixesTest(unittest.TestCase):
-    def test_gold_free_at_exactly_50(self):
-        self.assertEqual(shipping_cents(5000, "gold"), 0)
-
-    def test_cap_on_total(self):
-        self.assertEqual(order_discount_percent("SAVE20", "gold"), 25)
-        self.assertEqual(order_discount_percent("SAVE10", "gold"), 20)
-
-    def test_whole_dollars_only(self):
-        self.assertEqual(points_earned(199, "silver"), 1)
-        self.assertEqual(points_earned(5599, "gold"), 110)
-
-
 if __name__ == "__main__":
     unittest.main()
