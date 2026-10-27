@@ -55,11 +55,18 @@ IJ harness (one Build session per model) at 2000 × 1103, 1406 × 857,
 1280 × 720, 1024 × 640 and 390 × 844: never a sideways pan, every control
 inside the card and none over another; from a 640 px composer up, one
 vertical centre, Send right-most and at least six characters of the model's
-name. Its other cases: the user's own case on a light theme, typing and every
-toolbar menu leaving the row still, the order (the model's name truncates
-before the chips drop their words) and the hysteresis (a few pixels of jitter
-never flickers the chips' words). `IJ_ROW_OUT=<folder>` writes each case's
-measurements and a screenshot.
+name, and once the toolbar has given anything up, no gap wider than about one
+chip between its two groups. Its other cases: the user's own case on a light
+theme (at 2000 × 1103 the WHOLE name "Qwen3.8-27B (RTX)" with only Web's word
+given up; at 1024 × 640 the permission level and "Local" keep their words),
+typing measuring nothing and leaving the row still, every toolbar menu opening
+in place inside the window while the chips are compacted, the ORDER (the chips
+give up their words one at a time — Web, Auto tools, "Local only" to "Local" —
+and only then the model's name truncates, then the permission level), a short
+name picked after a long one getting its own width back, the hysteresis (a few
+pixels of jitter never flickers the chips' words), the user's case at 125 % and
+150 % zoom, and the IJ harness chip naming an Iron-Proxy account.
+`IJ_ROW_OUT=<folder>` writes each case's measurements and a screenshot.
 
 `e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
 with GET /team, /build/accounts and /team/starter stubbed to members and

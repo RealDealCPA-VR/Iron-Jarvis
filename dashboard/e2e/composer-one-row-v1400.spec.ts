@@ -30,9 +30,17 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *
  * Then the user's own case (a light theme, 2000 × 1103 and 1024 × 640: one
  * row); typing and opening each toolbar menu never move a control; the
- * ORDER — narrowing the box, the model's name truncates while the chips on
- * the left keep their words; a few pixels of jitter around the boundary
- * never brings the chips' words back (the hysteresis), and real room does.
+ * ORDER — narrowing the box, the chips give up their words one at a time,
+ * the model's name only after Web, Auto tools and "Local only" (the review,
+ * v1.400.0: the first cut dropped them all at once and cut the user's
+ * "(RTX)" first); a few pixels of jitter around a boundary never brings the
+ * chips' words back (the hysteresis), and real room does.
+ *
+ * The review's cases: no step leaves a gap wider than about one chip
+ * between the two groups; a short name picked after a long one gets its own
+ * width back (the floor ratchet); typing measures nothing; every toolbar
+ * menu opens inside the window while the chips are compacted; and the
+ * user's case at 125 % and 150 % zoom.
  *
  * Every check is soft, so one run reports every case. IJ_ROW_OUT=<folder>
  * writes each case's measurements (JSON) and a screenshot; the failures are
@@ -137,6 +145,12 @@ interface Facts {
   labelW: number;
   sixW: number;
   labelText: string;
+  /** The steps the toolbar has taken (`data-fit-<step>`), and the gap
+   *  between the last control on the left and the first on the right. */
+  steps: string[];
+  gap: number | null;
+  /** The model's name is truncated. */
+  nameCut: boolean;
 }
 
 /** The toolbar's visible controls, the card around them, the page's pan. */
@@ -182,6 +196,18 @@ async function facts(page: Page, place: "chat" | "harness"): Promise<Facts> {
     }
     const c = card.getBoundingClientRect();
     const label = bar.querySelector('[data-testid="model-chip-words"]') as HTMLElement | null;
+    const steps = Array.from(bar.attributes)
+      .map((a) => a.name)
+      .filter((n) => n.startsWith("data-fit-") && n !== "data-fit-row")
+      .map((n) => n.slice("data-fit-".length));
+    // The right group: the chat's second child; the IJ harness's box actions.
+    const rightGroup = (
+      where === "chat" ? bar.children[1] : bar.querySelector('[data-testid="harness-box-actions"]')
+    ) as HTMLElement | null;
+    const rg = rightGroup?.getBoundingClientRect();
+    const firstRight = rg ? controls.filter((x) => x.left >= rg.left - 0.5).sort((a, b) => a.left - b.left)[0] : undefined;
+    const lastLeft = rg ? controls.filter((x) => x.right <= rg.left + 0.5).sort((a, b) => b.right - a.right)[0] : undefined;
+    const gap = firstRight && lastLeft ? firstRight.left - lastLeft.right : null;
     let sixW = 0;
     let labelText = "";
     if (label) {
@@ -202,6 +228,9 @@ async function facts(page: Page, place: "chat" | "harness"): Promise<Facts> {
       labelW: label ? label.getBoundingClientRect().width : 0,
       sixW,
       labelText,
+      steps,
+      gap,
+      nameCut: label ? label.scrollWidth - label.getBoundingClientRect().width > 1 : false,
     };
   }, place);
 }
@@ -239,8 +268,18 @@ function check(f: Facts, label: string): string[] {
   const rightMost = Math.max(...f.controls.map((c) => c.right));
   rule(!!send && send.right >= rightMost - 0.5, "Send is the right-most control");
   rule(f.labelW + 0.5 >= f.sixW, `the model chip shows at least six characters (${f.labelW.toFixed(0)} px of ${f.sixW.toFixed(0)})`);
+  // The review: once the toolbar has given anything up, the two groups sit
+  // no further apart than about one chip ("Ask when risky", the widest, plus
+  // the hysteresis). The first cut left 281 px between the globe and
+  // "Reasoning" at the user's 792 px card.
+  if (f.steps.length > 0 && f.gap !== null) {
+    rule(f.gap <= GAP_MAX_PX, `no gap wider than about one chip once a step is taken (gap ${f.gap.toFixed(0)} px)`);
+  }
   return broken;
 }
+
+/** About one chip: "Ask when risky" (149 px) plus the hysteresis' 24 px. */
+const GAP_MAX_PX = 175;
 
 const failures: Record<string, string[]> = {};
 function record(name: string, data: unknown, broken: string[]) {
@@ -451,7 +490,42 @@ for (const size of [
       }
       const f = await facts(page, "chat");
       expect(check(f, `the user's case ${tag}`)).toEqual([]);
+      // The review (the coordinator, from the screenshots): the user picked
+      // this model by its whole name, "(RTX)" included — the machine.
+      const shown = await chipWords(page);
+      if (size.width === 2000) {
+        expect(f.nameCut, `the whole name "${f.labelText}" shows at the user's 792 px card`).toBe(false);
+        // The fewest chips gave up their words: Web alone.
+        expect(shown.web, "Web gives up its word").toBe(false);
+        expect([shown.ask, shown.localOnly, shown.tools], "Ask when risky, Local only and Auto tools keep theirs").toEqual([
+          true,
+          true,
+          true,
+        ]);
+      } else {
+        // At 1024 × 640 the chips that say how the chat runs keep words.
+        expect(shown.ask, "Ask when risky keeps its words").toBe(true);
+        expect(shown.local, "Local only keeps a word").toBe(true);
+      }
     });
+  });
+}
+
+/** Which of the chat's chips show their words. */
+async function chipWords(page: Page) {
+  return page.getByTestId("composer-toolbar").evaluate((bar) => {
+    const seen = (el: Element | null, re: RegExp) =>
+      !!el &&
+      Array.from(el.querySelectorAll("span")).some(
+        (s) => re.test((s.textContent || "").trim()) && s.getBoundingClientRect().width > 0,
+      );
+    return {
+      ask: seen(bar.querySelector("#chat-approval-mode"), /^(Ask first|Ask when risky|Don't ask)$/),
+      localOnly: seen(bar.querySelector('[data-testid="local-only-chip"]'), /^Local only$/),
+      local: seen(bar.querySelector('[data-testid="local-only-chip"]'), /^Local( only)?$/),
+      tools: seen(bar.querySelector('[data-testid="composer-tools"]'), /tools/i),
+      web: seen(bar.querySelector('[data-testid="composer-web"]'), /^Web$/),
+    };
   });
 }
 
@@ -481,32 +555,60 @@ test.describe("the row holds still (1406 × 857, the user's model)", () => {
     const level = ((await page.locator("#chat-approval-mode").getAttribute("aria-label")) ?? "").replace(/^Permissions: /, "");
     await expect(page.locator("#chat-approval-mode")).toHaveAttribute("title", new RegExp(`^${level}: `));
     const before = await boxes(page);
+    // The review: typing measures nothing. Every measure starts with the
+    // toolbar's own box, so its calls are counted while keys are typed.
+    await page.getByTestId("composer-toolbar").evaluate((bar) => {
+      const w = window as unknown as { __fitReads: number };
+      w.__fitReads = 0;
+      const real = bar.getBoundingClientRect.bind(bar);
+      (bar as HTMLElement).getBoundingClientRect = () => {
+        w.__fitReads += 1;
+        return real();
+      };
+    });
     // Typing: every keystroke, and the first one that wakes Send.
     await page.getByRole("textbox").first().click();
     await page.keyboard.type("a message long enough to wake Send and keep typing past it", { delay: 5 });
     await frames(page);
     expect(await boxes(page), "typing moved the row").toBe(before);
+    const reads = await page.evaluate(() => (window as unknown as { __fitReads: number }).__fitReads);
+    // `boxes` reads the controls, never the toolbar: any read is the fit's.
+    expect(reads, "the toolbar was measured while typing").toBe(0);
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Delete");
     await frames(page);
     expect(await boxes(page), "clearing the box moved the row").toBe(before);
-    // Each menu the toolbar opens.
-    for (const open of [
-      () => page.locator("#chat-approval-mode").click(),
-      () => page.getByTestId("composer-tools").click(),
-      () => page.getByLabel("Open the chat menu").click(),
-      () => clickChip(page),
-    ]) {
+    // Each menu the toolbar opens — and each opens inside the window while
+    // the chips are compacted (the v1.382.0 placement).
+    const vp = page.viewportSize() as { width: number; height: number };
+    for (const [name, open, menu] of [
+      ["permissions", () => page.locator("#chat-approval-mode").click(), () => page.getByTestId("permission-menu")],
+      ["tools", () => page.getByTestId("composer-tools").click(), () => page.getByTestId("composer-tools-menu")],
+      [
+        "+",
+        () => page.getByLabel("Open the chat menu").click(),
+        () => page.getByRole("button", { name: /Attach files or photos/ }).locator(".."),
+      ],
+      ["model", () => clickChip(page), () => page.getByTestId("model-menu")],
+    ] as const) {
       await open();
       await frames(page);
       expect(await boxes(page), "opening a menu moved the row").toBe(before);
+      const m = await menu().first().boundingBox();
+      expect(m, `the ${name} menu opened`).not.toBeNull();
+      if (m) {
+        expect.soft(
+          m.x >= -0.5 && m.y >= -0.5 && m.x + m.width <= vp.width + 0.5 && m.y + m.height <= vp.height + 0.5,
+          `the ${name} menu is inside the window (${JSON.stringify(m)})`,
+        ).toBe(true);
+      }
       await page.keyboard.press("Escape");
       await page.mouse.click(2, 300);
       await frames(page);
     }
   });
 
-  test("the model's name gives way before the chips' words", async ({ page }) => {
+  test("THE ORDER: one chip at a time, the model's name after Web, Auto tools and Local only", async ({ page }) => {
     await seed(page);
     await page.goto("/?new=1");
     await expect(page.getByTestId("chat-greeting")).toBeVisible({ timeout: 90_000 });
@@ -518,35 +620,84 @@ test.describe("the row holds still (1406 × 857, the user's model)", () => {
       }, w);
       await frames(page);
     };
-    const state = () =>
-      page.getByTestId("chat-composer").evaluate((card) => {
-        const chip = card.querySelector("#chat-approval-mode") as HTMLElement;
-        const words = Array.from(chip.querySelectorAll("span")).find((s) => (s.textContent || "").trim().length > 2);
-        const label = card.querySelector('[data-testid="model-chip-words"]') as HTMLElement;
-        return {
-          words: !!words && words.getBoundingClientRect().width > 0,
-          cut: label.scrollWidth - label.getBoundingClientRect().width > 1,
-        };
-      });
-    // Narrow the box until the model's name starts to truncate: the chips
-    // on the left must still have their words at every width on the way.
-    let cutAt = 0;
+    // Narrow the box two pixels at a time and note the first width at which
+    // each thing gives way. The name truncating is noted once it is CUT.
+    const first: Record<string, number> = {};
+    const note = (what: string, w: number) => {
+      if (!(what in first)) first[what] = w;
+    };
+    let prevGap: string[] = [];
     for (let w = 900; w >= 560; w -= 2) {
       await setWidth(w);
-      const s = await state();
-      expect(s.words, `the chips gave up their words at ${w} px before the model's name gave way`).toBe(true);
-      if (s.cut) {
-        cutAt = w;
-        break;
+      const f = await facts(page, "chat");
+      const shown = await chipWords(page);
+      expect.soft(oneRow(f), `one row at ${w} px`).toBe(true);
+      if (!shown.web) note("web", w);
+      if (!shown.tools) note("tools", w);
+      if (!shown.localOnly) note("local", w);
+      if (f.nameCut) note("name", w);
+      if (!shown.ask) note("ask", w);
+      // While the name is cut, Web, Auto tools and "only" are already gone.
+      if (f.nameCut) {
+        expect.soft([shown.web, shown.tools, shown.localOnly], `at ${w} px the name is cut while a cheaper word is shown`).toEqual([
+          false,
+          false,
+          false,
+        ]);
+      }
+      // "Local only" never becomes a house alone (v1.356.0 G75).
+      expect.soft(shown.local, `"Local" is still there at ${w} px`).toBe(true);
+      if (f.steps.length > 0 && f.gap !== null) {
+        expect.soft(f.gap, `the gap at ${w} px (steps ${f.steps.join(",")}; before: ${prevGap.join(",")})`).toBeLessThanOrEqual(
+          GAP_MAX_PX,
+        );
+      }
+      prevGap = f.steps;
+    }
+    // Each gave way, one after another, in the order.
+    const order = ["web", "tools", "local", "name", "ask"];
+    for (const what of order) expect(first[what], `${what} never gave way: ${JSON.stringify(first)}`).toBeGreaterThan(0);
+    for (let i = 1; i < order.length; i++) {
+      expect(first[order[i]], `${order[i]} gave way before ${order[i - 1]}: ${JSON.stringify(first)}`).toBeLessThan(
+        first[order[i - 1]],
+      );
+    }
+    // And back up: the gap stays small while the words come back.
+    for (let w = 560; w <= 900; w += 6) {
+      await setWidth(w);
+      const f = await facts(page, "chat");
+      expect.soft(oneRow(f), `one row at ${w} px (widening)`).toBe(true);
+      if (f.steps.length > 0 && f.gap !== null) {
+        expect.soft(f.gap, `the gap at ${w} px widening (steps ${f.steps.join(",")})`).toBeLessThanOrEqual(GAP_MAX_PX);
       }
     }
-    expect(cutAt, "the model's name never truncated").toBeGreaterThan(0);
-    // Twelve pixels less: the name is shorter still, the chips keep their words.
-    await setWidth(cutAt - 12);
-    const s = await state();
-    expect(s.cut, "the name truncates further").toBe(true);
-    expect(s.words, "the chips keep their words while the name can still give way").toBe(true);
-    expect(oneRow(await facts(page, "chat")), "one row").toBe(true);
+  });
+
+  test("a short name picked after a long one gets its own width back (the floor never ratchets)", async ({ page }) => {
+    // The review: the model chip's floor was read off the chip's own width,
+    // which already held the last floor — after "Qwen3.8-27B (RTX)", "brain
+    // (RTX)" kept the longer chip, 93 px of it empty, and at 1024 × 640 the
+    // chips gave up their words for nothing.
+    await page.setViewportSize({ width: 1024, height: 640 });
+    await seed(page);
+    await page.goto("/?new=1");
+    await expect(page.getByTestId("chat-greeting")).toBeVisible({ timeout: 90_000 });
+    const short = MODELS[0];
+    for (const m of [QWEN, short, QWEN, short]) {
+      await pick(page, m);
+      await page.mouse.move(2, 2);
+      await frames(page);
+    }
+    const inside = await page.getByTitle("Switch model").evaluate((chip) => {
+      const svg = chip.querySelector("svg") as SVGElement;
+      return chip.getBoundingClientRect().right - svg.getBoundingClientRect().right;
+    });
+    // The chevron sits at the chip's padding (8 px), not after empty chip.
+    expect(inside, "empty space inside the model chip after the chevron").toBeLessThanOrEqual(9);
+    const f = await facts(page, "chat");
+    expect(check(f, "brain after Qwen at 1024 × 640")).toEqual([]);
+    // brain fits with every word at the user's 696 px card.
+    expect(f.steps, "the toolbar gave something up for a short name").toEqual([]);
   });
 
   test("a few pixels of jitter around the boundary never flickers the chips' words", async ({ page }) => {
@@ -591,3 +742,75 @@ test.describe("the row holds still (1406 × 857, the user's model)", () => {
     expect(await words(), "the words come back with room to spare").toBe(true);
   });
 });
+
+/* ------------------------------------------- zoom (devicePixelRatio) */
+
+for (const z of [
+  { zoom: 1.25, width: 1600, height: 882 },
+  { zoom: 1.5, width: 1333, height: 735 },
+] as const) {
+  test.describe(`the user's case at ${z.zoom * 100} % zoom (2000 × 1103 at ${z.zoom}×)`, () => {
+    test.use({ viewport: { width: z.width, height: z.height }, deviceScaleFactor: z.zoom });
+    test("one row, in both themes", async ({ page }) => {
+      await seed(page);
+      for (const theme of ["mark8", ""]) {
+        await page.addInitScript((t) => {
+          try {
+            if (t) window.localStorage.setItem("ij_theme", t);
+            else window.localStorage.removeItem("ij_theme");
+          } catch {
+            /* private window */
+          }
+        }, theme);
+        await page.goto("/?new=1");
+        await expect(page.getByTestId("chat-greeting")).toBeVisible({ timeout: 90_000 });
+        for (const m of MODELS) {
+          await pick(page, m);
+          const name = `zoom-${z.zoom}-${theme || "dark"}-${m.key}`;
+          const f = await facts(page, "chat");
+          await shot(page, name);
+          record(name, f, check(f, name));
+        }
+      }
+    });
+  });
+}
+
+/* ------------------------------- the IJ harness chip naming an account */
+
+for (const size of [
+  { width: 2000, height: 1103 },
+  { width: 1280, height: 720 },
+  { width: 1024, height: 640 },
+] as const) {
+  test.describe(`the IJ harness model chip naming an Iron-Proxy account at ${size.width}x${size.height}`, () => {
+    test.use({ viewport: { width: size.width, height: size.height } });
+    test("one row, the account in the chip", async ({ page }) => {
+      // The review: the chip says "<model> · <account>" in a Build session on
+      // an Iron-Proxy account (v1.376.0); the account is part of the chip's
+      // floor. The session view is the daemon's, with an account added.
+      await seed(page);
+      const id = sessions.opus;
+      await page.route(`${DAEMON}/build/sessions/${id}`, async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        const res = await route.fetch();
+        const body = (await res.json()) as Record<string, unknown>;
+        body.account = { id: "acct-work", name: "Work Max Team", vendor: "claude", status: "ready", default: false };
+        body.account_vendor = "claude";
+        await route.fulfill({ response: res, json: body, headers: { ...res.headers(), ...CORS } });
+      });
+      await page.goto(`/terminals?session=${id}`);
+      await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+      await expect(page.getByTestId("model-chip-account")).toContainText("Work Max Team", { timeout: 30_000 });
+      await settled(page, MODELS[3]);
+      const name = `harness-account-${size.width}x${size.height}`;
+      const f = await facts(page, "harness");
+      await shot(page, name);
+      record(name, f, check(f, name));
+      expect(check(f, name)).toEqual([]);
+    });
+  });
+}
