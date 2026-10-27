@@ -47,6 +47,28 @@ follows the menu when the composer moves, an ancestor with a `transform` /
 `backdrop-filter` cannot move the menu (the portal), the app's palette covers
 an open menu, and the IJ harness's Ctrl+K from a row of the menu stays in it.
 
+`e2e/composer-one-row-v1400.spec.ts` (v1.400.0, the composer's toolbar is
+one row whatever model is picked) stubs `/models` with a short-named model,
+the user's "Qwen3.8-27B (RTX)" with reasoning levels, two longer names and one
+of 50 characters, and measures the toolbar of a new chat, a saved chat and the
+IJ harness (one Build session per model) at 2000 × 1103, 1406 × 857,
+1280 × 720, 1024 × 640 and 390 × 844: never a sideways pan, every control
+inside the card and none over another; from a 640 px composer up, one
+vertical centre, Send right-most and at least six characters of the model's
+name, and once the toolbar has given anything up, no gap wider than about one
+chip between its two groups. Its other cases: the user's own case on a light
+theme (at 2000 × 1103 the WHOLE name "Qwen3.8-27B (RTX)" with only Web's word
+given up; at 1024 × 640 the permission level and "Local" keep their words),
+typing measuring nothing and leaving the row still, every toolbar menu opening
+in place inside the window while the chips are compacted, the ORDER (the chips
+give up their words one at a time — Web, Auto tools, "Local only" to "Local" —
+and only then the model's name truncates, then the permission level), a short
+name picked after a long one getting its own width back, the hysteresis (a few
+pixels of jitter never flickers the chips' words), the user's case at 125 % and
+150 % zoom, the IJ harness chip naming an Iron-Proxy account, and typing in
+the IJ harness's box measuring nothing either.
+`IJ_ROW_OUT=<folder>` writes each case's measurements and a screenshot.
+
 `e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
 with GET /team, /build/accounts and /team/starter stubbed to members and
 accounts with long names, at 390 × 844 and 1280 × 720: every part of a

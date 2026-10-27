@@ -268,8 +268,13 @@ import {
   COMPOSER_ICON_BUTTON,
   composerChipClass,
   composerKeyHint,
+  fitIconChip,
+  fitShows,
+  fitWords,
+  iconOnlyTitle,
   toolsChipWords,
 } from "@/lib/composerChips";
+import { CHAT_FIT_ORDER, fitStepOn, useToolbarFit, type FitStep } from "@/lib/toolbarFit";
 import { scrollToLatest, useRepinOnGrowth } from "@/lib/transcriptRepin";
 import type { BatchPreview } from "@/components/chat/BatchSuggestCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
@@ -4542,6 +4547,15 @@ export default function ChatPage() {
   // land on the one now open (same shape as chatGenRef for turns).
   const compactionGenRef = useRef(0);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // v1.400.0: the composer's toolbar is ONE ROW whatever model is picked
+  // (lib/toolbarFit): it gives up space one chip at a time, least needed
+  // first (CHAT_FIT_ORDER: the project's name, Web, Auto tools, "Local only"
+  // to "Local", then the model's name truncates, then the permission level,
+  // the reasoning words) — all decided by measuring, outside React. The page
+  // hears only the settled level (it changes rarely: never per keystroke),
+  // for the tooltips of the chips that lost their words.
+  const [toolbarFitRef, toolbarFit] = useToolbarFit(CHAT_FIT_ORDER);
+  const fitOn = (step: FitStep) => fitStepOn(CHAT_FIT_ORDER, toolbarFit, step);
   // Calm UI redesign S9 (AUDIT Q3): the composer's menu IS the model
   // selector — the title-bar chip is retired, so the app-wide door
   // ("Switch model" in Ctrl K, "Choose a model" on the demo strip) opens it.
@@ -11413,7 +11427,7 @@ export default function ChatPage() {
               ? `inline-flex h-8 max-w-full items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 hover:bg-white/[0.06] ${
                   activeProject ? "text-accent-soft" : "text-zinc-500 hover:text-zinc-200"
                 }`
-              : composerChipClass(Boolean(activeProject))
+              : `${composerChipClass(Boolean(activeProject))} ${fitIconChip("project")}`
           }
         >
           <FolderKanban size={14} className="shrink-0" />
@@ -11426,9 +11440,11 @@ export default function ChatPage() {
             </>
           ) : (
             /* v1.315.0: icon-only on a phone (the title above and the top
-               bar's breadcrumb still name the project). */
+               bar's breadcrumb still name the project). v1.400.0: and in a
+               desktop toolbar out of room (lib/toolbarFit's `project`
+               step, the first it takes). */
             activeProject && (
-              <span className="hidden max-w-[9rem] truncate sm:inline">
+              <span className={`hidden max-w-[9rem] truncate sm:inline ${fitWords("project")}`}>
                 {activeProject.name}
               </span>
             )
@@ -11436,6 +11452,7 @@ export default function ChatPage() {
         </button>
         {projMenuOpen && (
           <div
+            data-fit-ignore=""
             className={`absolute left-0 z-20 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40 ${
               above ? "top-full mt-2" : "bottom-full mb-2"
             }`}
@@ -13187,11 +13204,23 @@ export default function ChatPage() {
                       talkingTo={addressee.map(agentDisplayName).join(", ")}
                       atKeys={atKeysRef}
                     />
+                    {/* v1.400.0: ONE ROW whatever model is picked (lib/toolbarFit).
+                        From sm up the toolbar measures itself and sets its own
+                        level as attributes: `data-fit-row` keeps it one line (the
+                        left chips no longer wrap or shrink; the right group gives
+                        way through the model chip's name), and one
+                        `data-fit-<step>` per step taken, in CHAT_FIT_ORDER: a chip
+                        reads its own step (fitIconChip / fitWords / fitShows), and
+                        `data-fit-short` cuts the reasoning chip's words. No
+                        `data-fit-row` (a phone, or a box too narrow even for that)
+                        is the old wrapping row. Menus drawn inside the toolbar carry
+                        `data-fit-ignore`: opening one never changes the row. */}
                     <div
+                      ref={toolbarFitRef}
                       data-testid="composer-toolbar"
-                      className="flex flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-2 pt-1"
+                      className="group/fit flex flex-wrap items-center gap-x-1 gap-y-1 px-2 pb-2 pt-1 data-[fit-row]:flex-nowrap"
                     >
-                      <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-1 group-data-[fit-row]/fit:shrink-0 group-data-[fit-row]/fit:flex-nowrap">
                         {/* The "+" menu (v1.326.0): what you ADD to a message. Attach, a
                             working folder for the files the chat makes, a skill (the same list
                             "/" opens) and a saved workflow. Persona lives in the top bar's "⋯";
@@ -13218,7 +13247,10 @@ export default function ChatPage() {
                             {uploading ? <LoaderInline /> : <Plus size={16} />}
                           </button>
                           {toolsOpen && (
-                            <div className="absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                            <div
+                              data-fit-ignore=""
+                              className="absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                            >
                               <button
                                 type="button"
                                 onClick={() => {
@@ -13413,6 +13445,7 @@ export default function ChatPage() {
                         <PermissionChip
                           id="chat-approval-mode"
                           iconOnlyOnPhone
+                          iconOnly={fitOn("ask")}
                           value={approvalMode}
                           onChange={(picked) => {
                             const mode = asApprovalMode(picked);
@@ -13444,15 +13477,24 @@ export default function ChatPage() {
                           data-testid="local-only-chip"
                           aria-pressed={localOnly}
                           aria-label="Local only"
-                          title={localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF}
+                          title={
+                            fitOn("local")
+                              ? iconOnlyTitle("Local only", localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF)
+                              : localOnly
+                                ? LOCAL_ONLY_TITLE_ON
+                                : LOCAL_ONLY_TITLE_OFF
+                          }
                           onClick={() => toggleLocalOnly()}
                           className={composerChipClass(localOnly, "success")}
                         >
                           <House size={14} className="shrink-0" aria-hidden="true" />
                           {/* v1.356.0 (G75): a phone shows its word on and off; a
-                              house alone said nothing until it was pressed. */}
-                          <span className="sm:hidden">Local</span>
-                          <span className="hidden sm:inline">Local only</span>
+                              house alone said nothing until it was pressed.
+                              v1.400.0: so does a desktop toolbar out of room (its
+                              `local` step): "Local", the phone's word, never the
+                              house alone; on, the glow stays too. */}
+                          <span className={`sm:hidden ${fitShows("local")}`}>Local</span>
+                          <span className={`hidden sm:inline ${fitWords("local")}`}>Local only</span>
                         </button>
                         {/* THE TOOLS CHIP (v1.326.0): Auto tools, and the tools armed by hand
                             for this chat, counted so a pick leaves a trace. Its menu holds the
@@ -13471,15 +13513,31 @@ export default function ChatPage() {
                             aria-expanded={toolMenuOpen}
                             aria-haspopup="true"
                             aria-label={`Tools: ${toolsChip.text}`}
-                            title={toolsChip.title}
-                            className={composerChipClass(toolsChip.on)}
+                            title={fitOn("tools") ? iconOnlyTitle(toolsChip.text, toolsChip.title) : toolsChip.title}
+                            className={`${composerChipClass(toolsChip.on)}${
+                              toolsChip.armed > 0 || !autoTools ? "" : ` ${fitIconChip("tools")}`
+                            }`}
                           >
                             <Wrench size={14} className="shrink-0" />
-                            <span className="hidden sm:inline">{toolsChip.text}</span>
-                            {toolsChip.armed > 0 && <span className="sm:hidden">{toolsChip.armed}</span>}
+                            <span className={`hidden sm:inline ${fitWords("tools")}`}>{toolsChip.text}</span>
+                            {/* Icon-only (a phone, or a desktop toolbar out of room —
+                                its `tools` step): the count of tools armed by hand
+                                stays, so with a count the chip keeps its padding
+                                instead of the 30px square. */}
+                            {toolsChip.armed > 0 && (
+                              <span className={`sm:hidden ${fitShows("tools")}`}>{toolsChip.armed}</span>
+                            )}
+                            {/* v1.400.0 (review): "Tools off" is not the everyday
+                                state, and a wrench alone reads exactly like Auto
+                                tools: on a desktop toolbar out of room it keeps a
+                                short "Off". */}
+                            {toolsChip.armed === 0 && !autoTools && (
+                              <span className={`hidden ${fitShows("tools")}`}>Off</span>
+                            )}
                           </button>
                           {toolMenuOpen && (
                             <div
+                              data-fit-ignore=""
                               data-testid="composer-tools-menu"
                               className="absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
                             >
@@ -13752,20 +13810,26 @@ export default function ChatPage() {
                           role="switch"
                           aria-checked={webArmed}
                           aria-label="Web research"
-                          title={
-                            webArmed
+                          title={(() => {
+                            const t = webArmed
                               ? "Web research is on for this chat. Press to turn it off."
                               : webRoom
                                 ? "Let this chat search the web and read pages"
-                                : `All ${MAX_TOOLS} tool slots are in use. Turn one off first.`
-                          }
-                          className={composerChipClass(webArmed)}
+                                : `All ${MAX_TOOLS} tool slots are in use. Turn one off first.`;
+                            return fitOn("web") ? iconOnlyTitle("Web", t) : t;
+                          })()}
+                          className={`${composerChipClass(webArmed)} ${fitIconChip("web")}`}
                         >
                           <Globe size={14} className="shrink-0" />
-                          <span className="hidden sm:inline">Web</span>
+                          <span className={`hidden sm:inline ${fitWords("web")}`}>Web</span>
                         </button>
                       </div>
-                      <div className="ml-auto flex shrink-0 items-center gap-1">
+                      {/* v1.400.0: the right group gives way instead of wrapping
+                          whole (it was `shrink-0`): the model chip inside it is the
+                          one item that shrinks, its name truncating. On one row it
+                          keeps 12px more between itself and the chips on the left,
+                          so the two groups still read as two when space is tight. */}
+                      <div className="ml-auto flex min-w-0 items-center gap-1 group-data-[fit-row]/fit:pl-3">
                         {/* v1.263.0: the reasoning level, ONLY for a model that offers
                             one (the daemon's catalog says which). A control that does
                             nothing for the picked model is not drawn at all. v1.369.0:
@@ -13776,6 +13840,7 @@ export default function ChatPage() {
                             levels={reasoningLevelsFor(choice)}
                             value={reasoning}
                             def={reasoningDefaultFor(choice)}
+                            short={fitOn("short")}
                             disabled={awaiting && sessionId !== null}
                             onChange={(level) => {
                               setReasoning(level);

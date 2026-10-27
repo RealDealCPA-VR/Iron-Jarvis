@@ -144,7 +144,10 @@ describe("U8 — chat controls explain themselves", () => {
     // is what the current level does, and its menu shows every level's line.
     expect(chat).toContain('id="chat-approval-mode"');
     const chip = src("components/chat/PermissionChip.tsx");
-    expect(chip).toContain("title={level.description}");
+    // v1.400.0 (updated on purpose): still the level's description; a chip
+    // showing its shield alone (a toolbar out of room) leads with the
+    // level's name first, since the words are no longer on screen.
+    expect(chip).toContain("title={iconOnly ? iconOnlyTitle(level.label, level.description) : level.description}");
     expect(chip).toContain("aria-label={`Permissions: ${level.label}`}");
     expect(chip).toContain("{row.description}");
   });

@@ -42,13 +42,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronRight, CircleAlert } from "lucide-react";
+import { Brain, Check, ChevronDown, ChevronRight, CircleAlert } from "lucide-react";
 import { FitPanel } from "@/components/chat/FitPanel";
 // v1.376.0: the IJ harness's company groups and accounts — TYPES only, so
 // the chat page's menu never loads lib/harnessModelMenu.
 import type { CompanyMenu, MenuAccount, MenuMatch, MenuWay } from "@/lib/harnessModelMenu";
 import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
-import { composerChipClass } from "@/lib/composerChips";
+import { composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { modelGroupName, providerDisplay } from "@/lib/onboarding";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
@@ -56,6 +56,7 @@ import {
   reasoningChipLabel,
   reasoningDefaultOf,
   reasoningDefaultOption,
+  reasoningShortLabel,
   reasoningTitle,
 } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
@@ -281,6 +282,7 @@ export function ReasoningChip({
   value,
   def,
   disabled = false,
+  short = false,
   onChange,
 }: {
   /** The levels the model offers (never empty: the caller checks). */
@@ -290,25 +292,53 @@ export function ReasoningChip({
   /** The model's own default level ("" = unknown). */
   def: string;
   disabled?: boolean;
+  /** v1.400.0: the toolbar it sits in (lib/toolbarFit) has taken its `short`
+   *  step and the chip's words give way to a brain icon (`data-fit-short`,
+   *  CSS; a level such as "Medium" keeps its word): its tooltip then leads
+   *  with the whole words. */
+  short?: boolean;
   onChange: (level: string) => void;
 }) {
   const picked = levels.includes(value) ? value : "";
+  const words = reasoningChipLabel(picked, def);
+  const shortWords = reasoningShortLabel(picked, def);
   return (
     <span
       className={`relative inline-flex h-[30px] shrink-0 items-center rounded-lg pl-2 pr-6 text-[13px] text-zinc-400 transition-colors has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/50 ${
         disabled ? "opacity-40" : "hover:bg-white/[0.06] hover:text-zinc-200"
       }`}
     >
-      <span aria-hidden data-testid="reasoning-chip-words" className="max-w-[10rem] truncate whitespace-nowrap">
-        {reasoningChipLabel(picked, def)}
+      {/* v1.400.0: the LAST words a tight toolbar gives up — after the model's
+          name has truncated and the chips on the left have dropped theirs.
+          A level ("Medium") is short and stays; "Reasoning", "Model decides"
+          and "Thinking off" give way to a brain (with "Off" for the last).
+          The review: the first cut cut the words to "Reaso…". */}
+      <span
+        aria-hidden
+        data-testid="reasoning-chip-words"
+        className={`max-w-[10rem] truncate whitespace-nowrap${
+          shortWords === null ? "" : " group-data-[fit-short]/fit:hidden"
+        }`}
+      >
+        {words}
       </span>
+      {shortWords !== null ? (
+        <span
+          aria-hidden
+          data-testid="reasoning-chip-short"
+          className="hidden items-center gap-1 whitespace-nowrap group-data-[fit-short]/fit:inline-flex"
+        >
+          <Brain size={14} className="shrink-0" />
+          {shortWords ? <span>{shortWords}</span> : null}
+        </span>
+      ) : null}
       <select
         aria-label="Reasoning level"
         data-testid="reasoning-level"
         value={picked}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        title={reasoningTitle(def)}
+        title={short && shortWords !== null ? iconOnlyTitle(words, reasoningTitle(def)) : reasoningTitle(def)}
         className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-lg border-0 bg-transparent text-[13px] opacity-0 focus-visible:outline-none disabled:cursor-default"
       >
         {/* v1.326.0: short words for a chip beside the model ("High"); the
@@ -861,7 +891,12 @@ export function ModelMenu({
   );
 
   return (
-    <div ref={popRef} className="relative">
+    // v1.400.0: the wrapper is the toolbar item that SHRINKS (min-w-0) and the
+    // chip fills it (w-full), so a long name truncates in place instead of
+    // pushing the row onto a second line; a toolbar that fits itself
+    // (lib/toolbarFit) sets the wrapper's floor (`data-fit-model`) so the name
+    // never truncates past about thirteen characters (nine at its tightest).
+    <div ref={popRef} data-fit-model="" className="relative min-w-0">
       <button
         ref={chipRef}
         type="button"
@@ -874,7 +909,7 @@ export function ModelMenu({
         aria-haspopup="true"
         aria-controls={open ? MODEL_MENU_ID : undefined}
         title={disabled ? disabledTitle : "Switch model"}
-        className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
+        className={`${composerChipClass(false)} w-full max-w-[11rem] sm:max-w-[16rem]`}
       >
         <span
           data-testid="model-chip-words"
