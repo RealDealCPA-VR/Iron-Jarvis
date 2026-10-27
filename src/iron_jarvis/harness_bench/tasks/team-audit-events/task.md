@@ -19,4 +19,4 @@ What counts, and to whom it belongs:
 
 Do not list: `shop/metrics.py`'s `record` (dashboard counters, not the audit trail) under whatever name it is imported, log messages, comments, docstrings, a method that happens to be called `record`, a local variable called `record`, a name in a table or a constant that nothing writes, or a reference to `record` that does not call it.
 
-The order of the entries does not matter, and a function that writes the same event in two places is listed once. Other keys in an entry are ignored. The list will be compared with the full list, entry by entry: be thorough across every package, and check your list. Do not change, add or remove any of the project's files; write only `answer.json`.
+The order of the entries does not matter, and a function that writes the same event in two places is listed once. Other keys in an entry are ignored. What will be checked is your list against the full list, entry by entry — nothing missing, nothing extra: be thorough across every package, and check your list. Do not change, add or remove any of the project's files; write only `answer.json`.
