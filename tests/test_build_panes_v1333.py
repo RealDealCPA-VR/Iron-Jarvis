@@ -329,8 +329,10 @@ def test_real_conpty_a_crashed_tui_leaves_no_mouse_mode_behind(tmp_path):
         assert _wait(lambda: b">" in bytes(s._tail), 30)
         s.write(f'"{sys.executable}" "{tui}"\r')
         assert _wait(lambda: b"TUI-UP" in bytes(s._tail), 30), bytes(s._tail)[-300:]
-        tail = bytes(s._tail)
-        assert b"\x1b[?1003h" in tail  # ConPTY passed the switch through
+        # ConPTY passed the switch through. v1.400.0: WAIT for it — under a
+        # loaded full run ConPTY handed the switch over a moment after the
+        # text it came before, and a read straight after "TUI-UP" missed it.
+        assert _wait(lambda: b"\x1b[?1003h" in bytes(s._tail), 30), bytes(s._tail)[-300:]
         assert _wait(lambda: M.MODE_RESET in bytes(s._tail), 60)
         after = bytes(s._tail)
         assert after.index(M.MODE_RESET) > after.index(b"TUI-UP")
