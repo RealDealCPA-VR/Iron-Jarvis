@@ -823,6 +823,13 @@ TEAM_LEAD = (
 #: terms ("role:<id>", as :data:`TEAM_LEAD` names them), naming only the roles
 #: the listed members hold — a role nobody holds would be refused when asked.
 TEAM_FIRST_LEAD = "Work as a team: the user wants to save this model's usage."
+#: v1.400.0 review: the lead for a planner whose model STAYS ON THE USER'S
+#: NETWORK (``egress.stays_on_this_network``: the user's own model server, a
+#: fleet node, the demo model). Its use costs nothing per call and its team
+#: may be the same model, so "save this model's usage" would be untrue and
+#: would send work onto the members that DO cost; the rest of the instruction
+#: is the same.
+TEAM_FIRST_LOCAL_LEAD = "Work as a team: the user wants the team to take its share of this work."
 #: What each role takes, in the order the instruction lists them.
 TEAM_FIRST_PIECES: tuple[tuple[str, str], ...] = (
     ("read", "reading and summarizing files (role:read)"),
@@ -862,14 +869,17 @@ def team_first_on(platform: Any) -> bool:
         return False
 
 
-def team_first_words(roles: Iterable[str]) -> str:
+def team_first_words(roles: Iterable[str], *, planner_local: bool = False) -> str:
     """The team-first instruction for a team whose listed members hold
-    ``roles`` ("" when they hold none)."""
+    ``roles`` ("" when they hold none). ``planner_local``: the planner's model
+    stays on the user's network, so the reason is :data:`TEAM_FIRST_LOCAL_LEAD`
+    (v1.400.0 review)."""
     held = set(roles)
     pieces = [words for rid, words in TEAM_FIRST_PIECES if rid in held]
     if not pieces:
         return ""
-    return (f"{TEAM_FIRST_LEAD} Hand pieces to the team by role: {_and_list(pieces)}. "
+    lead = TEAM_FIRST_LOCAL_LEAD if planner_local else TEAM_FIRST_LEAD
+    return (f"{lead} Hand pieces to the team by role: {_and_list(pieces)}. "
             + TEAM_FIRST_TAIL)
 
 
@@ -896,14 +906,17 @@ def team_first_tool_sentence(input_schema: Any, roles: Iterable[str]) -> str:
     return TEAM_FIRST_TOOL.format(how=how)
 
 
-def team_section(platform: Any, *, limit: int = 10, team_first: bool = False) -> tuple[str, tuple[str, ...]]:
+def team_section(platform: Any, *, limit: int = 10, team_first: bool = False,
+                 planner_local: bool = False) -> tuple[str, tuple[str, ...]]:
     """``(section, roles)`` for a coding session's prompt: :func:`team_block`'s
     text and — with ``team_first`` and a team shown — the team-first
     instruction after the member lines, and the roles the LISTED members hold
     (the helper tool's sentence names those). ``("", ())`` with no team;
     ``(team_block, ())`` with team-first off, so the prompt is byte-identical
-    to v1.399.4. BLOCKING (cached reads): the lanes call it off the loop, and
-    their ``except`` keeps a failure from breaking a turn."""
+    to v1.399.4. ``planner_local``: the planner's own model stays on the
+    user's network (:func:`team_first_words`). BLOCKING (cached reads): the
+    lanes call it off the loop, and their ``except`` keeps a failure from
+    breaking a turn."""
     names = {f"custom:{r.name}": r for r in team_members(platform)}
     if not names:
         return "", ()
@@ -921,12 +934,18 @@ def team_section(platform: Any, *, limit: int = 10, team_first: bool = False) ->
     if not team_first:
         return text, ()
     held: set[str] = set()
+    # v1.400.0 review: a member's NAME may hold a space ("My Reviewer" — the
+    # registry and POST /agents take it), so a line is matched to the name it
+    # STARTS with, the longest first; cutting at the first space lost such a
+    # member's roles, and a team of them got no instruction at all.
+    keys = sorted(names, key=len, reverse=True)
     for ln in body:
-        record = names.get(ln[2:].split(" ", 1)[0])
-        if record is not None:
-            held.update(roles_of(record))
+        rest = ln[2:]
+        key = next((k for k in keys if rest == k or rest.startswith(k + " ")), None)
+        if key is not None:
+            held.update(roles_of(names[key]))
     roles = tuple(rid for rid in ROLE_IDS if rid in held)
-    words = team_first_words(roles)
+    words = team_first_words(roles, planner_local=planner_local)
     if not words:
         return text, ()
     return text + "\n\n" + words, roles
@@ -2346,6 +2365,6 @@ __all__ += [
     "UNKNOWN_BURST_MAX",
     "floor_refusal", "named_account", "pay_refusal", "work_group",
     # v1.400.0 (team-first)
-    "TEAM_FIRST_LEAD", "TEAM_FIRST_PIECES", "TEAM_FIRST_TAIL", "TEAM_FIRST_TOOL",
+    "TEAM_FIRST_LEAD", "TEAM_FIRST_LOCAL_LEAD", "TEAM_FIRST_PIECES", "TEAM_FIRST_TAIL", "TEAM_FIRST_TOOL",
     "team_first_on", "team_first_tool_sentence", "team_first_words", "team_section",
 ]

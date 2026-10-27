@@ -5291,8 +5291,18 @@ async def _build_harness(
         # team: the section and every tool spec exactly as before. Read here,
         # BEFORE the planner, so the instruction's cost is in the budget.
         try:
+            _team_first = team_first_on(d.platform)
+            # v1.400.0 review: a planner whose model stays on the user's
+            # network is not told to save ITS usage (``TEAM_FIRST_LOCAL_LEAD``)
+            # — egress's own predicate (pure, never raises); asked only when
+            # the setting is on, so an off turn does exactly what it did.
+            _planner_local = False
+            if _team_first:
+                _planner_local = _egress.stays_on_this_network(
+                    prov, getattr(d.platform, "providers", None), getattr(d.platform, "config", None), mod,
+                )
             turn.team_section, turn.team_first = await asyncio.to_thread(
-                team_section, d.platform, team_first=team_first_on(d.platform),
+                team_section, d.platform, team_first=_team_first, planner_local=_planner_local,
             )
         except Exception:  # noqa: BLE001 — the team list never breaks a turn
             log.debug("model team block failed", exc_info=True)
