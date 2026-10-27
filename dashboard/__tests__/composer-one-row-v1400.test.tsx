@@ -406,6 +406,11 @@ describe("the IJ harness composer", () => {
     expect(s).toContain('data-testid="harness-composer-toolbar"');
     expect(s).toMatch(/group\/fit flex min-w-0 flex-wrap items-center[^"]*data-\[fit-row\]:flex-nowrap/);
     expect(s).toContain("group-data-[fit-row]/fit:flex-nowrap");
+    // Its right group ends at the box's edge (`justify-end`): on one row it
+    // overflows toward its END instead, so a squeeze is measured as an
+    // overflow and never drawn over the chips on the left (measureFit also
+    // counts controls running over one another: either alone holds it).
+    expect(s).toContain("group-data-[fit-row]/fit:justify-start");
     expect(s).toContain("iconOnly={harnessIcons}");
     // The plan chip and the try-on chip had no aria-label: their words were
     // their name. Now they keep a name when the words go.
