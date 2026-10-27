@@ -1,0 +1,8 @@
+{
+  "customer": {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com"},
+  "lines": [
+    {"name": "Notebook", "price_cents": 1250, "qty": 2},
+    {"name": "Fountain pen", "price_cents": 4500, "qty": 1}
+  ],
+  "coupon": "SAVE10"
+}

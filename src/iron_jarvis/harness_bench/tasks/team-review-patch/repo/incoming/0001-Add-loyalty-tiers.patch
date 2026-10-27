@@ -1,0 +1,370 @@
+From 5b2c9e17d0a4f3e8c1a6b9d2e7f4a1c3b8d6e0f2 Mon Sep 17 00:00:00 2001
+From: Dana Field <dana.field@example.com>
+Date: Thu, 22 Oct 2026 16:04:12 +0200
+Subject: [PATCH] Add loyalty tiers
+
+Customers now have a loyalty tier: bronze (the default), silver or gold.
+
+* customers.py: Customer gains `tier`. parse_customer reads the
+  customer's "tier" in any case, with spaces around it dropped ("Gold",
+  " silver "); a missing or empty tier is bronze; any other value is a
+  ValueError. normalize_tier does this for everyone.
+* discounts.py: tier_percent(tier) is 0 for bronze, 5 for silver and 10
+  for gold. order_discount_percent(coupon_code, tier) is the coupon's
+  percent plus the tier's percent, but never more than
+  MAX_DISCOUNT_PERCENT (25) in total.
+* shipping.py: shipping_cents takes the tier; gold customers ship free on
+  orders of $50.00 or more, everyone else from $100.00 as before.
+* invoice.py: a silver or gold invoice shows "Tier: Silver" / "Tier: Gold"
+  right under the customer's line (nothing for bronze); the discount is
+  order_discount_percent's and shipping uses the tier.
+* cli.py: --tier gives the customer's tier instead of the order file's
+  (checked like the file's).
+* report.py: sales_by_tier(orders) sums the subtotals per tier, every
+  tier present (0 when it has no orders); a customer with no tier is
+  bronze.
+* README.md: the tiers.
+* test_loyalty.py: tests for all of it.
+---
+ README.md              |  17 +++++++++++++++--
+ orderdesk/cli.py       |   8 ++++++--
+ orderdesk/customers.py |  16 +++++++++++++++-
+ orderdesk/discounts.py |  17 +++++++++++++++++
+ orderdesk/invoice.py   |  13 ++++++++-----
+ orderdesk/report.py    |  11 +++++++++++
+ orderdesk/shipping.py  |  10 ++++++----
+ test_loyalty.py        |  94 ++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 172 insertions(+), 14 deletions(-)
+ create mode 100644 test_loyalty.py
+
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -8,18 +8,20 @@
+ 
+ ```json
+ {
+-  "customer": {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com"},
++  "customer": {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com", "tier": "silver"},
+   "lines": [{"name": "Notebook", "price_cents": 1250, "qty": 2}],
+   "coupon": "SAVE10"
+ }
+ ```
+ 
+-`coupon` is optional. `examples/order.json` is a whole example.
++`coupon` and the customer's `tier` are optional. `examples/order.json` is a
++whole example.
+ 
+ ## Printing an invoice
+ 
+     python -m orderdesk.cli examples/order.json
+     python -m orderdesk.cli examples/order.json --coupon WELCOME5
++    python -m orderdesk.cli examples/order.json --tier gold
+ 
+ The exit code is 0, or 2 when the order file is wrong (the reason is
+ printed).
+@@ -32,6 +34,17 @@
+ Shipping is free on orders of $100.00 or more (the subtotal before any
+ discount), otherwise $5.99.
+ 
++## Loyalty tiers
++
++A customer's `tier` is `bronze` (the default, when the order file gives none),
++`silver` or `gold`, in any case. Silver takes 5% off and gold 10%, on top of
++any coupon; a coupon and a tier together never take off more than 25%. Gold
++customers get free shipping on orders of $50.00 or more. The invoice shows the
++tier of a silver or gold customer under their name, and `--tier` gives the
++tier instead of the order file's.
++
++`orderdesk.report.sales_by_tier(orders)` sums the subtotals per tier.
++
+ ## Tests
+ 
+     python -m unittest discover -s . -p "test_*.py"
+diff --git a/orderdesk/cli.py b/orderdesk/cli.py
+--- a/orderdesk/cli.py
++++ b/orderdesk/cli.py
+@@ -1,4 +1,4 @@
+-"""The command line: python -m orderdesk.cli ORDER.json [--coupon CODE]."""
++"""The command line: python -m orderdesk.cli ORDER.json [--coupon CODE] [--tier TIER]."""
+ 
+ import argparse
+ import json
+@@ -12,11 +12,15 @@
+     parser = argparse.ArgumentParser(prog="orderdesk", description="Print the invoice of an order file.")
+     parser.add_argument("order", help="the order file (JSON)")
+     parser.add_argument("--coupon", help="a coupon code (instead of the order file's)")
++    parser.add_argument("--tier", help="the customer's loyalty tier (instead of the order file's)")
+     args = parser.parse_args(argv)
+     with open(args.order, encoding="utf-8") as fh:
+         order = json.load(fh)
+     try:
+-        customer = parse_customer(order["customer"])
++        row = dict(order["customer"])
++        if args.tier:
++            row["tier"] = args.tier
++        customer = parse_customer(row)
+         text = render_invoice(customer, order["lines"], args.coupon or order.get("coupon"))
+     except (KeyError, ValueError) as exc:
+         print(f"error: {exc}", file=sys.stderr)
+diff --git a/orderdesk/customers.py b/orderdesk/customers.py
+--- a/orderdesk/customers.py
++++ b/orderdesk/customers.py
+@@ -1,6 +1,9 @@
+ """Customers."""
+ 
+ from dataclasses import dataclass
++
++#: The loyalty tiers, from the lowest.
++TIERS = ("bronze", "silver", "gold")
+ 
+ 
+ @dataclass(frozen=True)
+@@ -8,6 +11,16 @@
+     id: str
+     name: str
+     email: str
++    tier: str = "bronze"
++
++
++def normalize_tier(value):
++    """A tier as an order file writes it -> one of TIERS: any case, spaces
++    around it dropped; None or "" is "bronze"; ValueError for anything else."""
++    tier = str(value or "").strip().lower() or "bronze"
++    if tier not in TIERS:
++        raise ValueError(f"unknown tier {value!r} (one of {', '.join(TIERS)})")
++    return tier
+ 
+ 
+ def parse_customer(row):
+@@ -15,6 +28,7 @@
+ 
+     "id", "name" and "email" are required (spaces around them are dropped);
+     ValueError when one is missing or empty, or the e-mail has no "@".
++    "tier" is optional (see normalize_tier).
+     """
+     try:
+         cid, name, email = (str(row[key]).strip() for key in ("id", "name", "email"))
+@@ -22,4 +36,4 @@
+         raise ValueError(f"the customer has no {exc.args[0]!r}") from None
+     if not cid or not name or "@" not in email:
+         raise ValueError("a customer needs an id, a name and an e-mail address")
+-    return Customer(cid, name, email)
++    return Customer(cid, name, email, normalize_tier(row.get("tier")))
+diff --git a/orderdesk/discounts.py b/orderdesk/discounts.py
+--- a/orderdesk/discounts.py
++++ b/orderdesk/discounts.py
+@@ -1,6 +1,12 @@
+ """Coupons and discounts."""
+ 
+ COUPONS = {"WELCOME5": 5, "SAVE10": 10, "SAVE20": 20}
++
++#: What a loyalty tier takes off, in percent.
++TIER_PERCENT = {"bronze": 0, "silver": 5, "gold": 10}
++
++#: The most a coupon and a tier together may take off, in percent.
++MAX_DISCOUNT_PERCENT = 25
+ 
+ 
+ def coupon_percent(code):
+@@ -14,6 +20,17 @@
+         raise ValueError(f"unknown coupon {code!r}") from None
+ 
+ 
++def tier_percent(tier):
++    """The percent off a loyalty tier gives."""
++    return TIER_PERCENT[tier]
++
++
++def order_discount_percent(coupon_code, tier):
++    """The percent off an order: the coupon's plus the tier's, never more than
++    MAX_DISCOUNT_PERCENT in total."""
++    return min(coupon_percent(coupon_code), MAX_DISCOUNT_PERCENT) + tier_percent(tier)
++
++
+ def discount_cents(subtotal_cents, percent):
+     """The discount on a subtotal, in cents, a half cent rounded up."""
+     return (subtotal_cents * percent * 2 + 100) // 200
+diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
+--- a/orderdesk/invoice.py
++++ b/orderdesk/invoice.py
+@@ -1,24 +1,27 @@
+ """The invoice text."""
+ 
+-from .discounts import coupon_percent, discount_cents
++from .discounts import discount_cents, order_discount_percent
+ from .pricing import line_total, money, subtotal
+ from .shipping import shipping_cents
+ 
+ 
+ def render_invoice(customer, lines, coupon=None):
+-    """The invoice of an order, as text: the customer, one line per order line,
+-    the subtotal, the discount (when there is one), shipping and the total."""
++    """The invoice of an order, as text: the customer (and the loyalty tier,
++    for silver and gold), one line per order line, the subtotal, the discount
++    (when there is one), shipping and the total."""
+     out = [f"Invoice for {customer.name} <{customer.email}>"]
++    if customer.tier != "bronze":
++        out.append(f"Tier: {customer.tier.capitalize()}")
+     for line in lines:
+         amount = line_total(line["price_cents"], line["qty"])
+         out.append(f"  {line['qty']} x {line['name']}: {money(amount)}")
+     sub = subtotal(lines)
+     out.append(f"Subtotal: {money(sub)}")
+-    percent = coupon_percent(coupon)
++    percent = order_discount_percent(coupon, customer.tier)
+     off = discount_cents(sub, percent)
+     if off:
+         out.append(f"Discount ({percent}%): -{money(off)}")
+-    ship = shipping_cents(sub)
++    ship = shipping_cents(sub, customer.tier)
+     out.append(f"Shipping: {money(ship)}" if ship else "Shipping: free")
+     out.append(f"Total: {money(sub - off + ship)}")
+     return "\n".join(out)
+diff --git a/orderdesk/report.py b/orderdesk/report.py
+--- a/orderdesk/report.py
++++ b/orderdesk/report.py
+@@ -1,11 +1,22 @@
+ """Sales reports."""
+ 
++from .customers import TIERS, normalize_tier
+ from .pricing import subtotal
+ 
+ 
+ def sales_total(orders):
+     """The sum of the orders' subtotals, in cents."""
+     return sum(subtotal(order["lines"]) for order in orders)
++
++
++def sales_by_tier(orders):
++    """The sum of the orders' subtotals per loyalty tier, for every tier (0
++    for a tier with no orders); an order whose customer has no tier is bronze."""
++    totals = dict.fromkeys(TIERS, 0)
++    for order in orders:
++        tier = normalize_tier(order.get("customer", {}).get("tier"))
++        totals[tier] += subtotal(order["lines"])
++    return totals
+ 
+ 
+ def best_sellers(orders, top=3):
+diff --git a/orderdesk/shipping.py b/orderdesk/shipping.py
+--- a/orderdesk/shipping.py
++++ b/orderdesk/shipping.py
+@@ -2,9 +2,11 @@
+ 
+ FLAT_FEE_CENTS = 599
+ FREE_FROM_CENTS = 10000
++GOLD_FREE_FROM_CENTS = 5000
+ 
+ 
+-def shipping_cents(subtotal_cents):
+-    """Free on orders of $100.00 or more (the subtotal before any discount);
+-    otherwise the flat fee."""
+-    return 0 if subtotal_cents >= FREE_FROM_CENTS else FLAT_FEE_CENTS
++def shipping_cents(subtotal_cents, tier="bronze"):
++    """Free on orders of $100.00 or more, or $50.00 or more for a gold
++    customer (the subtotal before any discount); otherwise the flat fee."""
++    free_from = GOLD_FREE_FROM_CENTS if tier == "gold" else FREE_FROM_CENTS
++    return 0 if subtotal_cents >= free_from else FLAT_FEE_CENTS
+diff --git a/test_loyalty.py b/test_loyalty.py
+new file mode 100644
+--- /dev/null
++++ b/test_loyalty.py
+@@ -0,0 +1,94 @@
++import contextlib
++import io
++import json
++import os
++import tempfile
++import unittest
++
++from orderdesk.cli import main
++from orderdesk.customers import parse_customer
++from orderdesk.discounts import order_discount_percent, tier_percent
++from orderdesk.invoice import render_invoice
++from orderdesk.report import sales_by_tier
++from orderdesk.shipping import shipping_cents
++
++ADA = {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com"}
++LINES = [{"name": "Notebook", "price_cents": 1250, "qty": 2}, {"name": "Fountain pen", "price_cents": 4500, "qty": 1}]
++
++
++class TierParsingTest(unittest.TestCase):
++    def test_any_case_and_spaces(self):
++        self.assertEqual(parse_customer({**ADA, "tier": "Gold"}).tier, "gold")
++        self.assertEqual(parse_customer({**ADA, "tier": " silver "}).tier, "silver")
++
++    def test_the_default_is_bronze(self):
++        self.assertEqual(parse_customer(ADA).tier, "bronze")
++
++    def test_an_unknown_tier(self):
++        with self.assertRaises(ValueError):
++            parse_customer({**ADA, "tier": "platinum"})
++
++
++class TierDiscountTest(unittest.TestCase):
++    def test_tier_percent(self):
++        self.assertEqual([tier_percent(t) for t in ("bronze", "silver", "gold")], [0, 5, 10])
++
++    def test_coupon_and_tier_add_up(self):
++        self.assertEqual(order_discount_percent("SAVE10", "gold"), 20)
++        self.assertEqual(order_discount_percent(None, "silver"), 5)
++
++    def test_never_more_than_25_percent(self):
++        self.assertEqual(order_discount_percent("SAVE20", "silver"), 25)
++
++
++class GoldShippingTest(unittest.TestCase):
++    def test_gold_ships_free_from_50_dollars(self):
++        self.assertEqual(shipping_cents(6000, "gold"), 0)
++        self.assertEqual(shipping_cents(4000, "gold"), 599)
++
++    def test_the_others_are_unchanged(self):
++        self.assertEqual(shipping_cents(6000, "silver"), 599)
++        self.assertEqual(shipping_cents(10000, "silver"), 0)
++
++
++class InvoiceTierTest(unittest.TestCase):
++    def test_the_tier_line(self):
++        lines = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES).splitlines()
++        self.assertEqual(lines[1], "Tier: Gold")
++
++    def test_no_tier_line_for_bronze(self):
++        self.assertNotIn("Tier:", render_invoice(parse_customer(ADA), LINES))
++
++    def test_a_gold_invoice(self):
++        text = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES, coupon="SAVE10")
++        self.assertIn("Discount (20%): -$14.00", text)
++        self.assertIn("Shipping: free", text)
++        self.assertTrue(text.endswith("Total: $56.00"))
++
++
++class ReportTierTest(unittest.TestCase):
++    def test_sales_by_tier(self):
++        orders = [
++            {"customer": {**ADA, "tier": "gold"}, "lines": LINES},
++            {"customer": ADA, "lines": [{"name": "Ink", "price_cents": 800, "qty": 1}]},
++        ]
++        self.assertEqual(sales_by_tier(orders), {"bronze": 800, "silver": 0, "gold": 7000})
++
++
++class CliTierTest(unittest.TestCase):
++    def test_the_tier_option(self):
++        order = {"customer": ADA, "lines": [{"name": "Notebook", "price_cents": 1250, "qty": 5}]}
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "order.json")
++            with open(path, "w", encoding="utf-8") as fh:
++                json.dump(order, fh)
++            out = io.StringIO()
++            with contextlib.redirect_stdout(out):
++                code = main([path, "--tier", "gold"])
++        self.assertEqual(code, 0)
++        self.assertIn("Tier: Gold", out.getvalue())
++        self.assertIn("Shipping: free", out.getvalue())
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.47.0
+
