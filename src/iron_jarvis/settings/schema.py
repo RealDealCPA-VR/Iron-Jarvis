@@ -307,6 +307,18 @@ SETTINGS: tuple[SettingDef, ...] = (
       "or Codex plan are not counted.",
       tier="ask-floor", section="Model team", check=_range(0, 100000),
       aliases=("team pay cap", "pay per use limit", "pay per use cap", "model team budget")),
+    # v1.400.0 (TEAM-FIRST): what a coding session's planner is TOLD about
+    # the team (agents/model_team.team_section). Turning it ON moves work and
+    # usage onto other models and accounts, so from chat it asks every time
+    # (no grant lifts it); turning it off applies at once. Read live.
+    S("team_first", "Hand work to my team first", "models", "bool",
+      "When this is on, a coding session is asked to hand reading, test runs, first drafts and "
+      "reviews to your model team by role, and to keep the planning and the final check on its own "
+      "model. Members on your Claude Code or Codex plans use those plans. Off, a coding session is "
+      "shown your team and decides for itself whether to use it.",
+      tier="allow", floor_when=(True,), section="Model team",
+      aliases=("team first", "team-first", "hand work to my team", "use my team first",
+               "model team first")),
     S("voice_transcribe_base_url", "Voice: speech-to-text endpoint", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
       tier="ask", section="Voice", advanced=True),

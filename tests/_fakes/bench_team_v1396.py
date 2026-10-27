@@ -8,8 +8,10 @@ service or the network:
 * ``claude-cli`` — the PLANNER: it plays a script per (task, setup), where the
   setup is read off its own system prompt (a planner that sees "# Your model
   team" hands pieces out by ROLE through Claude Code's ``Agent`` tool; one
-  that does not works alone), and answers every call with the vendor's usage
-  headers in ``extra["ratelimit_headers"]`` — the exact shape the real
+  that does not works alone — and, v1.400.0, with ``world.team_words`` set,
+  one that sees the team but not those words works alone too), and answers
+  every call with the vendor's usage headers in ``extra["ratelimit_headers"]``
+  — the exact shape the real
   claude-cli adapter carries (``claude_native/transport.assemble``);
 * ``codex-cli`` — a REVIEWER member, answering with Codex's account snapshot
   in ``extra["rate_limits"]`` (``codex_native/adapter``'s shape);
@@ -194,6 +196,13 @@ class Double(LLMAdapter):
         if self.provider == PLANNER[0]:
             setup = "team" if "# Your model team" in (system or "") else (
                 "alone-helper" if w.alone_helper else "alone")
+            # v1.400.0 (team-first): a planner that hands pieces out ONLY when
+            # its system prompt carries these words — like the 2026-10-26 live
+            # planner, which was shown the team and worked alone. None (the
+            # default) = every earlier pin's planner, unchanged.
+            words = getattr(w, "team_words", None)
+            if setup == "team" and words and words not in (system or ""):
+                setup = "alone"
             # Stateless: the step is how many times it has answered in THIS
             # conversation (every repeat plays its script from the top).
             step = _answered(messages)
@@ -245,7 +254,7 @@ def wire(platform: Any, monkeypatch: Any, *, epoch: float = 1_900_000_000.0) -> 
     from iron_jarvis.harness_bench import runners as R
     from iron_jarvis.providers import router as router_mod
 
-    world = World(calls=[], alone_helper=False,
+    world = World(calls=[], alone_helper=False, team_words=None,
                   claude=Windows(start=20.0, step=0.5, resets=(int(epoch) + 4 * 3600, int(epoch) + 5 * 86400)),
                   codex=Windows(start=40.0, step=1.0, resets=(int(epoch) + 3 * 3600, int(epoch) + 6 * 86400)))
     mgr = platform.providers

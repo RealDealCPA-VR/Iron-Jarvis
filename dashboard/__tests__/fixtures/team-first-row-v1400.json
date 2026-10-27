@@ -1,0 +1,53 @@
+{
+ "rows": [
+  {
+   "key": "team_paid_cap_usd",
+   "label": "Pay-per-use limit for your model team ($ a month)",
+   "group": "models",
+   "section": "Model team",
+   "type": "number",
+   "help": "The most your model team's pay-per-use members may spend in a calendar month, in dollars. Iron Jarvis and its agents hand work to a pay-per-use member, or ask it a question, only while this month's spend is under this limit. 0 means never. Work you start yourself (on the Agents page, a schedule, a task you queue) is not stopped by it, but what it spends counts. Members on your own hardware and on your Claude Code or Codex plan are not counted.",
+   "options": [],
+   "tier": "ask-floor",
+   "floor_when": [],
+   "restart": false,
+   "advanced": false,
+   "aliases": [
+    "team pay cap",
+    "pay per use limit",
+    "pay per use cap",
+    "model team budget"
+   ],
+   "store": "config",
+   "placeholder": "",
+   "secret": false,
+   "pattern": false
+  },
+  {
+   "key": "team_first",
+   "label": "Hand work to my team first",
+   "group": "models",
+   "section": "Model team",
+   "type": "bool",
+   "help": "When this is on, a coding session is asked to hand reading, test runs, first drafts and reviews to your model team by role, and to keep the planning and the final check on its own model. Members on your Claude Code or Codex plans use those plans. Off, a coding session is shown your team and decides for itself whether to use it.",
+   "options": [],
+   "tier": "allow",
+   "floor_when": [
+    true
+   ],
+   "restart": false,
+   "advanced": false,
+   "aliases": [
+    "team first",
+    "team-first",
+    "hand work to my team",
+    "use my team first",
+    "model team first"
+   ],
+   "store": "config",
+   "placeholder": "",
+   "secret": false,
+   "pattern": false
+  }
+ ]
+}

@@ -815,25 +815,131 @@ TEAM_LEAD = (
 )
 
 
-def team_block(platform: Any, *, limit: int = 10) -> str:
-    """The team section of a coding session's prompt: the roster's member
-    lines only ("" when there are none, so every other turn's prompt is
-    byte-identical). Under Local only a member whose model leaves the
-    network is not listed (``roster_block`` does the filtering)."""
-    names = [f"custom:{r.name}" for r in team_members(platform)]
-    if not names:
+#: v1.400.0 (TEAM-FIRST, ``Config.team_first``, OFF by default): the user's
+#: own decision to save the planner's usage. The 2026-10-26 live benchmark's
+#: planner was SHOWN the team and handed it nothing in 36 runs: every word
+#: above only PERMITS handing work out. With the setting on, the team section
+#: ends with this instruction (:func:`team_first_words`), in the planner's own
+#: terms ("role:<id>", as :data:`TEAM_LEAD` names them), naming only the roles
+#: the listed members hold — a role nobody holds would be refused when asked.
+TEAM_FIRST_LEAD = "Work as a team: the user wants to save this model's usage."
+#: What each role takes, in the order the instruction lists them.
+TEAM_FIRST_PIECES: tuple[tuple[str, str], ...] = (
+    ("read", "reading and summarizing files (role:read)"),
+    ("test", "running tests and fixing what they find (role:test)"),
+    ("code", "first drafts of separate parts (role:code)"),
+    ("review", "reviewing a change (role:review)"),
+)
+TEAM_FIRST_TAIL = (
+    "Start several helpers in one message when their pieces do not depend on each other. "
+    "Keep the plan, the hard decisions and the final check yourself, and check what a helper "
+    "hands back."
+)
+#: The one sentence a helper tool's description LEADS with when team-first is
+#: on and the turn shows a team; ``{how}`` is that tool's own argument words
+#: (:func:`team_first_tool_sentence`).
+TEAM_FIRST_TOOL = "Your model team is listed under 'Your model team': for a piece that fits a role, {how}."
+
+
+def _and_list(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _or_list(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " or " + items[-1]
+
+
+def team_first_on(platform: Any) -> bool:
+    """Is team-first switched on (``Config.team_first``, read LIVE)? Only a
+    real True counts; anything unreadable is off. Never raises."""
+    try:
+        return getattr(getattr(platform, "config", None), "team_first", False) is True
+    except Exception:  # noqa: BLE001 — unreadable: off
+        return False
+
+
+def team_first_words(roles: Iterable[str]) -> str:
+    """The team-first instruction for a team whose listed members hold
+    ``roles`` ("" when they hold none)."""
+    held = set(roles)
+    pieces = [words for rid, words in TEAM_FIRST_PIECES if rid in held]
+    if not pieces:
         return ""
+    return (f"{TEAM_FIRST_LEAD} Hand pieces to the team by role: {_and_list(pieces)}. "
+            + TEAM_FIRST_TAIL)
+
+
+def team_first_tool_sentence(input_schema: Any, roles: Iterable[str]) -> str:
+    """The sentence a helper tool's description leads with, in THAT tool's
+    argument words: ``role`` (Jarvis's own ``delegate`` / ``spawn_agent``),
+    else ``subagent_type`` (Claude Code's ``Agent``) or ``agent_type``
+    (Codex's ``spawn_agent``) given ``role:<id>``. Only the roles the listed
+    members hold; "" for a tool that takes none of them. Never raises."""
+    try:
+        props = (input_schema or {}).get("properties") or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    held = [rid for rid in ROLE_IDS if rid in set(roles)]
+    if not held or not isinstance(props, dict):
+        return ""
+    if "role" in props:
+        how = "set role to " + _or_list(held)
+    else:
+        key = next((k for k in ("subagent_type", "agent_type") if k in props), "")
+        if not key:
+            return ""
+        how = f"give {key} " + _or_list([f"role:{rid}" for rid in held])
+    return TEAM_FIRST_TOOL.format(how=how)
+
+
+def team_section(platform: Any, *, limit: int = 10, team_first: bool = False) -> tuple[str, tuple[str, ...]]:
+    """``(section, roles)`` for a coding session's prompt: :func:`team_block`'s
+    text and — with ``team_first`` and a team shown — the team-first
+    instruction after the member lines, and the roles the LISTED members hold
+    (the helper tool's sentence names those). ``("", ())`` with no team;
+    ``(team_block, ())`` with team-first off, so the prompt is byte-identical
+    to v1.399.4. BLOCKING (cached reads): the lanes call it off the loop, and
+    their ``except`` keeps a failure from breaking a turn."""
+    names = {f"custom:{r.name}": r for r in team_members(platform)}
+    if not names:
+        return "", ()
     from .roster import roster_block
 
-    block = roster_block(platform, limit=limit, only=names)
+    block = roster_block(platform, limit=limit, only=list(names))
     if not block:
-        return ""
+        return "", ()
     lines = block.split("\n")
     # The roster's own header is replaced by the team's (same lines below).
     body = [ln for ln in lines[1:] if ln.startswith("- ")]
     if not body:
-        return ""
-    return "\n".join([TEAM_HEADER, TEAM_LEAD, *body])
+        return "", ()
+    text = "\n".join([TEAM_HEADER, TEAM_LEAD, *body])
+    if not team_first:
+        return text, ()
+    held: set[str] = set()
+    for ln in body:
+        record = names.get(ln[2:].split(" ", 1)[0])
+        if record is not None:
+            held.update(roles_of(record))
+    roles = tuple(rid for rid in ROLE_IDS if rid in held)
+    words = team_first_words(roles)
+    if not words:
+        return text, ()
+    return text + "\n\n" + words, roles
+
+
+def team_block(platform: Any, *, limit: int = 10, team_first: bool = False) -> str:
+    """The team section of a coding session's prompt: the roster's member
+    lines only ("" when there are none, so every other turn's prompt is
+    byte-identical). Under Local only a member whose model leaves the
+    network is not listed (``roster_block`` does the filtering). With
+    ``team_first`` (v1.400.0) the team-first instruction follows the member
+    lines (:func:`team_section`)."""
+    return team_section(platform, limit=limit, team_first=team_first)[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -2239,4 +2345,7 @@ __all__ += [
     "AccountPick", "PAY_PLACE", "PIECE_PERCENT", "PIECE_TAIL", "PLACED_RECENT_S", "QUESTION_TAIL",
     "UNKNOWN_BURST_MAX",
     "floor_refusal", "named_account", "pay_refusal", "work_group",
+    # v1.400.0 (team-first)
+    "TEAM_FIRST_LEAD", "TEAM_FIRST_PIECES", "TEAM_FIRST_TAIL", "TEAM_FIRST_TOOL",
+    "team_first_on", "team_first_tool_sentence", "team_first_words", "team_section",
 ]

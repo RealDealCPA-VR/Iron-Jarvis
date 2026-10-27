@@ -15,6 +15,7 @@ THE TEAM FILE (TOML)::
     [planner]                  # the model the coding session talks to
     provider = "claude-cli"
     model = "claude-opus-4-8"  # a model, never "default"
+    # team_first = true        # optional (default false): see TEAM-FIRST below
 
     [[members]]                # one per member (at most 10)
     name = "glm"
@@ -44,6 +45,18 @@ model, another role — is a new configuration folder, never a reused record.
 So are the router's thresholds (``team_record.MIN_RUNS`` / ``GOOD_RATE`` /
 ``FAIL_STREAK`` …, ``build_accounts.NEW_WORK_MAX_PERCENT`` …) and the router's
 own source: tuned defaults are a new setup.
+
+TEAM-FIRST (v1.400.0). ``team_first = true`` under ``[planner]`` runs the team
+with the user's "Hand work to my team first" setting ON (``Config.team_first``:
+the planner is told to hand reading, test runs, first drafts and reviews to the
+team by role — ``agents/model_team.team_section``). The runner sets the
+setting to the file's value, IN THE PROCESS ONLY (never written to any
+config.toml, never the user's home), for that invocation's runs, and puts it
+back when the invocation ends (:meth:`JarvisTeamRunner.prepare` /
+:meth:`~JarvisTeamRunner.close`). It is part of the identity ONLY when true:
+a file without the key, or with ``team_first = false``, is the team exactly as
+before (the same identity, the same folder), and ``true`` is a new folder. The
+report shows such a setup as ``jarvis-team (team-first)``.
 
 WHERE THE TEAM LIVES. In the benchmark's own scratch home (``--root``), never
 the user's — the members are made there before the first task
@@ -87,7 +100,7 @@ TEAM_RUNNER = "jarvis-team"
 MAX_MEMBERS = 10
 #: A member's name: what the planner calls it and the registry keys it by.
 _NAME_RX = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
-_PLANNER_KEYS = frozenset({"provider", "model"})
+_PLANNER_KEYS = frozenset({"provider", "model", "team_first"})
 _MEMBER_KEYS = frozenset({"name", "provider", "model", "roles", "description", "account", "effort", "max_steps"})
 #: v1.396.0 review: a member's step limit when the file names none is the
 #: planner's own round budget (``--rounds``, 60 by default). A member handed a
@@ -149,12 +162,20 @@ class TeamSpec:
     #: Where it was read from (never in the identity: the same team in
     #: another file is the same team).
     source: str = ""
+    #: v1.400.0: the file's ``team_first`` under ``[planner]`` — the runs use
+    #: the "Hand work to my team first" setting (see the module docstring).
+    team_first: bool = False
 
     def identity(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "planner": {"provider": self.planner_provider, "model": self.planner_model},
             "members": [m.identity() for m in sorted(self.members, key=lambda m: m.name)],
         }
+        # Only when ON: a team without it (every folder made before v1.400.0,
+        # and ``team_first = false``) keeps exactly its identity.
+        if self.team_first:
+            out["team_first"] = True
+        return out
 
     @property
     def key(self) -> str:
@@ -195,6 +216,9 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
     if p_model.lower() in NOT_A_MODEL:
         raise _refused("The team file's planner: " + MODEL_NOT_A_MODEL.format(model=p_model)
                        .replace("--model ", "model "))
+    team_first = planner.get("team_first", False)
+    if not isinstance(team_first, bool):
+        raise _refused("The team file's [planner] team_first is true or false (without quotes).")
     raw = data.get("members")
     if not isinstance(raw, list) or not raw:
         raise _refused("The team file needs at least one [[members]] table.")
@@ -246,7 +270,8 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
         members.append(Member(name=name, provider=m_provider, model=m_model,
                               roles=tuple(MT.clean_roles(roles)), description=description, account=account,
                               effort=effort, max_steps=int(steps or 0)))
-    return TeamSpec(planner_provider=p_provider, planner_model=p_model, members=tuple(members), source=source)
+    return TeamSpec(planner_provider=p_provider, planner_model=p_model, members=tuple(members), source=source,
+                    team_first=team_first)
 
 
 def load_team_file(path: str | Path) -> TeamSpec:
@@ -262,6 +287,16 @@ def load_team_file(path: str | Path) -> TeamSpec:
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise _refused(f"The team file {where} is not valid TOML ({exc}).") from None
     return parse_team(data, source=str(where))
+
+
+#: v1.400.0: a dry run's line for the team's team-first switch.
+TEAM_FIRST_ON_LINE = ("Team-first: on (the planner is told to hand reading, test runs, first drafts and "
+                      "reviews to the team by role).")
+TEAM_FIRST_OFF_LINE = "Team-first: off (the planner is shown the team and decides for itself)."
+
+
+def team_first_line(on: bool) -> str:
+    return TEAM_FIRST_ON_LINE if on else TEAM_FIRST_OFF_LINE
 
 
 def router_identity() -> dict[str, Any]:
@@ -308,6 +343,9 @@ class JarvisTeamRunner(JarvisRunner):
         #: v1.396.0 review: what the checks before the first task could only
         #: SAY (``check_ready``): a dry run lists them, a real run echoes them.
         self.ready_notes: list[str] = []
+        #: v1.400.0: the home's ``team_first`` value before :meth:`prepare`
+        #: set the file's (put back by :meth:`close`); None = not set by us.
+        self._team_first_before: bool | None = None
 
     # -- identity ---------------------------------------------------------- #
 
@@ -329,6 +367,8 @@ class JarvisTeamRunner(JarvisRunner):
     def dry_run_lines(self) -> list[str]:
         lines = [f"Team: planner {self.team.planner_provider} / {self.team.planner_model}; "
                  f"{len(self.team.members)} member(s):"]
+        # v1.400.0: whether the planner is told to hand work to the team first.
+        lines.append("  " + team_first_line(self.team.team_first))
         for m in sorted(self.team.members, key=lambda m: m.name):
             effort = self.member_effort(m)
             lines.append(f"  {m.words()}")
@@ -424,7 +464,14 @@ class JarvisTeamRunner(JarvisRunner):
 
     def prepare(self) -> None:
         """Make the file's members (and remove members an earlier, stopped
-        team invocation made that this file does not name). BLOCKING."""
+        team invocation made that this file does not name), and set the
+        home's "Hand work to my team first" setting to the file's value for
+        this invocation — in the process only, put back by :meth:`close`.
+        BLOCKING."""
+        config = getattr(self.platform, "config", None)
+        if config is not None and self._team_first_before is None:
+            self._team_first_before = getattr(config, "team_first", False) is True
+            config.team_first = bool(self.team.team_first)
         mine = {m.name for m in self.team.members}
         registry = self.platform.agents_registry
         for record in _members(self.platform):
@@ -440,12 +487,19 @@ class JarvisTeamRunner(JarvisRunner):
             )
 
     def close(self) -> None:
-        """Remove the members this runner made (their record stays). BLOCKING."""
-        registry = self.platform.agents_registry
-        for m in self.team.members:
-            record = registry.get(m.name)
-            if record is not None and _bench_made(record):
-                registry.remove(m.name)
+        """Remove the members this runner made (their record stays), and put
+        the home's team-first setting back as it was. BLOCKING."""
+        try:
+            registry = self.platform.agents_registry
+            for m in self.team.members:
+                record = registry.get(m.name)
+                if record is not None and _bench_made(record):
+                    registry.remove(m.name)
+        finally:
+            before, self._team_first_before = self._team_first_before, None
+            config = getattr(self.platform, "config", None)
+            if before is not None and config is not None:
+                config.team_first = before
 
     async def team_records_after(self) -> dict[str, Any] | None:
         """The router's record for every member and role after a run — the
