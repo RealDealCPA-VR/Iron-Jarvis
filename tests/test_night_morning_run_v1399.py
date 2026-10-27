@@ -35,16 +35,28 @@ import pytest
 from iron_jarvis.comm.channels import DesktopChannel, MockChannel
 from iron_jarvis.core.events import EventType
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.daemon.routes import build as build_routes
 from iron_jarvis.daemon.routes import chat as chat_routes
 from iron_jarvis.daemon.routes import night as night_routes
 from iron_jarvis.harness import night as N
 from iron_jarvis.harness import night_morning as M
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_git_v1375 import git, git_ok, install_fake_gh, make_repo, no_real_gh, snapshot
-from tests.test_build_sessions_v1367 import Script, asgi, asgi_get, messages_of, setup_of, until, wire
+from tests.test_build_sessions_v1367 import (
+    Script,
+    asgi,
+    asgi_get,
+    messages_of,
+    new_session,
+    open_turn,
+    setup_of,
+    until,
+    wire,
+)
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
+ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable.replace("\\", "/")
 
 TEST_CALC = '''import unittest
@@ -162,6 +174,14 @@ async def test_a_scripted_night_commits_each_branch_and_makes_one_summary_one_be
     platform.event_bus.add_handler(
         lambda ev: notices.append(dict(ev.payload or {})) if ev.type == EventType.BUILD_NIGHT_SUMMARY else None
     )
+    # ONE notice per night, never one per task: a night task's turn is not
+    # announced as "Your coding session finished" (every turn would be,
+    # with this at 0 — a person's turn below still is).
+    monkeypatch.setattr(build_routes, "FINISH_NOTICE_AFTER_S", 0.0)
+    finished: list[dict] = []
+    platform.event_bus.add_handler(
+        lambda ev: finished.append(dict(ev.payload or {})) if ev.type == EventType.BUILD_TURN_FINISHED else None
+    )
 
     wire(app, NightScript({
         "TASK-DONE": [
@@ -257,6 +277,16 @@ async def test_a_scripted_night_commits_each_branch_and_makes_one_summary_one_be
     assert "its work so far is committed" in lines[1] and "its work so far is committed" in lines[2]
     # "This PC" stays quiet: the bell (a window) or the tray says it.
     assert toasts == [], toasts
+    # No night task's turn was announced on its own (the control: a person's
+    # turn, at the same 0-second threshold, is).
+    night_threads = {done["thread_id"], needs["thread_id"], fail["thread_id"]}
+    assert not [f for f in finished if f.get("thread_id") in night_threads], finished
+    plain = tmp_path / "day"
+    plain.mkdir()
+    sid_person = new_session(app, plain)["id"]
+    status, raw = await asyncio.wait_for(open_turn(app, sid_person, {"text": "PERSON hi", "turn_id": "bt-day"}), 60)
+    assert status == 200 and "event: done" in raw
+    await until(lambda: any(f.get("thread_id") == sid_person for f in finished), 30)
 
     # ---- (3) THE NUMBERS EQUAL THE RECORDS (GET /build/night/summaries).
     status, view = await asgi_get(app, "/build/night/summaries")
@@ -287,6 +317,21 @@ async def test_a_scripted_night_commits_each_branch_and_makes_one_summary_one_be
     assert by_id[fail["id"]]["committed_words"].startswith("Its work so far is committed on ij/")
     assert by_id[needs["id"]]["committed_words"].startswith("Its work so far is committed on ij/")
     assert by_id[done["id"]]["committed_words"] == ""
+    # The dashboard's fixture (dashboard/__tests__/fixtures/last-night-v1399.json)
+    # holds the daemon's own keys — a key added or dropped here is a key the
+    # Last night view would never read.
+    fixture = json.loads((ROOT / "dashboard" / "__tests__" / "fixtures" / "last-night-v1399.json")
+                         .read_text(encoding="utf-8"))
+    fx_night = fixture["nights"][0]
+    fx_row = fx_night["rows"][0]
+    assert set(view) == set(fixture) - {"_about"}
+    assert set(night) == set(fx_night)
+    for r in rows:
+        assert set(r) - {"failure"} == set(fx_row) - {"failure"}, set(r) ^ set(fx_row)
+        assert set(r["session"]) == set(fx_row["session"])
+        for u in r["usage"]:
+            assert set(u) - {"cost_usd"} == set(fx_row["usage"][0]) - {"cost_usd"}
+    assert "failure" in by_id[fail["id"]]
 
     # ---- (4) PUSH and the PULL REQUEST, through the session's own git routes.
     gh = install_fake_gh(tmp_path, monkeypatch)

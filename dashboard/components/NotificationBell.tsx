@@ -48,6 +48,7 @@ import {
   buildMovedHeadline,
   buildSessionHref,
   buildThreadOf,
+  lastNightHref,
   sessionLinkFor,
 } from "@/lib/buildLinks";
 import { CODING_SESSION } from "@/lib/buildWords";
@@ -248,6 +249,9 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.392.0 (long jobs, Phase 3): a Build reply made no progress for ten
   // minutes — once per episode, said unless the user is looking at it.
   "build.turn_stalled",
+  // v1.399.0 (night shift N2): ONE night's Last night summary — one row per
+  // night, counted, opening Coding sessions › Last night.
+  "build.night_summary",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -967,6 +971,28 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       body: buildStalledBody(p.title, p.words),
       attention: true,
       build: thread,
+    };
+  }
+  if (e.type === "build.night_summary") {
+    // v1.399.0 (night shift N2): a night's Last night summary is ready (its
+    // last task ended, or the night window closed) — ONE row per night, not
+    // one per task. Payload: {night, label, title, body, counts, total,
+    // lines}; the daemon wrote the words (harness/night_morning.notice_words
+    // — the desktop app's tray and the phone say exactly these). It counts
+    // on the badge: nobody was watching the night's work. No session id.
+    const night = typeof p.night === "string" ? p.night.trim() : "";
+    if (!night) return null;
+    const counts = (p.counts && typeof p.counts === "object" ? p.counts : {}) as Record<string, unknown>;
+    const shortfall = Number(counts.failed ?? 0) > 0 || Number(counts.needs_you ?? 0) > 0;
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : "Last night's tasks ended";
+    return {
+      id: e.id,
+      ts: e.ts,
+      href: lastNightHref(night),
+      icon: shortfall ? AlertTriangle : CheckCircle2,
+      title,
+      body: clip(p.body),
+      attention: true,
     };
   }
   if (e.type === "library.proposal") {

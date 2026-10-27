@@ -46,14 +46,44 @@ export function sessionOfHref(href: string | null | undefined): string | null {
   }
 }
 
+/** v1.399.0 (night shift N2): where a night's LAST NIGHT summary opens —
+ *  Coding sessions › Last night, on that night (`/terminals?night=<date>`,
+ *  the date the night window opened). The bell's row and the desktop app's
+ *  tray notice open it. */
+export function lastNightHref(night: string): string {
+  return `/terminals?night=${encodeURIComponent(night)}`;
+}
+
+/** v1.399.0: the same-page trap as a session link (BUILD_SESSION_EVENT): a
+ *  link to Last night pressed while Build is open announces the night. */
+export const BUILD_NIGHT_EVENT = "ij:open-last-night";
+
+/** The night a Last night link names (`/terminals?night=<date>`), else null. */
+export function nightOfHref(href: string | null | undefined): string | null {
+  const h = typeof href === "string" ? href.trim() : "";
+  const q = h.indexOf("?");
+  if (q < 0 || h.slice(0, q).replace(/\/+$/, "") !== "/terminals") return null;
+  try {
+    const night = new URLSearchParams(h.slice(q + 1)).get("night");
+    return night && night.trim() ? night.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Tell an open Build page that a link to one of its sessions was pressed.
  *  Only on Build (anywhere else the navigation itself opens it). Answers
- *  whether it was announced. */
+ *  whether it was announced. v1.399.0: a link to Last night too. */
 export function announceBuildSessionLink(href: string | null | undefined): boolean {
   if (typeof window === "undefined") return false;
   const id = sessionOfHref(href);
-  if (!id) return false;
+  const night = id ? null : nightOfHref(href);
+  if (!id && !night) return false;
   if (window.location.pathname.replace(/\/+$/, "") !== "/terminals") return false;
+  if (night) {
+    window.dispatchEvent(new CustomEvent(BUILD_NIGHT_EVENT, { detail: { id: night } }));
+    return true;
+  }
   window.dispatchEvent(new CustomEvent(BUILD_SESSION_EVENT, { detail: { id } }));
   return true;
 }

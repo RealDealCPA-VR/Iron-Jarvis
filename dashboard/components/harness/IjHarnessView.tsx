@@ -17,7 +17,8 @@ import { MessageSquarePlus } from "lucide-react";
 import { HarnessSidebar, type StartExtra } from "@/components/harness/HarnessSidebar";
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import { TonightList } from "@/components/harness/TonightList";
-import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import { LastNightList } from "@/components/harness/LastNightList";
+import { choosePaneNext, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
@@ -60,6 +61,8 @@ function writeUrlSession(id: string | null): void {
     if (id) url.searchParams.set("session", id);
     else url.searchParams.delete("session");
     url.searchParams.delete("focus");
+    // v1.399.0: a Last night link is spent once a session is in front.
+    if (id) url.searchParams.delete("night");
     window.history.replaceState(window.history.state, "", url.toString());
   } catch {
     /* no history API — the window's memory still holds it */
@@ -68,6 +71,7 @@ function writeUrlSession(id: string | null): void {
 
 export function IjHarnessView({
   initialSession,
+  nightLink = null,
   terminals,
   onOpenTerminal,
   defaultFolder,
@@ -75,6 +79,10 @@ export function IjHarnessView({
 }: {
   /** `?session=<id>` the page was opened with. */
   initialSession: string | null;
+  /** v1.399.0 (night shift N2): a link to Last night (`?night=<date>`, the
+   *  bell's row, the tray notice) — `n` counts the presses, so a second press
+   *  of the same link opens it again. */
+  nightLink?: { night: string; n: number } | null;
   terminals: RailPane[];
   /** Open a terminal in the Terminals view (the page's own focus path). */
   onOpenTerminal: (id: string) => void;
@@ -104,8 +112,24 @@ export function IjHarnessView({
   // this window already knows is the pick at once.
   const pickedRef = useRef(initial.pick !== null);
   // v1.398.0 (night shift N1): Tonight in the middle instead of a session
-  // (this window's memory only; picking a session leaves it).
-  const [tonight, setTonight] = useState(false);
+  // (this window's memory only; picking a session leaves it). v1.399.0 (N2):
+  // or Last night — opened by its row, or by a link to it.
+  const [middle, setMiddle] = useState<"session" | "tonight" | "night">(nightLink ? "night" : "session");
+  const tonight = middle === "tonight";
+  const lastNight = middle === "night";
+  const nightPress = nightLink?.n ?? 0;
+  useEffect(() => {
+    if (nightPress > 0) setMiddle("night");
+  }, [nightPress]);
+  function openFromNight(id: string, opts?: { changes?: boolean }) {
+    // "Changes" opens the task's session on its Changes pane (a live
+    // branch's Branch view: the branch's whole diff).
+    if (opts?.changes) choosePaneNext("changes");
+    pickedRef.current = true;
+    setMiddle("session");
+    setSelected(id);
+    void refresh();
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -155,6 +179,8 @@ export function IjHarnessView({
       const id = sessionOfEvent(e);
       if (!id) return;
       pickedRef.current = true;
+      // v1.399.0: the session comes to the front (Tonight / Last night step aside).
+      setMiddle("session");
       setSelected(id);
       void refresh();
     };
@@ -165,8 +191,10 @@ export function IjHarnessView({
   useEffect(() => {
     if (!pickedRef.current) return;
     writeLastSession(selected);
+    // v1.399.0: Last night in front keeps its own address (a reload opens it).
+    if (middle === "night") return;
     writeUrlSession(selected);
-  }, [selected]);
+  }, [selected, middle]);
 
   const listRunning = useMemo(
     () => !!folders?.some((f) => f.sessions.some((s) => s.id === selected && s.running)),
@@ -209,6 +237,7 @@ export function IjHarnessView({
       const made = await (extra ? createSession(folder, { ...extra }) : createSession(folder));
       if (!made) return "The session could not be started.";
       pickedRef.current = true;
+      setMiddle("session");
       setSelected(made.id);
       void refresh();
       return null;
@@ -239,13 +268,15 @@ export function IjHarnessView({
         <HarnessSidebar
           folders={folders}
           listError={listError}
-          selectedId={tonight ? null : selected}
+          selectedId={middle === "session" ? selected : null}
           onSelect={(id) => {
-            setTonight(false);
+            setMiddle("session");
             setSelected(id);
           }}
           tonightOpen={tonight}
-          onTonight={() => setTonight(true)}
+          onTonight={() => setMiddle("tonight")}
+          lastNightOpen={lastNight}
+          onLastNight={() => setMiddle("night")}
           onStart={start}
           onRename={rename}
           defaultFolder={sessionFolder ?? defaultFolder}
@@ -264,11 +295,15 @@ export function IjHarnessView({
               folders={(folders ?? []).filter((f) => !f.noFolder && f.path).map((f) => f.path)}
               onOpenSession={(id) => {
                 pickedRef.current = true;
-                setTonight(false);
+                setMiddle("session");
                 setSelected(id);
                 void refresh();
               }}
             />
+          </div>
+        ) : lastNight ? (
+          <div className="h-full overflow-y-auto">
+            <LastNightList onOpenSession={openFromNight} focusNight={nightLink?.night ?? null} />
           </div>
         ) : selected ? (
           <HarnessSession

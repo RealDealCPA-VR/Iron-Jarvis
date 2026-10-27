@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, X } from "lucide-react";
+import { Check, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
 import { CODING_VIEW_NAME } from "@/lib/buildWords";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -380,11 +380,17 @@ export function HarnessSidebar({
   startWithNoFolder = false,
   tonightOpen = false,
   onTonight,
+  lastNightOpen = false,
+  onLastNight,
 }: {
   /** v1.398.0 (night shift N1): Tonight is the view in front. */
   tonightOpen?: boolean;
   /** v1.398.0: open the Tonight list (absent: no Tonight row). */
   onTonight?: () => void;
+  /** v1.399.0 (night shift N2): Last night is the view in front. */
+  lastNightOpen?: boolean;
+  /** v1.399.0: open Last night (absent: no Last night row). */
+  onLastNight?: () => void;
   /** v1.379.0 review: the session in front has no folder (New session opens
    *  with none). */
   startWithNoFolder?: boolean;
@@ -471,6 +477,19 @@ export function HarnessSidebar({
         >
           <Moon size={14} className="shrink-0" aria-hidden />
           Tonight
+        </button>
+      ) : null}
+      {onLastNight ? (
+        // v1.399.0 (night shift N2): the morning's summary, beside Tonight.
+        <button
+          type="button"
+          data-testid="harness-last-night"
+          aria-current={lastNightOpen ? "page" : undefined}
+          onClick={onLastNight}
+          className={`${ROW} shrink-0 ${lastNightOpen ? "bg-white/[0.07] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}
+        >
+          <Sunrise size={14} className="shrink-0" aria-hidden />
+          Last night
         </button>
       ) : null}
 

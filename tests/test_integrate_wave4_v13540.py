@@ -244,6 +244,14 @@ ALERT_PAYLOADS: dict[str, dict] = {
     "goal.satisfied": {"goal_id": "goal_1", "name": "Inbox zero"},
     "goal.tripped": {"goal_id": "goal_1", "name": "Inbox zero", "reason": "budget exhausted"},
     "goal.iteration_refused": {"goal_id": "goal_1", "name": "Inbox zero", "reason": "paused"},
+    # v1.399.0 (moved on purpose, night shift N2): the night's ONE message.
+    EventType.BUILD_NIGHT_SUMMARY: {
+        "night": "2026-10-26", "label": "Monday, October 26",
+        "title": "Last night: 1 failed, 1 done", "body": "Failed: Fix the parser · Done: Make add() add",
+        "counts": {"failed": 1, "needs_you": 0, "running": 0, "done": 1, "stopped": 0}, "total": 2,
+        "lines": ["• Failed: Fix the parser (ij/fix-the-parser-77aa): The model failed.",
+                  "• Done: Make add() add (ij/make-add-add-1a2b): tests passed; 1 file changed."],
+    },
 }
 
 #: What the line must say for each (the bell's words for the same event).
@@ -259,6 +267,7 @@ ALERT_WORDS: dict[str, str] = {
     "goal.satisfied": "Goal satisfied: Inbox zero",
     "goal.tripped": "Goal breaker tripped: Inbox zero — budget exhausted",
     "goal.iteration_refused": "Goal run refused: Inbox zero — paused",
+    EventType.BUILD_NIGHT_SUMMARY: "Last night: 1 failed, 1 done\n• Failed: Fix the parser",
 }
 
 

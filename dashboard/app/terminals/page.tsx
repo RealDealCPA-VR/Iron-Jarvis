@@ -58,7 +58,7 @@ import {
 } from "@/components/terminal/PaneState";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
-import { BUILD_SESSION_EVENT, BUILD_TERMINAL_EVENT, sessionOfEvent } from "@/lib/buildLinks";
+import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, BUILD_TERMINAL_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import { CODING_VIEW_NAME } from "@/lib/buildWords";
 import { cachedShape, keepShape } from "@/lib/turnCache";
 
@@ -174,6 +174,10 @@ export default function TerminalsPage() {
     keepShape(shape);
   }, [shape]);
   const [linkSession, setLinkSession] = useState<string | null>(null);
+  // v1.399.0 (night shift N2): a link to Last night (`?night=<date>`, the
+  // bell's row and the tray notice) opens Coding sessions on that view. The
+  // count makes a second press of the same link open it again.
+  const [linkNight, setLinkNight] = useState<{ night: string; n: number } | null>(null);
   useEffect(() => {
     let params: URLSearchParams | null = null;
     try {
@@ -184,6 +188,12 @@ export default function TerminalsPage() {
     const session = params?.get("session") ?? null;
     if (session) {
       setLinkSession(session);
+      setShape("harness");
+      return;
+    }
+    const night = params?.get("night") ?? null;
+    if (night) {
+      setLinkNight({ night, n: 1 });
       setShape("harness");
       return;
     }
@@ -211,9 +221,11 @@ export default function TerminalsPage() {
       // harness opens the session this window had open, not that old link
       // (v1.369.0 review).
       setLinkSession(null);
+      setLinkNight(null);
       try {
         const url = new URL(window.location.href);
         url.searchParams.delete("session");
+        url.searchParams.delete("night");
         window.history.replaceState(window.history.state, "", url.toString());
       } catch {
         /* no history API */
@@ -240,6 +252,22 @@ export default function TerminalsPage() {
     };
     window.addEventListener(BUILD_SESSION_EVENT, onLink);
     return () => window.removeEventListener(BUILD_SESSION_EVENT, onLink);
+  }, []);
+  // v1.399.0: the same for a link to Last night pressed while Build is open.
+  useEffect(() => {
+    const onNight = (e: Event) => {
+      const night = sessionOfEvent(e);
+      if (!night) return;
+      setLinkNight((cur) => ({ night, n: (cur?.n ?? 0) + 1 }));
+      setShape("harness");
+      try {
+        window.localStorage.setItem(SHAPE_KEY, "harness");
+      } catch {
+        /* the view still opens */
+      }
+    };
+    window.addEventListener(BUILD_NIGHT_EVENT, onNight);
+    return () => window.removeEventListener(BUILD_NIGHT_EVENT, onNight);
   }, []);
 
   // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of
@@ -1073,6 +1101,7 @@ export default function TerminalsPage() {
         <Reveal>
           <IjHarnessView
             initialSession={linkSession}
+            nightLink={linkNight}
             terminals={railPanes}
             onOpenTerminal={openInTerminals}
             defaultFolder={newFolder}
