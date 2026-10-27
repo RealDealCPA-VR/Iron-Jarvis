@@ -33,6 +33,31 @@ export function composerChipClass(on = false, tone: "accent" | "success" = "acce
   return `${CHIP_BASE} ${on ? (tone === "success" ? CHIP_ON_SUCCESS : CHIP_ON) : CHIP_IDLE}`;
 }
 
+/**
+ * v1.400.0: ONE ROW whatever model is picked (lib/toolbarFit). When the
+ * toolbar is too tight for every chip's words it sets `data-fit-icons` on
+ * itself (a `group/fit`), and a chip carrying these classes becomes a 30px
+ * square holding its icon — the shape it has on a phone — while its
+ * aria-label, tooltip and every non-colour cue (the Local only glow, the
+ * no-ask level's amber shield) stay. Outside a fit toolbar they do nothing.
+ */
+export const FIT_ICON_CHIP =
+  "group-data-[fit-icons]/fit:w-[30px] group-data-[fit-icons]/fit:justify-center group-data-[fit-icons]/fit:px-0";
+/** A chip's words (and chevron), gone while the toolbar shows icons only. */
+export const FIT_WORDS = "group-data-[fit-icons]/fit:hidden";
+
+/**
+ * The tooltip of a chip showing its icon alone leads with the words it no
+ * longer shows ("Local only: Keep this chat on this PC."), unless the
+ * tooltip already starts with them.
+ */
+export function iconOnlyTitle(words: string, title: string): string {
+  const w = words.trim();
+  if (!w) return title;
+  if (title.trim().toLowerCase().startsWith(w.toLowerCase())) return title;
+  return title ? `${w}: ${title}` : w;
+}
+
 /** A round icon button in the toolbar (the mic). Same quiet rules. */
 export const COMPOSER_ICON_BUTTON =
   "relative grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40";
