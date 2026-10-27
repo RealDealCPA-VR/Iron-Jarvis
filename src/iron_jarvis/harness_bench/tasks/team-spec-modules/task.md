@@ -1,0 +1,5 @@
+Please implement the three modules `SPEC.md` specifies: `durations.py` (section 1: reading and writing durations such as `1h 30m`), `versions.py` (section 2: Semantic Versioning 2.0.0 versions, their order, and npm-style ranges) and `allocate.py` (section 3: splitting an amount of cents by weights or percentages, and writing it in dollars). Each file holds the functions' signatures and raises `NotImplementedError` today. The modules do not depend on each other.
+
+Each section of `SPEC.md` is the whole contract of its module, and every detail in it will be checked — the parsing rules and every error case, how and when values are rounded and where the rounding carries, the precedence of pre-releases, which pre-releases a range admits, where the leftover cents go — with many more cases than `test_durations.py`, `test_versions.py` and `test_allocate.py` show (they fail today). Read the whole section before writing each module.
+
+Do not change the existing tests (add your own in new files if you want). Python 3.12, standard library only.

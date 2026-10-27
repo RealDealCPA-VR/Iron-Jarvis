@@ -1,0 +1,6 @@
+category = "refactor"
+tier = "team"
+title = "Rename a setting across the code, the command line, the environment and the docs, with deprecated aliases that warn once"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

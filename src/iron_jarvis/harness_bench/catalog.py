@@ -58,8 +58,15 @@ CATEGORIES: tuple[str, ...] = (
 #: generated repository of ~2,000 files, a project that will not build, a
 #: merge in progress, a program debugged while it runs, fixes whose obvious
 #: form breaks something else. A careful harness that plans, explores,
-#: verifies and cleans up passes them; small careful work does not.
-TIERS: tuple[str, ...] = ("core", "hard", "frontier")
+#: verifies and cleans up passes them; small careful work does not. ``team``
+#: (v1.400.0) — tasks where SPLITTING PAYS: each is several independent
+#: pieces (many files to read, separate modules from one spec, failing tests
+#: from unrelated bugs, a change reviewed file by file, a rename across code
+#: and docs, functions ported one by one), big enough that one model alone
+#: takes several minutes and a planner can hand each piece to a helper from a
+#: written brief. The first live team run (the frontier tier) handed nothing
+#: out: each frontier task was quicker to do than to describe.
+TIERS: tuple[str, ...] = ("core", "hard", "frontier", "team")
 
 #: Every hidden check file carries this text, so a leak is recognisable even
 #: when the file was renamed or pasted into another one.
@@ -266,6 +273,47 @@ def load_tasks(tasks_dir: Path | None = None) -> list[Task]:
     return out
 
 
+#: v1.400.0: what ``--tier`` takes besides one tier — several, joined by commas.
+_TIER_REFUSAL = (
+    f"--tier must be one of {', '.join((*TIERS, 'all'))}, or several tiers joined by commas "
+    "(frontier,team)"
+)
+
+
+def tier_names(tier: str) -> tuple[str, ...]:
+    """The tiers a ``--tier`` value selects, in :data:`TIERS` order.
+
+    ``all`` is every tier; one tier is itself; v1.400.0: several tiers joined
+    by commas select each of them (``frontier,team`` — one night's run of two
+    tiers), whatever order they are typed in (``team, frontier`` is the same
+    selection). An unknown tier, ``all`` beside another tier, or nothing at
+    all is refused (:class:`TaskError`), never silently dropped."""
+    text = str(tier or "").strip()
+    if text == "all":
+        return TIERS
+    parts = [p.strip() for p in text.split(",")]
+    named = [p for p in parts if p]
+    if not named or any(p not in TIERS for p in named):
+        raise TaskError(_TIER_REFUSAL)
+    return tuple(t for t in TIERS if t in set(named))
+
+
+def canonical_tier(tier: str) -> str:
+    """One spelling for a ``--tier`` value, so a setup's identity is the same
+    whatever order its tiers were typed in: ``all`` and a single tier stay as
+    they are (an existing configuration keeps its identity), several tiers
+    are joined in :data:`TIERS` order (``team,frontier`` -> ``frontier,team``).
+    A value :func:`tier_names` refuses comes back unchanged, to be refused
+    where the tasks are selected."""
+    text = str(tier or "").strip()
+    if text == "all":
+        return "all"
+    try:
+        return ",".join(tier_names(text))
+    except TaskError:
+        return tier
+
+
 def select_tasks(
     tasks: Sequence[Task],
     *,
@@ -280,10 +328,11 @@ def select_tasks(
     the same seed gives the same order on every machine. ``names`` keeps only
     those tasks (in the shuffled order; an unknown name is an error, never
     silently skipped), ``tier`` (``core`` / ``hard`` / ``frontier`` /
-    ``all``) keeps only that tier, and ``max_tasks`` keeps the first N after
-    that."""
-    if tier not in (*TIERS, "all"):
-        raise TaskError(f"--tier must be one of {', '.join((*TIERS, 'all'))}")
+    ``team`` / ``all``, or several tiers joined by commas — :func:`tier_names`)
+    keeps only those tiers, and ``max_tasks`` keeps the first N after that.
+    Several tiers keep the one shuffled order: ``frontier,team`` is the
+    frontier and team tasks exactly as ``all`` orders them."""
+    tiers = set(tier_names(tier))
     by_id = {t.id: t for t in tasks}
     order = sorted(by_id)
     random.Random(int(seed)).shuffle(order)
@@ -296,8 +345,8 @@ def select_tasks(
             )
         keep = set(wanted)
         order = [i for i in order if i in keep]
-    if tier != "all":
-        order = [i for i in order if by_id[i].tier == tier]
+    if tiers != set(TIERS):
+        order = [i for i in order if by_id[i].tier in tiers]
     if max_tasks is not None:
         if max_tasks < 1:
             raise TaskError("max_tasks must be at least 1")

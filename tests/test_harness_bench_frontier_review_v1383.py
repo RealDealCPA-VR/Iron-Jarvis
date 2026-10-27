@@ -61,7 +61,8 @@ def test_the_review_cases_are_real_and_named():
     assert DECOY_CASES, "no review decoys found"
     for root, cases in ((MORE_DECOYS, DECOY_CASES), (ALTERNATIVES, ALT_CASES)):
         for task_id, name in cases:
-            assert task_id in TASKS and TASKS[task_id].tier == "frontier", task_id
+            # v1.400.0: the team tier's alternatives and extra decoys live here too.
+            assert task_id in TASKS and TASKS[task_id].tier in ("frontier", "team"), task_id
             folder = root / task_id / name
             assert (folder / "NOTES.md").is_file(), folder
             assert any(folder.rglob("*.sol")) or (folder / "_solve.py").is_file(), folder

@@ -1,0 +1,10 @@
+category = "explain"
+tier = "team"
+title = "Every audit event a sixty-module package writes, and which function writes it"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
+check_timeout_s = 120
+
+# The answer file (the hidden check grades its contents).
+[rubric]
+answer_file = "answer.json"

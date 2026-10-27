@@ -1,0 +1,6 @@
+{
+  "remote": "https://store.example.com/team",
+  "max_retries": 5,
+  "timeout_s": 30,
+  "workers": 4
+}

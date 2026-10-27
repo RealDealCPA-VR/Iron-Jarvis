@@ -101,7 +101,7 @@ from .bench import (
     run_bench,
     TRAJECTORY_NAME,
 )
-from .catalog import Task, TaskError, load_tasks, select_tasks
+from .catalog import Task, TaskError, canonical_tier, load_tasks, select_tasks
 from .ledger import BudgetLedger, BudgetMismatch, Rollout, differences, receipts_of, sum_fields
 from .runners import (
     DEFAULT_ROUNDS,
@@ -199,7 +199,10 @@ class RefineSettings:
     def identity(self) -> dict[str, Any]:
         return {
             "loop": "refine", "provider": self.provider, "model": self.model,
-            "dialect": self.dialect, "rounds": self.rounds, "tier": self.tier,
+            "dialect": self.dialect, "rounds": self.rounds,
+            # v1.400.0: several tiers are one selection whatever order they were
+            # typed in; one tier and "all" keep their spelling (and the key).
+            "tier": canonical_tier(self.tier),
             "tasks": list(self.tasks), "max_tasks": self.max_tasks, "k": self.k, "mode": self.mode,
             "version": __version__, "loop_sha256": _module_sha(),
             **({"effort": self.effort} if self.effort else {}),
