@@ -12,7 +12,7 @@
 // stack trace from the socket layer into noise. It is 20 KB of code.
 
 import { build } from "esbuild";
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -90,6 +90,15 @@ const HTML = [
   ["src/mic/mic.html", "mic.html"],
 ];
 
+/** v1.400.6: the add-on's icons — the app's own "iU" tile at the sizes the
+ * browser draws (made by scripts/make_addon_icons.py). EVERY file in src/icons is
+ * copied into dist/icons, the folder manifest.json's `icons` and
+ * `action.default_icon` name, because only dist/** ships in the installer. A
+ * manifest icon that is missing makes Chrome refuse the whole folder ("Could not
+ * load icon"), so scripts/build.mjs and the doctor check each one exists. */
+const ICONS_FROM = "src/icons";
+const ICONS_TO = "icons";
+
 async function main() {
   // A stale dist/ is worse than no dist/: Chrome would keep loading the old
   // service worker while the source read as fixed.
@@ -122,8 +131,13 @@ async function main() {
   for (const [from, to] of HTML) {
     await copyFile(join(ROOT, from), join(OUT, to));
   }
+  await mkdir(join(OUT, ICONS_TO), { recursive: true });
+  const icons = (await readdir(join(ROOT, ICONS_FROM))).filter((name) => name.endsWith(".png"));
+  for (const name of icons) {
+    await copyFile(join(ROOT, ICONS_FROM, name), join(OUT, ICONS_TO, name));
+  }
   console.log(
-    `built ${OUT}: background.js, content.js, sidepanel.js, setup.js + 2 html` +
+    `built ${OUT}: background.js, content.js, sidepanel.js, setup.js, mic.js + 3 html + ${icons.length} icons` +
       (DAEMON_WS === DEFAULT_DAEMON_WS ? "" : ` (DEV daemon ${DAEMON_WS})`),
   );
 }

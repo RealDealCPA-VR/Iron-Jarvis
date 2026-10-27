@@ -190,7 +190,8 @@ manifest and the daemon have parted.
 manifest.json          MV3. permissions: tabs, scripting, downloads, storage.
                        optional_host_permissions only; no host_permissions;
                        no content_scripts. "key" pins the id.
-esbuild.config.mjs     background + content + popup + setup -> dist/, IIFE, chrome120
+esbuild.config.mjs     background + content + sidepanel + setup + mic -> dist/, IIFE,
+                       chrome120; copies the pages and src/icons/ -> dist/icons/
 scripts/build.mjs      verify-id, typecheck, build, then verify dist/ is complete
 scripts/verify-id.mjs  recomputes the id from the manifest key; exits 1 on drift
 src/protocol.ts        GENERATED from Python. Never hand-edit; see below.
@@ -200,7 +201,10 @@ src/bridge/errors.ts   BrowserErrorCode -> {code, message} envelopes
 src/background/        the service worker, tabs, downloads, and site access
 src/content/           the page snapshot, injected per read
 src/setup/             the grant surface: one button
-src/popup/             status only
+src/sidepanel/         the sidebar (the chat)
+src/mic/               the microphone grant page
+src/icons/             the app's "iU" tile at 16/32/48/128 (v1.400.6), made by
+                       scripts/make_addon_icons.py from desktop/assets/icon.png
 ```
 
 ## `src/protocol.ts` is generated

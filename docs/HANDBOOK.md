@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.5 (2026-10-25).*
+holds itself to. Current as of v1.400.6 (2026-10-25).*
 
 ---
 
@@ -929,7 +929,10 @@ it, and that choice is remembered on this PC.
 puts a newly loaded add-on on the toolbar — both hide it behind the **puzzle-piece**
 button at the top right. Open that menu, find **Iron Jarvis**, and press the **pin**
 (in Edge it is the eye icon, **Show in toolbar**), and
-the icon stays on the toolbar where one click opens the sidebar. The Browser card
+the icon stays on the toolbar where one click opens the sidebar. That icon is the
+app's own "iU" tile (since v1.400.6), the same picture as the desktop app, and it
+is what the puzzle-piece menu, the sidebar's header and your browser's add-ons
+page show too — reload the add-on once after updating to see it. The Browser card
 says this too, in every state, for anyone who set their browser up months ago and
 never opens the guided window again.
 

@@ -17,11 +17,16 @@ They are referenced by:
 - `main.js` → `windowIcon()` (the `.ico` on Windows, else the `.png`) for the
   main window and pop-out windows — the taskbar button.
 - `main.js` → `createTray()` (the `.ico`, else the `.png`) for the tray.
+- `extensions/chrome/src/icons/icon-{16,32,48,128}.png` (v1.400.6) — the
+  browser add-on's icon, `icon.png` resized exactly as the `.ico`'s frames
+  were. Remake with `uv run python scripts/make_addon_icons.py`;
+  `tests/test_browser_addon_icon_v14006.py` fails while they are stale.
 
 To change the icon: replace `icon-source.png` and remake `icon.png` and
 `icon.ico` from it (crop to the tile, round the corners with a transparent
-outside, then save the sizes above). `tests/test_app_icon_v1380.py` checks the
-sizes, the transparent corners and every reference.
+outside, then save the sizes above), then run `scripts/make_addon_icons.py`.
+`tests/test_app_icon_v1380.py` checks the sizes, the transparent corners and
+every reference.
 
 Windows keeps its own icon cache: after an update installs, a desktop
 shortcut can show the old icon until Windows refreshes it (signing out and in

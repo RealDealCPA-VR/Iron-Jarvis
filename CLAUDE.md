@@ -1255,6 +1255,22 @@ does not need a bump, stop and bump it.
   `BROWSERS` and let the pick choose. `browser-setup-edge-v1261.test.tsx`
   asserts an Edge-only window contains no "Chrome" outside the toggle.
 
+- **The browser add-on wears the app's icon, and a missing icon is a refused
+  folder** (v1.400.6). The manifest named no icon, so Chrome/Edge drew a grey "I"
+  in the toolbar, the puzzle-piece menu, the side panel's header and the
+  extensions page. `extensions/chrome/src/icons/icon-{16,32,48,128}.png` are
+  `desktop/assets/icon.png` resized with LANCZOS (`scripts/make_addon_icons.py`,
+  `--check`) — pixel-identical to `icon.ico`'s frames — and the bundler copies
+  every file there into `dist/icons/` (only `dist/**` ships). Manifest: `icons`
+  16/32/48/128 + `action.default_icon` 16/32; the setup and mic pages link
+  `icons/icon-32.png` as their tab icon. Chrome refuses a whole unpacked folder
+  over ONE missing icon ("Could not load icon"), so `scripts/build.mjs`'s
+  verifier and the doctor's `_addon_build_missing` read both icon fields from the
+  manifest (a string `default_icon` too). A NEW app icon means re-running the
+  script: `tests/test_browser_addon_icon_v14006.py` fails while they are stale.
+  The sidebar's own in-panel mark (the arc-reactor SVG with the connection dot)
+  is unchanged.
+
 - **Updates come from the `updates` branch manifest first; GitHub's releases
   feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**
   (v1.260.0). electron-updater's GitHub provider opens every check by reading

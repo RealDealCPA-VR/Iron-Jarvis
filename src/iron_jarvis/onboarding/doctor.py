@@ -506,14 +506,24 @@ def _addon_build_missing(folder: Path) -> list[str]:
     # in v1.242.0 (D32 -- Chrome ignores ``openPanelOnActionClick`` while a popup is
     # declared), and a check still reading the old field would find nothing, check
     # nothing, and report a panel-less add-on as ready to load. ``action`` is still in
-    # the manifest, carrying only ``default_title``, so reading it would find no file
-    # at all and this row would quietly stop covering the surface the user clicks.
+    # the manifest, carrying ``default_title`` and (v1.400.6) ``default_icon`` --
+    # read below with the icons -- and no page, so reading it for the panel would
+    # find no file at all and this row would quietly stop covering the surface the
+    # user clicks.
     panel = manifest.get("side_panel")
     if isinstance(panel, dict) and panel.get("default_path"):
         wanted.append(str(panel["default_path"]))
     for entry in manifest.get("content_scripts") or []:
         if isinstance(entry, dict):
             wanted += [str(js) for js in (entry.get("js") or [])]
+    # v1.400.6: the icons (the app's "iU" tile). Chrome refuses the whole unpacked
+    # folder when the manifest names an icon that is missing ("Could not load icon"),
+    # so each is checked like the service worker, from both fields that name one.
+    action = manifest.get("action")
+    for icons in (manifest.get("icons"), action.get("default_icon") if isinstance(action, dict) else None):
+        # A dict of size -> file, or (``default_icon`` only) one file for every size.
+        files = icons.values() if isinstance(icons, dict) else [icons] if isinstance(icons, str) else []
+        wanted += [f for f in files if isinstance(f, str) and f and f not in wanted]
     wanted += [name for name in BROWSER_ADDON_RUNTIME_FILES if name not in wanted]
     missing: list[str] = []
     for rel in wanted:

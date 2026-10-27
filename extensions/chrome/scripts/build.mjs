@@ -112,6 +112,23 @@ function requiredFiles() {
   }
   named.push([panel, "manifest.json side_panel.default_path"]);
 
+  // v1.400.6: the icons. Chrome refuses an unpacked folder whose manifest names an
+  // icon that is not there ("Could not load icon"), so each one is as required as
+  // the service worker. Read from both places the manifest names them.
+  for (const [field, icons] of [
+    ["icons", manifest.icons],
+    ["action.default_icon", manifest.action && manifest.action.default_icon],
+  ]) {
+    if (typeof icons === "string" && icons) {
+      // `action.default_icon` may be one file for every size.
+      named.push([icons, `manifest.json ${field}`]);
+    } else if (icons && typeof icons === "object") {
+      for (const [size, file] of Object.entries(icons)) {
+        if (typeof file === "string" && file) named.push([file, `manifest.json ${field}["${size}"]`]);
+      }
+    }
+  }
+
   for (const [source, pattern, where] of [
     ["src/background/tabs.ts", /CONTENT_SCRIPT_FILE = "([^"]+)"/, "tabs.ts CONTENT_SCRIPT_FILE"],
     ["src/background/hostperms.ts", /SETUP_PAGE = "([^"]+)"/, "hostperms.ts SETUP_PAGE"],
@@ -155,7 +172,7 @@ function verifyDist() {
   if (problems.length) {
     fail(
       "verify",
-      `the built add-on folder is not loadable:\n  - ${problems.join("\n  - ")}\n  Chrome would refuse it with "Service worker registration failed", naming no file.`,
+      `the built add-on folder is not loadable:\n  - ${problems.join("\n  - ")}\n  Chrome would refuse it with "Service worker registration failed" (naming no file)\n  or "Could not load icon".`,
     );
   }
   return seen.size;
