@@ -295,7 +295,8 @@ def _branch_numbers(git: "dict[str, str] | None") -> dict[str, Any]:
 
 async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[str, str] | None",
                           state: str, messages: list[dict[str, Any]], fin: Any, tests_trusted: bool,
-                          stopped_by_emergency: bool, notes: "list[tuple[str, str]]") -> None:
+                          stopped_by_emergency: bool, notes: "list[tuple[str, str]]", *,
+                          local_only: bool = False) -> None:
     """v1.399.0 (N2): one ended night task's COMMIT and its MORNING FACTS.
 
     * THE COMMIT (decision 2): the task's work is committed to its own branch
@@ -321,18 +322,27 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
     branch = str((git or {}).get("branch") or task.get("branch") or "")
     commit: "dict[str, Any] | None" = None
     commit_note = ""
+    from ...harness import night_commit as NC
+
+    left_out: list[dict[str, Any]] = []
     try:
         if git:
             if stopped_by_emergency:
                 commit_note = M.EMERGENCY_NOT_COMMITTED
             else:
                 done = await commit_for_night(d, thread, M.commit_message(task.get("words") or "", state))
+                left_out = [x for x in (done.get("left_out") or []) if isinstance(x, dict)]
                 if done.get("committed") and done.get("sha"):
                     commit = {"sha": str(done["sha"]), "subject": str(done.get("subject") or ""),
                               "files": int(done.get("files") or 0)}
                     notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
                     if done.get("note"):
                         notes.append(("info", str(done["note"])))
+                elif done.get("nothing") and left_out:
+                    # v1.399.0 review: everything it changed was left out (a
+                    # secret, a huge file): nothing committed — never "Nothing
+                    # changed" beside files that did change.
+                    commit_note = "Nothing was committed."
                 elif done.get("nothing") and task.get("commit_sha"):
                     # Iron Jarvis stopped after this task's commit and before
                     # the task was marked ended: the settle runs again, finds
@@ -340,10 +350,19 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
                     prior = (task.get("morning") or {}).get("commit")
                     commit = dict(prior) if isinstance(prior, dict) and prior.get("sha") else {
                         "sha": str(task["commit_sha"]), "subject": "", "files": 0}
+                elif done.get("nothing") and isinstance(done.get("recovered"), dict):
+                    # v1.399.0 review: the same, when the stop came before even
+                    # the RECORD of the commit was written — the branch's own
+                    # newest commit carries the night trailer.
+                    commit = dict(done["recovered"])
+                    notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
                 elif done.get("nothing"):
                     commit_note = M.TRY_ON_NOTE if task.get("try_on") else M.NOTHING_CHANGED
                 else:
                     commit_note = str(done.get("note") or "")
+            if left_out:
+                said = NC.left_out_words(left_out)
+                commit_note = f"{commit_note} {said}".strip() if commit_note else said
             if commit_note:
                 notes.append(("commit", commit_note))
         numbers = await asyncio.to_thread(_branch_numbers, git)
@@ -361,6 +380,11 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
             "usage": usage,
             "commit": commit,
             "commit_note": commit_note,
+            # v1.399.0 review: what the commit left out (kept in the branch
+            # folder, uncommitted), and whether the session was Local only.
+            "left_out": left_out[: NC.MAX_LEFT_OUT_KEPT],
+            "left_out_count": len(left_out),
+            "local_only": bool(local_only),
         }
         await asyncio.to_thread(N.set_morning, engine, tid, facts, commit_sha=(commit or {}).get("sha", ""))
     except Exception:  # noqa: BLE001 — the morning never breaks the settle
@@ -383,19 +407,64 @@ def _recent(key: str, now: Any) -> bool:
         return False
 
 
-async def _announce_night(platform: Any, key: str, rows: list[dict[str, Any]]) -> None:
+async def _announce_night(platform: Any, key: str, rows: list[dict[str, Any]]) -> bool:
     """``build.night_summary`` — the night's ONE notice (the bell, the tray,
-    the phone's one message). Never raises."""
+    the phone's one message). True when it was published. Never raises."""
     from ...core.events import EventType
     from ...harness import night_morning as M
 
     try:
         bus = getattr(platform, "event_bus", None)
         if bus is None:
-            return
+            return False
         await bus.publish(EventType.BUILD_NIGHT_SUMMARY, M.notice_payload(key, rows), session_id=None)
+        return True
     except Exception:  # noqa: BLE001 — the night's record stands without its notice
         log.warning("announcing night %s's summary failed", key, exc_info=True)
+        return False
+
+
+def _mark_local_only(engine: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """v1.399.0 review: a row whose session is Local only NOW (the user may
+    turn it on after the task ended) is marked so too — the notice never
+    carries its words. BLOCKING; never raises."""
+    from ...providers.egress import thread_local_only
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        r = dict(r)
+        if not r.get("local_only") and r.get("thread_id"):
+            try:
+                if thread_local_only(engine, str(r["thread_id"])):
+                    r["local_only"] = True
+            except Exception:  # noqa: BLE001 — unreadable: the safer reading
+                r["local_only"] = True
+        out.append(r)
+    return out
+
+
+async def _announce_once(platform: Any, key: str) -> bool:
+    """Announce night ``key``'s made summary ONCE, if it was not yet
+    (v1.399.0 review). The claim is written FIRST (``claim_notice``: a phone
+    never gets the night's message twice, even from two passes), and given
+    back when the publish fails, so the next pass tries again — a summary
+    made but never announced (Iron Jarvis stopped between the two, a claim
+    the database refused) is announced on the next pass, not never. A stop
+    between the claim and the publish loses that one notice (the Last night
+    view still holds the night): at most once, on purpose."""
+    from ...harness import night_morning as M
+
+    engine = platform.engine
+    summary = await asyncio.to_thread(M.get_summary, engine, key)
+    if summary is None or summary.get("notified"):
+        return False
+    if not await asyncio.to_thread(M.claim_notice, engine, key):
+        return False
+    rows = await asyncio.to_thread(_mark_local_only, engine, list(summary.get("rows") or []))
+    if await _announce_night(platform, key, rows):
+        return True
+    await asyncio.to_thread(M.release_notice, engine, key)
+    return False
 
 
 async def morning_pass(d: Any, settled: "list[str] | None" = None) -> list[str]:
@@ -433,19 +502,29 @@ async def morning_pass(d: Any, settled: "list[str] | None" = None) -> list[str]:
         group = by_night[key]
         rows = M.rows_for_night(group, key, start, end)
         if await asyncio.to_thread(M.has_summary, engine, key):
-            if any(t["id"] in settled_ids for t in group):
+            # v1.399.0 review: a row is brought up to date when its task ENDED
+            # since (or a task of that night is new) — read off the records,
+            # not only off this pass's own settle: a stop between a task's
+            # end and the pass that would refresh its row left it "still
+            # running" in the Last night view for good.
+            if any(t["id"] in settled_ids for t in group) or await asyncio.to_thread(
+                    M.rows_differ, engine, key, rows):
                 await asyncio.to_thread(M.refresh_summary, engine, key, rows)
-            continue
-        if key == current:
-            if any(t["state"] == N.RUNNING for t in group):
-                continue  # the night's work goes on
-            if queued and not emergency:
-                continue  # a queued task still starts in this window
-        if not await asyncio.to_thread(M.make_summary, engine, key, rows):
-            continue
-        made.append(key)
-        if _recent(key, now) and await asyncio.to_thread(M.claim_notice, engine, key):
-            await _announce_night(platform, key, rows)
+        else:
+            if key == current:
+                if any(t["state"] == N.RUNNING for t in group):
+                    continue  # the night's work goes on
+                if queued and not emergency:
+                    continue  # a queued task still starts in this window
+            if await asyncio.to_thread(M.make_summary, engine, key, rows):
+                made.append(key)
+        # v1.399.0 review: a made summary not yet announced is announced here
+        # — the one just made, and one a stop or a refused claim left behind.
+        if _recent(key, now):
+            try:
+                await _announce_once(platform, key)
+            except Exception:  # noqa: BLE001 — the next pass tries again
+                log.warning("night %s's notice could not be sent yet", key, exc_info=True)
     if made:
         await asyncio.to_thread(M.prune, engine)
     return made
@@ -679,8 +758,31 @@ async def settle_running(d: Any) -> list[str]:
         # keeps what the morning summary reads, off the records.
         stopped_by_emergency = emergency or N.has_note(task, "emergency") or any(
             k == "emergency" for k, _t in notes)
+        # v1.399.0 review: Local only (the session's switch, or a turn that
+        # ran under it) — the morning's notice never carries its words.
+        local_only = setup.get("local_only") is True or any(
+            isinstance(m, dict) and isinstance(m.get("route"), dict) and m["route"].get("local_only") is True
+            for m in messages
+        )
         await _settle_morning(d, task, thread, git, state, messages, fin, tests_trusted,
-                              stopped_by_emergency, notes)
+                              stopped_by_emergency, notes, local_only=local_only)
+        if git:
+            # v1.399.0 review: the commit ran the repository's own HOOKS (a
+            # post-commit hook can write anywhere), so the user's main folder
+            # is read AGAIN after it — the night's own commit moves only its
+            # ij/ branch, which the guard never counts.
+            from ...harness import night_guard as G
+
+            after = await asyncio.to_thread(_main_moved, engine, tid, git, S.folder_of(row))
+            if after and after != moved:
+                said = G.changed_words(git.get("main", "") or git.get("repo", ""), after)
+                notes = [(k, t) for k, t in notes if k != "outside" and t != G.UNCHECKED]
+                notes.insert(0, ("outside", said))
+                if not moved:
+                    notes.append(("info", "Your main folder changed while Iron Jarvis committed this task's "
+                                  "work (a git hook of the repository runs then)."))
+                if state == N.DONE:
+                    state = N.NEEDS_YOU
         for kind, text in notes:
             await asyncio.to_thread(N.add_note, engine, tid, kind, text)
         await asyncio.to_thread(N.finish_task, engine, tid, state)

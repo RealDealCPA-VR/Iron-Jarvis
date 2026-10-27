@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -63,6 +64,9 @@ STATE_WORDS = {
 #: The note kinds that are "what needs you" on a row (the main folder change
 #: has its own line, never folded).
 NEEDS_KINDS = ("declined", "unanswered", "low_trust", "account")
+#: v1.399.0 review: the note kinds that say why a task STOPPED (its row says
+#: the first one in words).
+STOP_KINDS = ("emergency", "limit", "stopped", "restart")
 #: At most this many task lines in the ONE phone message.
 PHONE_LINES = 10
 #: One phone line, at most this long.
@@ -137,6 +141,27 @@ def night_label(key: str) -> str:
 
 #: A commit subject, at most this long (git's own advice is 72).
 SUBJECT_CHARS = 72
+#: The line every night commit's message ends with (how the task ended
+#: follows) — v1.399.0 review: also how a settle that runs again after a
+#: crash finds the commit it already made (``build_git._night_commit_on_branch``).
+TRAILER = "Committed by Iron Jarvis when this night task ended"
+
+
+_CONTROL_RX = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def masked(text: str) -> str:
+    """``text`` with every secret-shaped value masked — the shared mask and
+    the shapes it does not know (``providers.failure_words.mask_failure_text``).
+    v1.399.0 review: a night task's words reach a commit message, the summary
+    and the notice (the bell, the tray, the phone, every webhook and the
+    daemon log). Never raises."""
+    try:
+        from ..providers.failure_words import mask_failure_text
+
+        return str(mask_failure_text(str(text or "")))
+    except Exception:  # noqa: BLE001 — masking never breaks the morning
+        return str(text or "")
 
 
 def commit_message(words: str, state: str) -> str:
@@ -148,13 +173,18 @@ def commit_message(words: str, state: str) -> str:
     Pure."""
     from .branches import MAX_MESSAGE_CHARS
 
-    text = str(words or "").replace("\r\n", "\n").strip()
+    # v1.399.0 review: the words are MASKED (a key the user pasted into a
+    # night task's words must not land in a commit they may push), a lone CR
+    # is a line break, and control characters git refuses (a NUL ends the
+    # commit with an error) or a terminal would act on are dropped.
+    text = masked(str(words or "").replace("\r\n", "\n").replace("\r", "\n"))
+    text = _CONTROL_RX.sub("", text).strip()
     lines = text.split("\n")
     first = next((ln.strip() for ln in lines if ln.strip()), "") or "Night task"
     subject = first if len(first) <= SUBJECT_CHARS else first[: SUBJECT_CHARS - 1].rstrip() + "…"
     body = text if (len(text) > len(first) or subject != first) else ""
     how = STATE_WORDS.get(str(state or ""), "ended").lower()
-    trailer = f"Committed by Iron Jarvis when this night task ended ({how})."
+    trailer = f"{TRAILER} ({how})."
     parts = [subject]
     if body:
         parts.append(body)
@@ -296,10 +326,13 @@ def summary_row(task: dict[str, Any]) -> dict[str, Any]:
     branch = str(task.get("branch") or "")
     commit = m.get("commit") if isinstance(m.get("commit"), dict) else None
     tests = str(m.get("tests") or "")
+    left_out = [x for x in (m.get("left_out") or []) if isinstance(x, dict) and x.get("path")]
     row: dict[str, Any] = {
         "id": str(task.get("id") or ""),
         "thread_id": str(task.get("thread_id") or ""),
-        "title": _first_line(task.get("words") or "") or "Night task",
+        # v1.399.0 review: every word the row carries from the task's words or
+        # its notes is MASKED (the row reaches the notice, the phone, webhooks).
+        "title": masked(_first_line(task.get("words") or "")) or "Night task",
         "folder": str(task.get("folder") or ""),
         "folder_name": os.path.basename(os.path.normpath(str(task.get("folder") or ""))) or str(task.get("folder") or ""),
         "branch": branch,
@@ -313,22 +346,41 @@ def summary_row(task: dict[str, Any]) -> dict[str, Any]:
         "usage": [u for u in (m.get("usage") or []) if isinstance(u, dict)],
         "commit": ({"sha": str(commit.get("sha") or ""), "subject": str(commit.get("subject") or "")}
                    if commit and commit.get("sha") else None),
-        "commit_note": str(m.get("commit_note") or ""),
+        "commit_note": masked(str(m.get("commit_note") or "")),
         "committed_words": committed_words(state, branch) if commit and commit.get("sha") else "",
-        "needs": [str(n.get("text") or "") for n in notes if n.get("kind") in NEEDS_KINDS and n.get("text")],
+        "needs": [masked(str(n.get("text") or "")) for n in notes
+                  if n.get("kind") in NEEDS_KINDS and n.get("text")],
         "main_changed": bool(task.get("main_changed")),
         "main_changed_words": next((str(n.get("text") or "") for n in notes if n.get("kind") == "outside"), ""),
-        "notes": [{"kind": str(n.get("kind") or ""), "text": str(n.get("text") or "")} for n in notes],
+        "notes": [{"kind": str(n.get("kind") or ""), "text": masked(str(n.get("text") or ""))} for n in notes],
         "try_on": len(task.get("try_on") or []),
+        # v1.399.0 review: what the night's commit left out (a secret, a huge
+        # file, a dependency folder) — still in the branch folder, uncommitted.
+        "left_out": [{"path": str(x.get("path")), "why": str(x.get("why") or "")} for x in left_out],
+        # v1.399.0 review: the session was Local only — its words and branch
+        # never go to the phone or any other destination off this PC.
+        "local_only": m.get("local_only") is True,
         "started_at": task.get("started_at"),
         "ended_at": task.get("ended_at"),
     }
     if row["tests"] and not row["tests_trusted"]:
         row["needs"].append("Its tests ran, but the result is not trusted: open the session to see why.")
+    if left_out:
+        from .night_commit import left_out_words
+
+        row["needs"].append(left_out_words(left_out, int(m.get("left_out_count") or len(left_out))))
+    if state == "stopped":
+        # v1.399.0 review: a stopped row says WHY in words (Emergency stop, its
+        # time or step limit, a restart, the user's Cancel) — never only a
+        # state word, with the reason folded away.
+        why = next((masked(str(n.get("text") or "")) for n in notes
+                    if n.get("kind") in STOP_KINDS and n.get("text")), "")
+        if why and why not in row["needs"]:
+            row["needs"].insert(0, why)
     if state == "failed":
         err = next((str(n.get("text") or "") for n in reversed(notes) if n.get("kind") == "error"), "")
         if err:
-            row["failure"] = _first_line(err, 300)
+            row["failure"] = masked(_first_line(err, 300))
     return row
 
 
@@ -395,10 +447,35 @@ def _row_detail(r: dict[str, Any]) -> str:
     return "; ".join(b.rstrip(".") for b in bits if b)
 
 
+#: v1.399.0 review: how a Local only task is named in anything that may
+#: leave this PC (the notice: the phone, a webhook) — never its words or its
+#: branch (which is made from its words).
+LOCAL_ONLY_TITLE = "A Local only task"
+LOCAL_ONLY_LINE = "open Iron Jarvis on this PC to see it"
+
+
+def shared_row(r: dict[str, Any]) -> dict[str, Any]:
+    """A row as the NOTICE may carry it (it reaches the phone, every webhook
+    and the daemon log): its words masked; a Local only task's words, branch
+    and notes left out entirely (v1.399.0 review — "Local only stays
+    absolute"). Pure."""
+    out = dict(r)
+    out["title"] = masked(str(r.get("title") or "")) or "Night task"
+    if r.get("failure"):
+        out["failure"] = masked(str(r.get("failure")))
+    out["needs"] = [masked(str(n)) for n in (r.get("needs") or [])]
+    if r.get("local_only"):
+        out.update(title=LOCAL_ONLY_TITLE, branch="", failure="", needs=[], notes=[], commit=None,
+                   committed_words="", main_changed_words="", left_out=[])
+    return out
+
+
 def phone_line(r: dict[str, Any]) -> str:
     """One task's short line in the phone message: its state, title, branch
     and the one thing to know. Pure."""
     head = f"• {STATE_WORDS.get(str(r.get('state')), 'Ended')}: {r.get('title') or 'Night task'}"
+    if r.get("local_only"):
+        return f"{head}: {LOCAL_ONLY_LINE}."
     if r.get("branch"):
         head += f" ({r['branch']})"
     detail = _row_detail(r)
@@ -426,17 +503,21 @@ def phone_message(payload: dict[str, Any]) -> str:
 def notice_payload(key: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     """``build.night_summary``'s payload: the night, its label, the words the
     bell / the tray / the phone say, the counts and the phone's task lines.
-    Titles and branch names only — never a path, a command or an id."""
-    words = notice_words(rows)
-    counts = counts_of(rows)
+    Titles and branch names only — never a path, a command or an id.
+    v1.399.0 review: every word masked, and a Local only task named only as
+    one (:func:`shared_row`) — this payload reaches the phone, webhooks, the
+    event record and the daemon log."""
+    shared = [shared_row(r) for r in rows]
+    words = notice_words(shared)
+    counts = counts_of(shared)
     return {
         "night": key,
         "label": night_label(key),
         "title": words["title"],
-        "body": words["body"],
+        "body": masked(words["body"]),
         "counts": counts,
-        "total": len(rows),
-        "lines": phone_lines(rows),
+        "total": len(shared),
+        "lines": [masked(x) for x in phone_lines(shared)],
     }
 
 
@@ -534,6 +615,38 @@ def claim_notice(engine: Any, key: str) -> bool:
         )
         db.commit()
         return bool(getattr(res, "rowcount", 0))
+
+
+def rows_differ(engine: Any, key: str, rows: list[dict[str, Any]]) -> bool:
+    """Does night ``key``'s made summary hold a row whose task has a
+    different state now, or lack a row of a task that ran that night
+    (v1.399.0 review)? BLOCKING; never raises (False when unreadable)."""
+    try:
+        with session_scope(engine) as db:
+            rec = db.get(NightSummaryRecord, str(key))
+            if rec is None:
+                return False
+            stored = {str(r.get("id")): str(r.get("state") or "") for r in _rows_of(rec)}
+    except Exception:  # noqa: BLE001
+        return False
+    return any(stored.get(str(r.get("id"))) != str(r.get("state") or "") for r in rows)
+
+
+def release_notice(engine: Any, key: str) -> None:
+    """Give a claimed notice back (v1.399.0 review: its publish failed, so the
+    next pass announces it). BLOCKING; never raises."""
+    from sqlalchemy import update
+
+    try:
+        with session_scope(engine) as db:
+            db.exec(
+                update(NightSummaryRecord)  # type: ignore[call-overload]
+                .where(NightSummaryRecord.night == str(key))
+                .values(notified_at=None)
+            )
+            db.commit()
+    except Exception:  # noqa: BLE001
+        log.warning("night %s's notice could not be given back", key, exc_info=True)
 
 
 def get_summary(engine: Any, key: str) -> "dict[str, Any] | None":
