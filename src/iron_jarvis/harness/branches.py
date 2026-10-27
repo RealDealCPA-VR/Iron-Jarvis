@@ -1111,12 +1111,21 @@ def clean_message(text: str) -> str:
     return "\n".join(lines).strip()[:MAX_MESSAGE_CHARS]
 
 
-def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
+def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: float = START_S,
+           on_spawn: Any = None) -> dict[str, Any]:
     """Commit everything in the worktree on the session's branch (``git add
     -A`` then ``git commit -F -``) as the user (their own git identity; Iron
     Jarvis's default name only when git names no one — said in ``note``).
     Never amends. :class:`GitRefused` for no message, nothing to commit, or a
-    commit git refused (a hook, …)."""
+    commit git refused (a hook, …).
+
+    v1.399.0 review (night shift N2) — three seams only Iron Jarvis's OWN
+    night commit passes (a person's Commit press is unchanged): ``screen(wt)``
+    runs after staging and unstages what must not be committed
+    (``harness/night_commit.screen``; answered as ``left_out``, and carried on
+    a :data:`NOTHING_TO_COMMIT` refusal as ``exc.left_out``); ``timeout``
+    bounds the commit (its hooks); ``on_spawn(proc)`` publishes the commit's
+    process so Emergency stop can end it (``procs.run``'s seam)."""
     wt = _live(facts)
     msg = str(message or "").replace("\r\n", "\n").strip()
     if not msg:
@@ -1127,13 +1136,32 @@ def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
     added = _g(["add", "-A"], wt)
     if not added.ok:
         raise GitRefused("Git could not stage the changes.", 409, _masked(added.err or added.out))
+    left_out: list[dict[str, str]] = []
+    if screen is not None:
+        try:
+            left_out = list(screen(wt) or [])
+        except GitRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 — unscreened is never committed
+            _g(["reset", "-q"], wt)
+            raise GitRefused(
+                "Iron Jarvis could not check what it was about to commit, so it committed nothing.", 409,
+                _masked(f"{type(exc).__name__}: {exc}"),
+            ) from exc
     if _g(["diff", "--cached", "--quiet"], wt).code == 0:
-        raise GitRefused(NOTHING_TO_COMMIT, 409)
+        refused = GitRefused(NOTHING_TO_COMMIT, 409)
+        refused.left_out = left_out  # type: ignore[attr-defined]
+        raise refused
     own = has_identity(wt, git_env())
     args = ([] if own else default_identity()) + ["commit", "-F", "-"]
-    got = _g(args, wt, timeout=START_S, input=(msg + "\n").encode("utf-8"))
+    if on_spawn is None:
+        got = _g(args, wt, timeout=timeout, input=(msg + "\n").encode("utf-8"))
+    else:
+        got = run_git(["-c", "core.quotepath=off", *args], Path(wt), timeout=timeout, env=git_env(),
+                      identity=False, input=(msg + "\n").encode("utf-8"), encoding="utf-8", on_spawn=on_spawn,
+                      breakaway_ok=False)
     if got.timed_out:
-        raise GitRefused(_timed_out_words("The commit", START_S), 504)
+        raise GitRefused(_timed_out_words("The commit", timeout), 504)
     if not got.ok:
         raise GitRefused("Git did not make the commit.", 409, _masked(got.err or got.out))
     sha = _ref_sha(wt, "HEAD")
@@ -1142,6 +1170,8 @@ def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
         "committed": True, "sha": sha[:12], "subject": msg.split("\n", 1)[0][:300],
         "files": len([f for f in files.out.splitlines() if f.strip()]) if files.ok else 0,
     }
+    if left_out:
+        out["left_out"] = left_out
     if not own:
         out["note"] = (
             "Git has no name and e-mail set on this PC, so the commit is signed \"Iron Jarvis\". "

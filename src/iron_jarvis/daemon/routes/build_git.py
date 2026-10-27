@@ -365,13 +365,36 @@ async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, An
     never runs on the user's main checkout (the worktree's HEAD must be on
     the session's branch — ``branches._require_on_branch``).
 
-    Answers ``{committed, sha, subject, files, nothing, note}``: ``nothing``
-    True when nothing changed (no commit is made); ``note`` the plain words
-    when the commit did not go through (a hook refused it, a file was held).
-    NEVER raises — the task's settle carries on whatever git says."""
+    Answers ``{committed, sha, subject, files, nothing, note, left_out,
+    stopped}``: ``nothing`` True when nothing changed (no commit is made);
+    ``note`` the plain words when the commit did not go through (a hook
+    refused it, a file was held); ``left_out`` what the screen kept out of it.
+    NEVER raises — the task's settle carries on whatever git says.
+
+    v1.399.0 review — three things the first cut missed:
+
+    * WHAT IT TAKES: ``git add -A`` takes everything, and a night task can
+      leave a ``.env``, a key it pasted into a config file, a 200 MB artefact
+      or a ``node_modules`` it installed. The night's commit is SCREENED
+      (``harness/night_commit.screen``): those are unstaged, stay in the
+      branch folder, and are named on the record (``left_out``).
+    * ITS HOOKS: they run the repository's own code unattended, so the
+      commit is bounded by :data:`NIGHT_COMMIT_S` (not the Commit button's
+      five minutes — the night loop waits for it) and EMERGENCY STOP ends it:
+      a watcher kills the commit's process tree the moment the switch is on,
+      and a cancelled settle (Iron Jarvis stopping) kills it too (measured:
+      git leaves no index lock behind a commit killed in its hook, so the
+      morning's Commit button works — pinned, never "cleaned up" here).
+    * A CRASH between git making the commit and the record saying so: the
+      settle runs again and finds nothing to commit — the branch's newest
+      commit carrying Iron Jarvis's own night trailer is still the task's
+      (``recovered``)."""
+    from ...harness import night_commit as NC
     from .build import _COMPACTING, _STARTING, _running_turn, _setup_of
 
-    out: dict[str, Any] = {"committed": False, "sha": "", "subject": "", "files": 0, "nothing": False, "note": ""}
+    out: dict[str, Any] = {"committed": False, "sha": "", "subject": "", "files": 0, "nothing": False, "note": "",
+                           "left_out": [], "stopped": False}
+    facts: "dict[str, str] | None" = None
     try:
         row = await asyncio.to_thread(S.get_row, d.platform.engine, thread_id)
         facts = B.facts_of(_setup_of(row)) if row is not None else None
@@ -382,21 +405,73 @@ async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, An
                 or _running_turn(d, thread_id)):
             out["note"] = NIGHT_COMMIT_BUSY
             return out
+        if _emergency_on(d):
+            out.update(stopped=True, note=NIGHT_COMMIT_EMERGENCY)
+            return out
+        box: dict[str, Any] = {"proc": None, "stop": False}
+        box_lock = threading.Lock()
+
+        def on_spawn(proc: Any) -> bool:
+            with box_lock:
+                box["proc"] = proc
+                return bool(box["stop"])
+
+        def kill() -> None:
+            from ...core import procs
+
+            with box_lock:
+                box["stop"] = True
+                proc = box["proc"]
+            if proc is not None:
+                with contextlib.suppress(Exception):
+                    procs.kill_tree(proc)
+
         _STARTING.add(thread_id)
         _GIT_ACTING.add(thread_id)
         try:
-            done = await asyncio.to_thread(_locked, thread_id, lambda: B.commit(facts, message))
+            job = asyncio.ensure_future(asyncio.to_thread(
+                _locked, thread_id,
+                lambda: B.commit(facts, message, screen=NC.screen, timeout=NIGHT_COMMIT_S, on_spawn=on_spawn),
+            ))
+            try:
+                while True:
+                    finished, _ = await asyncio.wait({job}, timeout=NIGHT_STOP_POLL_S)
+                    if finished:
+                        break
+                    if _emergency_on(d) and not box["stop"]:
+                        await asyncio.to_thread(kill)
+            except asyncio.CancelledError:
+                # Iron Jarvis is stopping: the commit (and its hooks) end with it.
+                await asyncio.shield(asyncio.to_thread(kill))
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(job)
+                raise
+            try:
+                done = job.result()
+            except B.GitRefused:
+                if box["stop"]:
+                    out.update(stopped=True, note=NIGHT_COMMIT_EMERGENCY)
+                    return out
+                raise
+            if box["stop"] and not done.get("sha"):
+                out.update(stopped=True, note=NIGHT_COMMIT_EMERGENCY)
+                return out
         finally:
             _GIT_ACTING.discard(thread_id)
             _STARTING.discard(thread_id)
         out.update(committed=True, sha=str(done.get("sha") or ""), subject=str(done.get("subject") or ""),
-                   files=int(done.get("files") or 0))
+                   files=int(done.get("files") or 0), left_out=list(done.get("left_out") or []))
         if done.get("note"):
             out["note"] = str(done["note"])
         return out
     except B.GitRefused as exc:
         if str(exc) == B.NOTHING_TO_COMMIT:
             out["nothing"] = True
+            out["left_out"] = list(getattr(exc, "left_out", None) or [])
+            if not out["left_out"]:
+                recovered = await asyncio.to_thread(_night_commit_on_branch, facts)
+                if recovered:
+                    out.update(recovered=recovered)
             return out
         detail = next((ln.strip() for ln in str(exc.details or "").splitlines() if ln.strip()), "")
         words = f"Iron Jarvis could not commit its work: {exc}"
@@ -409,6 +484,53 @@ async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, An
         out["note"] = (f"Iron Jarvis could not commit its work ({type(exc).__name__}); its changes are still in "
                        "its branch folder.")
         return out
+
+
+#: v1.399.0 review: how long the night's own commit (its hooks) may run. The
+#: night loop waits for it, so it is shorter than the Commit button's five
+#: minutes; a hook that needs longer is said in words and the work stays in
+#: the branch folder for the morning's Commit.
+NIGHT_COMMIT_S = 120.0
+#: How often the night's commit looks at Emergency stop while it runs.
+NIGHT_STOP_POLL_S = 0.25
+#: The note when Emergency stop ended (or came before) the night's commit.
+NIGHT_COMMIT_EMERGENCY = (
+    "Emergency stop was on, so Iron Jarvis did not commit its work (a commit already running, and its "
+    "hooks, were stopped); it is still in its branch folder."
+)
+
+
+def _emergency_on(d: Any) -> bool:
+    from ...agents.orchestrator import emergency_stop_on
+
+    try:
+        return bool(emergency_stop_on(getattr(d.platform, "config", None)))
+    except Exception:  # noqa: BLE001 — unreadable: carry on as off
+        return False
+
+
+def _night_commit_on_branch(facts: "dict[str, str] | None") -> "dict[str, Any] | None":
+    """The branch's newest commit when it is Iron Jarvis's own night commit
+    (its message carries ``night_morning.TRAILER``) — the settle's record of a
+    commit a crash kept it from writing down. BLOCKING; never raises."""
+    if not facts:
+        return None
+    try:
+        wt = B._live(facts)
+        mb = B.merge_base(facts, wt)
+        got = B._g(["log", "-1", "--format=%H%x00%s%x00%B", f"{mb}..HEAD"], wt, reads=True)
+        if not got.ok or not got.out.strip():
+            return None
+        sha, subject, body = (got.out.split("\0", 2) + ["", ""])[:3]
+        from ...harness.night_morning import TRAILER
+
+        if TRAILER not in body:
+            return None
+        files = B._g(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], wt, reads=True)
+        return {"sha": sha.strip()[:12], "subject": subject.strip()[:300],
+                "files": len([f for f in files.out.splitlines() if f.strip()]) if files.ok else 0}
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def draft_message(d: Any, thread_id: str) -> Any:
