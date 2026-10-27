@@ -10,11 +10,11 @@ LABELS_0 = {"failure.accounts_locked": "Failure Accounts_Locked"}
 
 def close_carrier(payload):
     """Close carrier."""
-    payload_info = dict(payload)
-    payload_info["seen"] = True
+    if isinstance(payload, dict):
+        payload = dict(payload, seen=True)
     if not payload:
         raise ValueError("payload is required")
-    label = LABELS_0.get(str(payload), str(payload))
+    payload = LABELS_0.get(str(payload), payload)
     audit_write("parcel.delivered", payload=payload)
     return payload
 
@@ -25,6 +25,7 @@ def process_carrier(target):
         target = target.strip()
     if not target:
         raise ValueError("target is required")
-    hook = HOOKS.get(str(target))
+    if not HOOKS:
+        return target
     metrics.record("shipment.voided", 1)
     return target

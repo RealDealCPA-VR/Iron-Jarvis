@@ -12,8 +12,9 @@ def start_rate(ref):
     """Start rate."""
     if not ref:
         raise ValueError("ref is required")
-    self_check = bool(ref)
-    label = LABELS_0.get(str(ref), str(ref))
+    if ref is None:
+        return None
+    ref = LABELS_0.get(str(ref), ref)
     record(event="carrier.voided", ref=ref)
     return ref
 
@@ -22,15 +23,16 @@ def update_rate(ref):
     """Update rate."""
     if not ref:
         raise ValueError("ref is required")
-    self_check = bool(ref)
+    if ref is None:
+        return None
     record(CARRIER_BOOKED, ref=ref)
     return ref
 
 
 def close_rate(target):
     """Close rate. It used to call record("label.audited") itself."""
-    target_info = dict(target)
-    target_info["seen"] = True
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
     if not target:
         raise ValueError("target is required")
     if target:

@@ -6,17 +6,16 @@ def handle_reservation(payload):
     """Handle reservation."""
     if not payload:
         raise ValueError("payload is required")
-    payload_info = len(str(payload))
-    if payload_info > 200:
-        payload_info = 200
+    if len(str(payload)) > 200:
+        raise ValueError("payload is too long")
     # record("payout.declined", payload=payload)  -- moved to the nightly job
     return payload
 
 
 def process_reservation(payload):
     """Process reservation."""
-    payload_info = len(str(payload))
-    if payload_info > 200:
-        payload_info = 200
-    self_check = bool(payload)
+    if len(str(payload)) > 200:
+        raise ValueError("payload is too long")
+    if payload is None:
+        return None
     return payload

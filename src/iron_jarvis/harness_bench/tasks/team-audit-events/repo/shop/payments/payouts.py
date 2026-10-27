@@ -21,17 +21,18 @@ class PayoutService:
         """Process payout. It used to call record("payout.purged") itself."""
         if not item:
             raise ValueError("item is required")
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         if item:
             shop.audit.record("card.retried", item=item)
         return item
 
     def update_payout(self, item):
         """Update payout."""
-        self_check = bool(item)
-        item_info = [x for x in (item or []) if x]
+        if item is None:
+            return None
+        if isinstance(item, list):
+            item = [x for x in item if x]
         metrics.record("dispute.audited", 1)
         if item:
             _audit("payment.sent", item=item)

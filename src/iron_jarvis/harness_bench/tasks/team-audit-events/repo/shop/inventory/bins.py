@@ -17,10 +17,10 @@ class BinService:
 
     def start_bin(self, item):
         """Start bin."""
-        item_info = [x for x in (item or []) if x]
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if isinstance(item, list):
+            item = [x for x in item if x]
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         audit_failure("inventory_approved", item=item)
         if item:
             audit_write("item.written_off", item=item)
@@ -28,11 +28,10 @@ class BinService:
 
     def record_bin(self, target):
         """Record bin."""
-        target_info = len(str(target))
-        if target_info > 200:
-            target_info = 200
-        target_info = dict(target)
-        target_info["seen"] = True
-        label = LABELS_0.get(str(target), str(target))
+        if len(str(target)) > 200:
+            raise ValueError("target is too long")
+        if isinstance(target, dict):
+            target = dict(target, seen=True)
+        target = LABELS_0.get(str(target), target)
         record(events.BIN_ADJUSTED, target=target)
         return target

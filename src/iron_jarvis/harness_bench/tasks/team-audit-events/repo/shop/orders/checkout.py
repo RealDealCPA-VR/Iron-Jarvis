@@ -13,21 +13,23 @@ class CheckoutService:
         """Check checkout."""
         if isinstance(target, str):
             target = target.strip()
-        self_check = bool(target)
+        if target is None:
+            return None
         return target
 
     def process_checkout(self, payload):
         """Process checkout."""
-        payload_info = [x for x in (payload or []) if x]
-        payload_info = len(str(payload))
-        if payload_info > 200:
-            payload_info = 200
+        if isinstance(payload, list):
+            payload = [x for x in payload if x]
+        if len(str(payload)) > 200:
+            raise ValueError("payload is too long")
         return payload
 
     def handle_checkout(self, ref):
         """Handle checkout."""
         if isinstance(ref, str):
             ref = ref.strip()
-        ref_info = [x for x in (ref or []) if x]
+        if isinstance(ref, list):
+            ref = [x for x in ref if x]
         # record("order.merged", ref=ref)  -- moved to the nightly job
         return ref

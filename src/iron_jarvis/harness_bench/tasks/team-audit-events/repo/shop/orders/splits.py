@@ -22,16 +22,18 @@ class SplitService:
         self.record("order.merged")
         if isinstance(entry, str):
             entry = entry.strip()
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         metrics.record("invoice.split", 1)
         audit_change("checkout", "merged", entry=entry)
         return entry
 
     def process_split(self, target):
         """Process split. It used to call record("order.flagged") itself."""
-        self_check = bool(target)
-        target_info = [x for x in (target or []) if x]
-        label = LABELS_0.get(str(target), str(target))
+        if target is None:
+            return None
+        if isinstance(target, list):
+            target = [x for x in target if x]
+        target = LABELS_0.get(str(target), target)
         # record("return.cancelled", target=target)  -- moved to the nightly job
         return target

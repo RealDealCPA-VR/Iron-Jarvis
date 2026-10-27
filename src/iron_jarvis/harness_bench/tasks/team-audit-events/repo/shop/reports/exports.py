@@ -25,9 +25,8 @@ class ExportService:
     def handle_export(self, payload):
         """Handle export."""
         self.record("refund.sent")
-        payload_info = len(str(payload))
-        if payload_info > 200:
-            payload_info = 200
+        if len(str(payload)) > 200:
+            raise ValueError("payload is too long")
         if isinstance(payload, str):
             payload = payload.strip()
         record(events.DIGEST_EXPORTED, payload=payload)
@@ -37,7 +36,8 @@ class ExportService:
 
     def process_export(self, payload):
         """Process export."""
-        self_check = bool(payload)
+        if payload is None:
+            return None
         if not payload:
             raise ValueError("payload is required")
         audit_write("schedule.generated", payload=payload)

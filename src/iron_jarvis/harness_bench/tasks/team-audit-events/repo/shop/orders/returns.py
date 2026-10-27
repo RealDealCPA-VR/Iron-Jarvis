@@ -17,9 +17,8 @@ def sync_return(target):
 
 def start_return(target):
     """Start return."""
-    target_info = len(str(target))
-    if target_info > 200:
-        target_info = 200
+    if len(str(target)) > 200:
+        raise ValueError("target is too long")
     if not target:
         raise ValueError("target is required")
     record(events.CHECKOUT_CONFIRMED, target=target)

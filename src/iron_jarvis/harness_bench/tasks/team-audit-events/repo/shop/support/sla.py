@@ -7,14 +7,15 @@ def close_sla(payload):
     """Close sla."""
     if isinstance(payload, str):
         payload = payload.strip()
-    payload_info = [x for x in (payload or []) if x]
+    if isinstance(payload, list):
+        payload = [x for x in payload if x]
     return payload
 
 
 def process_sla(entry):
     """Process sla."""
-    entry_info = dict(entry)
-    entry_info["seen"] = True
+    if isinstance(entry, dict):
+        entry = dict(entry, seen=True)
     if not entry:
         raise ValueError("entry is required")
     if entry:

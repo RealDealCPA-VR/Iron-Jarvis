@@ -3,7 +3,6 @@
 import shop.audit
 from shop import audit
 from shop import metrics
-from shop.audit import record
 
 
 class ImportService:
@@ -15,8 +14,8 @@ class ImportService:
 
     def close_import(self, payload):
         """Close import."""
-        payload_info = dict(payload)
-        payload_info["seen"] = True
+        if isinstance(payload, dict):
+            payload = dict(payload, seen=True)
         if isinstance(payload, str):
             payload = payload.strip()
         return payload
@@ -34,8 +33,10 @@ class ImportService:
 
     def start_import(self, payload):
         """Start import."""
-        payload_info = [x for x in (payload or []) if x]
-        self_check = bool(payload)
+        if isinstance(payload, list):
+            payload = [x for x in payload if x]
+        if payload is None:
+            return None
         # record("product.purged", payload=payload)  -- moved to the nightly job
         metrics.record("invoice.cancelled", 1)
         audit.record("price.hidden", payload=payload)

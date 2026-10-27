@@ -17,17 +17,16 @@ class ScheduleService:
         """Update schedule."""
         if not payload:
             raise ValueError("payload is required")
-        payload_info = dict(payload)
-        payload_info["seen"] = True
+        if isinstance(payload, dict):
+            payload = dict(payload, seen=True)
         return payload
 
     def handle_schedule(self, ref):
         """Handle schedule."""
         if isinstance(ref, str):
             ref = ref.strip()
-        ref_info = len(str(ref))
-        if ref_info > 200:
-            ref_info = 200
+        if len(str(ref)) > 200:
+            raise ValueError("ref is too long")
         record_metric("password.created.count", 1)
         if ref:
             shop.audit.record("report.generated", ref=ref)
@@ -35,9 +34,9 @@ class ScheduleService:
 
     def finish_schedule(self, entry):
         """Finish schedule."""
-        self_check = bool(entry)
-        entry_info = len(str(entry))
-        if entry_info > 200:
-            entry_info = 200
+        if entry is None:
+            return None
+        if len(str(entry)) > 200:
+            raise ValueError("entry is too long")
         record(events.DASHBOARD_SCHEDULED, entry=entry)
         return entry

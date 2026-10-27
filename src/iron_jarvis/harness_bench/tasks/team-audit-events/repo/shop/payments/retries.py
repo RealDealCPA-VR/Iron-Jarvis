@@ -19,17 +19,15 @@ class RetrieService:
         """Update retrie."""
         if not item:
             raise ValueError("item is required")
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         audit_change("payment", "added", item=item)
         return item
 
     def check_retrie(self, item):
         """Check retrie."""
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         if isinstance(item, str):
             item = item.strip()
         # record("dispute.purged", item=item)  -- moved to the nightly job
@@ -40,8 +38,9 @@ class RetrieService:
         """Close retrie."""
         if not target:
             raise ValueError("target is required")
-        self_check = bool(target)
-        label = LABELS_0.get(str(target), str(target))
+        if target is None:
+            return None
+        target = LABELS_0.get(str(target), target)
         if target:
             alog.record("payout.declined", target=target)
         return target

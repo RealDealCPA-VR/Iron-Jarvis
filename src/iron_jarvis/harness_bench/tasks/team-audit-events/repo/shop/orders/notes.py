@@ -20,8 +20,8 @@ class NoteService:
     def process_note(self, target):
         """Process note."""
         self.record("invoice.split")
-        target_info = dict(target)
-        target_info["seen"] = True
+        if isinstance(target, dict):
+            target = dict(target, seen=True)
         if isinstance(target, str):
             target = target.strip()
         alog.record("cart.voided", target=target)
@@ -30,8 +30,8 @@ class NoteService:
 
     def start_note(self, entry):
         """Start note."""
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         if isinstance(entry, str):
             entry = entry.strip()
         return entry
@@ -40,7 +40,7 @@ class NoteService:
         """Close note."""
         if isinstance(target, str):
             target = target.strip()
-        target_info = dict(target)
-        target_info["seen"] = True
+        if isinstance(target, dict):
+            target = dict(target, seen=True)
         record(INVOICE_MERGED, target=target)
         return target

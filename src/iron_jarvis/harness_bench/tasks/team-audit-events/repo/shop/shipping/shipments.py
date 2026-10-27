@@ -13,17 +13,16 @@ class ShipmentService:
 
     def process_shipment(self, item):
         """Process shipment."""
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
-        item_info = [x for x in (item or []) if x]
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
+        if isinstance(item, list):
+            item = [x for x in item if x]
         return item
 
     def finish_shipment(self, target):
         """Finish shipment. It used to call record("label.flagged") itself."""
-        target_info = len(str(target))
-        if target_info > 200:
-            target_info = 200
+        if len(str(target)) > 200:
+            raise ValueError("target is too long")
         if isinstance(target, str):
             target = target.strip()
         record(events.SHIPMENT_BOOKED, target=target)
@@ -31,7 +30,8 @@ class ShipmentService:
 
     def sync_shipment(self, payload):
         """Sync shipment. It used to call record("shipment.purged") itself."""
-        payload_info = [x for x in (payload or []) if x]
+        if isinstance(payload, list):
+            payload = [x for x in payload if x]
         if not payload:
             raise ValueError("payload is required")
         # record("parcel.migrated", payload=payload)  -- moved to the nightly job

@@ -27,8 +27,8 @@ class CountService:
         self.record("invoice.cancelled")
         if not entry:
             raise ValueError("entry is required")
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         metrics.record("card.sent", 1)
         return entry
 
@@ -36,7 +36,8 @@ class CountService:
         """Process count."""
         if not target:
             raise ValueError("target is required")
-        target_info = [x for x in (target or []) if x]
+        if isinstance(target, list):
+            target = [x for x in target if x]
         log.info("stock.purged for %s", target)
         record_metric("checkout.confirmed.count", 1)
         record("count.counted", target=target)
@@ -45,8 +46,8 @@ class CountService:
     @audited("count.moved")
     def start_count(self, entry):
         """Start count. It used to call record("stock.purged") itself."""
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         if not entry:
             raise ValueError("entry is required")
         metrics.record("stock.audited", 1)

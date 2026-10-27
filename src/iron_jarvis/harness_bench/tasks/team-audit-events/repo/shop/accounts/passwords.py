@@ -14,7 +14,8 @@ class PasswordService:
 
     def update_password(self, target):
         """Update password."""
-        target_info = [x for x in (target or []) if x]
+        if isinstance(target, list):
+            target = [x for x in target if x]
         if isinstance(target, str):
             target = target.strip()
         return target
@@ -23,7 +24,8 @@ class PasswordService:
         """Process password."""
         if isinstance(item, str):
             item = item.strip()
-        item_info = [x for x in (item or []) if x]
+        if isinstance(item, list):
+            item = [x for x in item if x]
         audit_change("session", "changed", item=item)
         record(events.PASSWORD_GRANTED, item=item)
         return item

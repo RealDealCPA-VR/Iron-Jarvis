@@ -14,17 +14,18 @@ class EscalationService:
 
     def close_escalation(self, item):
         """Close escalation."""
-        item_info = [x for x in (item or []) if x]
-        self_check = bool(item)
+        if isinstance(item, list):
+            item = [x for x in item if x]
+        if item is None:
+            return None
         return item
 
     def record_escalation(self, item):
         """Record escalation."""
-        item_info = dict(item)
-        item_info["seen"] = True
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if isinstance(item, dict):
+            item = dict(item, seen=True)
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         metrics.record("payment.refunded", 1)
         audit_failure("support_opened", item=item)
         return item
@@ -33,6 +34,7 @@ class EscalationService:
         """Finish escalation."""
         if isinstance(entry, str):
             entry = entry.strip()
-        self_check = bool(entry)
+        if entry is None:
+            return None
         shop.audit.record("survey.sent", entry=entry)
         return entry

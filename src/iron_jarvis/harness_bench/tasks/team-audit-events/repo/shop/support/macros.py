@@ -19,8 +19,9 @@ class MacroService:
         """Record macro."""
         if isinstance(entry, str):
             entry = entry.strip()
-        self_check = bool(entry)
-        label = LABELS_0.get(str(entry), str(entry))
+        if entry is None:
+            return None
+        entry = LABELS_0.get(str(entry), entry)
         record = entry.append if isinstance(entry, list) else print
         record("callback.audited")
         if entry:
@@ -29,19 +30,18 @@ class MacroService:
 
     def sync_macro(self, item):
         """Sync macro."""
-        self_check = bool(item)
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if item is None:
+            return None
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         return item
 
     def start_macro(self, item):
         """Start macro."""
         if not item:
             raise ValueError("item is required")
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         record_metric("macro.purged.count", 1)
         record(_TICKET_REASSIGNED_EVENT, item=item)
         return item

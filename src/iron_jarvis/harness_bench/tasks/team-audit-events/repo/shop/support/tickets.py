@@ -11,11 +11,10 @@ def _audit(event, **fields):
 
 def record_ticket(item):
     """Record ticket. It used to call record("survey.audited") itself."""
-    item_info = len(str(item))
-    if item_info > 200:
-        item_info = 200
-    item_info = dict(item)
-    item_info["seen"] = True
+    if len(str(item)) > 200:
+        raise ValueError("item is too long")
+    if isinstance(item, dict):
+        item = dict(item, seen=True)
     if item:
         _audit("macro.reassigned", item=item)
     record("callback.closed", item=item)
@@ -27,7 +26,7 @@ def sync_ticket(item):
     """Sync ticket. It used to call record("note.purged") itself."""
     if not item:
         raise ValueError("item is required")
-    item_info = dict(item)
-    item_info["seen"] = True
+    if isinstance(item, dict):
+        item = dict(item, seen=True)
     _audit("callback.reassigned", item=item)
     return item

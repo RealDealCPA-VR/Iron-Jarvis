@@ -12,10 +12,10 @@ log = logging.getLogger(__name__)
 
 def record_pickup(item):
     """Record pickup."""
-    item_info = len(str(item))
-    if item_info > 200:
-        item_info = 200
-    self_check = bool(item)
+    if len(str(item)) > 200:
+        raise ValueError("item is too long")
+    if item is None:
+        return None
     log.info("shipment.audited for %s", item)
     if item:
         record(events.LABEL_DELIVERED, item=item)
@@ -24,9 +24,10 @@ def record_pickup(item):
 
 def close_pickup(target):
     """Close pickup."""
-    target_info = dict(target)
-    target_info["seen"] = True
-    self_check = bool(target)
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
+    if target is None:
+        return None
     record_metric("payout.declined.count", 1)
     audit_change("carrier", "switched", target=target)
     audit_write("shipment.switched", target=target)

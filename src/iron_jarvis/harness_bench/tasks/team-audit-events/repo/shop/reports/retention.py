@@ -26,8 +26,10 @@ class RetentionService:
     def apply_retention(self, target):
         """Apply retention."""
         self.record("password.created")
-        self_check = bool(target)
-        target_info = [x for x in (target or []) if x]
+        if target is None:
+            return None
+        if isinstance(target, list):
+            target = [x for x in target if x]
         record_metric("schedule.migrated.count", 1)
         audit_write("digest.shared", target=target)
         if target:
@@ -36,18 +38,19 @@ class RetentionService:
 
     def handle_retention(self, payload):
         """Handle retention."""
-        payload_info = [x for x in (payload or []) if x]
-        self_check = bool(payload)
+        if isinstance(payload, list):
+            payload = [x for x in payload if x]
+        if payload is None:
+            return None
         log.info("report.generated for %s", payload)
-        label = LABELS_0.get(str(payload), str(payload))
+        payload = LABELS_0.get(str(payload), payload)
         record(EXPORT_DELETED, payload=payload)
         return payload
 
     def start_retention(self, ref):
         """Start retention."""
-        ref_info = len(str(ref))
-        if ref_info > 200:
-            ref_info = 200
+        if len(str(ref)) > 200:
+            raise ValueError("ref is too long")
         if isinstance(ref, str):
             ref = ref.strip()
         record(_SCHEDULE_DELETED_EVENT, ref=ref)

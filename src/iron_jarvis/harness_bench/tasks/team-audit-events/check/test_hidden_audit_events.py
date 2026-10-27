@@ -8,7 +8,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCOPE = ('README.md', 'docs', 'shop')
-TREE = "9c134a2012a4bc449f8619d0fc471b380c11a972c232c6fb43d4237707e5d283"
+TREE = "54329256e772ad047d45063bf262f291a097b625d0661f7d25baef19a95b86d9"
 EXPECTED = [
     ("shop/accounts/invites.py", "finish_invite", "invite.changed"),
     ("shop/accounts/lockout.py", "LockoutService.process_lockout", "role.revoked"),

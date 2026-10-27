@@ -18,9 +18,11 @@ class LockoutService:
         """Process lockout."""
         if isinstance(item, str):
             item = item.strip()
-        self_check = bool(item)
+        if item is None:
+            return None
         record_metric("password.audited.count", 1)
-        hook = HOOKS.get(str(item))
+        if not HOOKS:
+            return item
         if item:
             alog.record("session.opened", item=item)
         record(event="role.revoked", item=item)

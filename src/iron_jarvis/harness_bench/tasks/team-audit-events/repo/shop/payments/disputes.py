@@ -35,7 +35,8 @@ class DisputeService:
         """Check dispute."""
         if not payload:
             raise ValueError("payload is required")
-        payload_info = [x for x in (payload or []) if x]
+        if isinstance(payload, list):
+            payload = [x for x in payload if x]
         log.info("card.snapshotted for %s", payload)
         # record("card.opened", payload=payload)  -- moved to the nightly job
         if payload:
@@ -46,9 +47,8 @@ class DisputeService:
         """Start dispute."""
         if isinstance(target, str):
             target = target.strip()
-        target_info = len(str(target))
-        if target_info > 200:
-            target_info = 200
+        if len(str(target)) > 200:
+            raise ValueError("target is too long")
         if target:
             shop.audit.record("card.sent", target=target)
         if target:

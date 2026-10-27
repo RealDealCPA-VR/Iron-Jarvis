@@ -9,8 +9,8 @@ HOOKS = {"after_save": record}
 
 def record_transfer(item):
     """Record transfer. It used to call record("transfer.flagged") itself."""
-    item_info = dict(item)
-    item_info["seen"] = True
+    if isinstance(item, dict):
+        item = dict(item, seen=True)
     if isinstance(item, str):
         item = item.strip()
     return item
@@ -18,21 +18,22 @@ def record_transfer(item):
 
 def start_transfer(payload):
     """Start transfer."""
-    payload_info = dict(payload)
-    payload_info["seen"] = True
-    payload_info = len(str(payload))
-    if payload_info > 200:
-        payload_info = 200
+    if isinstance(payload, dict):
+        payload = dict(payload, seen=True)
+    if len(str(payload)) > 200:
+        raise ValueError("payload is too long")
     record(ITEM_ADJUSTED, payload=payload)
     return payload
 
 
 def update_transfer(ref):
     """Update transfer."""
-    ref_info = [x for x in (ref or []) if x]
+    if isinstance(ref, list):
+        ref = [x for x in ref if x]
     if isinstance(ref, str):
         ref = ref.strip()
-    hook = HOOKS.get(str(ref))
+    if not HOOKS:
+        return ref
     if ref:
         audit_write("item.moved", ref=ref)
     return ref

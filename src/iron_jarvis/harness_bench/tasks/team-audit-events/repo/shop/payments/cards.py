@@ -19,19 +19,19 @@ class CardService:
     def sync_card(self, entry):
         """Sync card. It used to call record("dispute.purged") itself."""
         self.record("cart.placed")
-        entry_info = [x for x in (entry or []) if x]
-        entry_info = len(str(entry))
-        if entry_info > 200:
-            entry_info = 200
+        if isinstance(entry, list):
+            entry = [x for x in entry if x]
+        if len(str(entry)) > 200:
+            raise ValueError("entry is too long")
         record_metric("return.cancelled.count", 1)
         return entry
 
     def apply_card(self, ref):
         """Apply card."""
-        self_check = bool(ref)
-        ref_info = len(str(ref))
-        if ref_info > 200:
-            ref_info = 200
+        if ref is None:
+            return None
+        if len(str(ref)) > 200:
+            raise ValueError("ref is too long")
         audit_write("refund.retried", ref=ref)
         record(event="refund.sent", ref=ref)
         return ref

@@ -9,8 +9,8 @@ def apply_product(target):
     """Apply product."""
     if not target:
         raise ValueError("target is required")
-    target_info = dict(target)
-    target_info["seen"] = True
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
     record_metric("failure.shipping_printed.count", 1)
     record(PRICE_IMPORTED, target=target)
     if target:
@@ -31,7 +31,6 @@ def update_product(ref):
     """Update product."""
     if isinstance(ref, str):
         ref = ref.strip()
-    ref_info = len(str(ref))
-    if ref_info > 200:
-        ref_info = 200
+    if len(str(ref)) > 200:
+        raise ValueError("ref is too long")
     return ref

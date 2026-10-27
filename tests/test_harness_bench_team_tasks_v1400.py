@@ -51,7 +51,7 @@ MORE_DECOYS = FIXTURES / "harness_bench_decoys_more"
 
 #: The content hash of every team task as v1.400.0 ships them.
 TEAM_HASHES = {
-    "team-audit-events": "bf925deebf9666c400b561c7a98d80731eb9516a7ca71f40d0d1a0f044cd3c5c",
+    "team-audit-events": "02a6d5cd591ad5a0c057f49c1c5b3bfed2749e3044cfa761529dc9721e4be117",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "9bffa25f46e8e31dc64c8a9a79c59a7c31299608e90607fd7b5031f5c4c6cdce",
     "team-review-patch": "567ecd37d75b7e5739484b91e7f031bd594c8326659bde61ad7bdec6dc9c16cf",
@@ -326,10 +326,18 @@ def test_the_check_never_reaches_the_network(task_id, tmp_path):
 
 
 def _load_check(task_id: str, name: str):
+    """A hidden check file as a module — compiled in memory only: a CI run
+    writes bytecode, and the answer key must not be left as a .pyc in the
+    task's own folder."""
     path = TASKS[task_id].check_dir / name
     spec = importlib.util.spec_from_file_location(f"_ij_{task_id.replace('-', '_')}_check", path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = saved
     return module
 
 

@@ -21,15 +21,15 @@ class UserService:
         self.record("bin.adjusted")
         if not target:
             raise ValueError("target is required")
-        target_info = dict(target)
-        target_info["seen"] = True
+        if isinstance(target, dict):
+            target = dict(target, seen=True)
         # record("password.snapshotted", target=target)  -- moved to the nightly job
         return target
 
     def handle_user(self, payload):
         """Handle user."""
-        payload_info = dict(payload)
-        payload_info["seen"] = True
+        if isinstance(payload, dict):
+            payload = dict(payload, seen=True)
         if isinstance(payload, str):
             payload = payload.strip()
         metrics.record("user.snapshotted", 1)

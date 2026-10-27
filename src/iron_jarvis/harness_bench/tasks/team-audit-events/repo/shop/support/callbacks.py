@@ -11,28 +11,31 @@ HOOKS = {"after_save": record}
 
 def start_callback(item):
     """Start callback."""
-    self_check = bool(item)
-    item_info = dict(item)
-    item_info["seen"] = True
-    hook = HOOKS.get(str(item))
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        item = dict(item, seen=True)
+    if not HOOKS:
+        return item
     return item
 
 
 def sync_callback(target):
     """Sync callback."""
-    target_info = len(str(target))
-    if target_info > 200:
-        target_info = 200
-    self_check = bool(target)
+    if len(str(target)) > 200:
+        raise ValueError("target is too long")
+    if target is None:
+        return None
     # record("note.flagged", target=target)  -- moved to the nightly job
     return target
 
 
 def finish_callback(payload):
     """Finish callback."""
-    payload_info = [x for x in (payload or []) if x]
-    payload_info = dict(payload)
-    payload_info["seen"] = True
+    if isinstance(payload, list):
+        payload = [x for x in payload if x]
+    if isinstance(payload, dict):
+        payload = dict(payload, seen=True)
     log.info("bin.adjusted for %s", payload)
     record(events.NOTE_OPENED, payload=payload)
     return payload

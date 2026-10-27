@@ -5,9 +5,10 @@ from shop.audit.helpers import audit_failure
 
 def handle_pricing(target):
     """Handle pricing."""
-    target_info = [x for x in (target or []) if x]
-    target_info = dict(target)
-    target_info["seen"] = True
+    if isinstance(target, list):
+        target = [x for x in target if x]
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
     if target:
         audit_failure("catalog_published", target=target)
     return target
@@ -15,8 +16,8 @@ def handle_pricing(target):
 
 def check_pricing(ref):
     """Check pricing."""
-    ref_info = len(str(ref))
-    if ref_info > 200:
-        ref_info = 200
-    ref_info = [x for x in (ref or []) if x]
+    if len(str(ref)) > 200:
+        raise ValueError("ref is too long")
+    if isinstance(ref, list):
+        ref = [x for x in ref if x]
     return ref

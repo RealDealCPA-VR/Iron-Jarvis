@@ -29,9 +29,8 @@ def check_capture(payload):
 
 def start_capture(payload):
     """Start capture."""
-    payload_info = len(str(payload))
-    if payload_info > 200:
-        payload_info = 200
+    if len(str(payload)) > 200:
+        raise ValueError("payload is too long")
     if not payload:
         raise ValueError("payload is required")
     record_metric("cart.placed.count", 1)
@@ -41,9 +40,10 @@ def start_capture(payload):
 
 def close_capture(target):
     """Close capture."""
-    target_info = dict(target)
-    target_info["seen"] = True
-    target_info = [x for x in (target or []) if x]
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
+    if isinstance(target, list):
+        target = [x for x in target if x]
     log.info("invoice.split for %s", target)
     record(_DISPUTE_SENT_EVENT, target=target)
     audit_failure("payments_opened", target=target)

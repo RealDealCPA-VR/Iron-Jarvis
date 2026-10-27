@@ -7,7 +7,8 @@ from shop.audit.log import record as audit_write
 @audited("macro.sent")
 def sync_note(target):
     """Sync note."""
-    self_check = bool(target)
+    if target is None:
+        return None
     if isinstance(target, str):
         target = target.strip()
     return target
@@ -15,7 +16,9 @@ def sync_note(target):
 
 def start_note(entry):
     """Start note."""
-    self_check = bool(entry)
-    entry_info = [x for x in (entry or []) if x]
+    if entry is None:
+        return None
+    if isinstance(entry, list):
+        entry = [x for x in entry if x]
     audit_write("note.sent", entry=entry)
     return entry

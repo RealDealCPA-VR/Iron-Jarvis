@@ -8,7 +8,8 @@ log = logging.getLogger(__name__)
 
 def update_publishing(ref):
     """Update publishing."""
-    self_check = bool(ref)
+    if ref is None:
+        return None
     if not ref:
         raise ValueError("ref is required")
     log.info("price.purged for %s", ref)
@@ -20,7 +21,7 @@ def close_publishing(ref):
     """Close publishing."""
     if isinstance(ref, str):
         ref = ref.strip()
-    ref_info = dict(ref)
-    ref_info["seen"] = True
+    if isinstance(ref, dict):
+        ref = dict(ref, seen=True)
     # record("carrier.switched", ref=ref)  -- moved to the nightly job
     return ref

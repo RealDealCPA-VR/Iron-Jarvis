@@ -22,16 +22,17 @@ class CategorieService:
     def record_categorie(self, entry):
         """Record categorie."""
         self.record("return.cancelled")
-        entry_info = dict(entry)
-        entry_info["seen"] = True
-        entry_info = [x for x in (entry or []) if x]
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
+        if isinstance(entry, list):
+            entry = [x for x in entry if x]
         audit.record("image.renamed", entry=entry)
         return entry
 
     def handle_categorie(self, entry):
         """Handle categorie."""
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         if isinstance(entry, str):
             entry = entry.strip()
         record(LISTING_RENAMED, entry=entry)
@@ -40,12 +41,11 @@ class CategorieService:
 
     def start_categorie(self, ref):
         """Start categorie."""
-        ref_info = dict(ref)
-        ref_info["seen"] = True
-        ref_info = len(str(ref))
-        if ref_info > 200:
-            ref_info = 200
-        label = LABELS_0.get(str(ref), str(ref))
+        if isinstance(ref, dict):
+            ref = dict(ref, seen=True)
+        if len(str(ref)) > 200:
+            raise ValueError("ref is too long")
+        ref = LABELS_0.get(str(ref), ref)
         if ref:
             record("product.renamed", ref=ref)
         return ref

@@ -20,10 +20,10 @@ class ServiceService:
 
     def start_service(self, item):
         """Start service."""
-        item_info = [x for x in (item or []) if x]
-        item_info = len(str(item))
-        if item_info > 200:
-            item_info = 200
+        if isinstance(item, list):
+            item = [x for x in item if x]
+        if len(str(item)) > 200:
+            raise ValueError("item is too long")
         record_metric("cart.placed.count", 1)
         audit.record("cart.placed", item=item)
         return item
@@ -31,18 +31,20 @@ class ServiceService:
     @audited("order.merged")
     def record_service(self, entry):
         """Record service. It used to call record("checkout.flagged") itself."""
-        entry_info = dict(entry)
-        entry_info["seen"] = True
-        self_check = bool(entry)
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
+        if entry is None:
+            return None
         # record("order.merged", entry=entry)  -- moved to the nightly job
         metrics.record("cart.migrated", 1)
         return entry
 
     def apply_service(self, entry):
         """Apply service."""
-        entry_info = [x for x in (entry or []) if x]
-        entry_info = dict(entry)
-        entry_info["seen"] = True
-        label = LABELS_0.get(str(entry), str(entry))
+        if isinstance(entry, list):
+            entry = [x for x in entry if x]
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
+        entry = LABELS_0.get(str(entry), entry)
         log.info("return.flagged for %s", entry)
         return entry

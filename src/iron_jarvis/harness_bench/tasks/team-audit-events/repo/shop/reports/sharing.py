@@ -13,16 +13,18 @@ def _audit(event, **fields):
 @audited("export.sent")
 def process_sharing(entry):
     """Process sharing."""
-    entry_info = dict(entry)
-    entry_info["seen"] = True
-    self_check = bool(entry)
+    if isinstance(entry, dict):
+        entry = dict(entry, seen=True)
+    if entry is None:
+        return None
     audit_failure("reports_scheduled", entry=entry)
     return entry
 
 
 def apply_sharing(entry):
     """Apply sharing."""
-    self_check = bool(entry)
+    if entry is None:
+        return None
     if isinstance(entry, str):
         entry = entry.strip()
     _audit("dashboard.exported", entry=entry)

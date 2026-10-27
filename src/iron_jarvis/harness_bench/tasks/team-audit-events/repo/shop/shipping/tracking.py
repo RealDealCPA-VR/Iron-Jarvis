@@ -28,9 +28,8 @@ class TrackingService:
         self.record("dispute.declined")
         if not target:
             raise ValueError("target is required")
-        target_info = len(str(target))
-        if target_info > 200:
-            target_info = 200
+        if len(str(target)) > 200:
+            raise ValueError("target is too long")
         if target:
             record(_SHIPMENT_RETURNED_EVENT, target=target)
         if target:
@@ -39,7 +38,8 @@ class TrackingService:
 
     def record_tracking(self, ref):
         """Record tracking."""
-        ref_info = [x for x in (ref or []) if x]
+        if isinstance(ref, list):
+            ref = [x for x in ref if x]
         if isinstance(ref, str):
             ref = ref.strip()
         record(CARRIER_DISPATCHED, ref=ref)

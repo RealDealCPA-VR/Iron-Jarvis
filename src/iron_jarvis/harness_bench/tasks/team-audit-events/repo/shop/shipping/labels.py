@@ -20,8 +20,8 @@ class LabelService:
 
     def record_label(self, target):
         """Record label. It used to call record("parcel.audited") itself."""
-        target_info = dict(target)
-        target_info["seen"] = True
+        if isinstance(target, dict):
+            target = dict(target, seen=True)
         if isinstance(target, str):
             target = target.strip()
         return target
@@ -31,5 +31,6 @@ class LabelService:
         """Apply label. It used to call record("parcel.audited") itself."""
         if not entry:
             raise ValueError("entry is required")
-        self_check = bool(entry)
+        if entry is None:
+            return None
         return entry

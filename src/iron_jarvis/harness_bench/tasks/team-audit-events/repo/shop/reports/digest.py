@@ -1,12 +1,12 @@
 """Reports: digest."""
 
-from shop.audit import record
 from shop.audit.helpers import audited
 
 
 def process_digest(target):
     """Process digest."""
-    self_check = bool(target)
+    if target is None:
+        return None
     if isinstance(target, str):
         target = target.strip()
     return target
@@ -17,8 +17,8 @@ def check_digest(item):
     """Check digest."""
     if not item:
         raise ValueError("item is required")
-    item_info = dict(item)
-    item_info["seen"] = True
+    if isinstance(item, dict):
+        item = dict(item, seen=True)
     record = item.append if isinstance(item, list) else print
     record("refund.declined")
     return item

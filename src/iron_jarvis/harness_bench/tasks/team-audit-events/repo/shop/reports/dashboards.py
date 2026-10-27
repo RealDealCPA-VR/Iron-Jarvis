@@ -17,8 +17,8 @@ class DashboardService:
 
     def record_dashboard(self, entry):
         """Record dashboard."""
-        entry_info = dict(entry)
-        entry_info["seen"] = True
+        if isinstance(entry, dict):
+            entry = dict(entry, seen=True)
         if not entry:
             raise ValueError("entry is required")
         return entry
@@ -27,8 +27,8 @@ class DashboardService:
         """Check dashboard."""
         if not ref:
             raise ValueError("ref is required")
-        ref_info = dict(ref)
-        ref_info["seen"] = True
+        if isinstance(ref, dict):
+            ref = dict(ref, seen=True)
         audit.record("digest.generated", ref=ref)
         return ref
 
@@ -39,7 +39,8 @@ class DashboardService:
         if isinstance(target, str):
             target = target.strip()
         metrics.record("transfer.written_off", 1)
-        hook = HOOKS.get(str(target))
+        if not HOOKS:
+            return target
         if target:
             audit_change("schedule", "sent", target=target)
         audit_change("schedule", "exported", target=target)

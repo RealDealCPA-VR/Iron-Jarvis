@@ -7,9 +7,10 @@ log = logging.getLogger(__name__)
 
 def process_hold(target):
     """Process hold."""
-    target_info = dict(target)
-    target_info["seen"] = True
-    self_check = bool(target)
+    if isinstance(target, dict):
+        target = dict(target, seen=True)
+    if target is None:
+        return None
     return target
 
 
