@@ -274,6 +274,12 @@ async def test_reads_that_ran_together_overlap_on_the_axis(app, work, monkeypatc
     chat_routes = importlib.import_module("iron_jarvis.daemon.routes.chat")
     clock = _StepClock()
     monkeypatch.setattr(chat_routes, "time", clock)
+    # v1.399.3: the REPLY's clock (harness/timeline.ReplyClock) caps each
+    # step's length at what it saw between the step's start and finish. On
+    # Windows asyncio.sleep(0.4) can end a few ms EARLY, so a reply clock on
+    # the real perf_counter cut the lane's 400 ms to 397 (v1.399.2's Tests
+    # gate). Both clocks read the same injected time.
+    monkeypatch.setattr(TL, "time", clock)
     sid = new_session(app, work)
     tool = app.state.platform.registry.get("read_file")
     real = tool.execute

@@ -4349,6 +4349,16 @@ does not need a bump, stop and bump it.
   hardware. The test now reads the lane's clock as an injected stand-in
   (`_StepClock`, each read moves it to its own end), so the lengths are
   exact; dropping the lane's own-length measurement still turns it red.
+  v1.399.3 (test-only): v1.399.2's Tests gate went red on the same test
+  (`ms` 397, not 400). The LANE's clock was injected, but the REPLY clock
+  (`harness/timeline.ReplyClock`, bound to its module's `time.perf_counter`
+  at construction) still read the real one, and `step_finished` caps a
+  step's length at the span IT saw — on Windows `asyncio.sleep(0.4)` can
+  end a few ms early (the v1.266.1 rule), so 400 became 397. The test now
+  injects the same clock into `timeline.time` too. A read that ends 20 ms
+  early reproduced CI's failure on the old shape (394 ms); the new shape
+  passes with it, and dropping the lane's own length still goes red. When a
+  test injects a clock, inject it into EVERY clock that bounds the number.
 
 - **A coding-session reply is a reply the whole app can see; a failed one
   has a press; the view's name lives in ONE constant** (v1.389.0, the v1.388.0
