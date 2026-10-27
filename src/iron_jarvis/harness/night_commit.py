@@ -143,7 +143,21 @@ def _staged(wt: Path) -> "list[tuple[str, str, str]]":
     got = _g(["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev"], wt, reads=True)
     if not got.ok:
         raise GitRefused("Git could not list what it was about to commit.", 409)
-    tokens = _split_z(got.out)
+    return _parse_raw(got.out)
+
+
+def _committed(wt: Path) -> "list[tuple[str, str, str]]":
+    """``(status, new mode, path)`` of every change the newest commit made."""
+    from .branches import GitRefused, _g
+
+    got = _g(["diff", "--raw", "-z", "--no-renames", "--no-abbrev", "HEAD~1", "HEAD"], wt, reads=True)
+    if not got.ok:
+        raise GitRefused("Git could not list what it committed.", 409)
+    return _parse_raw(got.out)
+
+
+def _parse_raw(out_text: str) -> "list[tuple[str, str, str]]":
+    tokens = _split_z(out_text)
     out: list[tuple[str, str, str]] = []
     i = 0
     while i + 1 < len(tokens):
@@ -158,8 +172,8 @@ def _staged(wt: Path) -> "list[tuple[str, str, str]]":
     return out
 
 
-def _old_blobs(wt: Path, paths: list[str]) -> dict[str, bytes]:
-    """The committed (HEAD) copy of each path, in ONE ``git cat-file --batch``."""
+def _old_blobs(wt: Path, paths: list[str], rev: str = "HEAD") -> dict[str, bytes]:
+    """The committed (``rev``) copy of each path, in ONE ``git cat-file --batch``."""
     from ..git.integration import git_env, run_git
 
     wanted = [p for p in paths if "\n" not in p and "\r" not in p]
@@ -170,7 +184,7 @@ def _old_blobs(wt: Path, paths: list[str]) -> dict[str, bytes]:
     res = run_git(
         ["-c", "core.quotepath=off", "cat-file", "--batch"], wt, timeout=120.0,
         env=git_env({"GIT_OPTIONAL_LOCKS": "0"}), identity=False,
-        input="".join(f"HEAD:{p}\n" for p in wanted).encode("utf-8"), keep_bytes=True,
+        input="".join(f"{rev}:{p}\n" for p in wanted).encode("utf-8"), keep_bytes=True,
     )
     if not res.ok:
         raise OSError("git could not read the committed copies")
@@ -203,7 +217,35 @@ def screen(wt: Path) -> list[dict[str, str]]:
     unstaged entirely) when that cannot be made sure of. BLOCKING."""
     from .branches import GitRefused, _g
 
-    entries = _staged(wt)
+    left = _judge(wt, _staged(wt), "HEAD")
+    if not left:
+        return []
+    paths = sorted(left)
+    unstaged = _g(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], wt,
+                  input="\0".join(paths).encode("utf-8"))
+    still = {rel for _s, _m, rel in _staged(wt)} if unstaged.ok else set(paths)
+    if not unstaged.ok or still & set(paths):
+        _g(["reset", "-q"], wt)  # nothing half-screened stays staged
+        raise GitRefused(
+            "Iron Jarvis could not leave out the files it must not commit, so it committed nothing.", 409,
+        )
+    return [{"path": rel, "why": left[rel]} for rel in paths]
+
+
+def check_commit(wt: Path) -> list[dict[str, str]]:
+    """What the NEWEST commit (the night's own, just made) holds that a night
+    commit must never take, by the same rules as :func:`screen` — the
+    repository's own hooks ran between the screen and the commit, and a hook
+    that stages everything again (``git add -A`` after a formatter) put back
+    what the screen left out. ``[]`` when the commit is clean. BLOCKING."""
+    left = _judge(wt, _committed(wt), "HEAD~1")
+    return [{"path": rel, "why": left[rel]} for rel in sorted(left)]
+
+
+def _judge(wt: Path, entries: "list[tuple[str, str, str]]", old_rev: str) -> dict[str, str]:
+    """``{path: why}`` of the changes (``entries``) a night commit must not
+    take; a changed file's secrets count only when ``old_rev``'s copy did not
+    hold them. BLOCKING."""
     left: dict[str, str] = {}
     to_read: list[tuple[str, str]] = []
     for status, mode, rel in entries:
@@ -225,7 +267,7 @@ def screen(wt: Path) -> list[dict[str, str]]:
             left[rel] = LARGE
             continue
         to_read.append((status, rel))
-    old = _old_blobs(wt, [rel for status, rel in to_read if status != "A"]) if to_read else {}
+    old = _old_blobs(wt, [rel for status, rel in to_read if status != "A"], old_rev) if to_read else {}
     for status, rel in to_read:
         try:
             data = (wt / rel).read_bytes()
@@ -240,18 +282,7 @@ def screen(wt: Path) -> list[dict[str, str]]:
             found -= secrets_in(before)
         if found:
             left[rel] = SECRET
-    if not left:
-        return []
-    paths = sorted(left)
-    unstaged = _g(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], wt,
-                  input="\0".join(paths).encode("utf-8"))
-    still = {rel for _s, _m, rel in _staged(wt)} if unstaged.ok else set(paths)
-    if not unstaged.ok or still & set(paths):
-        _g(["reset", "-q"], wt)  # nothing half-screened stays staged
-        raise GitRefused(
-            "Iron Jarvis could not leave out the files it must not commit, so it committed nothing.", 409,
-        )
-    return [{"path": rel, "why": left[rel]} for rel in paths]
+    return left
 
 
 def why_words(why: str) -> str:
@@ -281,5 +312,5 @@ def left_out_words(left: list[dict[str, Any]], total: "int | None" = None) -> st
 
 __all__ = [
     "DEPENDENCY", "LARGE", "MAX_COMMIT_FILE_BYTES", "MAX_LEFT_OUT_KEPT", "SECRET", "left_out_words",
-    "screen", "secret_name", "secrets_in", "why_words",
+    "check_commit", "screen", "secret_name", "secrets_in", "why_words",
 ]

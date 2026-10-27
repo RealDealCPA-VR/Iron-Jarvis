@@ -431,7 +431,8 @@ async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, An
         try:
             job = asyncio.ensure_future(asyncio.to_thread(
                 _locked, thread_id,
-                lambda: B.commit(facts, message, screen=NC.screen, timeout=NIGHT_COMMIT_S, on_spawn=on_spawn),
+                lambda: B.commit(facts, message, screen=NC.screen, timeout=NIGHT_COMMIT_S, on_spawn=on_spawn,
+                                 recheck=NC.check_commit),
             ))
             try:
                 while True:
@@ -478,6 +479,7 @@ async def commit_for_night(d: Any, thread_id: str, message: str) -> dict[str, An
         if detail:
             words += f" ({detail[:200]})"
         out["note"] = words + " Its changes are still in its branch folder."
+        out["left_out"] = list(getattr(exc, "left_out", None) or [])
         return out
     except Exception as exc:  # noqa: BLE001 — a commit never breaks the settle
         log.warning("a night task's commit failed (%s)", thread_id, exc_info=True)

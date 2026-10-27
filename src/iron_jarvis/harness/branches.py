@@ -1112,7 +1112,7 @@ def clean_message(text: str) -> str:
 
 
 def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: float = START_S,
-           on_spawn: Any = None) -> dict[str, Any]:
+           on_spawn: Any = None, recheck: Any = None) -> dict[str, Any]:
     """Commit everything in the worktree on the session's branch (``git add
     -A`` then ``git commit -F -``) as the user (their own git identity; Iron
     Jarvis's default name only when git names no one — said in ``note``).
@@ -1125,7 +1125,10 @@ def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: 
     (``harness/night_commit.screen``; answered as ``left_out``, and carried on
     a :data:`NOTHING_TO_COMMIT` refusal as ``exc.left_out``); ``timeout``
     bounds the commit (its hooks); ``on_spawn(proc)`` publishes the commit's
-    process so Emergency stop can end it (``procs.run``'s seam)."""
+    process so Emergency stop can end it (``procs.run``'s seam);
+    ``recheck(wt)`` judges what WENT INTO the commit (a hook may have staged
+    again what the screen left out) and the commit is undone when it holds
+    anything (``night_commit.check_commit``)."""
     wt = _live(facts)
     msg = str(message or "").replace("\r\n", "\n").strip()
     if not msg:
@@ -1165,6 +1168,38 @@ def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: 
     if not got.ok:
         raise GitRefused("Git did not make the commit.", 409, _masked(got.err or got.out))
     sha = _ref_sha(wt, "HEAD")
+    if recheck is not None:
+        # v1.399.0 review: the repository's hooks ran between the screen and
+        # the commit — one that stages everything again put back what the
+        # screen left out. What WENT IN is checked; a commit holding what must
+        # not be committed is undone (Iron Jarvis's own, seconds old, never
+        # pushed — only while HEAD is still that commit on the branch).
+        try:
+            bad = list(recheck(wt) or [])
+        except Exception as exc:  # noqa: BLE001 — an unchecked commit is not kept
+            bad = [{"path": "?", "why": f"could not be checked ({type(exc).__name__})"}]
+        if bad:
+            undone = False
+            if _ref_sha(wt, "HEAD") == sha:
+                with contextlib.suppress(GitRefused):
+                    _require_on_branch(facts, wt)
+                    undone = _g(["reset", "-q", "--soft", "HEAD~1"], wt).ok
+            if undone:
+                _g(["reset", "-q"], wt)
+                refused = GitRefused(
+                    "A git hook of the repository put back files Iron Jarvis had left out ("
+                    + ", ".join(str(b.get("path")) for b in bad[:5])
+                    + "), so Iron Jarvis undid its own commit and committed nothing.", 409,
+                )
+            else:
+                refused = GitRefused(
+                    "A git hook of the repository put back files Iron Jarvis had left out ("
+                    + ", ".join(str(b.get("path")) for b in bad[:5])
+                    + f") and Iron Jarvis could not undo that commit ({sha[:12]}): do not push this branch "
+                    "before you look at it.", 409,
+                )
+            refused.left_out = left_out or bad  # type: ignore[attr-defined]
+            raise refused
     files = _g(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], wt, reads=True)
     out: dict[str, Any] = {
         "committed": True, "sha": sha[:12], "subject": msg.split("\n", 1)[0][:300],

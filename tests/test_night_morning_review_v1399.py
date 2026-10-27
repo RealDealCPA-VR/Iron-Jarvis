@@ -632,6 +632,40 @@ async def test_a_task_that_ran_local_only_keeps_its_words_off_the_phone_even_whe
     assert "acme" not in payload and ended["branch"] not in payload, payload
 
 
+@pytest.mark.parametrize("secret_file", [".env", "config.py"])
+async def test_a_hook_that_stages_everything_again_never_slips_a_secret_into_the_commit(
+        tmp_path, monkeypatch, secret_file):
+    """The repository's own pre-commit hook runs `git add -A` (a formatter
+    hook often does): it stages what the screen left out back into the
+    commit — a new secret file, or a key added to a file the branch already
+    tracked. What WENT INTO the commit is checked again; a commit that holds
+    what must not be committed is undone (Iron Jarvis's own, seconds old,
+    never pushed) and the work stays in the branch folder."""
+    repo = make_repo(tmp_path / "proj")
+    (repo / "config.py").write_bytes(b"DEBUG = True\n")
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", "config", cwd=repo)
+    _hook(repo, "pre-commit", "git add -A\n")
+    content = f"KEY={OPENAI_SHAPE}\n" if secret_file == ".env" else f'DEBUG = True\nAWS = "{AWS_SHAPE}"\n'
+    shape = OPENAI_SHAPE if secret_file == ".env" else AWS_SHAPE
+    app, d = await _night(tmp_path, monkeypatch, {"TASK-RESTAGE": [
+        _write("r1", secret_file, content),
+        _write("r2", "ok.txt", "ok\n"),
+        "Done TASK-RESTAGE.",
+    ]})
+    task = await _add(app, repo, "TASK-RESTAGE: write two files")
+    await night_routes.night_pass(d)
+    ended = await _ended(app, d, task["id"])
+    history = git("log", "-p", "--format=%B", f"main..{ended['branch']}", cwd=repo)
+    assert shape not in history, history
+    assert secret_file not in _committed(repo, ended["branch"])
+    assert ended["commit_sha"] == "", ended["notes"]
+    assert "hook" in ended["morning"]["commit_note"], ended["morning"]["commit_note"]
+    worktree = Path(setup_of(app, ended["thread_id"])["git"]["worktree"])
+    assert (worktree / secret_file).read_text() == content and (worktree / "ok.txt").is_file()
+    assert git("diff", "--cached", "--name-only", cwd=worktree) == ""
+
+
 async def test_a_screen_whose_unstaging_fails_commits_nothing(tmp_path, monkeypatch):
     """If git cannot leave out what must not be committed, NOTHING is
     committed — never the whole folder with the secret in it."""
