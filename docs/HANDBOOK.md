@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.398.1 (2026-10-25).*
+holds itself to. Current as of v1.399.0 (2026-10-25).*
 
 ---
 
@@ -1898,6 +1898,55 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Night shift: the morning (v1.399.0)
+
+When a night task ends, Iron Jarvis saves its work, and in the morning one
+summary tells you how the night went.
+
+- **Each task's work is saved on its own branch.**
+  - Iron Jarvis commits it the way the Commit button does, using your task's
+    words as the message.
+  - It never pushes and never merges. Pushing and pull requests are yours.
+  - A task that failed or needs you is saved too, so nothing is lost.
+  - Nothing changed: nothing is committed, and the row says so.
+  - If the commit can't be made (for example, a hook refused it or took
+    longer than 2 minutes), the row says why, and the work stays in the
+    branch folder for you.
+- **Some files are left out of the night's commit.** They stay in the branch
+  folder, uncommitted, and the row names each one with its reason:
+  - files that look like secrets (`.env`, private keys, saved passwords) or
+    new text that looks like a key or password;
+  - files over 50 MB;
+  - new files inside dependency or cache folders, like `node_modules`.
+
+  This check knows common secret shapes only. Look at a night branch before
+  you push it.
+- **One summary per night.** It comes when the night's last task ends, or
+  when the window closes, whichever is first.
+  - You get one notice: one row in the bell, a desktop notice if no window
+    is open, and one phone message if a phone channel is set up. Never one
+    per task.
+  - A task that ran with **Local only** on appears on the phone only as "A
+    Local only task: open Iron Jarvis on this PC to see it". Its words stay
+    on this PC.
+- **The Last night view.** In Coding sessions, open **Last night** (under
+  Tonight).
+  - Failed tasks and tasks that need you come first.
+  - Each row shows the branch, whether the task finished, whether its tests
+    passed (or "not trusted"), the files changed, how long it ran, what it
+    used on each account, and what needs you. A change to your main folder
+    is shown in words on the row, never folded away.
+  - Buttons: **Open**, **Changes**, **Push**, **Open a pull request**, and
+    **Throw away** (two presses: the folder goes to the trash, and the
+    branch is kept).
+  - Older nights are listed below. The last 14 are kept.
+- **Your main folder is checked again after the commit**, so a commit hook
+  that writes there is caught too. A command that adds a git hook or
+  changes your repository's git settings also counts as a change to your
+  main folder, because those are shared with every branch.
+- **Emergency stop** also stops a commit that is still running. The work is
+  then left uncommitted, and the row says so.
+
 ## Night shift: the Tonight list (v1.398.0)
 
 Queue coding tasks before bed, and they run overnight, each on its own
@@ -1940,8 +1989,8 @@ branch.
   yourself is never stopped.
 - **The PC stays awake** while a night task runs, and from 6 hours before
   the window opens while one is queued.
-- **Coming in the next release:** each finished task committed to its
-  branch, and one morning summary.
+- **In the morning**, each task's work is already saved on its branch and
+  one summary tells you how the night went: see the next section.
 
 ## Try one task on several models (v1.397.0)
 

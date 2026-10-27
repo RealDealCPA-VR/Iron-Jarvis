@@ -3699,6 +3699,69 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **NIGHT SHIFT N2: Iron Jarvis commits each ended night task to ITS OWN
+  branch (screened), and ONE summary per night is announced ONCE** (v1.399.0,
+  phase N2 of `docs/NIGHT-SHIFT-PLAN.md`, decision 2; a doer + a reviewer
+  that found 12 more defects, each red first). COMMIT
+  (`build_git.commit_for_night`, never raises; `harness/night_commit.py`):
+  at settle, through the Commit button's own `branches.commit` under the
+  session's git lock, message from the task's words (masked, control chars
+  dropped, via stdin `-F -`, a night trailer), never a push or merge; done,
+  needs-you and failed are all committed; nothing changed = no commit + a
+  note; refused = a note in words, work left in the folder; NO commit under
+  Emergency stop (a watcher kills the commit's tree; git runs
+  `breakaway_ok=False`; bounded 120 s). `night_commit.screen` runs AFTER
+  staging for the NIGHT's commit only (a person's Commit press is unchanged)
+  and unstages secret-named files (`.env*` except example/sample/template,
+  private keys, `.netrc`, `.npmrc`, credentials, secrets.*), ADDED text
+  holding a secret shape (the mask shapes + private-key block + long
+  key=value + URL password; in a tracked file only values the old copy did
+  not hold), files > 50 MB, new files in dependency/cache folders; left-out
+  files stay uncommitted and are NAMED on the note and the row;
+  `check_commit` judges what really went in (vs `HEAD~1`) and undoes Iron
+  Jarvis's own seconds-old unpushed commit (soft reset) when a hook re-staged
+  a secret. The commit refuses in words when the worktree's HEAD is on
+  another branch, detached or gone. The N1 main-folder guard is read AGAIN
+  after the commit (a post-commit hook writing into main is caught; the
+  night's own `ij/` commit never counts) and now snapshots `.git/hooks`
+  (names/sizes/times, never contents) + a digest of `.git/config` — shared
+  with main, so a planted hook is a main change; an older snapshot without
+  them is never read as a change. SUMMARY (`harness/night_morning.py`,
+  `NightSummaryRecord` late model keyed by `night` = the local date the
+  window OPENED; `NightTaskRecord.night/commit_sha/morning_json` additive):
+  built only from records (task notes, reply lines' finish + usage,
+  `branches.branch_summary`, the guard), ready when the night's last task
+  ends or the window closes, whichever first; rows re-derived when stored
+  state differs (`rows_differ`); a stopped row leads with its reason; last
+  14 kept; a pruned task keeps its row. NOTICE: event `build.night_summary`
+  (no session id; words written ONCE by `notice_words`), a default alert;
+  `bell_pings`/`bell_attention` true (one-notice fixture case
+  `night-summary`), main.js `RUN_OUTCOME_AUDIT_TYPES` + `runOutcomeNotice`;
+  the CLAIM (`notified_at`) is written before the publish and GIVEN BACK if
+  the publish fails, and every pass announces any recent unannounced
+  summary (a crash exactly between claim and publish loses that one notice;
+  the view still has it); only tonight's/last night's is announced. LOCAL
+  ONLY is recorded at task end and re-read at send: such a task's words and
+  branch name never reach the phone, a webhook or the log ("A Local only
+  task: open Iron Jarvis on this PC to see it"). A night turn raises no
+  `build.turn_finished`. VIEW: `LastNightList.tsx` (Coding sessions, under
+  Tonight; `/terminals?night=<date>`; failed, needs you, running, done,
+  stopped; Open / Changes (the session's Changes pane via `choosePaneNext`) /
+  Push / Open a pull request / Throw away = the existing Discard, two
+  presses, branch kept); `GET /build/night/summaries`. OPEN: the phone
+  message can come at ~1 AM (announced when the last task ends, not at
+  window close — the user's call); a task after the summary updates its row
+  with no second notice; secrets in unknown shapes are still committed;
+  attempts' own branches are not committed; a user with an explicit
+  `comm.event_types` list gets no phone message; per-task stall and
+  account-limit notices still fire at night; a GPG-signing commit may pop a
+  passphrase window (bounded 120 s); not driven in the packaged app, with a
+  real phone or real GitHub. Pins: `tests/test_night_morning{,_run,
+  _review}_v1399.py`, `dashboard/__tests__/last-night-v1399.test.tsx` (+
+  fixture `last-night-v1399.json`), e2e `dashboard/e2e/ij-harness-last-night.spec.ts`;
+  moved on purpose: `test_one_notice_v13600` (audit types),
+  `test_integrate_wave4_v13540` (default-alert table).
+
 - **NIGHT SHIFT N1: a queue of coding tasks that run overnight on their own
   branches; file edits and commands run unasked, EVERYTHING else is carded
   and declined; the main folder is WATCHED** (v1.398.0, phase N1 of
