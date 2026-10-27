@@ -78,6 +78,17 @@ export const PANE_TABS: readonly { value: PaneTab; label: string }[] = [
 
 const TAB_KEY = "ij.build.pane";
 
+/** v1.399.0 (night shift N2): open the NEXT session shown on this pane tab —
+ *  Last night's "Changes" opens the task's session on its Changes pane, whose
+ *  Branch view is a live branch's first view (the branch's whole diff). */
+export function choosePaneNext(tab: PaneTab): void {
+  try {
+    window.localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    /* the session opens on its usual tab */
+  }
+}
+
 function readTab(): PaneTab {
   try {
     const v = window.localStorage.getItem(TAB_KEY);

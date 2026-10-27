@@ -90,7 +90,10 @@ ENDED_SHOWN_DAYS = 3
 
 #: The note kinds (the morning's sections, N2).
 NOTE_KINDS = ("declined", "unanswered", "low_trust", "limit", "env", "error", "stopped", "emergency",
-              "restart", "account", "tests", "info", "outside")
+              "restart", "account", "tests", "info", "outside",
+              # v1.399.0 (N2): what Iron Jarvis's own commit of the task's
+              # work did (``harness/night_morning``).
+              "commit")
 
 #: The command tools the night posture grants for the turn (decision 4):
 #: "runs commands inside its own branch folder without asking" — the model's
@@ -163,6 +166,18 @@ class NightTaskRecord(SQLModel, table=True):
     #: v1.398.0 review: the running time of the task's turns that ended, in
     #: seconds — its time limit is the TASK's, across every turn.
     ran_s: float = 0.0
+    #: v1.399.0 (N2, the morning): the night this task ran in — the LOCAL
+    #: date its night window opened (``night_morning.night_key``), written
+    #: when it starts. "" (NULL on an upgraded table) on a task an older Iron
+    #: Jarvis started: derived from ``started_at`` then.
+    night: str = ""
+    #: v1.399.0: the commit Iron Jarvis made of the task's work on its own
+    #: branch when it ended (decision 2), "" when none.
+    commit_sha: str = ""
+    #: v1.399.0: what the morning summary reads about the task, written when
+    #: it ends (``night_morning``): tests, files changed, usage per account,
+    #: the commit — read off its records, never a model's words.
+    morning_json: str = ""
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     started_at: datetime | None = None
@@ -188,6 +203,16 @@ def _notes(row: Any) -> list[dict[str, Any]]:
     except (TypeError, ValueError):
         return []
     return [n for n in raw if isinstance(n, dict)] if isinstance(raw, list) else []
+
+
+def morning_of(row: Any) -> dict[str, Any]:
+    """The task's morning facts (``morning_json``, v1.399.0), {} when none.
+    Never raises."""
+    try:
+        raw = json.loads(getattr(row, "morning_json", "") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def try_on_of(row: Any) -> list[dict[str, str]]:
@@ -222,6 +247,10 @@ def view(row: Any) -> dict[str, Any]:
         # one fact the morning must never miss (the list shows it first).
         "main_changed": any(n.get("kind") == "outside" for n in _notes(row)),
         "ran_s": round(float(getattr(row, "ran_s", 0.0) or 0.0), 3),
+        # v1.399.0 (N2): the night it ran in, its commit, the morning's facts.
+        "night": str(getattr(row, "night", "") or ""),
+        "commit_sha": str(getattr(row, "commit_sha", "") or ""),
+        "morning": morning_of(row),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
         "started_at": _iso(row.started_at),
@@ -401,17 +430,20 @@ def move_task(engine: Any, task_id: str, direction: str) -> list[dict[str, Any]]
         return [view(r) for r in _queued_rows(db)]
 
 
-def mark_running(engine: Any, task_id: str) -> bool:
+def mark_running(engine: Any, task_id: str, night: str = "") -> bool:
     """queued → running, as one compare-and-set (two passes never start one
-    task twice). BLOCKING."""
+    task twice). ``night`` (v1.399.0): the night it runs in. BLOCKING."""
     from sqlalchemy import update
 
     now = utcnow()
+    values: dict[str, Any] = {"state": RUNNING, "started_at": now, "updated_at": now}
+    if night:
+        values["night"] = str(night)
     with session_scope(engine) as db:
         res = db.exec(
             update(NightTaskRecord)  # type: ignore[call-overload]
             .where(NightTaskRecord.id == str(task_id), NightTaskRecord.state == QUEUED)
-            .values(state=RUNNING, started_at=now, updated_at=now)
+            .values(**values)
         )
         db.commit()
         return bool(getattr(res, "rowcount", 0))
@@ -462,6 +494,28 @@ def add_ran(engine: Any, task_id: str, seconds: float) -> None:
             db.commit()
     except Exception:  # noqa: BLE001 — the turn's end never fails over it
         log.warning("a night task's running time could not be kept", exc_info=True)
+
+
+def set_morning(engine: Any, task_id: str, facts: dict[str, Any], *, commit_sha: str = "") -> None:
+    """Keep the task's morning facts and its commit (v1.399.0). BLOCKING;
+    never raises."""
+    try:
+        text = json.dumps(facts or {})
+    except (TypeError, ValueError):
+        return
+    try:
+        with _RECORD_LOCK, session_scope(engine) as db:
+            row = db.get(NightTaskRecord, str(task_id or ""))
+            if row is None:
+                return
+            row.morning_json = text
+            if commit_sha:
+                row.commit_sha = str(commit_sha)
+            row.updated_at = utcnow()
+            db.add(row)
+            db.commit()
+    except Exception:  # noqa: BLE001 — the morning's facts never break the settle
+        log.warning("a night task's morning facts could not be kept", exc_info=True)
 
 
 def main_before(engine: Any, task_id: str) -> str:
@@ -1032,6 +1086,7 @@ __all__ = [
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_task", "flush_notes", "get_task",
     "last_reply_line", "list_tasks", "mark_running", "max_at_once", "move_task", "note_unattended_turn",
-    "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for", "set_session",
+    "morning_of", "outcome_of", "posture_setup", "remove_task", "reset_turn", "running_task_for",
+    "set_morning", "set_session",
     "set_turn", "stop_unattended_turns", "task_minutes", "try_on_of", "unattended_turns", "view",
 ]
