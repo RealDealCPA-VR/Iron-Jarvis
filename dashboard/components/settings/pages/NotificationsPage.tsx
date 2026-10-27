@@ -214,6 +214,11 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   { key: "goal.satisfied", label: "A goal was achieved" },
   { key: "goal.tripped", label: "A goal hit its safety breaker" },
   { key: "goal.iteration_refused", label: "A goal run was held back (budget or state)" },
+  // v1.400.3: the night shift's ONE message a night (DEFAULT_ALERT_EVENTS has
+  // had it since v1.399.0). Without a box here, ticking any smaller set saved
+  // a list without it and the summary silently stopped. This list must match
+  // DEFAULT_ALERT_EVENTS exactly (tests/test_notification_events_v14003.py).
+  { key: "build.night_summary", label: "The night shift's summary (one message a night)" },
 ];
 
 /** What the user READS on the telegram two-way fields (v1.136.0). The server's

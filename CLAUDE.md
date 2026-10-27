@@ -3884,6 +3884,15 @@ does not need a bump, stop and bump it.
   fixture `last-night-v1399.json`), e2e `dashboard/e2e/ij-harness-last-night.spec.ts`;
   moved on purpose: `test_one_notice_v13600` (audit types),
   `test_integrate_wave4_v13540` (default-alert table).
+  v1.400.3: the Notifications page's per-destination boxes
+  (`NotificationsPage.EVENT_LABELS`, "Send this destination") had no
+  `build.night_summary`, so ticking ANY smaller set saved an `events` list
+  without it and the phone's one message a night stopped silently. Added
+  ("The night shift's summary (one message a night)"), and
+  `tests/test_notification_events_v14003.py` pins the page's keys EQUAL to
+  `notifier.DEFAULT_ALERT_EVENTS` (a new default alert with no box fails it)
+  and drives a narrowed save through `POST /comm/channels`; all three red on
+  the old page.
   v1.399.1 (test-only; v1.399.0's Release gate went red, Tests green, nothing
   published): `test_profile_share_v1306::test_profile_change_rerenders_on_
   the_share_thread_never_the_loop` made two profile changes inside a 0.4 s

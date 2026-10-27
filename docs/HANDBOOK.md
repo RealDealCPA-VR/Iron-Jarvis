@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.2 (2026-10-25).*
+holds itself to. Current as of v1.400.3 (2026-10-25).*
 
 ---
 
@@ -736,6 +736,10 @@ with the request typed in.
   two-way Telegram chat is set up on one screen: after the chat ID is
   detected, tick the chat switch right under it and the allowed sender fills
   in from your own private chat (nothing to type, no Advanced fold).
+  Since v1.400.3 the destination's alert boxes (under Advanced, "Send this
+  destination") include **The night shift's summary**. With every box ticked a
+  destination gets every alert. Untick some and it gets only the ones still
+  ticked; before, any smaller set also silently dropped the night summary.
 - **A dead phone token is visible, and a dropped message says so**
   (v1.231.0): if your Telegram bot token is revoked or rotated (or your
   mailbox refuses the IMAP login), the Channels row turns red with **Not
