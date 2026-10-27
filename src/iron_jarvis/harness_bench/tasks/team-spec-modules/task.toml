@@ -1,0 +1,6 @@
+category = "feature"
+tier = "team"
+title = "Three independent modules from one specification: durations, versions and ranges, money allocation"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120
