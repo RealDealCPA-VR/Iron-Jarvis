@@ -1,0 +1,5 @@
+Our file-sync tool `syncer` is renaming its `max_retries` setting to `retry_limit` for release 2.4.0. `RENAME.md` is the whole plan: the six forms the name takes (keyword argument, attribute, config-file key, environment variable, command-line flag, the printed line) and their new names, how the five old names stay working for one release as deprecated aliases that warn exactly once per process each, what happens when the old and the new name are given together, and where the documentation may still mention the old names.
+
+Please do all of it: the package (`syncer/`), the command line, the existing tests (move them to the new names; keep every test), `README.md`, `docs/`, `examples/` and a `CHANGELOG.md` entry. Every rule in `RENAME.md` will be checked — each new name in each of its places, each alias and its single warning, the errors for old-plus-new, the printed line, and the old names left in the docs — with far more cases than `test_rename.py` (the first tests of the new names; they fail today). The code, the command line and the docs are separate pieces of work.
+
+When you are done every test must pass. Python 3.12, standard library only.

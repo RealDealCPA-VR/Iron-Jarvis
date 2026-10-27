@@ -1,0 +1,6 @@
+category = "trap"
+tier = "team"
+title = "Bring a colleague's eleven-file change into a project that moved on, and fix its three wrong edits"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120

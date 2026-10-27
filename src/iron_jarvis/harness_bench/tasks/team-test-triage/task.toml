@@ -1,0 +1,6 @@
+category = "bugfix"
+tier = "team"
+title = "About thirty failing tests from unrelated bugs in ten packages"
+timeout_s = 2400
+check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
+check_timeout_s = 120
