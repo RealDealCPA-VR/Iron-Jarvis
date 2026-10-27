@@ -219,6 +219,22 @@ def _phrase_found(text: str, entry: Any) -> bool:
     return any(" ".join(str(o).lower().split()) in lowered for o in options)
 
 
+def _answer_text(raw: bytes) -> str:
+    """An answer file's text, in the encoding it was written in (v1.400.2).
+
+    An agent on Windows writes ``answer.json`` however its shell writes files:
+    UTF-8, UTF-8 with a BOM, or the UTF-16 (with a BOM) that Windows
+    PowerShell 5.1's ``Out-File`` and ``>`` produce. Reading every file as
+    UTF-8 turned a right UTF-16 answer into "not valid JSON". JSON's own
+    detection (``json.detect_encoding``: the BOM, else the pattern of zero
+    bytes in the first four) decides; anything it cannot decode cleanly is
+    read as UTF-8 with replacement characters, as before."""
+    try:
+        return raw.decode(json.detect_encoding(raw))
+    except (UnicodeDecodeError, LookupError):
+        return raw.decode("utf-8", errors="replace")
+
+
 def run_rubric(task: Task, grade_dir: Path) -> dict[str, Any]:
     """Grade the answer file by the task's ``[rubric]`` — deterministic.
 
@@ -232,7 +248,7 @@ def run_rubric(task: Task, grade_dir: Path) -> dict[str, Any]:
     if not answer.is_file():
         part["reason"] = f"{rubric.get('answer_file')} was not written"
         return part
-    text = answer.read_text(encoding="utf-8", errors="replace")
+    text = _answer_text(answer.read_bytes())
     part["output"] = text[:OUTPUT_TAIL_CHARS]
     wrong: list[str] = []
     expected = rubric.get("json_equals")

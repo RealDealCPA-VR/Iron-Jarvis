@@ -3773,6 +3773,30 @@ does not need a bump, stop and bump it.
   it reads every source through one LF-normalising `read` and the windows
   are 300 / 1200. Both reproduced on this PC with the old shape (CI's exact
   errors) and green on the new one; a mutation of each fix goes red.
+  v1.400.2 (benchmark only): (1) an answer file is read in the encoding the
+  agent wrote it in — `grading._answer_text` (`json.detect_encoding`: UTF-8,
+  UTF-8 BOM, the UTF-16 Windows PowerShell 5.1's `Out-File`/`>` writes; an
+  undecodable file falls back to UTF-8 with replacement, as before) for every
+  `[rubric]`, and frontier-legacy-callers' check reads the BYTES like the team
+  checks (its hash moved). (2) `task.toml` takes `rounds` (1..1000,
+  `catalog.MAX_TASK_ROUNDS` == `chat_turn.MAX_TURN_ROUNDS` ==
+  `mode.BUILD_SAFETY_ROUNDS`, pinned); `catalog.rounds_for(task, budget)` =
+  max(runner budget, task rounds) — a task RAISES the budget, never lowers it;
+  the Jarvis runner passes it to the lane AND judges `cut_off` against it. The
+  six team tasks ask for 1000 (the product's own Build ceiling, so the
+  40-minute time limit decides; last night's fastest round was 3.6 s, so 60
+  could cut off a lone planner on the audit task); every other tier keeps 60
+  (its most rounds ever measured: 16). Members' step budgets are unchanged
+  (a piece is part of a task). The identity's `round_budget` stays the
+  runner's; the task's own value is in its content hash. Pins:
+  `tests/test_harness_bench_answers_and_rounds_v14002.py` (6 mutations red).
+  Same release (test-only): the full suite failed
+  `test_harness_bench_team_review_v1396::test_a_dry_run_says_what_it_checked_
+  and_what_it_cannot_know` once — an earlier test on its worker left a
+  "claude" refusal in `cli_auth.DEFAULT_PROBE` (the v1.396.0 shape, another
+  test); it now starts from an empty `_cache`/`_inflight`. A plugin that
+  plants that verdict before the test reproduced it on the old shape. EVERY
+  test that asserts the shared probe's state must start from an empty one.
 
 - **The chat toolbar stays ONE ROW; it gives up words one chip at a time,
   least needed first** (v1.400.0, a USER BUG: "Qwen3.8-27B (RTX)" + the

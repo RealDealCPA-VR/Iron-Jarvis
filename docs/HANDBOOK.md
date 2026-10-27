@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.1 (2026-10-25).*
+holds itself to. Current as of v1.400.2 (2026-10-25).*
 
 ---
 
@@ -1957,6 +1957,16 @@ How to use them:
   team and the planner alone.
 - **The team at work.** Each team's answer starts by saying in how many runs
   the planner handed at least one piece to a team member.
+- **No step limit on the team tasks (v1.400.2).** The other tiers give Jarvis
+  60 steps per task. The team tasks give it 1,000, the same ceiling a Build
+  reply has, so their 40-minute time limit is what decides. A planner working
+  alone no longer runs out of steps on a job a team would split. A task can
+  set its own `rounds` in `task.toml`; it can raise the runner's limit, never
+  lower it.
+- **Answer files in any encoding (v1.400.2).** A task that grades a written
+  answer (`answer.json`) now reads it whether it was saved as UTF-8, UTF-8
+  with a BOM, or UTF-16, the default for Windows PowerShell 5.1. Before, a
+  right answer saved by PowerShell failed as "not valid JSON".
 
 ## The chat box stays on one row (v1.400.0)
 

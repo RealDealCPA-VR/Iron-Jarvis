@@ -12,7 +12,9 @@ Each task is a folder under ``harness_bench/tasks/<task_id>/``:
 * ``task.toml`` — ``category``, ``title``, ``timeout_s``, the ``check`` command
   (an argv list; ``{python}`` is the grading interpreter) and its
   ``check_timeout_s``, and for read-and-explain tasks a ``[rubric]`` table that
-  grades an answer file deterministically — never a model call;
+  grades an answer file deterministically — never a model call; an optional
+  ``rounds`` (v1.400.2) gives the task more tool rounds than the runner's own
+  budget (:func:`rounds_for`);
 * ``setup/`` + a ``[setup]`` table (v1.383.0, the ``frontier`` tier) — a
   DETERMINISTIC step the bench runs in the fresh copy before the agent starts,
   for a tree too big to commit (a generated repository of ~2,000 files) or
@@ -103,6 +105,10 @@ class Task:
     setup_script: str = ""
     setup_seed: int = 0
     setup_timeout_s: float = 0.0
+    #: v1.400.2: the tool rounds the task asks for (0 = the runner's own
+    #: budget). A task can ask for MORE room than the runner gives, never less
+    #: (:func:`rounds_for`).
+    rounds: int = 0
 
     @property
     def repo_dir(self) -> Path:
@@ -219,6 +225,7 @@ def load_task(task_dir: Path) -> Task:
         if path.name.lower() in repo_names:
             raise TaskError(f"{where}: hidden file {path.name} has the same name as a repo file")
     script, seed, setup_timeout = _setup_table(meta.get("setup"), setup_dir, where)
+    rounds = _rounds(meta.get("rounds"), where)
     prompt = md_path.read_text(encoding="utf-8").strip()
     if not prompt:
         raise TaskError(f"{where}: task.md is empty")
@@ -237,7 +244,35 @@ def load_task(task_dir: Path) -> Task:
         setup_script=script,
         setup_seed=seed,
         setup_timeout_s=setup_timeout,
+        rounds=rounds,
     )
+
+
+#: The most tool rounds a task may ask for: the chat lane's own ceiling
+#: (``chat_turn.MAX_TURN_ROUNDS``, pinned equal) and the product's safety stop
+#: for a Build reply (``harness.mode.BUILD_SAFETY_ROUNDS``).
+MAX_TASK_ROUNDS = 1000
+
+
+def _rounds(value: Any, where: str) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_TASK_ROUNDS:
+        raise TaskError(f"{where}: rounds must be a whole number from 1 to {MAX_TASK_ROUNDS}")
+    return value
+
+
+def rounds_for(task: Task, budget: int) -> int:
+    """The tool rounds one run of ``task`` gets: the runner's ``budget``, or
+    the task's own ``rounds`` when that is larger (v1.400.2).
+
+    WHY: the team tier's jobs read or change dozens of files, and a planner
+    working alone can need more than the runner's 60 rounds where a team
+    would not — the benchmark would then measure a limit the product does not
+    have (a Build reply has had no step limit since v1.385.0, only a safety
+    stop at 1000). Those tasks ask for the product's own ceiling, so their
+    time limit is the bound that decides. A task never LOWERS the budget."""
+    return max(int(budget), int(task.rounds or 0))
 
 
 def _setup_table(setup: Any, setup_dir: Path, where: str) -> tuple[str, int, float]:

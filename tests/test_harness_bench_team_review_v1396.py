@@ -131,9 +131,14 @@ async def test_a_planner_model_claude_does_not_name_is_refused(world, tmp_path):
         await _run(world, _runner(world, tmp_path, planner_model="sonet"), names=[W.TASK_A], dry_run=True)
 
 
-async def test_a_dry_run_says_what_it_checked_and_what_it_cannot_know(world, tmp_path):
+async def test_a_dry_run_says_what_it_checked_and_what_it_cannot_know(world, tmp_path, monkeypatch):
     from iron_jarvis.providers import cli_auth
 
+    # DEFAULT_PROBE is one object per test process: start from an empty one,
+    # or a verdict an earlier test on this worker left (a scripted refusal)
+    # reads as one this dry run made (v1.400.2; the v1.396.0 lesson).
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_cache", {})
+    monkeypatch.setattr(cli_auth.DEFAULT_PROBE, "_inflight", set())
     res = await _run(world, _runner(world, tmp_path), names=[W.TASK_A], dry_run=True)
     text = "\n".join(res.plan_lines)
     assert world.calls == []

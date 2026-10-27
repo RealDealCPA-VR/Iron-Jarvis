@@ -2,5 +2,8 @@ category = "feature"
 tier = "team"
 title = "Port five independent string helpers from a JavaScript reference, edge cases and all"
 timeout_s = 2400
+# v1.400.2: the product's own ceiling for a Build reply, so the time limit
+# decides (catalog.rounds_for); the runner's 60 rounds stay for every other tier.
+rounds = 1000
 check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py"]
 check_timeout_s = 120

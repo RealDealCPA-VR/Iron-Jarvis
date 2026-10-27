@@ -70,7 +70,7 @@ from typing import Any, AsyncIterator
 from ..core import procs
 from ..core.claude_markers import drop_claude_session_markers
 from . import usage as _usage
-from .catalog import Task
+from .catalog import Task, rounds_for
 from .ledger import PLANNER, CallEntry, Rollout
 
 #: The tool rounds one benchmark turn gets — the IJ harness plan's Phase 4
@@ -915,6 +915,9 @@ class JarvisRunner:
             **({"reasoning": self.reasoning()} if self.reasoning() else {}),
         )
         deadline = time.monotonic() + float(timeout_s)
+        # v1.400.2: a task may ask for more rounds than the runner's budget
+        # (the team tier: the product's own ceiling); never fewer.
+        budget = rounds_for(task, self.round_budget)
         approvals = _approvals(SimpleNamespace(platform=self.platform))
         observed: dict[str, Any] = {}
         #: v1.396.0: the turn's helper rows by call id (``keep_helper``).
@@ -963,7 +966,7 @@ class JarvisRunner:
                 gen = await stream_chat_turn(
                     self.platform, BUILTIN_PERSONAS, body,
                     should_stop=lambda: time.monotonic() > deadline,
-                    round_budget=self.round_budget, stay_in_chat=True,
+                    round_budget=budget, stay_in_chat=True,
                     harness=self.dialect, session_id=session,
                 )
                 async with asyncio.timeout(float(timeout_s) + _GRACE_S):
@@ -1128,7 +1131,7 @@ class JarvisRunner:
         out.facts["finished"] = True
         # The agent used every round it was given (the turn then ended in
         # chat with one tool-less answer).
-        out.facts["cut_off"] = rounds >= self.round_budget
+        out.facts["cut_off"] = rounds >= budget
         if self.provider and out.answered_provider != self.provider:
             out.ok_run = False
             out.facts["answered_by"] = (

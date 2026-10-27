@@ -2,6 +2,9 @@ category = "explain"
 tier = "team"
 title = "Every audit event a sixty-module package writes, and which function writes it"
 timeout_s = 2400
+# v1.400.2: the product's own ceiling for a Build reply, so the time limit
+# decides (catalog.rounds_for); the runner's 60 rounds stay for every other tier.
+rounds = 1000
 check = ["{python}", "-I", "-m", "unittest", "discover", "-s", ".", "-p", "test_hidden_*.py"]
 check_timeout_s = 120
 

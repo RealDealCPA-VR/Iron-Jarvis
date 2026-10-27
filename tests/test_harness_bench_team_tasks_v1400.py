@@ -59,16 +59,18 @@ PATCH_BASE = FIXTURES / "harness_bench_team_patch_base"
 #: there do not apply and are brought in by hand.
 PATCH_CONFLICTS = {"README.md", "orderdesk/cli.py", "orderdesk/invoice.py", "orderdesk/shipping.py"}
 
-#: The content hash of every team task as v1.400.0 ships them.
+#: The content hash of every team task as v1.400.2 ships them (v1.400.2 gave
+#: each the product's own round ceiling, ``rounds = 1000``).
 TEAM_HASHES = {
-    "team-audit-events": "232bf1acd37bd2a453de8dc2412d3e77bf51840fd2f44e16d6ce6c3802bfea3d",
-    "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
-    "team-rename-option": "3317f863a36a4af2f4c09e3d09eb1959e22d490494303dee9369460d19dcf08e",
-    "team-review-patch": "c3c6b067e5fad22bb5da2cf5f48f624a1780cf63930c4a0d00add417d9b016e8",
-    "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
-    "team-test-triage": "70cbd69203b05e4f3e35032c5a415e5e964f79625e3a0a1eb94d515456aa0166",
+    "team-audit-events": "832fb3f1179d1c5e94a2a87c7a133622451f383bbb0c7f18e2f4e7e669c1e136",
+    "team-port-js": "e967a6fd47640299f681a50ecd8d4aeaaaa0cea313455df5a3103cae6013e9b3",
+    "team-rename-option": "11952c6917e7432cdf4c6a8937d57551c74d80a7f5491e6f281c3c2f78229ae9",
+    "team-review-patch": "fb3521c0427aca62dbedba702116a19a8a07ff8116b7661bbe39ab016587c8e3",
+    "team-spec-modules": "3d2d9e431c8416282523377fbddbdd9337c665c6e49c253f20eb9e6f10ca3f6a",
+    "team-test-triage": "e5054c3cd82795c33100084896eebe096c53d62c9f6b3b3aa9eb584df5373c50",
 }
-#: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none).
+#: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none),
+#: except legacy-callers, whose check reads a UTF-16 answer.json since v1.400.2.
 FRONTIER_HASHES = {
     "frontier-broken-build": "a3aaed1d3596115952589f699fa78db4d0200e71747c5e26261473dc123e052d",
     "frontier-config-injection": "50dcb282320f0bed31fc6e133a66e543519a22f8515a6d0bd2cfb0b3c58936cb",
@@ -76,7 +78,7 @@ FRONTIER_HASHES = {
     "frontier-debug-price-server": "213568ed72925b5e21689af2d46cdf80d15e1974950b1e9ae039dc69b9e86643",
     "frontier-flaky-test-order": "3292db8708abae22da2249700585c75cca07b0b5f45362d8f560585a74c5c440",
     "frontier-inventory-filter": "8016e5b62ea7975261b294b59c7422ba4013e65272fff9dc870e10bbd27e1d91",
-    "frontier-legacy-callers": "aaab71427052a8172494146a326422c89e66bb7285d8acaaae6f31923652dca0",
+    "frontier-legacy-callers": "99b1f9e5ffebf9b70b47a10a846126e8286a1afdf93cc5bc8c6b8c7586c42a92",
     "frontier-merge-in-progress": "8889dc224c9aacfb9d108cc4efb5bb268898b827e7ddc3ba8b37835626dae156",
     "frontier-monthly-recurrence": "69c61e8de95cb741828063cce5768f8b775b16cf05d8ce7872bc7011c6a3e200",
     "frontier-multicurrency-ledger": "c781426f1551756edc34aef3dfbbecbc768e0b01e1192e4aa3a1ac8b51a53b23",
