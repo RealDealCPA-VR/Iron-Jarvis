@@ -372,6 +372,39 @@ async def test_a_scripted_night_commits_each_branch_and_makes_one_summary_one_be
     assert snapshot(repo_done) == before[repo_done]
 
 
+async def test_a_task_whose_main_folder_changed_still_commits_only_its_branch(tmp_path, monkeypatch):
+    """N1's guard saw the user's MAIN folder change (a command wrote there):
+    the task ends needs-you, its work is committed on ITS branch only — the
+    stray file stays in the main folder untouched and uncommitted, the main
+    branch does not move — and the summary says it open."""
+    repo = make_repo(tmp_path / "proj")
+    main_head = git("rev-parse", "main", cwd=repo)
+    stray = (repo / "stray.txt").as_posix()
+    app = create_app(str(tmp_path / "home"))
+    d = app.state.d
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(23, 30))
+    wire(app, NightScript({"TASK-STRAY": [
+        [ToolCall(id="w1", name="Write", arguments={"file_path": "mine.txt", "content": "mine\n"})],
+        [ToolCall(id="c1", name="Bash", arguments={"command": f'"{PY}" -c "open(\'{stray}\', \'w\').write(\'x\')"'})],
+        "Done TASK-STRAY.",
+    ]}))
+    status, task = await asgi(app, "POST", "/build/night", {"folder": str(repo), "words": "TASK-STRAY: tidy up"})
+    assert status == 201, task
+    await night_routes.night_pass(d)
+    ended = await _ended(app, d, task["id"])
+    assert (repo / "stray.txt").read_text() == "x", "the scripted command did not run"
+    assert ended["state"] == N.NEEDS_YOU and ended["main_changed"] is True, ended["notes"]
+    assert ended["commit_sha"]
+    assert _branch_files(repo, ended["branch"]) == ["mine.txt"]
+    assert git("rev-parse", "main", cwd=repo) == main_head
+    assert git("status", "--porcelain", cwd=repo) == "?? stray.txt"
+    [summary] = M.list_summaries(app.state.platform.engine)
+    [row] = summary["rows"]
+    assert row["main_changed"] is True and row["main_changed_words"] == next(
+        n["text"] for n in ended["notes"] if n["kind"] == "outside")
+    assert row["committed_words"].startswith("Its work so far is committed on ij/")
+
+
 async def test_a_task_that_changed_nothing_gets_no_commit_and_says_so(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / "proj")
     app = create_app(str(tmp_path / "home"))

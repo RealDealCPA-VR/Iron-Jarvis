@@ -317,8 +317,9 @@ export function LastNightList({
             {newest.rows.length} task{newest.rows.length === 1 ? "" : "s"}: {countsWords(newest.counts)}.
           </p>
         ) : null}
-        <p className="text-[12px] text-zinc-500">
-          Iron Jarvis committed each task&apos;s work to its own branch when it ended. Nothing was pushed or merged.
+        <p data-testid="last-night-rule" className="text-[12px] text-zinc-500">
+          When a night task ends, Iron Jarvis commits its work to the task&apos;s own branch. It never pushes or
+          merges: that is yours to do here.
         </p>
       </header>
 
