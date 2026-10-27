@@ -878,7 +878,7 @@ export function ModelMenu({
     // chip fills it (w-full), so a long name truncates in place instead of
     // pushing the row onto a second line; a toolbar that fits itself
     // (lib/toolbarFit) sets the wrapper's floor (`data-fit-model`) so the name
-    // never truncates past about nine characters.
+    // never truncates past about thirteen characters (nine at its tightest).
     <div ref={popRef} data-fit-model="" className="relative min-w-0">
       <button
         ref={chipRef}

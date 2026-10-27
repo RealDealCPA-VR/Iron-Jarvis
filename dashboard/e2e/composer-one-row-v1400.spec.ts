@@ -29,10 +29,10 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * name.
  *
  * Then the user's own case (a light theme, 2000 × 1103 and 1024 × 640: one
- * row, and at the user's size the chips keep their words — the model's name
- * gives way first); typing and opening each toolbar menu never move a
- * control; a few pixels of jitter around the boundary never brings the chips'
- * words back (the hysteresis), and real room does.
+ * row); typing and opening each toolbar menu never move a control; the
+ * ORDER — narrowing the box, the model's name truncates while the chips on
+ * the left keep their words; a few pixels of jitter around the boundary
+ * never brings the chips' words back (the hysteresis), and real room does.
  *
  * Every check is soft, so one run reports every case. IJ_ROW_OUT=<folder>
  * writes each case's measurements (JSON) and a screenshot; the failures are
@@ -451,15 +451,6 @@ for (const size of [
       }
       const f = await facts(page, "chat");
       expect(check(f, `the user's case ${tag}`)).toEqual([]);
-      if (size.width === 2000) {
-        // The ORDER: at the user's own size the model's name gives way first
-        // (it truncates); the chips on the left keep their words.
-        const kept = await page.locator("#chat-approval-mode").evaluate((el) => {
-          const label = Array.from(el.querySelectorAll("span")).find((s) => (s.textContent || "").trim().length > 2);
-          return !!label && label.getBoundingClientRect().width > 0;
-        });
-        expect(kept, "the chips kept their words at the user's size").toBe(true);
-      }
     });
   });
 }
@@ -513,6 +504,49 @@ test.describe("the row holds still (1406 × 857, the user's model)", () => {
       await page.mouse.click(2, 300);
       await frames(page);
     }
+  });
+
+  test("the model's name gives way before the chips' words", async ({ page }) => {
+    await seed(page);
+    await page.goto("/?new=1");
+    await expect(page.getByTestId("chat-greeting")).toBeVisible({ timeout: 90_000 });
+    await pick(page, QWEN);
+    await page.mouse.move(2, 2);
+    const setWidth = async (w: number) => {
+      await page.getByTestId("chat-composer").evaluate((el, px) => {
+        (el as HTMLElement).style.width = `${px}px`;
+      }, w);
+      await frames(page);
+    };
+    const state = () =>
+      page.getByTestId("chat-composer").evaluate((card) => {
+        const chip = card.querySelector("#chat-approval-mode") as HTMLElement;
+        const words = Array.from(chip.querySelectorAll("span")).find((s) => (s.textContent || "").trim().length > 2);
+        const label = card.querySelector('[data-testid="model-chip-words"]') as HTMLElement;
+        return {
+          words: !!words && words.getBoundingClientRect().width > 0,
+          cut: label.scrollWidth - label.getBoundingClientRect().width > 1,
+        };
+      });
+    // Narrow the box until the model's name starts to truncate: the chips
+    // on the left must still have their words at every width on the way.
+    let cutAt = 0;
+    for (let w = 900; w >= 560; w -= 2) {
+      await setWidth(w);
+      const s = await state();
+      expect(s.words, `the chips gave up their words at ${w} px before the model's name gave way`).toBe(true);
+      if (s.cut) {
+        cutAt = w;
+        break;
+      }
+    }
+    expect(cutAt, "the model's name never truncated").toBeGreaterThan(0);
+    // Twelve pixels less: the name is shorter still, the chips keep their words.
+    await setWidth(cutAt - 12);
+    const s = await state();
+    expect(s.cut, "the name truncates further").toBe(true);
+    expect(s.words, "the chips keep their words while the name can still give way").toBe(true);
+    expect(oneRow(await facts(page, "chat")), "one row").toBe(true);
   });
 
   test("a few pixels of jitter around the boundary never flickers the chips' words", async ({ page }) => {

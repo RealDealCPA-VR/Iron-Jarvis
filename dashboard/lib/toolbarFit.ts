@@ -15,11 +15,13 @@
  *
  *   0. FULL  — every chip with its words. The MODEL chip's name truncates
  *              first (flexbox: it is the one item that shrinks), down to a
- *              minimum that keeps about nine characters of it readable
+ *              minimum that keeps about thirteen characters of it readable
  *              (`MODEL_LABEL_MIN_PX`; never wider than the name needs).
  *   1. ICONS — the left chips drop their words and keep their icons (their
  *              aria-labels, tooltips and every non-colour cue stay).
- *   2. TIGHT — the reasoning chip shortens its words.
+ *   2. TIGHT — the reasoning chip shortens its words, and the model's name
+ *              may go down to about nine characters
+ *              (`MODEL_LABEL_TIGHT_PX`) rather than the row wrapping.
  *   3. WRAP  — the last resort, only for a box too narrow for even that (a
  *              narrow IJ harness column): the old wrapping row, most compact.
  *
@@ -65,9 +67,12 @@ export type FitStage = 0 | 1 | 2 | 3;
 export const FIT_SLACK_PX = 24;
 /** Sub-pixel layout is not an overflow. */
 export const FIT_EPSILON_PX = 0.5;
-/** The model chip's name never truncates below this (about nine characters at
+/** The model chip's name never truncates below this (about thirteen characters at
  *  13 px); a shorter name keeps its own width. */
-export const MODEL_LABEL_MIN_PX = 64;
+export const MODEL_LABEL_MIN_PX = 96;
+/** At the tightest stage only (a narrow IJ harness column): about nine
+ *  characters, before the row would have to wrap. */
+export const MODEL_LABEL_TIGHT_PX = 64;
 /** The width under which the toolbar is left alone: Tailwind's `sm`. */
 export const FIT_MIN_VIEWPORT_PX = 640;
 
@@ -164,10 +169,11 @@ export function measureFit(bar: HTMLElement): FitMeasure | null {
 
 /**
  * The model chip's floor: what its chip needs besides the name, plus the name
- * up to `MODEL_LABEL_MIN_PX` — never more than the whole chip needs. Set on
- * the chip's wrapper (`data-fit-model`), which is the item flexbox shrinks.
+ * up to `labelMin` (MODEL_LABEL_MIN_PX; MODEL_LABEL_TIGHT_PX at the tightest
+ * stage) — never more than the whole chip needs. Set on the chip's wrapper
+ * (`data-fit-model`), which is the item flexbox shrinks.
  */
-export function syncModelFloor(bar: HTMLElement, on: boolean): void {
+export function syncModelFloor(bar: HTMLElement, on: boolean, labelMin: number = MODEL_LABEL_MIN_PX): void {
   const wrap = bar.querySelector<HTMLElement>("[data-fit-model]");
   if (!wrap) return;
   if (!on) {
@@ -180,7 +186,7 @@ export function syncModelFloor(bar: HTMLElement, on: boolean): void {
   const chipW = chip.getBoundingClientRect().width;
   const shown = label.getBoundingClientRect().width;
   const name = Math.max(shown, label.scrollWidth);
-  const floor = Math.ceil(chipW - shown + Math.min(name, MODEL_LABEL_MIN_PX));
+  const floor = Math.ceil(chipW - shown + Math.min(name, labelMin));
   const want = `${floor}px`;
   if (wrap.style.minWidth !== want) wrap.style.minWidth = want;
 }
@@ -249,7 +255,11 @@ export function useToolbarFit(): [(el: HTMLElement | null) => void, FitStage] {
       }
       applyFit(bar, current);
       for (let i = 0; i < 8; i++) {
-        syncModelFloor(bar, current < FIT_WRAP);
+        syncModelFloor(
+          bar,
+          current < FIT_WRAP,
+          current >= FIT_TIGHT ? MODEL_LABEL_TIGHT_PX : MODEL_LABEL_MIN_PX,
+        );
         const m = measureFit(bar);
         if (!m) break;
         const next = nextFitStage(current, m, needed);

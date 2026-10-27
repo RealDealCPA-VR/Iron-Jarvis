@@ -34,6 +34,7 @@ import {
   FIT_TIGHT,
   FIT_WRAP,
   MODEL_LABEL_MIN_PX,
+  MODEL_LABEL_TIGHT_PX,
   applyFit,
   fitControls,
   fitSignature,
@@ -241,6 +242,10 @@ describe("the measuring helpers", () => {
     Object.defineProperty(label, "scrollWidth", { configurable: true, value: 140 });
     syncModelFloor(b, true);
     expect(wrap.style.minWidth).toBe(`${34 + MODEL_LABEL_MIN_PX}px`);
+    // At the tightest stage the name may go down further, before a wrap.
+    syncModelFloor(b, true, MODEL_LABEL_TIGHT_PX);
+    expect(wrap.style.minWidth).toBe(`${34 + MODEL_LABEL_TIGHT_PX}px`);
+    expect(MODEL_LABEL_TIGHT_PX).toBeLessThan(MODEL_LABEL_MIN_PX);
     // A short name: the floor is the chip it already is.
     box(chip, { left: 0, right: 74 });
     box(label, { left: 8, right: 48 });
