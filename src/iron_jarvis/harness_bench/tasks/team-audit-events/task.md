@@ -12,7 +12,7 @@ One entry for each place where a function asks the audit trail to write an event
 
 What counts, and to whom it belongs:
 
-* a call of `shop.audit.log.record` — under any name or path an import gives it — with the event name written as text or as a constant (from `shop/audit/events.py` or a constant of the same module); the write belongs to the function that makes the call;
+* a call of `shop.audit.log.record` — under any name or path an import gives it, and in the audit package's own functions too — with the event name written as text or as a constant (from `shop/audit/events.py` or a constant of the same module); the write belongs to the function that makes the call;
 * a call of `audit_change` or `audit_failure` (`shop/audit/helpers.py`): they build the event name from what they are given (see their docstrings); the write belongs to the function that calls the helper — never to the helper itself;
 * a function decorated with `@audited("<event>")` writes that event: list the decorated function (not the decorator's own code);
 * a module's own wrapper that only passes on an event name it was given (such as `_audit(event, ...)`) is not listed; the function that calls it with the name is.

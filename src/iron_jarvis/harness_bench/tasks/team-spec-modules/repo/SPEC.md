@@ -140,8 +140,9 @@ pre-release on the same `MAJOR.MINOR.PATCH`: `1.2.4-rc.1` matches
 `^1.2.3`; `1.2.3-beta.5` matches `^1.2.3-beta.2`. (A version without a
 pre-release only has to satisfy the comparators.)
 
-`ValueError` when the range or the version is malformed; `TypeError` when
-`range_text` is not a `str`.
+`ValueError` when the range or the version is malformed — the whole range is
+read before anything is compared, so a malformed set is an error even when an
+earlier set would match; `TypeError` when `range_text` is not a `str`.
 
 ---
 

@@ -51,11 +51,11 @@ MORE_DECOYS = FIXTURES / "harness_bench_decoys_more"
 
 #: The content hash of every team task as v1.400.0 ships them.
 TEAM_HASHES = {
-    "team-audit-events": "02a6d5cd591ad5a0c057f49c1c5b3bfed2749e3044cfa761529dc9721e4be117",
+    "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
-    "team-rename-option": "9bffa25f46e8e31dc64c8a9a79c59a7c31299608e90607fd7b5031f5c4c6cdce",
+    "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
     "team-review-patch": "567ecd37d75b7e5739484b91e7f031bd594c8326659bde61ad7bdec6dc9c16cf",
-    "team-spec-modules": "503797e1eb625facf4c3c6d47c3ec3bd1c1df0668b01372deac20a83f4779d30",
+    "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
     "team-test-triage": "ba36744c65721af0550d4fde3441546b1031fc1b2aa12bf91ad9f0dfa81f25b8",
 }
 #: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none).
