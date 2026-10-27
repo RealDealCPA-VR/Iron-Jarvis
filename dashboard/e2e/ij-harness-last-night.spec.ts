@@ -98,7 +98,7 @@ test("390 px: Last night never pans sideways, and every button is inside the win
     }
   }
   // An older night opens with the keyboard, and stays inside the window.
-  const older = page.getByTestId("last-night-older-2026-10-25").locator("summary");
+  const older = page.getByTestId("last-night-older-2026-10-25").locator(":scope > summary");
   await older.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("last-night-task-night_old")).toBeVisible();
