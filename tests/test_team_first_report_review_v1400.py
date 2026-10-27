@@ -84,6 +84,10 @@ def test_each_team_is_answered_against_the_alone_row_of_its_own_iron_jarvis():
     # Another version is still the answer when it is the only alone row
     # (tonight's B before A's alone has run, against last night's).
     assert TRP.find_alone(*first, [night_team, night_alone, first])[0] is night_alone[0]
+    # Tonight's alone row cut short (4 of its 6 runs) still beats last night's
+    # whole one: the same harness first, then the runs in common.
+    cut = (alone[0], alone[1][:4])
+    assert TRP.find_alone(*first, [night_team, night_alone, team, cut, first])[0] is alone[0]
 
 
 def test_the_table_shows_the_alone_row_its_answer_compares_with_and_names_it():
