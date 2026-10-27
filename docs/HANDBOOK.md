@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.3 (2026-10-25).*
+holds itself to. Current as of v1.400.4 (2026-10-25).*
 
 ---
 
@@ -1877,6 +1877,13 @@ reads; it never writes, runs commands, or starts work on its own.
   *before* you type.
 - **An update seems stuck** → Updates page; a release can take ~10 min to
   finish uploading after the version bumps.
+- **"Iron Jarvis did not answer within 90 seconds … Press Retry" after an
+  update** (v1.400.4) → if Iron Jarvis is still running but has not answered
+  by then, the app now restarts it once by itself and waits again before
+  showing this. You see the message only if that second try also fails. A
+  start that has not finished after 30 seconds now writes to `daemon.log`
+  which step it is stuck in and where its code is waiting (code locations
+  only, never your files or data), so the cause can be found.
 - **A message says "internal error [err_xxxxxxxx]: …"** (v1.229.0) → quote
   the `err_` id from the message. The same id sits on the traceback line in
   the daemon log (the desktop app's `logs` folder, `daemon.log`), so whoever

@@ -105,7 +105,14 @@ def test_neither_gate_is_awaited_a_second_time():
     above still looks right."""
     block = _startup_block()
     assert "await waitForDashboard(" not in block
-    assert "await waitForDaemon(" not in block
+    # v1.400.4: the ONE allowed second wait is for a NEW daemon, inside the
+    # branch that restarts a hung one once (only after the first gate FAILED,
+    # so the normal boot still waits on both gates together).
+    opener = 'if (daemonGate.status === "rejected" && shouldRetryHungDaemon(daemonProc, bootDaemonRetried)) {'
+    start = block.index(opener)
+    retry_branch = block[start: block.index("\n  }\n", start)]
+    assert retry_branch.count("await waitForDaemon(") == 1, retry_branch
+    assert "await waitForDaemon(" not in block.replace(retry_branch, "")
     # Both verdicts must still be consumed — an unused gate is a gate that
     # never fails the boot.
     assert "daemonGate.status" in block

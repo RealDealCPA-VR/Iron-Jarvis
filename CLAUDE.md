@@ -735,6 +735,28 @@ does not need a bump, stop and bump it.
   after a successful install. `tests/test_desktop_reliability_v1249.py`,
   `tests/test_update_busy_v1249.py`,
   `dashboard/__tests__/interrupted-jobs-v1249.test.tsx`.
+  v1.400.4 (a USER BUG): twice on 2026-10-27 the FIRST daemon start after an
+  update (v1.400.1→.2 and .2→.3) hung inside the lifespan after "Waiting for
+  application startup" with nothing more in the log; the 90 s gate showed the
+  timeout dialog, the user's Retry relaunched, and the fresh start was ready in
+  2 s. 15 earlier updates back to Oct 22 started fine; no Defender event, no
+  download mark on the installed files, no orphaned pane shell, so the step is
+  NOT known. Two changes: (1) `daemon/boot_watch.BootWatch` (started first
+  thing in the lifespan; `_rehydrate_step` and the awaited steps call
+  `.step(name)`; `.done()` before the boot summary) logs at 30/60/120 s the
+  step and where the boot thread and other busy threads wait, as
+  `module:function:line` (module NAMES, never a path or value); it never
+  raises into the boot. THE NEXT STUCK START NAMES ITS STEP: read daemon.log
+  for "startup has not finished after". (2) desktop/main.js: when the daemon
+  gate FAILS and the child is still running (`shouldRetryHungDaemon`: no
+  exit code, no signal, not yet retried this launch), the boot restarts ONLY
+  the daemon once (`restartDaemonFromShell(why)`, logged "restarting once by
+  itself…") and gates again before the dialog; an exited daemon (port taken,
+  crash, missing file) goes to the dialog as before.
+  `test_startup_speed_v1250::test_neither_gate_is_awaited_a_second_time` now
+  allows exactly that one wait inside the retry branch (the serial-wait
+  mutation still fails it). Pins: `tests/test_boot_watch_v14004.py` (8
+  mutations red).
 - **A backup that never leaves the disk it protects is one failure from
   nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
   `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND

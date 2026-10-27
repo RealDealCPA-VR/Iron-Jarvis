@@ -335,6 +335,9 @@ let keepRunningPref = null;
 // Set once both children pass their health gates — lets a second launch (or the
 // tray) reopen the window after a --hidden boot that never created one.
 let bootComplete = false;
+// v1.400.4: the boot restarts a hung daemon by itself at most ONCE per launch
+// (shouldRetryHungDaemon). Retry relaunches the app, so it starts false again.
+let bootDaemonRetried = false;
 // A second launch DURING a --hidden boot has nothing to show: there is no main
 // window, no splash, and bootComplete is still false (a packaged cold boot can
 // take up to 90s while AV scans the frozen daemon). Record the intent here so
@@ -1045,7 +1048,7 @@ function restartServicesFromTray() {
 // It also clears the watchdog's breaker: the button is offered for a daemon
 // that is up but stopped answering (`stalled`) too, and a breaker left open
 // would never kill the next hang.
-function restartDaemonFromShell() {
+function restartDaemonFromShell(why) {
   const rec = _services.daemon;
   if (!rec || !rec.spawnFn) return false;
   const alive = !!daemonProc && daemonProc.exitCode === null && daemonProc.signalCode === null;
@@ -1065,7 +1068,7 @@ function restartDaemonFromShell() {
   _dwKills = [];
   _dwBreakerTripped = false;
   markTrayHealthy("daemon");
-  fileLogger("daemon")(`[main] ${new Date().toISOString()} restarting on request from the window\n`);
+  fileLogger("daemon")(`[main] ${new Date().toISOString()} restarting ${why || "on request from the window"}\n`);
   if (alive) {
     rec.manualRestart = true;
     killChild(daemonProc, "daemon", "restart"); // onGone respawns at once
@@ -1460,6 +1463,17 @@ function waitForDashboard(timeoutMs, intervalMs) {
 // mistaken for a healthy Iron Jarvis: the client URL is baked to 127.0.0.1:8787,
 // so if the wrong thing answers there, the whole app is silently broken. We
 // require a real /health 200 from OUR daemon (bearer token) before proceeding.
+// A daemon that is STILL RUNNING when the startup gate runs out is restarted
+// ONCE by the app itself before any dialog (v1.400.4). Twice on 2026-10-27 the
+// first start after an update hung inside its own startup with nothing in the
+// log; the user's Retry killed it, and the fresh start was ready in 2 s. A
+// daemon that EXITED (port taken, a crash, a missing file) is not retried
+// here: it goes to the dialog exactly as before, with its own cause.
+function shouldRetryHungDaemon(proc, alreadyRetried) {
+  if (alreadyRetried || !proc) return false;
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
 function waitForDaemon(timeoutMs, intervalMs) {
   const deadline = Date.now() + timeoutMs;
   let lastWhy = ""; // the most specific reason a probe was refused, for the timeout message
@@ -4586,10 +4600,22 @@ async function startup() {
   // the one that explains the other (no daemon → the dashboard renders an
   // offline shell), and `classifyStartupFailure` keys off the daemon's child
   // exit + log tail (v1.249.0, R-06).
-  const [daemonGate, dashboardGate] = await Promise.allSettled([
+  let [daemonGate, dashboardGate] = await Promise.allSettled([
     waitForDaemon(STARTUP_TIMEOUT_MS, GATE_POLL_MS),
     waitForDashboard(STARTUP_TIMEOUT_MS, GATE_POLL_MS),
   ]);
+  // v1.400.4: a daemon that is running but never answered gets ONE restart
+  // from the app itself (what the user's Retry did) before the dialog.
+  if (daemonGate.status === "rejected" && shouldRetryHungDaemon(daemonProc, bootDaemonRetried)) {
+    bootDaemonRetried = true;
+    const waited = Math.round(STARTUP_TIMEOUT_MS / 1000);
+    if (restartDaemonFromShell(`once by itself: it did not answer within ${waited} s while still running`)) {
+      daemonGate = await waitForDaemon(STARTUP_TIMEOUT_MS, GATE_POLL_MS).then(
+        (value) => ({ status: "fulfilled", value }),
+        (reason) => ({ status: "rejected", reason })
+      );
+    }
+  }
   try {
     if (daemonGate.status === "rejected") throw daemonGate.reason;
   } catch (err) {

@@ -892,6 +892,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # A START THAT DOES NOT FINISH SAYS WHERE (v1.400.4): twice on
+        # 2026-10-27 the first start after an update hung in here with nothing
+        # in the log. The watch reports the step and where the boot thread is
+        # waiting at 30/60/120 s, and stops at the boot summary below.
+        from .boot_watch import BootWatch
+
+        _boot_watch = BootWatch().start()
+        _boot_watch.step("mcp")
         # MCP PACKS LOAD IN THE BACKGROUND (v1.311.0, finding
         # boot-blocked-by-mcp-and-pane-respawn). Started FIRST so the
         # handshakes overlap the rest of boot instead of preceding it; the
@@ -943,6 +951,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _mcp_ready.set()
 
         _t = time.perf_counter()
+        _boot_watch.step("scheduler")
         try:  # start the cron scheduler when the daemon boots
             platform.scheduler.start()
             _tick("scheduler", True)
@@ -962,6 +971,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # gets a number — the breakdown must not go quiet exactly when
             # something is wrong. Order and failure behaviour are unchanged.
             _t = time.perf_counter()
+            _boot_watch.step(name)
             try:
                 fn()
                 _tick(name, True)
@@ -1041,6 +1051,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             assignment_dispatcher = AssignmentDispatcher(platform, tick=_tick)
             platform.assignment_dispatcher = assignment_dispatcher
             _t = time.perf_counter()
+            _boot_watch.step("requeue_assignments")
             try:
                 await assignment_dispatcher.requeue_lost_at_boot(set(orchestrator._running))
                 _tick("requeue_assignments", True)
@@ -1066,6 +1077,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _media_jobs = getattr(platform, "media_jobs", None)
         if _media_jobs is not None:
             _t = time.perf_counter()
+            _boot_watch.step("reconcile_media_jobs")
             try:
                 await _media_jobs.reconcile_at_boot()
                 _tick("reconcile_media_jobs", True)
@@ -1212,10 +1224,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
             TemplateStore(platform.engine).seed_starters()
 
         _rehydrate_step("seed_starter_templates", _seed_templates)
+        _boot_watch.step("prune_orphan_worktrees")
         try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
             orchestrator.prune_orphan_worktrees()
         except Exception:  # pragma: no cover - never block boot
             pass
+        _boot_watch.step("event_retention")
         try:  # event-log retention sweep (config.event_retention_days > 0)
             days = int(getattr(platform.config, "event_retention_days", 0) or 0)
             if days > 0:
@@ -1233,6 +1247,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     )
         except Exception:  # pragma: no cover - never block boot
             pass
+        _boot_watch.step("arming background loops")
         # Periodic auto-backup safety net — a daily driver shouldn't depend on the
         # user remembering to run `ironjarvis backup`. Disable with
         # IRONJARVIS_AUTO_BACKUP=off; tune via *_HOURS (default 24) / *_KEEP (7).
@@ -1902,6 +1917,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # everything above has run and the app is about to serve. Wrapped
         # because the boot's own summary must never become the thing that
         # breaks the boot (the v1.229.0 OBS5 lesson, one layer up).
+        _boot_watch.done()
         try:
             from ..core.ids import utcnow
 
