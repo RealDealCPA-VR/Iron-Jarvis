@@ -5282,13 +5282,31 @@ async def _build_harness(
     # Off the loop (cached reads); "" with no team. MIRROR NOTE (lock-step):
     # both lanes build their harness turn here.
     if turn.plan.gate & {"delegate", "spawn_agent"}:
-        from ..agents.model_team import team_block
+        from ..agents.model_team import team_first_on, team_section
 
+        # v1.400.0 (TEAM-FIRST, ``Config.team_first``, read live; OFF by
+        # default): with a team shown, its section ends with the team-first
+        # instruction and the helper tool's description leads with the team
+        # (``HarnessTurn.team_first`` → ``mode.model_specs``). Off, or no
+        # team: the section and every tool spec exactly as before. Read here,
+        # BEFORE the planner, so the instruction's cost is in the budget.
         try:
-            turn.team_section = await asyncio.to_thread(team_block, d.platform)
+            _team_first = team_first_on(d.platform)
+            # v1.400.0 review: a planner whose model stays on the user's
+            # network is not told to save ITS usage (``TEAM_FIRST_LOCAL_LEAD``)
+            # — egress's own predicate (pure, never raises); asked only when
+            # the setting is on, so an off turn does exactly what it did.
+            _planner_local = False
+            if _team_first:
+                _planner_local = _egress.stays_on_this_network(
+                    prov, getattr(d.platform, "providers", None), getattr(d.platform, "config", None), mod,
+                )
+            turn.team_section, turn.team_first = await asyncio.to_thread(
+                team_section, d.platform, team_first=_team_first, planner_local=_planner_local,
+            )
         except Exception:  # noqa: BLE001 — the team list never breaks a turn
             log.debug("model team block failed", exc_info=True)
-            turn.team_section = ""
+            turn.team_section, turn.team_first = "", ()
     # IJ harness part 3, Phase 3 — MIRROR NOTE (lock-step): both lanes build
     # their harness turn here, so both get all three.
     _window = _context_window(d, prov, mod)

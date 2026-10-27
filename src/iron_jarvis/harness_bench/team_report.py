@@ -59,6 +59,28 @@ NO_MEMBER_WORK = (
 )
 
 
+#: v1.400.0: how a TEAM-FIRST setup (the team file's ``team_first = true``:
+#: the "Hand work to my team first" setting on) is named beside the plain
+#: team, wherever a setup's runner is shown.
+TEAM_FIRST_TAG = "team-first"
+
+
+def is_team_first(config: Mapping[str, Any]) -> bool:
+    """Was this setup a team run with team-first on? Read off the saved
+    configuration's identity (``harness.team.team_first``); a configuration
+    saved before v1.400.0 has no such key and is a plain team."""
+    harness = config.get("harness") if isinstance(config, Mapping) else None
+    team = harness.get("team") if isinstance(harness, Mapping) else None
+    return config.get("runner") == TEAM_RUNNER and isinstance(team, Mapping) and team.get("team_first") is True
+
+
+def runner_label(config: Mapping[str, Any]) -> str:
+    """The Runner cell: the runner's name, and ``(team-first)`` for a team
+    setup with team-first on — so the two team setups read apart."""
+    runner = str(config.get("runner") or "?")
+    return f"{runner} ({TEAM_FIRST_TAG})" if is_team_first(config) else runner
+
+
 def _live(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     return [r for r in records if not r.get("stale") and not r.get("interrupted")]
 
@@ -335,7 +357,8 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
                ) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]] | None:
     """The single-model setup to answer against: Iron Jarvis on the team's
     PLANNER (same provider and model) alone — with the same effort first,
-    then the one sharing the most runs with the team, the newest on a tie."""
+    then the same Iron Jarvis version, then the one sharing the most runs
+    with the team, the newest on a tie."""
     team_keys = {_key(r) for r in _live(team_records)}
     best = None
     for config, records in configs:
@@ -345,12 +368,36 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
             continue
         shared = len(team_keys & {_key(r) for r in _live(records)})
         # The same effort as the team's planner first (another effort is
-        # another setup), then the most runs in common, then the newest.
+        # another setup), then the same Iron Jarvis (v1.400.0 review: a root
+        # keeps every night's folders, and tonight's alone row shares every
+        # task and repeat with LAST night's team — picked as the newest, it
+        # re-answered last night's team against another harness), then the
+        # most runs in common, then the newest.
         same_effort = str(config.get("effort") or "") == str(team_config.get("effort") or "")
-        rank = (same_effort, shared, str(config.get("created_at") or ""))
+        same_version = str(config.get("version") or "") == str(team_config.get("version") or "")
+        rank = (same_effort, same_version, shared, str(config.get("created_at") or ""))
         if best is None or rank > best[0]:
             best = (rank, config, records)
     return (best[1], best[2]) if best else None
+
+
+def compares_line(team_config: Mapping[str, Any], alone_config: Mapping[str, Any]) -> str:
+    """Which single-model row a team's answer compares with (v1.400.0
+    review): with every night's folders in one root, two alone rows can sit
+    in the same table, and only this line says which one the answer read —
+    and, when it is another Iron Jarvis, that it is."""
+    a_ver = str(alone_config.get("version") or "?")
+    t_ver = str(team_config.get("version") or "?")
+    line = (f"The answer compares with {str(alone_config.get('key', ''))[:12]} "
+            f"({runner_label(alone_config)}, Iron Jarvis {a_ver})")
+    if a_ver != t_ver:
+        line += f", which ran on another Iron Jarvis than this team ({t_ver})"
+    a_eff = str(alone_config.get("effort") or "")
+    t_eff = str(team_config.get("effort") or "")
+    if a_eff != t_eff:
+        line += (f", at effort {a_eff or 'none asked'} (this team's planner: "
+                 f"{t_eff or 'none asked'})")
+    return line + "."
 
 
 def handed_to_a_member(record: Mapping[str, Any]) -> bool:
@@ -365,6 +412,37 @@ def handed_to_a_member(record: Mapping[str, Any]) -> bool:
             if (part.get("model_calls") or 0) > 0 or any((part.get("pieces") or {}).values()):
                 return True
     return any(isinstance(h, Mapping) and str(h.get("member") or "") for h in (record.get("helpers") or ()))
+
+
+def handed_count(records: Iterable[Mapping[str, Any]]) -> tuple[int, int, int]:
+    """``(handed, ran, did_not_run)`` over a setup's live runs (v1.400.0):
+    how many runs handed at least one piece to a team member
+    (:func:`handed_to_a_member`), of the runs that ran — a run that never got
+    a fair go (an account limit, a server down: ``unscored_by ==
+    "infrastructure"``) and handed nothing is counted apart. v1.400.0 review:
+    a run that DID hand a piece and then went unscored because the member
+    could not work (its server down, its account's limit: ``member_infra``)
+    is a run in which the planner handed work out — it counts as handed."""
+    live = _live(records)
+    handed = [r for r in live if handed_to_a_member(r)]
+    ran = [r for r in live if r.get("unscored_by") != "infrastructure" or handed_to_a_member(r)]
+    return len(handed), len(ran), len(live) - len(ran)
+
+
+def handed_line(records: Iterable[Mapping[str, Any]]) -> str:
+    """The first number to look for in a team setup (v1.400.0): "The planner
+    handed at least one piece to a team member in N of M runs." ("" with no
+    run; "Not known: …" when every run did not run)."""
+    m, n, skipped = handed_count(records)
+    if not n and not skipped:
+        return ""
+    if not n:
+        # v1.400.0 review: "in 0 of 0 runs" read like a number.
+        return ("Not known: the 1 run did not run, so it could not hand a piece to a team member."
+                if skipped == 1 else
+                f"Not known: all {skipped} runs did not run, so none could hand a piece to a team member.")
+    return (f"The planner handed at least one piece to a team member in {m} of {n} "
+            f"run{'' if n == 1 else 's'}" + (f" ({skipped} did not run)" if skipped else "") + ".")
 
 
 def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
@@ -623,7 +701,13 @@ def usage_section(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
         return []
     u = summarize_usage(config, live)
     vendors = u["vendors"]
-    lines = [
+    lines = []
+    if config.get("runner") == TEAM_RUNNER:
+        # v1.400.0: did the planner hand the team anything at all?
+        handed = handed_line(live)
+        if handed:
+            lines += ["", "## The team at work", "", handed]
+    lines += [
         "", "## Usage", "",
         f"Time: {_secs(u['wall_s_total'])} in all, {_secs(u['wall_s_mean'])} a run.",
         "",
@@ -658,19 +742,31 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
     pairs = [(c, r) for c, r, _s in configs]
     for t_config, t_records, t_s in teams:
         shape = _tiers_and_repeats(t_records)
+        # v1.400.0: the OTHER team setups of the same planner (the plain team
+        # beside the team-first one) sit in the same table, each its own row.
+        planner = (t_config.get("provider"), t_config.get("model"), str(t_config.get("effort") or ""))
+        others = [(c, r, s) for c, r, s in teams
+                  if c is not t_config and _tiers_and_repeats(r) == shape
+                  and (c.get("provider"), c.get("model"), str(c.get("effort") or "")) == planner]
         peers = [(c, r, s) for c, r, s in configs
                  if c.get("runner") != TEAM_RUNNER and _tiers_and_repeats(r) == shape]
         alone = find_alone(t_config, t_records, pairs)
+        if alone is not None and not any(c is alone[0] for c, _r, _s in peers):
+            # v1.400.0 review: the row the answer compares with is always in
+            # the table, even when its tiers or repeats differ (a setup cut
+            # short, another night's): it was answered against, unseen.
+            peers += [(c, r, s) for c, r, s in configs if c is alone[0]]
         tiers = ", ".join(sorted(shape[0])) or "-"
         lines += [
-            f"**Team {str(t_config.get('key', ''))[:12]}** (planner {_model_cell(t_config)}; tier {tiers}; "
+            f"**Team {str(t_config.get('key', ''))[:12]}{', ' + TEAM_FIRST_TAG if is_team_first(t_config) else ''}** "
+            f"(planner {_model_cell(t_config)}; tier {tiers}; "
             f"{shape[1]} repeat(s)).",
             "",
             "| Setup | Runner | Model | Tasks | Pass rate (range) | Per repeat | Passed / scored | Time (a run) "
             "| Claude exact | Claude measured | Codex exact | Codex measured | Local tokens |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
-        for config, records, s in [(t_config, t_records, t_s), *peers]:
+        for config, records, s in [(t_config, t_records, t_s), *others, *peers]:
             u = summarize_usage(config, records)
             v = u["vendors"]
             local = v.get("local")
@@ -679,14 +775,18 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
             # says so here (the answer below is over the runs both made).
             tasks = len({str(r.get("task_id") or "") for r in _live(records)})
             lines.append(
-                f"| {str(config.get('key', ''))[:12]} | {config.get('runner')} | {_model_cell(config)} | {tasks} | "
+                f"| {str(config.get('key', ''))[:12]} | {runner_label(config)} | {_model_cell(config)} | {tasks} | "
                 f"{_rate_words(s)} | {per_repeat or '-'} | {s['passed']} / {s['scored']} | "
                 f"{_secs(u['wall_s_total'])} ({_secs(u['wall_s_mean'])}) | "
                 f"{exact_words(v, 'claude')} | {measured_words(u['measured'], 'claude', v)} | "
                 f"{exact_words(v, 'codex')} | {measured_words(u['measured'], 'codex', v)} | "
                 f"{(_tok(local['tokens_in']) + ' in / ' + _tok(local['tokens_out']) + ' out') if local else 'none'} |"
             )
-        lines += ["", f"**The answer:** {answer((t_config, t_records), alone)}", ""]
+        handed = handed_line(t_records)
+        lines += [""] + ([f"**The team at work:** {handed}", ""] if handed else [])
+        compares = compares_line(t_config, alone[0]) if alone is not None else ""
+        lines += ([compares, ""] if compares else [])
+        lines += [f"**The answer:** {answer((t_config, t_records), alone)}", ""]
         differ = _differing_tasks((t_config, t_records), alone)
         if differ:
             lines += [f"Tasks where they differ (team / {alone_label(t_config)} alone, passed of scored):", *differ, ""]

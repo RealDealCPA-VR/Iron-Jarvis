@@ -824,6 +824,15 @@ class Config(BaseModel):
     #: directly (``delegate`` / ``spawn_agent``, a task an agent queued) is
     #: held to it too; work the USER starts is not, but its spend counts.
     team_paid_cap_usd: float = Field(default=0.0, ge=0.0)
+    #: v1.400.0 (TEAM-FIRST): a coding session's planner is TOLD to hand
+    #: reading, test runs, first drafts and reviews to the model team by role,
+    #: keeping the plan, the hard decisions and the final check on its own
+    #: model (``agents/model_team.team_section``; the helper tool's description
+    #: leads with the team too). OFF by default: a planner shown the team then
+    #: reads exactly what it read before. It changes only what the planner is
+    #: told — never the team router, its floors, account groups or pay limit.
+    #: Read live; saved only through the settings writer.
+    team_first: bool = False
     #: v1.398.0 (night shift N1, ``harness/night``): the NIGHT WINDOW, local
     #: time "HH:MM" — queued coding tasks start only inside it (it may cross
     #: midnight); a task not started by its end waits for the next night.

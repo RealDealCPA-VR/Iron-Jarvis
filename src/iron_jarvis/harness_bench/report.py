@@ -47,6 +47,7 @@ from collections import Counter, OrderedDict
 from typing import Any, Iterable, Mapping
 
 from .catalog import CATEGORIES, TIERS
+from .team_report import runner_label
 
 
 def _mean(values: Iterable[Any]) -> float | None:
@@ -344,7 +345,7 @@ def _result_word(r: Mapping[str, Any]) -> str:
 
 
 def _label(config: Mapping[str, Any]) -> str:
-    who = config.get("runner", "?")
+    who = runner_label(config)
     provider = config.get("provider") or ""
     model = config.get("model") or NOT_NAMED
     return f"{who} · {provider + ' / ' if provider else ''}{model}"
@@ -622,7 +623,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             if repeated else f"{s['tasks']} | {s['passed']} / {s['scored']} | {_pct(s['pass_rate'])} | "
         )
         lines.append(
-            f"| {config.get('runner')} | {_model_cell(config)} | {_effort_cell(config, s)} | "
+            f"| {runner_label(config)} | {_model_cell(config)} | {_effort_cell(config, s)} | "
             f"{config.get('version', '?')} | {_setup(config)} | {middle}{s['unscored_infrastructure']} | "
             f"{s['unscored_grader']} | {s['interrupted']} | "
             f"{_num(s['mean_tool_calls'])} | {_num(s['mean_model_rounds'])} | "
@@ -634,7 +635,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
     stale = [(config, s) for config, _records, s in summaries if s["stale"]]
     if stale:
         lines += [""] + [
-            f"Left out of {config.get('runner')} · {_model_cell(config)} ({_setup(config)}): {s['stale']} run(s) "
+            f"Left out of {runner_label(config)} · {_model_cell(config)} ({_setup(config)}): {s['stale']} run(s) "
             f"from an earlier invocation that asked for more repeats ({_stale_words(s)}; kept in its "
             "results.json, marked stale)."
             for config, s in stale
@@ -644,13 +645,13 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
               "|---|---|---|---|---|"]
     for config, _records, s in summaries:
         lines.append(
-            f"| {config.get('runner')} | {_model_cell(config)} | {_effort_cell(config, s)} | "
+            f"| {runner_label(config)} | {_model_cell(config)} | {_effort_cell(config, s)} | "
             f"{_reported_cell(s)} | {_mismatch_words(s)} |"
         )
     if repeated:
         lines += ["", "## Each task across repeats", ""]
         for config, _records, s in summaries:
-            lines.append(f"**{config.get('runner')} · {_model_cell(config)}** ({_setup(config)}), "
+            lines.append(f"**{runner_label(config)} · {_model_cell(config)}** ({_setup(config)}), "
                          f"{s['repeats']} repeat(s):")
             lines += [*_task_group_lines(s), ""]
     lines += ["", "## Pass rate by tier", "", "| Runner | Model | Setup | " + " | ".join(TIERS) + " |",
@@ -662,7 +663,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             cells.append("-" if t is None else f"{_pct(t['pass_rate'])} ({t['passed']} / {t['scored']})" + (
                 f", {t['unscored']} unscored" if t["unscored"] else ""))
         lines.append(
-            f"| {config.get('runner')} | {config.get('model') or NOT_NAMED} | "
+            f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | "
             f"{_setup(config)} | " + " | ".join(cells) + " |"
         )
     lines += ["", "## Pass rate by category (passed / scored)", ""]
@@ -675,7 +676,7 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             cells.append("-" if c is None else f"{c['passed']} / {c['scored']}" + (
                 f" ({c['unscored']} unscored)" if c["unscored"] else ""))
         lines.append(
-            f"| {config.get('runner')} | {config.get('model') or NOT_NAMED} | "
+            f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | "
             f"{_setup(config)} | " + " | ".join(cells) + " |"
         )
     # v1.396.0: a TEAM setup beside the single-model ones, and the answer.
