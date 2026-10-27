@@ -348,8 +348,27 @@ def runtime_note(registry: Any, name: str, *, shell_description: str = "") -> st
     return " ".join(keep).strip()
 
 
+#: The real tools a helper tool starts (``delegate`` waits for its report;
+#: ``spawn_agent`` too, here). A dialect tool that reaches either of them is a
+#: helper tool (Claude Code's ``Agent``, Codex's ``spawn_agent``).
+HELPER_TARGETS = frozenset({"delegate", "spawn_agent"})
+
+
+def _team_first_lead(spec: dict[str, Any], roles: tuple[str, ...]) -> dict[str, Any]:
+    """``spec`` with the team-first sentence in front of its description
+    (v1.400.0), in the tool's own argument words; unchanged when the tool takes
+    no role-like argument."""
+    from ..agents.model_team import team_first_tool_sentence
+
+    sentence = team_first_tool_sentence(spec.get("input_schema"), roles)
+    if not sentence:
+        return spec
+    return {**spec, "description": sentence + " " + str(spec.get("description") or "")}
+
+
 def model_specs(
     registry: Any, plan: ToolPlan, *, shell_description: str = "", bash_description: str = "",
+    team_first: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """What the model is shown: the dialect's tools, then the pass-through
     real tools as the registry describes them. ``shell_description``
@@ -360,7 +379,12 @@ def model_specs(
     command tool (Claude Code's ``Bash``) really runs in on Windows — Git for
     Windows' bash, or cmd.exe with what differs from bash
     (``command_env.bash_shell_description``); "" (another OS, a dialect
-    without one) = ``shell_description`` / the registered words, as before."""
+    without one) = ``shell_description`` / the registered words, as before.
+    ``team_first`` (v1.400.0): the roles the turn's LISTED team members hold
+    when team-first is on and the team is shown — every helper tool's
+    description then LEADS with one sentence naming them in that tool's own
+    argument words; () (off, or no team) = every description exactly as
+    before."""
     out = []
     for tool in plan.dialect_tools:
         spec = tool.spec()
@@ -370,6 +394,8 @@ def model_specs(
         note = runtime_note(registry, tool.runtime_from, shell_description=words)
         if note:
             spec = {**spec, "description": spec["description"] + "\n\nHow commands run here: " + note}
+        if team_first and HELPER_TARGETS & set(tool.targets):
+            spec = _team_first_lead(spec, team_first)
         out.append(spec)
     if plan.passthrough:
         from ..tools.builtins import multi_read_spec
@@ -384,6 +410,8 @@ def model_specs(
             # Qwen Code's `read_file`) keeps its vendor's one-file shape: none
             # of those vendors has a multi-file read to map.
             s = multi_read_spec(s)
+            if team_first and s.get("name") in HELPER_TARGETS:
+                s = _team_first_lead(s, team_first)
             out.append(_strip_store_as(s))
     return out
 
@@ -573,6 +601,12 @@ class HarnessTurn:
         #: helper. Per turn (usage moves), never part of the fingerprint;
         #: "" (a byte-identical prompt) when there is no team.
         self.team_section: str = ""
+        #: v1.400.0 (TEAM-FIRST, ``Config.team_first``): the roles the listed
+        #: team members hold, when the setting is on AND the team section is
+        #: shown — the helper tool's description then leads with the team
+        #: (:func:`model_specs`). () = off, or no team: every tool spec is
+        #: exactly as before. Per turn, never part of the fingerprint.
+        self.team_first: tuple[str, ...] = ()
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -624,6 +658,8 @@ class HarnessTurn:
         return model_specs(
             registry, self.plan, shell_description=self.shell_description,
             bash_description=self.bash_description,
+            # (only with a team SHOWN: the sentence points at its list)
+            team_first=self.team_first if self.team_section else (),
         )
 
     def translate_calls(self, calls: list[Any]) -> list[Any]:
