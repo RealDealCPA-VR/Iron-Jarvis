@@ -48,6 +48,15 @@ RECORD_NOTE = (
 )
 #: The answer when the numbers cannot answer.
 NOT_ENOUGH = "not enough runs to say"
+#: v1.399.2: the answer when the planner handed NO piece to a team member in
+#: any run the two setups are compared on. The team row is then the planner
+#: working alone, and any "Yes" / "No" about the team would be the planner's
+#: own run-to-run variation read as a verdict (the 2026-10-26 live run: 35 of
+#: 36 both ways, "2% less" Claude list-price, and zero pieces handed out).
+NO_MEMBER_WORK = (
+    "No answer: the planner never handed a piece to a team member in these runs, so the team row "
+    "is the planner working alone and says nothing about the team."
+)
 
 
 def _live(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -344,6 +353,20 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
     return (best[1], best[2]) if best else None
 
 
+def handed_to_a_member(record: Mapping[str, Any]) -> bool:
+    """Did this run hand at least one piece to a team member? A member's part
+    with a model call or a piece, or a helper row naming a member (a piece the
+    member then failed, or one its hold refused, still went to the team)."""
+    parts = record.get("parts")
+    if isinstance(parts, Mapping):
+        for name, part in parts.items():
+            if str(name) == PLANNER or not isinstance(part, Mapping):
+                continue
+            if (part.get("model_calls") or 0) > 0 or any((part.get("pieces") or {}).values()):
+                return True
+    return any(isinstance(h, Mapping) and str(h.get("member") or "") for h in (record.get("helpers") or ()))
+
+
 def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
            alone: tuple[Mapping[str, Any], list[Mapping[str, Any]]] | None) -> str:
     """The plan's question, answered only from numbers both setups hold:
@@ -367,6 +390,9 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
         return f"{NOT_ENOUGH}: no run both made was scored for both the team and {label} alone."
     x, n = _scored(t_by[k] for k in keys)
     a, _n = _scored(a_by[k] for k in keys)
+    # v1.399.2: a team row whose planner handed nothing to a member is the
+    # planner alone — no verdict about the team, before any other verdict.
+    m = sum(1 for k in keys if handed_to_a_member(t_by[k]))
     # v1.396.0 review: the PASS comparison leads, and a verdict is given only
     # from the numbers — a team that passed fewer tasks never gets a "less
     # usage" headline, and what the team spent BEYOND the planner's
@@ -377,12 +403,17 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
     t_rows = [t_by[k] for k in keys]
     a_rows = [a_by[k] for k in keys]
     extra = _beyond(t_config, t_rows, vendor, "the team") + _beyond(a_config, a_rows, vendor, f"{label} alone")
+    if 0 < m < n:
+        passes += (f" Team members worked in {m} of the {n} run{'' if n == 1 else 's'}; "
+                   f"in the rest the planner worked alone.")
     tasks = "more tasks" if x > a else "as many tasks"
     if x < a:
         verdict = "No: the team passed fewer tasks."
     if vendor not in ("claude", "codex"):
         if x >= a:
             verdict = f"The team passed {tasks}; the planner has no list price to compare."
+        if m == 0:
+            verdict = NO_MEMBER_WORK
         return " ".join([verdict, passes, *extra])
     name = {"claude": "Claude", "codex": "Codex"}[vendor]
     t_cost = _vendor_list_price(t_config, t_rows, vendor)
@@ -402,6 +433,8 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
                        else f"No: {tasks}, but not less {name} list-price.")
         usage = (f"{name} list-price: {_money(t_cost)} for the team vs {_money(a_cost)} alone "
                  f"({abs(pct):.0f}% {'less' if pct >= 0 else 'more'}).")
+    if m == 0:
+        verdict = NO_MEMBER_WORK
     return " ".join([verdict, passes, usage, *extra])
 
 

@@ -433,7 +433,9 @@ def test_a_team_that_passes_as_many_with_less_claude_says_yes_and_what_else_it_u
     assert words.startswith("Yes on these runs: as many tasks, with less Claude list-price."), words
     assert "Beyond Claude, the team also used $0.0400 of Codex list-price." in words
     # As many tasks but MORE Claude: no.
-    dearer = [_rec("a", True, 0.40), _rec("b", True, 0.40)]
+    # (v1.399.2: a member took a piece — a team that handed nothing out gets
+    # "No answer", test_team_report_no_member_work_v13992.)
+    dearer = [_rec("a", True, 0.40, codex=0.02), _rec("b", True, 0.40, codex=0.02)]
     assert TRP.answer((TEAM_CFG, dearer), (ALONE_CFG, alone)).startswith(
         "No: as many tasks, but not less Claude list-price.")
     # A Codex list price the team's runs could not read is said as unknown.

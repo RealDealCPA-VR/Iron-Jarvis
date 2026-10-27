@@ -4003,6 +4003,24 @@ does not need a bump, stop and bump it.
   from an empty `_cache` and `_inflight` (monkeypatched, restored after);
   each leftover reproduced CI's exact error on the old shape. A test that
   asserts the shared probe DOES start a check must start from an empty one.
+  THE FIRST LIVE RUN (2026-10-26, v1.396.1 frozen, 12 frontier tasks x 3,
+  Sonnet planner + glm + Codex): team 35/36, Sonnet alone 35/36, team 2%
+  less Claude list price — and ZERO pieces handed to a member in 36 runs.
+  The planner WAS shown both the team list and Claude Code's `Agent` tool
+  with the role:<id> words (a scripted run recorded its system prompt and
+  tools); the words are permissive ("Helpers you can start…", the Agent
+  tool opens "on this session's model and account") and on one-minute
+  tasks Sonnet does the work itself. v1.399.2: `team_report.answer` gives
+  `NO_MEMBER_WORK` ("No answer: … the planner working alone") BEFORE any
+  other verdict when no compared run handed a piece to a member
+  (`handed_to_a_member`: a member part with a call or a piece, or a helper
+  row naming a member — a refused piece still went to the team), and says
+  "Team members worked in M of the N runs" when only some did. The old
+  report's "Yes on these runs" was the planner's own variation read as a
+  verdict. Pins: `tests/test_team_report_no_member_work_v13992.py` (8 of 9
+  red on the old code; 5 mutations red); moved on purpose: the memberless
+  teams in `test_harness_bench_team_v1396` and `…_review_v1396` got a
+  member, keeping what each tested.
 - **The planner asks for a ROLE; the team router picks the member, local
   first, never past an account's limit, never across an account group**
   (v1.395.0, Phase 6 of `docs/LONG-JOBS-AND-MODEL-TEAM-PLAN.md`, decisions 7

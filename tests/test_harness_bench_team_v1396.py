@@ -517,9 +517,12 @@ def test_a_run_whose_account_carried_no_reading_is_said_beside_the_span():
 def test_the_answer_says_not_enough_runs_when_the_numbers_cannot_answer():
     team_cfg = {"runner": "jarvis-team", "provider": "claude-cli", "model": "m"}
     alone_cfg = {"runner": "jarvis", "provider": "claude-cli", "model": "m"}
+    # (v1.399.2: the team hands a piece to a member, or the answer is
+    # "No answer" before any other verdict — test_team_report_no_member_work.)
     rec = {"task_id": "a", "passed": True, "cost_list_price_usd": 0.1, "tokens_in": 1, "tokens_out": 1,
            "parts": {PLANNER: {"vendor": "claude", "cost_list_price_usd": 0.1, "tokens_in": 1, "tokens_out": 1,
-                               "model_calls": 1}}}
+                               "model_calls": 1}},
+           "helpers": [{"member": "glm", "role": "code", "state": "done"}]}
     assert TRP.answer((team_cfg, [rec]), None).startswith("not enough runs to say")
     other = {**rec, "task_id": "b"}
     assert TRP.answer((team_cfg, [rec]), (alone_cfg, [other])).startswith("not enough runs to say")
@@ -541,9 +544,11 @@ def test_the_answer_counts_only_runs_both_setups_had_a_fair_go_at():
     alone_cfg = {"runner": "jarvis", "provider": "claude-cli", "model": "m"}
 
     def rec(task, passed, cost):
+        # (v1.399.2: a member took a piece in each run — see the pin above.)
         return {"task_id": task, "passed": passed, "tokens_in": 1, "tokens_out": 1, "cost_list_price_usd": cost,
                 "parts": {PLANNER: {"vendor": "claude", "cost_list_price_usd": cost, "tokens_in": 1,
-                                    "tokens_out": 1, "model_calls": 1}}}
+                                    "tokens_out": 1, "model_calls": 1}},
+                "helpers": [{"member": "glm", "role": "code", "state": "done"}]}
 
     team = [rec("a", True, 0.1), rec("b", None, 0.0)]  # b did not run for the team
     alone = [rec("a", True, 0.2), rec("b", True, 0.5)]

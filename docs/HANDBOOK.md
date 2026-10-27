@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.399.1 (2026-10-25).*
+holds itself to. Current as of v1.399.2 (2026-10-25).*
 
 ---
 
@@ -2085,6 +2085,10 @@ benchmark a model team against one model.
   - The team beside the planner alone: tasks passed, then Claude list price.
     The verdict comes first, and a team that passes fewer tasks is told so
     plainly.
+  - If the planner never handed a piece to a team member, the answer is "No
+    answer": the team row was the planner working alone, so it says nothing
+    about the team (v1.399.2). If members worked in only some runs, the
+    answer says in how many.
   - What else the team used: Codex list price, local tokens.
   - The usage-window readings your accounts sent. "Not comparable" when a
     window reset during the run; "not known" when none came.
