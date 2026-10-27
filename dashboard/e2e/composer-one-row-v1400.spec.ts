@@ -833,3 +833,41 @@ for (const size of [
     });
   });
 }
+
+test.describe("the IJ harness composer holds still while typing (1406 × 857)", () => {
+  test.use({ viewport: { width: 1406, height: 857 } });
+  test("typing measures nothing and wakes nothing", async ({ page }) => {
+    // The review: the chat's pin, for the harness's box (HarnessSession
+    // re-renders as you type; its toolbar's fit must not).
+    await seed(page);
+    await page.goto(`/terminals?session=${sessions.qwen}`);
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+    await settled(page, QWEN);
+    await page.getByTestId("harness-composer-toolbar").evaluate((bar) => {
+      const w = window as unknown as { __fitReads: number; __fitWakes: number };
+      w.__fitReads = 0;
+      w.__fitWakes = 0;
+      const real = bar.getBoundingClientRect.bind(bar);
+      (bar as HTMLElement).getBoundingClientRect = () => {
+        w.__fitReads += 1;
+        return real();
+      };
+      const realQ = bar.querySelectorAll.bind(bar);
+      (bar as HTMLElement).querySelectorAll = ((sel: string) => {
+        w.__fitWakes += 1;
+        return realQ(sel);
+      }) as typeof bar.querySelectorAll;
+    });
+    const send = page.getByTestId("harness-send");
+    await expect(send).toBeDisabled();
+    await page.getByTestId("harness-composer").getByRole("textbox").click();
+    await page.keyboard.type("make the build faster and keep typing past the first word", { delay: 5 });
+    await expect(send).toBeEnabled();
+    await frames(page);
+    const typed = await page.evaluate(() => {
+      const w = window as unknown as { __fitReads: number; __fitWakes: number };
+      return { reads: w.__fitReads, wakes: w.__fitWakes };
+    });
+    expect(typed, "the harness toolbar was measured or its observer woke while typing").toEqual({ reads: 0, wakes: 0 });
+  });
+});

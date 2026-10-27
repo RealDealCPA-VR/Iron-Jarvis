@@ -60,7 +60,7 @@ import { mintTurnId } from "@/lib/turnRejoin";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { answeredModelName } from "@/lib/answeredModel";
 import { composerChipClass, fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
-import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit } from "@/lib/toolbarFit";
+import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit, type FitStep } from "@/lib/toolbarFit";
 import { asPermissionMode } from "@/lib/permissionLevels";
 import { phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
@@ -589,7 +589,7 @@ export function HarnessSession({
   // "Plan first", the permission level, the reasoning words); only a box too
   // narrow even for that wraps as before.
   const [harnessFitRef, harnessFit] = useToolbarFit(HARNESS_FIT_ORDER);
-  const harnessOn = (step: Parameters<typeof fitStepOn>[2]) => fitStepOn(HARNESS_FIT_ORDER, harnessFit, step);
+  const harnessOn = (step: FitStep) => fitStepOn(HARNESS_FIT_ORDER, harnessFit, step);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   // v1.392.0 (long jobs, Phase 3): the running reply's stall notice (the

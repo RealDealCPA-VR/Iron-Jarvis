@@ -65,7 +65,8 @@ give up their words one at a time — Web, Auto tools, "Local only" to "Local" �
 and only then the model's name truncates, then the permission level), a short
 name picked after a long one getting its own width back, the hysteresis (a few
 pixels of jitter never flickers the chips' words), the user's case at 125 % and
-150 % zoom, and the IJ harness chip naming an Iron-Proxy account.
+150 % zoom, the IJ harness chip naming an Iron-Proxy account, and typing in
+the IJ harness's box measuring nothing either.
 `IJ_ROW_OUT=<folder>` writes each case's measurements and a screenshot.
 
 `e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
