@@ -847,6 +847,12 @@ def _and_list(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
+def _or_list(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " or " + items[-1]
+
+
 def team_first_on(platform: Any) -> bool:
     """Is team-first switched on (``Config.team_first``, read LIVE)? Only a
     real True counts; anything unreadable is off. Never raises."""
@@ -890,19 +896,14 @@ def team_first_tool_sentence(input_schema: Any, roles: Iterable[str]) -> str:
     return TEAM_FIRST_TOOL.format(how=how)
 
 
-def _or_list(items: list[str]) -> str:
-    if len(items) <= 1:
-        return "".join(items)
-    return ", ".join(items[:-1]) + " or " + items[-1]
-
-
 def team_section(platform: Any, *, limit: int = 10, team_first: bool = False) -> tuple[str, tuple[str, ...]]:
     """``(section, roles)`` for a coding session's prompt: :func:`team_block`'s
     text and — with ``team_first`` and a team shown — the team-first
     instruction after the member lines, and the roles the LISTED members hold
     (the helper tool's sentence names those). ``("", ())`` with no team;
     ``(team_block, ())`` with team-first off, so the prompt is byte-identical
-    to v1.399.4. Never raises (the caller's except also guards it)."""
+    to v1.399.4. BLOCKING (cached reads): the lanes call it off the loop, and
+    their ``except`` keeps a failure from breaking a turn."""
     names = {f"custom:{r.name}": r for r in team_members(platform)}
     if not names:
         return "", ()

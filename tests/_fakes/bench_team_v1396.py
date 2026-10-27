@@ -8,8 +8,10 @@ service or the network:
 * ``claude-cli`` — the PLANNER: it plays a script per (task, setup), where the
   setup is read off its own system prompt (a planner that sees "# Your model
   team" hands pieces out by ROLE through Claude Code's ``Agent`` tool; one
-  that does not works alone), and answers every call with the vendor's usage
-  headers in ``extra["ratelimit_headers"]`` — the exact shape the real
+  that does not works alone — and, v1.400.0, with ``world.team_words`` set,
+  one that sees the team but not those words works alone too), and answers
+  every call with the vendor's usage headers in ``extra["ratelimit_headers"]``
+  — the exact shape the real
   claude-cli adapter carries (``claude_native/transport.assemble``);
 * ``codex-cli`` — a REVIEWER member, answering with Codex's account snapshot
   in ``extra["rate_limits"]`` (``codex_native/adapter``'s shape);
