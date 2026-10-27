@@ -273,6 +273,47 @@ def load_tasks(tasks_dir: Path | None = None) -> list[Task]:
     return out
 
 
+#: v1.400.0: what ``--tier`` takes besides one tier — several, joined by commas.
+_TIER_REFUSAL = (
+    f"--tier must be one of {', '.join((*TIERS, 'all'))}, or several tiers joined by commas "
+    "(frontier,team)"
+)
+
+
+def tier_names(tier: str) -> tuple[str, ...]:
+    """The tiers a ``--tier`` value selects, in :data:`TIERS` order.
+
+    ``all`` is every tier; one tier is itself; v1.400.0: several tiers joined
+    by commas select each of them (``frontier,team`` — one night's run of two
+    tiers), whatever order they are typed in (``team, frontier`` is the same
+    selection). An unknown tier, ``all`` beside another tier, or nothing at
+    all is refused (:class:`TaskError`), never silently dropped."""
+    text = str(tier or "").strip()
+    if text == "all":
+        return TIERS
+    parts = [p.strip() for p in text.split(",")]
+    named = [p for p in parts if p]
+    if not named or any(p not in TIERS for p in named):
+        raise TaskError(_TIER_REFUSAL)
+    return tuple(t for t in TIERS if t in set(named))
+
+
+def canonical_tier(tier: str) -> str:
+    """One spelling for a ``--tier`` value, so a setup's identity is the same
+    whatever order its tiers were typed in: ``all`` and a single tier stay as
+    they are (an existing configuration keeps its identity), several tiers
+    are joined in :data:`TIERS` order (``team,frontier`` -> ``frontier,team``).
+    A value :func:`tier_names` refuses comes back unchanged, to be refused
+    where the tasks are selected."""
+    text = str(tier or "").strip()
+    if text == "all":
+        return "all"
+    try:
+        return ",".join(tier_names(text))
+    except TaskError:
+        return tier
+
+
 def select_tasks(
     tasks: Sequence[Task],
     *,
@@ -287,10 +328,11 @@ def select_tasks(
     the same seed gives the same order on every machine. ``names`` keeps only
     those tasks (in the shuffled order; an unknown name is an error, never
     silently skipped), ``tier`` (``core`` / ``hard`` / ``frontier`` /
-    ``team`` / ``all``) keeps only that tier, and ``max_tasks`` keeps the first N after
-    that."""
-    if tier not in (*TIERS, "all"):
-        raise TaskError(f"--tier must be one of {', '.join((*TIERS, 'all'))}")
+    ``team`` / ``all``, or several tiers joined by commas — :func:`tier_names`)
+    keeps only those tiers, and ``max_tasks`` keeps the first N after that.
+    Several tiers keep the one shuffled order: ``frontier,team`` is the
+    frontier and team tasks exactly as ``all`` orders them."""
+    wanted = set(tier_names(tier))
     by_id = {t.id: t for t in tasks}
     order = sorted(by_id)
     random.Random(int(seed)).shuffle(order)
@@ -303,8 +345,8 @@ def select_tasks(
             )
         keep = set(wanted)
         order = [i for i in order if i in keep]
-    if tier != "all":
-        order = [i for i in order if by_id[i].tier == tier]
+    if wanted != set(TIERS):
+        order = [i for i in order if by_id[i].tier in wanted]
     if max_tasks is not None:
         if max_tasks < 1:
             raise TaskError("max_tasks must be at least 1")

@@ -47,7 +47,10 @@ def run_command(
     tasks: str = typer.Option("", "--tasks", help="Only these tasks, comma-separated."),
     seed: int = typer.Option(None, "--seed", help="Shuffles the task order (same seed, same order)."),
     max_tasks: int = typer.Option(None, "--max-tasks", help="Run at most this many tasks."),
-    tier: str = typer.Option("all", "--tier", help="core, hard, frontier, team or all (default all)."),
+    tier: str = typer.Option(
+        "all", "--tier",
+        help="core, hard, frontier, team or all (default all), or several tiers joined by commas "
+        "(frontier,team: both in one run, in any order)."),
     rounds: int = typer.Option(None, "--rounds", help="Jarvis only: tool rounds per task (default 60)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="List what would run; no model is called."),
     root: str = typer.Option(".", "--root", help="Where the benchmark keeps its state (a scratch folder)."),
