@@ -147,4 +147,3 @@ def test_a_setup_where_nothing_ran_says_it_is_not_known():
         "Not known: all 6 runs did not run, so none could hand a piece to a team member.")
     one = gone[:1]
     assert TRP.handed_line(one) == "Not known: the 1 run did not run, so it could not hand a piece to a team member."
-

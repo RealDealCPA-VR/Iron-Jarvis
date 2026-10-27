@@ -237,4 +237,3 @@ def test_b_first_a_killed_after_its_team_then_a_again(tmp_path, monkeypatch, gat
         assert f"The answer compares with {alone_key} (jarvis, Iron Jarvis" in part
         assert f"to a team member in {handed} runs." in part
     assert f"**The answer:** {TRP.NO_MEMBER_WORK}" in _section(report, team[0][0])
-
