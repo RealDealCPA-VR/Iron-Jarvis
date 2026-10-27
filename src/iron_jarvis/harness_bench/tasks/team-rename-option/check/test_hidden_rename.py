@@ -397,8 +397,10 @@ class D_Docs(unittest.TestCase):
         self.assertIn("2.4.0", text)
         entry = text[text.index("2.4.0"):]
         entry = entry[: entry.index("2.3.0")] if "2.3.0" in entry else entry
-        self.assertIn("max_retries", entry)
-        self.assertIn("retry_limit", entry)
+        # "names the rename": the old and the new name, in any of their forms
+        # (max_retries, --max-retries, SYNCER_MAX_RETRIES, "Max retries" ...).
+        self.assertTrue(OLD_WORDS.search(entry), "the 2.4.0 entry does not name the old name")
+        self.assertTrue(re.search(r"retry[ _-]limit", entry, re.IGNORECASE), "the 2.4.0 entry does not name the new one")
 
 
 class E_TestsKept(unittest.TestCase):

@@ -63,7 +63,7 @@ PATCH_CONFLICTS = {"README.md", "orderdesk/cli.py", "orderdesk/invoice.py", "ord
 TEAM_HASHES = {
     "team-audit-events": "232bf1acd37bd2a453de8dc2412d3e77bf51840fd2f44e16d6ce6c3802bfea3d",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
-    "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
+    "team-rename-option": "3317f863a36a4af2f4c09e3d09eb1959e22d490494303dee9369460d19dcf08e",
     "team-review-patch": "c3c6b067e5fad22bb5da2cf5f48f624a1780cf63930c4a0d00add417d9b016e8",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
     "team-test-triage": "70cbd69203b05e4f3e35032c5a415e5e964f79625e3a0a1eb94d515456aa0166",
