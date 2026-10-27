@@ -14,7 +14,7 @@ An order file is JSON:
 }
 ```
 
-`coupon` and the customer's `tier` are optional. `examples/order.json` is a
+`coupon`, `credit_cents` and the customer's `tier` are optional. `examples/order.json` is a
 whole example.
 
 ## Printing an invoice
@@ -22,6 +22,7 @@ whole example.
     python -m orderdesk.cli examples/order.json
     python -m orderdesk.cli examples/order.json --coupon WELCOME5
     python -m orderdesk.cli examples/order.json --tier gold
+    python -m orderdesk.cli examples/order.json --credit 1500
 
 The exit code is 0, or 2 when the order file is wrong (the reason is
 printed).
@@ -54,6 +55,14 @@ Silver and gold invoices end with a "Points earned" line. A refund takes back
 the order's points in proportion to the refunded part of what was paid,
 rounded up and never more than the order earned
 (`orderdesk.refunds.points_to_take_back`).
+
+## Store credit
+
+A customer's store credit (`credit_cents` in the order file, or `--credit`
+instead of it) pays as much of the invoice's total as it can
+(`orderdesk.credit.apply_store_credit`); the invoice then shows the credit
+used and the amount due under the total. Store credit does not change the
+points an order earns.
 
 ## Tests
 

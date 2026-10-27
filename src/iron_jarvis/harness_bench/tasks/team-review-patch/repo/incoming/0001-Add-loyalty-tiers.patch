@@ -35,20 +35,36 @@ Customers now have a loyalty tier: bronze (the default), silver or gold.
   part of what was paid, rounded UP to a whole point, never more than the
   order earned (nothing for a refund of 0); paid_cents must be more than 0
   (ValueError otherwise).
-* README.md: the tiers and the points.
+* credit.py (new): apply_store_credit(amount_cents, credit_cents) returns
+  (used_cents, left_to_pay_cents): the customer's store credit pays as much
+  of the amount as it can, never more than the amount and never more than
+  the credit, and the rest is left to pay; an amount of 0 or less uses no
+  credit and leaves nothing to pay; a negative credit is a ValueError.
+* invoice.py: render_invoice takes credit_cents (0 by default); whenever
+  store credit pays any of the total (some of it or all of it), "Store
+  credit: -$X.XX" (the credit used) and "Amount due: $Y.YY" (what is left
+  to pay, $0.00 when the credit covers it all) come right after the Total
+  line, before any points line; when it pays nothing, neither line is
+  there. Store credit does not change the points.
+* cli.py: --credit CENTS gives the customer's store credit instead of the
+  order file's "credit_cents" (0 when neither gives one); a --credit that
+  is not a whole number, or a negative credit, is an error (exit code 2).
+* README.md: the tiers, the points and store credit.
 * test_loyalty.py: tests for all of it.
 ---
- README.md              |  27 +++++++++++++++++++++++++--
- orderdesk/cli.py       |   8 ++++++--
+ README.md              |  36 ++++++++++++++++++++++++++++++++++--
+ orderdesk/cli.py       |  12 +++++++++---
+ orderdesk/credit.py    |  14 ++++++++++++++
  orderdesk/customers.py |  16 +++++++++++++++-
  orderdesk/discounts.py |  17 +++++++++++++++++
- orderdesk/invoice.py   |  17 ++++++++++++-----
+ orderdesk/invoice.py   |  28 +++++++++++++++++++++-------
  orderdesk/points.py    |  19 +++++++++++++++++++
  orderdesk/refunds.py   |  13 +++++++++++++
  orderdesk/report.py    |  11 +++++++++++
- orderdesk/shipping.py  |  10 ++++++----
- test_loyalty.py        | 120 ++++++++++++++++++++++++++++++++++++++++
- 10 files changed, 244 insertions(+), 14 deletions(-)
+ orderdesk/shipping.py  |   9 ++++++---
+ test_loyalty.py        | 145 ++++++++++++++++++++++++++++++++++++++++
+ 11 files changed, 304 insertions(+), 16 deletions(-)
+ create mode 100644 orderdesk/credit.py
  create mode 100644 orderdesk/points.py
  create mode 100644 orderdesk/refunds.py
  create mode 100644 test_loyalty.py
@@ -56,7 +72,7 @@ Customers now have a loyalty tier: bronze (the default), silver or gold.
 diff --git a/README.md b/README.md
 --- a/README.md
 +++ b/README.md
-@@ -8,18 +8,20 @@
+@@ -8,18 +8,21 @@
  
  ```json
  {
@@ -68,7 +84,7 @@ diff --git a/README.md b/README.md
  ```
  
 -`coupon` is optional. `examples/order.json` is a whole example.
-+`coupon` and the customer's `tier` are optional. `examples/order.json` is a
++`coupon`, `credit_cents` and the customer's `tier` are optional. `examples/order.json` is a
 +whole example.
  
  ## Printing an invoice
@@ -76,10 +92,11 @@ diff --git a/README.md b/README.md
      python -m orderdesk.cli examples/order.json
      python -m orderdesk.cli examples/order.json --coupon WELCOME5
 +    python -m orderdesk.cli examples/order.json --tier gold
++    python -m orderdesk.cli examples/order.json --credit 1500
  
  The exit code is 0, or 2 when the order file is wrong (the reason is
  printed).
-@@ -32,6 +34,27 @@
+@@ -32,6 +35,35 @@
  Shipping is free on orders of $100.00 or more (the subtotal before any
  discount), otherwise $5.99.
  
@@ -104,6 +121,14 @@ diff --git a/README.md b/README.md
 +rounded up and never more than the order earned
 +(`orderdesk.refunds.points_to_take_back`).
 +
++## Store credit
++
++A customer's store credit (`credit_cents` in the order file, or `--credit`
++instead of it) pays as much of the invoice's total as it can
++(`orderdesk.credit.apply_store_credit`); the invoice then shows the credit
++used and the amount due under the total. Store credit does not change the
++points an order earns.
++
  ## Tests
  
      python -m unittest discover -s . -p "test_*.py"
@@ -112,27 +137,50 @@ diff --git a/orderdesk/cli.py b/orderdesk/cli.py
 +++ b/orderdesk/cli.py
 @@ -1,4 +1,4 @@
 -"""The command line: python -m orderdesk.cli ORDER.json [--coupon CODE]."""
-+"""The command line: python -m orderdesk.cli ORDER.json [--coupon CODE] [--tier TIER]."""
++"""The command line: python -m orderdesk.cli ORDER.json [--coupon CODE] [--tier TIER] [--credit CENTS]."""
  
  import argparse
  import json
-@@ -12,11 +12,15 @@
+@@ -12,12 +12,18 @@
      parser = argparse.ArgumentParser(prog="orderdesk", description="Print the invoice of an order file.")
      parser.add_argument("order", help="the order file (JSON)")
      parser.add_argument("--coupon", help="a coupon code (instead of the order file's)")
 +    parser.add_argument("--tier", help="the customer's loyalty tier (instead of the order file's)")
++    parser.add_argument("--credit", help="the customer's store credit in cents (instead of the order file's)")
      args = parser.parse_args(argv)
      with open(args.order, encoding="utf-8") as fh:
          order = json.load(fh)
      try:
 -        customer = parse_customer(order["customer"])
+-        text = render_invoice(customer, order["lines"], args.coupon or order.get("coupon"))
 +        row = dict(order["customer"])
 +        if args.tier:
 +            row["tier"] = args.tier
 +        customer = parse_customer(row)
-         text = render_invoice(customer, order["lines"], args.coupon or order.get("coupon"))
++        credit = int(args.credit) if args.credit is not None else int(order.get("credit_cents", 0))
++        text = render_invoice(customer, order["lines"], args.coupon or order.get("coupon"), credit_cents=credit)
      except (KeyError, ValueError) as exc:
          print(f"error: {exc}", file=sys.stderr)
+         return 2
+diff --git a/orderdesk/credit.py b/orderdesk/credit.py
+new file mode 100644
+--- /dev/null
++++ b/orderdesk/credit.py
+@@ -0,0 +1,14 @@
++"""Store credit (from returns and goodwill gestures), spent on an order."""
++
++
++def apply_store_credit(amount_cents, credit_cents):
++    """Pay ``amount_cents`` with the customer's store credit, as
++    ``(used_cents, left_to_pay_cents)``. The credit pays as much of the amount
++    as it can: never more than the amount and never more than the credit;
++    whatever it does not cover is left to pay. An amount of 0 or less uses no
++    credit and leaves nothing to pay. A negative credit is a ValueError."""
++    if credit_cents < 0:
++        raise ValueError(f"store credit cannot be negative: {credit_cents}")
++    amount = max(amount_cents, 0)
++    used = min(amount, credit_cents)
++    return used, amount - used
 diff --git a/orderdesk/customers.py b/orderdesk/customers.py
 --- a/orderdesk/customers.py
 +++ b/orderdesk/customers.py
@@ -214,23 +262,26 @@ diff --git a/orderdesk/discounts.py b/orderdesk/discounts.py
 diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
 --- a/orderdesk/invoice.py
 +++ b/orderdesk/invoice.py
-@@ -1,24 +1,31 @@
+@@ -1,24 +1,38 @@
  """The invoice text."""
  
 -from .discounts import coupon_percent, discount_cents
++from .credit import apply_store_credit
 +from .discounts import discount_cents, order_discount_percent
 +from .points import points_earned
  from .pricing import line_total, money, subtotal
  from .shipping import shipping_cents
  
  
- def render_invoice(customer, lines, coupon=None):
+-def render_invoice(customer, lines, coupon=None):
 -    """The invoice of an order, as text: the customer, one line per order line,
 -    the subtotal, the discount (when there is one), shipping and the total."""
++def render_invoice(customer, lines, coupon=None, credit_cents=0):
 +    """The invoice of an order, as text: the customer (and the loyalty tier,
 +    for silver and gold), one line per order line, the subtotal, the discount
-+    (when there is one), shipping and the total, and for silver and gold the
-+    points the order earns."""
++    (when there is one), shipping and the total; then, when store credit pays
++    any of it, the credit used and the amount due; and for silver and gold
++    the points the order earns."""
      out = [f"Invoice for {customer.name} <{customer.email}>"]
 +    if customer.tier != "bronze":
 +        out.append(f"Tier: {customer.tier.capitalize()}")
@@ -247,7 +298,13 @@ diff --git a/orderdesk/invoice.py b/orderdesk/invoice.py
 -    ship = shipping_cents(sub)
 +    ship = shipping_cents(sub, customer.tier)
      out.append(f"Shipping: {money(ship)}" if ship else "Shipping: free")
-     out.append(f"Total: {money(sub - off + ship)}")
+-    out.append(f"Total: {money(sub - off + ship)}")
++    total = sub - off + ship
++    out.append(f"Total: {money(total)}")
++    used, due = apply_store_credit(total, credit_cents)
++    if used:
++        out.append(f"Store credit: -{money(used)}")
++        out.append(f"Amount due: {money(due)}")
 +    if customer.tier != "bronze":
 +        out.append(f"Points earned: {points_earned(sub - off, customer.tier)}")
      return "\n".join(out)
@@ -269,7 +326,7 @@ new file mode 100644
 +    if total_cents <= 0:
 +        return 0
 +    numerator, denominator = POINTS_PER_DOLLAR[tier]
-+    return (total_cents // 100) * numerator // denominator
++    return total_cents * numerator // denominator // 100
 +
 +
 +def points_value_cents(points):
@@ -322,7 +379,7 @@ diff --git a/orderdesk/report.py b/orderdesk/report.py
 diff --git a/orderdesk/shipping.py b/orderdesk/shipping.py
 --- a/orderdesk/shipping.py
 +++ b/orderdesk/shipping.py
-@@ -2,9 +2,11 @@
+@@ -2,9 +2,12 @@
  
  FLAT_FEE_CENTS = 599
  FREE_FROM_CENTS = 10000
@@ -332,17 +389,17 @@ diff --git a/orderdesk/shipping.py b/orderdesk/shipping.py
 -def shipping_cents(subtotal_cents):
 -    """Free on orders of $100.00 or more (the subtotal before any discount);
 -    otherwise the flat fee."""
--    return 0 if subtotal_cents >= FREE_FROM_CENTS else FLAT_FEE_CENTS
 +def shipping_cents(subtotal_cents, tier="bronze"):
 +    """Free on orders of $100.00 or more, or $50.00 or more for a gold
 +    customer (the subtotal before any discount); otherwise the flat fee."""
-+    free_from = GOLD_FREE_FROM_CENTS if tier == "gold" else FREE_FROM_CENTS
-+    return 0 if subtotal_cents >= free_from else FLAT_FEE_CENTS
++    if tier == "gold" and subtotal_cents > GOLD_FREE_FROM_CENTS:
++        return 0
+     return 0 if subtotal_cents >= FREE_FROM_CENTS else FLAT_FEE_CENTS
 diff --git a/test_loyalty.py b/test_loyalty.py
 new file mode 100644
 --- /dev/null
 +++ b/test_loyalty.py
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,145 @@
 +import contextlib
 +import io
 +import json
@@ -351,6 +408,7 @@ new file mode 100644
 +import unittest
 +
 +from orderdesk.cli import main
++from orderdesk.credit import apply_store_credit
 +from orderdesk.customers import parse_customer
 +from orderdesk.discounts import order_discount_percent, tier_percent
 +from orderdesk.invoice import render_invoice
@@ -437,6 +495,18 @@ new file mode 100644
 +        self.assertEqual(points_to_take_back(10, 9999, 5000), 10)
 +
 +
++class StoreCreditTest(unittest.TestCase):
++    def test_part_of_the_total(self):
++        self.assertEqual(apply_store_credit(5600, 1000), (1000, 4600))
++
++    def test_more_credit_than_the_total(self):
++        self.assertEqual(apply_store_credit(5600, 9000), (5600, 0))
++
++    def test_an_invoice_with_credit(self):
++        text = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES, coupon="SAVE10", credit_cents=600)
++        self.assertTrue(text.endswith("Total: $56.00\nStore credit: -$6.00\nAmount due: $50.00\nPoints earned: 112"))
++
++
 +class ReportTierTest(unittest.TestCase):
 +    def test_sales_by_tier(self):
 +        orders = [
@@ -459,6 +529,18 @@ new file mode 100644
 +        self.assertEqual(code, 0)
 +        self.assertIn("Tier: Gold", out.getvalue())
 +        self.assertIn("Shipping: free", out.getvalue())
++
++    def test_the_credit_option(self):
++        order = {"customer": ADA, "lines": LINES, "credit_cents": 100}
++        with tempfile.TemporaryDirectory() as tmp:
++            path = os.path.join(tmp, "order.json")
++            with open(path, "w", encoding="utf-8") as fh:
++                json.dump(order, fh)
++            out = io.StringIO()
++            with contextlib.redirect_stdout(out):
++                code = main([path, "--credit", "2500"])
++        self.assertEqual(code, 0)
++        self.assertIn("Store credit: -$25.00\nAmount due: $50.99", out.getvalue())
 +
 +
 +if __name__ == "__main__":

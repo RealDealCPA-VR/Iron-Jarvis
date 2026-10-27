@@ -11,7 +11,7 @@ def points_earned(total_cents, tier):
     if total_cents <= 0:
         return 0
     numerator, denominator = POINTS_PER_DOLLAR[tier]
-    return (total_cents // 100) * numerator // denominator
+    return total_cents * numerator // denominator // 100
 
 
 def points_value_cents(points):

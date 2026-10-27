@@ -8,7 +8,7 @@ import os
 import random
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +30,11 @@ UNCHANGED = {
     "test_stock.py": "1247508585dfb54cb94470d739e31797f00a21f6372be243ec1959faede43191",
     "test_tax.py": "470d69da29bdcbc0afc1533c6bf73f87fe64ea16e2283b22457c1a36f58de131",
     "test_truncate.py": "d9077faa1164b8993599b32d112e68c17c7118cef668290e3d526ec9f97f151d",
+    "test_passwords.py": "70c17897f16809bb95f8cc7d64d1d1f12118eb2bfe5767417d5884f33a6a0746",
+    "test_quiet_hours.py": "6997a0312af8fe5ff2e356c63b9eac24b11128b98086f2426a140568c2e21fa3",
+    "test_cards.py": "338a1a009fa981f76fc1b65220c55d3866351cc72c447722097b28082874b6ca",
+    "test_recurrence.py": "9263252f2d3507afa69e38f71578e5b7559df2a5a7a665b0492c1d727aaa9e52",
+    "test_percentiles.py": "1055d2b8d705b566654608226927056603f3ad1afe173bd660881a29094374a1",
 }
 
 
@@ -224,6 +229,218 @@ class HiddenWeights(unittest.TestCase):
                 got = parcel_grams(items)
                 self.assertEqual(got, grams)
                 self.assertIs(type(got), int, "whole grams are an int")
+
+
+class HiddenPasswords(unittest.TestCase):
+    NAMED = [
+        ("long-enough-AdaL-2026", "AdaL"), ("long-enough-adal-2026", "AdaL"), ("long-enough-ADAL-2026", "aDaL"),
+        ("xx-BoB-xx-123456", "bob"), ("\u00c9LODIE-was-here-26", "\u00e9lodie"),
+        ("\u00e9lodie-was-here-26", "\u00c9lodie"), ("sam-sam-sam-2026", "SAM"), ("TheAdmin-Room-42", "theadmin"),
+    ]
+    CLEAN = [
+        ("long-enough-Ada-2026", "adal"), ("al-is-here-2026", "AL"), ("Al-is-here-2026", "al"),
+        ("annxlee-2026-long", "ann.lee"), ("ANNXLEE-2026-long", "Ann.Lee"), ("plain-words-here-9", "zed"),
+    ]
+
+    def test_a_the_user_name_in_any_case(self):
+        from accounts.passwords import password_problems
+
+        for password, username in self.NAMED:
+            with self.subTest(password=password, username=username):
+                self.assertEqual(password_problems(password, username), ["contains the user name"])
+
+    def test_b_short_names_and_lookalikes_are_not_flagged(self):
+        from accounts.passwords import is_acceptable, password_problems
+
+        for password, username in self.CLEAN:
+            with self.subTest(password=password, username=username):
+                self.assertEqual(password_problems(password, username), [])
+                self.assertTrue(is_acceptable(password, username))
+
+    def test_c_the_order_of_the_problems(self):
+        from accounts.passwords import password_problems
+
+        self.assertEqual(password_problems("ADA", "ada"), ["too short", "no digit", "contains the user name"])
+        self.assertEqual(password_problems("123456789012", "Bob"), ["no letter"])
+        self.assertEqual(password_problems("Bob-9", "bOB"), ["too short", "contains the user name"])
+
+
+class HiddenQuietHours(unittest.TestCase):
+    NIGHT = (time(22, 0), time(7, 0))
+    LATE = (time(20, 30), time(5, 15))
+    LUNCH = (time(13, 0), time(14, 30))
+    CASES = [
+        (time(22, 0), NIGHT, True), (time(21, 59, 59), NIGHT, False), (time(0, 0), NIGHT, True),
+        (time(6, 59, 59, 999999), NIGHT, True), (time(7, 0), NIGHT, False), (time(12, 0), NIGHT, False),
+        (time(20, 30), LATE, True), (time(20, 29), LATE, False), (time(5, 14), LATE, True),
+        (time(5, 15), LATE, False), (time(23, 0), LATE, True), (time(13, 0), LUNCH, True),
+        (time(14, 29), LUNCH, True), (time(14, 30), LUNCH, False), (time(12, 59), LUNCH, False),
+        (time(23, 0), LUNCH, False), (time(3, 0), LUNCH, False),
+        (time(9, 0), (time(9, 0), time(9, 0)), False), (time(3, 0), (time(9, 0), time(9, 0)), False),
+        (time(23, 30), (time(0, 0), time(0, 0)), False),
+        (datetime(2026, 10, 27, 2, 15), NIGHT, True), (datetime(2026, 10, 27, 7, 0, 1), NIGHT, False),
+    ]
+
+    def test_a_in_quiet_hours(self):
+        from notify.quiet_hours import in_quiet_hours
+
+        for moment, (start, end), quiet in self.CASES:
+            with self.subTest(moment=moment, start=start, end=end):
+                self.assertIs(bool(in_quiet_hours(moment, start=start, end=end)), quiet)
+
+    def test_b_the_default_hours(self):
+        from notify.quiet_hours import in_quiet_hours
+
+        self.assertTrue(in_quiet_hours(time(22, 0)))
+        self.assertTrue(in_quiet_hours(time(1, 0)))
+        self.assertFalse(in_quiet_hours(time(7, 0)))
+
+    def test_c_next_send_time(self):
+        from notify.quiet_hours import next_send_time
+
+        day = datetime(2026, 10, 27)
+        cases = [
+            (day.replace(hour=2), self.NIGHT, day.replace(hour=7)),
+            (day.replace(hour=22), self.NIGHT, datetime(2026, 10, 28, 7, 0)),
+            (day.replace(hour=3, minute=40, second=5), self.LATE, day.replace(hour=5, minute=15)),
+            (day.replace(hour=21), self.LATE, datetime(2026, 10, 28, 5, 15)),
+            (day.replace(hour=13, minute=45), self.LUNCH, day.replace(hour=14, minute=30)),
+            (day.replace(hour=15, minute=1, second=7), self.LUNCH, day.replace(hour=15, minute=1, second=7)),
+            (day.replace(hour=9), (time(9, 0), time(9, 0)), day.replace(hour=9)),
+            (datetime(2026, 12, 31, 23, 5), self.NIGHT, datetime(2027, 1, 1, 7, 0)),
+        ]
+        for moment, (start, end), expected in cases:
+            with self.subTest(moment=moment, start=start, end=end):
+                self.assertEqual(next_send_time(moment, start=start, end=end), expected)
+
+
+class HiddenCards(unittest.TestCase):
+    VALID = [
+        "4222222222222", "4000056655661", "3714 496353 98431", "353011133330001", "1234567890123456785",
+        "6011 1111 1111 1117", "5555-5555-5555-4444", "601100009005", "622126123456789015", "4012888888881881",
+        "60110009901392", "40000566556652", "3782 822463 10005",
+    ]
+    INVALID = [
+        "3782 822463 10006", "4222222222223", "1234567890123456784", "353011133330002", "4111 1111 1111 1112",
+        "4222 2222", "12345678901234567890", "4111 1111 1111 111x", "",
+    ]
+
+    def test_a_valid_numbers_of_every_length(self):
+        from payments.cards import luhn_ok
+
+        for number in self.VALID:
+            with self.subTest(number=number):
+                self.assertIs(luhn_ok(number), True)
+
+    def test_b_invalid_numbers(self):
+        from payments.cards import luhn_ok
+
+        for number in self.INVALID:
+            with self.subTest(number=number):
+                self.assertIs(luhn_ok(number), False)
+
+    def test_c_one_wrong_digit_is_always_caught(self):
+        from payments.cards import luhn_ok
+
+        rng = random.Random(1400)
+        for _ in range(300):
+            length = rng.randint(12, 19)
+            body = [rng.randint(0, 9) for _ in range(length - 1)]
+            check = (10 - _luhn_sum(body + [0]) % 10) % 10
+            number = "".join(map(str, body + [check]))
+            self.assertIs(luhn_ok(number), True, number)
+            spot = rng.randrange(length)
+            wrong = number[:spot] + str((int(number[spot]) + rng.randint(1, 9)) % 10) + number[spot + 1:]
+            self.assertIs(luhn_ok(wrong), False, wrong)
+
+
+def _luhn_sum(digits):
+    total = 0
+    for place, digit in enumerate(reversed(digits)):
+        if place % 2:
+            digit *= 2
+            digit -= 9 if digit > 9 else 0
+        total += digit
+    return total
+
+
+class HiddenRecurrence(unittest.TestCase):
+    def _expected(self, year, month, weekday, n):
+        days = [d for d in range(1, calendar.monthrange(year, month)[1] + 1) if date(year, month, d).weekday() == weekday]
+        if n > 0:
+            return date(year, month, days[n - 1]) if n <= len(days) else None
+        return date(year, month, days[n]) if -n <= len(days) else None
+
+    def test_a_every_month_weekday_and_n(self):
+        from scheduling.recurrence import nth_weekday
+
+        for year in (2026, 2027, 2028, 2100):
+            for month in range(1, 13):
+                for weekday in range(7):
+                    for n in (1, 2, 3, 4, 5, -1, -2, -3, -4, -5):
+                        expected = self._expected(year, month, weekday, n)
+                        with self.subTest(year=year, month=month, weekday=weekday, n=n):
+                            if expected is None:
+                                with self.assertRaises(ValueError):
+                                    nth_weekday(year, month, weekday, n)
+                            else:
+                                self.assertEqual(nth_weekday(year, month, weekday, n), expected)
+
+    def test_b_named_days(self):
+        from scheduling.recurrence import nth_weekday
+
+        self.assertEqual(nth_weekday(2028, 2, 1, -1), date(2028, 2, 29))
+        self.assertEqual(nth_weekday(2026, 3, 1, -1), date(2026, 3, 31))
+        self.assertEqual(nth_weekday(2026, 12, 3, -2), date(2026, 12, 24))
+        self.assertEqual(nth_weekday(2026, 2, 6, -1), date(2026, 2, 22))
+
+    def test_c_out_of_range(self):
+        from scheduling.recurrence import nth_weekday
+
+        for n in (0, 6, -6, 9):
+            with self.subTest(n=n):
+                with self.assertRaises(ValueError):
+                    nth_weekday(2026, 5, 0, n)
+
+
+class HiddenPercentiles(unittest.TestCase):
+    CASES = [
+        ([4, 1, 3, 2], 50, 2.5), (list(range(1, 11)), 90, 9.1), ([10, 20], 25, 12.5), (list(range(1, 9)), 25, 2.75),
+        (list(range(1, 9)), 75, 6.25), ([7], 30, 7.0), ([5, 1, 9, 3], 10, 1.6), ([2, 4, 8, 16, 32], 62.5, 12.0),
+        ([0.5, 1.5, 2.5], 99, 2.48), ([-3, 3], 50, 0.0), ([100, 0, 50, 25], 40, 30.0), ([1, 1, 1, 9], 80, 4.2),
+    ]
+
+    def test_a_interpolated(self):
+        from stats.percentiles import percentile
+
+        for values, p, expected in self.CASES:
+            with self.subTest(values=values, p=p):
+                got = percentile(values, p)
+                self.assertIsInstance(got, float)
+                self.assertAlmostEqual(got, expected, places=9)
+
+    def test_b_the_helpers(self):
+        from stats.percentiles import interquartile_range, median, summary
+
+        self.assertAlmostEqual(median([8, 2, 6, 4]), 5.0, places=9)
+        self.assertAlmostEqual(median(iter([1, 2, 3, 4, 5, 6])), 3.5, places=9)
+        self.assertAlmostEqual(interquartile_range(list(range(1, 9))), 3.5, places=9)
+        self.assertAlmostEqual(interquartile_range(iter(range(1, 9))), 3.5, places=9)
+        self.assertEqual(summary([4, 1, 3, 2]), {"min": 1.0, "median": 2.5, "max": 4.0})
+
+    def test_c_random_against_a_sort(self):
+        from stats.percentiles import percentile
+
+        rng = random.Random(14)
+        for _ in range(200):
+            values = [rng.randint(-50, 50) for _ in range(rng.randint(1, 12))]
+            p = rng.choice([0, 5, 10, 25, 33, 50, 66, 75, 90, 95, 100])
+            data = sorted(values)
+            position = (len(data) - 1) * p / 100
+            below = int(position)
+            above = min(below + 1, len(data) - 1)
+            expected = data[below] + (data[above] - data[below]) * (position - below)
+            self.assertAlmostEqual(percentile(values, p), expected, places=9, msg=(values, p))
 
 
 class HiddenUnchanged(unittest.TestCase):

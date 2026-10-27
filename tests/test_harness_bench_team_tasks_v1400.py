@@ -5,9 +5,10 @@ repeats) handed ZERO pieces to a member: each frontier task took about a
 minute, and doing the work was always quicker than writing a helper a brief.
 The team tier holds tasks made of several independent pieces a planner can
 hand out from a written brief: a sixty-module package to read, three modules
-from one specification, twenty failing tests from six unrelated bugs, a
-ten-file change to apply and review, a rename across code, command line,
-environment and docs, five functions to port from a JavaScript reference.
+from one specification, about thirty failing tests from eleven unrelated bugs,
+an eleven-file change to apply and review (three of its edits to fix), a
+rename across code, command line, environment and docs, five functions to
+port from a JavaScript reference.
 
 Pinned here, each through the real code (``load_tasks``, ``prepare_workspace``,
 ``grade``):
@@ -22,7 +23,7 @@ Pinned here, each through the real code (``load_tasks``, ``prepare_workspace``,
   tiers' hashes and task lists are unchanged;
 * ``--tier team`` selects exactly the team tasks, ``--tier all`` includes them;
 * the answer keys are honest: the audit list is what an ``ast`` resolver finds,
-  the patch applies cleanly and its own tests pass WITH its bug, and (where
+  the patch applies cleanly and its own tests pass WITH its bugs, and (where
   ``node`` is installed) the port's expected values are what the JavaScript
   reference really returns.
 """
@@ -54,9 +55,9 @@ TEAM_HASHES = {
     "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
-    "team-review-patch": "43fcee1ffdfab3b1d53eedca06f69bc5634e149298a45c860bacdea10bf017c2",
+    "team-review-patch": "2e8aaec34a86f513bd5f8d14854beec8c68a9ef1d1db6db8139ba5fffabff405",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
-    "team-test-triage": "61e86752e8ca96a19d84c20eabf9f9f813d0f33502b55608c0d57da89293fb1b",
+    "team-test-triage": "9a1992cb4b0ce94581bc4fb912a1033655d21012b89fb40f85f2eaac7ff1d87a",
 }
 #: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none).
 FRONTIER_HASHES = {
@@ -123,7 +124,7 @@ def test_the_team_tier_holds_six_tasks_of_independent_pieces():
     kinds = {
         "read across a sixty-module package": ("team-audit-events", "explain"),
         "three modules from one specification": ("team-spec-modules", "feature"),
-        "twenty failing tests from unrelated bugs": ("team-test-triage", "bugfix"),
+        "thirty failing tests from unrelated bugs": ("team-test-triage", "bugfix"),
         "a change reviewed and fixed": ("team-review-patch", "trap"),
         "a rename across code and docs": ("team-rename-option", "refactor"),
         "functions ported from another language": ("team-port-js", "feature"),
@@ -361,10 +362,10 @@ def test_the_audit_answer_key_is_what_a_real_resolver_finds(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git to apply the patch")
-def test_the_patch_applies_cleanly_and_its_own_tests_pass_with_its_bug(tmp_path):
+def test_the_patch_applies_cleanly_and_its_own_tests_pass_with_its_bugs(tmp_path):
     """The incoming change is a real patch: ``git apply`` takes it as written,
-    the result is exactly the pinned decoy (the change as sent, bug included),
-    and every test — the patch's own included — passes with the bug in."""
+    the result is exactly the pinned decoy (the change as sent, bugs included),
+    and every test — the patch's own included — passes with the bugs in."""
     task = TASKS["team-review-patch"]
     work = prepare_workspace(task, tmp_path / "w")
     # A checkout with autocrlf has CRLF in the patch AND in its targets; the

@@ -32,6 +32,8 @@ PATCH_TESTS = [
     "test_the_others_are_unchanged", "test_the_tier_line", "test_no_tier_line_for_bronze", "test_a_gold_invoice",
     "test_sales_by_tier", "test_the_tier_option", "test_points_per_tier", "test_nothing_for_nothing",
     "test_a_point_is_a_cent", "test_in_proportion", "test_rounded_up", "test_never_more_than_earned",
+    "test_part_of_the_total", "test_more_credit_than_the_total", "test_an_invoice_with_credit",
+    "test_the_credit_option",
 ]
 ADA = {"id": "c-17", "name": "Ada Byron", "email": "ada@example.com"}
 LINES = [{"name": "Notebook", "price_cents": 1250, "qty": 2}, {"name": "Fountain pen", "price_cents": 4500, "qty": 1}]
@@ -164,6 +166,35 @@ class HiddenCli(unittest.TestCase):
         code, _, err = self.run_cli({"customer": {**ADA, "tier": "wood"}, "lines": LINES})
         self.assertEqual(code, 2)
 
+    def test_d_store_credit(self):
+        order = {"customer": {**ADA, "tier": "silver"}, "lines": LINES, "credit_cents": 1000}
+        code, out, _ = self.run_cli(order)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.rstrip().endswith(
+            "Total: $72.49\nStore credit: -$10.00\nAmount due: $62.49\nPoints earned: 99"), out)
+        code, out, _ = self.run_cli(order, "--credit", "9000")
+        self.assertEqual(code, 0)
+        self.assertIn("Store credit: -$72.49\nAmount due: $0.00", out)
+        code, out, _ = self.run_cli(order, "--credit", "0")
+        self.assertEqual(code, 0)
+        self.assertNotIn("Store credit", out)
+        self.assertNotIn("Amount due", out)
+        code, out, _ = self.run_cli({"customer": ADA, "lines": LINES})
+        self.assertEqual(code, 0)
+        self.assertNotIn("Store credit", out)
+
+    def test_e_a_wrong_credit_is_an_error(self):
+        for args, order_credit in ((("--credit", "-5"), None), (("--credit", "ten"), None), (("--credit", "12.5"), None),
+                                   ((), -300)):
+            with self.subTest(args=args, order_credit=order_credit):
+                order = {"customer": ADA, "lines": LINES}
+                if order_credit is not None:
+                    order["credit_cents"] = order_credit
+                code, out, err = self.run_cli(order, *args)
+                self.assertEqual(code, 2)
+                self.assertIn("error:", err)
+                self.assertEqual(out, "")
+
 
 class HiddenReport(unittest.TestCase):
     def test_sales_by_tier(self):
@@ -205,6 +236,48 @@ class HiddenPoints(unittest.TestCase):
                 self.assertEqual(points_to_take_back(*args), expected)
         with self.assertRaises(ValueError):
             points_to_take_back(10, 100, 0)
+
+
+class HiddenCredit(unittest.TestCase):
+    def test_a_apply_store_credit(self):
+        from orderdesk.credit import apply_store_credit
+
+        cases = [
+            ((5600, 1000), (1000, 4600)), ((5600, 9000), (5600, 0)), ((5600, 5600), (5600, 0)), ((5600, 0), (0, 5600)),
+            ((0, 500), (0, 0)), ((-250, 500), (0, 0)), ((1, 1), (1, 0)), ((7599, 7600), (7599, 0)),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(tuple(apply_store_credit(*args)), expected)
+        with self.assertRaises(ValueError):
+            apply_store_credit(5600, -1)
+
+    def render(self, tier, credit, coupon=None):
+        from orderdesk.customers import parse_customer
+        from orderdesk.invoice import render_invoice
+
+        row = dict(ADA) if tier is None else {**ADA, "tier": tier}
+        return render_invoice(parse_customer(row), LINES, coupon=coupon, credit_cents=credit).splitlines()
+
+    def test_b_a_gold_invoice_with_credit(self):
+        self.assertEqual(self.render("gold", 2550, "SAVE20")[-5:], [
+            "Shipping: free", "Total: $52.50", "Store credit: -$25.50", "Amount due: $27.00", "Points earned: 104",
+        ])
+
+    def test_c_a_bronze_invoice_with_credit(self):
+        self.assertEqual(self.render(None, 10000)[-4:], [
+            "Shipping: $5.99", "Total: $75.99", "Store credit: -$75.99", "Amount due: $0.00",
+        ])
+
+    def test_d_no_credit_no_lines(self):
+        for tier in (None, "silver"):
+            with self.subTest(tier=tier):
+                lines = self.render(tier, 0)
+                self.assertFalse([line for line in lines if line.startswith(("Store credit", "Amount due"))])
+
+    def test_e_a_negative_credit(self):
+        with self.assertRaises(ValueError):
+            self.render("gold", -100)
 
 
 class HiddenKept(unittest.TestCase):

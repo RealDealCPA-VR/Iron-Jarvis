@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from orderdesk.cli import main
+from orderdesk.credit import apply_store_credit
 from orderdesk.customers import parse_customer
 from orderdesk.discounts import order_discount_percent, tier_percent
 from orderdesk.invoice import render_invoice
@@ -92,6 +93,18 @@ class RefundPointsTest(unittest.TestCase):
         self.assertEqual(points_to_take_back(10, 9999, 5000), 10)
 
 
+class StoreCreditTest(unittest.TestCase):
+    def test_part_of_the_total(self):
+        self.assertEqual(apply_store_credit(5600, 1000), (1000, 4600))
+
+    def test_more_credit_than_the_total(self):
+        self.assertEqual(apply_store_credit(5600, 9000), (5600, 0))
+
+    def test_an_invoice_with_credit(self):
+        text = render_invoice(parse_customer({**ADA, "tier": "gold"}), LINES, coupon="SAVE10", credit_cents=600)
+        self.assertTrue(text.endswith("Total: $56.00\nStore credit: -$6.00\nAmount due: $50.00\nPoints earned: 112"))
+
+
 class ReportTierTest(unittest.TestCase):
     def test_sales_by_tier(self):
         orders = [
@@ -114,6 +127,18 @@ class CliTierTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("Tier: Gold", out.getvalue())
         self.assertIn("Shipping: free", out.getvalue())
+
+    def test_the_credit_option(self):
+        order = {"customer": ADA, "lines": LINES, "credit_cents": 100}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "order.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(order, fh)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main([path, "--credit", "2500"])
+        self.assertEqual(code, 0)
+        self.assertIn("Store credit: -$25.00\nAmount due: $50.99", out.getvalue())
 
 
 if __name__ == "__main__":
