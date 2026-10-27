@@ -237,7 +237,18 @@ async def test_one_ask_as_every_surface_receives_it(tmp_path):
     try:
         assert await _wait_for(lambda: bool(asks())), "the run never asked"
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as c:
-            listing = (await c.get("/chat/approvals/pending")).json()["approvals"]
+            # Wait for the ask to be LISTED, not only published: the spy
+            # records it before the real publish writes the event row the
+            # listing reads (the v1.373.1 shape), so one read could come back
+            # without it on a loaded runner ("coroutine raised StopIteration"
+            # at the `next` below). Bounded at 15 s.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 15.0
+            while True:
+                listing = (await c.get("/chat/approvals/pending")).json()["approvals"]
+                if any(r.get("session_id") == sid for r in listing) or loop.time() > deadline:
+                    break
+                await asyncio.sleep(0.05)
             row = (await c.get(f"/sessions/{sid}")).json()["session"]
         view = await asyncio.to_thread(mission.mission_view, platform, sid)
         requested = asks()[-1]
