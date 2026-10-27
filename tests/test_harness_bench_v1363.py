@@ -90,7 +90,15 @@ def edge_installed() -> bool:
     path = TASKS["frontier-inventory-filter"].check_dir / "test_hidden_inventory_page.py"
     spec = importlib.util.spec_from_file_location("_ij_page_check", path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # v1.400.0 review: compiled in memory only. With bytecode on (CI's
+    # setting) exec_module wrote check/__pycache__/*.pyc into the task's own
+    # folder — the hidden check, compiled, left in the source tree.
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = saved
     return bool(module.find_edge())
 
 
