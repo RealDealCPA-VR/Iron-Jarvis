@@ -476,12 +476,38 @@ def test_profile_change_rerenders_on_the_share_thread_never_the_loop(client, use
 
     monkeypatch.setattr(share, "_atomic_write", _spy)
     monkeypatch.setattr(share, "DEBOUNCE_S", 0.4)
+    # v1.399.1: the debounce window starts only when the test says so. On
+    # v1.399.0's loaded Release runner a PUT took longer than the 0.4 s
+    # window, the first timer fired before the second change arrived, and
+    # two writes landed. A timer held at its start still proves the rule:
+    # two changes make ONE re-render and ONE write. (A poke that stopped
+    # cancelling would re-render twice; the second writes nothing because the
+    # text is the same, so the re-renders are counted too.)
+    gate = threading.Event()
+    real_timer = threading.Timer
+    renders: list[int] = []
+    real_sync = share.ProfileShare.sync
+
+    def _counted_sync(self, *a, **k):
+        renders.append(1)
+        return real_sync(self, *a, **k)
+
+    monkeypatch.setattr(share.ProfileShare, "sync", _counted_sync)
+
+    class _HeldTimer(real_timer):  # type: ignore[misc, valid-type]
+        def run(self):
+            gate.wait(10)
+            super().run()
+
+    monkeypatch.setattr(share.threading, "Timer", _HeldTimer)
     r = client.put("/profile", json={"values": {"about": "Dana Reyes, one."}})
     assert r.status_code == 200
     client.put("/profile", json={"values": {"about": "Dana Reyes, two."}})
     assert seen == []  # the response did not wait for the write
+    gate.set()
     _settle(client)
     assert seen == [("profile-share", False)]  # two changes, ONE write
+    assert len(renders) == 1  # ... and one re-render
     assert "two." in _inside((user / ".claude" / "CLAUDE.md").read_bytes())
 
 

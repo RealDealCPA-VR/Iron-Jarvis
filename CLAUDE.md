@@ -3761,6 +3761,18 @@ does not need a bump, stop and bump it.
   fixture `last-night-v1399.json`), e2e `dashboard/e2e/ij-harness-last-night.spec.ts`;
   moved on purpose: `test_one_notice_v13600` (audit types),
   `test_integrate_wave4_v13540` (default-alert table).
+  v1.399.1 (test-only; v1.399.0's Release gate went red, Tests green, nothing
+  published): `test_profile_share_v1306::test_profile_change_rerenders_on_
+  the_share_thread_never_the_loop` made two profile changes inside a 0.4 s
+  debounce, but on the loaded runner a PUT took longer than the window, so
+  the first timer fired between them and two writes landed. The test now
+  holds the debounce timer at its start (a `threading.Timer` subclass whose
+  `run` waits on a gate) until both changes are in, and also COUNTS the
+  re-renders: a poke that stopped cancelling re-renders twice while still
+  writing once (the second render's text is the same), which the write
+  count alone never caught, in the old test or the new. A profile save held
+  0.5 s reproduced CI's failure on the old shape; the new shape passes with
+  it held, and the no-cancel mutant goes red.
 
 - **NIGHT SHIFT N1: a queue of coding tasks that run overnight on their own
   branches; file edits and commands run unasked, EVERYTHING else is carded
