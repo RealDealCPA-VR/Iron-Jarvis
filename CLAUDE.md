@@ -4851,6 +4851,18 @@ does not need a bump, stop and bump it.
   helper 3 failed, new 3 passed. 18 test files read
   `/chat/approvals/pending`; any that reads it once right after an ask is
   the same risk.
+  v1.399.4 (test-only, THE SWEEP): v1.399.3's Tests gate went red on the
+  same shape in `test_plan_contract_v1350` (`AssertionError: []`). All 22
+  files that read the listing were run with the `approval.requested` row's
+  write held 0.5 s (a scratch plugin wrapping `platform.persist_event`, the
+  handler at `platform.py`'s `event_bus.add_handler`): exactly two failed —
+  `test_plan_contract_v1350` and `test_receipt_seams_v13520` (StopIteration)
+  — and both now poll the listing until the session's row is there (15 s).
+  With the fix: 508 passed under a 0.5 s hold and a 2 s hold, both bytecode
+  settings; 78 more files that read `waiting_on`, asks or the mission view
+  passed under both holds (`waiting_on` reads the in-memory registry, which
+  holds the ask before the publish). A NEW test that reads the listing after
+  seeing an ask polls it.
 - **The composer's model menu is PORTALED, FIXED at its chip and always
   inside the window** (v1.382.0, a USER BUG: in a new chat, the centred
   composer's menu opened upward and its top — the filter box, Recent — was
