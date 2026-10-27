@@ -19,7 +19,10 @@ checkout's state before a night task starts and again when it ends, and
 * its stash;
 * the repository's branches and tags (the ``ij/`` branches night tasks make
   are left out);
-* the packages in the main folder's ``.venv`` (the one a branch borrows).
+* the packages in the main folder's ``.venv`` (the one a branch borrows);
+* (v1.399.0 review) the repository's git hooks and its ``.git/config`` — a
+  hook a command planted runs on Iron Jarvis's own commit of the night's
+  work and on every commit the user makes afterwards.
 
 A change ends the task "needs you" with a note no one can miss. What is NOT
 checked is said in the record too (:data:`NOT_CONFINED`): folders outside
@@ -41,7 +44,8 @@ from typing import Any
 #: The record's own sentence about what a night task's commands could reach.
 NOT_CONFINED = (
     "Its commands ran as you, so they could reach other folders and the network; Iron Jarvis "
-    "checked only your main folder (its commit, branches, files and .venv packages) afterwards."
+    "checked only your main folder (its commit, branches, files, git hooks and settings, and .venv packages) "
+    "afterwards."
 )
 #: The sentence when the main folder could not be read afterwards.
 UNCHECKED = (
@@ -57,6 +61,10 @@ _WHAT: dict[str, str] = {
     "stash": "its stash changed",
     "refs": "a branch or tag of the repository changed",
     "env": "the packages in its .venv changed (something was installed or removed)",
+    # v1.399.0 review (night shift N2): a hook runs on every commit — Iron
+    # Jarvis's own commit of the night's work and every one the user makes.
+    "hooks": "its git hooks changed (a hook runs on every commit you make)",
+    "config": "its git settings changed (.git/config)",
 }
 
 
@@ -86,6 +94,40 @@ def env_listing(venv: str) -> str:
         return _digest("\n".join(names))
     except OSError:
         return ""
+
+
+def _git_settings(main: str) -> dict[str, str]:
+    """v1.399.0 review (night shift N2): the repository's own git SETTINGS
+    (``.git/config``) and HOOKS (the hooks folder git runs — ``core.hooksPath``
+    or ``<common dir>/hooks``; names, sizes and times, never contents). A night
+    task's commands can plant a hook there, and Iron Jarvis's own commit of
+    its work then RUNS it unattended — and so does every commit the user makes
+    afterwards in the main folder. ``{}`` when unreadable (nothing is said
+    then, never a made-up change). Never raises."""
+    from .branches import _g
+
+    try:
+        common = _g(["rev-parse", "--path-format=absolute", "--git-common-dir"], main, reads=True)
+        if common.code != 0 or not common.out.strip():
+            return {}
+        common_dir = Path(common.out.strip())
+        hooks_path = _g(["config", "--get", "core.hooksPath"], main, reads=True)
+        configured = hooks_path.out.strip() if hooks_path.code == 0 else ""
+        hooks_dir = Path(configured) if configured else common_dir / "hooks"
+        if configured and not hooks_dir.is_absolute():
+            hooks_dir = Path(main) / hooks_dir
+        listing: list[str] = [f"path={configured}"]
+        if hooks_dir.is_dir():
+            for entry in sorted(hooks_dir.iterdir(), key=lambda p: p.name):
+                if entry.name.endswith(".sample") or not entry.is_file():
+                    continue
+                st = entry.stat()
+                listing.append(f"{entry.name}\0{st.st_size}\0{st.st_mtime_ns}")
+        config_file = common_dir / "config"
+        config = hashlib.sha256(config_file.read_bytes()).hexdigest() if config_file.is_file() else ""
+        return {"hooks": _digest("\n".join(listing)), "config": config}
+    except Exception:  # noqa: BLE001 — unreadable: no claim either way
+        return {}
 
 
 def snapshot(main: str, venv: str = "") -> dict[str, str]:
@@ -119,6 +161,7 @@ def snapshot(main: str, venv: str = "") -> dict[str, str]:
             "stash": stash.out.strip() if stash.code == 0 else "",
             "refs": _digest("\n".join(sorted(kept_refs))),
             "env": env_listing(venv),
+            **_git_settings(main),
         }
     except Exception:  # noqa: BLE001 — never raises: unreadable is said, not hidden
         return {"error": "git could not read it"}
@@ -131,7 +174,11 @@ def changes(before: "dict[str, str] | None", after: "dict[str, str] | None") -> 
         return None
     if before.get("error") or after.get("error"):
         return None
-    return [words for key, words in _WHAT.items() if str(before.get(key, "")) != str(after.get(key, ""))]
+    # v1.399.0 review: a key one side does not hold (a snapshot an older Iron
+    # Jarvis took before the task started, or settings it could not read) is
+    # never a change.
+    return [words for key, words in _WHAT.items()
+            if (key in before) == (key in after) and str(before.get(key, "")) != str(after.get(key, ""))]
 
 
 def changed_words(main: str, moved: "list[str]") -> str:

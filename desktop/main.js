@@ -3276,7 +3276,12 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // v1.392.0 (long jobs, Phase 3): and a Build reply that made no progress for
 // ten minutes (`build.turn_stalled`, once per stall episode), said in the
 // bell's words ("Your coding session has stopped making progress").
-const RUN_OUTCOME_AUDIT_TYPES = "session.completed,workflow.completed,build.turn_finished,build.turn_stalled";
+// v1.399.0 (night shift N2): and a night's Last night summary
+// (`build.night_summary`, ONE per night), in the words the daemon wrote for
+// the bell, the tray and the phone alike; the click opens Coding sessions ›
+// Last night.
+const RUN_OUTCOME_AUDIT_TYPES =
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -3361,6 +3366,21 @@ function runOutcomeNotice(entry) {
   const id = typeof entry.id === "string" ? entry.id : "";
   const p = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
   if (!id) return null;
+  if (entry.type === "build.night_summary") {
+    // v1.399.0 (night shift N2): ONE night's summary — the daemon wrote the
+    // words (harness/night_morning.notice_words: the bell's row and the
+    // phone's first line say exactly these); the click opens Last night.
+    const night = typeof p.night === "string" ? p.night.trim() : "";
+    if (!night) return null;
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : "Last night's tasks ended";
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title,
+      body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
+      href: `/terminals?night=${encodeURIComponent(night)}`,
+    };
+  }
   if (entry.type === "build.turn_stalled") {
     // v1.392.0: a Build reply that made no progress for ten minutes (the
     // bell's row, word for word: lib/buildLinks BUILD_STALLED_HEADLINE —

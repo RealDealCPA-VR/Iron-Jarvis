@@ -1043,6 +1043,41 @@ def branch_changes(facts: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def branch_summary(facts: dict[str, str]) -> dict[str, Any]:
+    """The branch in NUMBERS (v1.399.0, night shift N2 — the morning
+    summary's record of a night task's branch): the files it changed against
+    its base (where they meet, :func:`merge_base` — committed and not, new
+    files included, like the Branch view), lines added and removed, its
+    commits ahead of the base, the files not committed yet, and whether it
+    has a remote to push to. The status's own reads (:func:`status`) without
+    the GitHub CLI's sign-in check (a network call nobody asked for at
+    night) and without one patch per file (:func:`branch_changes`).
+    Read-only. :class:`GitRefused` for a gone worktree."""
+    wt = _live(facts)
+    mb = merge_base(facts, wt)
+    entries = _name_status(wt, mb)
+    counts = _numstat(wt, mb)
+    added = removed = 0
+    for code, old, new in entries:
+        a, r = counts.get(new or old, (None, None))
+        added += int(a or 0)
+        removed += int(r or 0)
+    new_files = _untracked(wt)
+    for rel in new_files:
+        row = _new_file_change(wt, rel)
+        added += int(row.get("added") or 0)
+    count = _g(["rev-list", "--count", f"{mb}..HEAD"], wt, reads=True)
+    branch = facts.get("branch", "")
+    return {
+        "files": len(entries) + len(new_files),
+        "added": added,
+        "removed": removed,
+        "ahead": int(count.out.strip() or 0) if count.ok else 0,
+        "uncommitted": len(_porcelain(wt)),
+        "remote": pick_remote(wt, branch) if branch else "",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # commit
 # --------------------------------------------------------------------------- #
@@ -1076,12 +1111,24 @@ def clean_message(text: str) -> str:
     return "\n".join(lines).strip()[:MAX_MESSAGE_CHARS]
 
 
-def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
+def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: float = START_S,
+           on_spawn: Any = None, recheck: Any = None) -> dict[str, Any]:
     """Commit everything in the worktree on the session's branch (``git add
     -A`` then ``git commit -F -``) as the user (their own git identity; Iron
     Jarvis's default name only when git names no one — said in ``note``).
     Never amends. :class:`GitRefused` for no message, nothing to commit, or a
-    commit git refused (a hook, …)."""
+    commit git refused (a hook, …).
+
+    v1.399.0 review (night shift N2) — three seams only Iron Jarvis's OWN
+    night commit passes (a person's Commit press is unchanged): ``screen(wt)``
+    runs after staging and unstages what must not be committed
+    (``harness/night_commit.screen``; answered as ``left_out``, and carried on
+    a :data:`NOTHING_TO_COMMIT` refusal as ``exc.left_out``); ``timeout``
+    bounds the commit (its hooks); ``on_spawn(proc)`` publishes the commit's
+    process so Emergency stop can end it (``procs.run``'s seam);
+    ``recheck(wt)`` judges what WENT INTO the commit (a hook may have staged
+    again what the screen left out) and the commit is undone when it holds
+    anything (``night_commit.check_commit``)."""
     wt = _live(facts)
     msg = str(message or "").replace("\r\n", "\n").strip()
     if not msg:
@@ -1092,21 +1139,74 @@ def commit(facts: dict[str, str], message: str) -> dict[str, Any]:
     added = _g(["add", "-A"], wt)
     if not added.ok:
         raise GitRefused("Git could not stage the changes.", 409, _masked(added.err or added.out))
+    left_out: list[dict[str, str]] = []
+    if screen is not None:
+        try:
+            left_out = list(screen(wt) or [])
+        except GitRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 — unscreened is never committed
+            _g(["reset", "-q"], wt)
+            raise GitRefused(
+                "Iron Jarvis could not check what it was about to commit, so it committed nothing.", 409,
+                _masked(f"{type(exc).__name__}: {exc}"),
+            ) from exc
     if _g(["diff", "--cached", "--quiet"], wt).code == 0:
-        raise GitRefused(NOTHING_TO_COMMIT, 409)
+        refused = GitRefused(NOTHING_TO_COMMIT, 409)
+        refused.left_out = left_out  # type: ignore[attr-defined]
+        raise refused
     own = has_identity(wt, git_env())
     args = ([] if own else default_identity()) + ["commit", "-F", "-"]
-    got = _g(args, wt, timeout=START_S, input=(msg + "\n").encode("utf-8"))
+    if on_spawn is None:
+        got = _g(args, wt, timeout=timeout, input=(msg + "\n").encode("utf-8"))
+    else:
+        got = run_git(["-c", "core.quotepath=off", *args], Path(wt), timeout=timeout, env=git_env(),
+                      identity=False, input=(msg + "\n").encode("utf-8"), encoding="utf-8", on_spawn=on_spawn,
+                      breakaway_ok=False)
     if got.timed_out:
-        raise GitRefused(_timed_out_words("The commit", START_S), 504)
+        raise GitRefused(_timed_out_words("The commit", timeout), 504)
     if not got.ok:
         raise GitRefused("Git did not make the commit.", 409, _masked(got.err or got.out))
     sha = _ref_sha(wt, "HEAD")
+    if recheck is not None:
+        # v1.399.0 review: the repository's hooks ran between the screen and
+        # the commit — one that stages everything again put back what the
+        # screen left out. What WENT IN is checked; a commit holding what must
+        # not be committed is undone (Iron Jarvis's own, seconds old, never
+        # pushed — only while HEAD is still that commit on the branch).
+        try:
+            bad = list(recheck(wt) or [])
+        except Exception as exc:  # noqa: BLE001 — an unchecked commit is not kept
+            bad = [{"path": "?", "why": f"could not be checked ({type(exc).__name__})"}]
+        if bad:
+            undone = False
+            if _ref_sha(wt, "HEAD") == sha:
+                with contextlib.suppress(GitRefused):
+                    _require_on_branch(facts, wt)
+                    undone = _g(["reset", "-q", "--soft", "HEAD~1"], wt).ok
+            if undone:
+                _g(["reset", "-q"], wt)
+                refused = GitRefused(
+                    "A git hook of the repository put back files Iron Jarvis had left out ("
+                    + ", ".join(str(b.get("path")) for b in bad[:5])
+                    + "), so Iron Jarvis undid its own commit and committed nothing.", 409,
+                )
+            else:
+                refused = GitRefused(
+                    "A git hook of the repository put back files Iron Jarvis had left out ("
+                    + ", ".join(str(b.get("path")) for b in bad[:5])
+                    + f") and Iron Jarvis could not undo that commit ({sha[:12]}): do not push this branch "
+                    "before you look at it.", 409,
+                )
+            refused.left_out = left_out or bad  # type: ignore[attr-defined]
+            raise refused
     files = _g(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], wt, reads=True)
     out: dict[str, Any] = {
         "committed": True, "sha": sha[:12], "subject": msg.split("\n", 1)[0][:300],
         "files": len([f for f in files.out.splitlines() if f.strip()]) if files.ok else 0,
     }
+    if left_out:
+        out["left_out"] = left_out
     if not own:
         out["note"] = (
             "Git has no name and e-mail set on this PC, so the commit is signed \"Iron Jarvis\". "

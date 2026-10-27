@@ -1,5 +1,5 @@
 {
-  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert). v1.393.0 review (the long-jobs plan's Phase 4): a coding reply that WAITS for its account's reset by itself (`build.account_limit` with `waiting: true` — armed with no press, or a group with nothing usable) and a reply carried on by ANOTHER account of its group (`build.resumed` with `moved_from_name`) are news, not questions: the bell pings them uncounted (no badge), so the tray says nothing; desktop only (not a default alert, never the phone).",
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert). v1.393.0 review (the long-jobs plan's Phase 4): a coding reply that WAITS for its account's reset by itself (`build.account_limit` with `waiting: true` — armed with no press, or a group with nothing usable) and a reply carried on by ANOTHER account of its group (`build.resumed` with `moved_from_name`) are news, not questions: the bell pings them uncounted (no badge), so the tray says nothing; desktop only (not a default alert, never the phone). v1.399.0 (night shift N2): a night's Last night summary (`build.night_summary`, ONE per night) rings and counts on the badge, is said from the tray once, and is the phone's ONE message of the night (a default alert: a short line per task); its words are the daemon's own (harness/night_morning.notice_words), and it opens Coding sessions › Last night.",
   "cases": [
     {
       "case": "schedule-failed",
@@ -376,6 +376,34 @@
       "title": "Work Max reached its limit; carried on with Spare (same group)",
       "body": "Port the parser",
       "href": "/terminals?session=bs_lim"
+    },
+    {
+      "case": "night-summary",
+      "event": {
+        "id": "evt_night_summary",
+        "type": "build.night_summary",
+        "session_id": null,
+        "ts": "2026-10-27T11:00:30",
+        "payload": {
+          "night": "2026-10-26",
+          "label": "Monday, October 26",
+          "title": "Last night: 1 failed, 1 needs you, 1 done",
+          "body": "Failed: Fix the parser · Needs you: Write the release notes · Done: Make add() add",
+          "counts": {"failed": 1, "needs_you": 1, "running": 0, "done": 1, "stopped": 0},
+          "total": 3,
+          "lines": [
+            "• Failed: Fix the parser (ij/fix-the-parser-77aa): The model failed; 1 file changed; its work so far is committed.",
+            "• Needs you: Write the release notes (ij/write-the-release-notes-9f8e): Needs your OK: run a command (nobody answered in 15 minutes, so it was skipped); 1 file changed; its work so far is committed.",
+            "• Done: Make add() add (ij/make-add-add-1a2b): tests passed; 2 files changed."
+          ]
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": true,
+      "title": "Last night: 1 failed, 1 needs you, 1 done",
+      "body": "Failed: Fix the parser · Needs you: Write the release notes · Done: Make add() add",
+      "href": "/terminals?night=2026-10-26"
     }
   ]
 }

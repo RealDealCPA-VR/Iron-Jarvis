@@ -251,6 +251,7 @@ _LATE_MODEL_MODULES = (
     "..agents.team_record",   # TeamRoleRun — the model team's record per (member, role) (v1.395.0)
     "..harness.attempt_spend",  # AttemptSpendRecord — an attempt's metered spend (v1.397.0)
     "..harness.night",        # NightTaskRecord — a coding task queued for the night (v1.398.0)
+    "..harness.night_morning",  # NightSummaryRecord — one night's Last night summary (v1.399.0)
 )
 
 

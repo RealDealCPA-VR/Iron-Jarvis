@@ -231,6 +231,14 @@ class EventType:
     # session; "This PC" stays quiet for it (comm/notifier.bell_pings).
     # session_id = "build:<thread id>".
     BUILD_TURN_STALLED = "build.turn_stalled"
+    # Night shift N2 (v1.399.0, "the morning"): ONE night's Last night summary
+    # is ready — its last task ended, or the night window closed:
+    # {night, label, title, body, counts, total, lines} (titles and branch
+    # names only, never a path, a command or an id). ONE per night: the bell
+    # says it (and the desktop app from the tray), the phone gets ONE message
+    # with a line per task; "This PC" stays quiet for it
+    # (comm/notifier.bell_pings). No session id.
+    BUILD_NIGHT_SUMMARY = "build.night_summary"
     # The experience library proposed something for a project folder — a
     # lesson to keep, or an edit to the folder's harness files — that waits
     # for the user's Accept: {id, kind, folder_name, thread_id, summary}

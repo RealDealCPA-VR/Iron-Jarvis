@@ -45,6 +45,10 @@ class GitRun:
     out: str
     err: str
     timed_out: bool = False
+    #: v1.399.0 review: stdout as the child wrote it (``run_git(keep_bytes=
+    #: True)`` only) — a blob's bytes and size survive (``out`` turns CRLF
+    #: into LF).
+    stdout: bytes = b""
 
     @property
     def ok(self) -> bool:
@@ -90,6 +94,9 @@ def run_git(
     identity: bool = True,
     input: "bytes | None" = None,
     encoding: "str | None" = None,
+    on_spawn: "object | None" = None,
+    keep_bytes: bool = False,
+    breakaway_ok: bool = True,
 ) -> GitRun:
     """THE ONE place git is spawned (``core.procs``: its own Job, bounded, the
     tree killed on a timeout). ``identity`` injects the defaults so a commit
@@ -98,17 +105,27 @@ def run_git(
     (:func:`has_identity`). ``env`` None = this process's own environment;
     ``encoding`` None = the locale's (the original decoding) — a Build
     session reads paths and diffs as UTF-8. BLOCKING: a caller on the event
-    loop hops it off."""
+    loop hops it off. ``on_spawn(proc)`` (v1.399.0 review): ``procs.run``'s
+    seam — the child's handle is published so a caller can end it early (the
+    night's own commit, whose hooks Emergency stop must be able to stop).
+    ``breakaway_ok`` False (the same night commit): git's hooks run in Git's
+    own ``sh``, whose MSYS2 runtime starts programs OUTSIDE the parent's Job
+    when the Job allows it — a ``sleep`` in a hook outlived the kill and held
+    the output pipe open (the v1.386.2 bash lesson)."""
     cmd = ["git"]
     if identity:
         cmd += default_identity()
     cmd += list(args)
-    res = procs.run(cmd, cwd=cwd, timeout=timeout, env=env, input=input)
+    extra: dict = {"on_spawn": on_spawn} if on_spawn is not None else {}
+    if not breakaway_ok:
+        extra["breakaway_ok"] = False
+    res = procs.run(cmd, cwd=cwd, timeout=timeout, env=env, input=input, **extra)  # type: ignore[arg-type]
     return GitRun(
         code=-1 if res.timed_out else res.returncode,
         out=procs.text(res.stdout, encoding),
         err=procs.text(res.stderr, encoding),
         timed_out=bool(res.timed_out),
+        stdout=(res.stdout or b"") if keep_bytes else b"",
     )
 
 

@@ -1,0 +1,162 @@
+{
+  "_about": "v1.399.0 (night shift N2): GET /build/night/summaries as the daemon answers it (routes/night.summaries_view over harness/night_morning). Hand-built from a real answer with paths and commits made up; tests/test_night_morning_run_v1399.py holds the daemon's keys equal to these (row, usage, session).",
+  "nights": [
+    {
+      "night": "2026-10-26",
+      "label": "Monday, October 26",
+      "rows": [
+        {
+          "id": "night_fail",
+          "thread_id": "bs_fail",
+          "title": "Fix the parser",
+          "folder": "C:\\work\\parser",
+          "folder_name": "parser",
+          "branch": "ij/fix-the-parser-77aa",
+          "state": "failed",
+          "tests": "",
+          "tests_trusted": true,
+          "files": 1,
+          "added": 4,
+          "removed": 1,
+          "seconds": 125.4,
+          "usage": [
+            {"account": "Work Max", "provider": "claude-cli", "model": "claude-opus-4-8", "input_tokens": 12000, "output_tokens": 345, "kind": "plan", "cost_usd": 0.4213}
+          ],
+          "commit": {"sha": "77aa66bb55cc", "subject": "Fix the parser"},
+          "commit_note": "",
+          "committed_words": "Its work so far is committed on ij/fix-the-parser-77aa, so nothing is lost.",
+          "needs": [],
+          "main_changed": false,
+          "main_changed_words": "",
+          "notes": [
+            {"kind": "error", "text": "The model's server went away."},
+            {"kind": "commit", "text": "Iron Jarvis committed its work on ij/fix-the-parser-77aa (77aa66bb55cc). Nothing was pushed."}
+          ],
+          "try_on": 0,
+          "left_out": [],
+          "local_only": false,
+          "started_at": "2026-10-27T03:31:00Z",
+          "ended_at": "2026-10-27T03:33:05Z",
+          "failure": "The model's server went away.",
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false},
+          "usage_words": ["12,345 tokens · ≈$0.42 at list price (your plan)"]
+        },
+        {
+          "id": "night_needs",
+          "thread_id": "bs_needs",
+          "title": "Write the release notes",
+          "folder": "C:\\work\\shop",
+          "folder_name": "shop",
+          "branch": "ij/write-the-release-notes-9f8e",
+          "state": "needs_you",
+          "tests": "passed",
+          "tests_trusted": false,
+          "files": 2,
+          "added": 30,
+          "removed": 0,
+          "seconds": 300,
+          "usage": [
+            {"account": "", "provider": "ollama", "model": "qwen3", "input_tokens": 900, "output_tokens": 100, "kind": "free"}
+          ],
+          "commit": {"sha": "9f8e7d6c5b4a", "subject": "Write the release notes"},
+          "commit_note": "",
+          "committed_words": "Its work so far is committed on ij/write-the-release-notes-9f8e, so nothing is lost.",
+          "needs": [
+            "Needs your OK: run a command (nobody answered in 15 minutes, so it was skipped).",
+            "Its tests ran, but the result is not trusted: open the session to see why."
+          ],
+          "main_changed": true,
+          "main_changed_words": "Your main folder C:\\work\\shop changed while this task ran: a file changed (README.md).",
+          "notes": [
+            {"kind": "outside", "text": "Your main folder C:\\work\\shop changed while this task ran: a file changed (README.md)."},
+            {"kind": "declined", "text": "Needs your OK: run a command (nobody answered in 15 minutes, so it was skipped)."}
+          ],
+          "try_on": 0,
+          "left_out": [],
+          "local_only": false,
+          "started_at": "2026-10-27T03:32:00Z",
+          "ended_at": "2026-10-27T03:37:00Z",
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false},
+          "usage_words": ["1,000 tokens · free"]
+        },
+        {
+          "id": "night_done",
+          "thread_id": "bs_done",
+          "title": "Make add() add",
+          "folder": "C:\\work\\calc",
+          "folder_name": "calc",
+          "branch": "ij/make-add-add-1a2b",
+          "state": "done",
+          "tests": "passed",
+          "tests_trusted": true,
+          "files": 2,
+          "added": 3,
+          "removed": 1,
+          "seconds": 612,
+          "usage": [
+            {"account": "", "provider": "openai", "model": "gpt-6", "input_tokens": 5000, "output_tokens": 500, "kind": "pay", "cost_usd": 0.05}
+          ],
+          "commit": {"sha": "1a2b3c4d5e6f", "subject": "Make add() add"},
+          "commit_note": "",
+          "committed_words": "",
+          "needs": [],
+          "main_changed": false,
+          "main_changed_words": "",
+          "notes": [],
+          "try_on": 0,
+          "left_out": [],
+          "local_only": false,
+          "started_at": "2026-10-27T03:33:00Z",
+          "ended_at": "2026-10-27T03:43:12Z",
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": true, "pr_url": "https://github.com/acme/calc/pull/7", "merged": false},
+          "usage_words": ["5,500 tokens · $0.05"]
+        }
+      ],
+      "counts": {"failed": 1, "needs_you": 1, "running": 0, "done": 1, "stopped": 0},
+      "words": {"title": "Last night: 1 failed, 1 needs you, 1 done", "body": "Failed: Fix the parser · Needs you: Write the release notes · Done: Make add() add"},
+      "ready_at": "2026-10-27T03:43:30Z",
+      "notified": true
+    },
+    {
+      "night": "2026-10-25",
+      "label": "Sunday, October 25",
+      "rows": [
+        {
+          "id": "night_old",
+          "thread_id": "bs_old",
+          "title": "Tidy the readme",
+          "folder": "C:\\work\\shop",
+          "folder_name": "shop",
+          "branch": "ij/tidy-the-readme-0c0c",
+          "state": "stopped",
+          "tests": "",
+          "tests_trusted": true,
+          "files": 0,
+          "added": 0,
+          "removed": 0,
+          "seconds": 30,
+          "usage": [],
+          "commit": null,
+          "commit_note": "Nothing changed, so nothing was committed.",
+          "committed_words": "",
+          "needs": [],
+          "main_changed": false,
+          "main_changed_words": "",
+          "notes": [{"kind": "stopped", "text": "You stopped it."}],
+          "try_on": 0,
+          "left_out": [],
+          "local_only": false,
+          "started_at": "2026-10-26T03:01:00Z",
+          "ended_at": "2026-10-26T03:01:30Z",
+          "session": {"exists": true, "archived": true, "has_branch": true, "removed": true, "pushed": false, "pr_url": "", "merged": false},
+          "usage_words": []
+        }
+      ],
+      "counts": {"failed": 0, "needs_you": 0, "running": 0, "done": 0, "stopped": 1},
+      "words": {"title": "Last night: 1 stopped", "body": "Stopped: Tidy the readme"},
+      "ready_at": "2026-10-26T12:00:30Z",
+      "notified": true
+    }
+  ],
+  "keep": 14
+}

@@ -539,8 +539,10 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
     assert "runOutcomeWindowSeenAt = Date.now()" in hide
     # The audit types are exactly the bell's run-outcome types — v1.374.0
     # (moved on purpose): and a long Build turn that ended; v1.392.0 (moved
-    # on purpose): and a Build reply that made no progress for ten minutes.
+    # on purpose): and a Build reply that made no progress for ten minutes;
+    # v1.399.0 (moved on purpose, night shift N2): and a night's summary.
     assert (
-        'const RUN_OUTCOME_AUDIT_TYPES = '
-        '"session.completed,workflow.completed,build.turn_finished,build.turn_stalled";' in src
+        'const RUN_OUTCOME_AUDIT_TYPES =\n'
+        '  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary";'
+        in src
     )

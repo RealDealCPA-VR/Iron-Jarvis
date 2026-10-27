@@ -1942,10 +1942,15 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
         # line is written (the notice opens a session that already shows it).
         # Never for a turn the user stopped or a shutdown cut off, and never
         # beside an account's limit card (that card is the same news).
+        # v1.399.0 (night shift N2): never for a NIGHT task's turn — the
+        # night's ONE Last night summary says how each task ended (one notice
+        # per night, never one per task; the tray would otherwise toast each).
+        from ...harness import night as _night_shift
+
         elapsed = time.time() - watch.started_at
         if (
             platform is not None and status in ("done", "error") and not watch.account_limit
-            and elapsed > FINISH_NOTICE_AFTER_S
+            and elapsed > FINISH_NOTICE_AFTER_S and _night_shift.current() is None
         ):
             with contextlib.suppress(BaseException):
                 await asyncio.shield(_announce_turn_finished(platform, thread_id, turn_id, status, elapsed))
