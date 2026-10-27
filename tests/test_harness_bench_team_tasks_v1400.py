@@ -5,7 +5,7 @@ repeats) handed ZERO pieces to a member: each frontier task took about a
 minute, and doing the work was always quicker than writing a helper a brief.
 The team tier holds tasks made of several independent pieces a planner can
 hand out from a written brief: a sixty-module package to read, three modules
-from one specification, about thirty failing tests from eleven unrelated bugs,
+from one specification, about thirty failing tests from thirteen unrelated bugs,
 an eleven-file change to bring into a project that moved on since and review
 (three of its edits to fix), a rename across code, command line, environment
 and docs, five functions to port from a JavaScript reference.
@@ -66,7 +66,7 @@ TEAM_HASHES = {
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
     "team-review-patch": "66c79495a2ce93fd8401cf696ff89aa050ddf9debe01b639e30136fd0d20c9f7",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
-    "team-test-triage": "9a1992cb4b0ce94581bc4fb912a1033655d21012b89fb40f85f2eaac7ff1d87a",
+    "team-test-triage": "70cbd69203b05e4f3e35032c5a415e5e964f79625e3a0a1eb94d515456aa0166",
 }
 #: The frontier tier as v1.383.0 shipped it (v1.400.0 adds a tier; it edits none).
 FRONTIER_HASHES = {

@@ -7,6 +7,7 @@ import hashlib
 import os
 import random
 import sys
+import tempfile
 import unittest
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -35,6 +36,9 @@ UNCHANGED = {
     "test_cards.py": "338a1a009fa981f76fc1b65220c55d3866351cc72c447722097b28082874b6ca",
     "test_recurrence.py": "9263252f2d3507afa69e38f71578e5b7559df2a5a7a665b0492c1d727aaa9e52",
     "test_percentiles.py": "1055d2b8d705b566654608226927056603f3ad1afe173bd660881a29094374a1",
+    "test_promotions.py": "37647fc8793be88dc95994578d4e499012b57e98fe4bf7959361193b61f50c32",
+    "test_shelf_labels.py": "bc82fde9f551c5d9f87429e4e6cfab983c020a71be58bff747af641e9160afd8",
+    "test_importer.py": "6c7833ac3385c352f12a0f26ae7ede72f88ce08dc0c8c955d10c551ccd30f3eb",
 }
 
 
@@ -441,6 +445,73 @@ class HiddenPercentiles(unittest.TestCase):
             above = min(below + 1, len(data) - 1)
             expected = data[below] + (data[above] - data[below]) * (position - below)
             self.assertAlmostEqual(percentile(values, p), expected, places=9, msg=(values, p))
+
+
+class HiddenPromotions(unittest.TestCase):
+    def test_a_the_standing_price_list_never_changes(self):
+        from inventory.promotions import PRICE_LIST, promoted_prices
+
+        before = dict(PRICE_LIST)
+        first = promoted_prices(10, ["ab-1"])
+        second = promoted_prices(10, ["ab-1"])
+        self.assertEqual(first, second)
+        self.assertEqual(first["AB-1"], 2250)
+        self.assertEqual(PRICE_LIST, before)
+        promoted_prices(30, ["AB-1", "cd-2", " EF-3", "gh-4 "])
+        self.assertEqual(PRICE_LIST, before)
+        self.assertIsNot(promoted_prices(0, []), PRICE_LIST)
+
+    def test_b_a_given_price_list_never_changes(self):
+        from inventory.promotions import promoted_prices
+
+        prices = {"X-1": 1000, "Y-2": 333, "Z-3": 999}
+        before = dict(prices)
+        out = promoted_prices(50, ["x-1", " y-2"], prices)
+        self.assertEqual(out, {"X-1": 500, "Y-2": 167, "Z-3": 999})
+        self.assertEqual(prices, before)
+        self.assertIsNot(out, prices)
+        self.assertEqual(promoted_prices(15, ["Z-3"], prices)["Z-3"], 849)
+        self.assertEqual(prices, before)
+
+    def test_c_labels_after_a_promotion(self):
+        from inventory.labels import shelf_label
+        from inventory.promotions import promoted_prices
+
+        promoted_prices(40, ["AB-1", "GH-4"])
+        self.assertEqual(shelf_label("AB-1"), "Blue cotton shirt: $25.00")
+        self.assertEqual(shelf_label("gh-4"), "Gift card sleeve: $9.99")
+
+
+class HiddenImporter(unittest.TestCase):
+    BOM = bytes([0xEF, 0xBB, 0xBF])
+
+    def read(self, data):
+        from inventory.importer import read_stock_csv
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "count.csv")
+            with open(path, "wb") as fh:
+                fh.write(data)
+            return read_stock_csv(path)
+
+    def test_a_files_excel_saves(self):
+        cases = [
+            (self.BOM + b"qty,sku\r\n3,ab-1\r\n7, cd-2\r\n", {"AB-1": 3, "CD-2": 7}),
+            (self.BOM + b"SKU,Qty\r\nef-3,12\r\n", {"EF-3": 12}),
+            (self.BOM + b"Qty,SKU\n0,gh-4\n", {"GH-4": 0}),
+            (self.BOM + b"sku,qty\n", {}),
+        ]
+        for data, expected in cases:
+            with self.subTest(data=data):
+                self.assertEqual(self.read(data), expected)
+
+    def test_b_blank_lines_and_line_ends(self):
+        self.assertEqual(self.read(b"sku,qty\n\nab-1,1\n\n\ncd-2,2\n"), {"AB-1": 1, "CD-2": 2})
+        self.assertEqual(self.read(b"QTY,SKU\r\n4,ab-1\r\n\r\n"), {"AB-1": 4})
+
+    def test_c_a_sku_twice(self):
+        with self.assertRaises(ValueError):
+            self.read(self.BOM + b"qty,sku\r\n3,ab-1\r\n4,AB-1 \r\n")
 
 
 class HiddenUnchanged(unittest.TestCase):

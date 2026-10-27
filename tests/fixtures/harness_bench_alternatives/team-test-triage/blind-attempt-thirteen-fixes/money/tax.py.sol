@@ -1,7 +1,5 @@
 """Sales tax on invoice lines."""
 
-from decimal import ROUND_HALF_UP, Decimal
-
 
 def line_tax(amount_cents, rate_percent):
     """The tax on one invoice line, in cents.
@@ -13,7 +11,8 @@ def line_tax(amount_cents, rate_percent):
     zero (12.5 -> 13, -12.5 -> -13). The rate is used exactly as written: no
     binary floating point anywhere.
     """
-    rate = Decimal(str(rate_percent).strip())
-    exact = abs(Decimal(amount_cents)) * rate / 100
-    cents = int(exact.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    from decimal import Decimal, ROUND_HALF_UP
+    rate = Decimal(str(rate_percent))
+    tax = abs(Decimal(amount_cents)) * rate / 100
+    cents = int(tax.quantize(Decimal(1), rounding=ROUND_HALF_UP))
     return -cents if amount_cents < 0 else cents

@@ -23,6 +23,10 @@ Every bug fixed at its cause, written another way than the reference:
 * the n-th weekday is picked from `calendar.monthdayscalendar` (Python's
   negative indexing for the last ones), not from the month's last day;
 * the percentile is interpolated exactly with `Fraction` and converted to a
-  float at the end.
+  float at the end;
+* the promoted price list is built as a new dict in one comprehension, not a
+  copy that is then changed;
+* the importer removes the byte order mark from the header names instead of
+  opening the file as `utf-8-sig`.
 
 No test file is touched. The hidden check must pass it.

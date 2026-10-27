@@ -1,7 +1,6 @@
 """URL slugs."""
 
 import re
-import unicodedata
 
 
 def slugify(title, max_length=60):
@@ -14,8 +13,8 @@ def slugify(title, max_length=60):
     end. A slug longer than ``max_length`` is cut at the last "-" that keeps it
     within ``max_length`` (or at ``max_length`` when there is none).
     """
-    title = unicodedata.normalize("NFKD", title)
-    text = title.encode("ascii", "ignore").decode("ascii")
+    import unicodedata
+    text = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
     text = re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-").lower()
     if len(text) <= max_length:
         return text

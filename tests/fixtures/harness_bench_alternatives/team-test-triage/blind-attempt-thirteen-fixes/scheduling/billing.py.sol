@@ -25,15 +25,15 @@ def billing_dates(anchor, count):
     dates = []
     year, month = anchor.year, anchor.month
     while len(dates) < count:
-        dates.append(anchor if not dates else _on_day(year, month, anchor.day))
+        dates.append(_on_day(year, month, anchor.day))
         year, month = _following_month(year, month)
     return dates
 
 
 def next_billing_date(anchor, after):
     """The first billing date of the plan strictly after the date ``after``."""
-    current = anchor
     year, month = anchor.year, anchor.month
+    current = _on_day(year, month, anchor.day)
     while current <= after:
         year, month = _following_month(year, month)
         current = _on_day(year, month, anchor.day)

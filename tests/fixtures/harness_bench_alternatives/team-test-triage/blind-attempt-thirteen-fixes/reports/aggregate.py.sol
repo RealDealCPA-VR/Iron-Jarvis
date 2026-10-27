@@ -4,8 +4,6 @@ Every report counts an order on its UTC calendar day, whatever time zone the
 shop that took it is in.
 """
 
-from datetime import datetime, timezone
-
 
 def order_day(order):
     """The UTC calendar day of an order, as "YYYY-MM-DD".
@@ -15,13 +13,11 @@ def order_day(order):
     UTC): 23:30 at -05:00 is 04:30 UTC the next day, so that order belongs to
     March 2.
     """
-    text = order["created"].strip()
-    if text[-1:] in ("Z", "z"):
-        text = text[:-1] + "+00:00"
-    moment = datetime.fromisoformat(text)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc).date().isoformat()
+    from datetime import datetime, timezone
+    moment = datetime.fromisoformat(order["created"])
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc)
+    return moment.date().isoformat()
 
 
 def daily_totals(orders):
