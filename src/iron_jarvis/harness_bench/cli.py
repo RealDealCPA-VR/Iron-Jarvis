@@ -60,8 +60,9 @@ def run_command(
     team: str = typer.Option(
         "", "--team",
         help="jarvis-team only, and required for it: a TOML file naming the planner ([planner] "
-        "provider + model) and the members ([[members]] name, provider, model, roles, optional "
-        "account). The team is part of the setup: another team is another results folder."),
+        "provider + model, optional team_first = true to run with \"Hand work to my team first\" on) "
+        "and the members ([[members]] name, provider, model, roles, optional account). The team is "
+        "part of the setup: another team is another results folder."),
     with_alone: bool = typer.Option(
         False, "--with-alone",
         help="jarvis-team only: after the team, run its PLANNER alone (the jarvis runner on the planner's "
@@ -212,6 +213,13 @@ def _say(result, *, dry_run: bool, repeats: int) -> None:
             + (f"; {unscored} unscored" if unscored else "")
             + f". Results: {result.config_dir}"
         )
+    if getattr(result.config, "runner", "") == "jarvis-team":
+        # v1.400.0: the first number to look for in a team setup.
+        from .team_report import handed_line
+
+        handed = handed_line(result.records)
+        if handed:
+            typer.echo(handed)
     if result.report_path is not None:
         typer.echo(f"Report across every setup: {result.report_path}")
 
