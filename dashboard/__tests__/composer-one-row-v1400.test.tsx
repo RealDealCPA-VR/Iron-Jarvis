@@ -399,6 +399,8 @@ describe("the hook watches words, never what typing changes", () => {
     render(<Bar order={CHAT_FIT_ORDER} onLevel={(l) => levels.push(l)} />);
     const bar = screen.getByTestId("bar");
     const spy = vi.spyOn(bar, "getBoundingClientRect");
+    // Every wake of the observer reads the controls (`fitControls`): none.
+    const woke = vi.spyOn(bar, "querySelectorAll");
     const send = document.getElementById("send") as HTMLButtonElement;
     await act(async () => {
       for (let i = 0; i < 20; i++) {
@@ -408,6 +410,7 @@ describe("the hook watches words, never what typing changes", () => {
       await Promise.resolve();
     });
     expect(spy).not.toHaveBeenCalled();
+    expect(woke).not.toHaveBeenCalled();
     await act(async () => {
       (screen.getByTestId("model-chip-words") as HTMLElement).textContent = "Qwen3.8-27B (RTX)";
       await Promise.resolve();

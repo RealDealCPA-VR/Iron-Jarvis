@@ -557,23 +557,42 @@ test.describe("the row holds still (1406 × 857, the user's model)", () => {
     const before = await boxes(page);
     // The review: typing measures nothing. Every measure starts with the
     // toolbar's own box, so its calls are counted while keys are typed.
+    // Its observer reading the controls (`fitControls`) is counted too: Send
+    // waking as the first key lands changes an attribute, which it must not
+    // even wake for.
     await page.getByTestId("composer-toolbar").evaluate((bar) => {
-      const w = window as unknown as { __fitReads: number };
+      const w = window as unknown as { __fitReads: number; __fitWakes: number };
       w.__fitReads = 0;
+      w.__fitWakes = 0;
       const real = bar.getBoundingClientRect.bind(bar);
       (bar as HTMLElement).getBoundingClientRect = () => {
         w.__fitReads += 1;
         return real();
       };
+      const realQ = bar.querySelectorAll.bind(bar);
+      (bar as HTMLElement).querySelectorAll = ((sel: string) => {
+        w.__fitWakes += 1;
+        return realQ(sel);
+      }) as typeof bar.querySelectorAll;
     });
-    // Typing: every keystroke, and the first one that wakes Send.
-    await page.getByRole("textbox").first().click();
+    // Typing: every keystroke, and the first one that wakes Send. The review:
+    // the first cut typed into `getByRole("textbox").first()` — the
+    // sidebar's "Search chats…" box, which comes first in the page — so the
+    // composer never saw a key and Send never woke. The keys go to the
+    // composer's own box now, and Send waking proves they landed.
+    const send = page.getByTestId("composer-toolbar").getByRole("button", { name: "Send" });
+    await expect(send).toBeDisabled();
+    await page.getByTestId("chat-composer").getByRole("textbox").click();
     await page.keyboard.type("a message long enough to wake Send and keep typing past it", { delay: 5 });
+    await expect(send).toBeEnabled();
     await frames(page);
+    const typed = await page.evaluate(() => {
+      const w = window as unknown as { __fitReads: number; __fitWakes: number };
+      return { reads: w.__fitReads, wakes: w.__fitWakes };
+    });
+    expect(typed.reads, "the toolbar was measured while typing").toBe(0);
+    expect(typed.wakes, "the toolbar's observer woke while typing").toBe(0);
     expect(await boxes(page), "typing moved the row").toBe(before);
-    const reads = await page.evaluate(() => (window as unknown as { __fitReads: number }).__fitReads);
-    // `boxes` reads the controls, never the toolbar: any read is the fit's.
-    expect(reads, "the toolbar was measured while typing").toBe(0);
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Delete");
     await frames(page);
