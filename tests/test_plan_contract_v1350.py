@@ -84,6 +84,23 @@ async def _listing(app) -> dict:
         return (await c.get("/chat/approvals/pending")).json()
 
 
+async def _listed(app, session_id: str) -> list[dict]:
+    """The listing's rows for this session, read once the ask is LISTED.
+
+    The listing names an ask only once its ``approval.requested`` event row
+    exists, and the event bus writes that row AFTER the publish spy has seen
+    the ask (the v1.373.1 shape) — so one read right after the spy came back
+    empty on a loaded runner (v1.399.3's Tests gate: ``AssertionError: []``).
+    Poll until a row is there, bounded at 15 s."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 15.0
+    while True:
+        rows = [r for r in (await _listing(app))["approvals"] if r.get("session_id") == session_id]
+        if rows or loop.time() > deadline:
+            return rows
+        await asyncio.sleep(0.05)
+
+
 async def _allow_run(h) -> dict:
     h.platform.config.plan_approval = True
     inner = _TextOnly([_PLAN, "Collected the statements.", "Wrote summary.txt.", "Both done."])
@@ -93,7 +110,7 @@ async def _allow_run(h) -> dict:
         assert await _wait_for(lambda: bool(_events(h, "approval.requested", sess.id)))
         ask = _events(h, "approval.requested", sess.id)[0]["payload"]
         awaiting = (await _get_plan(h.app, sess.id)).json()
-        rows = [r for r in (await _listing(h.app))["approvals"] if r.get("session_id") == sess.id]
+        rows = await _listed(h.app, sess.id)
         assert len(rows) == 1, rows
         assert h.platform.approvals.resolve(ask["approval_id"], "once")
         await _finish(task)
