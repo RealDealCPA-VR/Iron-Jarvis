@@ -33,7 +33,6 @@ BLOCKING (git and file reads): callers hop off the loop.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
