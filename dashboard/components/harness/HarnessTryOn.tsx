@@ -19,10 +19,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { Layers, X } from "lucide-react";
 import { FIT_ICON_CHIP, FIT_WORDS, composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
-
-/** The try-on chip's tooltip. */
-const TRY_ON_TITLE =
-  "Try this message on up to three models at once, each on its own branch — then keep the one you want";
 import { workerModelName } from "@/lib/buildHelpers";
 import {
   MAX_ATTEMPTS,
@@ -37,6 +33,10 @@ import {
 import type { CatalogRow } from "@/lib/answeredModel";
 
 type Place = ReturnType<typeof tryOnMenuPosition>;
+
+/** The try-on chip's tooltip. */
+const TRY_ON_TITLE =
+  "Try this message on up to three models at once, each on its own branch — then keep the one you want";
 
 export function TryOnControl({
   models,

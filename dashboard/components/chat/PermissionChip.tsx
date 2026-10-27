@@ -375,11 +375,12 @@ export function PermissionChip({
     : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200";
   // On a phone the chip is a 30px square holding the shield; the words and the
   // chevron come back from sm up.
+  // v1.400.0: so is a chip in a toolbar that has given up its chips' words
+  // (lib/toolbarFit: FIT_ICON_CHIP / FIT_WORDS, read off the toolbar's
+  // `data-fit-icons`), keeping the amber shield of the no-ask level; its
+  // tooltip then names the level (`iconOnly`).
   const phoneChip = iconOnlyOnPhone ? " max-sm:w-[30px] max-sm:justify-center max-sm:px-0" : "";
   const phoneHide = iconOnlyOnPhone ? " max-sm:hidden" : "";
-  // v1.400.0: in a toolbar that has given up its chips' words (lib/toolbarFit)
-  // the chip is the same 30px square holding its shield (the amber one for
-  // the no-ask level), and its tooltip names the level.
 
   const menu = open ? (
     <div
