@@ -373,6 +373,15 @@ def test_the_audit_answer_key_is_what_a_real_resolver_finds(tmp_path):
 PATCH = "incoming/0001-Add-loyalty-tiers.patch"
 
 
+#: git as it runs on an LF checkout. A runner's GLOBAL ``core.autocrlf=true``
+#: (GitHub's Windows runners set it) makes ``git apply`` write the files it
+#: creates with CRLF, so the byte comparison below would test the runner's
+#: git settings, not the patch (v1.400.1: both gates went red on exactly that;
+#: ``GIT_CONFIG_GLOBAL`` pointing at an ``autocrlf = true`` file reproduces it).
+#: The CRLF checkout has its own pin in test_harness_bench_team_review_v1400.
+GIT_LF = ["git", "-c", "core.autocrlf=false"]
+
+
 def _on_lf(work: Path) -> Path:
     """A checkout with autocrlf has CRLF in the patch AND in its targets; the
     patch is about content, so compare and apply on LF (as an LF checkout is)."""
@@ -390,7 +399,7 @@ def test_the_patch_applies_to_its_own_base_and_its_tests_pass_with_its_bugs(tmp_
     task = TASKS["team-review-patch"]
     base = prepare_workspace(task, tmp_path / "base")
     apply_solution(task.id, base, root=PATCH_BASE)
-    applied = procs.run(["git", "apply", PATCH], cwd=_on_lf(base), timeout=60)
+    applied = procs.run([*GIT_LF, "apply", PATCH], cwd=_on_lf(base), timeout=60)
     assert applied.returncode == 0, procs.text(applied.stderr, "utf-8")
     assert (base / "orderdesk" / "credit.py").is_file() and (base / "test_loyalty.py").is_file()
     _visible_tests_pass(base)
@@ -405,8 +414,8 @@ def test_on_the_project_as_it_is_now_only_the_files_it_changed_since_conflict(tm
     bugs included), and the project's newer tests pass on the decoy."""
     task = TASKS["team-review-patch"]
     now = _on_lf(prepare_workspace(task, tmp_path / "now"))
-    assert procs.run(["git", "apply", "--check", PATCH], cwd=now, timeout=60).returncode != 0
-    tried = procs.run(["git", "apply", "--reject", PATCH], cwd=now, timeout=60)
+    assert procs.run([*GIT_LF, "apply", "--check", PATCH], cwd=now, timeout=60).returncode != 0
+    tried = procs.run([*GIT_LF, "apply", "--reject", PATCH], cwd=now, timeout=60)
     assert tried.returncode != 0
     failed = set(re.findall(r"patch failed: (\S+):\d+", procs.text(tried.stderr, "utf-8")))
     assert failed == PATCH_CONFLICTS, failed

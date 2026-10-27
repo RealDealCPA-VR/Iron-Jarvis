@@ -3759,6 +3759,20 @@ does not need a bump, stop and bump it.
   `.pyc` of a hidden check in the source tree with bytecode on). Pins:
   `tests/test_harness_bench_{team_tasks,team_review,tiers,team_generators}
   _v1400.py`.
+  v1.400.1 (test-only; v1.400.0's Tests AND Release gates both went red,
+  nothing was published): (1) the patch pin compared the files `git apply`
+  wrote byte for byte with LF copies, but GitHub's Windows runners set a
+  GLOBAL `core.autocrlf=true`, so `git apply` wrote its NEW files with CRLF
+  — the pin tested the runner's git, not the patch. It now runs git as an
+  LF checkout (`GIT_LF = ["git", "-c", "core.autocrlf=false"]`); the CRLF
+  checkout keeps its own pin. REPRODUCE a runner's git here with
+  `GIT_CONFIG_GLOBAL=<a file holding "[core] autocrlf = true">` (this PC's
+  global is `input`). (2) `approval-mode-v1188`'s window from the chip's
+  `value=` to `markSetupChanged()` was 694 chars on LF once the one-row
+  toolbar added props, past 700 on CI's CRLF checkout (the v1.232.1 trap);
+  it reads every source through one LF-normalising `read` and the windows
+  are 300 / 1200. Both reproduced on this PC with the old shape (CI's exact
+  errors) and green on the new one; a mutation of each fix goes red.
 
 - **The chat toolbar stays ONE ROW; it gives up words one chip at a time,
   least needed first** (v1.400.0, a USER BUG: "Qwen3.8-27B (RTX)" + the

@@ -18,10 +18,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const page = readFileSync(join(process.cwd(), "app", "chat", "page.tsx"), "utf8");
+// v1.400.1: CI checks files out with CRLF (core.autocrlf=true), which made
+// a fixed window around a match longer there than here; read every source
+// with LF line ends (the v1.232.1 rule: normalise at the reader).
+const read = (...parts: string[]) =>
+  readFileSync(join(process.cwd(), ...parts), "utf8").split("\r\n").join("\n");
+const page = read("app", "chat", "page.tsx");
 // v1.327.0: the words and values moved to ONE table the composer's permission
 // chip reads; the page imports it instead of keeping its own copy.
-const levels = readFileSync(join(process.cwd(), "lib", "permissionLevels.ts"), "utf8");
+const levels = read("lib", "permissionLevels.ts");
 
 describe("the posture vocabulary", () => {
   it("matches the daemon's, value for value", () => {
@@ -49,7 +54,7 @@ describe("the control and its wiring", () => {
     // v1.327.0: the chip replaced the select. The window spans the chip's
     // onChange handler (persist + snapshot).
     expect(page).toMatch(
-      /<PermissionChip\s+id="chat-approval-mode"[\s\S]{0,120}value=\{approvalMode\}[\s\S]{0,700}markSetupChanged\(\);/,
+      /<PermissionChip\s+id="chat-approval-mode"[\s\S]{0,300}value=\{approvalMode\}[\s\S]{0,1200}markSetupChanged\(\);/,
     );
     expect(page).not.toContain('aria-label="Approval mode"');
   });
@@ -84,7 +89,7 @@ describe("the control and its wiring", () => {
     // v1.327.0: the chip reads the level's tone; yolo is the one warn level
     // and warn is the amber tone token (rendered: ux-wave2-chat-words-v1314).
     expect(levels).toMatch(/yolo: \{[\s\S]{0,200}tone: "warn"/);
-    const chip = readFileSync(join(process.cwd(), "components", "chat", "PermissionChip.tsx"), "utf8");
+    const chip = read("components", "chat", "PermissionChip.tsx");
     expect(chip).toMatch(/warn\s*\?\s*"text-tone-warn/);
   });
 });
