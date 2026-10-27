@@ -19,7 +19,6 @@ Pinned here (each red before its fix, or a property the review proved):
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import shutil
 import sys
@@ -42,6 +41,16 @@ def _pycs(task_id: str, stem: str) -> list[Path]:
     return sorted(cache.glob(f"{stem}.*.pyc")) if cache.is_dir() else []
 
 
+def _tidy(task_id: str, stem: str) -> None:
+    """Remove what a failing run of these pins (or a mutation) leaves: the
+    .pyc, and the __pycache__ folder when nothing else is in it."""
+    for leftover in _pycs(task_id, stem):
+        leftover.unlink()
+    cache = TASKS[task_id].check_dir / "__pycache__"
+    if cache.is_dir() and not any(cache.iterdir()):
+        cache.rmdir()
+
+
 def test_edge_installed_leaves_no_bytecode_of_the_hidden_check(monkeypatch):
     """With bytecode ON (CI writes it; this PC's environment turns it off,
     which is why the leak never showed here), loading the browser task's
@@ -49,15 +58,13 @@ def test_edge_installed_leaves_no_bytecode_of_the_hidden_check(monkeypatch):
     from tests.test_harness_bench_v1363 import edge_installed
 
     stem = "test_hidden_inventory_page"
-    for leftover in _pycs("frontier-inventory-filter", stem):
-        leftover.unlink()  # an earlier run's (the leak this pins)
+    _tidy("frontier-inventory-filter", stem)  # an earlier run's (the leak this pins)
     monkeypatch.setattr(sys, "dont_write_bytecode", False)
     try:
         edge_installed()
         assert _pycs("frontier-inventory-filter", stem) == []
     finally:
-        for leftover in _pycs("frontier-inventory-filter", stem):
-            leftover.unlink()
+        _tidy("frontier-inventory-filter", stem)
 
 
 @pytest.mark.parametrize("task_id", TEAM)
@@ -66,14 +73,12 @@ def test_the_team_pins_load_the_hidden_checks_without_bytecode(task_id, monkeypa
 
     monkeypatch.setattr(sys, "dont_write_bytecode", False)
     for path in sorted(TASKS[task_id].check_dir.glob("*.py")):
-        for leftover in _pycs(task_id, path.stem):
-            leftover.unlink()
+        _tidy(task_id, path.stem)
         try:
             _load_check(task_id, path.name)
             assert _pycs(task_id, path.stem) == [], path.name
         finally:
-            for leftover in _pycs(task_id, path.stem):
-                leftover.unlink()
+            _tidy(task_id, path.stem)
 
 
 def _crlf(work: Path) -> Path:
