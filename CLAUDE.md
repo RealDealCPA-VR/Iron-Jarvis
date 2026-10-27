@@ -3699,6 +3699,63 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **TEAM FIRST: a coding session's planner can be TOLD to hand pieces to
+  the team; off is byte-identical** (v1.400.0; the user's decision after the
+  first live team benchmark — a Sonnet planner shown the team handed ZERO
+  pieces in 36 runs: the words only permitted it). `Config.team_first`
+  (schema row, Models › Model team, default off; ON from chat is ASK-FLOOR
+  via `config_change_protected` (`floor_when=(True,)`), OFF is allow, like
+  `account_groups`). `model_team.team_section(platform, *, limit,
+  team_first, planner_local=)` → `(section, roles)`: when on and the turn
+  shows a team, the team section ends with `team_first_words` naming ONLY
+  the roles the listed members hold (read, test, code, review order) —
+  `TEAM_FIRST_LEAD` ("…the user wants to save this model's usage") or
+  `TEAM_FIRST_LOCAL_LEAD` ("…wants the team to take its share of this
+  work") when `egress.stays_on_this_network` says the planner is local —
+  and every helper tool's description leads with `team_first_tool_sentence`
+  in its dialect's own argument words (`subagent_type` / `agent_type` /
+  `set role to`); `HarnessTurn.team_first` is NOT in the fingerprint; a
+  member name with a space keeps its roles. Off, or no team: every dialect's
+  prompt and tool specs are byte-identical to v1.399.4 (golden
+  `tests/fixtures/team_first_off_golden_v1400.json`). Never reaches a
+  helper's own run, the POST lane, plan mode, a mission coordinator. The
+  router, floors, groups and pay limit are unchanged. BENCHMARK: the team
+  file's `[planner] team_first = true` (non-bool refused); the runner sets
+  the config in-process and restores it in `close()`; in the identity only
+  when true; the report labels "jarvis-team (team-first)", answers each
+  team setup against the alone row of ITS OWN Iron Jarvis version first
+  (`find_alone` ranks effort, version, runs in common, newest — a root
+  holding two nights mis-paired before), always shows that alone row with a
+  `compares_line`, and leads each answer with "The team at work: … handed
+  at least one piece to a team member in N of M runs" (a member's infra
+  failure still counts as handed; all-did-not-run says "Not known"). Pins:
+  `tests/test_team_first_{setting,prompt,bench,report_review,words_review,
+  tonight}_v1400.py`, `dashboard/__tests__/team-first-setting-v1400.test.tsx`.
+
+- **The chat toolbar stays ONE ROW; it gives up words one chip at a time,
+  least needed first** (v1.400.0, a USER BUG: "Qwen3.8-27B (RTX)" + the
+  Reasoning chip wrapped the right group to a second line). `lib/toolbarFit.ts`
+  measures the toolbar (ResizeObserver next frame; MutationObserver on a
+  control's WORDS and `loadingdone` restart from full before paint; never on a
+  keystroke — pinned by counting observer wakes while typing) and applies
+  `data-fit-<step>` attributes OUTSIDE React (the page never re-renders per
+  keystroke, v1.250.0). `CHAT_FIT_ORDER`: project, web (globe), tools (wrench;
+  "Tools off" keeps "Off", a count stays), local ("Local", never a bare
+  house, glow kept), name (truncates to `MODEL_LABEL_MIN_PX` 96 — the END of a
+  name is the machine, so it goes after cheaper steps), ask (shield;
+  "Ask first" is ShieldQuestion, no-ask amber), short (reasoning words → a
+  brain icon; a level word stays), tight (floor 64), then WRAP (the old row).
+  `HARNESS_FIT_ORDER`: tryon, name, plan, ask, short, tight. Hysteresis per
+  level `FIT_SLACK_PX` 24. The model chip's floor is built from its PARTS
+  (padding, account, chevron) — reading the chip's own width ratcheted it
+  wider forever. Active from `sm`; the phone keeps its v1.315.0 rules (Send
+  inside the card fixed). Tooltips lead with the hidden words; ids, testids
+  and aria-labels kept. Real-browser pins:
+  `dashboard/e2e/composer-one-row-v1400.spec.ts` (98 cases: 5 models × hero,
+  saved chat, harness × 2000/1406/1280/1024/390, the order sweep, the gap,
+  the ratchet, typing, menus, zoom, an account chip), plus
+  `dashboard/__tests__/composer-one-row-v1400.test.tsx`.
+
 - **NIGHT SHIFT N2: Iron Jarvis commits each ended night task to ITS OWN
   branch (screened), and ONE summary per night is announced ONCE** (v1.399.0,
   phase N2 of `docs/NIGHT-SHIFT-PLAN.md`, decision 2; a doer + a reviewer

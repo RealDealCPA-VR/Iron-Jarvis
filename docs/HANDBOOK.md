@@ -1898,6 +1898,58 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Hand work to your team first (v1.400.0)
+
+Your model team only helps when the planner hands it work. In the first
+measured run, a Claude planner was shown the team in 36 runs and never
+handed it a piece: nothing told it you wanted to save its usage.
+
+- **The setting.** **Settings › Models › Model team › Hand work to my team
+  first**. It is off by default.
+- **What it changes, when it is on and you have a team.** A coding
+  session's planner is told to:
+  - hand reading and summarizing, test runs, first drafts and reviews to
+    your team by role;
+  - start several helpers at once when their pieces don't depend on each
+    other;
+  - keep the plan, the hard decisions and the final check itself.
+
+  It names only the roles your members hold. The helper tool's description
+  also points to your team first. A planner on a free local model is told the
+  team should take its share of the work rather than told to save usage.
+- **What it does not change.**
+  - With the setting off, or with no team, the planner sees exactly what it
+    saw before.
+  - The team's own rules are unchanged: local first, no account past its
+    limit, account groups and the pay-per-use limit.
+  - A helper is never told to hand its work on again.
+- **From chat**, turning it on always asks first, because it moves work and
+  usage onto other models and accounts. Turning it off does not ask.
+- **It reaches coding sessions only.** An objective's coordinator does not
+  get these words yet.
+
+## The chat box stays on one row (v1.400.0)
+
+The controls under the message box stay on one line whatever model you
+pick, with Send at the right end. Before, a longer model name together with
+the Reasoning chip pushed the right-hand controls onto a second line.
+
+- **When space is short, the row gives way one control at a time, least
+  needed first:**
+  1. "Web" becomes its globe.
+  2. "Auto tools" becomes its wrench. "Tools off" keeps "Off".
+  3. "Local only" becomes "Local". It keeps its glow when on.
+  4. Only then does the model's name shorten. The end of the name, which
+     often names the machine, goes last.
+  5. "Ask when risky" becomes its shield. "Ask first" has its own shield,
+     and the no-ask level stays amber.
+  6. "Reasoning" becomes a small brain icon. A level such as "Medium" stays
+     in words.
+- **The words are still there.** Hover over any control to see its full
+  words; a screen reader reads them too. Typing never makes the row move.
+- **The same rules apply in the Coding sessions box.** On a phone, the
+  layout is unchanged.
+
 ## Night shift: the morning (v1.399.0)
 
 When a night task ends, Iron Jarvis saves its work, and in the morning one
