@@ -211,13 +211,6 @@ def test_runner_label_tells_the_two_team_setups_apart():
     assert TRP.is_team_first({"runner": "jarvis", "harness": {"team": {"team_first": True}}}) is False
 
 
-def test_find_alone_pairs_both_team_setups_with_the_one_alone_row():
-    team, first, alone = _three_setups()
-    pairs = [team, first, alone]
-    assert TRP.find_alone(*team, pairs)[0] is alone[0]
-    assert TRP.find_alone(*first, pairs)[0] is alone[0]
-
-
 def test_handed_to_a_member_is_counted_per_setup():
     team, first, _alone = _three_setups()
     assert TRP.handed_count(team[1]) == (0, 2, 0)
@@ -230,6 +223,11 @@ def test_handed_to_a_member_is_counted_per_setup():
 
 def test_the_combined_report_answers_for_each_team_setup_against_the_same_alone_row():
     team, first, alone = _three_setups()
+    # find_alone pairs BOTH team setups with the one planner-alone row (same
+    # planner provider, model and effort).
+    pairs = [team, first, alone]
+    assert TRP.find_alone(*team, pairs)[0] is alone[0]
+    assert TRP.find_alone(*first, pairs)[0] is alone[0]
     report = combined_report([team, first, alone])
     # Each setup its own row, the two teams told apart.
     rows = [ln for ln in report.split("\n## ", 1)[0].splitlines() if ln.startswith("| jarvis")]
