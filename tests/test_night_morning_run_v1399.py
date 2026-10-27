@@ -427,6 +427,37 @@ async def test_a_task_that_changed_nothing_gets_no_commit_and_says_so(tmp_path, 
     assert git("rev-list", "--count", f"{base}..{ended['branch']}", cwd=repo) == "0"
 
 
+async def test_a_settle_run_again_after_a_stop_keeps_the_commit_it_made(tmp_path, monkeypatch):
+    """Iron Jarvis stopped between a task's commit and its record saying it
+    ended: the settle runs again, finds nothing new to commit — and the
+    commit it already made is still the task's commit (never "Nothing
+    changed")."""
+    repo = make_repo(tmp_path / "proj")
+    app = create_app(str(tmp_path / "home"))
+    d = app.state.d
+    monkeypatch.setattr(N, "CLOCK", lambda: _local(23, 30))
+    wire(app, NightScript({"TASK-TWICE": [
+        [ToolCall(id="t1", name="Write", arguments={"file_path": "twice.txt", "content": "twice\n"})],
+        "Done TASK-TWICE.",
+    ]}))
+    status, task = await asgi(app, "POST", "/build/night", {"folder": str(repo), "words": "TASK-TWICE: write twice.txt"})
+    assert status == 201, task
+    await night_routes.night_pass(d)
+    ended = await _ended(app, d, task["id"])
+    sha = ended["commit_sha"]
+    assert sha and ended["morning"]["commit"]["sha"] == sha
+    git_facts = setup_of(app, ended["thread_id"])["git"]
+    notes: list = []
+    await night_routes._settle_morning(d, ended, ended["thread_id"], git_facts, ended["state"],
+                                       messages_of(app, ended["thread_id"]), None, True, False, notes)
+    again = _task(app, task["id"])
+    assert again["commit_sha"] == sha
+    assert again["morning"]["commit"]["sha"] == sha and again["morning"]["commit_note"] == ""
+    assert not [n for n in notes if n[1] == M.NOTHING_CHANGED], notes
+    base = git("merge-base", "main", ended["branch"], cwd=repo)
+    assert git("rev-list", "--count", f"{base}..{ended['branch']}", cwd=repo) == "1"
+
+
 async def test_a_commit_git_refuses_is_a_note_in_words_never_a_crash(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / "proj")
     hook = repo / ".git" / "hooks" / "pre-commit"

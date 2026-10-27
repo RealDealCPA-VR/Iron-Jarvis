@@ -333,6 +333,13 @@ async def _settle_morning(d: Any, task: dict[str, Any], thread: str, git: "dict[
                     notes.append(("commit", M.commit_note_words(branch, commit["sha"])))
                     if done.get("note"):
                         notes.append(("info", str(done["note"])))
+                elif done.get("nothing") and task.get("commit_sha"):
+                    # Iron Jarvis stopped after this task's commit and before
+                    # the task was marked ended: the settle runs again, finds
+                    # nothing new, and the commit it made is still its commit.
+                    prior = (task.get("morning") or {}).get("commit")
+                    commit = dict(prior) if isinstance(prior, dict) and prior.get("sha") else {
+                        "sha": str(task["commit_sha"]), "subject": "", "files": 0}
                 elif done.get("nothing"):
                     commit_note = M.TRY_ON_NOTE if task.get("try_on") else M.NOTHING_CHANGED
                 else:
