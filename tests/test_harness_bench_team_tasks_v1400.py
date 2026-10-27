@@ -64,7 +64,7 @@ TEAM_HASHES = {
     "team-audit-events": "88263c040785d0e11842db7b1a497fd9cee2cd4ab513a738983a375b97b46ec8",
     "team-port-js": "311ff0d540c7d98ce27bae1f95b1835108dbf7b0b1440978f435224332dd4d6e",
     "team-rename-option": "fedb634d6384c2ca7cf8bc7e31ba0df382ecee6282e83b1fda0a04c0a9609220",
-    "team-review-patch": "66c79495a2ce93fd8401cf696ff89aa050ddf9debe01b639e30136fd0d20c9f7",
+    "team-review-patch": "c3c6b067e5fad22bb5da2cf5f48f624a1780cf63930c4a0d00add417d9b016e8",
     "team-spec-modules": "5aa9b813b4e89d1d9d5e22bc6726145002a8a0bf7cd85f1d8597c8d6f868953a",
     "team-test-triage": "70cbd69203b05e4f3e35032c5a415e5e964f79625e3a0a1eb94d515456aa0166",
 }

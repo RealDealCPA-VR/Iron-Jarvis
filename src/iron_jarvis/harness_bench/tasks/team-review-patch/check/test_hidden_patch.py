@@ -168,7 +168,13 @@ class HiddenCli(unittest.TestCase):
                 json.dump(order, fh)
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = main([path, *args])
+                try:
+                    code = main([path, *args])
+                except SystemExit as exc:
+                    # A usage error argparse raises (an option checked with
+                    # type=) is the program's exit code too: what the
+                    # description asks for is "exit code 2".
+                    code = 0 if exc.code is None else exc.code
             return code, out.getvalue(), err.getvalue()
 
     def test_a_the_option_wins_over_the_file(self):
