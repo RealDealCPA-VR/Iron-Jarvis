@@ -48,7 +48,7 @@ import { FitPanel } from "@/components/chat/FitPanel";
 // the chat page's menu never loads lib/harnessModelMenu.
 import type { CompanyMenu, MenuAccount, MenuMatch, MenuWay } from "@/lib/harnessModelMenu";
 import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
-import { composerChipClass } from "@/lib/composerChips";
+import { composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
 import { friendlyModelName } from "@/lib/friendlyModelName";
 import { modelGroupName, providerDisplay } from "@/lib/onboarding";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
@@ -281,6 +281,7 @@ export function ReasoningChip({
   value,
   def,
   disabled = false,
+  short = false,
   onChange,
 }: {
   /** The levels the model offers (never empty: the caller checks). */
@@ -290,17 +291,29 @@ export function ReasoningChip({
   /** The model's own default level ("" = unknown). */
   def: string;
   disabled?: boolean;
+  /** v1.400.0: the toolbar it sits in (lib/toolbarFit) is at its tightest and
+   *  the chip's words are cut short (`data-fit-short`, CSS): its tooltip then
+   *  leads with the whole words. */
+  short?: boolean;
   onChange: (level: string) => void;
 }) {
   const picked = levels.includes(value) ? value : "";
+  const words = reasoningChipLabel(picked, def);
   return (
     <span
       className={`relative inline-flex h-[30px] shrink-0 items-center rounded-lg pl-2 pr-6 text-[13px] text-zinc-400 transition-colors has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-accent/50 ${
         disabled ? "opacity-40" : "hover:bg-white/[0.06] hover:text-zinc-200"
       }`}
     >
-      <span aria-hidden data-testid="reasoning-chip-words" className="max-w-[10rem] truncate whitespace-nowrap">
-        {reasoningChipLabel(picked, def)}
+      {/* v1.400.0: the LAST thing a tight toolbar gives up — after the model's
+          name has truncated and the chips on the left have dropped their
+          words, these words are cut to about four letters. */}
+      <span
+        aria-hidden
+        data-testid="reasoning-chip-words"
+        className="max-w-[10rem] truncate whitespace-nowrap group-data-[fit-short]/fit:max-w-[3.5rem]"
+      >
+        {words}
       </span>
       <select
         aria-label="Reasoning level"
@@ -308,7 +321,7 @@ export function ReasoningChip({
         value={picked}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        title={reasoningTitle(def)}
+        title={short ? iconOnlyTitle(words, reasoningTitle(def)) : reasoningTitle(def)}
         className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-lg border-0 bg-transparent text-[13px] opacity-0 focus-visible:outline-none disabled:cursor-default"
       >
         {/* v1.326.0: short words for a chip beside the model ("High"); the
@@ -861,7 +874,12 @@ export function ModelMenu({
   );
 
   return (
-    <div ref={popRef} className="relative">
+    // v1.400.0: the wrapper is the toolbar item that SHRINKS (min-w-0) and the
+    // chip fills it (w-full), so a long name truncates in place instead of
+    // pushing the row onto a second line; a toolbar that fits itself
+    // (lib/toolbarFit) sets the wrapper's floor (`data-fit-model`) so the name
+    // never truncates past about thirteen characters (nine at its tightest).
+    <div ref={popRef} data-fit-model="" className="relative min-w-0">
       <button
         ref={chipRef}
         type="button"
@@ -874,7 +892,7 @@ export function ModelMenu({
         aria-haspopup="true"
         aria-controls={open ? MODEL_MENU_ID : undefined}
         title={disabled ? disabledTitle : "Switch model"}
-        className={`${composerChipClass(false)} max-w-[11rem] sm:max-w-[16rem]`}
+        className={`${composerChipClass(false)} w-full max-w-[11rem] sm:max-w-[16rem]`}
       >
         <span
           data-testid="model-chip-words"

@@ -47,6 +47,7 @@ import {
   type PermissionMode,
 } from "@/lib/permissionLevels";
 import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
+import { FIT_ICON_CHIP, FIT_WORDS, iconOnlyTitle } from "@/lib/composerChips";
 
 export interface PermissionChipProps {
   /** The conversation's level (a wire value; an unknown one reads as the default). */
@@ -65,6 +66,10 @@ export interface PermissionChipProps {
    *  chip unmounts with it open), so the page can keep "Jump to latest" off
    *  an open menu. Not called on mount. */
   onOpenChange?: (open: boolean) => void;
+  /** v1.400.0: the toolbar it sits in (lib/toolbarFit) shows icons only, so
+   *  the chip is its shield alone: its tooltip leads with the level's name.
+   *  The shape itself follows the toolbar's `data-fit-icons` (CSS). */
+  iconOnly?: boolean;
 }
 
 /**
@@ -188,6 +193,7 @@ export function PermissionChip({
   id,
   iconOnlyOnPhone = false,
   onOpenChange,
+  iconOnly = false,
 }: PermissionChipProps) {
   const current = asPermissionMode(value);
   // v1.360.0: the reading sentence follows the readable-folders setting.
@@ -369,6 +375,10 @@ export function PermissionChip({
     : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200";
   // On a phone the chip is a 30px square holding the shield; the words and the
   // chevron come back from sm up.
+  // v1.400.0: so is a chip in a toolbar that has given up its chips' words
+  // (lib/toolbarFit: FIT_ICON_CHIP / FIT_WORDS, read off the toolbar's
+  // `data-fit-icons`), keeping the amber shield of the no-ask level; its
+  // tooltip then names the level (`iconOnly`).
   const phoneChip = iconOnlyOnPhone ? " max-sm:w-[30px] max-sm:justify-center max-sm:px-0" : "";
   const phoneHide = iconOnlyOnPhone ? " max-sm:hidden" : "";
 
@@ -451,12 +461,12 @@ export function PermissionChip({
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-label={`Permissions: ${level.label}`}
-        title={level.description}
-        className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg bg-transparent px-2.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${chipTone}${phoneChip}`}
+        title={iconOnly ? iconOnlyTitle(level.label, level.description) : level.description}
+        className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg bg-transparent px-2.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${chipTone}${phoneChip} ${FIT_ICON_CHIP}`}
       >
         <Icon size={14} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
-        <span className={phoneHide.trim() || undefined}>{level.label}</span>
-        <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide}`} />
+        <span className={`${phoneHide.trim()} ${FIT_WORDS}`.trim()}>{level.label}</span>
+        <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide} ${FIT_WORDS}`} />
       </button>
       {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}
     </div>
