@@ -3885,6 +3885,79 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **APPROVE ONCE, THEN OFF TO THE RACES: every ask is counted, an approved
+  plan runs, runs you start do not stop at 12, and a closing offer is acted
+  on unless it is the user's call** (v1.402.0; the user's autonomy goal and
+  an audit that found none of their three metrics computable; three builders
+  + three reviewers + integrate). MEASURE (part A): every card / question in
+  every lane publishes `interrupt.asked` / `interrupt.answered` through
+  `core/approvals.InterruptNote` (kind card|question|plan, tool, surface,
+  thread/turn ids, args_hash, flags; answered adds decision, `actor`
+  app|phone|grant|timeout|bench|stopped, `wait_ms`) — COUNTING ONLY: never a
+  default alert, bell row, desktop notice, phone message or audit-timeline
+  row, never args or text. `resolve(actor=)`; `settled_actor`. A new chat's
+  first-turn card has no thread yet: `InterruptNote(thread_for=)` looks it up
+  in the turn logs when it settles. `eval/autonomy.py` is THE definition
+  (module docstring): `classify_line` nudge|retry|request|ack (a bare
+  "yes/ok" is a nudge only after a reply that ended on a question), tasks
+  split at request lines, success, hands-off, and conservative AVOIDABLE rules
+  — never a plan approval (it IS the "approve once"), a once-only safety
+  card, a denial, a timeout or a grant. `GET /autonomy/metrics?days=` (off the
+  loop, bounded, `truncated` said, zeros never a 500) feeds
+  `components/autonomy/HandsOffCard.tsx`. The chat's Continue press is kept
+  as `continuedPresses`. The bench records `facts.asks` and
+  `facts.would_have_asked` (one ask per round per permission kind, Claude
+  Code / Codex names mapped through the dialect + parity tables; "not known"
+  otherwise) — its pass rate on one prompt is metric 3 for the bench.
+  `core/nudges.note_nudge` publishes `autonomy.nudged` for each of the
+  system's own nudges (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED,
+  CLOSING_QUESTION), counted apart. PLAN RUNS (part B): Allow on the Build
+  plan door ("Allow and run") makes the daemon start the act turn itself when
+  the plan turn ends cleanly (`routes/build.run_approved_plan`, hidden
+  `PLAN_RUN_TEXT` with `continuation: true`, a take-flag — exactly once; never
+  after Deny/error/stop/cut-off/steer/queued or newer message/plan mode back
+  on/archive/account wait/night task); a low-trust plan turn starts its act
+  turn LOW; `finish_for_turn` treats `PLAN_RUN_TEXT` as a carry-on (it is not
+  the user's request). STEPS: `runtime.resolve_max_steps` is the ONE place —
+  an attended origin with no budget gets setting `attended_run_steps` (60,
+  12–200, live), unattended keep `max_agent_steps` (12), explicit wins; an
+  attended run at its limit carries on ONCE inside the SAME run
+  (`carries_on_at_step_limit`, `STEP_LIMIT_CARRY_ON_NOTE`, one more budget,
+  the repeat breaker spans both, `allowance.carry_on_refusal` checked first;
+  a caller-typed budget never carries on); RunResultCard offers Keep going
+  (continue with resume; `resume_reason` stamped). Document/browser chat
+  turns get ONE more round allotment (`more_rounds`, both lanes) before the
+  OUT_OF_ROUNDS end. ASK POLICY (part C): `harness/components.ASK_POLICY`
+  ("ask about what the user wants or what counts as done, never how; decide
+  the rest and say what you assumed") in the harness "How you work" section
+  (act + plan, every dialect; a folder's system_prompt.md replaces it), every
+  agent run's prompt (before the planner), `chat_turn.CHAT_ASK_POLICY` on the
+  chat Tools seam only when `arms_work()`, and `dialects.ASK_TOOL_RULE` on
+  all three question tools. CLOSING OFFER: `harness/closing_offer.
+  ends_on_offer` (English, last sentence of the last prose paragraph) → ONE
+  `CLOSING_OFFER_NUDGE` in harness turns (both lanes, after the text-tool-call
+  nudge, before the finish check, never after it ran or `checked_before`) and
+  at the agent runtime's flat final answer; never plain chat, plan mode, low
+  trust, < 2 rounds left, a read-only reviewer, a child run (helper, mission
+  member, delegate), or twice. An offer to SEND / POST / PUBLISH / COMMIT /
+  PUSH / MERGE / DEPLOY / DELETE / PAY / BUY / touch production is the user's
+  (`user_owns`) and keeps its question, and the nudge itself says it never
+  authorises those; offered work that runs out of steps keeps the run's
+  answer (`OFFER_CUT_LEAD`). Same release (a pre-existing gap the review
+  found): the browser sidebar's allow-everything switch answered a waiting
+  RISK card (payment, password, destructive word) — risk cards live in
+  `PanelTurns._floor_offered` and the switch skips them. Goldens: only
+  `team_first_off_golden_v1400.json` moved (each dialect's system prompt
+  gained exactly "\n\n" + ASK_POLICY). OPEN: a plan run is a person's turn,
+  so Emergency stop does not refuse it; Enter still answers the plan door;
+  helpers and mission teammates also get 60 + a carry-on; a restart between
+  the plan turn's end and the act turn's start loses the plan run; the
+  bench's `would_card` re-derives the lane's rule for three tools. Pins:
+  `tests/test_{autonomy_metrics,autonomy_metrics_review,plan_runs,
+  plan_runs_review,attended_steps,chat_more_rounds,ask_policy,closing_offer,
+  panel_switch_skips_risk}_v1402.py`, `dashboard/__tests__/{autonomy-metrics,
+  plan-runs,keep-going}-v1402.test.tsx`.
+
 - **TEAM REVIEW AT THE FINISH: Iron Jarvis hands the change to the team's
   reviewer ITSELF; the reviewer only reads, is bounded, and its verdict is
   the report's last line** (v1.401.0; the user's decision after a Sonnet
