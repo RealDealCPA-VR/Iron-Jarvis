@@ -4662,6 +4662,9 @@ async def chat_stream(
         # answer; the final-answer wording is chosen by the same helper.
         _office = _stays_in_chat({*armed, *ask_armed}, force=stay_in_chat)
         _cut_office = False
+        # v1.402.0: the turn's ONE extra allotment was given (`more_rounds`).
+        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        _extended = False
         # v1.392.0 (the long-jobs plan's Phase 3, decision 8): the cap a
         # coding session's reply met ({kind, limit}), None while it has not
         # (or the session has none — the default).
@@ -4690,7 +4693,7 @@ async def chat_stream(
             # turn's own growing part, never fixed history.
             _head = _resume_head
         try:
-            for _round in range(_rounds):
+            for _round in _chat_turn.turn_rounds(lambda: _rounds):
                 if await _stop():
                     # The completed rounds were billed even though the
                     # client walked away — keep the ledger honest.
@@ -5021,6 +5024,23 @@ async def chat_stream(
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
                     break
+                if _round == _rounds - 1 and _office:
+                    # ONE MORE ALLOTMENT (v1.402.0): a document / browser-
+                    # agent turn at its last round with calls still to make
+                    # gets the same number of rounds once more, instead of
+                    # ending on "what is still left to do". Once per turn.
+                    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+                    _more = _chat_turn.more_rounds(
+                        {*armed, *ask_armed}, override=round_budget, force=stay_in_chat,
+                        harness=_harness is not None, used=_extended,
+                    )
+                    if _more:
+                        _extended = True
+                        _rounds += _more
+                        await _chat_turn.note_rounds_extended(
+                            platform, thread_id=str(getattr(body, "thread_id", "") or ""),
+                            turn_id=str(getattr(body, "turn_id", "") or ""), rounds=_rounds,
+                        )
                 if _round == _rounds - 1:
                     # LAST allowed round (mirrors chat_complete): no round is
                     # left to show the model these results — skip, say so.

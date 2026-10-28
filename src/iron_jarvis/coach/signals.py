@@ -125,8 +125,15 @@ def run_signals(platform, session: Session) -> dict[str, Any]:
     sid = session.id
     engine = platform.engine
     result = session_result(engine, sid)
-    config_cap = int(getattr(platform.config, "max_agent_steps", 0) or 0)
-    max_steps = int(getattr(session, "max_steps", None) or config_cap or 0)
+    # v1.402.0: the run's REAL budget (``runtime.resolve_max_steps`` — an
+    # attended run's default is "Steps for runs you start", not the
+    # background ceiling), so a 30-step chat job is not read as "used all 12".
+    from ..agents.runtime import resolve_max_steps
+
+    try:
+        max_steps = int(resolve_max_steps(session, platform.config) or 0)
+    except (AttributeError, TypeError, ValueError):
+        max_steps = int(getattr(session, "max_steps", None) or 0)
 
     steps = 0
     tools_used: list[str] = []

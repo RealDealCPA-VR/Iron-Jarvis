@@ -338,7 +338,9 @@ describe("the model's own question takes the composer's place", () => {
 });
 
 describe("the plan door", () => {
-  it("shows the reply above as the plan, with Allow once and Deny only (never Always or a wider scope)", async () => {
+  // v1.402.0 (moved on purpose): the door's Allow reads "Allow and run" (it
+  // approves the plan AND the daemon starts carrying it out).
+  it("shows the reply above as the plan, with Allow and run and Deny only (never Always or a wider scope)", async () => {
     const s = controlledStream();
     fetchMock.mockImplementation(async () => s.response);
     renderSession();
@@ -350,7 +352,7 @@ describe("the plan door", () => {
     });
     const card = await screen.findByTestId("chat-approval-card");
     expect(within(card).getByTestId("approval-plan-text")).toHaveTextContent("build the cart model, then the page.");
-    expect(within(card).getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Allow and run" })).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Deny" })).toBeInTheDocument();
     expect(within(card).queryByTestId("approval-always")).toBeNull();
     expect(within(card).queryByTestId("approval-scope")).toBeNull();

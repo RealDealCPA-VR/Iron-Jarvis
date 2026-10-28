@@ -26,6 +26,15 @@ import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 /** The narrow answer: this one call. */
 export const ALLOW_ONCE = "Allow once";
 
+/** v1.402.0: a Build session's plan door — Allow approves the plan AND
+ *  starts the work (the daemon carries it out by itself once the plan turn
+ *  ends). The value posted is still `once`. */
+export const ALLOW_AND_RUN = "Allow and run";
+
+/** v1.402.0: the plan door's one sentence (what Allow and Deny do). */
+export const PLAN_RUN_SENTENCE =
+  "Nothing changes until you answer. “Allow and run” approves this plan and Iron Jarvis starts carrying it out at once, with no message from you; Deny keeps it planning.";
+
 /** The refusal. The assistant (or the run) is told the user declined. */
 export const DENY = "Deny";
 

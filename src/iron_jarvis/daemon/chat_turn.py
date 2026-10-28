@@ -5202,6 +5202,50 @@ def _round_budget(armed_names, *, override: "int | None" = None) -> int:
     return _DOC_TOOL_ROUNDS if _is_office_turn(armed_names) else _MAX_TOOL_ROUNDS
 
 
+def more_rounds(armed_names, *, override: "int | None" = None, force: bool = False,
+                harness: bool = False, used: bool = False) -> int:
+    """ONE more allotment for a turn at its last round (v1.402.0, "approve
+    once, then off to the races"): a document / browser-agent turn that
+    stays in chat (``_stays_in_chat``) used to end at its last round with
+    OUT_OF_ROUNDS ("…what is still left to do") and no button — the user
+    typed "continue". Now it gets the SAME number of rounds once more, once
+    per turn; after that it ends exactly as before. 0 = no more rounds: a
+    plain turn (it escalates as before), a turn whose CALLER set its budget
+    (``override`` — a Build reply, the benchmark) or forced it to stay in
+    chat, a harness turn, or a turn that already had its extra allotment.
+    MIRROR NOTE (lock-step): both chat lanes call this at their last round."""
+    if used or override is not None or force or harness:
+        return 0
+    if not _stays_in_chat(armed_names):
+        return 0
+    return _round_budget(armed_names)
+
+
+def turn_rounds(limit):
+    """The round counter both chat lanes iterate (v1.402.0): 0, 1, 2, … while
+    the index is below ``limit()`` — read LIVE, so a turn given one more
+    allotment (:func:`more_rounds`) runs on. With the budget never changed it
+    is ``range(rounds)`` exactly. MIRROR NOTE (lock-step): both lanes."""
+    i = 0
+    while i < limit():
+        yield i
+        i += 1
+
+
+async def note_rounds_extended(platform, *, thread_id: str = "", turn_id: str = "",
+                               rounds: int = 0) -> None:
+    """The ONE ``autonomy.nudged`` event a turn given one more allotment
+    publishes (``core/nudges.ROUNDS_EXTENDED``). Never raises."""
+    from ..core.nudges import ROUNDS_EXTENDED, note_nudge
+
+    facts: dict[str, Any] = {"rounds": int(rounds)}
+    if thread_id:
+        facts["thread_id"] = str(thread_id)
+    if turn_id:
+        facts["turn_id"] = str(turn_id)
+    await note_nudge(getattr(platform, "event_bus", None), ROUNDS_EXTENDED, **facts)
+
+
 #: The most tool rounds a caller may give ONE turn (v1.363.0). Not a user
 #: setting: the knob is a keyword argument of the two lanes, reachable from
 #: Python callers only (no HTTP field carries it), and the bound only keeps a
@@ -9012,6 +9056,8 @@ async def run_chat_turn(
     # (lock-step with the stream lane's `_stays_in_chat`).
     _office = _stays_in_chat(armed, force=stay_in_chat)
     _cut_office = False
+    # v1.402.0: the turn's ONE extra allotment was given (`more_rounds`).
+    _extended = False
     # IN-TURN BUDGET (v1.287.0): everything before round 0 is the planned
     # history; each completion sends `msgs` FITTED to the window (the rounds
     # grow it). Lock-step: the stream lane fits every completion the same way.
@@ -9021,7 +9067,7 @@ async def run_chat_turn(
     # lane keeps the same dict.
     _refit_note: dict[str, int] = {}
     try:
-        for _round in range(_rounds):
+        for _round in turn_rounds(lambda: _rounds):
             if _cut_pending:
                 # v1.387.0: the cut-off note owed by the last round, AFTER its
                 # complete calls' results (lock-step: the stream lane).
@@ -9187,6 +9233,22 @@ async def run_chat_turn(
                     _finish_round = True
             if not calls or not armed:
                 break
+            if _round == _rounds - 1 and _office:
+                # ONE MORE ALLOTMENT (v1.402.0): a document / browser-agent
+                # turn at its last round with calls still to make gets the
+                # same number of rounds once more, instead of ending on "what
+                # is still left to do" for the user to type "continue". Once
+                # per turn; after it, the turn ends below exactly as before.
+                # MIRROR NOTE (lock-step): routes/chat.py's stream loop.
+                _more = more_rounds(armed, override=round_budget, force=stay_in_chat,
+                                    harness=_harness is not None, used=_extended)
+                if _more:
+                    _extended = True
+                    _rounds += _more
+                    await note_rounds_extended(
+                        platform, thread_id=str(getattr(body, "thread_id", "") or ""),
+                        rounds=_rounds,
+                    )
             if _round == _rounds - 1:
                 # LAST allowed round: no round is left to show the model
                 # these results, so executing them would burn tool side

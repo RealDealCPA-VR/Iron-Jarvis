@@ -1105,6 +1105,41 @@ def call_signature(name: str, arguments: dict | None) -> str:
     return f"{name}({canon[:2000]})"
 
 
+#: THE STEP BUDGET OF A RUN A PERSON IS WATCHING (v1.402.0, "approve once,
+#: then off to the races"). Every chat hand-off used to get
+#: ``config.max_agent_steps`` (12) — the background doors' safety ceiling — and
+#: a real job died "stopped: reached max steps" with no answer, the user
+#: retyping it from scratch. A run whose origin is ATTENDED (chat, a job from
+#: the Agents page or a mission, a project task, a user-started run) and whose
+#: caller set no budget gets ``config.attended_run_steps`` instead ("Steps for
+#: runs you start", Agents & automation; this is its default and the bounds
+#: the setting allows). The unattended doors keep ``max_agent_steps``; an
+#: explicit ``max_steps`` from any caller wins; the per-session 200 ceiling
+#: (``SESSION_MAX_STEPS_MAX``) is untouched.
+ATTENDED_RUN_STEPS = 60
+ATTENDED_RUN_STEPS_MIN = 12
+ATTENDED_RUN_STEPS_MAX = 200
+
+
+def attended_run_steps(config) -> int:
+    """``config.attended_run_steps``, read live and clamped to its bounds; a
+    config without it (a stub, an older test double) reads the default."""
+    raw = getattr(config, "attended_run_steps", ATTENDED_RUN_STEPS)
+    if isinstance(raw, bool):
+        return ATTENDED_RUN_STEPS
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return ATTENDED_RUN_STEPS
+    return max(ATTENDED_RUN_STEPS_MIN, min(ATTENDED_RUN_STEPS_MAX, n))
+
+
+def _attended_run(session) -> bool:
+    """Is a PERSON watching this run (``ATTENDED_ORIGINS``)? The plan ask's
+    own reading (``plan_approval_wanted``); an untagged run is not."""
+    return str(getattr(session, "origin", None) or "").startswith(ATTENDED_ORIGINS)
+
+
 def resolve_max_steps(session, config) -> int:
     """This run's step budget: the session's own, else the configured default.
 
@@ -1113,13 +1148,71 @@ def resolve_max_steps(session, config) -> int:
     one — must land on exactly today's number. A non-positive or unparseable
     value means "unset", never "zero steps": a run that can take no action at
     all is not a budget, it is a broken session.
+
+    v1.402.0: THE ONE PLACE the default is decided — an attended run with no
+    budget of its own gets :func:`attended_run_steps` (60 by default), every
+    other run ``config.max_agent_steps`` exactly as before. The decomposed
+    lane reads this same number (``decompose.session_step_budget``).
     """
     raw = getattr(session, "max_steps", None)
     try:
         wanted = int(raw) if raw is not None else 0
     except (TypeError, ValueError):
         wanted = 0
-    return wanted if wanted > 0 else int(config.max_agent_steps)
+    if wanted > 0:
+        return wanted
+    if _attended_run(session):
+        return attended_run_steps(config)
+    return int(config.max_agent_steps)
+
+
+#: v1.402.0 (3b): what the model reads when an attended run spent its step
+#: budget and Iron Jarvis carries it on ONCE by itself — the same run, its
+#: whole conversation kept (no step is repeated), one more budget of the same
+#: size. ``{steps}`` is that budget.
+STEP_LIMIT_CARRY_ON_NOTE = (
+    "You used your step budget ({steps} steps) before finishing. Carry on and "
+    "finish the task now: do not repeat what the results above show is already "
+    "done. You have {steps} more steps, and this is the only extension, so if "
+    "something cannot be finished in them, stop and say what is left. End with "
+    "a short summary of what you did."
+)
+
+
+#: What a run that spent its step budget says (its result, and so its
+#: session's summary). The chat's "Stopped at its step limit" reads it
+#: (dashboard ``lib/agentRun.atStepLimit``); keep the words.
+STEP_LIMIT_RESULT = "stopped: reached max steps before completion"
+
+
+def stopped_at_step_limit(summary: Any) -> bool:
+    """Does a run's result (or its session's summary) say it stopped at its
+    step limit? The dashboard's ``atStepLimit`` twin."""
+    return isinstance(summary, str) and summary.strip().lower().startswith("stopped: reached max steps")
+
+
+#: v1.402.0: the run option ``continue_session`` stamps when a "Keep going"
+#: resumes a run that stopped at its step limit (the runtime then tells the
+#: model so, never "a restart or a crash").
+RESUME_REASON_OPTION = "resume_reason"
+RESUME_REASON_STEP_LIMIT = "step_limit"
+KEEP_GOING_RESUME_NOTE = (
+    "[This run stopped at its step budget before it finished, and the user "
+    "pressed Keep going. Your conversation so far is above, exactly as it was. "
+    "Carry on from where you stopped: do not repeat what the results above "
+    "show is already done.]"
+)
+
+
+def carries_on_at_step_limit(session) -> bool:
+    """Does this run carry on ONCE by itself when it spends its step budget
+    (v1.402.0)? Only a run a person is watching (``ATTENDED_ORIGINS``) whose
+    budget was NOT set by its caller: a typed budget is the caller's ceiling
+    (and the bench's team members, which set one, stay exactly as measured);
+    the unattended doors stop at ``max_agent_steps`` as before."""
+    if not _attended_run(session):
+        return False
+    return _decompose.explicit_max_steps(session) is None
 
 
 def _effective(messages, system_prompt: str, summary: str, covers: int):
@@ -1985,11 +2078,19 @@ class AgentRuntime:
                 _transcript.load_for_resume, self.p.engine, _resume_run, self.p.registry
             )
             if _carried:
+                # v1.402.0: "Keep going" on a run that stopped at its step
+                # limit resumes it the same way, told the TRUE reason (it was
+                # never a restart or a crash) — ``continue_session`` marks it.
+                _note = (
+                    KEEP_GOING_RESUME_NOTE
+                    if _run_options.get(RESUME_REASON_OPTION) == RESUME_REASON_STEP_LIMIT
+                    else _transcript.RESUME_NOTE
+                )
                 messages[:] = [
                     *_carried,
                     LLMMessage(
                         role="user",
-                        content=_transcript.RESUME_NOTE + chr(10) * 2 + session.task,
+                        content=_note + chr(10) * 2 + session.task,
                     ),
                 ]
                 _resumed = True
@@ -2386,6 +2487,12 @@ class AgentRuntime:
             # Where THIS run's own messages start — anything before is the
             # carried history, not work this run did (agents-07).
             run_from = len(messages)
+            _budget = resolve_max_steps(session, self.p.config)
+            # v1.402.0 (3b): the repeat breaker's streaks span BOTH of the
+            # run's allotments (a call refused in the first is still refused
+            # in the second). The first call reads an empty dict exactly as it
+            # read ``None`` (a fresh per-invocation scope).
+            _flat_breaker: dict[str, Any] = {}
             finished, final_text = await self.perceive_act(
                 run,
                 session,
@@ -2395,13 +2502,49 @@ class AgentRuntime:
                 tool_specs=tool_specs,
                 session_allow=session_allow,
                 sink=sink,
-                max_steps=resolve_max_steps(session, self.p.config),
+                max_steps=_budget,
+                breaker_state=_flat_breaker,
                 transcript=True,
             )
+            if not finished and not final_text and carries_on_at_step_limit(session):
+                # AT ITS LIMIT, AN ATTENDED RUN CARRIES ON ONCE BY ITSELF
+                # (v1.402.0). It spent its step budget with the model still
+                # working (an empty reason is the step limit; the streamed-
+                # output ceiling and the cut-off end bring their own words and
+                # end the run as before). The SAME run goes on — its whole
+                # conversation, folder, grants, posture, trust and Local only
+                # unchanged, so no step is repeated and every surface that
+                # follows the session follows the carry-on — with one note
+                # and one more budget of the same size. A second limit stops
+                # for real (the chat then offers Keep going).
+                from ..core.nudges import STEP_LIMIT_CONTINUE, note_nudge
+
+                await note_nudge(
+                    self.p.event_bus, STEP_LIMIT_CONTINUE, session_id=session.id,
+                    run_id=run.id, steps=_budget,
+                )
+                messages.append(LLMMessage(
+                    role="user", content=STEP_LIMIT_CARRY_ON_NOTE.format(steps=_budget),
+                ))
+                if sink:
+                    sink.phase("running", "used its step budget — carrying on")
+                finished, final_text = await self.perceive_act(
+                    run,
+                    session,
+                    agent_def,
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    tool_specs=tool_specs,
+                    session_allow=session_allow,
+                    sink=sink,
+                    max_steps=_budget,
+                    breaker_state=_flat_breaker,
+                    transcript=True,
+                )
             if not finished:
                 # A not-finished step may carry its OWN reason (v1.228.0: the
                 # streamed-output ceiling); the empty default is max steps.
-                run.result = final_text or "stopped: reached max steps before completion"
+                run.result = final_text or STEP_LIMIT_RESULT
                 await self._set_state(run, AgentState.FAILED, session.id)
                 await self.p.event_bus.publish(
                     EventType.AGENT_COMPLETED,

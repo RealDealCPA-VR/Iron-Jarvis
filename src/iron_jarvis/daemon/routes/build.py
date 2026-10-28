@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import re
@@ -133,6 +134,31 @@ COMPACT_RUNNING = "This session is still answering. Wait for the reply, or stop 
 #: v1.374.0: a turn that ran longer than this, and ended, is said by the bell
 #: (and by the desktop app from the tray) — ``build.turn_finished``.
 FINISH_NOTICE_AFTER_S = 60.0
+
+#: AN APPROVED PLAN RUNS (v1.402.0, "approve once, then off to the races").
+#: Allow on a Build session's plan door used to switch the session to act
+#: mode and then WAIT for the user's next message — the user approved the
+#: plan and had to type "go". Now, when the plan turn ends cleanly, the daemon
+#: itself starts the act turn (:func:`run_approved_plan`) with this hidden
+#: question (saved ``continuation: true``, like the account-limit resume — the
+#: screen hides it; the model reads it as the user's).
+PLAN_RUN_TEXT = (
+    "Your plan above is approved. Carry it out now, step by step: make the changes, "
+    "check them as you go, and end with a short summary of what you changed and how "
+    "you checked it."
+)
+#: thread id -> {"from": the plan turn's id, "taken": bool} — an approved plan
+#: whose act turn is due (set when the plan turn's clean ``done`` goes out,
+#: BEFORE the screen sees it, so the screen's re-read knows to wait for it),
+#: then TAKEN by the one :func:`run_approved_plan` that starts it (exactly
+#: once per approval) and removed once that start returned. On the loop
+#: thread only; holds no client and no live service (the v1.367.0 test-
+#: isolation rule). A daemon restart forgets it: the session is in act mode
+#: with its plan kept, and the user's next message carries it out.
+_PLAN_RUNS: dict[str, dict[str, Any]] = {}
+#: The plan-run tasks in flight (a reference keeps a task from being
+#: collected while it runs).
+_PLAN_TASKS: set[Any] = set()
 
 
 class BuildSessionCreate(BaseModel):
@@ -681,6 +707,12 @@ class _ReplyWatch:
         self.first_token_at: float | None = None
         #: (plan text) of an exit_plan_mode call that ran (the user allowed it).
         self.approved_plans: list[str] = []
+        #: v1.402.0: the user approved a plan in THIS turn (exit_plan_mode ran);
+        #: unlike ``approved_plans`` it is never cleared by the session write.
+        self.plan_approved = False
+        #: v1.402.0: the user wrote a steer note AFTER that approval — then
+        #: the act turn is not started by itself (the user said something).
+        self.steered_after_plan = False
         #: The last plan the user approved this turn — kept on the reply line
         #: (see :meth:`lines`).
         self.approved_text = ""
@@ -752,6 +784,8 @@ class _ReplyWatch:
         elif event == "round":
             if data.get("steer"):
                 self.steers.append(str(data["steer"]))
+                if self.plan_approved:
+                    self.steered_after_plan = True
             # v1.390.0: the tool loop is about to ask the model (a call in
             # flight until its `model_call` frame) — the frame says from when.
             stamped = {**data, "start": self.clock.round_started()}
@@ -831,6 +865,7 @@ class _ReplyWatch:
                     approved = str(plan or "").strip() or "".join(self.text).strip()
                     self.approved_plans.append(approved)
                     self.approved_text = approved
+                    self.plan_approved = True
         elif event == "helper":
             # v1.390.0: the helper's row and its step on the reply's clock.
             stamped = self.clock.helper(data)
@@ -1313,9 +1348,10 @@ def _with_helper_plans(engine: Any, lines: list[dict[str, Any]]) -> list[dict[st
 
 
 async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch) -> None:
-    """An approved plan switches the session to act mode for the NEXT turn
-    and keeps the plan; an "allow for this conversation" answer is kept for
-    the next turns. Off the loop; never raises."""
+    """An approved plan switches the session to act mode and keeps the plan
+    (v1.402.0: the act turn then starts BY ITSELF when this turn ends cleanly,
+    :func:`run_approved_plan`); an "allow for this conversation" answer is
+    kept for the next turns. Off the loop; never raises."""
     setup: dict[str, Any] = {}
     if watch.approved_plans:
         from ...harness.session_tools import plan_steps
@@ -1761,6 +1797,28 @@ def _parks_or_answers(parsed: "list[tuple[str, str]]") -> bool:
                for ev, _ in parsed)
 
 
+def plan_run_due(watch: "_ReplyWatch") -> bool:
+    """Did this turn approve a plan AND end cleanly, so its act turn starts
+    by itself (v1.402.0)? Clean = a ``done`` frame (never an error, a Stop or
+    a cut-off), not cut at its length, its step limit or its cap, no account
+    limit, and nothing the user wrote after the approval (a steer note, or
+    one the model never read). Pure."""
+    if not watch.plan_approved or watch.steered_after_plan:
+        return False
+    done = watch.done
+    if done is None or watch.error is not None or watch.account_limit:
+        return False
+    if done.get("truncated") or done.get("step_limit") or done.get("cap"):
+        return False
+    if done.get("unread_steers"):
+        return False
+    route = done.get("route")
+    cut = route.get("cut_off") if isinstance(route, dict) else None
+    if isinstance(cut, dict) and not cut.get("recovered"):
+        return False
+    return True
+
+
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None, no_limit: bool = False,
                         record: Any = None, account_move: "dict[str, Any] | None" = None):
@@ -1888,6 +1946,16 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                         await record.set_waiting(parked_now)
                 if watch.approved_plans or watch.granted:
                     await _apply_session_changes(engine, thread_id, watch)
+                if terminal and watch.done is not None and plan_run_due(watch):
+                    # v1.402.0: AN APPROVED PLAN RUNS — marked due BEFORE the
+                    # terminal frame goes out, so the screen's re-read after
+                    # `done` knows the act turn is coming and follows it. A
+                    # NIGHT task's turn never starts one (its own loop settles
+                    # the task when the turn ends).
+                    from ...harness import night as _night_plan
+
+                    if _night_plan.current() is None:
+                        _PLAN_RUNS[thread_id] = {"from": turn_id, "taken": False}
                 if terminal and (watch.done is not None or watch.error is not None):
                     await asyncio.shield(end("done" if watch.done is not None else "error"))
                 yield chunk
@@ -1969,6 +2037,129 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
 # --------------------------------------------------------------------------- #
 # starting a build turn (the route, "Choose account", "Resume when ready")
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+# an approved plan runs (v1.402.0)
+# --------------------------------------------------------------------------- #
+
+
+def plan_run_pending(thread_id: str) -> bool:
+    """Is an approved plan's act turn due or starting for this session? (The
+    session view says so, so the screen waits for it and follows it.)"""
+    return thread_id in _PLAN_RUNS
+
+
+def plan_run_refusal(engine: Any, thread_id: str, from_turn: str) -> str:
+    """Why the approved plan of turn ``from_turn`` is NOT carried out by
+    itself, in plain words, or "" when it is (v1.402.0). BLOCKING.
+
+    Never when the session is gone or archived, back in plan mode (the user
+    switched it), waiting on its account, or when the user sent a message
+    after the plan turn's question; and only while the plan turn's reply is
+    on the session and is not a failure."""
+    row = S.get_row(engine, thread_id)
+    if row is None:
+        return "its session is gone"
+    if getattr(row, "archived_at", None) is not None:
+        return "its session is archived"
+    if S.mode_of(row) == S.MODE_PLAN:
+        return "the session is in plan mode"
+    setup = _setup_of(row)
+    if setup.get("account_wait") or setup.get("account_limit"):
+        return "it waits on its account"
+    messages = S._messages(row)
+    idx = _question_index(messages, from_turn)
+    if idx is None:
+        return "its plan is no longer in the session"
+    if _newer_message(messages, idx):
+        return "a newer message was sent"
+    try:
+        queued = json.loads(getattr(row, "queued_json", "") or "[]")
+    except (TypeError, ValueError):
+        queued = []
+    if isinstance(queued, list) and any(isinstance(q, dict) for q in queued):
+        # The user wrote while the plan turn ran (Ctrl+Enter): their message
+        # goes out after it instead (the screen sends the queue).
+        return "a message is waiting to be sent"
+    reply = next((
+        m for m in messages[idx + 1:]
+        if m.get("role") == "assistant" and m.get("turnId") == from_turn
+    ), None)
+    if reply is None or reply.get("error"):
+        return "the plan turn did not finish"
+    return ""
+
+
+async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
+    """START the act turn of the plan the user approved in turn ``from_turn``
+    (v1.402.0) — EXACTLY ONCE per approval: the pending entry is TAKEN in one
+    step on the loop (a second call finds it taken and starts nothing), then
+    :func:`plan_run_refusal` checks again, then :func:`start_build_turn` runs
+    it as a daemon carry-on (``continuation``: the hidden :data:`PLAN_RUN_TEXT`
+    question) with everything a turn of this session gets — its account pin,
+    model hold, branch, Local only. A turn already running (the user's own
+    message got there first) means nothing starts here. Publishes ONE
+    ``autonomy.nudged`` (``plan_run``). Returns the new turn's log, or None.
+
+    ``started_by`` is a PERSON: the user's Allow, seconds ago, is the press
+    (like a launch button) — so Emergency stop, which holds back work that
+    starts on its own, does not hold it, and it is not listed as unattended."""
+    entry = _PLAN_RUNS.get(thread_id)
+    if not entry or entry.get("from") != from_turn or entry.get("taken"):
+        return None
+    entry["taken"] = True
+    platform = d.platform
+    try:
+        why = await asyncio.to_thread(plan_run_refusal, platform.engine, thread_id, from_turn)
+        if why:
+            log.info("not carrying out the approved plan of session %s: %s", thread_id, why)
+            return None
+        new_turn = "bt_" + secrets.token_hex(8)
+        try:
+            lg = await start_build_turn(d, thread_id, PLAN_RUN_TEXT, new_turn, continuation=True)
+        except SessionBusy:
+            return None  # the user's own message is starting or running
+        except HTTPException as exc:
+            log.info("the approved plan of session %s did not start: %s", thread_id, exc.detail)
+            return None
+        except Exception:  # noqa: BLE001 — a failed start leaves the session as it was
+            log.warning("starting the approved plan of session %s failed", thread_id, exc_info=True)
+            return None
+        from ...core.nudges import PLAN_RUN, note_nudge
+
+        await note_nudge(
+            getattr(platform, "event_bus", None), PLAN_RUN,
+            thread_id=thread_id, turn_id=new_turn, from_turn=from_turn,
+        )
+        return lg
+    finally:
+        if _PLAN_RUNS.get(thread_id) is entry:
+            _PLAN_RUNS.pop(thread_id, None)
+
+
+def _after_turn_task(d: Any, thread_id: str, turn_id: str, task: Any) -> None:
+    """A Build turn's task ENDED (its log is no longer running): start the
+    act turn of a plan it approved (:data:`_PLAN_RUNS`), or forget a due plan
+    whose turn did not end cleanly after all. Runs on the loop, in the
+    context of whoever started the turn (never the turn's own pin / hold).
+    Never raises."""
+    try:
+        entry = _PLAN_RUNS.get(thread_id)
+        if not entry or entry.get("from") != turn_id or entry.get("taken"):
+            return
+        from .chat import _turn_logs
+
+        lg = _turn_logs(d).get(turn_id)
+        if task.cancelled() or lg is None or lg.status != "done":
+            _PLAN_RUNS.pop(thread_id, None)
+            return
+        t = asyncio.ensure_future(run_approved_plan(d, thread_id, turn_id))
+        _PLAN_TASKS.add(t)
+        t.add_done_callback(_PLAN_TASKS.discard)
+    except Exception:  # noqa: BLE001 — a turn's end never fails on this
+        log.warning("starting an approved plan of session %s failed", thread_id, exc_info=True)
+        _PLAN_RUNS.pop(thread_id, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -2389,6 +2580,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     from ...harness import reply_record as RR
     from ...iron_proxy.pin import reset_pin, set_pin
 
+    # v1.402.0: the context of whoever STARTS this turn, before any of the
+    # turn's own scope (pin, hold, branch, command rule, night) is armed —
+    # the turn's end callback runs in it, so an approved plan's act turn is
+    # started the way any turn is, never inside this one's scope.
+    caller_ctx = contextvars.copy_context()
     platform = d.platform
     logs = _turn_logs(d)
     if started_by != _night.BY_PERSON:
@@ -2405,6 +2601,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     if thread_id in _STARTING or _running_turn(d, thread_id):
         raise SessionBusy(thread_id)
     _STARTING.add(thread_id)
+    if started_by == _night.BY_PERSON and not continuation:
+        # v1.402.0: the user's own message wins over an approved plan whose
+        # act turn was due but not yet started (it is not started after it).
+        due = _PLAN_RUNS.get(thread_id)
+        if due is not None and not due.get("taken"):
+            _PLAN_RUNS.pop(thread_id, None)
     # v1.370.0 review: the session is not idle — its library reflection waits
     # (this turn's end starts the idle wait again).
     from ...harness import library as _library
@@ -2858,6 +3060,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # skips a running session).
             with contextlib.suppress(Exception):
                 lg.task.add_done_callback(lambda _t: wake_wait_loop())
+            # v1.402.0: when this turn's task ends, an approved plan's act
+            # turn starts (or a plan due from a turn that did not end cleanly
+            # is forgotten) — in the CALLER's context, not this turn's scope.
+            with contextlib.suppress(Exception):
+                lg.task.add_done_callback(
+                    lambda _t, _tid=turn_id: _after_turn_task(d, thread_id, _tid, _t),
+                    context=caller_ctx,
+                )
             # v1.398.0: a turn Iron Jarvis started by itself is listed while
             # it runs (Emergency stop reaches it), and the night loop looks
             # again the moment it ends.
@@ -3614,6 +3824,9 @@ def register(app: FastAPI, d: Any) -> None:
         # right now — a screen that comes back to it mid-Compact says
         # "Summarizing earlier turns…" (a send would be refused meanwhile).
         view["compacting"] = row.id in _COMPACTING
+        # v1.402.0: an approved plan's act turn is due or starting — the
+        # screen keeps reading until it runs, then follows it.
+        view["plan_run"] = plan_run_pending(row.id)
         # v1.368.0: the session's account (with its live status, from the
         # CACHED snapshot) and which vendor its model belongs to ("" = a
         # local model or an API key: no account; the header names the place).

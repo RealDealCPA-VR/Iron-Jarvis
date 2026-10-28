@@ -22,9 +22,12 @@ every posture (auto-approve included), offers Allow once / Deny only, and no
 grant of any width covers it (the v1.350.0 ``approve_plan`` card's rules).
 Allow runs it: the tool itself WRITES NOTHING (like ``plan_update``, the plan
 rides its result's ``data``); the Build turn that sees it succeed switches
-the session to act mode for the NEXT turn and keeps the plan on the session
-(``daemon/routes/build``). Deny refuses the call: the session stays in plan
-mode.
+the session to act mode and keeps the plan on the session
+(``daemon/routes/build``). v1.402.0 ("approve once, then off to the races"):
+Allow means "approve AND carry it out" — when this plan turn ends cleanly the
+daemon itself starts the act turn (``routes/build.run_approved_plan``), so
+the user never has to send a message to start the work. Deny refuses the
+call: the session stays in plan mode.
 """
 
 from __future__ import annotations
@@ -61,10 +64,14 @@ UNANSWERED_AT_NIGHT = (
     "yourself, carry on with the rest of the task, and say at the end what you assumed."
 )
 #: What exit_plan_mode's result tells the model after the user's Allow.
+#: v1.402.0: the approval STARTS the work — as soon as this turn ends,
+#: Iron Jarvis carries the plan out in act mode by itself, with no new
+#: message from the user (``routes/build.run_approved_plan``).
 PLAN_APPROVED = (
-    "The user approved your plan. This turn stays read-only; from the user's "
-    "next message this session works in act mode and you can carry the plan "
-    "out. End this turn now with one short line saying you are ready."
+    "The user approved your plan. This turn stays read-only and ends now: as "
+    "soon as it ends, Iron Jarvis starts carrying the plan out in act mode, "
+    "without waiting for another message from the user. End this turn now with "
+    "one short line saying you are starting on the plan."
 )
 #: exit_plan_mode called outside a Build session.
 NOT_A_SESSION = "Plan mode exists only in a Build session."
@@ -271,9 +278,9 @@ class ExitPlanModeTool(Tool):
     name = "exit_plan_mode"
     description = (
         "Present your plan and ask the user to leave plan mode. The user reads the "
-        "plan on a card and approves it or not. Approved: this turn stays read-only "
-        "and the session works in act mode from the user's next message. Declined: "
-        "stay in plan mode and revise the plan with the user."
+        "plan on a card and approves it or not. Approved: this turn ends and Iron "
+        "Jarvis starts carrying the plan out in act mode at once. Declined: stay in "
+        "plan mode and revise the plan with the user."
     )
     #: It writes nothing (the session's mode is switched by the Build turn that
     #: sees the approved call land) — the plan rides the result's data.

@@ -157,7 +157,7 @@ def test_the_plan_mode_set_changes_nothing_on_this_pc(tmp_path):
 async def test_exit_plan_mode_cards_once_only_even_on_auto_approve_and_allow_switches_to_act(app, work):
     sid = new_session(app, work, mode="plan", approval_mode="yolo")["id"]
     plan_text = "My plan:\n1. Change x in app.py\n2. Run the tests"
-    wire(app, Script([(plan_text, [ToolCall(id="x1", name="ExitPlanMode", arguments={})]), "Ready."]))
+    script = wire(app, Script([(plan_text, [ToolCall(id="x1", name="ExitPlanMode", arguments={})]), "Ready."]))
     drop, task = await _start(app, sid, "plan it", "bp-exit")
     card = (await until(lambda: [d for e, d in turn_frames(app, "bp-exit") if e == "approval"]))[0]
     assert card["tool"] == "exit_plan_mode" and card["once_only"] is True and card["can_always"] is False
@@ -184,11 +184,16 @@ async def test_exit_plan_mode_cards_once_only_even_on_auto_approve_and_allow_swi
     # the last round's "Ready."), so the transcript shows it...
     reply = [m for m in messages_of(app, sid) if m["role"] == "assistant"][-1]
     assert reply["content"] == plan_text + "\n\nReady."
-    # ...and the NEXT turn — act mode — reads it in its history.
-    script = wire(app, Script(["now acting"]))
-    await open_turn(app, sid, {"text": "do it", "turn_id": "bp-next"})
-    assert "Write" in script.calls[0]["tools"] and "ExitPlanMode" not in script.calls[0]["tools"]
-    assert any(plan_text in str(m.content) for m in script.calls[0]["messages"] if m.role == "assistant")
+    # ...and the NEXT turn — act mode — reads it in its history. v1.402.0
+    # (moved on purpose): that turn is no longer the user's next message —
+    # Iron Jarvis starts it by itself the moment the plan turn ends
+    # (tests/test_plan_runs_v1402.py pins the rest of that).
+    act = await until(lambda: [m for m in messages_of(app, sid) if m["role"] == "user" and m.get("continuation")])
+    act_log = await until(lambda: turn_log(app, act[0]["turnId"]))
+    await until(lambda: act_log.status != "running", 30)
+    act_calls = [c for c in script.calls if "Write" in c["tools"]]
+    assert act_calls and "ExitPlanMode" not in act_calls[0]["tools"]
+    assert any(plan_text in str(m.content) for m in act_calls[0]["messages"] if m.role == "assistant")
 
 
 async def test_deny_keeps_plan_mode(app, work):

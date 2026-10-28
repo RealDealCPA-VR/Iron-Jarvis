@@ -441,6 +441,13 @@ class Config(BaseModel):
     # thread's own persona, and user overrides of this slug all still win.
     default_persona: str = "assistant"
     max_agent_steps: int = 12
+    #: STEPS FOR RUNS YOU START (v1.402.0): the step budget of an agent run a
+    #: person is watching (``agents/runtime.ATTENDED_ORIGINS`` — a chat
+    #: hand-off, a mission, a project task, a run you started) when its caller
+    #: set none; ``max_agent_steps`` stays the background doors' ceiling. At
+    #: this budget such a run carries on ONCE by itself before it stops
+    #: (``runtime.carries_on_at_step_limit``). Read live. 12..200.
+    attended_run_steps: int = 60
     #: THE TOOL-CALL DEADLINE (v1.228.0, RT6): seconds a single tool call in
     #: an agent run may take before it is stopped and recorded as a failed
     #: call ("<tool> did not finish within N s — it was stopped"); the run
