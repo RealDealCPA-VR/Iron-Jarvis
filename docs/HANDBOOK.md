@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.401.1 (2026-10-25).*
+holds itself to. Current as of v1.401.2 (2026-10-25).*
 
 ---
 
@@ -1941,6 +1941,35 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Clearer model, effort and pane tabs in a coding session (v1.401.2)
+
+Three things in a coding session's box and panes read more simply.
+
+- **No more "Your Claude plan" row.** It meant "whatever model Claude Code
+  uses by default", and never said which. The model menu now lists that model
+  once, by its own name: with Claude Code's default being Opus 5.5, there is
+  just **Opus 5.5**, and a session set to the plan's default shows "Opus 5.5"
+  on its model chip. This holds in a session's menu, the chat's model menu and
+  **Try on…**. Lists that keep both choices, such as **Settings › Default
+  model**, say "Claude Code's default (Opus 5.5)". Until Iron Jarvis has read Claude
+  Code's model list (a moment after Claude Code is signed in), the old words
+  stay. Codex does not say which model is its default, so "Your ChatGPT plan"
+  stays.
+- **Effort lists levels only, and Extra where it exists.** The list is
+  **Low**, **Medium**, **High**, and **Extra** for a model that takes it. There
+  is no "Default" row. With nothing picked, nothing is sent and the model runs
+  at its own level; the chip says "Reasoning", or the level when the vendor
+  documents one, and that level is marked in the list. **Extra** is Claude
+  Code's own name for its level above High. It appears only for a model
+  Claude Code itself says takes it; Codex, the API providers and local models
+  do not show it.
+- **The pane tabs are icons.** Plan, Timeline, Terminal, Changes, Browser and
+  Files are now six small icons above the right-hand pane. Rest the pointer on
+  one and its name appears just under it after a moment, and stays while the
+  pointer stays; a pointer passing over shows nothing. With the keyboard, the
+  arrow keys move between the tabs and the focused tab shows its name. Screen
+  readers read each tab's name as before.
 
 ## Hand work to your team first (v1.400.0)
 

@@ -33,6 +33,17 @@ import re
 #: the provider's own default — nothing sent, byte-identical to before.
 LEVELS: tuple[str, ...] = ("low", "medium", "high")
 
+#: v1.401.2 (the user: "there should be Extra in models that allow for it"):
+#: the level ABOVE high — Claude Code's ``--effort xhigh``, which its own
+#: effort picker calls "Extra" (read in Claude Code 2.1.311). Offered ONLY
+#: where the model's own vendor says the model takes it: today Claude Code,
+#: per model, from its live picker's ``supportedEffortLevels``
+#: (``claude_models.effort_levels``). Every other provider keeps ``LEVELS``.
+EXTRA = "xhigh"
+
+#: Every level a request may carry (``normalize_level``'s vocabulary).
+ALL_LEVELS: tuple[str, ...] = LEVELS + (EXTRA,)
+
 #: Anthropic / Gemini thinking budgets per level, in tokens. Low is enough to
 #: plan a short answer; high is the vendors' documented "deep" band.
 BUDGET_TOKENS: dict[str, int] = {"low": 2048, "medium": 8192, "high": 24576}
@@ -53,9 +64,26 @@ _LOCAL_REASONING = re.compile(
 
 
 def normalize_level(value: object) -> str:
-    """``low`` / ``medium`` / ``high`` or ``""`` — never anything else on the wire."""
+    """``low`` / ``medium`` / ``high`` / ``xhigh`` or ``""`` — never anything
+    else on the wire. A level the serving model does not take is still dropped
+    later (``supports``, the router's ``_applied_reasoning``)."""
     text = str(value or "").strip().lower()
-    return text if text in LEVELS else ""
+    return text if text in ALL_LEVELS else ""
+
+
+def _claude_cli_levels(model: str) -> tuple[str, ...]:
+    """Claude Code's levels for ``model``: ``LEVELS``, plus ``xhigh`` when the
+    CLI's own picker lists it for that model. The cached picker only — this
+    never starts the CLI (``claude_models.effort_levels`` reads ``_known``)."""
+    try:
+        from .claude_models import effort_levels
+
+        offered = effort_levels(model)
+    except Exception:  # noqa: BLE001 — an unreadable catalog offers the base levels
+        offered = None
+    if offered and EXTRA in offered:
+        return LEVELS + (EXTRA,)
+    return LEVELS
 
 
 def reasoning_levels(provider: str, model: str) -> tuple[str, ...]:
@@ -67,7 +95,9 @@ def reasoning_levels(provider: str, model: str) -> tuple[str, ...]:
         return ()
     if prov == "anthropic":
         return () if (not low.startswith("claude") or _ANTHROPIC_NO_THINKING.match(low)) else LEVELS
-    if prov in ("claude-cli", "codex-cli"):
+    if prov == "claude-cli":
+        return _claude_cli_levels(mid)
+    if prov == "codex-cli":
         return LEVELS
     if prov == "openai":
         return LEVELS if _OPENAI_REASONING.match(low) else ()

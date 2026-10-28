@@ -54,7 +54,7 @@ import {
   type AccountsView,
   type BuildAccount,
 } from "@/lib/buildAccounts";
-import { friendlyProvider, modelGroupName, modelRowName } from "@/lib/onboarding";
+import { foldPlanRows, friendlyProvider, modelGroupName, modelRowName } from "@/lib/onboarding";
 import type { ModelOption } from "@/lib/types";
 
 /** One company and the two ways a Build session reaches it. */
@@ -256,7 +256,9 @@ export function foldKeylessApis(models: readonly ModelOption[]): FoldedModels {
       provider: co.cli,
       inherited_from: null,
       kind: "cli",
-      reasoning: own?.reasoning ?? m.reasoning,
+      // v1.401.2: never "Extra" (xhigh) here: the CLI offers it PER MODEL
+      // (its live picker), and this model is one the picker does not list.
+      reasoning: (own?.reasoning ?? m.reasoning)?.filter((l) => l !== "xhigh"),
       reasoning_default: own?.reasoning_default ?? "",
     });
     added.set(co.cli, rows);
@@ -283,8 +285,13 @@ export function companyMenu(
   choice: string,
   now: Date = new Date(),
 ): CompanyMenu {
-  // ---- fold a keyless API into the CLI that serves it
-  const { listed, alias } = foldKeylessApis(models);
+  // ---- fold a keyless API into the CLI that serves it, then (v1.401.2) a
+  // CLI's own-default row into the model it runs ("Your Claude plan" → the
+  // Opus 5.5 row): one row per model, the plan's pick marked on that model.
+  const keyless = foldKeylessApis(models);
+  const planFold = foldPlanRows(keyless.listed);
+  const listed = planFold.models;
+  const alias: Record<string, string> = { ...keyless.alias, ...planFold.alias };
 
   // ---- the accounts of each CLI way
   const vw = view ?? null;

@@ -217,15 +217,27 @@ describe("every pickable row of the harness menu, as the daemon receives it", ()
     const fx = read();
     const menu = companyMenu(fx.models as unknown as ModelOption[], decodeAccounts(fx.accounts), null, "");
     for (const cli of ["claude-cli", "codex-cli"]) {
-      const own = fx.models.filter((m) => m.provider === cli).map((m) => m.model as string);
+      // v1.401.2 (moved on purpose): Claude Code's own-default row is folded
+      // into the model it runs (the catalog marks Opus 5.5 `cli_default`);
+      // Codex names no default, so its plan row stays first.
+      const own = fx.models
+        .filter((m) => m.provider === cli)
+        .map((m) => m.model as string)
+        .filter((m) => !(cli === "claude-cli" && m === "subscription"));
       const got = menu.models.filter((m) => m.provider === cli).map((m) => m.model);
       expect(got.slice(0, own.length), cli).toEqual(own);
       expect(got.length, cli).toBeGreaterThan(own.length);
     }
-    // …and the menu draws that order: the plan row first in each panel.
+    // …and the menu draws that order: Claude Code's default model first
+    // (v1.401.2: its plan row folded into it), Codex's plan row first.
     const claude = fx.picks.filter((p) => p.account === "c-work");
-    expect(claude[0].model).toBe("subscription");
+    expect(claude[0].model).toBe("claude-opus-5-5");
+    expect(claude.some((p) => p.model === "subscription")).toBe(false);
     expect(fx.picks.filter((p) => p.account === "x-plus")[0].model).toBe("subscription");
+    // A session saved on the plan row is marked on the model it runs.
+    expect(companyMenu(fx.models as unknown as ModelOption[], decodeAccounts(fx.accounts), null, "claude-cli::subscription").choice).toBe(
+      "claude-cli::claude-opus-5-5",
+    );
   });
 
   it("the pairs are the folded list's, row for row; a pair stored before the change is marked as its fold", () => {

@@ -283,7 +283,8 @@ describe("the reasoning chip shows on the default model when it offers levels", 
     render(<ChatPage />);
     const select = (await screen.findByTestId("reasoning-level")) as HTMLSelectElement;
     expect(select.value).toBe("");
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "low", "medium", "high"]);
+    // v1.401.2 (moved on purpose): the levels only, no "Default" row.
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.value)).toEqual(["low", "medium", "high"]);
     fireEvent.change(select, { target: { value: "high" } });
     const box = await screen.findByPlaceholderText(/Message Iron Jarvis/);
     fireEvent.change(box, { target: { value: "think hard" } });

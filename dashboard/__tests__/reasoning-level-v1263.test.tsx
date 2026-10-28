@@ -208,7 +208,8 @@ describe("the reasoning control exists only where it is an option (v1.263.0)", (
     render(<ChatPage />);
     await pickModel("gpt-5");
     const select = (await screen.findByTestId("reasoning-level")) as HTMLSelectElement;
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "low", "medium", "high"]);
+    // v1.401.2 (moved on purpose): the levels only, no "Default" row.
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.value)).toEqual(["low", "medium", "high"]);
     fireEvent.change(select, { target: { value: "high" } });
     const body = await send("think hard about this");
     expect(body.reasoning).toBe("high");

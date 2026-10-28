@@ -231,12 +231,13 @@ for (const { width, height } of [
     // Claude Code: each model once; a keyless Anthropic's own one sits here.
     await groups.nth(2).click();
     const cc = page.getByTestId("harness-try-on-panel");
-    await expect(cc.getByTestId("harness-try-on-row")).toHaveCount(8);
+    // v1.401.2: 7 — "Your Claude plan" is Opus 5.5 (the default), listed once.
+    await expect(cc.getByTestId("harness-try-on-row")).toHaveCount(7);
     // Drawn where it sits as it opens (on a phone: brought into view, under
     // its row, inside the list).
     expect(await drawnWhereItSits(page, "harness-try-on-panel")).toBe(true);
     await shot(page, `${width}-3-claude`);
-    expect(await cc.getByTestId("harness-try-on-place").allTextContents()).toEqual(Array(8).fill("cloud"));
+    expect(await cc.getByTestId("harness-try-on-place").allTextContents()).toEqual(Array(7).fill("cloud"));
     const opus48 = cc.locator('[data-testid="harness-try-on-row"][data-model="claude-opus-4-8"]');
     await expect(opus48).toHaveAttribute("data-provider", "anthropic");
     await opus48.check();

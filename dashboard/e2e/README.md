@@ -98,6 +98,18 @@ keyboard, Escape closing the provider and leaving the form, Enter in the find
 box sending nothing, no sideways pan, and the task's `try_on` (caught in the
 browser) carrying the catalog pairs.
 
+`e2e/plan-row-effort-pane-icons.spec.ts` (v1.401.2) opens a coding session on
+Claude Code's plan default with `/models` stubbed to the real daemon's Claude
+rows (the plan row has no label; the live picker marks Opus 5.5 as the CLI's
+default and lists Extra for it), at 1280 × 800, 1600 × 900 and 390 × 844, each
+on a session of its own: the model chip says "Opus 5.5" and the menu lists it
+once with no "Your Claude plan"; the effort list is Low, Medium, High, Extra
+and picking Extra saves `"reasoning":"xhigh"`; the six pane tabs show no word
+at rest, still none just after the pointer arrives, the word after the pause,
+inside the window and every clipping ancestor, gone when the pointer leaves,
+and on the tab an arrow key focuses; the page never pans sideways.
+`IJ_PANE_ICONS_OUT=<folder>` writes a screenshot of each step.
+
 Run from `dashboard/`:
 
 ```bash

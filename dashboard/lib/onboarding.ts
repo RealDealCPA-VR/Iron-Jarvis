@@ -298,6 +298,54 @@ export function isProviderDefaultModel(model: string | null | undefined): boolea
   return PROVIDER_DEFAULT_MODEL_IDS.includes((model ?? "").trim().toLowerCase());
 }
 
+/**
+ * v1.401.2 (the user, a screenshot of the coding session's model menu: "the
+ * option for just 'your claude plan'. When this is selected it does not
+ * indicate which model is being used and does not make any sense"): the row a
+ * provider's own-default row ("subscription": the CLI's default) RUNS — the
+ * catalog row the daemon marks `cli_default`, read from Claude Code's live
+ * picker (routes/connections `_claude_rows`). undefined when the catalog does
+ * not say (no live picker yet, or a CLI that names no default: Codex).
+ */
+export function planModelRow<T extends { provider: string; model?: string }>(
+  provider: string,
+  catalog?: readonly T[] | null,
+): T | undefined {
+  if (!catalog) return undefined;
+  return catalog.find(
+    (r) =>
+      r.provider === provider &&
+      (r as { cli_default?: unknown }).cli_default === true &&
+      !isProviderDefaultModel(r.model),
+  );
+}
+
+/**
+ * v1.401.2: a model MENU with each own-default row folded into the row it
+ * runs (`planModelRow`): "Your Claude plan" beside "Opus 5.5" listed the same
+ * model twice under two names. `alias` maps a folded row's value
+ * ("claude-cli::subscription") to the row that now stands for it
+ * ("claude-cli::claude-opus-5-5"), so a saved pick of the plan row is marked
+ * there. Nothing is folded while the catalog names no default. Pure.
+ */
+export function foldPlanRows<T extends { provider: string; model: string }>(
+  models: readonly T[],
+): { models: T[]; alias: Record<string, string> } {
+  const out: T[] = [];
+  const alias: Record<string, string> = {};
+  for (const m of models) {
+    if (isProviderDefaultModel(m.model)) {
+      const runs = planModelRow(m.provider, models);
+      if (runs) {
+        alias[`${m.provider}::${m.model}`] = `${runs.provider}::${runs.model}`;
+        continue;
+      }
+    }
+    out.push(m);
+  }
+  return { models: out, alias };
+}
+
 /** The alias docs/LOCAL-MODELS.md tells a model-server owner to keep in
  *  front of their servers ("fleet"; OpenCode writes it "<its server>/fleet").
  *  It means "whatever my own servers run", so a row says that. */
@@ -430,6 +478,10 @@ export function modelRowName(
   if (label) return label;
   const model = (m.model ?? "").trim();
   if (isProviderDefaultModel(model)) {
+    // v1.401.2: named by the model it runs when the catalog says which
+    // ("Opus 5.5"), never by the plan alone.
+    const runs = planModelRow(m.provider, catalog as readonly { provider: string; model?: string }[] | null);
+    if (runs) return modelRowName({ provider: runs.provider, model: runs.model ?? "", label: (runs as { label?: string | null }).label }, catalog);
     const cli = SUBSCRIPTION_CLIS.find((c) => c.provider === m.provider);
     return cli?.planName || providerHeading(m.provider) || m.model;
   }
@@ -464,7 +516,16 @@ export function modelPickWords(
 ): string {
   if (m.provider === "mock") return providerDisplay("mock");
   const words = modelRowName(m, catalog);
-  if (isProviderDefaultModel(m.model)) return words;
+  if (isProviderDefaultModel(m.model)) {
+    // v1.401.2: a LIST (Settings, an agent, a terminal…) shows both rows, so
+    // the own-default one says it follows the CLI's default and which model
+    // that is now: "Claude Code's default (Opus 5.5)".
+    if (planModelRow(m.provider, catalog)) {
+      const group = modelGroupName({ provider: m.provider, model: m.model });
+      return group ? `${group}'s default (${words})` : words;
+    }
+    return words;
+  }
   // Readiness 12A (0f.3): a fleet node's group is the MACHINE — its name
   // (from the row or the catalog's rows for it) else "Your model server" —
   // never its raw id: a list said "fleet-spark · Spark B" when the caller

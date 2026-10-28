@@ -132,7 +132,7 @@ import {
   turnOffToolLabel,
   workingFolderTitle,
 } from "@/lib/chatControlWords";
-import { reasoningChipLabel, reasoningDefaultOption, reasoningTitle } from "@/lib/reasoningChip";
+import { reasoningChipLabel, reasoningTitle } from "@/lib/reasoningChip";
 
 /* ------------------------------------------------------------------ data */
 
@@ -420,7 +420,7 @@ describe("a million-token model reads 'long docs', never '1M'", () => {
 describe("the reasoning chip: a model that decides reads 'Model decides'", () => {
   it("never a third control called Auto", () => {
     expect(reasoningChipLabel("", "auto")).toBe("Model decides");
-    expect(reasoningDefaultOption("auto")).toBe("Default (Model decides)");
+    // v1.401.2: the list's "Default (…)" row is gone (moved on purpose).
     expect(reasoningTitle("auto")).toContain("decides for itself");
     // CONTROL: the other words are unchanged.
     expect(reasoningChipLabel("", "medium")).toBe("Medium");

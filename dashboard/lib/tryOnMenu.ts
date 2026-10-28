@@ -27,7 +27,10 @@
  *    name of the same deployment (`aliases`), is one entry;
  *  - the "fleet" alias ("whatever my own servers run") is not a second model
  *    beside the server's real one: it is left out wherever that server lists
- *    a model that runs on this network.
+ *    a model that runs on this network;
+ *  - v1.401.2: a CLI's own-default row ("Your Claude plan") is the model the
+ *    catalog says it runs (`cli_default`, lib/onboarding foldPlanRows): it is
+ *    listed once, as that model.
  *
  * WHAT A PICK SENDS: the daemon refuses a pick that is not a GET /models row
  * (harness/attempts.py `resolve`), so every entry carries the CATALOG pair
@@ -42,7 +45,7 @@
 import { KIND_BADGE, PROVIDER_RANK, rowKind } from "@/components/chat/ModelMenu";
 import { tryOnChoices, type TryOnPick, type TryOnRow } from "@/lib/buildAttempts";
 import { foldKeylessApis, wayLabel } from "@/lib/harnessModelMenu";
-import { isOwnServerSlot, isServerAlias, machineName, modelRowName, providerHeading } from "@/lib/onboarding";
+import { foldPlanRows, isOwnServerSlot, isServerAlias, machineName, modelRowName, providerHeading } from "@/lib/onboarding";
 import type { ModelOption } from "@/lib/types";
 
 /** Where a model runs: a KIND_BADGE key. */
@@ -158,7 +161,11 @@ export function tryOnGroups(rows: readonly TryOnRow[], localOnly: boolean): TryO
   // GET /models rows: the fields the menu reads beyond TryOnRow's are optional.
   const catalog = rows as unknown as readonly ModelOption[];
   const choices = tryOnChoices(rows, localOnly) as unknown as ModelOption[];
-  const { listed, origin } = foldKeylessApis(choices);
+  const keyless = foldKeylessApis(choices);
+  const origin = keyless.origin;
+  // v1.401.2: a CLI's own-default row ("Your Claude plan") is the model it
+  // runs, listed once under that model's name (lib/onboarding foldPlanRows).
+  const listed = foldPlanRows(keyless.listed).models;
   const providers = new Set(listed.map((m) => m.provider));
 
   type Draft = { key: string; label: string; entries: TryOnModel[]; ids: Map<string, number>; size: number };

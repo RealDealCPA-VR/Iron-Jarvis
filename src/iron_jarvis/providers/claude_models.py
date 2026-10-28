@@ -218,6 +218,24 @@ def _label(row: dict, model_id: str) -> str:
     return pinned[0] if pinned else (str(row.get("displayName") or "").strip() or model_id)
 
 
+#: v1.401.2: the effort words Claude Code's own ``--effort`` takes, in its
+#: order (``claude --help``, 2.1.311: "low, medium, high, xhigh, max").
+CLI_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+def _effort_levels(row: dict) -> list[str]:
+    """The effort levels a picker row says the model takes, in the CLI's own
+    order (its ``supportedEffortLevels``, read 2026-10-28 from Claude Code
+    2.1.311's ``initialize`` answer: every current model lists low, medium,
+    high, xhigh and max). A row without the list (an older CLI) gives ``[]``
+    — unknown, never a guess."""
+    raw = row.get("supportedEffortLevels")
+    if not isinstance(raw, list) or row.get("supportsEffort") is False:
+        return []
+    have = {str(x).strip().lower() for x in raw if isinstance(x, str)}
+    return [level for level in CLI_EFFORTS if level in have]
+
+
 def _usage_credits(desc: str, model_id: str, subscription: str | None) -> bool:
     if "usage credit" in (desc or "").lower():
         return True
@@ -295,6 +313,7 @@ def _parse(stdout: str) -> dict:
             "usage_credits": _usage_credits(desc, mid, subscription),
             "pinned": pinned,
             "default": is_default,
+            "effort_levels": _effort_levels(r),
         }
     if not rows:
         raise ValueError("the claude CLI's picker named no model we can route")
@@ -508,6 +527,23 @@ def _default_row() -> dict | None:
         if isinstance(r, dict) and r.get("default") and r.get("id"):
             return r
     return None
+
+
+def effort_levels(model_id: str) -> tuple[str, ...] | None:
+    """The effort levels Claude Code's own picker says ``model_id`` takes, or
+    ``None`` when the picker has not named that model (or is older and lists
+    no levels). "subscription"/"default"/"" read the CLI default's row. Reads
+    the cached catalog only (``_known``): never starts the CLI."""
+    if (model_id or "").strip().lower() in DEFAULT_IDS:
+        row = _default_row()
+    else:
+        _canon, row = _lookup(model_id)
+    if row is None:
+        return None
+    levels = row.get("effort_levels")
+    if not isinstance(levels, list) or not levels:
+        return None
+    return tuple(str(x) for x in levels if isinstance(x, str))
 
 
 def context_window(model_id: str) -> int | None:

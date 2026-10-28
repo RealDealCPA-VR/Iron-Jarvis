@@ -195,7 +195,7 @@ async function openMenu(waitForAccount = "work"): Promise<HTMLElement> {
 }
 
 const levelOptions = () =>
-  Array.from((screen.getByTestId("reasoning-level") as HTMLSelectElement).options).map((o) => o.value);
+  Array.from((screen.getByTestId("reasoning-level") as HTMLSelectElement).options).filter((o) => !o.hidden).map((o) => o.value);
 
 /* ------------------------------------------------- 1. folded pick: reasoning */
 
@@ -205,7 +205,8 @@ describe("a folded pick keeps its reasoning chip", () => {
     renderSession();
     await waitFor(() => expect(screen.getByTitle("Switch model").textContent).toBe("Opus 4.8 · Work"));
     await waitFor(() => expect(screen.getByTestId("reasoning-level")).toBeTruthy());
-    expect(levelOptions()).toEqual(["", ...LEVELS]);
+    // v1.401.2 (moved on purpose): the levels only, no "Default" row.
+    expect(levelOptions()).toEqual(LEVELS);
   });
 
   it("an OpenAI id a keyless OpenAI lists, folded under Codex, offers Codex's levels (the CLI applies them)", async () => {
@@ -213,7 +214,8 @@ describe("a folded pick keeps its reasoning chip", () => {
     api.gets["/build/accounts"] = { claude: [], codex: [], iron_proxy: PROXY_ON };
     renderSession();
     await waitFor(() => expect(screen.getByTestId("reasoning-level")).toBeTruthy());
-    expect(levelOptions()).toEqual(["", ...LEVELS]);
+    // v1.401.2 (moved on purpose): the levels only, no "Default" row.
+    expect(levelOptions()).toEqual(LEVELS);
   });
 
   it("a session stored before the change as anthropic::<id> keeps its chip and is marked under its account", async () => {
@@ -243,7 +245,8 @@ describe("a session on its provider's own default", () => {
     expect(plan.className).toContain("text-accent-soft");
     // …and the reasoning chip is that row's (the CLI's levels), not the
     // app default's (the demo model offers none).
-    expect(levelOptions()).toEqual(["", ...LEVELS]);
+    // v1.401.2 (moved on purpose): the levels only, no "Default" row.
+    expect(levelOptions()).toEqual(LEVELS);
   });
 
   it("a provider with no such row marks nothing, still never the app's default model", async () => {

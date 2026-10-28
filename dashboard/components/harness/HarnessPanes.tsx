@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { ChartGantt, FileDiff, FolderOpen, Globe, ListChecks, Loader2, Plus, RefreshCw, SquareTerminal, type LucideIcon } from "lucide-react";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
@@ -66,14 +66,23 @@ export interface SessionTerminalApi {
 
 export type PaneTab = "plan" | "timeline" | "terminal" | "changes" | "browser" | "files";
 
-export const PANE_TABS: readonly { value: PaneTab; label: string }[] = [
-  { value: "plan", label: "Plan" },
+/**
+ * v1.401.2 (the user: the six words "seem a bit overwhelming … a small icon
+ * instead so it a cleaner look and if a mouse is hovering over it then the
+ * word describing it briefly pops up or stays up if the mouse is held there
+ * steady, but if no mouse hovering then no word"): each tab is an ICON; its
+ * word is its accessible name and a small tip that shows while the pointer
+ * rests on it (after a short pause, so a passing pointer shows nothing) or
+ * while it has keyboard focus — never otherwise.
+ */
+export const PANE_TABS: readonly { value: PaneTab; label: string; icon: LucideIcon }[] = [
+  { value: "plan", label: "Plan", icon: ListChecks },
   // v1.390.0 (the long-jobs plan's Phase 1, decision 9): beside Plan.
-  { value: "timeline", label: "Timeline" },
-  { value: "terminal", label: "Terminal" },
-  { value: "changes", label: "Changes" },
-  { value: "browser", label: "Browser" },
-  { value: "files", label: "Files" },
+  { value: "timeline", label: "Timeline", icon: ChartGantt },
+  { value: "terminal", label: "Terminal", icon: SquareTerminal },
+  { value: "changes", label: "Changes", icon: FileDiff },
+  { value: "browser", label: "Browser", icon: Globe },
+  { value: "files", label: "Files", icon: FolderOpen },
 ];
 
 const TAB_KEY = "ij.build.pane";
@@ -529,10 +538,11 @@ export function HarnessPanes({
         role="tablist"
         aria-label="Session views"
         data-testid="harness-pane-tabs"
-        className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1"
+        className="flex shrink-0 flex-wrap items-center gap-x-1 gap-y-1 px-1"
       >
         {PANE_TABS.map((t) => {
           const selected = tab === t.value;
+          const Icon = t.icon;
           return (
             <button
               key={t.value}
@@ -552,16 +562,27 @@ export function HarnessPanes({
                 choose(next.value);
                 document.getElementById(`${baseId}-tab-${next.value}`)?.focus();
               }}
-              className={`rounded-md px-1.5 py-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-                selected ? "font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
+              className={`group relative inline-grid h-8 w-8 place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+                selected ? "bg-white/[0.08] text-zinc-100" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
               }`}
             >
-              {t.label}
+              <Icon size={16} aria-hidden strokeWidth={selected ? 2.25 : 1.75} />
+              {/* The word, SHOWN only while the pointer rests here (after
+                  300 ms, so a passing pointer shows nothing) or the tab has
+                  keyboard focus. Faded, never removed: it is the tab's name
+                  for a screen reader (with "(a new plan)" below), so no
+                  aria-label repeats it. */}
+              <span
+                data-testid={`harness-pane-tip-${t.value}`}
+                className="pointer-events-none absolute left-1/2 top-full z-30 mt-1 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-ink-900 px-2 py-0.5 text-[12px] text-zinc-200 opacity-0 shadow-lg shadow-black/30 transition-opacity duration-150 group-hover:opacity-100 group-hover:delay-300 group-focus-visible:opacity-100"
+              >
+                {t.label}
+              </span>
               {t.value === "plan" && planNew && !selected ? (
                 // v1.384.0: from xl only — below it the plan is under the
                 // reply, where the user already is.
                 <span data-testid="harness-plan-new" className="hidden xl:inline">
-                  <span aria-hidden className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" />
+                  <span aria-hidden className="absolute right-1 top-1 inline-block h-1.5 w-1.5 rounded-full bg-accent" />
                   <span className="sr-only"> (a new plan)</span>
                 </span>
               ) : null}

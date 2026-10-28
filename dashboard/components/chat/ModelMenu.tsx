@@ -50,12 +50,13 @@ import type { CompanyMenu, MenuAccount, MenuMatch, MenuWay } from "@/lib/harness
 import { ModelRowChips, modelText, modelTitle } from "@/components/ModelRowBits";
 import { composerChipClass, iconOnlyTitle } from "@/lib/composerChips";
 import { friendlyModelName } from "@/lib/friendlyModelName";
-import { modelGroupName, providerDisplay } from "@/lib/onboarding";
+import { foldPlanRows, modelGroupName, providerDisplay } from "@/lib/onboarding";
 import { matchModels, readRecentModels, rememberRecentModel } from "@/lib/recentModels";
 import {
+  levelWords,
   reasoningChipLabel,
   reasoningDefaultOf,
-  reasoningDefaultOption,
+  reasoningShownLevel,
   reasoningShortLabel,
   reasoningTitle,
 } from "@/lib/reasoningChip";
@@ -69,8 +70,9 @@ import {
   type ModelMenuPlacement,
 } from "@/lib/modelMenuPlacement";
 
-/** v1.263.0: the levels the composer may offer — the daemon's vocabulary. */
-export const REASONING_LEVELS = ["low", "medium", "high"];
+/** v1.263.0: the levels the composer may offer — the daemon's vocabulary.
+ *  v1.401.2: "xhigh" ("Extra"), offered only where a row lists it. */
+export const REASONING_LEVELS = ["low", "medium", "high", "xhigh"];
 
 /** v1.277.0: how many rows a typed model filter lists. */
 export const MODEL_FILTER_MAX = 12;
@@ -285,8 +287,10 @@ export function modelTriggerOf(
  * The reasoning level chip (v1.263.0), ONLY for a model that offers one (the
  * daemon's catalog says which; the caller draws nothing otherwise).
  * v1.330.0: the chip's WORDS are this span; the native select lies invisibly
- * over it (same box), so its menu can say "Default (Medium)" while the chip
- * says "Medium". The select keeps its name, value, keyboard and phone picker.
+ * over it (same box). The select keeps its name, value, keyboard and phone
+ * picker. v1.401.2: its list holds the levels only (no "Default" row); with
+ * nothing picked it marks the model's own level when known, and a pick of that
+ * same level changes nothing, so nothing is sent until the user picks another.
  */
 export function ReasoningChip({
   levels,
@@ -312,6 +316,7 @@ export function ReasoningChip({
 }) {
   const picked = levels.includes(value) ? value : "";
   const words = reasoningChipLabel(picked, def);
+  const shown = reasoningShownLevel(levels, picked, def);
   const shortWords = reasoningShortLabel(picked, def);
   return (
     <span
@@ -346,23 +351,29 @@ export function ReasoningChip({
       <select
         aria-label="Reasoning level"
         data-testid="reasoning-level"
-        value={picked}
-        onChange={(e) => onChange(e.target.value)}
+        value={shown}
+        onChange={(e) => {
+          if (e.target.value !== shown) onChange(e.target.value);
+        }}
         disabled={disabled}
         title={short && shortWords !== null ? iconOnlyTitle(words, reasoningTitle(def)) : reasoningTitle(def)}
         className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-lg border-0 bg-transparent text-[13px] opacity-0 focus-visible:outline-none disabled:cursor-default"
       >
         {/* v1.326.0: short words for a chip beside the model ("High"); the
-            select's name says what they measure. v1.330.0: the "send
-            nothing" row names the model's own default when the daemon knows
-            it ("Default (Medium)"; it leads with "Default" so it never reads
-            as a twin of the explicit "Medium" row). */}
-        <option value="" className="bg-ink-900 text-zinc-200">
-          {reasoningDefaultOption(def)}
-        </option>
+            select's name says what they measure. v1.401.2: the levels only,
+            in the vendor's words ("Extra" is Claude Code's xhigh); no
+            "Default" row. With no level to mark (nothing picked, the model's
+            own level unknown or not one of these), a HIDDEN placeholder holds
+            the selection: a select whose value matches no option selects its
+            first one, so "Low" read as picked and choosing it did nothing. */}
+        {shown === "" ? (
+          <option value="" disabled hidden className="bg-ink-900 text-zinc-200">
+            {words}
+          </option>
+        ) : null}
         {levels.map((lvl) => (
           <option key={lvl} value={lvl} className="bg-ink-900 text-zinc-200">
-            {lvl.charAt(0).toUpperCase() + lvl.slice(1)}
+            {levelWords(lvl) || lvl}
           </option>
         ))}
       </select>
@@ -511,14 +522,23 @@ export function ModelMenu({
       setRecent(readRecentModels());
     }
   }
-  const matches = useMemo(() => matchModels(models, filter, MODEL_FILTER_MAX), [models, filter]);
+  // v1.401.2: the chat's rows with the CLI's own-default row folded into the
+  // model it runs ("Your Claude plan" was Opus 5.5 under a second name); a
+  // saved pick of it is marked on that model (`plan.alias`).
+  const plan = useMemo(() => foldPlanRows(models), [models]);
+  const matches = useMemo(() => matchModels(plan.models, filter, MODEL_FILTER_MAX), [plan, filter]);
   const providers = useMemo(() => modelProvidersOf(models), [models]);
   // v1.376.0 (IJ harness): the rows listed (a keyless API folded into the
   // CLI that serves it), the pick as that list spells it, and the filter and
   // Recent rows, each on the account it runs on. The chat: its own catalog
   // and pick, untouched.
-  const listed = companies ? companies.models : models;
-  const chosen = companies ? companies.choice : choice;
+  const listed = companies ? companies.models : plan.models;
+  const chosen = companies ? companies.choice : (plan.alias[choice] ?? choice);
+  /** The chat's Recent picks as the folded list spells them, each once. */
+  const chatRecent = useMemo(
+    () => [...new Set(recent.map((v) => plan.alias[v] ?? v))],
+    [recent, plan],
+  );
   const companyMatches = useMemo(
     () => (companies ? companies.match(filter, MODEL_FILTER_MAX) : []),
     [companies, filter],
@@ -1032,7 +1052,7 @@ export function ModelMenu({
                         disabled={m.available === false}
                         title={m.available === false ? `${modelGroupName(m)} isn't connected` : undefined}
                         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
-                          choice === v ? "text-accent-soft" : "text-zinc-300"
+                          chosen === v ? "text-accent-soft" : "text-zinc-300"
                         }`}
                       >
                         <span className="min-w-0 truncate" title={modelTitle(m, models)}>
@@ -1086,12 +1106,12 @@ export function ModelMenu({
                 </>
               ) : (
                 <>
-                  {recent.length > 0 && (
+                  {chatRecent.length > 0 && (
                     <div data-testid="model-recent" className="mb-1 border-b border-white/[0.06] pb-1">
                       <p className="px-2.5 pb-0.5 text-[10px] uppercase tracking-wide text-zinc-600">Recent</p>
-                      {recent.map((v) => {
+                      {chatRecent.map((v) => {
                         const { provider, model } = splitChoice(v);
-                        const row = models.find((m) => m.provider === provider && m.model === model);
+                        const row = plan.models.find((m) => m.provider === provider && m.model === model);
                         if (!row) return null;
                         return (
                           <button
@@ -1100,7 +1120,7 @@ export function ModelMenu({
                             onClick={() => pick(v)}
                             disabled={row.available === false}
                             className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 ${
-                              choice === v ? "text-accent-soft" : "text-zinc-300"
+                              chosen === v ? "text-accent-soft" : "text-zinc-300"
                             }`}
                           >
                             <span className="min-w-0 truncate" title={modelTitle(row, models)}>

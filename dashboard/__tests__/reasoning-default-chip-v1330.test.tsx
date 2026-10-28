@@ -108,7 +108,7 @@ import {
   defaultWords,
   reasoningChipLabel,
   reasoningDefaultOf,
-  reasoningDefaultOption,
+  reasoningShownLevel,
   reasoningTitle,
 } from "@/lib/reasoningChip";
 
@@ -183,21 +183,24 @@ async function chipFor(model: string, words: string) {
 }
 
 describe("the words, one table (lib/reasoningChip)", () => {
+  // v1.401.2 (moved on purpose): the list has no "Default" row any more (the
+  // user: "Default should not be there"); with nothing picked it MARKS the
+  // model's own level when that is one of its levels.
   it.each([
-    // [picked, default, chip, default row]
-    ["", "medium", "Medium", "Default (Medium)"],
-    ["", "low", "Low", "Default (Low)"],
-    ["", "high", "High", "Default (High)"],
-    ["", "off", "Thinking off", "Default (Thinking off)"],
+    // [picked, default, chip, the level the list marks]
+    ["", "medium", "Medium", "medium"],
+    ["", "low", "Low", "low"],
+    ["", "high", "High", "high"],
+    ["", "off", "Thinking off", ""],
     // v1.356.0 (G75): "auto" reads "Model decides" (updated on purpose).
-    ["", "auto", "Model decides", "Default (Model decides)"],
-    ["", "", "Reasoning", "Default"],
-    ["high", "medium", "High", "Default (Medium)"],
-    ["low", "off", "Low", "Default (Thinking off)"],
-    ["medium", "", "Medium", "Default"],
-  ])("picked %j, default %j: chip %j, row %j", (picked, def, chip, row) => {
+    ["", "auto", "Model decides", ""],
+    ["", "", "Reasoning", ""],
+    ["high", "medium", "High", "high"],
+    ["low", "off", "Low", "low"],
+    ["medium", "", "Medium", "medium"],
+  ])("picked %j, default %j: chip %j, marks %j", (picked, def, chip, marked) => {
     expect(reasoningChipLabel(picked, def)).toBe(chip);
-    expect(reasoningDefaultOption(def)).toBe(row);
+    expect(reasoningShownLevel(LEVELS, picked, def)).toBe(marked);
   });
 
   it("reads only the words it knows; anything else is unknown", () => {
@@ -222,14 +225,10 @@ describe("the chip on the page says the level the model will use", () => {
   it("a documented default: the chip says it, the menu marks it, nothing extra is sent", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5", "Medium");
-    expect(select.value).toBe("");
-    expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "low", "medium", "high"]);
-    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
-      "Default (Medium)",
-      "Low",
-      "Medium",
-      "High",
-    ]);
+    // v1.401.2 (moved on purpose): no "Default" row; the list marks Medium.
+    expect(select.value).toBe("medium");
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.value)).toEqual(["low", "medium", "high"]);
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.textContent)).toEqual(["Low", "Medium", "High"]);
     expect(select.getAttribute("title")).toContain("runs at medium, its own default");
     // The default row sends NOTHING: byte-identical to before the field.
     const body = await send("hello");
@@ -246,12 +245,13 @@ describe("the chip on the page says the level the model will use", () => {
     expect(body.reasoning).toBe("high");
   });
 
-  it("picking the default row again sends nothing", async () => {
+  // v1.401.2 (moved on purpose): there is no "Default" row to go back to.
+  // With nothing picked, choosing the level the list already marks (the
+  // model's own) changes nothing, so nothing is sent.
+  it("choosing the level the list already marks sends nothing", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5", "Medium");
-    fireEvent.change(select, { target: { value: "low" } });
-    await waitFor(() => expect(chipWords()).toBe("Low"));
-    fireEvent.change(select, { target: { value: "" } });
+    fireEvent.change(select, { target: { value: "medium" } });
     await waitFor(() => expect(chipWords()).toBe("Medium"));
     const body = await send("hello");
     expect("reasoning" in body).toBe(false);
@@ -260,10 +260,10 @@ describe("the chip on the page says the level the model will use", () => {
   it("a model that does not think unless asked reads 'Thinking off'", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5.1", "Thinking off");
-    expect(select.options[0].textContent).toBe("Default (Thinking off)");
     expect(select.getAttribute("title")).toContain("does not think first");
-    // The menu still offers the three levels.
-    expect(Array.from(select.options).slice(1).map((o) => o.value)).toEqual(LEVELS);
+    // The menu offers the three levels and marks none (v1.401.2: no Default row).
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.value)).toEqual(LEVELS);
+    expect(select.value).toBe("");
   });
 
   // v1.356.0 (G75): "Model decides", not a third control called "Auto"
@@ -271,7 +271,7 @@ describe("the chip on the page says the level the model will use", () => {
   it("a model that decides for itself reads 'Model decides'", async () => {
     render(<ChatPage />);
     const select = await chipFor("gpt-5.9-auto", "Model decides");
-    expect(select.options[0].textContent).toBe("Default (Model decides)");
+    expect(Array.from(select.options).filter((o) => !o.hidden).map((o) => o.textContent)).toEqual(["Low", "Medium", "High"]);
   });
 
   it.each(["gpt-5-codex", "o3", "gpt-7"])(
@@ -279,7 +279,7 @@ describe("the chip on the page says the level the model will use", () => {
     async (model) => {
       render(<ChatPage />);
       const select = await chipFor(model, "Reasoning");
-      expect(select.options[0].textContent).toBe("Default");
+      expect(Array.from(select.options).filter((o) => !o.hidden).some((o) => /default/i.test(o.textContent ?? ""))).toBe(false);
       expect(select.getAttribute("title")).toBe(
         "How hard the model thinks before answering. Higher is slower and costs more. With nothing picked the model decides.",
       );

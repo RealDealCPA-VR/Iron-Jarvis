@@ -24,6 +24,7 @@ import { KIND_BADGE, modelProvidersOf } from "@/components/chat/ModelMenu";
 import { floatEdges } from "@/components/chat/FitPanel";
 import { MAX_ATTEMPTS, tryOnBody, type TryOnPick } from "@/lib/buildAttempts";
 import { companyMenu, foldKeylessApis } from "@/lib/harnessModelMenu";
+import { foldPlanRows } from "@/lib/onboarding";
 import { MIXED_BADGE, groupBadge, matchTryOn, tryOnGroups, type TryOnGroup } from "@/lib/tryOnMenu";
 import type { ModelOption } from "@/lib/types";
 
@@ -47,8 +48,9 @@ describe("the list is one row per provider, local first, no model twice", () => 
 
   it("Claude Code lists each model once; a keyless Anthropic's own model sits under it and SENDS its catalog pair", () => {
     const cc = byId(groups, "claude-cli");
+    // v1.401.2 (moved on purpose): "Your Claude plan" is Opus 5.5 (the catalog
+    // marks it Claude Code's default), listed once, as Opus 5.5.
     expect(labels(cc)).toEqual([
-      "Your Claude plan",
       "Opus 5.5",
       "Fable 5.1",
       "Sonnet 5.5",
@@ -59,7 +61,6 @@ describe("the list is one row per provider, local first, no model twice", () => 
     ]);
     // The screenshot's Opus 5.5 / Fable 5.1 / Sonnet 5.5 / Haiku twins are gone.
     expect(sent(cc)).toEqual([
-      "claude-cli::subscription",
       "claude-cli::claude-opus-5-5",
       "claude-cli::claude-fable-5-1",
       "claude-cli::claude-sonnet-5-5",
@@ -69,7 +70,8 @@ describe("the list is one row per provider, local first, no model twice", () => 
       "anthropic::claude-fable-5",
     ]);
     expect(groups.some((g) => g.id === "anthropic")).toBe(false);
-    // Codex the same way: its plan, then the keyless OpenAI's models.
+    // Codex the same way: its plan (Codex names no default model, so its
+    // plan row stays), then the keyless OpenAI's models.
     expect(sent(byId(groups, "codex-cli"))).toEqual([
       "codex-cli::subscription",
       "openai::gpt-4o",
@@ -155,7 +157,8 @@ describe("where each provider and each model runs is read from the row, never gu
   });
 
   it("the shared fold is the harness menu's own (one rule): the same rows listed", () => {
-    expect(foldKeylessApis(CATALOG).listed).toEqual(companyMenu(CATALOG, null, null, "").models);
+    // v1.401.2: both then fold a CLI's own-default row into the model it runs.
+    expect(foldPlanRows(foldKeylessApis(CATALOG).listed).models).toEqual(companyMenu(CATALOG, null, null, "").models);
     // And the chat menu's provider rows are untouched by the lift of rowKind:
     // there a provider still reads as its FIRST row (here a cloud name).
     expect(modelProvidersOf(CATALOG).map((p) => [p.id, p.kind])).toContainEqual(["custom", "endpoint"]);
@@ -239,10 +242,11 @@ describe("the control: provider rows, a pop-out of each one's models, at most th
     fireEvent.click(groupRow("claude-cli"));
     expect(groupRow("claude-cli")).toHaveAttribute("aria-expanded", "true");
     const panel = screen.getByTestId("harness-try-on-panel");
-    expect(within(panel).getAllByTestId("harness-try-on-row")).toHaveLength(8);
+    // v1.401.2: 7 — "Your Claude plan" is Opus 5.5, listed once.
+    expect(within(panel).getAllByTestId("harness-try-on-row")).toHaveLength(7);
     // Every model says local or cloud.
     expect(within(panel).getAllByTestId("harness-try-on-place").map((p) => p.textContent)).toEqual(
-      Array(8).fill("cloud"),
+      Array(7).fill("cloud"),
     );
     fireEvent.click(rowFor("anthropic", "claude-opus-4-8"));
     expect(onPicks).toHaveBeenLastCalledWith([{ provider: "anthropic", model: "claude-opus-4-8", label: "Opus 4.8" }]);

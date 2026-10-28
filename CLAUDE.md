@@ -1399,6 +1399,56 @@ does not need a bump, stop and bump it.
   rule for the panel, and do not widen a plain Allow to more than one call.
   `tests/test_browser_agent_v1262.py` (harness: `tests/_fakes/panel_harness.py`).
 
+- **A plan row is the model it runs; effort lists levels, Extra where the
+  CLI says; the session's pane tabs are icons** (v1.401.2, a USER REPORT with
+  two screenshots of a coding session). PLAN ROW: `lib/onboarding.
+  planModelRow(provider, catalog)` = the row GET /models marks `cli_default`
+  (Claude Code's live picker; Codex names none, so its plan row stays) and
+  `foldPlanRows(models)` → `{models, alias}` drops the provider-default row
+  ("claude-cli::subscription") and maps it onto that row. The chat's
+  ModelMenu (matches, rows, Recent deduped through the alias, the marked
+  pick), `harnessModelMenu.companyMenu` (after `foldKeylessApis`) and
+  `tryOnMenu.tryOnGroups` all fold; `modelRowName` names the plan row by its
+  model ("Opus 5.5", so the chip does too) and `modelPickWords` — the LISTS
+  that keep both rows (Settings default model, an agent, a terminal…) — says
+  "Claude Code's default (Opus 5.5)". No live picker → nothing folds, the
+  old "Your Claude plan" words. The daemon is unchanged for this half: a
+  saved "subscription" pick still sends "subscription". EFFORT: Claude Code
+  2.1.311's `initialize` rows carry `supportedEffortLevels` (every current
+  model: low, medium, high, xhigh, max) and `supportsEffort`;
+  `claude_models._parse` keeps them as `effort_levels` in the CLI's order
+  (`[]` = unknown; `supportsEffort: false` wins) and
+  `claude_models.effort_levels(model)` reads the CACHED catalog only (the
+  plan placeholders read the default row; None = unknown). `reasoning.EXTRA =
+  "xhigh"`, `ALL_LEVELS`; `normalize_level` keeps xhigh (never max — no menu
+  offers it); `reasoning_levels("claude-cli", m)` adds xhigh ONLY when that
+  model's picker lists it, every other provider (Codex included: Iron Jarvis
+  does not read Codex's model list) keeps LEVELS; the router, `_clean_setup`
+  and the CLI's `--effort` (its `_EFFORTS` already held xhigh) need nothing
+  more. Dashboard: `lib/reasoningChip` LEVEL_WORDS (xhigh → "Extra", Claude
+  Code's own word), `reasoningShownLevel` (the pick, else an offered base
+  default, else ""); `ReasoningChip` has NO "Default" option: the select's
+  value is the shown level, re-choosing it sends nothing, and when nothing is
+  shown a HIDDEN disabled placeholder holds the selection — a select whose
+  value matches no option selects its FIRST, so "Low" read as picked and
+  choosing it did nothing. `foldKeylessApis` strips xhigh from an API row
+  folded under the CLI (the API never takes it). PANES: `HarnessPanes`
+  `PANE_TABS` carry a lucide icon; each tab is a 32 px icon button whose ONLY
+  text is its tip span (`harness-pane-tip-<tab>`): faded (`opacity-0`), shown
+  on `group-hover` after `delay-300` (a passing pointer shows nothing) and on
+  `group-focus-visible`, `pointer-events-none`. The tip IS the tab's
+  accessible name — no `aria-label` (it dropped the plan dot's sr-only "(a new
+  plan)"). Pins: `tests/test_effort_extra_v14012.py`,
+  `dashboard/__tests__/plan-row-effort-pane-icons-v1401-2.test.tsx` (22
+  mutations, all red), e2e `dashboard/e2e/plan-row-effort-pane-icons.spec.ts`
+  (1280 × 800, 1600 × 900, 390 × 844: the tip faded at rest, still faded just
+  after the pointer arrives, shown after the pause, inside the window and
+  every clipping ancestor, gone when the pointer leaves, shown on an arrow
+  key; Extra saved as "xhigh"); moved on purpose: `reasoning-default-chip-v1330`,
+  `chat-words-v13560`, `reasoning-level-v1263`, `calm-polish-v1329`,
+  `ij-harness-model-accounts-review-v1376`, `ij-harness-model-fold-v1376` (+
+  its fixture), `try-on-grouped-v1400-7` (+ its e2e).
+
 - **The reasoning level is ONE vocabulary, ONE table, and applied only where
   the serving model offers it** (v1.263.0). `providers/reasoning.py` says which
   (provider, model) pairs take `low`/`medium`/`high`; `GET /models` rows carry

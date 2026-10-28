@@ -25,10 +25,35 @@
  * name of three different controls on one toolbar (this chip, Auto tools and
  * the Auto model), and only this one meant "the model picks how hard to
  * think".
+ *
+ * v1.401.2 (the user: "in effort it shows the options default, low, medium
+ * and high. Default should not be there and there should be Extra in models
+ * that allow for it"): the list holds the LEVELS only — no "Default" row.
+ * With nothing picked the chip still names the model's own level when it is
+ * known (and the list marks it), and still sends nothing. "Extra" is Claude
+ * Code's own word for its `xhigh` level (its effort picker, read in 2.1.311);
+ * the daemon offers it only for a model whose vendor says it takes it.
  */
 
-const LEVELS = ["low", "medium", "high"];
-const KNOWN_DEFAULTS = [...LEVELS, "off", "auto"];
+/** The levels, in order; `xhigh` only where a model's row offers it. */
+const LEVELS = ["low", "medium", "high", "xhigh"];
+/** The levels a model runs at by default: a vendor's documented default is
+ *  never `xhigh` (none documents one), so it is not among them. */
+const BASE_LEVELS = ["low", "medium", "high"];
+const KNOWN_DEFAULTS = [...BASE_LEVELS, "off", "auto"];
+
+/** What a level is called, in the menu and on the chip. */
+export const LEVEL_WORDS: Readonly<Record<string, string>> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra",
+};
+
+/** A level's words ("Extra" for xhigh), "" for a word this build does not know. */
+export function levelWords(level: string): string {
+  return LEVEL_WORDS[level] ?? "";
+}
 
 /** v1.356.0 (G75): the words for a model that picks its own level. */
 export const MODEL_DECIDES = "Model decides";
@@ -45,13 +70,9 @@ export function reasoningDefaultOf(row: { reasoning_default?: unknown } | null |
   return KNOWN_DEFAULTS.includes(v) ? v : "";
 }
 
-function cap(word: string): string {
-  return word.charAt(0).toUpperCase() + word.slice(1);
-}
-
 /** The default in plain words ("Medium", "Thinking off", "Model decides"), "" when unknown. */
 export function defaultWords(def: string): string {
-  if (LEVELS.includes(def)) return cap(def);
+  if (BASE_LEVELS.includes(def)) return levelWords(def);
   if (def === "off") return "Thinking off";
   if (def === "auto") return MODEL_DECIDES;
   return "";
@@ -73,16 +94,16 @@ export function reasoningShortLabel(picked: string, def: string): string | null 
 
 /** What the chip shows: the picked level, else the model's default, else "Reasoning". */
 export function reasoningChipLabel(picked: string, def: string): string {
-  if (LEVELS.includes(picked)) return cap(picked);
+  if (LEVELS.includes(picked)) return levelWords(picked);
   return defaultWords(def) || "Reasoning";
 }
 
-/** The menu row for "send nothing": "Default", naming the level in brackets
- *  when it is known ("Default (Medium)"), so it never reads as a twin of the
- *  explicit "Medium" row below it. */
-export function reasoningDefaultOption(def: string): string {
-  const words = defaultWords(def);
-  return words ? `Default (${words})` : "Default";
+/** v1.401.2: the level the list MARKS — the picked one, else the model's own
+ *  default when it is one of the offered levels, else none (""). Marking the
+ *  default sends nothing: picking it again changes nothing. */
+export function reasoningShownLevel(levels: readonly string[], picked: string, def: string): string {
+  if (picked && levels.includes(picked)) return picked;
+  return BASE_LEVELS.includes(def) && levels.includes(def) ? def : "";
 }
 
 /** The chip's tooltip: what it measures, then what happens with nothing picked. */
