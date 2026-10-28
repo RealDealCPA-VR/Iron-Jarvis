@@ -22,6 +22,7 @@ import {
   handsOffWords,
   nudgedWords,
   systemWords,
+  truncatedWords,
 } from "@/lib/autonomyMetrics";
 
 export function HandsOffCard() {
@@ -35,6 +36,7 @@ export function HandsOffCard() {
   const m = decodeMetrics(res.data);
   if (!m) return null;
   const system = systemWords(m);
+  const truncated = truncatedWords(m);
   return (
     <Card
       title="How hands-off Jarvis is"
@@ -68,6 +70,11 @@ export function HandsOffCard() {
             {system}
           </p>
         )}
+        {truncated && (
+          <p className="mt-3 text-xs text-zinc-500" data-testid="hands-off-truncated">
+            {truncated}
+          </p>
+        )}
         {m.error && (
           <p className="mt-3 text-xs text-zinc-500" data-testid="hands-off-error">
             {m.error}
@@ -92,7 +99,8 @@ export function HandsOffCard() {
             </p>
             <p>
               A nudge is a short message only to move the work on (“continue”, “try again”, “still
-              failing”, a “yes” to an offer), the same request sent again, or a Continue press.
+              failing”, a “yes” to an offer), the same request sent again, a Try again or an edited
+              question, or a Continue press.
               “With no help” means no answered card or question, no nudge and no note while it
               worked.
             </p>

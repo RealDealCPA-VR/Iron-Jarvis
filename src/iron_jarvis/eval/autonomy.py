@@ -11,9 +11,11 @@ records:
    AVOIDED (:func:`avoidable`).
 2. HUMAN NUDGES PER SUCCESSFUL TASK — the lines the person typed only to move
    the work on ("continue", "try again", "still failing", a "yes" to an offer:
-   :func:`classify_line`), the questions they sent again word for word, and
-   the chat's cut-off Continue presses (saved on the merged reply as
-   ``continuedPresses``) — over the tasks that ended well.
+   :func:`classify_line`), the questions they sent again word for word or
+   asked again with the chat's Try again / an edit (each earlier version is
+   kept on the message, :func:`stored_versions`), and the chat's cut-off
+   Continue presses (saved on the merged reply as ``continuedPresses``) —
+   over the tasks that ended well.
 3. TASKS COMPLETED WITHOUT HUMAN INTERVENTION — the share of tasks that ended
    well with no answered card or question, no nudge, no retry, no steer note
    and no Continue press.
@@ -186,7 +188,32 @@ def _clause_kind(clause: str) -> str:
     return ""
 
 
-def classify_line(text: Any, earlier_requests: Iterable[str] = ()) -> str:
+#: The words of a BARE affirmation ("ok", "yes please", "sure, thanks"): it
+#: moves the work on only when it answers an offer.
+_BARE_WORDS = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "k", "alright", "all", "right", "absolutely",
+    "definitely", "of", "course", "please", "sounds", "good", "great", "cool", "nice", "perfect", "fine",
+    "awesome", "thanks", "thank", "you", "idea", "that",
+})
+_BARE_AFFIRM = frozenset({"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "k", "alright", "absolutely",
+                          "definitely", "course", "please", "sounds"})
+#: How far back from a reply's end an offer ("Want me to …?") is looked for.
+OFFER_TAIL_CHARS = 300
+
+
+def bare_affirmation(text: Any) -> bool:
+    """A line made only of yes / ok / sure / please (and a thanks)."""
+    words = re.findall(r"[a-z']+", _norm(text))
+    return bool(words) and all(w in _BARE_WORDS for w in words) and any(w in _BARE_AFFIRM for w in words)
+
+
+def ends_on_offer(reply: Any) -> bool:
+    """Did a reply end by asking something ("Want me to add tests?")? A "?"
+    in its last :data:`OFFER_TAIL_CHARS` characters."""
+    return "?" in str(reply or "").rstrip()[-OFFER_TAIL_CHARS:]
+
+
+def classify_line(text: Any, earlier_requests: Iterable[str] = (), *, after: Any = None) -> str:
     """One user line → ``"nudge"`` | ``"retry"`` | ``"request"`` (and
     ``"ack"`` for a thanks, which is neither a new task nor a nudge).
 
@@ -200,6 +227,12 @@ def classify_line(text: Any, earlier_requests: Iterable[str] = ()) -> str:
       a paragraph about tax" is a request: its clause is not a bare phrase.
     * ``ack`` — every clause is a thanks / praise ("thanks!", "great job").
     * ``request`` — anything else.
+
+    ``after`` (v1.402.0 review): the reply the line answers, when known. A
+    BARE affirmation ("ok", "yes", "sure, thanks") is a nudge only when that
+    reply ended on a question (an offer: "Want me to add tests?"); after a
+    reply that asked nothing it is an acknowledgement (``ack``). ``None`` =
+    not known: a bare affirmation stays a nudge.
     """
     norm = normalize_request(text)
     if not norm:
@@ -214,7 +247,11 @@ def classify_line(text: Any, earlier_requests: Iterable[str] = ()) -> str:
     kinds = [k for k in kinds if k != "empty"]
     if not kinds or any(k == "" for k in kinds):
         return REQUEST
-    return NUDGE if NUDGE in kinds else ACK
+    if NUDGE not in kinds:
+        return ACK
+    if after is not None and bare_affirmation(text) and not ends_on_offer(after):
+        return ACK
+    return NUDGE
 
 
 # --------------------------------------------------------------------------- #
@@ -369,6 +406,8 @@ CONTINUE_MARKER = "[Continuing an earlier session. Original task:"
 MAX_THREADS = 2000
 MAX_SESSIONS = 5000
 MAX_EVENTS = 50_000
+#: Turns whose linked chat is looked up in one read (a new chat's first asks).
+MAX_TURNS = 2000
 #: An interruption stamped a little BEFORE its task's first line (two clocks)
 #: still belongs to it.
 SKEW_S = 120.0
@@ -443,6 +482,33 @@ def reply_succeeded(line: Any) -> bool:
     return True
 
 
+#: At most this many kept versions are counted on one message (the chat keeps
+#: ten, ``dashboard/lib/branches.MAX_BRANCHES``).
+MAX_VERSIONS = 10
+
+
+def stored_versions(line: Any) -> int:
+    """How many EARLIER versions a chat message keeps (v1.402.0 review): the
+    chat's Try again / Regenerate and an edited-and-resent question do not
+    send the question a second time — they fork the conversation and keep
+    the old ending on the first message of the live one
+    (``dashboard/lib/branches.ts``: ``branch = {tails: [...]}``, exactly one
+    ``null`` = the live slot, every other entry a stored ending). Each stored
+    ending is one more time the person had to ask: a retry. 0 for anything
+    that is not a well-formed fork (the dashboard's own ``validSet`` rule)."""
+    if not isinstance(line, dict):
+        return 0
+    branch = line.get("branch")
+    tails = branch.get("tails") if isinstance(branch, dict) else None
+    if not isinstance(tails, list) or len(tails) < 2:
+        return 0
+    if sum(1 for t in tails if t is None) != 1:
+        return 0
+    if any(t is not None and not (isinstance(t, list) and t) for t in tails):
+        return 0
+    return min(len(tails) - 1, MAX_VERSIONS)
+
+
 def split_conversation(messages: list, *, surface: str, key: str, fallback_at: "float | None") -> list[Task]:
     """A conversation's tasks (see the module docstring). ``fallback_at`` is
     the start used for lines saved before they carried ``at``."""
@@ -471,6 +537,8 @@ def split_conversation(messages: list, *, surface: str, key: str, fallback_at: "
                 presses = raw.get("continuedPresses")
                 if isinstance(presses, int) and not isinstance(presses, bool) and presses > 0:
                     current.presses += min(presses, 100)
+                # A Try again keeps the old reply as a version (a retry).
+                current.retries += stored_versions(raw)
             continue
         if role != "user":
             continue
@@ -488,7 +556,12 @@ def split_conversation(messages: list, *, surface: str, key: str, fallback_at: "
             ):
                 current.presses += 1
             continue
-        kind = REQUEST if current is None else classify_line(raw.get("content"), requests)
+        kind = REQUEST if current is None else classify_line(
+            raw.get("content"), requests,
+            # (review) the reply it answers: a bare "ok" after a reply that
+            # offered nothing is a thanks, not a nudge.
+            after=str((last_reply or {}).get("content") or ""),
+        )
         if kind == REQUEST:
             _close()
             if current is not None and at is not None:
@@ -501,6 +574,8 @@ def split_conversation(messages: list, *, surface: str, key: str, fallback_at: "
             current.nudges += 1
         elif kind == RETRY:
             current.retries += 1
+        # An edited-and-resent question keeps the earlier one as a version.
+        current.retries += stored_versions(raw)
     _close()
     return tasks
 
@@ -516,11 +591,38 @@ def _options(raw: Any) -> dict:
 def agent_tasks(rows: list[dict]) -> tuple[list[Task], dict[str, Task]]:
     """``(tasks, by_session)`` from Session rows (dicts: id, origin, task,
     outcome, created_at, options_json), oldest first. A follow-up (the
-    Continue door's marker in its task) is a nudge on the newest earlier task
-    of the same origin, and its outcome becomes that task's."""
+    Continue door's marker in its task) is a nudge on the task it continues,
+    and its outcome becomes that task's.
+
+    WHICH task it continues (review): the Continue door writes the earlier
+    run's own task into the follow-up (``Original task: <repr>. Prior
+    result:`` — ``Orchestrator.continue_session``), so the follow-up is
+    matched to THAT run. Every mission has the origin ``job:mission`` (every
+    Agents-page job ``job:agents``), so "the newest earlier run of the same
+    origin" put mission A's follow-up on mission B and overwrote B's outcome;
+    it is only the fallback when no earlier run's task matches."""
     tasks: list[Task] = []
     by_session: dict[str, Task] = {}
     newest_by_origin: dict[str, Task] = {}
+    #: per origin: an earlier run's task AS THE CONTINUE DOOR WRITES IT (its
+    #: repr) -> the task it belongs to (the newest run wins a tie).
+    by_text: dict[str, dict[str, Task]] = {}
+
+    def _continued(origin: str, text: str) -> "Task | None":
+        known = by_text.get(origin) or {}
+        lead = "Original task: "
+        i = text.find(lead)
+        if i < 0 or not known:
+            return None
+        start = i + len(lead)
+        j = text.find(". Prior result:", start)
+        while j >= 0:
+            hit = known.get(text[start:j])
+            if hit is not None:
+                return hit
+            j = text.find(". Prior result:", j + 1)
+        return None
+
     for r in sorted(rows, key=lambda r: _epoch(r.get("created_at")) or 0.0):
         if not agent_task_origin(r.get("origin")):
             continue
@@ -529,16 +631,19 @@ def agent_tasks(rows: list[dict]) -> tuple[list[Task], dict[str, Task]]:
             continue
         origin = str(r.get("origin") or "")
         ok = str(r.get("outcome") or "") == "completed"
-        if CONTINUE_MARKER in str(r.get("task") or "") and origin in newest_by_origin:
-            root = newest_by_origin[origin]
+        text = str(r.get("task") or "")
+        if CONTINUE_MARKER in text and origin in newest_by_origin:
+            root = _continued(origin, text) or newest_by_origin[origin]
             root.nudges += 1
             root.success = ok
             by_session[str(r.get("id"))] = root
+            by_text.setdefault(origin, {})[repr(text)] = root
             continue
         t = Task(surface="agent", key=str(r.get("id")), start=_epoch(r.get("created_at")) or 0.0, success=ok)
         tasks.append(t)
         by_session[str(r.get("id"))] = t
         newest_by_origin[origin] = t
+        by_text.setdefault(origin, {})[repr(text)] = t
     return tasks, by_session
 
 
@@ -574,9 +679,18 @@ def avoidable(answer: dict, task: Task, *, conversation_grants: set, approved_be
     if kind == "plan":
         if answer.get("edited"):
             return False
+        # (review) ANY steer note from the moment the plan was put to the
+        # person on: a Build session writes its steer notes when the turn
+        # ENDS (``routes/build`` ``_ReplyWatch.lines``), so a note typed while
+        # the plan card waited is stamped after the answer — "between asked
+        # and answered" never saw it, and the plan read as untouched.
+        # Conservative: a later note unrelated to the plan also keeps it off.
         asked_at = _epoch(answer.get("asked_at"))
-        at = _epoch(answer.get("at"))
-        if asked_at is not None and at is not None and any(asked_at <= s <= at for s in task.steer_times):
+        if asked_at is None:
+            asked_at = _epoch(answer.get("at"))
+        if asked_at is None:
+            return not task.steers
+        if any(s >= asked_at for s in task.steer_times):
             return False
         return True
     if answer.get("once_only"):
@@ -602,10 +716,18 @@ def _week_start(at: float) -> str:
 
 def compute(
     *, threads: list[dict], sessions: list[dict], events: list[dict], days: int, now: float,
+    turn_threads: "dict[str, str] | None" = None, truncated: "Iterable[str]" = (),
 ) -> dict:
     """The metrics from already-read rows (pure). ``threads``: {id, surface,
     messages_json | messages, created_at}; ``sessions``: Session rows as
-    dicts; ``events``: {type, payload (dict), created_at}."""
+    dicts; ``events``: {type, payload (dict), created_at}.
+
+    ``turn_threads`` (review): the chat each daemon-run TURN was linked to
+    (``ChatTurnRecord``). A NEW chat's first question goes out before its
+    first save names the chat (``POST /chat/turns/{id}/thread`` links it
+    after), so its cards may be asked with no ``thread_id``; such an ask is
+    placed by its own answer's thread, then by any other ask of the same
+    turn, then by this map. ``truncated``: which reads hit their bound."""
     cutoff = now - days * 86400.0
     by_key: dict[str, list[Task]] = {}
     all_tasks: list[Task] = []
@@ -631,11 +753,44 @@ def compute(
     # The interruptions, oldest first, paired asked → answered by ask id.
     system = Counter()
     asked_at: dict[str, float] = {}
+    # (review) WHERE an ask was put when it was asked with no thread (a new
+    # chat's first question): its own answer, another ask of the same turn,
+    # or the turn's record (``turn_threads``).
+    thread_by_ask: dict[str, str] = {}
+    thread_by_turn: dict[str, str] = {}
+    for ev in events:
+        p = ev.get("payload") or {}
+        th = str(p.get("thread_id") or "") if isinstance(p, dict) else ""
+        if not th:
+            continue
+        if p.get("ask_id"):
+            thread_by_ask.setdefault(str(p["ask_id"]), th)
+        if p.get("turn_id"):
+            thread_by_turn.setdefault(str(p["turn_id"]), th)
+    for turn, th in (turn_threads or {}).items():
+        if turn and th:
+            thread_by_turn.setdefault(str(turn), str(th))
+
+    def _thread_of(p: dict) -> str:
+        th = str(p.get("thread_id") or "")
+        if th:
+            return th
+        ask = str(p.get("ask_id") or "")
+        if ask and ask in thread_by_ask:
+            return thread_by_ask[ask]
+        turn = str(p.get("turn_id") or "")
+        return thread_by_turn.get(turn, "") if turn else ""
+
     ordered = sorted(
         events,
         key=lambda e: _epoch((e.get("payload") or {}).get("at")) or _epoch(e.get("created_at")) or 0.0,
     )
     unattributed = 0
+    #: (review) the task each ask was put to, so its ANSWER lands on that
+    #: same task even when it came after the person's next request (an
+    #: escalated run's card answered late). None = the ask belonged to no
+    #: task counted here.
+    task_by_ask: "dict[str, Task | None]" = {}
     for ev in ordered:
         p = ev.get("payload") or {}
         if not isinstance(p, dict):
@@ -647,26 +802,49 @@ def compute(
             continue
         if str(p.get("surface") or "") == "bench" or str(p.get("actor") or "") == "bench":
             continue
+        ask_id = str(p.get("ask_id") or "")
         task: "Task | None" = None
-        thread = str(p.get("thread_id") or "")
-        if thread and thread in by_key:
-            task = _task_at([t for t in by_key[thread] if t.surface != "agent"], at)
+        if ev.get("type") == "interrupt.answered" and ask_id in task_by_ask:
+            task = task_by_ask[ask_id]
+            if task is None:
+                continue
+        else:
+            thread = _thread_of(p)
+            if thread and thread in by_key:
+                task = _task_at([t for t in by_key[thread] if t.surface != "agent"], at)
+            if task is None:
+                sid = str(p.get("session_id") or "")
+                task = by_session.get(sid) if sid else None
+            if task is not None and task.start < cutoff:
+                task = None
+            if ev.get("type") == "interrupt.asked" and ask_id:
+                task_by_ask[ask_id] = task
         if task is None:
-            sid = str(p.get("session_id") or "")
-            task = by_session.get(sid) if sid else None
-        if task is None or task.start < cutoff:
             if at >= cutoff and ev.get("type") == "interrupt.asked":
                 unattributed += 1
             continue
         if ev.get("type") == "interrupt.asked":
             task.asked.append(p)
-            if p.get("ask_id"):
-                asked_at[str(p["ask_id"])] = at
+            if ask_id:
+                asked_at[ask_id] = at
         elif ev.get("type") == "interrupt.answered":
             row = dict(p)
-            if p.get("ask_id") and str(p["ask_id"]) in asked_at:
-                row["asked_at"] = asked_at[str(p["ask_id"])]
+            if ask_id and ask_id in asked_at:
+                row["asked_at"] = asked_at[ask_id]
             task.answered.append(row)
+
+    # (review) ONE interruption per thing the person acted on: an ask settled
+    # by a GRANT the person made on another card a moment earlier (a run's
+    # sibling woken by "Allow for this run", the sidebar's allow-everything
+    # switch) is not counted a second time — the card they answered is.
+    granted = {
+        str(a.get("ask_id"))
+        for t in all_tasks for a in t.answered
+        if a.get("ask_id") and str(a.get("actor") or "") == "grant"
+    }
+
+    def _interrupts(t: Task) -> list:
+        return [p for p in t.asked if not (p.get("ask_id") and str(p["ask_id"]) in granted)]
 
     # The avoidable rules, per conversation (grants outlive one task).
     avoid_by_task: dict[int, int] = {}
@@ -699,7 +877,7 @@ def compute(
         n = len(ts)
         ok = [t for t in ts if t.success]
         hands = [t for t in ok if not _helped(t)]
-        asked = sum(len(t.asked) for t in ts)
+        asked = sum(len(_interrupts(t)) for t in ts)
         avoid = sum(avoid_by_task.get(id(t), 0) for t in ts)
         human = sum(t.human_nudges for t in ts)
         return {
@@ -710,16 +888,21 @@ def compute(
         }
 
     total = _block(tasks)
-    by_kind = Counter(str(p.get("kind") or "card") for t in tasks for p in t.asked)
-    by_tool = Counter(str(p.get("tool") or "") for t in tasks for p in t.asked if p.get("tool"))
+    by_kind = Counter(str(p.get("kind") or "card") for t in tasks for p in _interrupts(t))
+    by_tool = Counter(str(p.get("tool") or "") for t in tasks for p in _interrupts(t) if p.get("tool"))
     waits = [int(a.get("wait_ms") or 0) for t in tasks for a in t.answered
              if str(a.get("actor") or "") in _PERSON]
     ok_tasks = [t for t in tasks if t.success]
     human_ok = sum(t.human_nudges for t in ok_tasks)
 
     weeks: list[dict] = []
-    n_weeks = max(1, math.ceil(days / 7))
+    # (review) Every week the window touches, from the one holding its first
+    # day: ``ceil(days / 7)`` weeks back from this Monday dropped the first
+    # day or two of a window that began late in a week, so the weekly rows
+    # did not add up to the totals beside them.
     last_monday = datetime.fromisoformat(_week_start(now)).date()
+    first_monday = datetime.fromisoformat(_week_start(cutoff)).date()
+    n_weeks = max(1, (last_monday - first_monday).days // 7 + 1)
     buckets: dict[str, list[Task]] = {}
     for t in tasks:
         buckets.setdefault(_week_start(t.start), []).append(t)
@@ -756,6 +939,10 @@ def compute(
             s: _block([t for t in tasks if t.surface == s]) for s in ("chat", "build", "agent")
         },
         "weekly": weeks,
+        # (review) Which reads hit their bound (``threads`` / ``sessions`` /
+        # ``events``): the numbers then count only the newest records of
+        # that kind. Empty = everything in the window was read.
+        "truncated": sorted({str(x) for x in truncated if str(x or "").strip()}),
     }
 
 
@@ -767,11 +954,13 @@ def empty(days: int) -> dict:
 def read_metrics(engine: Any, days: int = 30, *, now: "float | None" = None) -> dict:
     """BLOCKING — read the rows (bounded: the newest :data:`MAX_THREADS`
     conversations touched in the window, :data:`MAX_SESSIONS` runs,
-    :data:`MAX_EVENTS` events) and :func:`compute`. Callers hop off the loop."""
+    :data:`MAX_EVENTS` events, :data:`MAX_TURNS` turn links) and
+    :func:`compute`; a read that hit its bound is named in ``truncated``.
+    Callers hop off the loop."""
     from sqlmodel import Session as _DB
     from sqlmodel import select
 
-    from ..core.models import ChatThreadRecord, EventRecord
+    from ..core.models import ChatThreadRecord, ChatTurnRecord, EventRecord
     from ..core.models import Session as SessionRow
 
     days = max(1, min(int(days or 30), 365))
@@ -804,6 +993,7 @@ def read_metrics(engine: Any, days: int = 30, *, now: "float | None" = None) -> 
             )
         ]
         events = []
+        event_rows = 0
         for r in db.exec(
             select(EventRecord.type, EventRecord.payload_json, EventRecord.created_at)
             .where(EventRecord.type.in_(  # type: ignore[union-attr]
@@ -813,17 +1003,44 @@ def read_metrics(engine: Any, days: int = 30, *, now: "float | None" = None) -> 
             .order_by(EventRecord.created_at.desc())  # type: ignore[union-attr]
             .limit(MAX_EVENTS)
         ):
+            event_rows += 1
             try:
                 payload = json.loads(r[1] or "{}")
             except Exception:  # noqa: BLE001
                 continue
             events.append({"type": r[0], "payload": payload if isinstance(payload, dict) else {},
                            "created_at": r[2]})
-    return compute(threads=threads, sessions=sessions, events=events, days=days, now=now_ts)
+        # (review) The chat a turn was linked to AFTER it started (a new
+        # chat's first question): read only for the turns whose asks carry no
+        # thread, bounded, from the turn records (kept ~7 days).
+        unplaced = list(dict.fromkeys(
+            str(e["payload"].get("turn_id"))
+            for e in events
+            if e["payload"].get("turn_id") and not e["payload"].get("thread_id")
+        ))[:MAX_TURNS]
+        turn_threads: dict[str, str] = {}
+        for i in range(0, len(unplaced), 500):
+            chunk = unplaced[i:i + 500]
+            for r in db.exec(
+                select(ChatTurnRecord.id, ChatTurnRecord.thread_id)
+                .where(ChatTurnRecord.id.in_(chunk))  # type: ignore[union-attr]
+            ):
+                if r[1]:
+                    turn_threads[str(r[0])] = str(r[1])
+    truncated = [
+        name for name, n, cap in (
+            ("threads", len(threads), MAX_THREADS),
+            ("sessions", len(sessions), MAX_SESSIONS),
+            ("events", event_rows, MAX_EVENTS),
+        ) if n >= cap
+    ]
+    return compute(threads=threads, sessions=sessions, events=events, days=days, now=now_ts,
+                   turn_threads=turn_threads, truncated=truncated)
 
 
 __all__ = [
     "ACK", "AGENT_TASK_ORIGINS", "NUDGE", "REQUEST", "RETRY", "Task",
-    "agent_tasks", "avoidable", "classify_line", "compute", "empty", "normalize_request",
-    "question_deferred", "read_metrics", "reply_succeeded", "split_conversation", "would_card",
+    "agent_tasks", "avoidable", "bare_affirmation", "classify_line", "compute", "empty", "ends_on_offer",
+    "normalize_request", "question_deferred", "read_metrics", "reply_succeeded", "split_conversation",
+    "stored_versions", "would_card",
 ]

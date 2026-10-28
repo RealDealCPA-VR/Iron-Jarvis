@@ -60,6 +60,7 @@ import {
   handsOffWords,
   nudgedWords,
   systemWords,
+  truncatedWords,
 } from "@/lib/autonomyMetrics";
 import { HandsOffCard } from "@/components/autonomy/HandsOffCard";
 import { mergeContinuation, type ContinuableMessage } from "@/lib/continueReply";
@@ -189,6 +190,39 @@ describe("HandsOffCard", () => {
     expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
     expect(src).not.toMatch(/text-(emerald|rose|amber|red|green|sky)-\d/);
     expect(src).not.toMatch(/\[\d+\.\d+px\]/);
+  });
+});
+
+describe("a read that hit its bound (v1.402.0 review)", () => {
+  it("says which records were left out, in plain words, and only known ones", () => {
+    expect(truncatedWords(decodeMetrics(SAMPLE)!)).toBe("");
+    expect(truncatedWords(decodeMetrics({ ...SAMPLE, truncated: ["threads"] })!)).toBe(
+      "Only the newest conversations were counted: there were too many to read at once.",
+    );
+    expect(truncatedWords(decodeMetrics({ ...SAMPLE, truncated: ["threads", "sessions", "events"] })!)).toBe(
+      "Only the newest conversations, runs and cards and questions were counted: there were too many to read at once.",
+    );
+    expect(decodeMetrics({ ...SAMPLE, truncated: ["<b>x</b>", 3, "events"] })!.truncated).toEqual(["events"]);
+    expect(decodeMetrics({ ...SAMPLE, truncated: "threads" })!.truncated).toEqual([]);
+  });
+
+  it("shows the line on the card only when something was left out", async () => {
+    api.responses[PATH] = { ...SAMPLE, truncated: ["sessions"] };
+    render(<HandsOffCard />);
+    expect(await screen.findByTestId("hands-off-truncated")).toHaveTextContent(
+      "Only the newest runs were counted",
+    );
+    cleanup();
+    api.responses[PATH] = SAMPLE;
+    render(<HandsOffCard />);
+    await screen.findByTestId("hands-off-pct");
+    expect(screen.queryByTestId("hands-off-truncated")).toBeNull();
+  });
+
+  it("names a Try again among the nudges in how it is counted", async () => {
+    api.responses[PATH] = SAMPLE;
+    render(<HandsOffCard />);
+    expect(await screen.findByTestId("hands-off-how")).toHaveTextContent("a Try again or an edited question");
   });
 });
 

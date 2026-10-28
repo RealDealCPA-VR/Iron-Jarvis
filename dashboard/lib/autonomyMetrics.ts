@@ -22,6 +22,9 @@ export interface AutonomyMetrics {
     per_successful_task: number;
     system: { total: number; by_kind: Record<string, number> };
   };
+  /** v1.402.0 review: which reads hit their bound (`threads`, `sessions`,
+   *  `events`) — the numbers then count only the newest of those. */
+  truncated: string[];
   error?: string;
 }
 
@@ -62,8 +65,27 @@ export function decodeMetrics(raw: unknown): AutonomyMetrics | null {
       per_successful_task: num(n.per_successful_task),
       system: { total: Math.floor(num(sys.total)), by_kind: byKind },
     },
+    truncated: Array.isArray(r.truncated)
+      ? r.truncated.filter((k): k is string => typeof k === "string" && k in TRUNCATED_WORDS)
+      : [],
     ...(typeof r.error === "string" && r.error ? { error: r.error } : {}),
   };
+}
+
+/** What each bounded read counts, in plain words. */
+const TRUNCATED_WORDS: Record<string, string> = {
+  threads: "conversations",
+  sessions: "runs",
+  events: "cards and questions",
+};
+
+/** v1.402.0 review: one quiet sentence when a read hit its bound; "" when
+ *  everything in the window was counted. */
+export function truncatedWords(m: AutonomyMetrics): string {
+  const parts = m.truncated.map((k) => TRUNCATED_WORDS[k]).filter(Boolean);
+  if (!parts.length) return "";
+  const list = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `Only the newest ${list} were counted: there were too many to read at once.`;
 }
 
 /** "1.4", "2", "0.3" — one decimal, none when it is a whole number. */

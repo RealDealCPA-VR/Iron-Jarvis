@@ -66,7 +66,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
 #: What a resolution may say. "once" grants THIS call; "conversation" grants
 #: the rest of the turn too (and the client re-arms the tool for later turns —
@@ -497,8 +497,15 @@ class InterruptNote:
         once_only: bool = False,
         reason: str = "",
         args_hash: str = "",
+        thread_for: "Callable[[], str] | None" = None,
     ) -> None:
         self._bus = bus
+        #: (review) Where to find the chat LATER when it had no id yet: a new
+        #: chat's first question goes out before its first save names the
+        #: chat, and the page links the turn to it a moment after
+        #: (``POST /chat/turns/{id}/thread``). Asked once, when the ask
+        #: settles; never raises.
+        self._thread_for = thread_for
         facts: dict[str, Any] = {
             "kind": kind if kind in INTERRUPT_KINDS else "card",
             "tool": _short(tool),
@@ -535,6 +542,17 @@ class InterruptNote:
         if self._done:
             return
         self._done = True
+        if not self._asked:
+            # (review) Never put to the person (a cancel before the card went
+            # out): no interruption, so no answer either.
+            return
+        if "thread_id" not in self.facts and self._thread_for is not None:
+            try:
+                thread = _short(self._thread_for())
+            except Exception:  # noqa: BLE001 — a metric never breaks a turn
+                thread = ""
+            if thread:
+                self.facts["thread_id"] = thread
         payload: dict[str, Any] = {
             **self.facts,
             "decision": _short(decision) or "none",
