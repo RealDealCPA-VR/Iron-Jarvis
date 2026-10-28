@@ -511,6 +511,11 @@ class PanelTurns:
         #: an ask filed by an agent session on another thread — proven, and the
         #: only thing that had ever stopped it was that ids are unguessable.
         self._offered: set[str] = set()
+        #: v1.402.0: the cards the browser RISK DOOR put up (a payment or
+        #: password field, a destructive word, a flagged page) — a subset of
+        #: :attr:`_offered` the allow-everything switch never answers: each
+        #: one is still a person's own decision (:meth:`_auto_allow`).
+        self._floor_offered: set[str] = set()
         #: Monotonic timestamps of the turns started inside the rolling
         #: window. See :data:`PANEL_TURNS_PER_WINDOW`.
         self._starts: list[float] = []
@@ -673,6 +678,7 @@ class PanelTurns:
         safe_args = args if isinstance(args, dict) else {}
         ap_id, fut = registry.request(name or "browser action", safe_args)
         self._offered.add(ap_id)
+        self._floor_offered.add(ap_id)
         # v1.402.0 review (the autonomy metrics): this card, for COUNTING
         # ONLY, like every other card — a browser risk check is a once-only
         # SAFETY card (never "avoidable"). The sidebar keeps no saved
@@ -1041,6 +1047,7 @@ class PanelTurns:
         # be answered any more anyway (their turn has gone), and keeping them
         # would only widen what this panel may resolve.
         self._offered.clear()
+        self._floor_offered.clear()
         self._delta_seen = False
         self._answer = []
         self._turn_text = text
@@ -1173,7 +1180,10 @@ class PanelTurns:
             from ..daemon.routes.chat import _approvals
 
             registry = _approvals(SimpleNamespace(platform=self.platform))
-            for approval_id in list(self._offered):
+            # v1.402.0: never a RISK card (payment, password, a destructive
+            # word, a flagged page): turning the switch on while one waits
+            # approved it — the one card the switch must never answer.
+            for approval_id in list(self._offered - self._floor_offered):
                 try:
                     # v1.402.0: settled by the switch the person just turned
                     # on — a grant, not a second answer (the autonomy metrics).

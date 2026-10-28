@@ -93,9 +93,9 @@ export function HandsOffCard() {
             <p>
               Asked counts every approval card and question put to you. It could have been avoided
               when you approved the same call again in one task, approved a tool you had already
-              allowed for the chat, answered a question with “you decide”, or approved a plan without
-              changing it. Safety checks (a commit, a push, a paid call, Local only) never count as
-              avoidable, and neither does a “no”.
+              allowed for the chat, or answered a question with “you decide”. Approving a plan never
+              counts (it is the one approval you are meant to give), and neither do safety checks (a
+              commit, a push, a paid call, Local only) or a “no”.
             </p>
             <p>
               A nudge is a short message only to move the work on (“continue”, “try again”, “still

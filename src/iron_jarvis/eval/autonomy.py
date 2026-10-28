@@ -59,12 +59,13 @@ the phone) and:
   earlier in the same conversation (or run);
 * a QUESTION they skipped or handed back ("you decide", "up to you", "your
   call", "whatever", "either", "doesn't matter", picking the first or the
-  recommended option — the asker records this as one ``deferred`` flag);
-* a PLAN they approved with no edit and no steer note in between.
+  recommended option — the asker records this as one ``deferred`` flag).
 
-Never avoidable: a once-only SAFETY card (a commit or push, a project's
-command lines, Local only's ask-first, a priced call, a browser risk check),
-a denial, a card nobody answered, a card settled by a grant.
+Never avoidable: a PLAN approval (v1.402.0 integrate: it is the one
+"approve once" the user's goal asks for — the boundary itself, not an
+interruption of the work), a once-only SAFETY card (a commit or push, a
+project's command lines, Local only's ask-first, a priced call, a browser
+risk check), a denial, a card nobody answered, a card settled by a grant.
 """
 
 from __future__ import annotations
@@ -677,22 +678,9 @@ def avoidable(answer: dict, task: Task, *, conversation_grants: set, approved_be
     if decision not in _APPROVED:
         return False
     if kind == "plan":
-        if answer.get("edited"):
-            return False
-        # (review) ANY steer note from the moment the plan was put to the
-        # person on: a Build session writes its steer notes when the turn
-        # ENDS (``routes/build`` ``_ReplyWatch.lines``), so a note typed while
-        # the plan card waited is stamped after the answer — "between asked
-        # and answered" never saw it, and the plan read as untouched.
-        # Conservative: a later note unrelated to the plan also keeps it off.
-        asked_at = _epoch(answer.get("asked_at"))
-        if asked_at is None:
-            asked_at = _epoch(answer.get("at"))
-        if asked_at is None:
-            return not task.steers
-        if any(s >= asked_at for s in task.steer_times):
-            return False
-        return True
+        # v1.402.0 integrate: a plan approval is never avoidable — it is
+        # the one "approve once" the user's goal asks for.
+        return False
     if answer.get("once_only"):
         return False
     h = str(answer.get("args_hash") or "")

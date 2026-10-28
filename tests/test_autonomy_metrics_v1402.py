@@ -528,11 +528,13 @@ def test_a_question_counts_only_when_handed_back():
     assert _avoidable([_ask("t", t0 + 1, "a", **q), _ans("t", t0 + 2, "a", "skipped", deferred=True, **q)]) == 1
 
 
-def test_a_plan_approved_untouched_is_avoidable_and_a_steer_or_an_edit_is_not():
+def test_a_plan_approval_is_never_avoidable_untouched_edited_or_steered():
+    """v1.402.0 integrate (moved on purpose): approving a plan IS the one
+    "approve once" the user's goal asks for — never an avoidable interruption."""
     t0 = NOW - 3600
     plan = dict(kind="plan", tool="exit_plan_mode", h="", once_only=True)
     ev = [_ask("t", t0 + 10, "p", **plan), _ans("t", t0 + 20, "p", **plan)]
-    assert _avoidable(ev) == 1
+    assert _avoidable(ev) == 0
     assert _avoidable([_ask("t", t0 + 10, "p", **plan), _ans("t", t0 + 20, "p", edited=True, **plan)]) == 0
     steered = [
         {"role": "user", "content": "Plan the refactor", "at": t0},
@@ -608,7 +610,8 @@ def _seed(engine) -> None:
         ("interrupt.answered", {"kind": "card", "tool": "web_fetch", "thread_id": "chat_b", "ask_id": "a4",
                                 "args_hash": "h4", "decision": "deny", "actor": "app", "wait_ms": 1000,
                                 "surface": "chat", "at": t1 + 12}),
-        # task5: a plan approved untouched (avoidable), a question handed back (avoidable).
+        # task5: a plan approved untouched (never avoidable — v1.402.0 integrate),
+        # a question handed back (avoidable).
         ("interrupt.asked", {"kind": "plan", "tool": "exit_plan_mode", "thread_id": "build_c",
                              "ask_id": "p1", "once_only": True, "surface": "build", "at": t2 + 101}),
         ("interrupt.answered", {"kind": "plan", "tool": "exit_plan_mode", "thread_id": "build_c",
@@ -672,8 +675,8 @@ def test_the_endpoint_computes_all_three_numbers_exactly(tmp_path):
     # Only S1 had no help at all.
     assert got["hands_off"] == 1 and got["hands_off_pct"] == 12.5
     i = got["interruptions"]
-    assert i["total"] == 7 and i["avoidable"] == 3
-    assert i["per_task"] == 0.88 and i["avoidable_per_task"] == 0.38
+    assert i["total"] == 7 and i["avoidable"] == 2
+    assert i["per_task"] == 0.88 and i["avoidable_per_task"] == 0.25
     assert i["by_kind"] == {"card": 5, "question": 1, "plan": 1}
     assert i["by_tool"][0] == {"tool": "shell", "count": 4}
     assert i["unattributed"] == 1
@@ -686,7 +689,7 @@ def test_the_endpoint_computes_all_three_numbers_exactly(tmp_path):
     assert (s["chat"]["tasks"], s["chat"]["successful"], s["chat"]["interruptions"], s["chat"]["avoidable"],
             s["chat"]["human_nudges"]) == (3, 2, 4, 1, 3)
     assert (s["build"]["tasks"], s["build"]["successful"], s["build"]["interruptions"],
-            s["build"]["avoidable"]) == (2, 1, 2, 2)
+            s["build"]["avoidable"]) == (2, 1, 2, 1)
     assert (s["agent"]["tasks"], s["agent"]["successful"], s["agent"]["hands_off"],
             s["agent"]["interruptions"], s["agent"]["human_nudges"]) == (3, 2, 1, 1, 1)
     weekly = got["weekly"]

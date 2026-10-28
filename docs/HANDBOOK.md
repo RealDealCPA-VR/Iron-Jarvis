@@ -1958,10 +1958,10 @@ that says how close it gets over the last 30 days, in three numbers:
   avoided* when you approved the very same call again within one task,
   approved a tool you had already allowed for the chat or run, answered a
   question with "you decide" (or skipped it, or took its first or
-  recommended choice), or approved a plan without changing it. Safety checks
-  never count as avoidable: a commit or a push, a project's own command
-  lines, a Local only ask, a paid call, a browser risk check. Neither does a
-  "no".
+  recommended choice). Approving a plan never counts as avoidable: that is
+  the one approval you are meant to give. Neither do safety checks (a commit
+  or a push, a project's own command lines, a Local only ask, a paid call, a
+  browser risk check) or a "no".
 - **"You nudged it 0.3 times per finished task."** A nudge is a short message
   that only moves the work on ("continue", "keep going", "try again", "still
   failing", a "yes" to an offer), the same request sent again, a Try again

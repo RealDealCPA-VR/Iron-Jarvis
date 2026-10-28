@@ -290,10 +290,11 @@ def test_a_steer_written_when_the_turn_ended_keeps_a_plan_from_reading_untouched
           _ev("interrupt.answered", ask_id="p", decision="once", actor="app", at=t0 + 20, **plan)]
     got = A.compute(threads=[_thread("b", lines, surface="build")], sessions=[], events=ev, days=30, now=NOW)
     assert got["interruptions"]["avoidable"] == 0
-    # The control: no steer at all → an untouched plan stays avoidable.
+    # v1.402.0 integrate (moved on purpose): with no steer at all an untouched
+    # plan is STILL not avoidable — approving a plan is the one "approve once".
     plain = [lines[0], lines[2]]
     got = A.compute(threads=[_thread("b", plain, surface="build")], sessions=[], events=ev, days=30, now=NOW)
-    assert got["interruptions"]["avoidable"] == 1
+    assert got["interruptions"]["avoidable"] == 0 and got["interruptions"]["total"] == 1
 
 
 def test_a_try_again_or_an_edited_question_is_a_retry():
