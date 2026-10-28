@@ -3885,6 +3885,63 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A CODING SESSION CAN HAVE A TEAM: the lead plans and checks and NEVER
+  edits; workers do the code; the reviewer checks every change; a lead that
+  had to do a piece itself SAYS SO** (v1.403.0; the user's decision after a
+  Try on run felt like "models unsure of their duties" — and the bench's 0 of
+  108 showed asking does not move a planner, so the roles are ENFORCED).
+  DATA: `setup.team {workers: [member names] (1..2), reviewer}` (members are
+  model-team members; `POST /team/members/from-model {provider, model, role
+  worker|reviewer}` makes or REUSES one, never clobbering it — a worker gets
+  code+test+read, a reviewer review), validated by `harness/team.validate`
+  (unknown, > 2, no Writing code, no Reviewing, the same member twice, a
+  COORDINATOR as a worker — the router never hands it a piece), folder
+  default `BuildFolderRecord.team_json` + `GET|PUT /build/folders/team`
+  (`folder=` empty → 200 null; keyed on the PICKED folder, never the
+  worktree), the view's `team` from CACHED states only. THE LOCK:
+  `start_build_turn` arms `harness/team.SESSION_TEAM`; ONE shared builder
+  (`chat_turn._build_harness`, both lanes) resolves it and `mode.build(lead=
+  True)` arms the lead with `team.lead_tools` (no file-changing or running
+  tool, app tools only when declared read-only; plan mode and text-only picks
+  never lock; no helper door → never locked); the dialect shows exactly what
+  is armed. ROUTING: role pieces from delegate / spawn_agent / the dialects'
+  helper tools go ONLY to the session's workers (code/test/read — any worker
+  takes any of the three: `team_takes_role` via `helpers.team_route_kwargs`)
+  or its reviewer (review); a name off the team is refused in one sentence;
+  workers run on their own model with `worker_rules()`. THE EXCEPTION: a
+  ROUTER REFUSAL of a worker piece (never a failed run, a review, a low-trust
+  turn) unlocks the coding tools for the REST OF THAT REPLY
+  (`apply_team_unlock`), the refusal carries `UNLOCK_NOTE`, and the record's
+  `lead_did` keeps the router's reason; a team with NO worker left runs
+  unlocked and records `NO_WORKERS_LEFT` (`team.gone_record`,
+  `turn.team_gone`) — never a silent solo. Codex: a parked thread whose tool
+  names differ is a miss (`codex_native.adapter._same_tools`), so an
+  unlocked lead gets its new tools. THE REVIEWER: the finish review runs for a
+  session with a reviewer WITHOUT `team_first`, routed only to it, and once
+  more after the lead's workers fixed what it found (`finish.review.rounds`
+  1|2, never 3); finish tests come from this reply's workers' `shell` runs,
+  and `round_gate` lets ONLY the check's own unsettled carrier calls (and its
+  pending review) through the lead's gate. RECORD: `team {lead, workers,
+  reviewer, pieces, lead_did}` LAST on the done frame / POST answer / reply
+  line (`LINE_KEYS`). SCREEN: `components/harness/HarnessTeam.tsx` (Team chip
+  in `HARNESS_FIT_ORDER` after tryon; panel picks from the Try on provider
+  groups; folder default; 404 hides it), `lib/sessionTeam.ts` (decoders,
+  `helperTeamName` "Worker …"/"Reviewer …" only in a team turn, the turn's
+  team captured when the screen starts it), `TeamReplyLine` (names via
+  `friendlyModelName`, never ids; `lead_did` in the warn tone, never folded).
+  Try on runs each model ALONE (it never erases `setup.team`). BENCH: a team
+  file's `[planner] team = true` runs a locked lead ("lead (locked)"). SEAM:
+  `tests/test_session_team_seams_v1403.py` records the real daemon's answers
+  to `dashboard/__tests__/fixtures/session-team-seams-v1403.json`
+  (`IJ_REGEN_TEAM_SEAMS=1`) and `session-team-seams-v1403.test.tsx` decodes
+  them. OPEN: the router's burst guard and 80% new-work mark also count as
+  "no worker could take it"; PATCH does not check cloud members against a
+  Local only session (the turn refuses); a reply resumed after a restart is
+  locked again; Codex's write_stdin / Claude's BashOutput are shown to the lead
+  but only read; a team helper row names its model twice. Pins:
+  `tests/test_session_team{,_routes,_bench,_seams,_gone}_v1403.py` (+ the part
+  D review pins), `dashboard/__tests__/session-team{,-seams}-v1403.test.tsx`.
+
 - **APPROVE ONCE, THEN OFF TO THE RACES: every ask is counted, an approved
   plan runs, runs you start do not stop at 12, and a closing offer is acted
   on unless it is the user's call** (v1.402.0; the user's autonomy goal and

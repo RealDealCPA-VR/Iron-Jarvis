@@ -95,7 +95,10 @@ def test_the_real_answers_are_what_the_screen_decodes(client, tmp_path):
 
     got = _stable({
         "from_model_worker": w, "from_model_reviewer": r,
-        "view": view, "folder": got_folder.json(), "empty_folder": empty_folder.json(),
+        # Only the view's TEAM parts: the rest of a view (its session id, its
+        # turn) changes run to run and is not this seam.
+        "view": {"team": view.get("team"), "setup": {"team": (view.get("setup") or {}).get("team")}},
+        "folder": got_folder.json(), "empty_folder": empty_folder.json(),
         "reply_team": reply_team, "finish": finish,
     })
     if REGEN or not FIXTURE.exists():

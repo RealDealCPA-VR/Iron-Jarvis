@@ -54,24 +54,6 @@
   ]
  },
  "view": {
-  "account": null,
-  "account_limit": null,
-  "account_vendor": "",
-  "account_wait": null,
-  "archived": false,
-  "branched_from": null,
-  "compacting": false,
-  "compaction": null,
-  "folder_name": "work",
-  "is_project": false,
-  "messages": [],
-  "mode": "act",
-  "plan": null,
-  "plan_run": false,
-  "project_id": null,
-  "queued": [],
-  "running": false,
-  "session_id": "build:chat_e47d309b5b23",
   "setup": {
    "team": {
     "reviewer": "gpt-6-astra",
@@ -102,8 +84,6 @@
      "state": "unavailable"
     }
    ]
-  },
-  "turn_id": "",
-  "waiting": false
+  }
  }
 }
