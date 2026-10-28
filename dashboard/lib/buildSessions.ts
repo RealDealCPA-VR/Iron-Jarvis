@@ -21,6 +21,7 @@ import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
 import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
 import type { FinishRecord, FinishReview } from "@/lib/stepWords";
+import { decodeSessionTeam, decodeTeamNames, type SessionTeam, type TeamNames } from "@/lib/sessionTeam";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -154,6 +155,9 @@ export interface BuildSetup {
   /** v1.392.0 (decision 8): the session's optional cap on a reply (raw;
    *  lib/buildLongJobs decodeSessionCap) — null = none, the default. */
   cap: unknown;
+  /** v1.403.0: the session's team by its members' names (the setup key
+   *  `team`; lib/sessionTeam) — null = it works alone. */
+  team?: TeamNames | null;
 }
 
 /** A waiting message (Ctrl+Enter): its words and, since v1.373.0, its own
@@ -204,6 +208,9 @@ export interface BuildSessionView extends BuildSessionRow {
   noFolder: boolean;
   workFolder: string;
   workRoot: string;
+  /** v1.403.0: the session's TEAM (lib/sessionTeam) — the lead, the workers
+   *  and the reviewer with each member's state; null = it works alone. */
+  team: SessionTeam | null;
 }
 
 /** A transcript line: the chat page's own message shape (the daemon keeps
@@ -275,6 +282,10 @@ export type BuildMessage = PaneMessage & {
   /** v1.397.0: the ATTEMPTS card of a "try this on several models" reply
    *  (raw; lib/buildAttempts decodeAttemptsCard). */
   attempts?: unknown;
+  /** v1.403.0: a team turn's record — who led, worked and reviewed, the
+   *  pieces handed out, and every time the lead did a piece itself (raw;
+   *  lib/sessionTeam decodeReplyTeam). */
+  team?: unknown;
 };
 
 /** Part 3, Phase 2: a reply line's `finish`, whitelisted — the known keys
@@ -300,8 +311,22 @@ export function decodeFinish(raw: unknown): FinishRecord | null {
   const why = str(r.why, 200).trim();
   if (tests === "not_run" && why) out.why = why;
   const review = decodeFinishReview(r.review);
-  if (review) out.review = review;
+  if (review) {
+    // v1.403.0: a team's reviewer checks at most TWICE a reply (once more
+    // after the workers fixed what it found). The count rides the review
+    // (`review.rounds`); a record that keeps it beside (`rounds`) reads too.
+    if (review.rounds === undefined) {
+      const rounds = reviewRounds(r.rounds);
+      if (rounds) review.rounds = rounds;
+    }
+    out.review = review;
+  }
   return out;
+}
+
+/** v1.403.0: how many times the reviewer checked: 1 or 2, else nothing. */
+function reviewRounds(v: unknown): 1 | 2 | null {
+  return v === 1 || v === 2 ? v : null;
 }
 
 /** v1.401.0: a finish record's `review`, whitelisted — a known state, the
@@ -322,6 +347,8 @@ export function decodeFinishReview(raw: unknown): FinishReview | null {
   };
   const why = str(r.why, 200).trim();
   if (state !== "done" && why) out.why = why;
+  const rounds = reviewRounds(r.rounds);
+  if (rounds) out.rounds = rounds;
   return out;
 }
 
@@ -428,6 +455,8 @@ const LINE_KEYS = [
   // v1.397.0: the attempts card of a "try this on several models" reply
   // (lib/buildAttempts).
   "attempts",
+  // v1.403.0: a team turn's record (lib/sessionTeam decodeReplyTeam).
+  "team",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {
@@ -475,6 +504,7 @@ function decodeSetup(raw: unknown): BuildSetup {
     account: str(r.account, 120),
     accountName: str(r.account_name, 80),
     cap: r.cap ?? null,
+    team: decodeTeamNames(r.team),
   };
 }
 
@@ -515,6 +545,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     noFolder: r.no_folder === true,
     workFolder: r.no_folder === true ? str(r.work_folder, 1000) : "",
     workRoot: r.no_folder === true ? str(r.work_root, 1000) : "",
+    team: decodeSessionTeam(r.team),
   };
 }
 

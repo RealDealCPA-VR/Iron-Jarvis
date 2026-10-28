@@ -871,3 +871,66 @@ test.describe("the IJ harness composer holds still while typing (1406 × 857)", 
     expect(typed, "the harness toolbar was measured or its observer woke while typing").toEqual({ reads: 0, wakes: 0 });
   });
 });
+
+/* ---------------------- v1.403.0: the IJ harness toolbar with a TEAM set */
+
+/** A team the session view carries (the contract's shape); the folder's team
+ *  read the Team control asks once is stubbed too (a 404 would hide it). */
+const TEAM_SET = {
+  lead: { provider: "claude-cli", model: "claude-opus-4-8", label: "claude-opus-4-8" },
+  workers: [
+    { name: "glm-5-3-flash", provider: "fleet-dgx", model: "glm-5.3-flash", label: "glm-5.3-flash", state: "ready" },
+    { name: "qwen3-8-27b", provider: "fleet-rtx", model: "qwen3.8-27b", label: "Qwen3.8-27B", state: "busy" },
+  ],
+  reviewer: { name: "codex", provider: "codex-cli", model: "gpt-6-astra", label: "Codex", state: "ready" },
+};
+
+for (const size of SIZES) {
+  const tag = `${size.width}x${size.height}`;
+  test.describe(`the IJ harness toolbar with a team set at ${tag}`, () => {
+    test.use({ viewport: { width: size.width, height: size.height } });
+    test("one row with the Team chip, and its panel inside the window", async ({ page }) => {
+      await seed(page);
+      await page.route(`${DAEMON}/build/folders/team**`, (route) =>
+        stub(route, JSON.stringify({ folder: work, team: { workers: ["glm-5-3-flash", "qwen3-8-27b"], reviewer: "codex" } })),
+      );
+      for (const key of ["qwen", "long"] as const) {
+        const id = sessions[key];
+        await page.route(`${DAEMON}/build/sessions/${id}`, async (route) => {
+          if (route.request().method() !== "GET") {
+            await route.fallback();
+            return;
+          }
+          const res = await route.fetch();
+          const body = (await res.json()) as Record<string, unknown>;
+          body.team = TEAM_SET;
+          await route.fulfill({ response: res, json: body, headers: { ...res.headers(), ...CORS } });
+        });
+        const m = MODELS.find((x) => x.key === key)!;
+        await page.goto(`/terminals?session=${id}`);
+        await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+        await expect(page.getByTestId("harness-team")).toBeVisible({ timeout: 30_000 });
+        await settled(page, m);
+        const name = `harness-team-${key}-${tag}`;
+        const f = await facts(page, "harness");
+        await shot(page, name);
+        record(name, f, check(f, name));
+        expect(check(f, name)).toEqual([]);
+        // The team keeps its count even when its word went.
+        await expect(page.getByTestId("harness-team")).toContainText("4");
+        await page.getByTestId("harness-team").click();
+        const panel = page.getByTestId("harness-team-panel");
+        await expect(panel).toBeVisible();
+        const box = await panel.boundingBox();
+        expect(box, "the team panel has a box").not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(15.5);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(size.width - 15.5);
+        expect(box!.y).toBeGreaterThanOrEqual(-0.5);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+        await page.keyboard.press("Escape");
+        await expect(panel).toHaveCount(0);
+        await expect(page.getByTestId("harness-team")).toBeFocused();
+      }
+    });
+  });
+}

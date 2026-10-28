@@ -30,6 +30,10 @@
  * ("On qwen3:8b"), in the Timeline's words (lib/buildHelpers
  * `workerModelName`) — a team member runs on its own model, not the
  * session's, so the row names both the member and its model.
+ *
+ * v1.403.0 (the coding-session team): in a TEAM turn a helper is named by its
+ * part — "Worker glm-5.3-flash", "Reviewer Codex" (lib/sessionTeam
+ * `helperTeamName`, the one rule) — so the row says whose duty the piece is.
  */
 
 import { Bot, X } from "lucide-react";
@@ -47,6 +51,7 @@ import {
   type SavedHelper,
 } from "@/lib/buildHelpers";
 import type { CatalogRow } from "@/lib/answeredModel";
+import { helperTeamName, type TeamRoster } from "@/lib/sessionTeam";
 
 /** v1.394.0: the model the helper ran on, one quiet line ("" = not known). */
 function HelperModel({ provider, model, models }: { provider?: string; model?: string; models: readonly CatalogRow[] }) {
@@ -90,8 +95,17 @@ function Asked({ task }: { task: string }) {
 /** A finished helper: the chat's settled run row; opened, what it was asked,
  *  its report and its steps. A helper refused before it had a session (no
  *  "Open run" to offer) is one failed work row with the reason. */
-export function SettledHelperRow({ helper, models = NO_MODELS }: { helper: SavedHelper; models?: readonly CatalogRow[] }) {
-  const name = helperName(helper.agent);
+export function SettledHelperRow({
+  helper,
+  models = NO_MODELS,
+  team = null,
+}: {
+  helper: SavedHelper;
+  models?: readonly CatalogRow[];
+  /** v1.403.0: a team turn's members (null outside one). */
+  team?: TeamRoster | null;
+}) {
+  const name = helperTeamName(helper.agent, helper.role, team) ?? helperName(helper.agent);
   if (!helper.session) {
     // Never started: refused (a remote agent, a pinned model), or stopped
     // while it waited for a free slot.
@@ -141,10 +155,18 @@ export function SettledHelperRow({ helper, models = NO_MODELS }: { helper: Saved
 }
 
 /** A helper while the turn runs. */
-export function LiveHelperRow({ helper, models = NO_MODELS }: { helper: HelperView; models?: readonly CatalogRow[] }) {
+export function LiveHelperRow({
+  helper,
+  models = NO_MODELS,
+  team = null,
+}: {
+  helper: HelperView;
+  models?: readonly CatalogRow[];
+  team?: TeamRoster | null;
+}) {
   const settled = settledFromLive(helper);
-  if (settled) return <SettledHelperRow helper={settled} models={models} />;
-  const name = helperName(helper.agent);
+  if (settled) return <SettledHelperRow helper={settled} models={models} team={team} />;
+  const name = helperTeamName(helper.agent, helper.role, team) ?? helperName(helper.agent);
   if (helper.state === "queued" || (helper.state === "starting" && !helper.session)) {
     const waiting = helper.state === "queued";
     return (
@@ -226,25 +248,43 @@ function phaseWords(phase: string): string {
 }
 
 /** The turn's helpers while it runs (call order). */
-export function LiveHelperRows({ helpers, models = NO_MODELS }: { helpers: readonly HelperView[]; models?: readonly CatalogRow[] }) {
+export function LiveHelperRows({
+  helpers,
+  models = NO_MODELS,
+  team = null,
+}: {
+  helpers: readonly HelperView[];
+  models?: readonly CatalogRow[];
+  /** v1.403.0: the session's team while this turn runs (null = alone). */
+  team?: TeamRoster | null;
+}) {
   if (!helpers.length) return null;
   return (
     <div data-testid="harness-helpers" className="grid gap-2">
       {helpers.map((h) => (
-        <LiveHelperRow key={h.id} helper={h} models={models} />
+        <LiveHelperRow key={h.id} helper={h} models={models} team={team} />
       ))}
     </div>
   );
 }
 
 /** A reply's saved helpers (the line's `helpers`). */
-export function SavedHelperRows({ raw, models = NO_MODELS }: { raw: unknown; models?: readonly CatalogRow[] }) {
+export function SavedHelperRows({
+  raw,
+  models = NO_MODELS,
+  team = null,
+}: {
+  raw: unknown;
+  models?: readonly CatalogRow[];
+  /** v1.403.0: the members of the team turn this reply was (null = alone). */
+  team?: TeamRoster | null;
+}) {
   const helpers = decodeSavedHelpers(raw);
   if (!helpers.length) return null;
   return (
     <div data-testid="harness-helpers" className="mb-2 grid gap-2">
       {helpers.map((h) => (
-        <SettledHelperRow key={h.id} helper={h} models={models} />
+        <SettledHelperRow key={h.id} helper={h} models={models} team={team} />
       ))}
     </div>
   );

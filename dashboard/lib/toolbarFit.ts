@@ -81,7 +81,18 @@ import { useCallback, useRef, useState } from "react";
 /** One way a toolbar gives up space. A chip opts in with its step's classes
  *  (lib/composerChips); `name`, `short` and `tight` are the model chip's floor
  *  and the reasoning chip's words. */
-export type FitStep = "project" | "web" | "tools" | "name" | "local" | "ask" | "tryon" | "plan" | "short" | "tight";
+export type FitStep =
+  | "project"
+  | "web"
+  | "tools"
+  | "name"
+  | "local"
+  | "ask"
+  | "tryon"
+  | "team"
+  | "plan"
+  | "short"
+  | "tight";
 
 /** Every step, for the attributes (a step a toolbar does not use is never set). */
 export const FIT_STEPS: readonly FitStep[] = [
@@ -92,6 +103,7 @@ export const FIT_STEPS: readonly FitStep[] = [
   "local",
   "ask",
   "tryon",
+  "team",
   "plan",
   "short",
   "tight",
@@ -110,10 +122,11 @@ export const CHAT_FIT_ORDER: readonly FitStep[] = ["project", "web", "tools", "l
 
 /**
  * The IJ harness composer's order: "Try on…" (an occasional tool) first,
- * then the model's name, then "Plan first" (on, "Planning" keeps its word),
- * then the permission level.
+ * then "Team" (v1.403.0: its word goes; a team set keeps its count), then
+ * the model's name, then "Plan first" (on, "Planning" keeps its word), then
+ * the permission level.
  */
-export const HARNESS_FIT_ORDER: readonly FitStep[] = ["tryon", "name", "plan", "ask", "short", "tight"];
+export const HARNESS_FIT_ORDER: readonly FitStep[] = ["tryon", "team", "name", "plan", "ask", "short", "tight"];
 
 /** How much more room than a level needed before the toolbar goes back to
  *  it. Wider than a classic Windows scrollbar (17 px), the one width that can

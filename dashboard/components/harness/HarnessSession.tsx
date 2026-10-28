@@ -129,6 +129,8 @@ import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHel
 // (Keep) and the box's "Try on…" control.
 import { AttemptsCardView, LiveAttemptRows } from "@/components/harness/HarnessAttempts";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
+import { TeamControl, TeamReplyLine } from "@/components/harness/HarnessTeam";
+import { EMPTY_ROSTER, decodeReplyTeam, rosterOf } from "@/lib/sessionTeam";
 // v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
 // conversation is (and Compact), and "the user is looking at this session".
 import { LivePlan, SettledPlan } from "@/components/harness/HarnessPlan";
@@ -2533,10 +2535,19 @@ export function HarnessSession({
                   // Part 3, Phase 2: the reply's finish check, in one sentence.
                   finish={decodeFinish(m.finish)}
                 />
+                {/* v1.403.0: a team reply says who led, worked and reviewed —
+                    and, in the warn tone and never folded away, every time
+                    the lead did a piece itself. */}
+                <TeamReplyLine raw={m.team} />
                 {/* v1.392.0: the reply summarized its own older rounds. */}
                 <SummarizedLine summarized={decodeSummarized(m.summarized)} />
                 {/* v1.372.0: the helper agents this reply's turn started. */}
-                <SavedHelperRows raw={m.helpers} models={catalog.models} />
+                <SavedHelperRows
+                  raw={m.helpers}
+                  models={catalog.models}
+                  // v1.403.0: in a team reply each helper is named by its part.
+                  team={decodeReplyTeam(m.team) ? (rosterOf(view.team) ?? EMPTY_ROSTER) : null}
+                />
                 {/* v1.397.0: the attempts on several models, side by side —
                     and Keep (only while nothing runs). */}
                 {m.turnId && m.attempts ? (
@@ -2700,7 +2711,7 @@ export function HarnessSession({
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
                   drawn a second time). */}
-              <LiveHelperRows helpers={helpers} models={catalog.models} />
+              <LiveHelperRows helpers={helpers} models={catalog.models} team={rosterOf(view.team)} />
               {/* v1.397.0: each attempt is ONE row while it runs. */}
               <LiveAttemptRows attempts={attempts} />
               {(() => {
@@ -3042,6 +3053,29 @@ export function HarnessSession({
                 onChange={setTryOn}
                 disabled={view.archived || view.mode === "plan"}
                 iconOnly={harnessOn("tryon")}
+                // v1.403.0: Try on is not the team (its tooltip says so).
+                teamSet={!!(view.team ?? view.setup.team)}
+              />
+              {/* v1.403.0: the session's TEAM — its own model leads (plans and
+                  checks, never edits files), workers do the code, a reviewer
+                  checks every change. Hidden by an Iron Jarvis without teams. */}
+              <TeamControl
+                threadId={threadId}
+                // The folder a NEW session is made in: a session on its own
+                // branch works in a worktree, but is the folder the user
+                // picked (its checkout) — that folder's default is the one.
+                folder={view.git?.checkout || view.folder}
+                noFolder={view.noFolder}
+                team={view.team ?? null}
+                teamSetup={view.setup.team ?? null}
+                leadWords={modelPart.text}
+                models={catalog.models}
+                localOnly={view.setup.localOnly}
+                disabled={view.archived}
+                onView={(v) => {
+                  adopt(v);
+                  onChanged();
+                }}
               />
               {/* Review (v1.374.0): this group may WRAP, right-aligned, and
                   never grows past the row. With the meter added, a model that

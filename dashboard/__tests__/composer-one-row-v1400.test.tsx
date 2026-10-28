@@ -101,7 +101,9 @@ describe("the order: one step at a time, least needed first", () => {
   });
 
   it("the IJ harness gives up 'Try on…' first, then the name, then 'Plan first'", () => {
-    expect(HARNESS_FIT_ORDER).toEqual(["tryon", "name", "plan", "ask", "short", "tight"]);
+    // v1.403.0 (moved on purpose): "Team" gives up its word right after
+    // "Try on…" (a team set keeps its count), before the model's name.
+    expect(HARNESS_FIT_ORDER).toEqual(["tryon", "team", "name", "plan", "ask", "short", "tight"]);
   });
 
   it("every step a toolbar takes is one the attributes know", () => {
@@ -431,7 +433,7 @@ describe("the chips keep their names when they drop their words", () => {
   });
 
   it("each chip step's classes read its own attribute, and are whole pixels", () => {
-    const steps: FitChipStep[] = ["project", "web", "tools", "local", "ask", "tryon", "plan"];
+    const steps: FitChipStep[] = ["project", "web", "tools", "local", "ask", "tryon", "team", "plan"];
     for (const s of steps) {
       expect(fitWords(s)).toBe(`group-data-[fit-${s}]/fit:hidden`);
       expect(fitShows(s)).toBe(`group-data-[fit-${s}]/fit:inline`);

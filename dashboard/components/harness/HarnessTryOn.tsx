@@ -45,6 +45,7 @@ import {
   type TryOnRow,
 } from "@/lib/buildAttempts";
 import { tryOnGroups } from "@/lib/tryOnMenu";
+import { TRY_ON_ALONE } from "@/lib/sessionTeam";
 import type { CatalogRow } from "@/lib/answeredModel";
 
 type Place = ReturnType<typeof tryOnMenuPosition>;
@@ -53,6 +54,12 @@ type Place = ReturnType<typeof tryOnMenuPosition>;
 const TRY_ON_TITLE =
   "Try this message on up to three models at once, each on its own branch — then keep the one you want";
 
+/** v1.403.0: the tooltip while the session has a TEAM — "Try on" is not the
+ *  team: each model does the whole task alone. */
+export function tryOnTitle(teamSet: boolean): string {
+  return teamSet ? `${TRY_ON_TITLE}. ${TRY_ON_ALONE}.` : TRY_ON_TITLE;
+}
+
 export function TryOnControl({
   models,
   localOnly,
@@ -60,6 +67,7 @@ export function TryOnControl({
   onChange,
   disabled,
   iconOnly = false,
+  teamSet = false,
 }: {
   models: readonly (TryOnRow & CatalogRow)[];
   localOnly: boolean;
@@ -70,6 +78,8 @@ export function TryOnControl({
    *  `tryon` step; the chip's tooltip then leads with its words. Its shape
    *  follows the toolbar's `data-fit-tryon` (CSS). */
   iconOnly?: boolean;
+  /** v1.403.0: the session has a team (the tooltip says Try on is not it). */
+  teamSet?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<Place | null>(null);
@@ -191,6 +201,7 @@ export function TryOnControl({
       <p className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
         Pick up to {MAX_ATTEMPTS} models. Each tries your next message on its own branch; you keep one.
         {localOnly ? " Local only: models on this PC or your network." : ""}
+        {teamSet ? " Each one works alone, without the team." : ""}
       </p>
       <TryOnModels
         groups={groups}
@@ -243,8 +254,8 @@ export function TryOnControl({
         aria-label={tryOnChipWords(picks)}
         title={
           iconOnly
-            ? iconOnlyTitle(tryOnChipWords(picks), TRY_ON_TITLE)
-            : TRY_ON_TITLE
+            ? iconOnlyTitle(tryOnChipWords(picks), tryOnTitle(teamSet))
+            : tryOnTitle(teamSet)
         }
         className={`${composerChipClass(picks.length > 0)}${picks.length > 0 ? "" : ` ${fitIconChip("tryon")}`}`}
       >

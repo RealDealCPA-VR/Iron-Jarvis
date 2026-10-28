@@ -360,6 +360,9 @@ export interface FinishReview {
   model: string;
   verdict: "" | "approved" | "changes_needed";
   why?: string;
+  /** v1.403.0: a coding-session team's reviewer checks once more after the
+   *  workers fixed what it found — 2 then (absent or 1: once). */
+  rounds?: 1 | 2;
 }
 
 /** The review's few words on the work line: "reviewed by codex: changes
@@ -371,7 +374,13 @@ export function reviewWords(r: FinishReview): string {
   if (r.state === "failed") return "review failed";
   if (r.state === "stopped") return "review stopped";
   if (r.state !== "done") return "review not run";
-  const who = r.member ? `reviewed by ${r.member}` : "reviewed by your team";
+  // v1.403.0: a second review (after the workers' fixes) says so.
+  const twice = r.rounds === 2;
+  const who = r.member
+    ? `reviewed by ${r.member}${twice ? " twice" : ""}`
+    : twice
+      ? "reviewed twice"
+      : "reviewed by your team";
   if (r.verdict === "approved") return `${who}: approved`;
   if (r.verdict === "changes_needed") return `${who}: changes needed`;
   return who;
@@ -424,7 +433,11 @@ export function finishTitle(f: FinishRecord): string | undefined {
   if (f.review) {
     // v1.401.0: who reviewed it, on which model — or why no review ran.
     if (f.review.state === "done" && f.review.member) {
-      bits.push(`Reviewed by ${f.review.member}${f.review.model ? ` on ${f.review.model}` : ""}`);
+      bits.push(
+        `Reviewed by ${f.review.member}${f.review.model ? ` on ${f.review.model}` : ""}${
+          f.review.rounds === 2 ? ", twice" : ""
+        }`,
+      );
     } else if (f.review.state !== "done" && f.review.why) {
       bits.push(`Review: ${f.review.why}`);
     }

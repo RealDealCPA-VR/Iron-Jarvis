@@ -45,7 +45,7 @@ export function composerChipClass(on = false, tone: "accent" | "success" = "acce
  * The classes are written out whole, one row per step, because Tailwind only
  * builds a class it finds spelled in the source.
  */
-export type FitChipStep = "project" | "web" | "tools" | "local" | "ask" | "tryon" | "plan";
+export type FitChipStep = "project" | "web" | "tools" | "local" | "ask" | "tryon" | "team" | "plan";
 
 const FIT_CHIP_CLASSES: Readonly<Record<FitChipStep, { chip: string; words: string; shows: string }>> = {
   project: {
@@ -77,6 +77,11 @@ const FIT_CHIP_CLASSES: Readonly<Record<FitChipStep, { chip: string; words: stri
     chip: "group-data-[fit-tryon]/fit:w-[30px] group-data-[fit-tryon]/fit:justify-center group-data-[fit-tryon]/fit:px-0",
     words: "group-data-[fit-tryon]/fit:hidden",
     shows: "group-data-[fit-tryon]/fit:inline",
+  },
+  team: {
+    chip: "group-data-[fit-team]/fit:w-[30px] group-data-[fit-team]/fit:justify-center group-data-[fit-team]/fit:px-0",
+    words: "group-data-[fit-team]/fit:hidden",
+    shows: "group-data-[fit-team]/fit:inline",
   },
   plan: {
     chip: "group-data-[fit-plan]/fit:w-[30px] group-data-[fit-plan]/fit:justify-center group-data-[fit-plan]/fit:px-0",
