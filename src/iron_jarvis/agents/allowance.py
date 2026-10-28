@@ -276,6 +276,51 @@ def refusal_for(record: Any, engine, now: datetime | None = None) -> str:
         return ""
 
 
+def carry_on_refusal(
+    registry, engine, roster_name: str, *, tokens: int = 0, usd: float = 0.0,
+    now: datetime | None = None,
+) -> str:
+    """BLOCKING. ``""`` when a run of ``roster_name`` may CARRY ON past its
+    step budget by itself (v1.402.0 review, ``runtime.carries_on_at_step_limit``);
+    otherwise the paused / used-up sentence, exactly as the doors say it.
+
+    The carry-on is new spending nobody pressed for, so it answers to the
+    agent's allowance like a fresh start does — counting what THIS run has
+    spent so far (``tokens`` / ``usd``): its session row is stamped only when
+    the run ends, so the month's ledger does not hold it yet. A builtin, an
+    unknown name or an agent with no allowance: ``""``. Never raises (a broken
+    ledger must not be a lockout)."""
+    try:
+        slug = _slug(roster_name)
+        if not slug or registry is None:
+            return ""
+        record = registry.get(slug)
+        if record is None:
+            return ""
+        paused = paused_sentence(record)
+        if paused:
+            return paused
+        b_tokens, b_usd = _bounds(record)
+        if b_tokens <= 0 and b_usd <= 0:
+            return ""
+        spend = dict(month_spend(engine, roster_name_for(record), now))
+        try:
+            spend["tokens"] = int(spend.get("tokens") or 0) + max(0, int(tokens or 0))
+        except (TypeError, ValueError):
+            pass
+        try:
+            spend["usd"] = float(spend.get("usd") or 0.0) + max(0.0, float(usd or 0.0))
+        except (TypeError, ValueError):
+            pass
+        state = allowance_state(record, spend, now)
+        if state.get("status") == "exhausted":
+            return exhausted_sentence(record, state, now)
+        return ""
+    except Exception:  # noqa: BLE001
+        log.debug("carry_on_refusal failed", exc_info=True)
+        return ""
+
+
 def _slug(roster_name: str) -> str:
     text = " ".join(str(roster_name or "").split())
     if not text.lower().startswith(CUSTOM_PREFIX):

@@ -302,3 +302,72 @@ describe("Keep going on the real chat page", () => {
     expect(screen.queryByTestId("run-result-keep-going")).toBeNull();
   });
 });
+
+// v1.402.0 review: "Keep going" is a press on the run card, never a message
+// from the box.
+describe("Keep going leaves the box alone (v1.402.0 review)", () => {
+  const UP = "C:/Users/u/.ironjarvis/uploads/notes.pdf";
+  const IN_FOLDER = "C:/Users/u/Documents/Iron Jarvis/2026-10-28 notes/notes.pdf";
+
+  async function attachNotes() {
+    H.api.postResponses["/documents/upload"] = { path: UP, name: "notes.pdf", bytes: 3 };
+    H.api.postResponses["/documents/workfolder"] = {
+      path: "C:/Users/u/Documents/Iron Jarvis/2026-10-28 notes",
+      created: true,
+      files: [{ name: "notes.pdf", path: IN_FOLDER, bytes: 3, source: UP }],
+      skipped: [],
+      note: "",
+    };
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["abc"], "notes.pdf", { type: "application/pdf" })] } });
+    await screen.findByText("notes.pdf", {}, { timeout: 10_000 });
+  }
+
+  it("the files waiting in the composer neither ride the continuation nor leave the box", async () => {
+    storeThread([QUESTION, STOPPED_REPLY]);
+    H.api.postResponses["/sessions/s1/continue"] = { id: "s2", status: "active", task: KEEP_GOING_MESSAGE };
+    H.api.getResponses["/sessions/s2?transcript=0"] = {
+      session: { id: "s2", status: "active", summary: "", created_at: "2026-10-28T10:00:00" },
+      transcript: null,
+    };
+    render(<ChatPage />);
+    const keep = await screen.findByTestId("run-result-keep-going", {}, { timeout: 10_000 });
+    await attachNotes();
+    fireEvent.click(keep);
+    await waitFor(() => expect(H.api.posts.some((p) => p.path === "/sessions/s1/continue")).toBe(true));
+    const body = H.api.posts.find((p) => p.path === "/sessions/s1/continue")!.body;
+    // The continuation carries the press's words only — no "Attached file:".
+    expect(body.message).toBe(KEEP_GOING_MESSAGE);
+    // The file is still in the box, for the user's next message (waited for
+    // the hand-off to settle: the mark is saved after the continue lands).
+    await waitFor(() =>
+      expect(
+        H.api.puts.some((p) =>
+          ((p.body as { messages?: Msg[] }).messages ?? []).some((m) => m.awaitingSession === "s2"),
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByText("notes.pdf")).toBeTruthy();
+  });
+
+  it("a Keep going that did not start takes its bubble back: the press is offered again and the box stays empty", async () => {
+    storeThread([QUESTION, STOPPED_REPLY]);
+    H.api.postResponses["/sessions/s1/continue"] = new H.FakeApiError("Iron Jarvis is busy", 409);
+    render(<ChatPage />);
+    const keep = await screen.findByTestId("run-result-keep-going", {}, { timeout: 10_000 });
+    fireEvent.click(keep);
+    await waitFor(() => expect(H.api.posts.some((p) => p.path === "/sessions/s1/continue")).toBe(true));
+    // The press is offered again (the run card is the newest reply again)…
+    expect(await screen.findByTestId("run-result-keep-going", {}, { timeout: 10_000 })).toBeTruthy();
+    // …the last save holds no Keep going bubble…
+    await waitFor(() => {
+      const last = H.api.puts[H.api.puts.length - 1];
+      const msgs = ((last?.body as { messages?: Msg[] }).messages ?? []) as Msg[];
+      expect(msgs.length).toBe(2);
+      expect(msgs.some((m) => m.content === KEEP_GOING_MESSAGE)).toBe(false);
+    });
+    // …and the box is not filled with the press's words.
+    const box = document.querySelector("textarea") as HTMLTextAreaElement;
+    expect(box.value).toBe("");
+  });
+});

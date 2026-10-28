@@ -147,7 +147,19 @@ PLAN_RUN_TEXT = (
     "check them as you go, and end with a short summary of what you changed and how "
     "you checked it."
 )
-#: thread id -> {"from": the plan turn's id, "taken": bool} — an approved plan
+#: v1.402.0 review: the act turn of a plan whose turn went to LOW TRUST (it
+#: read something flagged — a page or file that tried to give it orders)
+#: starts at low trust too, with this reason. The flagged words reached the
+#: plan the model wrote and its last lines, which the act turn reads as the
+#: conversation; started at full trust by Iron Jarvis itself it had its
+#: commands back with nobody reading in between (the night shift's rule,
+#: ``harness/night.LOW_TRUST_CARRIED``: a turn Iron Jarvis starts after a
+#: lowered one stays low). The user's own next message runs as before.
+PLAN_RUN_LOW_TRUST = (
+    "the planning reply read something flagged earlier, so the plan is carried out at low trust"
+)
+#: thread id -> {"from": the plan turn's id, "taken": bool, "low_trust": the
+#: reason when the plan turn ended at low trust, else ""} — an approved plan
 #: whose act turn is due (set when the plan turn's clean ``done`` goes out,
 #: BEFORE the screen sees it, so the screen's re-read knows to wait for it),
 #: then TAKEN by the one :func:`run_approved_plan` that starts it (exactly
@@ -1819,6 +1831,15 @@ def plan_run_due(watch: "_ReplyWatch") -> bool:
     return True
 
 
+def plan_run_low_trust(watch: "_ReplyWatch") -> str:
+    """The trust reason an approved plan's act turn starts with: ""
+    (full trust) unless the plan turn itself ended at LOW trust (its ``done``
+    frame says so), then :data:`PLAN_RUN_LOW_TRUST` (v1.402.0 review). Pure."""
+    done = watch.done or {}
+    trust = str(done.get("trust") or "full").strip().lower()
+    return PLAN_RUN_LOW_TRUST if trust != "full" else ""
+
+
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None, no_limit: bool = False,
                         record: Any = None, account_move: "dict[str, Any] | None" = None):
@@ -1955,7 +1976,10 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                     from ...harness import night as _night_plan
 
                     if _night_plan.current() is None:
-                        _PLAN_RUNS[thread_id] = {"from": turn_id, "taken": False}
+                        _PLAN_RUNS[thread_id] = {
+                            "from": turn_id, "taken": False,
+                            "low_trust": plan_run_low_trust(watch),
+                        }
                 if terminal and (watch.done is not None or watch.error is not None):
                     await asyncio.shield(end("done" if watch.done is not None else "error"))
                 yield chunk
@@ -2116,8 +2140,15 @@ async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
             log.info("not carrying out the approved plan of session %s: %s", thread_id, why)
             return None
         new_turn = "bt_" + secrets.token_hex(8)
+        # v1.402.0 review: a plan turn that went to low trust hands its act
+        # turn low trust (passed only when set: the turn is otherwise started
+        # exactly as before).
+        low = str(entry.get("low_trust") or "")
         try:
-            lg = await start_build_turn(d, thread_id, PLAN_RUN_TEXT, new_turn, continuation=True)
+            lg = await start_build_turn(
+                d, thread_id, PLAN_RUN_TEXT, new_turn, continuation=True,
+                **({"low_trust": low} if low else {}),
+            )
         except SessionBusy:
             return None  # the user's own message is starting or running
         except HTTPException as exc:
@@ -2497,7 +2528,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            resume_turn: str = "",
                            account_move: "dict[str, Any] | None" = None,
                            started_by: str = "person",
-                           model_note: str = "") -> Any:
+                           model_note: str = "",
+                           low_trust: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2574,7 +2606,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     under the night posture (``night.posture_setup``) and the night wait
     (``night.NightTurn``, armed like the pin). ``model_note`` — words the
     MODEL is sent after the question (the question line shows ``text``
-    alone): a night task's "use your team"."""
+    alone): a night task's "use your team".
+
+    v1.402.0 review: ``low_trust`` — a reason, and the turn starts at LOW
+    trust with it (an approved plan whose planning turn went to low trust:
+    :data:`PLAN_RUN_LOW_TRUST`). "" = as before."""
     from .chat import _turn_logs
     from ...harness import night as _night
     from ...harness import reply_record as RR
@@ -3002,7 +3038,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     # turn continues, so its commands never come back.
                     **(
                         {"trust": "low", "trust_reason": _night.LOW_TRUST_CARRIED}
-                        if night_task is not None and _night.has_note(night_task, "low_trust") else {}
+                        if night_task is not None and _night.has_note(night_task, "low_trust")
+                        # v1.402.0 review: an approved plan's act turn after
+                        # a planning turn that went to low trust.
+                        else {"trust": "low", "trust_reason": str(low_trust)}
+                        if str(low_trust or "").strip() else {}
                     ),
                     # v1.392.0 (decision 8): only when the session has a cap.
                     **({"reply_cap": reply_cap} if reply_cap is not None else {}),
