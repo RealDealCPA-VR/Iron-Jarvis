@@ -222,6 +222,12 @@ class HelperParent:
     #: runtime reads the run option this sets, :meth:`options`). A guarantee,
     #: not a request: a write or a command it calls is refused "not armed".
     review_only: bool = False
+    #: v1.403.0 (the coding-session team, ``harness/team``): the turn's
+    #: :class:`~iron_jarvis.harness.team.TeamTurn` when the session has a team
+    #: (None: solo). The helper doors hand pieces ONLY to its members (the
+    #: workers for code / test / read, the reviewer for a review); a worker
+    #: gets the whole coding set and the worker rules, the reviewer only reads.
+    team: Any = None
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:
@@ -362,7 +368,18 @@ def for_member(parent: "HelperParent | None", platform: Any, record: Any, *,
         return parent
     from ..agents import model_team as _mt
 
+    name = str(getattr(record, "name", "") or "")
+    # v1.403.0 (the coding-session team): the session's REVIEWER only reads —
+    # when the lead hands it a piece as much as at the finish check — and a
+    # team member is named on its parent even when it runs on the session's
+    # own model (its worker rules key on the name).
+    team = getattr(parent, "team", None)
+    review_only = parent.review_only or bool(
+        team is not None and getattr(team, "team", None) is not None and team.team.is_reviewer(name)
+    )
     if not _mt.runs_elsewhere(record):
+        if team is not None:
+            return replace(parent, member=name, review_only=review_only)
         return parent
     return replace(
         parent,
@@ -370,7 +387,8 @@ def for_member(parent: "HelperParent | None", platform: Any, record: Any, *,
         model=_mt.pinned_model(platform, record),
         pin=pin if pin is not _UNSET else _mt.member_account(platform, record, parent.pin, coding=True)[0],
         own_model=True,
-        member=str(getattr(record, "name", "") or ""),
+        member=name,
+        review_only=review_only,
     )
 
 
@@ -455,6 +473,17 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
     from .branches import prompt_line as branch_line
 
     prompt = str(getattr(definition, "system_prompt", "") or "") + branch_line()
+    # v1.403.0 (the coding-session team): a WORKER is told its part — one
+    # piece, only the files it names, its tests, a report. Only a worker of a
+    # team turn (every other helper's prompt is exactly as before).
+    team = getattr(parent, "team", None)
+    if (
+        team is not None and not parent.review_only and parent.member
+        and getattr(team, "team", None) is not None and team.team.is_worker(parent.member)
+    ):
+        from .team import worker_rules
+
+        prompt += worker_rules()
     return replace(definition, tools=tools, permission_overrides=overrides, system_prompt=prompt)
 
 
@@ -1022,6 +1051,45 @@ def note_route(parent: "HelperParent | None", *, role: str = "", reason: str = "
     if reason:
         call.reason = _short(reason, REASON_CHARS)
     call.say()
+
+
+def team_route_kwargs(parent: "HelperParent | None", role: str, project_team: Any) -> dict[str, Any]:
+    """The team router's ``team`` for one role piece: a coding session's team
+    (v1.403.0 — its workers for code / test / read, its reviewer for a review,
+    named "this session's team"), else a project mission's team as before."""
+    team = getattr(parent, "team", None) if parent is not None else None
+    if team is None:
+        return {"team": project_team}
+    from .team import TEAM_WORDS
+
+    return {"team": team.route_names(role), "team_words": TEAM_WORDS}
+
+
+def team_role_refusal(parent: "HelperParent | None", role: str) -> Any:
+    """A role piece a coding session's team cannot route at all — a review
+    when the team has no reviewer — as the door's ``ToolResult``, else None
+    (an empty team list would let the router ask EVERY member)."""
+    team = getattr(parent, "team", None) if parent is not None else None
+    if team is None or team.route_names(role):
+        return None
+    from ..tools.base import ToolResult
+    from .team import NO_REVIEWER_REFUSAL
+
+    note_route(parent, role=role, reason="not started: this session's team has no reviewer")
+    return ToolResult(ok=False, output="", error=NO_REVIEWER_REFUSAL,
+                      data={"role": role, "reason": "not started: this session's team has no reviewer",
+                            "state": "not_started", "waited": False})
+
+
+def note_team_piece(parent: "HelperParent | None", target: str) -> None:
+    """A piece really started on ``target`` (a roster name): counted on the
+    coding session's team record when it is one of its workers (v1.403.0)."""
+    team = getattr(parent, "team", None) if parent is not None else None
+    if team is not None:
+        try:
+            team.note_piece(target)
+        except Exception:  # noqa: BLE001 — a record never breaks a delegation
+            pass
 
 
 def child_started(parent: "HelperParent | None", platform: Any, child_session_id: str,

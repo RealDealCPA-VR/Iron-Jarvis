@@ -167,6 +167,11 @@ LINE_KEYS: tuple[str, ...] = (
     # attempt's model, account, branch, tests, files, time and usage, why it
     # stopped, and (once the user pressed Keep) which one was kept.
     "attempts",
+    # v1.403.0 (the coding-session team, ``harness/team``): on the reply of a
+    # turn of a session with a team — the lead's, the workers' and the
+    # reviewer's model labels, how many pieces went to the workers, and every
+    # time the lead did a piece itself because no worker could take it.
+    "team",
 )
 
 
@@ -295,8 +300,14 @@ def rename_folder(engine: Any, path: str, name: str) -> dict[str, Any]:
             row.name = clean
             db.add(row)
             # A display name stored before the folder became a project would
-            # be a second name waiting to come back: it goes.
-            if stale is not None:
+            # be a second name waiting to come back: it goes. v1.403.0: the
+            # row also keeps the folder's default TEAM (``team_json``) — then
+            # only the name goes.
+            if stale is not None and str(getattr(stale, "team_json", "") or ""):
+                stale.name = ""
+                stale.updated_at = utcnow()
+                db.add(stale)
+            elif stale is not None:
                 db.delete(stale)
             db.commit()
             return {"path": path, "name": clean, "is_project": True, "project_id": project.id}
@@ -936,6 +947,9 @@ def session_view(row: Any, *, states: "dict[str, dict[str, bool]] | None" = None
                 "account", "account_name",
                 # v1.392.0 (decision 8): the session's optional cap.
                 "cap",
+                # v1.403.0: the session's team as stored (member names); the
+                # view's own ``team`` (routes/build) says their models.
+                "team",
             ) if k in setup
         },
         "messages": _messages(row),

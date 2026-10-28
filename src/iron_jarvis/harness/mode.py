@@ -242,11 +242,17 @@ def plan_tools(
     plugins: _components.Plugins = _components.Plugins(),
     plan_mode: bool = False,
     ask_user: bool = False,
+    lead: bool = False,
 ) -> ToolPlan:
     """The harness turn's tools. Every filter the lanes apply later (the
     ceiling, low trust, Local only) is applied here too, so what the system
     prompt names is exactly what the model can call; the lanes' own filters
     then find nothing more to drop.
+
+    ``lead`` (v1.403.0, a coding session WITH A TEAM): the turn's model is
+    the team LEAD — every tool that changes a file or runs something is left
+    out (``harness/team.lead_tools``, the one rule), after every other filter,
+    so the dialect shows exactly what the lead holds.
 
     ``plan_mode`` (v1.367.0): only :data:`PLAN_MODE_TOOLS` (no app tool from
     ``extra`` — an app's tool may change things), plus ``exit_plan_mode`` in
@@ -284,6 +290,10 @@ def plan_tools(
     if tool_ceiling is not None:
         ceiling = set(tool_ceiling)
         candidates = [n for n in candidates if n in ceiling]
+    if lead:
+        from .team import lead_tools
+
+        candidates = lead_tools(candidates, registry)
     denied = [n for n in candidates if plugins.rule_for(n) == "deny"]
     candidates = [n for n in candidates if n not in denied]
     allow: list[str] = []
@@ -367,9 +377,21 @@ def _team_first_lead(spec: dict[str, Any], roles: tuple[str, ...]) -> dict[str, 
     return {**spec, "description": sentence + " " + str(spec.get("description") or "")}
 
 
+def _team_lead(spec: dict[str, Any], session_team: Any) -> dict[str, Any]:
+    """``spec`` with the coding-session team's sentence in front of its
+    description (v1.403.0), naming the session's workers in the tool's own
+    argument words; unchanged for a tool that takes none of them."""
+    from .team import tool_sentence
+
+    sentence = tool_sentence(spec.get("input_schema"), session_team)
+    if not sentence:
+        return spec
+    return {**spec, "description": sentence + " " + str(spec.get("description") or "")}
+
+
 def model_specs(
     registry: Any, plan: ToolPlan, *, shell_description: str = "", bash_description: str = "",
-    team_first: tuple[str, ...] = (),
+    team_first: tuple[str, ...] = (), session_team: Any = None,
 ) -> list[dict[str, Any]]:
     """What the model is shown: the dialect's tools, then the pass-through
     real tools as the registry describes them. ``shell_description``
@@ -395,7 +417,11 @@ def model_specs(
         note = runtime_note(registry, tool.runtime_from, shell_description=words)
         if note:
             spec = {**spec, "description": spec["description"] + "\n\nHow commands run here: " + note}
-        if team_first and HELPER_TARGETS & set(tool.targets):
+        if session_team is not None and HELPER_TARGETS & set(tool.targets):
+            # v1.403.0: a coding session WITH A TEAM — its own workers named
+            # (never the whole model team's team-first sentence too).
+            spec = _team_lead(spec, session_team)
+        elif team_first and HELPER_TARGETS & set(tool.targets):
             spec = _team_first_lead(spec, team_first)
         out.append(spec)
     if plan.passthrough:
@@ -411,7 +437,9 @@ def model_specs(
             # Qwen Code's `read_file`) keeps its vendor's one-file shape: none
             # of those vendors has a multi-file read to map.
             s = multi_read_spec(s)
-            if team_first and s.get("name") in HELPER_TARGETS:
+            if session_team is not None and s.get("name") in HELPER_TARGETS:
+                s = _team_lead(s, session_team)
+            elif team_first and s.get("name") in HELPER_TARGETS:
                 s = _team_first_lead(s, team_first)
             out.append(_strip_store_as(s))
     return out
@@ -613,6 +641,33 @@ class HarnessTurn:
         #: (:func:`model_specs`). () = off, or no team: every tool spec is
         #: exactly as before. Per turn, never part of the fingerprint.
         self.team_first: tuple[str, ...] = ()
+        #: v1.403.0 (the coding-session team, ``harness/team``): the turn's
+        #: :class:`~iron_jarvis.harness.team.TeamTurn` when this coding
+        #: session has a team (None: solo — every other turn). Its ``plan``
+        #: above is then the LEAD's (no tool that changes a file or runs
+        #: something) and :attr:`full_plan` the whole coding set, which the
+        #: workers get — and the lead too once no worker could take a piece
+        #: (:meth:`unlock_lead`).
+        self.team: Any = None
+        self.full_plan: "ToolPlan | None" = None
+
+    # -- the team lead ------------------------------------------------------ #
+
+    def unlock_lead(self) -> tuple[list[str], list[str]]:
+        """v1.403.0: the lead gets the whole coding set for the REST of this
+        reply (no worker could take a piece). Answers ``(armed, ask)`` — the
+        real tools it gains, by tier (the lanes add them to their own lists
+        in place, ``chat_turn.apply_team_unlock``). ``([], [])`` when it holds
+        them already."""
+        full = self.full_plan
+        if full is None or full is self.plan:
+            return [], []
+        have_armed = set(self.plan.armed)
+        have_ask = set(self.plan.ask)
+        gained_armed = [n for n in full.armed if n not in have_armed]
+        gained_ask = [n for n in full.ask if n not in have_ask]
+        self.plan = full
+        return gained_armed, gained_ask
 
     # -- the prompt --------------------------------------------------------- #
 
@@ -666,6 +721,8 @@ class HarnessTurn:
             bash_description=self.bash_description,
             # (only with a team SHOWN: the sentence points at its list)
             team_first=self.team_first if self.team_section else (),
+            # v1.403.0: a coding session's team names its own workers.
+            session_team=getattr(self.team, "team", None) if self.team is not None else None,
         )
 
     def translate_calls(self, calls: list[Any]) -> list[Any]:
@@ -948,6 +1005,7 @@ def build(
     library: Iterable[str] = (),
     shell_description: str = "",
     bash_description: str = "",
+    lead: bool = False,
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -956,7 +1014,13 @@ def build(
     ``plan_mode`` / ``ask_user`` (v1.367.0, a Build session's turn): see
     :func:`plan_tools`; plan mode also renders the tree's MODE component
     ("plan only: propose, do not change files"), naming the tools in the
-    model's own dialect."""
+    model's own dialect.
+
+    ``lead`` (v1.403.0, a coding session WITH A TEAM, act mode): the turn's
+    plan is the LEAD's (:func:`plan_tools` ``lead``) and ``full_plan`` the
+    whole coding set — ONLY when the whole set can start a helper (a lead
+    with no way to hand work out is never locked: the turn then runs as a
+    solo turn would, ``full_plan`` None)."""
     family, dialect = _dialects.resolve(requested, provider, model)
     plugins = layer.plugins if layer.used else _components.Plugins()
     plan = plan_tools(
@@ -964,6 +1028,14 @@ def build(
         low_trust=low_trust, local_only=local_only, tool_ceiling=tool_ceiling,
         extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user,
     )
+    full_plan: "ToolPlan | None" = None
+    if lead and not plan_mode and plan.gate & HELPER_TARGETS:
+        full_plan = plan
+        plan = plan_tools(
+            registry, permissions, dialect, family=family, stream=stream,
+            low_trust=low_trust, local_only=local_only, tool_ceiling=tool_ceiling,
+            extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user, lead=True,
+        )
     section = dialect_section(plan, ask_words=ask_sentence(
         plan, approval_mode=approval_mode, local_only=local_only, registry=registry,
     ) if stream else "")
@@ -984,6 +1056,8 @@ def build(
         requested=requested, plan=plan, layer=layer, tree=tree, rendered=rendered, today=today,
     )
     turn.plan_mode = bool(plan_mode)
+    # v1.403.0: the whole coding set behind a team lead's plan (None: solo).
+    turn.full_plan = full_plan
     # v1.377.0: a Build session's commands run with the user's own PATH; the
     # caller worked out the words off the loop (``harness/command_env``).
     turn.shell_description = str(shell_description or "")

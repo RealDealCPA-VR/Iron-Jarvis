@@ -118,6 +118,11 @@ CALL_ID_PREFIX = "ij-finish-"
 #: v1.401.0: the team review's call id, and the real tool it calls (the
 #: helper door the team router stands behind).
 REVIEW_CALL_ID = CALL_ID_PREFIX + "review"
+#: v1.403.0 (the coding-session team): the SECOND review of a reply — after
+#: the lead's workers fixed what the first one found (never a third).
+REVIEW_CALL_ID_2 = REVIEW_CALL_ID + "-2"
+#: At most this many reviews per reply.
+MAX_REVIEW_ROUNDS = 2
 REVIEW_TOOL = "delegate"
 #: The role the review asks the team router for (``model_team.ROLE_IDS``).
 REVIEW_ROLE = "review"
@@ -1418,6 +1423,50 @@ def ran_commands(engine: Any, session_id: str, after: int, upto: int) -> list[tu
     return out
 
 
+def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, dict[str, Any], str, str]]:
+    """v1.403.0 (the coding-session team): the ``shell`` commands this
+    reply's HELPERS ran above ``mark``, in order — a team lead runs none, so
+    the check's test command is the one its workers ran (the finish check's
+    own ``_commands`` shape: ``(tool, args, handle, shell language)``; a
+    helper runs Jarvis's own ``shell``, never a bash-written dialect tool).
+    BLOCKING; [] on any failure."""
+    import json as _json
+
+    try:
+        from sqlalchemy import literal_column
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ToolInvocation
+
+        rowid = literal_column("toolinvocation.rowid")
+        with session_scope(engine) as db:
+            helpers = _helper_sessions(db, session_id, mark)
+            if not helpers:
+                return []
+            rows = db.exec(
+                select(ToolInvocation.args_json, ToolInvocation.confinement, ToolInvocation.called_as)
+                .where(ToolInvocation.session_id.in_(helpers))  # type: ignore[attr-defined]
+                .where(ToolInvocation.tool == "shell")
+                .where(rowid > int(mark))
+                .order_by(rowid)  # type: ignore[arg-type]
+                .limit(MAX_LEDGER_ROWS)
+            ).all()
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[tuple[str, dict[str, Any], str, str]] = []
+    for args_json, confinement, called_as in rows:
+        if confinement not in _RAN_CONFINEMENTS or called_as in HARNESS_CALLED_AS:
+            continue
+        try:
+            args = _json.loads(args_json or "{}")
+        except ValueError:
+            continue
+        if isinstance(args, dict) and isinstance(args.get("command"), str):
+            out.append(("shell", args, "", ""))
+    return out
+
+
 def ran_unjournaled(engine: Any, session_id: str, after: int, upto: int, custom: Iterable[str] = ()) -> bool:
     """Did the session — or a helper agent it started — RUN, between two
     ledger marks, a tool that can change a file without an undo-journal row
@@ -1835,6 +1884,24 @@ REVIEW_ASK = (
     "Fix what is right with your tools; in your closing sentence say which points you fixed and "
     "which did not apply."
 )
+#: v1.403.0 (the coding-session team): the same, for a team LEAD — it holds no
+#: tool that changes a file; its workers make the fixes.
+TEAM_REVIEW_ASK = (
+    "The reviewer can be wrong: check each point against the code first. Hand each fix that is "
+    "right to a worker (say which file and what to change); in your closing sentence say which "
+    "points you had fixed and which did not apply."
+)
+#: v1.403.0: what a SECOND review's brief adds (the change it reads is the fix).
+SECOND_REVIEW_ASK = (
+    "This is a second look: the change above is the FIX made after your first review. Check that "
+    "what you found is fixed and that the fix broke nothing else."
+)
+#: v1.403.0: the finish note's closing ask for a team LEAD.
+TEAM_FIX_ASK = (
+    "If the tests failed, a point is not met, or a file should not stay, hand the fix to a worker "
+    "now (and have it run the tests again). Then end your reply with one sentence saying what "
+    "changed after this check, or that nothing needed changing."
+)
 
 
 def _text_of(data: "bytes | None") -> "tuple[str | None, str]":
@@ -2049,8 +2116,15 @@ class FinishCheck:
         unjournaled: Iterable[str] = (),
         platform: Any = None,
         team_review: bool = False,
+        team: Any = None,
     ) -> None:
         self.engine = engine
+        #: v1.403.0 (the coding-session team, ``harness/team``): the turn's
+        #: ``TeamTurn`` (None: solo). With one, the review runs whenever the
+        #: session has a reviewer (routed only to it — the helper doors'
+        #: rule), a second time after the workers fixed what it found, and
+        #: the tests come from the WORKERS' own commands (the lead runs none).
+        self.team = team
         self.home = home
         self.event_bus = event_bus
         #: v1.401.0: the platform (the model team's members, the reviewer's
@@ -2135,6 +2209,15 @@ class FinishCheck:
         self._review_pending = False
         self._review_report = ""
         self._review_low = False
+        # v1.403.0: how many reviews this reply handed out (1 or 2), the
+        # current review call's id, the ledger mark when the first review
+        # settled (what the workers changed AFTER it is the second review's
+        # change), and whether the note owed now is the second review's.
+        self.review_rounds = 0
+        self._review_call_id = REVIEW_CALL_ID
+        self._review_mark = 0
+        self._second_note_due = False
+        self._second_draft = ""
 
     # -- what the lane tells it -------------------------------------------- #
 
@@ -2151,9 +2234,25 @@ class FinishCheck:
         the reply's own work (``tools_used``)."""
         return (
             self._review_pending
-            and str(getattr(call, "id", "") or "") == REVIEW_CALL_ID
+            and str(getattr(call, "id", "") or "") == self._review_call_id
             and str(getattr(call, "name", "") or "") == REVIEW_TOOL
         )
+
+    def team_check_tools(self, calls: Iterable[Any]) -> set[str]:
+        """v1.403.0 (a coding session WITH A TEAM): the command tools the
+        check's OWN test run needs — its carrier, and ``process_read`` /
+        ``process_stop`` for a ``process_start`` run — when ``calls`` holds
+        one of its test calls; else none. The lead holds no command tool, so
+        the lanes add exactly these to that round's gate
+        (``chat_turn.round_gate``); every other gate still applies to them."""
+        if self.team is None:
+            return set()
+        if not any(str(getattr(c, "id", "") or "") in self._by_id for c in calls or ()):
+            return set()
+        want = {self.carrier}
+        if self.carrier == "process_start":
+            want |= {"process_read", "process_stop"}
+        return {t for t in want if t in self.gate}
 
     def needs_a_person(self, call: Any) -> bool:
         """Must this call of the check's be allowed by a PERSON (a card, or a
@@ -2296,6 +2395,13 @@ class FinishCheck:
         # fixes could not run there (a round with tool calls at the limit is
         # the step-limit report), so a reply that had ENDED would end on the
         # step-limit report instead.
+        if self.ran and not self.checked_before:
+            # v1.403.0 (the coding-session team): the check ran once; the ONE
+            # thing that may follow is the team's second review.
+            return await self._second_review(
+                reply=reply, round_index=round_index, rounds=rounds, truncated=truncated,
+                low_trust=low_trust,
+            )
         if (self.ran or self.checked_before or not self.config.enabled or truncated
                 or round_index >= rounds - 2):
             return None
@@ -2309,6 +2415,12 @@ class FinishCheck:
         self.draft = str(reply or "")
         # v1.401.0: decided BEFORE the gathering, which builds its brief.
         await self._decide_review(low_trust=low_trust)
+        if self.team is not None and not self._commands:
+            # v1.403.0: the team LEAD runs no command — the tests are the ones
+            # its WORKERS ran in this reply (their own sessions' ledger rows).
+            self._commands.extend(
+                await asyncio.to_thread(helper_commands, self.engine, self.session_id, self.mark)
+            )
         await asyncio.to_thread(self._gather, files, seen)
         calls = self._test_calls(low_trust=low_trust)
         if self.harness is not None:
@@ -2334,6 +2446,53 @@ class FinishCheck:
             calls = [*calls, review]
         return calls
 
+    async def _second_review(
+        self, *, reply: str, round_index: int, rounds: int, truncated: bool, low_trust: bool,
+    ) -> "list[Any] | None":
+        """v1.403.0 (the coding-session team): ONE more review of the reply's
+        change, when the first said "changes needed" and the lead then had a
+        worker change files — the review of the FIX (the change since the first
+        review settled). Never a third, never on a cut reply, at the last
+        rounds, in low trust or with nothing changed since. None otherwise
+        (the reply ends as it would have)."""
+        if self.team is None or self.review_rounds != 1 or self._second_note_due:
+            return None
+        rv = self.review or {}
+        if rv.get("state") != REVIEW_DONE or rv.get("verdict") != VERDICT_CHANGES:
+            return None
+        if truncated or low_trust or round_index >= rounds - 2:
+            return None
+        files = await asyncio.to_thread(read_turn_files, self.engine, self.session_id, self._review_mark)
+        if not files.changed:
+            return None
+        self._second_draft = str(reply or "")
+        self._review_task = await asyncio.to_thread(self._second_brief, files)
+        self._review_wanted = True
+        self._review_call_id = REVIEW_CALL_ID_2
+        self.review_rounds = MAX_REVIEW_ROUNDS
+        self._second_note_due = True
+        review = self._review_call()
+        if review is None:
+            return None
+        if self.harness is not None:
+            try:
+                self.harness.mark_called_as(review.id, REVIEW_CALLED_AS)
+            except Exception:  # noqa: BLE001
+                pass
+        return [review]
+
+    def _second_brief(self, files: TurnFiles) -> str:
+        """BLOCKING: the second review's brief — the request, what the lead
+        said after the fixes, and the change SINCE the first review (scanned,
+        like the first brief)."""
+        change = change_diff(self.folder, self.home, files, [])
+        from ..core.promptguard import publish_blocked, scan_context
+
+        scanned = scan_context(change, source=REVIEW_CHANGE_SOURCE, cap=None)
+        if scanned.blocked:
+            publish_blocked(self.event_bus, self.session_id, scanned)
+        return review_brief(self.request, self._second_draft, scanned.text) + "\n\n" + SECOND_REVIEW_ASK
+
     # -- the team's review (v1.401.0) --------------------------------------- #
 
     def _reviewer_exists(self) -> bool:
@@ -2344,6 +2503,15 @@ class FinishCheck:
         try:
             from ..agents import model_team as MT
 
+            if self.team is not None:
+                # v1.403.0: a coding session's team — ITS reviewer (the doors
+                # route the review only to it).
+                name = str(getattr(getattr(self.team, "team", None), "reviewer", "") or "")
+                if not name:
+                    return False
+                registry = getattr(self.platform, "agents_registry", None)
+                rec = registry.get(name) if registry is not None else None
+                return rec is not None and REVIEW_ROLE in MT.roles_of(rec)
             return any(REVIEW_ROLE in MT.roles_of(r) for r in MT.team_members(self.platform))
         except Exception:  # noqa: BLE001 — no team known: no review
             return False
@@ -2375,7 +2543,10 @@ class FinishCheck:
         from ..providers.adapters.base import ToolCall
 
         self._review_pending = True
-        return ToolCall(id=REVIEW_CALL_ID, name=REVIEW_TOOL, arguments={
+        # v1.403.0: the first review of a reply is round 1 (a team's second
+        # review set its own round and id before it got here).
+        self.review_rounds = max(1, self.review_rounds)
+        return ToolCall(id=self._review_call_id, name=REVIEW_TOOL, arguments={
             "role": REVIEW_ROLE, "piece": REVIEW_PIECE, "task": self._review_task,
         })
 
@@ -2779,6 +2950,12 @@ class FinishCheck:
         }
         if state != REVIEW_DONE and str(why or "").strip():
             rv["why"] = _clip(why, MAX_REVIEW_WHY_CHARS)
+        if self.team is not None and self.review_rounds >= 1:
+            # v1.403.0 (the coding-session team): how many reviews this reply
+            # handed out — 1, or 2 when a second review ran (the record keeps
+            # the latest). Only on a team turn: every other record is exactly
+            # the v1.401.0 one.
+            rv["rounds"] = min(self.review_rounds, MAX_REVIEW_ROUNDS)
         self.review = rv
 
     def _review_model_words(self, data: dict[str, Any]) -> str:
@@ -2861,6 +3038,10 @@ class FinishCheck:
             verdict = ""
         self._review_low = low
         self._settle_review(REVIEW_DONE, member=member, model=model, verdict=verdict, report=report)
+        if self.team is not None and self.review_rounds == 1:
+            # v1.403.0: what the workers change AFTER this is the second
+            # review's change (``_second_review``).
+            self._review_mark = await asyncio.to_thread(ledger_mark, self.engine)
 
     def _settle_tests(self) -> None:
         if self.tests in (TESTS_NONE,) or not self.runs:
@@ -2880,7 +3061,12 @@ class FinishCheck:
         """The ONE note the model answers in its finish round. A test run's
         output is the program's own text, so it is fenced and scanned
         (``fence`` — the lane's own fence, which taints the reply when the
-        text reads as an instruction)."""
+        text reads as an instruction).
+
+        v1.403.0 (the coding-session team): after the team's SECOND review
+        the note is that review alone (:meth:`_second_note`)."""
+        if self._second_note_due:
+            return await self._second_note(fence)
         self._settle_tests()
         self._note_sent = True
         parts = [
@@ -2908,11 +3094,40 @@ class FinishCheck:
                 'you checked>" or "<number>. not met: <what is missing>".'
             )
         ask.append(
+            TEAM_FIX_ASK if self._lead_locked() else
             "If the tests failed, a point is not met, or a file should not stay, fix it now with "
             "your tools (and run the tests again). Then end your reply with one sentence saying "
             "what you changed after this check, or that nothing needed changing."
         )
         parts.append("\n".join(ask))
+        return "\n\n".join(parts)
+
+    def _lead_locked(self) -> bool:
+        """v1.403.0: is the reply a team LEAD's that still holds no coding
+        tool (its fixes go to a worker)?"""
+        return self.team is not None and not bool(getattr(self.team, "unlocked", False))
+
+    async def _second_note(self, fence: "Callable[[str], Awaitable[str]] | None") -> str:
+        """v1.403.0: the note after the team's SECOND review — what the
+        reviewer found in the fix, and that it was the last review of this
+        reply. The same fence and verdict rules as the first."""
+        self._second_note_due = False
+        parts = [
+            f"{NOTE_OPENING} Your reviewer read the fix once more. Iron Jarvis wrote this note; "
+            "this was the last review of this reply."
+        ]
+        review = await self._review_text(fence)
+        if review:
+            parts.append("## A second review by your team\n" + review)
+        else:
+            rv = self.review or {}
+            why = str(rv.get("why") or "it did not finish")
+            parts.append(f"## A second review by your team\nThe second review did not run: {why}.")
+        parts.append(
+            "If it still finds something to change, hand the fix to a worker now (or say why it "
+            "can wait). Then end your reply with one sentence saying what changed after this "
+            "review, or that nothing needed changing."
+        )
         return "\n\n".join(parts)
 
     async def _tests_text(self, fence: "Callable[[str], Awaitable[str]] | None") -> str:
@@ -3009,7 +3224,8 @@ class FinishCheck:
             except TypeError:  # a fence that names no tool (an older double)
                 fenced = fence(report)
             report = str(await fenced)
-        return f"{who}{on} read this reply's change.{verdict} Its report:\n{report}\n{REVIEW_ASK}"
+        ask = TEAM_REVIEW_ASK if self.team is not None else REVIEW_ASK
+        return f"{who}{on} read this reply's change.{verdict} Its report:\n{report}\n{ask}"
 
     #: Review: the list is the FILE TOOLS' (the undo journal). A command the
     #: model ran can make files too (the glm run this phase replays patched
@@ -3046,6 +3262,8 @@ class FinishCheck:
         listed = "\n".join(f"- `{rel}`" for _p, rel in self.new_files)
         more = f"\n(and {self.new_files_left_out} more)" if self.new_files_left_out else ""
         how = (
+            # v1.403.0: a team LEAD holds no tool that removes a file.
+            "have a worker remove the rest" if self._lead_locked() else
             f"remove the rest with {self.delete_name} (\"*** Delete File: <path>\"), which can be "
             "undone"
             if self.delete_name else "remove the rest with your tools"
@@ -3190,6 +3408,10 @@ def saved_review(raw: Any) -> "dict[str, Any] | None":
     why = raw.get("why")
     if state != REVIEW_DONE and isinstance(why, str) and why.strip():
         out["why"] = _clip(why, MAX_REVIEW_WHY_CHARS)
+    rounds = raw.get("rounds")
+    if isinstance(rounds, int) and not isinstance(rounds, bool) and 1 <= rounds <= MAX_REVIEW_ROUNDS:
+        # v1.403.0: how many reviews a team turn's reply handed out (1 or 2).
+        out["rounds"] = rounds
     return out
 
 
@@ -3321,6 +3543,7 @@ async def start(
     continues: str = "",
     platform: Any = None,
     team_review: bool = False,
+    team: Any = None,
 ) -> "FinishCheck | None":
     """The reply's finish check, or None when it does not apply: no harness
     turn, not a Build session's own turn (``build:<id>``), plan mode, no
@@ -3377,17 +3600,29 @@ async def start(
             carried = True
     plan = getattr(harness, "plan", None)
     gate = frozenset(getattr(plan, "gate", None) or ())
+    # v1.403.0 (the coding-session team): a team LEAD's plan holds no command
+    # tool — the check's own test run uses the WHOLE coding set's carrier
+    # (``HarnessTurn.full_plan``), let through for exactly its own calls by the
+    # lanes' ``round_gate``.
+    team = team if team is not None else getattr(harness, "team", None)
+    full = getattr(harness, "full_plan", None) if team is not None else None
+    if full is not None:
+        gate = frozenset(getattr(full, "gate", None) or ()) | gate
     from .mode import _shown_name
 
     carrier = "shell" if "shell" in gate else ("process_start" if "process_start" in gate else "shell")
     delete_name = _shown_name(plan, "apply_patch") if plan is not None else ""
     plugins = getattr(tree, "plugins", None)
+    if team is not None and str(getattr(getattr(team, "team", None), "reviewer", "") or ""):
+        # The session's reviewer checks every change — "Hand work to my team
+        # first" is not needed for a team the user picked for this session.
+        team_review = True
     check = FinishCheck(
         engine=engine, home=home, event_bus=event_bus, session_id=sid, folder=base, mark=mark,
         request=request_text(messages, carry_on), config=config,
         checks=getattr(plugins, "checks", ()) or (), gate=gate, carrier=carrier,
         delete_name=delete_name, harness=harness, unjournaled=custom,
-        platform=platform, team_review=team_review,
+        platform=platform, team_review=team_review, team=team,
     )
     called_syntax = getattr(harness, "shell_syntax_called", None)
 
@@ -3423,8 +3658,14 @@ async def start(
 
 __all__ = [
     "CALLED_AS",
+    "MAX_REVIEW_ROUNDS",
     "REVIEW_CALLED_AS",
     "REVIEW_CALL_ID",
+    "REVIEW_CALL_ID_2",
+    "SECOND_REVIEW_ASK",
+    "TEAM_FIX_ASK",
+    "TEAM_REVIEW_ASK",
+    "helper_commands",
     "REVIEW_DEADLINE_S",
     "change_diff",
     "review_brief",

@@ -1942,6 +1942,64 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## A team for a coding session (v1.403.0)
+
+A coding session can have its own small team: one model leads, one or two
+others write the code, and one checks every change. Telling a planner to hand
+work to a team did not work (in 108 measured runs it handed out nothing), so
+here the roles are kept by Iron Jarvis, not suggested.
+
+- **The roles.**
+  - **Team lead** is the session's own model. It talks with you, reads the
+    project, writes the plan and what "done" means, splits the work into
+    pieces, hands each piece to a worker, checks each worker's report,
+    answers the reviewer and reports back to you.
+  - **Workers** (one or two members of your model team) each take one piece
+    at a time on their own model and account, in the session's folder and
+    branch, under the session's approval setting, Local only and trust.
+    Each is told to do only its piece, touch only the files the piece names,
+    run the tests the piece names, and end with a report: the files it
+    changed, the tests it ran and their results, and anything left undone.
+  - **Reviewer** (none or one member) checks every change before the reply
+    ends. It can only read.
+- **How to set it.** A session's team is set on the session (pick its
+  workers and reviewer from your model team, or make a member from a model
+  you have connected: a worker gets the Writing code, Running and fixing
+  tests and Reading roles, a reviewer the Reviewing role, and a member
+  already on that model is reused and keeps everything else it has). A
+  folder can keep a team too: a new session in that folder starts with it.
+  A session with no workers works alone, exactly as before.
+- **What the lead may not do.** The lead is not given any tool that edits a
+  file or runs a command (no writing, editing, patching, shell, program or
+  page clicking and typing). It keeps reading, searching, the plan, your
+  questions, skills and the tools that hand work out. It can hand a piece to
+  a worker by name, or ask for a role (code, test or read) and Iron Jarvis
+  picks the worker. Only the session's own workers and reviewer can be
+  handed work; anyone else, a built-in helper included, is refused.
+- **The one exception.** When no worker can take a piece right now (every
+  worker is at its usage limit, past the pay-per-use limit, not answering,
+  or off this network in a Local only session), the lead gets the coding
+  tools for the rest of that reply and must say in its reply that it did the
+  piece itself and why. The reply shows "The team lead did this itself:"
+  with the reason. A worker whose run failed does not count: the lead hands
+  the piece again, or to the other worker.
+- **The reviewer, twice at most.** When a reply changed files, Iron Jarvis
+  hands the change to the session's reviewer before the reply ends (you do
+  not need "Hand work to my team first" for this). If it says changes are
+  needed and the lead has a worker fix them, the reviewer reads the fix once
+  more. There is never a third review in one reply. The finish check's tests
+  are the ones the workers ran, run again once.
+- **What you see.** Each reply of a team names the lead, the workers and
+  the reviewer, how many pieces went to the workers, and every time the lead
+  did a piece itself.
+- **Try on several models is different.** Try on gives the whole task to
+  each model alone, without the team.
+- **Plan mode** is unchanged: the lead only reads and plans there anyway.
+- **Measuring it.** A benchmark team file can say `team = true` under
+  `[planner]`: the planner then runs as this locked lead, the members with
+  the code role are its workers and the member with only the review role is
+  its reviewer. The report names that setup "lead (locked)".
+
 ## How hands-off Jarvis is (v1.402.0)
 
 The goal: give Jarvis a task, approve what it may do once, and let it work

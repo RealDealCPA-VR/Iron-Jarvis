@@ -5476,6 +5476,18 @@ async def _build_harness(
         bash_words = await asyncio.to_thread(bash_shell_description, build_call)
     if build_call and not bash_words:
         shell_words = await asyncio.to_thread(build_shell_description)
+    # v1.403.0 (THE CODING-SESSION TEAM, ``harness/team``): a Build session's
+    # turn with a team (armed by ``routes/build.start_build_turn`` — never from
+    # a client's body) runs its model as the team LEAD: no tool that changes a
+    # file or runs something is armed for it, in act mode, and its workers get
+    # the whole coding set. Read off the loop (registry reads); None — every
+    # other turn, plan mode, a text-only pick — is exactly as before.
+    # MIRROR NOTE (lock-step): both lanes build their harness turn here.
+    from ..harness import team as _team_mod
+
+    _session_team = None
+    if build_call and not plan_mode and not text_only and _team_mod.current() is not None:
+        _session_team = await asyncio.to_thread(_team_mod.resolve, d.platform, _team_mod.current())
     turn = _mode.build(
         registry=d.platform.registry,
         permissions=d.platform.permissions,
@@ -5496,13 +5508,29 @@ async def _build_harness(
         library=library,
         shell_description=shell_words,
         bash_description=bash_words,
+        lead=_session_team is not None,
     )
-    # v1.394.0 (the long-jobs plan's Phase 5): the user's MODEL TEAM, when
-    # this turn can start a helper — each member on its OWN model; under
-    # Local only a member whose model leaves the network is not listed.
-    # Off the loop (cached reads); "" with no team. MIRROR NOTE (lock-step):
-    # both lanes build their harness turn here.
-    if turn.plan.gate & {"delegate", "spawn_agent"}:
+    if _session_team is not None and turn.full_plan is not None:
+        # The team's own brief stands where the model team's list stood (one
+        # source of a member's line: the roster), BEFORE the planner — its
+        # cost is in the budget; it is not in the fingerprint.
+        try:
+            turn.team = await asyncio.to_thread(
+                _team_mod.turn_for, d.platform, _session_team,
+                worker_tools=sorted(turn.full_plan.gate), lead_provider=prov, lead_model=mod,
+            )
+            turn.team_section = await asyncio.to_thread(_team_mod.brief, d.platform, _session_team)
+            turn.team_first = ()
+        except Exception:  # noqa: BLE001 — never a locked lead with no team to hand work to
+            log.warning("coding-session team could not be set up; the turn runs solo", exc_info=True)
+            turn.team = None
+            turn.plan, turn.full_plan = turn.full_plan, None
+    elif turn.plan.gate & {"delegate", "spawn_agent"}:
+        # v1.394.0 (the long-jobs plan's Phase 5): the user's MODEL TEAM, when
+        # this turn can start a helper — each member on its OWN model; under
+        # Local only a member whose model leaves the network is not listed.
+        # Off the loop (cached reads); "" with no team. MIRROR NOTE
+        # (lock-step): both lanes build their harness turn here.
         from ..agents.model_team import team_first_on, team_section
 
         # v1.400.0 (TEAM-FIRST, ``Config.team_first``, read live; OFF by
@@ -5643,7 +5671,7 @@ def turn_session_id(session_id: "str | None") -> str:
 
 def helper_base(
     harness: "str | None", *, tool_session: str, tool_ws: Any, in_project_folder: bool,
-    project_id: "str | None",
+    project_id: "str | None", team: Any = None,
 ):
     """The parts of a harness turn's :class:`~iron_jarvis.harness.helpers.
     HelperParent` known before the first round: the session, its folder, its
@@ -5651,7 +5679,13 @@ def helper_base(
     in the turn's own context, and carried explicitly to the helper's task
     (``helpers.pinned``). None when the turn is not a harness turn (no
     helper is armed there, and ``delegate`` / ``spawn_agent`` keep reading
-    their parent row exactly as before)."""
+    their parent row exactly as before).
+
+    v1.403.0: ``team`` — the turn's coding-session team
+    (``HarnessTurn.team``, a ``harness/team.TeamTurn``; None: solo). The
+    helper doors route among its members only, a worker gets the whole
+    coding set and the worker rules, the reviewer only reads. MIRROR NOTE
+    (lock-step): both lanes pass it."""
     if harness is None:
         return None
     from ..harness.command_shell import current as _command_rule_current
@@ -5673,6 +5707,8 @@ def helper_base(
         # v1.395.0 review: this reply's id on the model team's record (a
         # reviewer's verdict judges only the pieces of the same reply).
         turn=_new_turn_key(),
+        # v1.403.0: the coding-session team (None: solo).
+        team=team,
     )
 
 
@@ -5722,6 +5758,16 @@ def helper_parent_now(
     # Sorted: the stream lane hands a SET, and a helper's tool list must not
     # change order between two identical calls.
     turn_tools = tuple(sorted({str(t) for t in (tools or ()) if str(t).strip()}))
+    team = getattr(base, "team", None)
+    if team is not None:
+        # v1.403.0 (the coding-session team): the LEAD holds no tool that
+        # changes a file or runs something, but its WORKERS do the code — a
+        # helper of a team turn works with the whole coding set (and its
+        # rules below are worked out over that set: "Ask before every
+        # action" and Local only ask in the worker too).
+        turn_tools = tuple(sorted(
+            set(turn_tools) | {str(t) for t in (getattr(team, "worker_tools", ()) or ()) if str(t).strip()}
+        ))
     rules: dict[str, str] = {}
     for key, mode in (overrides or {}).items():
         if mode == "deny":
@@ -5799,6 +5845,84 @@ def helper_parent_now(
         rules=tuple(sorted(rules.items())),
         review_only=bool(review_only),
     )
+
+
+def apply_team_unlock(harness_turn: Any, platform: Any, *, armed: list, ask_armed: list,
+                      tool_specs: list, overrides: dict, armed_grant: set,
+                      trust_state: "dict[str, Any]") -> bool:
+    """v1.403.0 (THE CODING-SESSION TEAM, ``harness/team``): when a worker
+    piece was refused because no worker of the session could take it
+    (``TeamTurn.no_worker``), the LEAD gets the whole coding set for the REST
+    of this reply — added IN PLACE to the lane's own lists (the loop closes
+    over them): ``armed`` / ``ask_armed`` by the full plan's tiers, the tool
+    specs the model is shown (the parity rule: what is armed is what it sees),
+    and the allow-tier grants through the same overrides every armed tool
+    gets — the folder's rules and low trust (from the door, or a taint since)
+    narrowed again over the new names. Called at the TOP of each round, so
+    the note the refusal carried ("You may do this piece yourself now") is
+    true by the next model call. False (nothing changed) on every other turn
+    and round. MIRROR NOTE (lock-step): both lanes call it at the same seam."""
+    team = getattr(harness_turn, "team", None) if harness_turn is not None else None
+    if team is None or not team.take_unlock():
+        return False
+    gained_armed, gained_ask = harness_turn.unlock_lead()
+    if trust_state.get("low") or trust_state.get("tainted"):
+        gained_armed = [n for n in gained_armed if n not in LOW_TRUST_DENY]
+        gained_ask = [n for n in gained_ask if n not in LOW_TRUST_DENY]
+    registry = getattr(platform, "registry", None)
+    for name in gained_armed:
+        if name not in armed:
+            armed.append(name)
+        overrides[name] = "allow"
+        tool = registry.get(name) if registry is not None else None
+        if tool is not None:
+            overrides[tool.perm_key()] = "allow"
+    for name in gained_ask:
+        if name not in ask_armed and name not in armed:
+            ask_armed.append(name)
+    harness_turn.narrow(overrides, registry, getattr(platform, "permissions", None))
+    if trust_state.get("low") or trust_state.get("tainted"):
+        overrides.update(low_trust_overrides(overrides))
+    for name in gained_armed:
+        tool = registry.get(name) if registry is not None else None
+        for key in {name, tool.perm_key() if tool is not None else name}:
+            if overrides.get(key) == "allow":
+                armed_grant.add(key)
+    tool_specs[:] = harness_turn.specs(registry)
+    log.info("coding-session team: the lead may do a piece itself now (%d tools armed)",
+             len(gained_armed) + len(gained_ask))
+    return True
+
+
+def round_gate(base: Any, finish: Any, calls: Any) -> set:
+    """The real tools THIS round's calls may run — the lane's armed set — plus,
+    in a coding session WITH A TEAM (v1.403.0), the command tool of the
+    finish check's OWN test run: the lead holds no command tool, so the
+    check's synthetic call (and its ``process_read`` / ``process_stop``) is
+    allowed for exactly the calls the check owns, through every other gate
+    as before (the git guard's spend check, the card, the posture, Local
+    only). ``base`` unchanged on every other turn. MIRROR NOTE (lock-step):
+    both lanes read their armed set through it."""
+    gate = set(base or ())
+    if finish is None or getattr(finish, "team", None) is None:
+        return gate
+    try:
+        return gate | set(finish.team_check_tools(calls))
+    except Exception:  # noqa: BLE001 — never wider by accident
+        return gate
+
+
+def team_record(harness_turn: Any) -> "dict[str, Any] | None":
+    """The turn record's ``team`` (v1.403.0) — present ONLY for a turn of a
+    coding session with a team. MIRROR NOTE (lock-step): both lanes put it
+    LAST on the done frame / POST answer."""
+    team = getattr(harness_turn, "team", None) if harness_turn is not None else None
+    if team is None:
+        return None
+    try:
+        return team.record()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def helper_together(harness_on: bool, calls: Any, refused: Any) -> "list[bool] | None":
@@ -9122,6 +9246,8 @@ async def run_chat_turn(
             harness, tool_session=_tool_session, tool_ws=tool_ws,
             in_project_folder=in_project_folder,
             project_id=(pid if resolved_proj is not None else None),
+            # v1.403.0: the coding-session team (lock-step: the stream lane).
+            team=getattr(_harness, "team", None),
         )
         if armed else None
     )
@@ -9201,6 +9327,13 @@ async def run_chat_turn(
                 # complete calls' results (lock-step: the stream lane).
                 msgs.append(LLMMessage(role="user", content=_cut_pending))
                 _cut_pending = ""
+            # THE CODING-SESSION TEAM (v1.403.0): no worker could take a piece
+            # — the lead's coding tools for the rest of this reply, before the
+            # model is asked again. MIRROR NOTE (lock-step): the stream lane.
+            apply_team_unlock(
+                _harness, d.platform, armed=armed, ask_armed=[], tool_specs=tool_specs,
+                overrides=overrides, armed_grant=armed_grant, trust_state=_trust_state,
+            )
             _send, _send_system = _fit_turn_transcript(
                 d, msgs, system, provider_choice, model_choice, head=_head
             )
@@ -9480,8 +9613,12 @@ async def run_chat_turn(
             # quote is cached by the tool, so a free start pays no second
             # estimate. POST-LANE-ONLY policy by design: the stream lane cards
             # instead of refusing — see `spend_not_asked_invoke_kwargs`.
+            # v1.403.0: the round's gate (``round_gate`` — a team turn's
+            # finish-check test run joins it). MIRROR NOTE (lock-step): the
+            # stream lane's `_turn_tools`.
+            _gate_now = round_gate(set(armed), _finish, calls)
             _spend = await _spend_checks_for(
-                d.platform.registry, calls, ctx, set(armed)
+                d.platform.registry, calls, ctx, _gate_now
             )
             _batched = [
                 not _refused[i] and _batchable_call(tc.name, tc.arguments)
@@ -9572,7 +9709,7 @@ async def run_chat_turn(
                     _harness.ctx_for(ctx, tc) if _harness is not None else ctx,
                     d.platform.permissions,
                     overrides, session_allow=armed_grant,
-                    allowed_names=set(armed),
+                    allowed_names=_gate_now,
                     # v1.246.0: the agent run's tool deadline, so a hung
                     # tool ends as a failed result instead of a hung turn.
                     deadline_s=chat_tool_deadline(d.platform),
@@ -9831,7 +9968,8 @@ async def run_chat_turn(
                                 await _finish.take(
                                     tc, result, str(content), refused=_fin_refused,
                                     invoke=finish_invoke(
-                                        d, ctx, overrides, lambda: armed_grant, set(armed),
+                                        # v1.403.0: the round's gate (lock-step).
+                                        d, ctx, overrides, lambda: armed_grant, _gate_now,
                                     ),
                                 )
                             continue
@@ -10302,4 +10440,9 @@ async def run_chat_turn(
     # carries the same conditional key.
     if _finish is not None and _finish.ran:
         out["finish"] = await _finish.record()
+    # THE CODING-SESSION TEAM (v1.403.0): LAST, and present ONLY for a turn of
+    # a session with a team. MIRROR NOTE (lock-step): the stream done-frame.
+    _team_rec = team_record(_harness)
+    if _team_rec is not None:
+        out["team"] = _team_rec
     return out

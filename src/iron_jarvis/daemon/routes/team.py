@@ -39,6 +39,20 @@ class StarterBody(BaseModel):
     paid: bool = False
 
 
+class FromModelBody(BaseModel):
+    """``POST /team/members/from-model`` (v1.403.0, the coding-session team):
+    the member that runs on this model, for a session's ``role``."""
+
+    provider: str = ""
+    model: str = ""
+    #: "worker" (gains code, test and read) or "reviewer" (gains review).
+    role: str = ""
+    #: Optional: the session is Local only (a cloud model is refused) — said
+    #: by the flag, or read off the Build session ``thread_id`` names.
+    local_only: bool = False
+    thread_id: str = ""
+
+
 def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = None) -> dict[str, Any]:
     """One member as Settings › Model team shows it. Never raises.
 
@@ -153,3 +167,36 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=refused.status, detail=str(refused)) from None
         out["team"] = team_view(d.platform)
         return out
+
+    @app.post("/team/members/from-model")
+    def post_member_from_model(body: FromModelBody) -> dict[str, Any]:
+        """v1.403.0 (the coding-session team, ``harness/team``): the member
+        that runs on ``provider`` / ``model`` for a session's ``role`` — an
+        existing member on that model (it GAINS the role's roles; everything
+        else it has is kept), else a new one named after the model. 409 in
+        one sentence for the demo model, a model Iron Jarvis cannot use or
+        reach now, and a cloud model in a Local only session."""
+        from ...harness import team as HT
+        from .connections import selectable_models
+
+        local_only = bool(body.local_only)
+        if not local_only and body.thread_id.strip():
+            from ...harness import sessions as S
+
+            row = S.get_row(d.platform.engine, body.thread_id.strip())
+            if row is not None:
+                setup = S._setup(row)
+                local_only = setup.get("local_only") is True
+        try:
+            catalog = selectable_models(d)
+        except Exception as exc:  # noqa: BLE001 — said, never a guess
+            raise HTTPException(
+                status_code=503, detail=f"The model list could not be read: {type(exc).__name__}"
+            ) from None
+        try:
+            return HT.member_from_model(
+                d.platform, catalog, provider=body.provider, model=body.model, role=body.role,
+                local_only=local_only,
+            )
+        except HT.TeamRefused as refused:
+            raise HTTPException(status_code=refused.status, detail=str(refused)) from None

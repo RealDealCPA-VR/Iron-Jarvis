@@ -310,6 +310,10 @@ class DelegateTool(Tool):
         # still runs exactly as before; a role beside the name only says what
         # the piece is (its record). An unknown role, or one no usable member
         # holds, is refused in words — never a silent run as anyone else.
+        # A CODING SESSION'S TEAM (v1.403.0, ``harness/team``): the lead hands
+        # pieces ONLY to the session's workers (code / test / read) and its
+        # reviewer (a review). None for every other caller.
+        _session_team = getattr(_hp, "team", None) if _hp is not None else None
         _route = None
         _team_role = ""
         _piece = ""
@@ -323,16 +327,28 @@ class DelegateTool(Tool):
                 return ToolResult(ok=False, output="", error=_model_team.unknown_role_refusal(_asked))
             _piece = _model_team.piece_key(args.get("piece"), task)
             if _role_text is not None or not str(args.get("agent_type") or "").strip():
+                _refused = _helpers.team_role_refusal(_hp, _team_role)
+                if _refused is not None:
+                    return _refused
                 _route = await asyncio.to_thread(
                     _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
-                    session_id=ctx.session_id, helper_parent=_hp, team=_project_team,
+                    session_id=ctx.session_id, helper_parent=_hp,
+                    **_helpers.team_route_kwargs(_hp, _team_role, _project_team),
                 )
                 _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
                 if _route.record is None:
+                    # v1.403.0: no WORKER of a coding session's team could take
+                    # this piece — the lead may do it itself (unlocked at the
+                    # lane's next round), and its answer says so.
+                    _note = (
+                        _session_team.no_worker(_team_role, _route.refusal, _route.reason)
+                        if _session_team is not None else ""
+                    )
                     return ToolResult(
-                        ok=False, output="", error=_route.refusal,
+                        ok=False, output="", error=_note or _route.refusal,
                         data={"role": _team_role, "reason": _route.reason, "state": "not_started",
-                              "waited": _route.waited},
+                              "waited": _route.waited,
+                              **({"lead_may_do": True} if _note else {})},
                     )
                 raw_type = f"custom:{_route.record.name}"
 
@@ -405,6 +421,13 @@ class DelegateTool(Tool):
                 return ToolResult(
                     ok=False, output="", error=_team.off_team_refusal(_project_team, _who)
                 )
+        # A CODING SESSION'S TEAM (v1.403.0): the lead hands work to its own
+        # workers and reviewer only — a built-in helper would do the work on
+        # the lead's model, around the lead's lock. Said before anything runs.
+        if _session_team is not None:
+            _off = _session_team.off_team(entry.name if entry is not None else raw_type)
+            if _off:
+                return ToolResult(ok=False, output="", error=_off)
 
         if entry is not None and entry.kind == "remote":
             # Remote target: no local session — the existing remote ask path.
@@ -668,6 +691,8 @@ class DelegateTool(Tool):
             )
             # v1.372.0: the harness row starts following the helper.
             _helpers.child_started(_hp, self.platform, child_session.id, target_name, task)
+            # v1.403.0: a piece really started on a worker of the session's team.
+            _helpers.note_team_piece(_hp, target_name)
 
             # The child must ALWAYS settle (v1.167.0). A bare await left the child
             # session ACTIVE forever when the parent was cancelled mid-delegation

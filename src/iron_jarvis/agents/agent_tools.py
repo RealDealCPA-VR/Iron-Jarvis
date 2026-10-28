@@ -337,6 +337,9 @@ class SpawnAgentTool(Tool):
         # it (MIRROR NOTE, lock-step): ``role`` or ``agent: "role:<id>"`` asks
         # the TEAM ROUTER; a named agent runs as before; an unknown role or one
         # no usable member holds is refused in words.
+        # A CODING SESSION'S TEAM (v1.403.0) — exactly as ``delegate`` reads
+        # it (MIRROR NOTE, lock-step).
+        _session_team = getattr(_hp, "team", None) if _hp is not None else None
         _route = None
         _team_role = ""
         _piece = ""
@@ -350,16 +353,27 @@ class SpawnAgentTool(Tool):
                 return ToolResult(ok=False, output="", error=_model_team.unknown_role_refusal(_asked))
             _piece = _model_team.piece_key(args.get("piece"), task)
             if _role_text is not None or not str(args.get("agent") or "").strip():
+                _refused = _helpers.team_role_refusal(_hp, _team_role)
+                if _refused is not None:
+                    return _refused
                 _route = await asyncio.to_thread(
                     _model_team.route_for_call, self.platform, role=_team_role, piece=_piece,
-                    session_id=ctx.session_id, helper_parent=_hp, team=_project_team,
+                    session_id=ctx.session_id, helper_parent=_hp,
+                    **_helpers.team_route_kwargs(_hp, _team_role, _project_team),
                 )
                 _helpers.note_route(_hp, role=_team_role, reason=_route.reason)
                 if _route.record is None:
+                    # v1.403.0: no worker could take it — the lead may do it
+                    # itself (``delegate``'s rule, lock-step).
+                    _note = (
+                        _session_team.no_worker(_team_role, _route.refusal, _route.reason)
+                        if _session_team is not None else ""
+                    )
                     return ToolResult(
-                        ok=False, output="", error=_route.refusal,
+                        ok=False, output="", error=_note or _route.refusal,
                         data={"role": _team_role, "reason": _route.reason, "state": "not_started",
-                              "waited": _route.waited},
+                              "waited": _route.waited,
+                              **({"lead_may_do": True} if _note else {})},
                     )
                 agent_name = _route.record.name
         elif not str(args.get("agent") or "").strip():
@@ -421,6 +435,11 @@ class SpawnAgentTool(Tool):
                 return ToolResult(
                     ok=False, output="", error=_team.off_team_refusal(_project_team, _who)
                 )
+        # A CODING SESSION'S TEAM (v1.403.0, ``delegate``'s rule — lock-step).
+        if _session_team is not None:
+            _off = _session_team.off_team(canonical_roster_name(self.platform, agent_name))
+            if _off:
+                return ToolResult(ok=False, output="", error=_off)
         if base_type is AgentType.SUPERVISOR:
             return ToolResult(
                 ok=False,
@@ -611,6 +630,8 @@ class SpawnAgentTool(Tool):
                 _hp, self.platform, child_session.id,
                 canonical_roster_name(self.platform, agent_name), task,
             )
+            # v1.403.0: a piece really started on a worker of the session's team.
+            _helpers.note_team_piece(_hp, canonical_roster_name(self.platform, agent_name))
             # THE CHILD MUST ALWAYS SETTLE — the same guard `delegate` grew in
             # v1.167.0, and since v1.193.0 spawn cannot go without it. A bare
             # await left a crashed child ACTIVE forever; that used to strand a

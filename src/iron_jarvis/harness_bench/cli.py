@@ -63,7 +63,9 @@ def run_command(
     team: str = typer.Option(
         "", "--team",
         help="jarvis-team only, and required for it: a TOML file naming the planner ([planner] "
-        "provider + model, optional team_first = true to run with \"Hand work to my team first\" on) "
+        "provider + model, optional team_first = true to run with \"Hand work to my team first\" on, "
+        "optional team = true to run the planner as a locked team lead with the code members as its "
+        "workers and the review member as its reviewer) "
         "and the members ([[members]] name, provider, model, roles, optional account). The team is "
         "part of the setup: another team is another results folder."),
     with_alone: bool = typer.Option(

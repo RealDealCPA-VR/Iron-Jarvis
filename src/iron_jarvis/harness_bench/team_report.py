@@ -74,11 +74,26 @@ def is_team_first(config: Mapping[str, Any]) -> bool:
     return config.get("runner") == TEAM_RUNNER and isinstance(team, Mapping) and team.get("team_first") is True
 
 
+#: v1.403.0: how a TEAM MODE setup (the team file's ``team = true``: the
+#: planner runs as a coding session's locked team lead) is named.
+TEAM_LEAD_TAG = "lead (locked)"
+
+
+def is_team_mode(config: Mapping[str, Any]) -> bool:
+    """Was this setup a team run in team mode (``harness.team.team_mode``)?
+    A configuration saved before v1.403.0 has no such key and is not."""
+    harness = config.get("harness") if isinstance(config, Mapping) else None
+    team = harness.get("team") if isinstance(harness, Mapping) else None
+    return config.get("runner") == TEAM_RUNNER and isinstance(team, Mapping) and team.get("team_mode") is True
+
+
 def runner_label(config: Mapping[str, Any]) -> str:
     """The Runner cell: the runner's name, and ``(team-first)`` for a team
-    setup with team-first on — so the two team setups read apart."""
+    setup with team-first on — so the two team setups read apart. v1.403.0:
+    and ``· lead (locked)`` for a team-mode setup."""
     runner = str(config.get("runner") or "?")
-    return f"{runner} ({TEAM_FIRST_TAG})" if is_team_first(config) else runner
+    label = f"{runner} ({TEAM_FIRST_TAG})" if is_team_first(config) else runner
+    return f"{label} · {TEAM_LEAD_TAG}" if is_team_mode(config) else label
 
 
 def _live(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -409,8 +424,10 @@ FINISH_REVIEW_ID = "ij-finish-review"
 
 
 def _finish_review_rows(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    # v1.403.0: a coding-session team's SECOND review is the finish check's
+    # too (``harness.finish.REVIEW_CALL_ID_2`` = this id + "-2").
     return [h for h in (record.get("helpers") or ())
-            if isinstance(h, Mapping) and str(h.get("id") or "") == FINISH_REVIEW_ID]
+            if isinstance(h, Mapping) and str(h.get("id") or "") in (FINISH_REVIEW_ID, FINISH_REVIEW_ID + "-2")]
 
 
 def _a_member(name: Any) -> bool:
@@ -827,7 +844,8 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
             peers += [(c, r, s) for c, r, s in configs if c is alone[0]]
         tiers = ", ".join(sorted(shape[0])) or "-"
         lines += [
-            f"**Team {str(t_config.get('key', ''))[:12]}{', ' + TEAM_FIRST_TAG if is_team_first(t_config) else ''}** "
+            f"**Team {str(t_config.get('key', ''))[:12]}{', ' + TEAM_FIRST_TAG if is_team_first(t_config) else ''}"
+            f"{', ' + TEAM_LEAD_TAG if is_team_mode(t_config) else ''}** "
             f"(planner {_model_cell(t_config)}; tier {tiers}; "
             f"{shape[1]} repeat(s)).",
             "",
