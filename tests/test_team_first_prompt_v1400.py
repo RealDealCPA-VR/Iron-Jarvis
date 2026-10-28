@@ -24,6 +24,13 @@ and every tool spec are BYTE-IDENTICAL to v1.399.4:
 with ``IJ_REGEN_TEAM_FIRST_OFF=1``. Regenerate ONLY for an intended change to
 what a coding session's planner is shown, and say so in the commit.
 
+REGENERATED ONCE, v1.402.0 (part 4, "ask about intent, decide the rest"): the
+harness's "How you work" gained the asking policy (``components.ASK_POLICY``)
+for every dialect. Checked before it was written: every key differs from the
+v1.399.4 capture by exactly ``"\\n\\n" + ASK_POLICY`` in the system prompt,
+and the tool specs are identical (``tests/test_ask_policy_v1402.py`` holds
+that one change to its place).
+
 The capture is machine-independent: the temporary folder and the home folder
 become placeholders, today's date becomes ``<TODAY>``, and a command tool's
 "How commands run here" note (it names the shell this PC has) becomes

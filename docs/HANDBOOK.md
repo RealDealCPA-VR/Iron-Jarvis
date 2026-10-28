@@ -1942,6 +1942,35 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Asks about what you want, decides the rest (v1.402.0)
+
+Iron Jarvis now asks you fewer questions, and better ones.
+
+- **One rule about asking.** Every coding session (whatever model it runs on,
+  planning or not), every agent run, and every chat message that can change
+  something is told the same thing: ask you only about what you want or what
+  counts as done, never about how to do it. It decides the details itself
+  (names, where files go, the tools your project already uses, the order of
+  the work), says in its summary what it assumed, and keeps working. When it
+  must ask, it asks once, gives the choices with its recommendation, and does
+  not ask the same thing again. A folder whose own harness file
+  `system_prompt.md` replaces "How you work" replaces this rule with it.
+- **"Want me to …?" is done, not asked.** When a coding session's reply, or an
+  agent's final answer, ends by offering more work ("Want me to also add
+  tests?", "Shall I proceed?", "Let me know if you'd like me to …") and there
+  is room left to work, Iron Jarvis tells it once: if that work is part of
+  what you asked, or plainly needed to finish it, do it now and then sum up;
+  if only you can decide, end with that one question and a recommendation.
+  The reply you keep is the first answer, then what came after it.
+- **When it does not do this.** Never in a plain chat (the reply ends where the
+  model ended it), in plan mode, in a run marked low trust, with fewer than two
+  rounds left, or more than once in a reply. A question about what you want
+  ("Which colour should the button be?"), a choice between options, an offer
+  to explain, and an idea it parks "for later" all end the reply as before.
+  After the finish check has run, its answer ends the reply.
+- Each time it happens, the app counts it as one of its own nudges (an
+  `autonomy.nudged` event), apart from the times you nudge it yourself.
+
 ## Clearer model, effort and pane tabs in a coding session (v1.401.2)
 
 Three things in a coding session's box and panes read more simply.

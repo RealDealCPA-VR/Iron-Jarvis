@@ -46,6 +46,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
+from . import closing_offer as _closing_offer
 from . import components as _components
 from . import dialects as _dialects
 
@@ -568,6 +569,11 @@ class HarnessTurn:
         self.plan_mode = False
         self.nudged = False
         self.text_call_kind = ""
+        #: v1.402.0 (part 4): this reply's CLOSING-OFFER nudge (``harness/
+        #: closing_offer``) — a reply that ends "Want me to …?" with work
+        #: left is told once to do it. Read by both chat lanes at the same
+        #: seam as :meth:`wants_nudge`.
+        self.closing_offer = _closing_offer.ClosingOffer()
         #: call id -> the name the model used, for calls that were translated
         self._called_as: dict[str, str] = {}
         #: call id -> the dialect tool the model called (for its own words)

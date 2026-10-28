@@ -145,7 +145,31 @@ INCREMENTAL_WORK = (
     "first change."
 )
 
-DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_BASE + INCREMENTAL_WORK
+#: v1.402.0 (part 4, "ask about intent, decide the rest"): THE ONE ASKING
+#: POLICY. Nothing told a model WHAT to ask the user about — the Build layer
+#: said "keep going until the task is done" and nothing about asking, the
+#: agents' voice said "make a sensible assumption", and on the user's install
+#: 9 of 67 chat replies ended in a question. Said in these words wherever a
+#: model can ask: this layer's "How you work" (every dialect, act AND plan
+#: mode — a plan is where intent questions belong), every agent run's system
+#: prompt (``agents/runtime``, attended and unattended), and — the short form
+#: ``daemon/chat_turn.CHAT_ASK_POLICY`` — a plain chat turn that armed a tool
+#: that does work. A folder's own ``system_prompt.md`` replaces it with the
+#: rest of "How you work" (omitted-is-inherited, like every default here).
+ASK_POLICY = (
+    "Ask the user only about what they want or what counts as done — never about how "
+    "to do it. Decide implementation details yourself (names, file layout, the "
+    "libraries and test tools the project already uses, the order of the work), say "
+    "in your final summary what you assumed, and keep working. When you must ask, ask "
+    "once, give the options with your recommendation, and do not ask again about the "
+    "same thing."
+)
+
+DEFAULT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPT_BASE + INCREMENTAL_WORK + "\n\n" + ASK_POLICY
+
+#: A planning turn's "How you work" (v1.384.0: no "one change at a time" — it
+#: has no editors), with the asking policy all the same (v1.402.0).
+DEFAULT_PLAN_PROMPT = DEFAULT_SYSTEM_PROMPT_BASE + "\n\n" + ASK_POLICY
 
 #: THE FLOOR. Learned the hard way (2026-10-21): in a Phase 0 review run the
 #: model finished a task with ``taskkill /f /im python.exe``, which ended every
@@ -701,9 +725,10 @@ def compose(
     plan-mode text (:func:`plan_mode_text`); "" renders nothing."""
     texts = project.texts if project.used else {}
     # v1.384.0 review: a planning turn (``mode``) is never told to make
-    # changes one at a time — it has no editors.
+    # changes one at a time — it has no editors. v1.402.0: both carry the
+    # asking policy (``ASK_POLICY``).
     system_prompt = texts.get("system_prompt", "").strip() or (
-        DEFAULT_SYSTEM_PROMPT_BASE if str(mode or "").strip() else DEFAULT_SYSTEM_PROMPT
+        DEFAULT_PLAN_PROMPT if str(mode or "").strip() else DEFAULT_SYSTEM_PROMPT
     )
     guardrails = list(DEFAULT_GUARDRAILS)
     extra_guard = texts.get("guardrails", "").strip()

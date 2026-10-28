@@ -2448,6 +2448,40 @@ RECOVERY_BLOCK = (
 )
 
 
+#: v1.402.0 (part 4, "ask about intent, decide the rest") — the SHORT FORM of
+#: the one asking policy (``harness/components.ASK_POLICY``, which a coding
+#: session's harness and every agent run carry whole). Rides the "# Tools"
+#: section of BOTH lanes right after :data:`RECOVERY_BLOCK`, and ONLY when the
+#: turn armed (or ask-armed) a tool that does work (:func:`arms_work`): a
+#: plain question, a text-only turn and a turn that only reads keep their
+#: prompt byte for byte (``tests/test_text_only_handoff_v1330.py``,
+#: ``tests/test_harness_off_golden_v1366.py``). MIRROR NOTE (lock-step):
+#: routes/chat.py's stream lane carries the same constant at the same seam.
+CHAT_ASK_POLICY = (
+    "ASKING: ask the user only about what they want or what counts as done,"
+    " never how to do it — decide the rest yourself and say what you assumed."
+    " When you must ask, ask once, with your recommendation."
+)
+
+
+def arms_work(names) -> bool:
+    """Does the turn arm (or ask-arm) a tool that DOES work — one that can
+    change a file, run a command or program, hand the work on, or act in a
+    browser — rather than only read or look things up? (v1.402.0, the
+    :data:`CHAT_ASK_POLICY` gate.) The lists are the app's own: the
+    registry's ``_MUTATING_TOOLS`` (its "success may have changed
+    something" list), :data:`_FILE_CHANGING_TOOLS` and the page-acting
+    browser tools. Reversibility is NOT the signal: it defaults to
+    irreversible, so ``web_search`` would count. Never raises."""
+    try:
+        from ..tools.registry import _MUTATING_TOOLS
+
+        s = {str(n) for n in (names or ())}
+        return bool(s & (_MUTATING_TOOLS | _FILE_CHANGING_TOOLS | _BROWSER_ACTING_TOOLS))
+    except Exception:  # noqa: BLE001 — a prompt line never breaks a turn
+        return False
+
+
 #: v1.353.0 (G40) — ASKING FOR A PICTURE WITH NO MEDIA SERVICE ASKS FOR THE
 #: KEY UP FRONT. Before: "make a video of a cat surfing" with nothing
 #: connected ask-armed ``generate_media``, the user approved its card, and
@@ -6054,6 +6088,83 @@ def finish_low_trust(trust_state: dict[str, Any]) -> bool:
     return bool(trust_state.get("low") or trust_state.get("tainted"))
 
 
+def closing_offer_wanted(
+    harness: Any,
+    finish: Any,
+    reply: str,
+    *,
+    has_calls: bool,
+    round_index: int,
+    rounds: int,
+    armed: bool,
+    truncated: bool,
+    trust_state: dict[str, Any],
+    messages: Any = None,
+) -> bool:
+    """A CLOSING OFFER (v1.402.0, part 4 — ``harness/closing_offer``): does
+    this coding-session reply, which called no tool, end by offering to do
+    more ("Want me to also add tests?") with work left? Only on a harness
+    turn (a plain chat turn never: byte-identical), at most once per reply —
+    a nudge already in ``messages`` (the turn's transcript: a reply resumed
+    after a restart carries its earlier rounds) counts as fired — never in
+    plan mode, in low trust, cut for length, without two rounds left, or
+    after the finish check has run (its answer ends the reply). Asked BEFORE
+    the finish check, so when both apply the offer goes first. Never raises.
+    MIRROR NOTE (lock-step): both lanes ask it at the same seam, right after
+    the text-tool-call nudge."""
+    offer = getattr(harness, "closing_offer", None) if harness is not None else None
+    if offer is None:
+        return False
+    try:
+        from ..harness.closing_offer import nudge_index
+
+        if messages is not None and nudge_index(messages) >= 0:
+            return False
+        return bool(offer.wants(
+            reply,
+            has_calls=has_calls, round_index=round_index, rounds=rounds, armed=armed,
+            truncated=truncated, low_trust=finish_low_trust(trust_state),
+            plan_mode=bool(getattr(harness, "plan_mode", False)),
+            after_finish=bool(finish is not None and getattr(finish, "ran", False)),
+        ))
+    except Exception:  # noqa: BLE001 — a reading never breaks a turn
+        return False
+
+
+def take_closing_offer(harness: Any, reply: str) -> str:
+    """The closing offer fires: the nudge's words (the reply it fired on is
+    kept as the head of the reply the user keeps)."""
+    return harness.closing_offer.take(reply)
+
+
+def combine_closing_offer(harness: Any, text: str) -> str:
+    """The reply the user keeps after a closing offer fired: the answer that
+    ended on the offer, then what came after it (``ClosingOffer.combine`` —
+    the finish check's ``combine`` shape). Unchanged when it never fired, and
+    on every non-harness turn. MIRROR NOTE (lock-step): both lanes combine
+    AFTER the final-answer nudge (so a silent finish still gets its summary)
+    and BEFORE the language guard (which then reads the whole reply)."""
+    offer = getattr(harness, "closing_offer", None) if harness is not None else None
+    if offer is None or not getattr(offer, "fired", False):
+        return text
+    return offer.combine(text)
+
+
+async def note_closing_offer(platform: Any, body: Any, tool_session: str, round_index: int) -> None:
+    """ONE ``autonomy.nudged`` event (``core/nudges.CLOSING_QUESTION``) for
+    a closing offer that fired. Never raises (``note_nudge`` swallows)."""
+    from ..core.nudges import CLOSING_QUESTION, note_nudge
+
+    await note_nudge(
+        getattr(platform, "event_bus", None), CLOSING_QUESTION,
+        session_id=str(tool_session or "chat"),
+        surface="build" if str(tool_session or "").startswith("build:") else "chat",
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        round=int(round_index) + 1,
+    )
+
+
 def harness_check_gate(trust_state: dict[str, Any]) -> dict[str, Any]:
     """``{may_run, why_not}`` for a folder's plugin checks this turn: never
     in low trust (a check is the folder's own command, and the folder is
@@ -8829,6 +8940,10 @@ async def run_chat_turn(
             # NOTE (lock-step): routes/chat.py's stream lane carries the same
             # constant at the same seam — edit both or neither.
             + "\n" + RECOVERY_BLOCK
+            # ASKING (v1.402.0): the asking policy's short form, only on a
+            # turn that armed a tool that does work. MIRROR NOTE (lock-step):
+            # routes/chat.py's Tools seam, same constant, same place.
+            + ("\n" + CHAT_ASK_POLICY if arms_work(armed) else "")
             + (
                 "\nSPREADSHEET FIGURES: never compute numbers yourself —"
                 " call excel_query (profile the workbook first with"
@@ -9158,6 +9273,26 @@ async def run_chat_turn(
 
                 msgs.append(LLMMessage(role="assistant", content=route.response.text or ""))
                 msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                continue
+            # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4 — harness/
+            # closing_offer): "Want me to also add tests?" with rounds left.
+            # ONCE per reply the model is told to do it unless only the user
+            # can decide, and the loop goes on; BEFORE the finish check, so
+            # when both apply the offer goes first and the check runs when
+            # the model ends again. Never on a plain chat turn. MIRROR NOTE
+            # (lock-step): routes/chat.py's stream loop, same seam.
+            if not calls and closing_offer_wanted(
+                _harness, _finish, route.response.text or "",
+                has_calls=bool(calls), round_index=_round, rounds=_rounds,
+                armed=bool(armed), truncated=_truncated, trust_state=_trust_state, messages=msgs,
+            ):
+                _offer_text = route.response.text or ""
+                msgs.append(LLMMessage(
+                    role="assistant", content=_offer_text,
+                    raw_blocks=list(getattr(route.response, "raw_blocks", None) or []),
+                ))
+                msgs.append(LLMMessage(role="user", content=take_closing_offer(_harness, _offer_text)))
+                await note_closing_offer(d.platform, body, _tool_session, _round)
                 continue
             # THE FINISH CHECK (part 3, Phase 2): the model ends a Build reply
             # that changed files — ONCE, its tests run as this round's own
@@ -9745,6 +9880,12 @@ async def run_chat_turn(
         usage_in += _f_in
         usage_out += _f_out
         completions += _f_n
+    # A CLOSING OFFER THAT FIRED (v1.402.0, part 4): the reply is the answer
+    # that ended on the offer, then what came after it — AFTER the final-
+    # answer nudge (a silent finish still gets its summary), BEFORE the
+    # language guard (it reads the whole reply). MIRROR NOTE (lock-step): the
+    # stream lane combines at the same point.
+    model_text = combine_closing_offer(_harness, model_text)
     _l_outcome: dict = {}
     model_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
         d.platform,
