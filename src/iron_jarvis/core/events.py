@@ -104,6 +104,18 @@ class EventType:
     # the Tools page while the user stared at chat.
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_RESOLVED = "approval.resolved"
+    # v1.402.0 (autonomy metrics, ``core/nudges``): EVERY card or question
+    # any lane puts to the user (chat, Build, agent runs, night, the bench),
+    # and its answer — for counting only: never a default alert, never on the
+    # bell, never sent to the phone. asked: {kind: card|question|plan, tool,
+    # surface, thread_id?, turn_id?, once_only?}; answered adds {decision,
+    # actor: app|phone|grant|timeout|bench, wait_ms}.
+    INTERRUPT_ASKED = "interrupt.asked"
+    INTERRUPT_ANSWERED = "interrupt.answered"
+    # v1.402.0: Iron Jarvis moved a run ON BY ITSELF where the user used to
+    # have to nudge it: {kind (core/nudges.NUDGE_KINDS), thread_id?, turn_id?}.
+    # Counted apart from the user's own nudges.
+    AUTONOMY_NUDGED = "autonomy.nudged"
     # THE TEAM ANNOUNCES ITSELF (v1.193.0). Delegation had NO event of its own:
     # the only trace of a coordinator handing work out was a
     # tool.executed{tool:"delegate"} plus a session.created that read like an
