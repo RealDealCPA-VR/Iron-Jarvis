@@ -130,7 +130,7 @@ import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHel
 import { AttemptsCardView, LiveAttemptRows } from "@/components/harness/HarnessAttempts";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
 import { TeamControl, TeamReplyLine } from "@/components/harness/HarnessTeam";
-import { EMPTY_ROSTER, decodeReplyTeam, rosterOf } from "@/lib/sessionTeam";
+import { EMPTY_ROSTER, decodeReplyTeam, sessionRoster, type TeamRoster } from "@/lib/sessionTeam";
 // v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
 // conversation is (and Compact), and "the user is looking at this session".
 import { LivePlan, SettledPlan } from "@/components/harness/HarnessPlan";
@@ -459,6 +459,12 @@ export function HarnessSession({
   // v1.397.0: the attempts the running turn started, one row each (its
   // `attempt` frames; lib/buildAttempts). The reply keeps them after, as a card.
   const [attempts, setAttempts] = useState<AttemptView[]>(() => (kept?.page.attempts as AttemptView[] | undefined) ?? []);
+  // v1.403.0 review: the TEAM a reply this screen started began with. The
+  // daemon decides a turn's team when it starts (its reply line keeps it), so
+  // a team set or taken away while the reply runs is for the NEXT reply: the
+  // live helper rows keep naming their parts as the turn began. null = not
+  // known here (a reply followed, not started, here): the session's own.
+  const [turnTeam, setTurnTeam] = useState<{ roster: TeamRoster | null } | null>(null);
   // v1.384.0: the frames' folds of THIS session (helpers, questions) as the
   // running reply builds them — the truth the state above is drawn from, so a
   // replay folds silently and is drawn ONCE (at `caught_up`), and the kept
@@ -1011,6 +1017,10 @@ export function HarnessSession({
       if (!resume) {
         setPageHelpers([]);
         setPageAttempts([]);
+        // v1.403.0 review: and the team it starts with (one this screen sends;
+        // a followed turn began elsewhere, before this view was read).
+        const v = viewRef.current;
+        setTurnTeam(rejoinId ? null : { roster: v ? sessionRoster(v.team, v.setup.team) : null });
       }
       // v1.392.0: and its own stall notice and summary line.
       if (!resume) {
@@ -2546,7 +2556,7 @@ export function HarnessSession({
                   raw={m.helpers}
                   models={catalog.models}
                   // v1.403.0: in a team reply each helper is named by its part.
-                  team={decodeReplyTeam(m.team) ? (rosterOf(view.team) ?? EMPTY_ROSTER) : null}
+                  team={decodeReplyTeam(m.team) ? (sessionRoster(view.team, view.setup.team) ?? EMPTY_ROSTER) : null}
                 />
                 {/* v1.397.0: the attempts on several models, side by side —
                     and Keep (only while nothing runs). */}
@@ -2711,7 +2721,12 @@ export function HarnessSession({
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
                   drawn a second time). */}
-              <LiveHelperRows helpers={helpers} models={catalog.models} team={rosterOf(view.team)} />
+              <LiveHelperRows
+                helpers={helpers}
+                models={catalog.models}
+                // v1.403.0 review: the team THIS reply began with.
+                team={turnTeam ? turnTeam.roster : sessionRoster(view.team, view.setup.team)}
+              />
               {/* v1.397.0: each attempt is ONE row while it runs. */}
               <LiveAttemptRows attempts={attempts} />
               {(() => {

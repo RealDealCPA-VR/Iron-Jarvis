@@ -287,6 +287,23 @@ export function rosterOf(team: SessionTeam | null | undefined): TeamRoster | nul
   };
 }
 
+/** v1.403.0 review: the roster of a session view — its `team`, else (a view
+ *  that keeps only the setup's names) the names with no words of their own.
+ *  A team the setup names is a team: the Try on chip and the Team chip read
+ *  it so, and the helper rows must not say otherwise. */
+export function sessionRoster(
+  team: SessionTeam | null | undefined,
+  names: TeamNames | null | undefined,
+): TeamRoster | null {
+  const r = rosterOf(team);
+  if (r) return r;
+  if (!names || !names.workers.length) return null;
+  return {
+    workers: names.workers.map((name) => ({ name, label: "" })),
+    reviewer: names.reviewer ? { name: names.reviewer, label: "" } : null,
+  };
+}
+
 // ----------------------------------------------------------- the routes
 
 /** POST /team/members/from-model's answer. */

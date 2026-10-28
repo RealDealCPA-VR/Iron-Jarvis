@@ -44,6 +44,7 @@ import { tryOnMenuPosition } from "@/lib/buildAttempts";
 import { matchTryOn, placeWord, tryOnGroups, type TryOnGroup, type TryOnModel } from "@/lib/tryOnMenu";
 import { KIND_BADGE, MODEL_FILTER_MAX } from "@/components/chat/ModelMenu";
 import { workerModelName } from "@/lib/buildHelpers";
+import { isPhone } from "@/components/harness/TryOnModels";
 import { patchSession, type BuildSessionView } from "@/lib/buildSessions";
 import {
   LEAD_DUTY,
@@ -152,6 +153,8 @@ export function TeamControl({
     reviewer: null,
   });
   const doneRef = useRef<HTMLButtonElement | null>(null);
+  /** v1.403.0 review: the folder's one button (use it / stop using it). */
+  const folderRef = useRef<HTMLButtonElement | null>(null);
 
   // Read once per folder: the folder's saved team, and whether teams exist.
   useEffect(() => {
@@ -255,17 +258,37 @@ export function TeamControl({
   };
 
   /** After a change took away the control that had the focus (a picked
-   *  model, a removed member): back to that part's Add button, else Done. */
-  const refocus = (part: Part) =>
-    window.setTimeout(() => {
-      const add = addRef.current[part];
-      (add && !add.disabled && add.isConnected ? add : doneRef.current)?.focus({ preventScroll: true });
-    }, 0);
+   *  model, a removed member, "No team", the folder's button): to the control
+   *  that takes its place, else Done — never out of the panel (review: "No
+   *  team" and the folder's buttons left it on the page's body). Done once
+   *  the change is DRAWN and the panel is no longer busy (review: a timer
+   *  raced React's commit, and on a loaded machine found the old button,
+   *  still disabled, and fell back to Done). */
+  const focusNext = useRef<(() => HTMLButtonElement | null) | null>(null);
+  // A change that ends before the busy state is ever drawn still moves the
+  // focus: the asking itself is a change the effect sees.
+  const [focusAsk, setFocusAsk] = useState(0);
+  const refocusTo = (target: () => HTMLButtonElement | null) => {
+    focusNext.current = target;
+    setFocusAsk((n) => n + 1);
+  };
+  const refocus = (part: Part) => refocusTo(() => addRef.current[part]);
+  useEffect(() => {
+    if (busy || !focusNext.current) return;
+    const target = focusNext.current;
+    focusNext.current = null;
+    const el = target();
+    (el && !el.disabled && el.isConnected ? el : doneRef.current)?.focus({ preventScroll: true });
+  }, [busy, focusAsk]);
 
+  /** The model list closed (Escape, Cancel): its Add button stays where it
+   *  was, so the focus goes back to it at once. */
   const stopPicking = () => {
     const part = picking;
     setPicking(null);
-    if (part) refocus(part);
+    if (!part) return;
+    const add = addRef.current[part];
+    (add && !add.disabled && add.isConnected ? add : doneRef.current)?.focus({ preventScroll: true });
   };
 
   const onPanelKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -339,7 +362,9 @@ export function TeamControl({
         setError(`${label} is already a worker.`);
         return;
       }
-      if (part === "reviewer" && names.reviewer === made.name) {
+      // Review: a worker pick whose member is the reviewer too (a view that
+      // keeps only the names cannot tell before the member is known).
+      if (names.reviewer === made.name) {
         setError(`${label} is already the reviewer.`);
         return;
       }
@@ -372,11 +397,13 @@ export function TeamControl({
   const noTeam = () =>
     run(async () => {
       await save(null);
+      refocus("worker");
     });
 
   const saveFolder = (names: TeamNames | null) =>
     run(async () => {
       setFolderTeam(await putFolderTeam(folder, names));
+      refocusTo(() => folderRef.current);
     });
 
   if (avail !== "yes") return null;
@@ -449,6 +476,7 @@ export function TeamControl({
           </p>
           <button
             type="button"
+            ref={folderRef}
             data-testid="harness-team-folder-clear"
             disabled={busy || disabled}
             onClick={() => void saveFolder(null)}
@@ -464,6 +492,7 @@ export function TeamControl({
       <div className="border-t border-white/[0.06] pt-2">
         <button
           type="button"
+          ref={folderRef}
           data-testid="harness-team-folder-default"
           disabled={busy || disabled}
           onClick={() => void saveFolder(current)}
@@ -623,10 +652,15 @@ function TeamModelPicker({
   const [filter, setFilter] = useState("");
   const [sub, setSub] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const found = useMemo(() => matchTryOn(groups, filter, MODEL_FILTER_MAX), [groups, filter]);
 
+  // The focus goes in once, when the list opens: the find box on a wide
+  // window, the first provider on a phone (review: a focused box there pops
+  // the keyboard over the list — the "Try on…" list's rule).
   useLayoutEffect(() => {
-    filterRef.current?.focus({ preventScroll: true });
+    if (isPhone()) rootRef.current?.querySelector<HTMLElement>('[data-testid="harness-team-group"]')?.focus({ preventScroll: true });
+    else filterRef.current?.focus({ preventScroll: true });
   }, []);
 
   const modelButton = (m: TryOnModel, where?: string) => {
@@ -657,6 +691,7 @@ function TeamModelPicker({
   const typed = filter.trim();
   return (
     <div
+      ref={rootRef}
       data-testid="harness-team-picker"
       role="group"
       aria-label={part === "worker" ? "Pick a model for a worker" : "Pick a model for the reviewer"}

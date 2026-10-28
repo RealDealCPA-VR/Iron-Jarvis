@@ -785,3 +785,218 @@ describe("the pure rules", () => {
     expect(t.reviewer).toBeNull();
   });
 });
+
+/* ------------------------------------- v1.403.0 part E review: the fixes */
+
+/** A turn's stream the test feeds frame by frame (the live helper rows). */
+function controlledStream() {
+  let ctl!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      ctl = c;
+    },
+  });
+  const enc = new TextEncoder();
+  return {
+    response: new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    push: (event: string, data: unknown) => ctl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)),
+    end: () => ctl.close(),
+  };
+}
+
+describe("review: the keyboard focus never falls out of the panel", () => {
+  it("'No team' takes its own button away: the focus goes to Add a worker, inside the panel", async () => {
+    api.gets["/build/sessions/s1"] = teamView([GLM], CODEX);
+    api.answers["PATCH /build/sessions/s1"] = view();
+    renderSession();
+    const p = await openPanel();
+    const none = within(p).getByTestId("harness-team-none");
+    none.focus();
+    fireEvent.click(none);
+    await waitFor(() => expect(screen.getByTestId("harness-team").getAttribute("data-count")).toBe("0"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("harness-team-add-worker")));
+  });
+
+  it("Escape and Cancel in the model list hand the focus back to its Add button", async () => {
+    api.gets["/build/sessions/s1"] = teamView([GLM], null);
+    renderSession();
+    await openPanel();
+    fireEvent.click(screen.getByTestId("harness-team-add-worker"));
+    const filter = await screen.findByTestId("harness-team-filter");
+    await waitFor(() => expect(document.activeElement).toBe(filter));
+    fireEvent.keyDown(filter, { key: "Escape" });
+    expect(screen.queryByTestId("harness-team-picker")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("harness-team-add-worker")));
+    fireEvent.click(screen.getByTestId("harness-team-add-reviewer"));
+    fireEvent.click(await screen.findByTestId("harness-team-picker-cancel"));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("harness-team-add-reviewer")));
+  });
+
+  it("the focus waits for the change to be DRAWN (a timer that beats the commit never leaves it on Done)", async () => {
+    // A loaded machine, held on purpose: every 0 ms timer fires at once,
+    // BEFORE React draws the answered view. A focus taken on a timer then
+    // finds the old Add button still disabled (the panel busy) and falls
+    // back to Done; a focus taken once the change is drawn does not.
+    api.gets["/build/sessions/s1"] = teamView([GLM, QWEN], null);
+    api.answers["PATCH /build/sessions/s1"] = teamView([GLM], null);
+    renderSession();
+    await openPanel();
+    const real = window.setTimeout;
+    const spy = vi.spyOn(window, "setTimeout").mockImplementation(((fn: TimerHandler, ms?: number, ...rest: unknown[]) => {
+      if (!ms && typeof fn === "function") {
+        (fn as (...a: unknown[]) => void)(...rest);
+        return 0;
+      }
+      return real(fn, ms, ...rest);
+    }) as typeof window.setTimeout);
+    try {
+      const qwen = screen.getAllByTestId("harness-team-worker").find((r) => r.getAttribute("data-name") === "qwen3-8-27b")!;
+      fireEvent.click(within(qwen).getByTestId("harness-team-remove-worker"));
+      await waitFor(() => expect(screen.getAllByTestId("harness-team-worker")).toHaveLength(1));
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("harness-team-add-worker")));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("the folder's buttons hand the focus to the one that takes their place", async () => {
+    api.gets["/build/sessions/s1"] = teamView([GLM], CODEX);
+    api.answers["PUT /build/folders/team"] = (body: unknown) => body;
+    renderSession();
+    await openPanel();
+    const use = await screen.findByTestId("harness-team-folder-default");
+    use.focus();
+    fireEvent.click(use);
+    const clear = await screen.findByTestId("harness-team-folder-clear");
+    await waitFor(() => expect(document.activeElement).toBe(clear));
+    fireEvent.click(clear);
+    const back = await screen.findByTestId("harness-team-folder-default");
+    await waitFor(() => expect(document.activeElement).toBe(back));
+  });
+});
+
+describe("review: on a phone the picker does not pop the keyboard over its list", () => {
+  it("the focus goes to the first provider, not the find box (the Try on list's rule)", async () => {
+    const had = window.matchMedia;
+    window.matchMedia = ((q: string) => ({
+      matches: q === "(max-width: 639.98px)",
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    try {
+      renderSession();
+      await openPanel();
+      fireEvent.click(screen.getByTestId("harness-team-add-worker"));
+      const picker = await screen.findByTestId("harness-team-picker");
+      const first = within(picker).getAllByTestId("harness-team-group")[0];
+      await waitFor(() => expect(document.activeElement).toBe(first));
+      expect(document.activeElement).not.toBe(screen.getByTestId("harness-team-filter"));
+    } finally {
+      if (had) window.matchMedia = had;
+      else delete (window as { matchMedia?: unknown }).matchMedia;
+    }
+  });
+
+  it("(control) on a wide window the find box takes the focus", async () => {
+    renderSession();
+    await openPanel();
+    fireEvent.click(screen.getByTestId("harness-team-add-worker"));
+    const filter = await screen.findByTestId("harness-team-filter");
+    await waitFor(() => expect(document.activeElement).toBe(filter));
+  });
+});
+
+describe("review: a member is never a worker and the reviewer at once", () => {
+  it("a view that keeps only the names still refuses the reviewer as a worker, before any PATCH", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      setup: { provider: "claude-cli", model: "claude-opus-5-5", team: { workers: ["glm-5-3-flash"], reviewer: "codex" } },
+    });
+    api.answers["POST /team/members/from-model"] = {
+      name: "codex", provider: "codex-cli", model: "gpt-6-astra", label: "Codex", roles: ["review", "code"], created: false,
+    };
+    renderSession();
+    await openPanel();
+    fireEvent.click(screen.getByTestId("harness-team-add-worker"));
+    await pickModel("codex-cli", "gpt-6-astra");
+    expect((await screen.findByTestId("harness-team-error")).textContent).toBe("Codex is already the reviewer.");
+    expect(callsOf("PATCH", "/build/sessions/s1")).toHaveLength(0);
+  });
+});
+
+describe("review: a running reply keeps the team it started with", () => {
+  const box = () => screen.getByTestId("harness-input") as HTMLTextAreaElement;
+  function send(text: string) {
+    fireEvent.change(box(), { target: { value: text } });
+    fireEvent.keyDown(box(), { key: "Enter" });
+  }
+  const row = (id: string) =>
+    screen.queryAllByTestId("helper-row").find((el) => el.getAttribute("data-helper") === id) ?? null;
+  const memberHelper = {
+    id: "h1", agent: "custom:glm-5-3-flash", role: "code", task: "Write util.py.", state: "running",
+    steps: 0, since: 1000, session: "sess_h1", provider: "ollama", model: "glm-5.3-flash",
+  };
+  const streamWith = (s: ReturnType<typeof controlledStream>) =>
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => s.response);
+
+  it("a reply started ALONE stays alone when a team is set mid-reply (no 'Worker' words)", async () => {
+    const s = controlledStream();
+    streamWith(s);
+    api.answers["POST /team/members/from-model"] = {
+      name: "glm-5-3-flash", provider: "ollama", model: "glm-5.3-flash", label: "glm-5.3-flash", roles: ["code"], created: false,
+    };
+    api.answers["PATCH /build/sessions/s1"] = teamView([GLM], null);
+    renderSession();
+    await screen.findByTestId("harness-team");
+    send("write util.py");
+    await act(async () => {
+      s.push("helper", memberHelper);
+    });
+    await waitFor(() => expect(row("h1")).not.toBeNull());
+    expect(row("h1")).not.toHaveTextContent("Worker");
+    // The team is set while the reply runs: it is for the NEXT reply.
+    await openPanel();
+    fireEvent.click(screen.getByTestId("harness-team-add-worker"));
+    await pickModel("ollama", "glm-5.3-flash");
+    await waitFor(() => expect(screen.getByTestId("harness-team")).toHaveTextContent("Team · 2"));
+    expect(row("h1")).not.toHaveTextContent("Worker");
+    s.end();
+  });
+
+  it("a TEAM reply keeps its 'Worker' words when the team is taken away mid-reply", async () => {
+    const s = controlledStream();
+    streamWith(s);
+    api.gets["/build/sessions/s1"] = teamView([GLM], null);
+    api.answers["PATCH /build/sessions/s1"] = view();
+    renderSession();
+    await screen.findByTestId("harness-team");
+    send("write util.py");
+    await act(async () => {
+      s.push("helper", memberHelper);
+    });
+    await waitFor(() => expect(row("h1")).toHaveTextContent("Worker glm-5.3-flash"));
+    await openPanel();
+    fireEvent.click(screen.getByTestId("harness-team-none"));
+    await waitFor(() => expect(screen.getByTestId("harness-team").getAttribute("data-count")).toBe("0"));
+    expect(row("h1")).toHaveTextContent("Worker glm-5.3-flash");
+    s.end();
+  });
+
+  it("a view that keeps only the team's NAMES still names a live member as a worker", async () => {
+    const s = controlledStream();
+    streamWith(s);
+    api.gets["/build/sessions/s1"] = view({
+      setup: { provider: "claude-cli", model: "claude-opus-5-5", team: { workers: ["glm-5-3-flash"], reviewer: "" } },
+    });
+    renderSession();
+    await screen.findByTestId("harness-team");
+    send("write util.py");
+    await act(async () => {
+      s.push("helper", { ...memberHelper, role: undefined });
+    });
+    await waitFor(() => expect(row("h1")).toHaveTextContent("Worker glm-5-3-flash"));
+    s.end();
+  });
+});
