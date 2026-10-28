@@ -116,6 +116,32 @@ export interface ProviderRow {
   size: number;
 }
 
+/** Where ONE catalog row runs, as a KIND_BADGE key ("local" / "cli" / "api" /
+ *  "endpoint"). Lifted out of `modelProvidersOf` (v1.400.7) so the IJ
+ *  harness's "Try on…" list marks each MODEL by the same rule; the menu's
+ *  answers are unchanged.
+ *
+ *  v1.230.0 (U5): a keyless API provider served through the logged-in CLI
+ *  (`inherited_from`) is flat-rate — it ranks and labels as a CLI
+ *  ("included"), never "metered". The daemon names the CLI; /health and
+ *  /connections carry the same answer.
+ *  v1.352.0 re-review (G21): an endpoint the daemon classes "local" (a fleet
+ *  node, a custom URL) but says is OFF the user's network (a cloud API added
+ *  on Connections) runs in the cloud: its badge says so, as the reply's
+ *  receipt does (`on_this_network`, the same predicate), and it ranks with
+ *  the cloud rows. Absent (an older daemon): the class decides, as before. */
+export function rowKind(m: ModelOption): string {
+  return m.inherited_from
+    ? "cli"
+    : m.kind === "local" && m.on_this_network === false
+      ? "endpoint"
+      : (m.kind ?? "api");
+}
+
+/** How the menu ranks where a provider runs: your own hardware, then your
+ *  plans, then metered or outside servers (v1.148.0). */
+export const PROVIDER_RANK: Readonly<Record<string, number>> = { local: 0, cli: 1, api: 2, endpoint: 2 };
+
 /**
  * Providers for the composer's model menu, LOCAL FIRST (v1.148.0).
  *
@@ -130,21 +156,7 @@ export interface ProviderRow {
 export function modelProvidersOf(models: readonly ModelOption[]): ProviderRow[] {
   const seen = new Map<string, ProviderRow>();
   for (const m of models) {
-    // v1.230.0 (U5): a keyless API provider served through the logged-in
-    // CLI (`inherited_from`) is flat-rate — it ranks and labels as a CLI
-    // ("included"), never "metered". The daemon names the CLI; /health and
-    // /connections carry the same answer.
-    // v1.352.0 re-review (G21): an endpoint the daemon classes "local" (a
-    // fleet node, a custom URL) but says is OFF the user's network (a cloud
-    // API added on Connections) runs in the cloud: its badge says so, as
-    // the reply's receipt does (`on_this_network`, the same predicate),
-    // and it ranks with the cloud rows. Absent (an older daemon): the
-    // class decides, as before.
-    const kind = m.inherited_from
-      ? "cli"
-      : m.kind === "local" && m.on_this_network === false
-        ? "endpoint"
-        : (m.kind ?? "api");
+    const kind = rowKind(m);
     const size = typeof m.size_b === "number" ? m.size_b : Number.POSITIVE_INFINITY;
     const prev = seen.get(m.provider);
     if (!prev) {
@@ -165,11 +177,10 @@ export function modelProvidersOf(models: readonly ModelOption[]): ProviderRow[] 
       prev.size = Math.min(prev.size, size);
     }
   }
-  const RANK: Record<string, number> = { local: 0, cli: 1, api: 2, endpoint: 2 };
   return [...seen.values()].sort((a, b) => {
     if (a.available !== b.available) return a.available ? -1 : 1; // offline last
-    const ra = RANK[a.kind] ?? 3;
-    const rb = RANK[b.kind] ?? 3;
+    const ra = PROVIDER_RANK[a.kind] ?? 3;
+    const rb = PROVIDER_RANK[b.kind] ?? 3;
     if (ra !== rb) return ra - rb;
     if (a.size !== b.size) return a.size - b.size; // smallest local rung first
     return a.label.localeCompare(b.label);

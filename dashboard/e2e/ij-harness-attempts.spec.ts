@@ -91,8 +91,8 @@ const CARD = {
   ],
 };
 const MODELS = [
-  { provider: "claude-cli", model: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", available: true, on_this_network: false, kind: "cloud" },
-  { provider: "codex-cli", model: "gpt-5.5", label: "GPT-5.5 (Codex)", available: true, on_this_network: false, kind: "cloud" },
+  { provider: "claude-cli", model: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", available: true, on_this_network: false, kind: "cli" },
+  { provider: "codex-cli", model: "gpt-5.5", label: "GPT-5.5 (Codex)", available: true, on_this_network: false, kind: "cli" },
   { provider: "ollama", model: LONG, label: LONG, available: true, on_this_network: true, kind: "local" },
   { provider: "mock", model: "mock-1", available: true, kind: "local", on_this_network: true },
 ];
@@ -222,13 +222,21 @@ test("the Try on chip opens only on the user's press; at 390 px its list fits; k
   expect(box!.x + box!.width).toBeLessThanOrEqual(390 - 16 + 0.5);
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(chipBox!.y + 0.5);
-  // The demo model is never offered.
-  await expect(page.getByTestId("harness-try-on-row")).toHaveCount(3);
+  // The demo model is never offered. v1.400.7: one row per provider, local
+  // first; a provider's models open under its row on a phone.
+  await expect(page.getByTestId("harness-try-on-group")).toHaveCount(3);
+  const claude = page.locator('[data-testid="harness-try-on-group"][data-group="claude-cli"]');
+  await claude.focus();
+  await page.keyboard.press("Enter");
   const first = page.getByTestId("harness-try-on-row").first();
-  await first.focus();
+  await page.keyboard.press("Tab");
+  await expect(first).toBeFocused();
   await page.keyboard.press("Space");
   await expect(first).toBeChecked();
   await expect(chip).toContainText("Try on Claude Sonnet 4.5");
+  // Escape closes the pop-out, then the list.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("harness-try-on-panel")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(chip).toBeFocused();

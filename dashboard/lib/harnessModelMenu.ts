@@ -190,19 +190,27 @@ function accountsFor(
   return rows;
 }
 
+/** The catalog with a keyless API folded into the CLI that serves it. */
+export interface FoldedModels {
+  /** The rows listed: a keyless API's model the CLI already lists is gone, one
+   *  it does not list is listed under the CLI (its provider rewritten). */
+  listed: ModelOption[];
+  /** catalog "provider::model" → the folded list's spelling (every folded
+   *  row, the dropped twins too). */
+  alias: Record<string, string>;
+  /** v1.400.7: the folded list's spelling → the catalog pair it came from,
+   *  for a row the fold ADDED under a CLI ("claude-cli::claude-opus-4-8" →
+   *  "anthropic::claude-opus-4-8"). A caller that sends a pick the daemon
+   *  checks against GET /models (Try on…) sends the catalog pair. */
+  origin: Record<string, string>;
+}
+
 /**
- * The harness menu for this catalog, account list and session account.
- * `view` undefined/null (not read yet, or a 404) and an empty vendor group
- * both mean "no accounts": the CLI's way is its single row.
+ * Fold a keyless API (`inherited_from` its CLI) into the CLI that serves it
+ * (v1.376.0; lifted out of `companyMenu` in v1.400.7 so the "Try on…" list
+ * folds by the same rule). Pure.
  */
-export function companyMenu(
-  models: readonly ModelOption[],
-  view: AccountsView | null | undefined,
-  current: BuildAccount | null,
-  choice: string,
-  now: Date = new Date(),
-): CompanyMenu {
-  // ---- fold a keyless API into the CLI that serves it
+export function foldKeylessApis(models: readonly ModelOption[]): FoldedModels {
   const cliModels = new Map<string, Set<string>>();
   /** The CLI's own first row: what the daemon says the CLI offers. */
   const cliFirst = new Map<string, ModelOption>();
@@ -216,6 +224,7 @@ export function companyMenu(
     }
   }
   const alias: Record<string, string> = {};
+  const origin: Record<string, string> = {};
   const listed: ModelOption[] = [];
   /** Review: the rows a fold ADDS to a CLI, placed after the CLI's own (its
    *  plan row and its live picker first, as the chat lists the CLI). The
@@ -240,6 +249,7 @@ export function companyMenu(
     // first cut also lost the chip for every folded pick: the composer looked
     // the pick up in the unfolded catalog, where claude-cli never lists it).
     const own = cliFirst.get(co.cli);
+    origin[value] = `${m.provider}::${m.model}`;
     const rows = added.get(co.cli) ?? [];
     rows.push({
       ...m,
@@ -258,6 +268,23 @@ export function companyMenu(
     });
     listed.splice(last + 1, 0, ...rows);
   }
+  return { listed, alias, origin };
+}
+
+/**
+ * The harness menu for this catalog, account list and session account.
+ * `view` undefined/null (not read yet, or a 404) and an empty vendor group
+ * both mean "no accounts": the CLI's way is its single row.
+ */
+export function companyMenu(
+  models: readonly ModelOption[],
+  view: AccountsView | null | undefined,
+  current: BuildAccount | null,
+  choice: string,
+  now: Date = new Date(),
+): CompanyMenu {
+  // ---- fold a keyless API into the CLI that serves it
+  const { listed, alias } = foldKeylessApis(models);
 
   // ---- the accounts of each CLI way
   const vw = view ?? null;

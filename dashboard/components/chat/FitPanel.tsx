@@ -62,19 +62,33 @@ export function fitPlacement(
 /** A floating panel's fixed edges for a row at `row`, in a window `vw` × `vh`,
  *  `width` wide. Beside the row on its left (its right edge `FLOAT_GAP_PX`
  *  left of the row, which the panel's `mr-1` makes); shifted to stay inside
- *  the window when the left has no room for it. Pure. */
+ *  the window when the left has no room for it. Pure.
+ *
+ *  v1.400.7: `toward: "right"` (the IJ harness's "Try on…" list, whose chip
+ *  sits at the LEFT of the box, so its rows have no room on their left) puts
+ *  the panel beside the row on its RIGHT when the window has room there, else
+ *  on its left, else shifted inside the window. Left is the default, and its
+ *  answers are unchanged. `gap` (v1.400.7): how far the panel stands off its
+ *  row — past the list's own padding and border, so the panel never covers
+ *  the list it opened from; on the left the panel's own `mr-1` is part of it.
+ *  The default is FLOAT_GAP_PX, the answers before. */
 export function floatEdges(
-  row: { top: number; bottom: number; left: number },
+  row: { top: number; bottom: number; left: number; right?: number },
   place: FitPlacement,
   vw: number,
   vh: number,
   width: number,
+  toward: "left" | "right" = "left",
+  gap: number = FLOAT_GAP_PX,
 ): { top?: number; bottom?: number; left?: number; right?: number; align: "beside" | "shifted" } {
   const vertical = place.side === "up" ? { bottom: Math.round(vh - row.bottom) } : { top: Math.round(row.top) };
-  if (row.left - FLOAT_GAP_PX - width >= EDGE_PX) {
-    return { ...vertical, right: Math.round(vw - row.left), align: "beside" };
+  if (toward === "right" && typeof row.right === "number" && row.right + gap + width <= vw - EDGE_PX) {
+    return { ...vertical, left: Math.round(row.right + gap), align: "beside" };
   }
-  const left = Math.max(EDGE_PX, Math.min(row.left - FLOAT_GAP_PX - width, vw - EDGE_PX - width));
+  if (row.left - gap - width >= EDGE_PX) {
+    return { ...vertical, right: Math.round(vw - row.left + gap - FLOAT_GAP_PX), align: "beside" };
+  }
+  const left = Math.max(EDGE_PX, Math.min(row.left - gap - width, vw - EDGE_PX - width));
   return { ...vertical, left: Math.round(left), align: "shifted" };
 }
 
@@ -101,6 +115,8 @@ export function FitPanel({
   float = false,
   inlineQuery,
   refitKey,
+  toward = "left",
+  gap = FLOAT_GAP_PX,
 }: {
   /** Everything but the vertical anchor (no bottom-0/top-0, no max-h). */
   className: string;
@@ -117,6 +133,10 @@ export function FitPanel({
    *  with no such event (the demo strip going away) gave it nothing to hear,
    *  and left it where its row had been. */
   refitKey?: unknown;
+  /** v1.400.7: the side a floating panel prefers, and how far it stands off
+   *  its row (`floatEdges`). */
+  toward?: "left" | "right";
+  gap?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<FitPlacement | null>(null);
@@ -143,7 +163,7 @@ export function FitPanel({
       const vp = menuViewport();
       const next = fitPlacement(r.top, r.bottom, vp.height, cap, appTopLimit());
       setPlace(next);
-      setEdges(floatEdges(r, next, vp.width, vp.height, el.offsetWidth || 224));
+      setEdges(floatEdges(r, next, vp.width, vp.height, el.offsetWidth || 224, toward, gap));
     };
     fit();
     // A floating panel follows its row when anything scrolls (the menu's
@@ -158,7 +178,7 @@ export function FitPanel({
       window.removeEventListener("resize", fit);
       if (float) window.removeEventListener("scroll", onScroll, true);
     };
-  }, [cap, float, inlineQuery, refitKey]);
+  }, [cap, float, inlineQuery, refitKey, toward, gap]);
 
   const side = place?.side ?? "up";
   const style: CSSProperties = { maxHeight: place ? place.maxHeight : cap };

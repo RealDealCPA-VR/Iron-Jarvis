@@ -76,6 +76,19 @@ member's row (model, role boxes, account picker) and of a starter row sits
 inside its own box and the page never pans sideways; the role boxes and the
 account picker are reached with Tab alone.
 
+`e2e/try-on-grouped-v1400-7.spec.ts` (v1.400.7) opens a coding session's
+"Try on…" list with `/models` stubbed to the user's catalog (Claude Code and a
+keyless Anthropic, Codex and a keyless OpenAI, the gateway reached as its
+config slot and its fleet node with 30 names sent on to the cloud, the RTX
+box), at 1280 × 720 and 390 × 844: one row per provider, local first, each
+marked where it runs and no checkbox until one is opened; a provider's pop-out
+is drawn where it sits (beside the list on the right on a wide window, under
+its row on a phone), every model says local or cloud and the last of 32 is
+reached by scrolling; a model is ticked from the keyboard; Escape closes the
+pop-out, then the list; and the next message's `try_on` (caught in the
+browser) carries the catalog pairs. `IJ_TRYON_OUT=<folder>` writes a
+screenshot of each step.
+
 Run from `dashboard/`:
 
 ```bash

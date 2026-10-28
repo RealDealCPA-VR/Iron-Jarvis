@@ -371,6 +371,15 @@ describe("a saved card never waits on anyone and never reads as running", () => 
   });
 });
 
+/** v1.400.7: a provider's models open in its pop-out (lib/tryOnMenu). */
+function openTryOnGroup(provider: string) {
+  const row = screen.getAllByTestId("harness-try-on-group").find((g) => g.getAttribute("data-group") === provider)!;
+  if (row.getAttribute("aria-expanded") !== "true") fireEvent.click(row);
+}
+function tryOnRow(model: string): HTMLInputElement {
+  return (screen.getAllByTestId("harness-try-on-row") as HTMLInputElement[]).find((r) => r.getAttribute("data-model") === model)!;
+}
+
 describe("the \"Try on…\" control: opt-in, for the next message, at most three", () => {
   it("offers connected models (never the demo model), local only offers only local ones", () => {
     expect(tryOnChoices(MODELS, false).map((r) => r.model)).toEqual(["claude-sonnet-4-5", "gpt-5.5", "glm-local", "qwen-local"]);
@@ -419,13 +428,27 @@ describe("the \"Try on…\" control: opt-in, for the next message, at most three
     const chip = screen.getByTestId("harness-try-on");
     expect(chip).toHaveTextContent("Try on…");
     fireEvent.click(chip);
-    const rows = screen.getAllByTestId("harness-try-on-row") as HTMLInputElement[];
-    expect(rows.map((r) => r.getAttribute("data-model"))).toEqual(["claude-sonnet-4-5", "gpt-5.5", "glm-local", "qwen-local"]);
-    fireEvent.click(rows[0]);
-    fireEvent.click(rows[1]);
-    fireEvent.click(rows[2]);
-    expect((screen.getAllByTestId("harness-try-on-row") as HTMLInputElement[])[3]).toBeDisabled();
+    // v1.400.7: one row per provider, local first; a provider's models open
+    // in its pop-out (lib/tryOnMenu).
+    expect(screen.getAllByTestId("harness-try-on-group").map((g) => g.getAttribute("data-group"))).toEqual([
+      "ollama",
+      "claude-cli",
+      "codex-cli",
+    ]);
+    openTryOnGroup("claude-cli");
+    fireEvent.click(tryOnRow("claude-sonnet-4-5"));
+    openTryOnGroup("codex-cli");
+    fireEvent.click(tryOnRow("gpt-5.5"));
+    openTryOnGroup("ollama");
+    expect((screen.getAllByTestId("harness-try-on-row") as HTMLInputElement[]).map((r) => r.getAttribute("data-model"))).toEqual([
+      "glm-local",
+      "qwen-local",
+    ]);
+    fireEvent.click(tryOnRow("glm-local"));
+    expect(tryOnRow("qwen-local")).toBeDisabled();
     expect(screen.getByTestId("harness-try-on")).toHaveTextContent("Try on 3 models");
+    // Escape closes the pop-out, then the list.
+    fireEvent.keyDown(screen.getByTestId("harness-try-on-menu"), { key: "Escape" });
     fireEvent.keyDown(screen.getByTestId("harness-try-on-menu"), { key: "Escape" });
     expect(screen.queryByTestId("harness-try-on-menu")).toBeNull();
     expect(document.activeElement).toBe(screen.getByTestId("harness-try-on"));
@@ -438,9 +461,10 @@ describe("the \"Try on…\" control: opt-in, for the next message, at most three
     renderSession();
     await screen.findByTestId("harness-empty");
     fireEvent.click(screen.getByTestId("harness-try-on"));
-    const rows = screen.getAllByTestId("harness-try-on-row");
-    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "gpt-5.5")!);
-    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "glm-local")!);
+    openTryOnGroup("codex-cli");
+    fireEvent.click(tryOnRow("gpt-5.5"));
+    openTryOnGroup("ollama");
+    fireEvent.click(tryOnRow("glm-local"));
     fireEvent.click(screen.getByTestId("harness-try-on-done"));
     expect(screen.getByTestId("harness-try-on")).toHaveTextContent("Try on 2 models");
     await send("fix add in calc.py");

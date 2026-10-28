@@ -255,9 +255,13 @@ describe("a message queued while a reply works keeps its Try on picks", () => {
     render(<HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByTestId("harness-try-on"));
-    const rows = screen.getAllByTestId("harness-try-on-row");
-    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "gpt-5.5")!);
-    fireEvent.click(rows.find((r) => r.getAttribute("data-model") === "glm-local")!);
+    // v1.400.7: a provider's models open in its pop-out (lib/tryOnMenu).
+    const tick = (provider: string, model: string) => {
+      fireEvent.click(screen.getAllByTestId("harness-try-on-group").find((g) => g.getAttribute("data-group") === provider)!);
+      fireEvent.click(screen.getAllByTestId("harness-try-on-row").find((r) => r.getAttribute("data-model") === model)!);
+    };
+    tick("codex-cli", "gpt-5.5");
+    tick("ollama", "glm-local");
     fireEvent.click(screen.getByTestId("harness-try-on-done"));
     const box = screen.getByTestId("harness-input") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "fix add in calc.py" } });

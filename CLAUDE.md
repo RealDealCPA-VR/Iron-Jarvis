@@ -4098,6 +4098,34 @@ does not need a bump, stop and bump it.
   `tests/test_build_attempts{,_review}_v1397.py`,
   `dashboard/__tests__/build-attempts{,-review}-v1397.test.tsx`, e2e
   `dashboard/e2e/ij-harness-attempts.spec.ts` (390 px, 1280 px, keyboard).
+  v1.400.7 (a USER REPORT, a screenshot of one flat list of every model):
+  the "Try on…" list is GROUPED BY PROVIDER (`lib/tryOnMenu.tryOnGroups`):
+  one row per provider, local first (ModelMenu `PROVIDER_RANK`), each with a
+  `KIND_BADGE` word ("local + cloud", `MIXED_BADGE`, for a gateway that
+  sends some names out), each opening a `FitPanel` pop-out (`toward="right"`:
+  the chip sits at the box's left; under its row below 640 px) where every
+  model says "local" / "cloud" from its OWN `on_this_network` (true = local,
+  else ModelMenu `rowKind`, lifted out of `modelProvidersOf` unchanged). NO
+  TWINS: the keyless-API fold is ONE rule, `harnessModelMenu.foldKeylessApis`
+  (lifted out of `companyMenu`, which calls it); a config slot and the fleet
+  node the registry SEEDS from it (`custom`/`fleet-custom`,
+  `ollama`/`fleet-ollama` — `routable_nodes()` includes the seeds, so GET
+  /models lists the user's gateway twice) are ONE group named by
+  `machineName("fleet-<slot>")` else "Your model server"; a name in a twin
+  row's `aliases` is no second entry; the "fleet" alias is left out when its
+  server lists a model on the network. A PICK SENDS THE CATALOG PAIR
+  (`FoldedModels.origin`): `attempts.resolve` refuses a pair GET /models does
+  not list, so a model folded under Claude Code still sends `anthropic::…`,
+  and a model both twins list sends the slot's. A find box, the picks listed
+  on top (each with ×), Escape closes the pop-out and then the list. The list
+  has NO backdrop blur: a `backdrop-filter` makes a box the containing block
+  of the FIXED pop-outs inside it and would clip them. The chat's menu is
+  byte-identical (`chat-model-menu-v1376.json`). Pins:
+  `dashboard/__tests__/try-on-grouped-v1400-7.test.tsx`, e2e
+  `dashboard/e2e/try-on-grouped-v1400-7.spec.ts` (1280 × 720, 390 × 844);
+  the v1397 pins open a provider first. OPEN: Tonight's own try-on checkboxes
+  (`TonightList`) are still one flat list; an attempt's account is chosen by
+  the daemon, never in the list.
   v1.397.1 (test-only): v1.397.0's Tests gate went red (Release passed and
   published) on `test_iron_proxy_routes_v1301::test_the_real_bundle_starts_
   answers_and_stops` — the account list read `[]` right after a 201 create.

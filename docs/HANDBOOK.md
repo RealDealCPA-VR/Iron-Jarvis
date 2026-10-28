@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.6 (2026-10-25).*
+holds itself to. Current as of v1.400.7 (2026-10-25).*
 
 ---
 
@@ -2107,7 +2107,17 @@ models at once and keep the best result.
   - Begin or end your message with a sentence naming the models, for example
     "Try this with Claude, Codex and the local model: fix the date parsing in
     `report.py`."
-  - Or press **Try on…** in the box and pick one to three models.
+  - Or press **Try on…** in the box and pick one to three models. The list
+    shows one row per provider, your own hardware first, each marked
+    **local**, **cloud · on your plan**, **cloud · pay per use**, **cloud**,
+    or **local + cloud** for a model server that sends some names on to a
+    cloud service. Open a provider to tick its models; every model says
+    local or cloud. Type to find a model across every provider. The models
+    you picked are listed at the top. No model is listed twice: a model
+    Claude Code (or Codex) serves for a keyless Anthropic (or OpenAI) is
+    listed once, under Claude Code (or Codex), and your own model server is
+    one row, named as you named it, without a separate "your model server"
+    entry when it lists a model on your network (v1.400.7).
   - It only starts when you ask. Ordinary sentences such as "Try it with a
     smaller input" or "Try this with Claude's API format" stay ordinary
     messages.
