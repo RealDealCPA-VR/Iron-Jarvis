@@ -243,6 +243,19 @@ def _on_pinned_account(s: S.CodexSession) -> bool:
     return s.lease is not None and getattr(s.lease, "profile_id", None) == pin.profile_id
 
 
+def _same_tools(s: S.CodexSession, tools: list[dict[str, Any]]) -> bool:
+    """v1.403.0 review: does this parked session's thread offer exactly the
+    tools of this call (by name — the names its dynamic tools were built
+    from)? True when the session does not know its tools (nothing to judge
+    by: resumed as before)."""
+    names = getattr(s, "names", None)
+    forward = getattr(names, "forward", None)
+    if not isinstance(forward, dict):
+        return True
+    want = {str(t.get("name") or "") for t in tools or [] if isinstance(t, dict) and t.get("name")}
+    return set(forward) == want
+
+
 def _which_cli(binary: str) -> str | None:
     from ..subprocess_cli import _which_cli as resolve
 
@@ -408,6 +421,15 @@ class CodexNativeAdapter(LLMAdapter):
                 # v1.368.0: a Build session moved to another account — a
                 # parked Codex session runs as the OLD account's CODEX_HOME;
                 # nothing may continue on an account the session left.
+                await _teardown(claimed)
+                claimed = None
+            if claimed is not None and not _same_tools(claimed, tools):
+                # v1.403.0 review: the call's TOOLS changed since this thread
+                # started (a coding-session team's lead was just unlocked:
+                # ``chat_turn.apply_team_unlock``). A Codex thread's dynamic
+                # tools are fixed at its start, so resuming it would show the
+                # model the OLD list — it was told it may write and could
+                # not. A miss: a new thread with this call's tools.
                 await _teardown(claimed)
                 claimed = None
             if claimed is not None:

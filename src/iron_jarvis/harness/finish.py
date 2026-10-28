@@ -2244,10 +2244,27 @@ class FinishCheck:
         ``process_stop`` for a ``process_start`` run — when ``calls`` holds
         one of its test calls; else none. The lead holds no command tool, so
         the lanes add exactly these to that round's gate
-        (``chat_turn.round_gate``); every other gate still applies to them."""
+        (``chat_turn.round_gate``); every other gate still applies to them.
+
+        v1.403.0 review: ONLY a round made entirely of the check's OWN calls
+        that have not settled yet (its test runs, as it handed them out — the
+        carrier, by name — and its pending review): the round gate is one set
+        for every call of the round, so a round mixing a check call with a
+        model's call, or a later call that reuses an ``ij-finish-N`` id once
+        its run settled, would hand the lead the command tool it does not
+        hold (``owns_review``'s rule since v1.401.0)."""
         if self.team is None:
             return set()
-        if not any(str(getattr(c, "id", "") or "") in self._by_id for c in calls or ()):
+        calls = list(calls or ())
+        mine = False
+        for c in calls:
+            if self.owns_review(c):
+                continue
+            run = self._by_id.get(str(getattr(c, "id", "") or ""))
+            if run is None or run.verdict or str(getattr(c, "name", "") or "") != self.carrier:
+                return set()
+            mine = True
+        if not mine:
             return set()
         want = {self.carrier}
         if self.carrier == "process_start":
