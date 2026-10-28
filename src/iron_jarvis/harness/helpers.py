@@ -118,6 +118,13 @@ HELPER_EVENT = "helper"
 #: v1.372.0 review: the run option naming the Build session (its thread id)
 #: a helper belongs to — read by the pending listing for the bell / desktop.
 BUILD_SESSION_OPTION = "build_session"
+#: v1.401.0: the run option of a READ-ONLY reviewer (the finish check's team
+#: review): the runtime arms nothing on top of its definition's tools.
+REVIEW_ONLY_OPTION = "review_only"
+#: v1.401.0: the ONLY tools a read-only reviewer may hold (those of them the
+#: turn holds): reading and searching the folder. Never a write, a command, a
+#: process tool, the web, a page or a helper door.
+REVIEW_TOOLS: tuple[str, ...] = ("read_file", "glob", "grep", "list_files")
 #: A Build session's tool session id prefix (``harness/sessions.session_id_for``).
 _BUILD_PREFIX = "build:"
 
@@ -208,6 +215,13 @@ class HelperParent:
     #: session lasts for days, and a review of this reply's change must not
     #: judge every unreviewed piece the session ever handed out.
     turn: str = ""
+    #: v1.401.0 (the team's review at the finish, ``harness/finish``): the
+    #: helper only READS — it gets the turn's :data:`REVIEW_TOOLS` and nothing
+    #: else, whatever its own definition or base type says
+    #: (:func:`helper_definition`), and its run arms nothing on top (the
+    #: runtime reads the run option this sets, :meth:`options`). A guarantee,
+    #: not a request: a write or a command it calls is refused "not armed".
+    review_only: bool = False
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:
@@ -235,6 +249,10 @@ class HelperParent:
         thread = build_thread_of(self.session_id)
         if thread:
             out[BUILD_SESSION_OPTION] = thread
+        if self.review_only:
+            # v1.401.0: the runtime arms nothing on top of the reviewer's
+            # read-only tools (not even an agent's own notebook).
+            out[REVIEW_ONLY_OPTION] = True
         return out or None
 
 
@@ -394,7 +412,11 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
     The runtime arms nothing more for the task (``runtime`` skips
     ``arm_for_task`` for :data:`HELPER_ORIGIN`). ``parent`` None, or a parent
     with no tool set, returns ``definition`` unchanged."""
-    if parent is None or not parent.tools or definition is None:
+    if parent is None or definition is None:
+        return definition
+    if not parent.tools and not parent.review_only:
+        # (A read-only reviewer is ALWAYS cut — to nothing, if the turn holds
+        # no reading tool: never left with its own definition's.)
         return definition
     from .mode import PLAN_MODE_TOOLS
     # v1.394.0: a MODEL TEAM MEMBER that stores no tool list of its own works
@@ -406,7 +428,13 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
     turn = [t for t in dict.fromkeys(parent.tools) if t not in NOT_FOR_HELPERS]
     kind = str(getattr(getattr(definition, "type", None), "value", "") or "")
     own = set(getattr(definition, "tools", None) or [])
-    if custom:
+    if parent.review_only:
+        # v1.401.0: the finish check's team review READS — whatever the
+        # member's own tools or base type (a builder-based member would get
+        # the turn's whole set below).
+        reads = set(REVIEW_TOOLS)
+        tools = [t for t in turn if t in reads]
+    elif custom:
         tools = [t for t in turn if t in own]
     elif kind == "builder":
         tools = list(turn)
@@ -1010,19 +1038,52 @@ def child_started(parent: "HelperParent | None", platform: Any, child_session_id
 # --------------------------------------------------------------------------- #
 
 
+#: v1.401.0: the ``data["state"]`` of a helper call that ran past its
+#: ``deadline_s`` (:func:`invoke_helper`) and was cancelled.
+TIMED_OUT_STATE = "timed_out"
+
+
+async def _bounded(aw: Any, deadline_s: "float | None") -> Any:
+    """``aw`` within ``deadline_s`` seconds (None: no bound). Past it the
+    call is CANCELLED — the cancel reaches the helper's run, as Stop's does —
+    and an ordinary failed result says so (``data.state`` :data:`TIMED_OUT_STATE`).
+    Only the bound's own expiry earns that answer: a ``TimeoutError`` the call
+    raised itself keeps its own words (the v1.228.0 rule)."""
+    if not deadline_s:
+        return await aw
+    try:
+        async with asyncio.timeout(float(deadline_s)) as cm:
+            return await aw
+    except TimeoutError:
+        if not cm.expired():
+            raise
+        from ..tools.base import ToolResult
+
+        mins = max(1, round(float(deadline_s) / 60))
+        return ToolResult(
+            ok=False, output="",
+            error=f"the helper ran past its time limit ({mins} min) and was stopped",
+            data={"state": TIMED_OUT_STATE},
+        )
+
+
 async def invoke_helper(parent: "HelperParent | None", call_id: str, name: str, args: Any,
                         invoke: "Callable[[], Any]", *, emit: "Emit | None" = None,
-                        handle: Any = None) -> tuple[Any, bool]:
+                        handle: Any = None, deadline_s: "float | None" = None) -> tuple[Any, bool]:
     """Run ONE helper-starting call of a harness turn: arm its parent (and
     its row), race it against the turn's Stop, and say how it ended.
     ``invoke`` makes the ``registry.invoke`` awaitable (made INSIDE the
     scope). ``(result, stopped)``; an ordinary failure is the result's own,
     a crash is re-raised after the row says so. MIRROR NOTE (lock-step): both
     chat lanes call this for ``delegate`` / ``spawn_agent`` in a harness turn
-    (the POST lane with no row and no Stop handle)."""
+    (the POST lane with no row and no Stop handle).
+
+    v1.401.0: ``deadline_s`` bounds the call (:func:`_bounded`) — the finish
+    check's team review passes one, so a slow reviewer can never hold the
+    reply; every other helper call passes None and is exactly as before."""
     with helper_call(parent, call_id, name, args, emit) as call:
         try:
-            result, stopped = await until_stopped(invoke(), handle)
+            result, stopped = await until_stopped(_bounded(invoke(), deadline_s), handle)
         except Exception as exc:  # noqa: BLE001 — said on the row, then re-raised
             if call is not None:
                 call.close()
@@ -1073,6 +1134,7 @@ async def until_stopped(aw: Any, handle: Any) -> tuple[Any, bool]:
 
 __all__ = [
     "AGENT_TOOLS", "ASK_POLL_S", "FINAL_STATES", "HELPER_EVENT", "HELPER_ORIGIN",
+    "REVIEW_ONLY_OPTION", "REVIEW_TOOLS", "TIMED_OUT_STATE",
     "HELPER_PARENT", "HELPER_TOOLS", "HelperCall", "HelperParent", "MAX_HELPERS", "for_member",
     "NOT_FOR_HELPERS", "READ_ONLY_TYPES",
     "REASON_CHARS", "SKILL_TOOLS", "STOPPED_RESULT", "asking", "call_target", "child_started",

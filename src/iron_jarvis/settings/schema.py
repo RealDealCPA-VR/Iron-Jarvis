@@ -311,10 +311,16 @@ SETTINGS: tuple[SettingDef, ...] = (
     # the team (agents/model_team.team_section). Turning it ON moves work and
     # usage onto other models and accounts, so from chat it asks every time
     # (no grant lifts it); turning it off applies at once. Read live.
+    # v1.401.0: it also makes Iron Jarvis ITSELF hand each coding reply that
+    # changed files to the team's reviewer at the finish (harness/finish).
     S("team_first", "Hand work to my team first", "models", "bool",
       "When this is on, a coding session is asked to hand reading, test runs, first drafts and "
       "reviews to your model team by role, and to keep the planning and the final check on its own "
-      "model. Members on your Claude Code or Codex plans use those plans. Off, a coding session is "
+      "model. Iron Jarvis also hands each coding reply that changed files to the team member with "
+      "the Review role before the reply ends: the reviewer reads the change on the model you set "
+      "for it, cannot change files, and the session answers what it found. A review adds up to "
+      "ten minutes to the reply. "
+      "Members on your Claude Code or Codex plans use those plans. Off, a coding session is "
       "shown your team and decides for itself whether to use it.",
       tier="allow", floor_when=(True,), section="Model team",
       aliases=("team first", "team-first", "hand work to my team", "use my team first",

@@ -191,8 +191,12 @@ def test_tonights_two_invocations_end_to_end(tmp_path, monkeypatch, gateway):
     # The command line said each team's number once.
     assert [ln for ln in a_out.splitlines() if ln.startswith("The planner handed")] == [
         "The planner handed at least one piece to a team member in 0 of 6 runs."]
+    # v1.401.0 (moved on purpose): team-first also hands each reply that
+    # changed files to the team's reviewer at the finish (harness/finish) —
+    # said apart, never counted as the planner's piece (team_report review).
     assert [ln for ln in b_out.splitlines() if ln.startswith("The planner handed")] == [
-        "The planner handed at least one piece to a team member in 6 of 6 runs."]
+        "The planner handed at least one piece to a team member in 6 of 6 runs. Iron Jarvis's own finish "
+        "check handed the change to the team's reviewer in 3 of 6 runs."]
 
 
 def test_b_first_a_killed_after_its_team_then_a_again(tmp_path, monkeypatch, gateway):

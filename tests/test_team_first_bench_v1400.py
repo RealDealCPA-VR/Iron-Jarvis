@@ -324,7 +324,11 @@ async def test_three_setups_in_one_root_the_planner_works_as_a_team_only_when_to
     assert "**The answer:** Yes on these runs: as many tasks, with less Claude list-price." in first_part
     # Who did what stays per setup.
     assert "| glm | fleet-spark / glm-5.3-flash | code 2 |" in first_part
-    assert "| codex | codex-cli / gpt-6-astra | review 2 |" in first_part
+    # v1.401.0 (moved on purpose): team-first also hands each reply that
+    # changed files to the reviewer at the finish (harness/finish) — task A
+    # (glm changed recur/rules.py) got a second review; task B changed
+    # nothing, so it got none. The planner's own two + the finish's one.
+    assert "| codex | codex-cli / gpt-6-astra | review 3 |" in first_part
     assert "code 2" not in plain_part and "review 2" not in plain_part
     # Each setup's own report says its number.
     first_report = (first.config_dir / "report.md").read_text(encoding="utf-8")
@@ -364,7 +368,10 @@ def test_the_command_line_says_the_number_after_a_team_setup(tmp_path, monkeypat
     lines = out.output.splitlines()
     said = [ln for ln in lines if ln.startswith("The planner handed")]
     # Once: the team's; the planner alone gets no such line.
-    assert said == ["The planner handed at least one piece to a team member in 1 of 1 run."], out.output
+    # v1.401.0 (moved on purpose): the finish check's own review is said apart
+    # (never counted as the planner's piece — team_report review).
+    assert said == ["The planner handed at least one piece to a team member in 1 of 1 run. Iron Jarvis's own "
+                    "finish check handed the change to the team's reviewer in 1 of 1 run."], out.output
     assert lines.index(said[0]) < next(i for i, ln in enumerate(lines) if "jarvis-claude-cli-" in ln)
     (runner,) = made
     assert runner.platform.config.team_first is False

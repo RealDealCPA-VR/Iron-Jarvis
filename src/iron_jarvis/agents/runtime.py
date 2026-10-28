@@ -1930,7 +1930,18 @@ class AgentRuntime:
         # on a roster the user edits. Only for a `custom:<slug>` session with
         # a folder store attached; builtins and bare registries see nothing.
         notebook_slug = self._notebook_slug(session)
-        if notebook_slug and "notebook" not in armed_names and self.p.registry.get("notebook") is not None:
+        # v1.401.0: a READ-ONLY reviewer (the finish check's team review,
+        # ``harness/helpers.REVIEW_ONLY_OPTION``) holds its reading tools and
+        # nothing written on top — not even its own notebook. Its notebook is
+        # still READ into its prompt below.
+        _review_only = False
+        if str(getattr(session, "origin", "") or "") == _HELPER_ORIGIN:
+            from ..harness.helpers import REVIEW_ONLY_OPTION as _REVIEW_ONLY
+            from ..scheduling.knobs import session_options as _review_opts
+
+            _review_only = _review_opts(session).get(_REVIEW_ONLY) is True
+        if (notebook_slug and "notebook" not in armed_names and not _review_only
+                and self.p.registry.get("notebook") is not None):
             armed_names.append("notebook")
         tool_specs = self.p.registry.specs(armed_names)
         # v1.377.0 (IJ harness part 2 Phase 6): a HELPER of a Build session
@@ -2274,6 +2285,13 @@ class AgentRuntime:
         # v1.337.0: a resumed run carries on in the loop it was in — a fresh
         # plan would throw the conversation it resumed from away.
         if _resumed:
+            engage_decomposed = False
+        # v1.401.0: the finish check's READ-ONLY reviewer is one job — read
+        # the change, write the report — and its brief quotes the user's
+        # request, which can read as a bulk task ("rename every file …"). A
+        # plan would cost rounds and its assembled answer could lose the
+        # verdict line the record reads from the report's LAST line.
+        if _review_only:
             engage_decomposed = False
         # v1.339.0: ...and a resumed DECOMPOSED run carries on in its plan.
         if _resume_plan is not None:

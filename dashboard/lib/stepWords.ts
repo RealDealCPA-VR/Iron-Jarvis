@@ -346,6 +346,35 @@ export interface FinishRecord {
   unmet: number;
   after: "" | "passed" | "failed";
   why?: string;
+  /** v1.401.0: the team's review at the finish ("Hand work to my team
+   *  first" on, a member with the Review role) — absent when it did not
+   *  apply. */
+  review?: FinishReview;
+}
+
+/** v1.401.0: how the team's review at the finish went (the daemon's
+ *  harness/finish `saved_review`; decoded by lib/buildSessions). */
+export interface FinishReview {
+  state: "done" | "failed" | "not_run" | "stopped";
+  member: string;
+  model: string;
+  verdict: "" | "approved" | "changes_needed";
+  why?: string;
+}
+
+/** The review's few words on the work line: "reviewed by codex: changes
+ *  needed", "reviewed by codex" (no verdict counted), "review not run". A
+ *  "changes needed" is NOT a warning: the reply answered it. Review: a
+ *  reviewer that STARTED and then failed, or was stopped, says so ("review
+ *  failed", "review stopped") — "not run" is only a review that never ran. */
+export function reviewWords(r: FinishReview): string {
+  if (r.state === "failed") return "review failed";
+  if (r.state === "stopped") return "review stopped";
+  if (r.state !== "done") return "review not run";
+  const who = r.member ? `reviewed by ${r.member}` : "reviewed by your team";
+  if (r.verdict === "approved") return `${who}: approved`;
+  if (r.verdict === "changes_needed") return `${who}: changes needed`;
+  return who;
 }
 
 /** The finish check's ONE sentence on the work line: "Checked: tests passed,
@@ -373,6 +402,7 @@ export function finishWords(f: FinishRecord): string {
   if (f.removed > 0) parts.push(`${plural(f.removed, "scratch file")} removed`);
   if (f.kept > 0) parts.push(`${plural(f.kept, "new file")} kept`);
   if (f.unmet > 0) parts.push(`${plural(f.unmet, "point")} needed more work`);
+  if (f.review) parts.push(reviewWords(f.review));
   return `Checked: ${parts.join(", ")}`;
 }
 
@@ -391,6 +421,14 @@ export function finishTitle(f: FinishRecord): string | undefined {
   const ran = f.tests === "passed" || f.tests === "failed";
   if (f.command) bits.push(`${ran ? "Ran" : "Not run"}: ${f.command}`);
   if (f.tests === "not_run" && f.why) bits.push(`Why: ${f.why}`);
+  if (f.review) {
+    // v1.401.0: who reviewed it, on which model — or why no review ran.
+    if (f.review.state === "done" && f.review.member) {
+      bits.push(`Reviewed by ${f.review.member}${f.review.model ? ` on ${f.review.model}` : ""}`);
+    } else if (f.review.state !== "done" && f.review.why) {
+      bits.push(`Review: ${f.review.why}`);
+    }
+  }
   return bits.length ? bits.join("\n") : undefined;
 }
 

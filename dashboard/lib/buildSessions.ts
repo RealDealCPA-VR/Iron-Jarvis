@@ -20,7 +20,7 @@ import type { PaneMessage } from "@/components/terminal/paneWork";
 import { decodeQueuedItem, type QueuedItem } from "@/lib/buildComposer";
 import { decodeSessionGit, type SessionGit } from "@/lib/buildGit";
 import { decodeBranchedFrom, type BranchedFrom } from "@/lib/buildNext";
-import type { FinishRecord } from "@/lib/stepWords";
+import type { FinishRecord, FinishReview } from "@/lib/stepWords";
 
 // Where a Build session opens lives in the import-free lib/buildLinks (the
 // bell and the Activity rows read it); re-exported here for the screen.
@@ -295,6 +295,29 @@ export function decodeFinish(raw: unknown): FinishRecord | null {
   };
   const why = str(r.why, 200).trim();
   if (tests === "not_run" && why) out.why = why;
+  const review = decodeFinishReview(r.review);
+  if (review) out.review = review;
+  return out;
+}
+
+/** v1.401.0: a finish record's `review`, whitelisted — a known state, the
+ *  member's and the model's words capped, a known verdict (else ""), `why`
+ *  only for a review that did not finish; else null (dropped). The daemon's
+ *  twin is harness/finish.saved_review. */
+export function decodeFinishReview(raw: unknown): FinishReview | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const state = r.state;
+  if (state !== "done" && state !== "failed" && state !== "not_run" && state !== "stopped") return null;
+  const verdict = r.verdict === "approved" || r.verdict === "changes_needed" ? r.verdict : "";
+  const out: FinishReview = {
+    state,
+    member: str(r.member, 80).trim(),
+    model: str(r.model, 120).trim(),
+    verdict,
+  };
+  const why = str(r.why, 200).trim();
+  if (state !== "done" && why) out.why = why;
   return out;
 }
 

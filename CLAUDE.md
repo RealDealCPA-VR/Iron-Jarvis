@@ -3824,6 +3824,42 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **TEAM REVIEW AT THE FINISH: Iron Jarvis hands the change to the team's
+  reviewer ITSELF; the reviewer only reads, is bounded, and its verdict is
+  the report's last line** (v1.401.0; the user's decision after a Sonnet
+  planner told "work as a team" handed the team 0 pieces in 108 bench runs —
+  soft words do not move it). With `team_first` on, a member holding the
+  Review role, `delegate` in the turn's gate, not low trust and the folder's
+  `finish.toml` not saying `review = false`, `FinishCheck.prepare` adds ONE
+  synthetic `delegate` call (`REVIEW_CALL_ID` "ij-finish-review", role review,
+  `called_as` "team review", in `HARNESS_CALLED_AS`) AFTER the test calls of
+  its round, so the team router, the helper row, Stop and MAX_HELPERS all
+  apply. The brief (`_review_brief`, off the loop): request + the coder's
+  draft + `change_diff` (journal before-bytes vs disk, per-file 8k / total
+  24k, files past the cap named, command-changed files by name), MASKED
+  BEFORE every cut and promptguard-scanned. READ-ONLY IS A GUARANTEE:
+  `HelperParent.review_only` → `helper_definition` gives only the turn's
+  `REVIEW_TOOLS` (read_file/glob/grep/list_files) whatever the member's own
+  roster or base; run option `review_only` → the runtime arms no notebook and
+  never decomposes. BOTH lanes (MIRROR NOTE) pass `review_only` and
+  `deadline_s=review_deadline(...)` (`REVIEW_DEADLINE_S` 600; past it the
+  call is cancelled as Stop cancels it, `helpers._bounded` answers
+  `data.state` `timed_out`, only on the bound's own expiry) for that call
+  only, and keep it out of `tools_used` / `last_tool_output`. The verdict is
+  `team_record.verdict_of` (last line only), never from a low-trust child, a
+  runtime-written report, or a report the injection detector flags (that one
+  is withheld by the fence and its verdict cleared). Record `finish.review
+  {state done|failed|not_run|stopped, member, model, verdict
+  approved|changes_needed|"", why?}` whitelisted by `saved_review` and the
+  dashboard's `decodeFinishReview`; the work line says "reviewed by X: …" /
+  "review failed|stopped|not run". The bench splits `planner_handed` from
+  `finish_reviewed` (`FINISH_REVIEW_ID` == `REVIEW_CALL_ID`), so "The planner
+  handed …" stays true. OPEN: a folder "ask" rule on `delegate` cards the
+  whole ~30k brief; ~30k chars per reviewed reply land in the ledger args and
+  the child's task; a reviewer's account limit voids a bench run. Pins:
+  `tests/test_team_review_finish{,_review,_ship}_v1401.py`,
+  `dashboard/__tests__/team-review-finish-v1401.test.tsx`.
+
 - **TEAM FIRST: a coding session's planner can be TOLD to hand pieces to
   the team; off is byte-identical** (v1.400.0; the user's decision after the
   first live team benchmark — a Sonnet planner shown the team handed ZERO

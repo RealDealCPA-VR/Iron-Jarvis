@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.9 (2026-10-25).*
+holds itself to. Current as of v1.401.0 (2026-10-25).*
 
 ---
 
@@ -1961,6 +1961,41 @@ handed it a piece: nothing told it you wanted to save its usage.
   It names only the roles your members hold. The helper tool's description
   also points to your team first. A planner on a free local model is told the
   team should take its share of the work rather than told to save usage.
+- **Iron Jarvis hands the review to your team itself (v1.401.0).** Telling
+  the planner was not enough: in the next measured night it handed the team
+  nothing in 108 runs. So when the setting is on, Iron Jarvis does one part of
+  it on its own. When a coding reply changed files and is about to end, its
+  finish check also hands the change to the member of your team with the
+  **Review** role:
+  - **Who reviews.** The team picks the member the usual way: a local one
+    first when its record is good, no account past its limit, your account
+    groups, the pay-per-use limit and Local only all apply. With no member
+    holding the Review role, nothing changes.
+  - **What it gets.** Your request, what the coding model says it did, and
+    the change itself (the lines each file gained and lost, shortened when
+    it is long). Keys and passwords in it are hidden first, and any part of
+    the change that reads like an instruction to a model is taken out. It
+    reads the folder's files with its own tools.
+  - **It cannot change anything.** The reviewer is given only reading and
+    searching tools; a write or a command it tries is refused.
+  - **What happens next.** Its report goes into the same finish note the
+    coding model already answers, which then fixes what is right and says
+    which points did not apply. It is told the reviewer can be wrong.
+  - **What you see.** The work line under the reply ends with "reviewed by
+    codex: changes needed", "reviewed by codex: approved", "review failed",
+    or "review not run" (hover it for why). The reviewer has its own row,
+    like any helper.
+  - **What it costs.** A review adds time to the reply and uses the model
+    you set for the reviewer (a member with no model of its own reviews on
+    the session's model). It has a limit of ten minutes: past that it is
+    stopped and the reply goes on without it ("review stopped"; hover it for
+    why). It is skipped for a reply that changed no files, in a reply that
+    read something that looked like an instruction (low trust), and in plan
+    mode.
+  - **A report that reads like an instruction** is withheld from the coding
+    model, and its verdict is not counted.
+  - **Turn it off for one folder.** Put `review = false` in
+    `.ironjarvis/harness/finish.toml` in that folder.
 - **What it does not change.**
   - With the setting off, or with no team, the planner sees exactly what it
     saw before.
@@ -2000,7 +2035,10 @@ How to use them:
   shows it as its own setup, "jarvis-team (team-first)", next to the plain
   team and the planner alone.
 - **The team at work.** Each team's answer starts by saying in how many runs
-  the planner handed at least one piece to a team member.
+  the planner handed at least one piece to a team member. With team first
+  on, it also says in how many runs Iron Jarvis's own finish check handed the
+  change to the team's reviewer (v1.401.0). That review is never counted as
+  a piece the planner handed.
 - **No step limit on the team tasks (v1.400.2).** The other tiers give Jarvis
   60 steps per task. The team tasks give it 1,000, the same ceiling a Build
   reply has, so their 40-minute time limit is what decides. A planner working

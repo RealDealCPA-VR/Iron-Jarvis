@@ -400,39 +400,101 @@ def compares_line(team_config: Mapping[str, Any], alone_config: Mapping[str, Any
     return line + "."
 
 
-def handed_to_a_member(record: Mapping[str, Any]) -> bool:
-    """Did this run hand at least one piece to a team member? A member's part
-    with a model call or a piece, or a helper row naming a member (a piece the
-    member then failed, or one its hold refused, still went to the team)."""
+#: v1.401.0: the helper row of the review Iron Jarvis's own FINISH CHECK hands
+#: the team's reviewer (``harness.finish.REVIEW_CALL_ID`` — pinned equal). The
+#: PLANNER did not hand it out, so it never counts as "the planner handed a
+#: piece" (:func:`planner_handed`); it is team work all the same
+#: (:func:`handed_to_a_member`, :func:`finish_reviewed`).
+FINISH_REVIEW_ID = "ij-finish-review"
+
+
+def _finish_review_rows(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [h for h in (record.get("helpers") or ())
+            if isinstance(h, Mapping) and str(h.get("id") or "") == FINISH_REVIEW_ID]
+
+
+def _a_member(name: Any) -> bool:
+    """A helper row's ``member`` that names a member (not ``role:<id>``: a role
+    the team router could not place started nothing)."""
+    text = str(name or "")
+    return bool(text) and not text.startswith("role:")
+
+
+def finish_reviewed(record: Mapping[str, Any]) -> bool:
+    """Did Iron Jarvis's own finish check hand this run's change to a team
+    member — the team's review at the finish (v1.401.0, "Hand work to my team
+    first" on)? A row the router could not place (no member) does not count."""
+    return any(_a_member(h.get("member")) for h in _finish_review_rows(record))
+
+
+def planner_handed(record: Mapping[str, Any]) -> bool:
+    """Did the PLANNER hand at least one piece to a team member? A member's
+    part with a model call or a piece, or a helper row naming a member (a piece
+    the member then failed, or one its hold refused, still went to the team) —
+    never the finish check's own review (v1.401.0: Iron Jarvis handed that
+    one, not the planner; its piece and its model calls are left out of the
+    member's part)."""
+    reviews = Counter(str(h.get("member") or "") for h in _finish_review_rows(record))
     parts = record.get("parts")
     if isinstance(parts, Mapping):
         for name, part in parts.items():
             if str(name) == PLANNER or not isinstance(part, Mapping):
                 continue
-            if (part.get("model_calls") or 0) > 0 or any((part.get("pieces") or {}).values()):
+            pieces = part.get("pieces") or {}
+            try:
+                own = sum(int(v or 0) for v in pieces.values()) if isinstance(pieces, Mapping) else 0
+            except (TypeError, ValueError):
+                own = 1 if any(pieces.values()) else 0
+            if own - reviews.get(str(name), 0) > 0:
                 return True
-    return any(isinstance(h, Mapping) and str(h.get("member") or "") for h in (record.get("helpers") or ()))
+            if (part.get("model_calls") or 0) > 0 and not reviews.get(str(name)):
+                return True
+    return any(
+        isinstance(h, Mapping) and str(h.get("member") or "") and str(h.get("id") or "") != FINISH_REVIEW_ID
+        for h in (record.get("helpers") or ())
+    )
+
+
+def handed_to_a_member(record: Mapping[str, Any]) -> bool:
+    """Did a team member work in this run at all? The planner handed it a
+    piece (:func:`planner_handed`), or — v1.401.0 — Iron Jarvis's own finish
+    check handed it the change to review (:func:`finish_reviewed`). Only when
+    neither did is the team row the planner working alone."""
+    return planner_handed(record) or finish_reviewed(record)
 
 
 def handed_count(records: Iterable[Mapping[str, Any]]) -> tuple[int, int, int]:
     """``(handed, ran, did_not_run)`` over a setup's live runs (v1.400.0):
-    how many runs handed at least one piece to a team member
-    (:func:`handed_to_a_member`), of the runs that ran — a run that never got
-    a fair go (an account limit, a server down: ``unscored_by ==
-    "infrastructure"``) and handed nothing is counted apart. v1.400.0 review:
-    a run that DID hand a piece and then went unscored because the member
-    could not work (its server down, its account's limit: ``member_infra``)
-    is a run in which the planner handed work out — it counts as handed."""
+    how many runs the PLANNER handed at least one piece to a team member
+    (:func:`planner_handed` — v1.401.0: never the finish check's own review),
+    of the runs that ran — a run that never got a fair go (an account limit,
+    a server down: ``unscored_by == "infrastructure"``) and in which no member
+    worked is counted apart. v1.400.0 review: a run that DID hand a piece and
+    then went unscored because the member could not work (its server down,
+    its account's limit: ``member_infra``) is a run in which work went out —
+    it counts as ran."""
     live = _live(records)
-    handed = [r for r in live if handed_to_a_member(r)]
+    handed = [r for r in live if planner_handed(r)]
     ran = [r for r in live if r.get("unscored_by") != "infrastructure" or handed_to_a_member(r)]
     return len(handed), len(ran), len(live) - len(ran)
+
+
+def reviewed_count(records: Iterable[Mapping[str, Any]]) -> tuple[int, int]:
+    """``(reviewed, ran)`` (v1.401.0): in how many of the runs that ran (as
+    :func:`handed_count` counts them) Iron Jarvis's own finish check handed
+    the change to the team's reviewer (:func:`finish_reviewed`)."""
+    live = _live(records)
+    ran = [r for r in live if r.get("unscored_by") != "infrastructure" or handed_to_a_member(r)]
+    return sum(1 for r in ran if finish_reviewed(r)), len(ran)
 
 
 def handed_line(records: Iterable[Mapping[str, Any]]) -> str:
     """The first number to look for in a team setup (v1.400.0): "The planner
     handed at least one piece to a team member in N of M runs." ("" with no
-    run; "Not known: …" when every run did not run)."""
+    run; "Not known: …" when every run did not run). v1.401.0: when Iron
+    Jarvis's own finish check handed the change to the team's reviewer, a
+    second sentence says in how many runs — never counted as the planner's."""
+    records = list(records)
     m, n, skipped = handed_count(records)
     if not n and not skipped:
         return ""
@@ -441,8 +503,13 @@ def handed_line(records: Iterable[Mapping[str, Any]]) -> str:
         return ("Not known: the 1 run did not run, so it could not hand a piece to a team member."
                 if skipped == 1 else
                 f"Not known: all {skipped} runs did not run, so none could hand a piece to a team member.")
-    return (f"The planner handed at least one piece to a team member in {m} of {n} "
+    line = (f"The planner handed at least one piece to a team member in {m} of {n} "
             f"run{'' if n == 1 else 's'}" + (f" ({skipped} did not run)" if skipped else "") + ".")
+    reviewed, _ran = reviewed_count(records)
+    if reviewed:
+        line += (f" Iron Jarvis's own finish check handed the change to the team's reviewer in "
+                 f"{reviewed} of {n} run{'' if n == 1 else 's'}.")
+    return line
 
 
 def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
@@ -470,6 +537,8 @@ def answer(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],
     a, _n = _scored(a_by[k] for k in keys)
     # v1.399.2: a team row whose planner handed nothing to a member is the
     # planner alone — no verdict about the team, before any other verdict.
+    # (v1.401.0: a run in which the finish check handed the change to the
+    # team's reviewer is team work too — `handed_to_a_member`.)
     m = sum(1 for k in keys if handed_to_a_member(t_by[k]))
     # v1.396.0 review: the PASS comparison leads, and a verdict is given only
     # from the numbers — a team that passed fewer tasks never gets a "less

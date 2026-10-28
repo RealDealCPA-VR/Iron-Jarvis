@@ -192,6 +192,19 @@ def stopped_by_user_error(target: str) -> str:
     )
 
 
+def _routed_member(route: Any, record: Any, provider: Any, model: Any) -> dict[str, str]:
+    """v1.401.0: ``{member, provider, model}`` of the member the TEAM ROUTER
+    picked for a role (the answer's ``data``) — {} for every other call, so
+    its data is exactly what it was."""
+    if route is None or record is None:
+        return {}
+    return {
+        "member": str(getattr(record, "name", "") or ""),
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+    }
+
+
 def _local_only_now() -> bool:
     """Is the run this tool call belongs to Local only? (The runtime sets the
     scope around a local-only run's whole body.) Never raises."""
@@ -809,6 +822,7 @@ class DelegateTool(Tool):
                         "agent_type": child_session.agent_type.value,
                         "state": "failed",
                         **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
+                        **_routed_member(_route, rec, provider, model),
                     },
                 )
 
@@ -896,6 +910,9 @@ class DelegateTool(Tool):
                     "workspace": child_session.workspace_path,
                     # v1.395.0: the role asked for, and why this member took it.
                     **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
+                    # v1.401.0: and WHO took it, on which model (the finish
+                    # check's team review names its reviewer from these).
+                    **_routed_member(_route, rec, provider, model),
                 },
             )
 

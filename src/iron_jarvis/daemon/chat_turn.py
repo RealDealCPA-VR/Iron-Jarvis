@@ -5608,6 +5608,7 @@ def helper_parent_now(
     base, platform: Any, *, provider: str, model: str, approval_mode: str,
     grants: Any, overrides: "dict[str, str]", trust_state: "dict[str, Any]",
     tools: Any = (),
+    review_only: bool = False,
 ):
     """The parent a helper call starts from, completed AT CALL TIME: the
     provider + model that serve the turn now (its route), its approval
@@ -5621,7 +5622,12 @@ def helper_parent_now(
     along as ``rules``. Under Local only every tool that reaches outside this
     PC (``egress.ask_first_tools``: a command, an app, a page) asks in the
     helper too — never a conversation grant: the parent cards those every
-    time, and a grant handed down would have run them without a word."""
+    time, and a grant handed down would have run them without a word.
+
+    v1.401.0: ``review_only`` — the call is the finish check's TEAM REVIEW
+    (``FinishCheck.owns_review``): the helper only reads
+    (``HelperParent.review_only``). Both lanes pass it (MIRROR NOTE); False
+    leaves every other helper exactly as it was."""
     if base is None:
         return None
     import dataclasses as _dc
@@ -5713,6 +5719,7 @@ def helper_parent_now(
         trust_reason=str(trust_state.get("reason") or "") if low else "",
         tools=turn_tools,
         rules=tuple(sorted(rules.items())),
+        review_only=bool(review_only),
     )
 
 
@@ -5916,6 +5923,11 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
         custom = frozenset(d.platform.registry.custom_names())
     except Exception:  # noqa: BLE001 — no registry here: nothing is known as custom
         custom = frozenset()
+    # v1.401.0 (TEAM REVIEW AT THE FINISH): "Hand work to my team first",
+    # read live as the reply begins — Iron Jarvis then hands the reply's
+    # change to the team's reviewer itself (harness/finish). Off: no review.
+    from ..agents.model_team import team_first_on as _team_first_on
+
     check = await _finish.start(
         engine=getattr(d.platform, "engine", None),
         home=getattr(getattr(d.platform, "config", None), "home", None),
@@ -5929,6 +5941,8 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
         custom_tools=custom,
         turn_id=str(getattr(body, "turn_id", "") or ""),
         continues=continues,
+        platform=d.platform,
+        team_review=_team_first_on(d.platform),
     )
     if check is not None and is_resume and _finish.noted_in(resumed_tail):
         check.checked_before = True
@@ -5978,11 +5992,17 @@ _FINISH_UNTRUSTED = SimpleNamespace(returns_untrusted_content=True)
 
 def finish_fence(d, trust_state: dict[str, Any], overrides: dict[str, str], tool_name: str):
     """``async fence(text)`` for the finish note: the lane's own fence + scan
-    (a flagged output TAINTS the reply, exactly as a flagged tool result)."""
+    (a flagged output TAINTS the reply, exactly as a flagged tool result).
 
-    async def fence(text: str) -> str:
+    v1.401.0 review: ``tool`` — the tool whose output ``text`` is, when it is
+    not the command tool the check runs its tests through (the team review's
+    report: ``delegate``). A flagged text lowers the reply "from" that tool
+    (``core.trust.taint_reason``) — the reviewer's report used to be blamed
+    on ``shell``, sending the user to look for a command that never ran."""
+
+    async def fence(text: str, tool: str = "") -> str:
         return str(await _fence_tool_output(
-            d, trust_state, overrides, tool_name, _FINISH_UNTRUSTED, str(text or ""),
+            d, trust_state, overrides, str(tool or tool_name), _FINISH_UNTRUSTED, str(text or ""),
         ))
 
     return fence
@@ -6013,6 +6033,18 @@ def finish_invoke(d, ctx, overrides: dict[str, str], grants, gate, *, called_as:
         )
 
     return invoke
+
+
+def review_deadline(finish: Any, call: Any) -> "float | None":
+    """v1.401.0: the time limit of the finish check's TEAM REVIEW call
+    (``harness/finish.REVIEW_DEADLINE_S``), else None — every other helper
+    call is unbounded, exactly as before. MIRROR NOTE (lock-step): both lanes
+    pass it to ``harness/helpers.invoke_helper``."""
+    if finish is None or not finish.owns_review(call):
+        return None
+    from ..harness.finish import REVIEW_DEADLINE_S
+
+    return float(REVIEW_DEADLINE_S)
 
 
 def finish_low_trust(trust_state: dict[str, Any]) -> bool:
@@ -9302,9 +9334,15 @@ async def run_chat_turn(
                                 # THIS turn's tools (lock-step: the stream
                                 # lane passes its `_turn_tools`).
                                 tools=armed,
+                                # v1.401.0: the finish check's team review
+                                # only READS (lock-step: the stream lane).
+                                review_only=_finish is not None and _finish.owns_review(tc),
                             ),
                             tc.id, tc.name, tc.arguments,
                             lambda: _registry_invoke(tc, _deny_kw),
+                            # v1.401.0: the team review is BOUNDED
+                            # (lock-step: the stream lane).
+                            deadline_s=review_deadline(_finish, tc),
                         )
                         return _hres, ""
                     return await _registry_invoke(tc, _deny_kw), ""
@@ -9420,7 +9458,13 @@ async def run_chat_turn(
                     ))
                     _label = ""  # (read by the finish check below)
                     if ran:
-                        last_tool_output = str(result.output or "")
+                        # v1.401.0 review: never the finish check's TEAM
+                        # REVIEW's report — it is not in `tools_used`, so an
+                        # empty reply's "Here is what <tools> returned" would
+                        # show the reviewer's words under the reply's own
+                        # tools. MIRROR NOTE (lock-step): routes/chat.py.
+                        if not (_finish is not None and _finish.owns_review(tc)):
+                            last_tool_output = str(result.output or "")
                     elif result is not None:
                         # An honest refusal is not "used" — record it so the
                         # reply can note it (a tool-internal failure just
@@ -9457,7 +9501,13 @@ async def run_chat_turn(
                     # tools_used counts ONLY tools that actually executed — a
                     # denied or failed call is not honestly reported as run.
                     if ran:
-                        tools_used.append(tc.name)
+                        # v1.401.0: the finish check's TEAM REVIEW is the
+                        # harness's own call — never the reply's work, and
+                        # never a possible writer for the honesty notes (its
+                        # reviewer only reads). MIRROR NOTE (lock-step):
+                        # routes/chat.py's stream loop.
+                        if not (_finish is not None and _finish.owns_review(tc)):
+                            tools_used.append(tc.name)
                         # DOOR (v1.199.0): a successful creating tool opens a
                         # link into its surface. Same gate as tools_used —
                         # inside this `if ran:` — so honesty is enforced at the

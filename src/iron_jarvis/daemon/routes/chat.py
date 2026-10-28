@@ -5790,10 +5790,20 @@ async def chat_stream(
                                         # with THIS turn's tools (lock-step:
                                         # the POST lane passes its `armed`).
                                         tools=_turn_tools,
+                                        # v1.401.0: the finish check's team
+                                        # review only READS (lock-step:
+                                        # chat_turn.run_chat_turn).
+                                        review_only=_finish is not None and _finish.owns_review(tc),
                                     ),
                                     tc.id, tc.name, tc.arguments,
                                     lambda: _registry_invoke(tc, _p, _low_kw, _deny_reason, _deny_label),
                                     emit=_helper_emit, handle=handle,
+                                    # v1.401.0: the team review is BOUNDED
+                                    # (finish.REVIEW_DEADLINE_S) — a slow
+                                    # reviewer never holds the reply. Every
+                                    # other helper: None, as before.
+                                    # MIRROR NOTE (lock-step): chat_turn.
+                                    deadline_s=_chat_turn.review_deadline(_finish, tc),
                                 )
                                 if _stopped:
                                     return None, _HELPER_STOPPED
@@ -6004,7 +6014,14 @@ async def chat_stream(
                             continue
                         _label = ""  # (read by the finish check below)
                         if ran:
-                            last_tool_output = str(result.output or "")
+                            # v1.401.0 review: never the finish check's TEAM
+                            # REVIEW's report — it is not in `tools_used`, so
+                            # an empty reply's "Here is what <tools> returned"
+                            # would show the reviewer's words under the
+                            # reply's own tools. MIRROR NOTE (lock-step):
+                            # chat_turn.run_chat_turn.
+                            if not (_finish is not None and _finish.owns_review(tc)):
+                                last_tool_output = str(result.output or "")
                         elif result is not None:
                             # v1.344.0 (M3): "not armed" and "low trust" are
                             # footnoted beside "permission denied";
@@ -6030,7 +6047,13 @@ async def chat_stream(
                             # ran (that lane never cards).
                             connect_offered.append(offered_app(tc.name, tc.arguments))
                         if ran:
-                            tools_used.append(tc.name)
+                            # v1.401.0: the finish check's TEAM REVIEW is the
+                            # harness's own call — never the reply's work, and
+                            # never a possible writer for the honesty notes
+                            # (its reviewer only reads). MIRROR NOTE
+                            # (lock-step): chat_turn.run_chat_turn.
+                            if not (_finish is not None and _finish.owns_review(tc)):
+                                tools_used.append(tc.name)
                             # DOOR (v1.199.0): a successful creating tool
                             # opens a link into its surface. Same gate as
                             # tools_used — inside this `if ran:` — so honesty
