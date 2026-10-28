@@ -1343,6 +1343,17 @@ does not need a bump, stop and bump it.
   the "Point at it" block of `sidepanel-runtime-v1242.test.ts` (28
   mutations, all red; the side-panel ones on a REBUILT bundle) and a
   real-Edge run against a scratch daemon on 8797 (14 checks).
+  v1.401.1 (v1.400.9 and v1.401.0 published NO installer): the picker test
+  imports `content/picker.ts` and `content/index.ts`, which use the global
+  `chrome`; the dashboard's tsconfig includes every `**/*.ts` and has no
+  chrome types, so the Tests workflow's `npx tsc --noEmit` and the
+  installer's `pnpm build` failed ("Cannot find name 'chrome'") while every
+  vitest run stayed green — vitest never type-checks. The test is in
+  `dashboard/tsconfig.json` `exclude` (vitest still runs it), and
+  `tests/test_dashboard_typecheck_addon_v14011.py` follows every dashboard
+  test's imports into `extensions/chrome/src` and fails while one that
+  reaches `chrome` is still type-checked. A change that adds or edits a
+  dashboard test runs `npx tsc --noEmit` (or `pnpm build`) before the push.
 
 - **Updates come from the `updates` branch manifest first; GitHub's releases
   feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**
