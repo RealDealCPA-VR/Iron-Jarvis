@@ -690,7 +690,11 @@ def test_the_endpoint_computes_all_three_numbers_exactly(tmp_path):
     assert (s["agent"]["tasks"], s["agent"]["successful"], s["agent"]["hands_off"],
             s["agent"]["interruptions"], s["agent"]["human_nudges"]) == (3, 2, 1, 1, 1)
     weekly = got["weekly"]
-    assert len(weekly) == 5 and sum(w["tasks"] for w in weekly) == 8
+    # (review) every week the 30 days touch: 5, or 6 when the window began
+    # late in a week (a Monday or a Tuesday "now").
+    first = datetime.fromisoformat(A._week_start(NOW - 30 * 86400)).date()
+    last = datetime.fromisoformat(A._week_start(NOW)).date()
+    assert len(weekly) == (last - first).days // 7 + 1 and sum(w["tasks"] for w in weekly) == 8
     assert all(re.fullmatch(r"\d{4}-\d{2}-\d{2}", w["week"]) for w in weekly)
 
 
@@ -789,7 +793,8 @@ def test_the_cli_parsers_keep_names_never_long_inputs():
          "input": {"file_path": "a.py", "content": "x" * 5000}},
         {"type": "tool_use", "id": "t1", "name": "Write", "input": {}},  # the same id once
     ]}}))
-    assert claude["tool_uses"] == [{"name": "Write", "input": {"file_path": "a.py"}}]
+    # (review) each call keeps the model message it came in (one round).
+    assert claude["tool_uses"] == [{"name": "Write", "input": {"file_path": "a.py"}, "round": 0}]
     codex = parse_codex_events("\n".join(json.dumps(x) for x in (
         {"type": "item.completed", "item": {"type": "command_execution"}},
         {"type": "item.completed", "item": {"type": "agent_message", "text": "hi"}},

@@ -2762,6 +2762,23 @@ class AgentRuntime:
                 requested,
                 session_id=session.id,
             )
+            # (review) A MISSION'S TEAMMATE asks under its own session, which
+            # is no task of its own: its ask belongs to the mission (the
+            # root). Looked up AFTER the card is out (no delay before it) and
+            # inside the try (a cancel here still pops the ask).
+            from .team import MISSION_MEMBER_ORIGIN as _MEMBER
+
+            if str(getattr(session, "origin", "") or "") == _MEMBER:
+                try:
+                    from .team import mission_root as _mission_root
+
+                    _root = await asyncio.to_thread(
+                        _mission_root, self.p.engine, str(session.id), getattr(run, "id", None)
+                    )
+                    if _root is not None and getattr(_root, "id", None):
+                        _inote.facts["session_id"] = str(_root.id)
+                except Exception:  # noqa: BLE001 — a metric never breaks a run
+                    pass
             _inote.asked()
             if timeout is None:
                 # No clock: an answer, a decline, or a cancel of the session

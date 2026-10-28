@@ -576,6 +576,27 @@ def _queued_of(row) -> list:
     return [i for i in items if isinstance(i, dict)][:MAX_THREAD_QUEUE] if isinstance(items, list) else []
 
 
+def _turn_thread_lookup(d, turn_id: str):
+    """v1.402.0 review (the autonomy metrics): a callable answering which
+    saved chat ``turn_id`` was linked to — a NEW chat's first question goes
+    out before its first save names the chat, and the page links the turn a
+    moment later (``POST /chat/turns/{id}/thread``), so an ask of that turn
+    learns its chat when it SETTLES. Reads the platform's turn logs only when
+    they exist (never makes them); "" when it cannot tell."""
+    turn = str(turn_id or "")
+
+    def _lookup() -> str:
+        logs = getattr(getattr(d, "platform", None), "turn_logs", None)
+        if not turn or logs is None:
+            return ""
+        try:
+            return str(logs.thread_for(turn) or "")
+        except Exception:  # noqa: BLE001 — a metric never breaks a turn
+            return ""
+
+    return _lookup
+
+
 def _turn_logs(d) -> "_durable.TurnLogs":
     """This platform's daemon-owned chat turns (v1.336.0), made on first use."""
     logs = getattr(d.platform, "turn_logs", None)
@@ -4481,6 +4502,8 @@ async def chat_stream(
                 else str(getattr(body, "thread_id", "") or "")
             ),
             "turn_id": _step_turn,
+            # (review) a new chat's first turn learns its chat later.
+            "thread_for": _turn_thread_lookup(d, _step_turn),
         },
     )
     # v1.327.0: the chat list's "waiting" reads this turn's open app asks
@@ -5556,6 +5579,9 @@ async def chat_stream(
                                     or ("local_only" if _local_ask else "priced" if _spend_card else "")
                                 ),
                                 args_hash=str(_frame.get("args_hash") or ""),
+                                # (review) a new chat's first turn learns its
+                                # chat when the page's first save links it.
+                                thread_for=_turn_thread_lookup(d, _step_turn),
                             )
                             _inote.asked()
                             # v1.327.0: the chat reads "waiting on you" from

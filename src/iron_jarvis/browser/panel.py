@@ -667,10 +667,21 @@ class PanelTurns:
             return False
         from ..daemon.routes.chat import _approvals
 
+        from ..core.approvals import InterruptNote, settled_actor
+
         registry = _approvals(SimpleNamespace(platform=self.platform))
         safe_args = args if isinstance(args, dict) else {}
         ap_id, fut = registry.request(name or "browser action", safe_args)
         self._offered.add(ap_id)
+        # v1.402.0 review (the autonomy metrics): this card, for COUNTING
+        # ONLY, like every other card — a browser risk check is a once-only
+        # SAFETY card (never "avoidable"). The sidebar keeps no saved
+        # conversation, so it is counted as an ask no task holds.
+        note = InterruptNote(
+            getattr(self.platform, "event_bus", None),
+            kind="card", tool=name or "browser action", surface="chat",
+            ask_id=ap_id, turn_id=self._turn_id, once_only=True, reason="browser_risk",
+        )
         what = describe_browser_call(name, safe_args)
         reason = " ".join(str(getattr(req, "reason", "") or "").split())
         await self.emit(
@@ -687,14 +698,22 @@ class PanelTurns:
                 "floor": True,
             },
         )
+        note.asked()
         try:
             decision = await asyncio.wait_for(fut, RISK_ASK_TIMEOUT_S)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
+            note.answered("timeout", "timeout")
+            registry.pop(ap_id)
+            return False
+        except asyncio.CancelledError:
+            note.answered("stopped", "app")
             registry.pop(ap_id)
             return False
         except Exception:  # noqa: BLE001 — an answer that failed to arrive is a refusal
+            note.answered("stopped", "app")
             registry.pop(ap_id)
             return False
+        note.answered(str(decision), settled_actor(registry, ap_id, str(decision)))
         registry.pop(ap_id)
         return str(decision) in ("once", "conversation", "tab")
 

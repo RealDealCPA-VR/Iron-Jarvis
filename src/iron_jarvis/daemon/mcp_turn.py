@@ -387,6 +387,7 @@ class TurnInteractions:
             ask_id=ask.id,
             thread_id=str(facts.get("thread_id") or self.owner or ""),
             turn_id=str(facts.get("turn_id") or ""),
+            thread_for=facts.get("thread_for") if callable(facts.get("thread_for")) else None,
         )
         note.asked()
         return note

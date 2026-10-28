@@ -993,7 +993,11 @@ class JarvisRunner:
                                 elif event == "tool_call" and data.get("status") == "started":
                                     _flush_words()
                                     _note({"kind": "call", "id": data.get("id"), "tool": data.get("name"),
-                                           "args": data.get("args")})
+                                           "args": data.get("args"),
+                                           # v1.402.0 review: the round it was
+                                           # asked in (one card per round's
+                                           # same-kind calls, as the lane shows).
+                                           "round": rounds})
                                 elif event == "tool_call" and data.get("status") == "finished":
                                     tools += 1
                                     detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
@@ -1310,6 +1314,9 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
     #: scalar inputs (what decides the Jarvis tool it maps to — a background
     #: Bash), for "would have asked you" (``asks.would_have_asked``).
     tool_uses: list[dict[str, Any]] = []
+    #: (review) which model MESSAGE each call came in — calls of one message
+    #: are one round, and the app shows one card for a round's same-kind calls.
+    rounds_by_message: dict[str, int] = {}
     answered = 0
     result: dict[str, Any] | None = None
     reported: str | None = None
@@ -1323,6 +1330,8 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
             message = obj.get("message") or {}
             if not obj.get("isApiErrorMessage") and message.get("content"):
                 answered += 1
+            mid = str(message.get("id") or f"event-{len(rounds_by_message)}")
+            this_round = rounds_by_message.setdefault(mid, len(rounds_by_message))
             for block in message.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     bid = str(block.get("id") or f"anon-{len(tool_ids)}")
@@ -1337,6 +1346,7 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
                                     if isinstance(v, (bool, int, float))
                                     or (isinstance(v, str) and len(v) <= 300)
                                 },
+                                "round": this_round,
                             })
         elif kind == "result":
             result = obj

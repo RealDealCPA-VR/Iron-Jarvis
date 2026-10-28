@@ -24,6 +24,16 @@ Every runner's calls are replayed:
 
 A name that cannot be mapped (an app's tool, a vendor tool Jarvis does not
 serve) is counted as ``not known`` — never guessed either way.
+
+ONE CARD PER ROUND'S KIND (v1.402.0 review). The lane puts ONE card in front
+of every call of a round that needs the same permission ("ONE CARD FOR THE
+BATCH", v1.247.0), so calls that came in one model message (a Jarvis round, a
+Claude Code message's parallel ``tool_use`` blocks) are counted as one ask
+per permission. Codex reports no rounds: each of its calls is one ask. A
+question the model puts to the person (``ask_user`` / Claude Code's
+``AskUserQuestion``) is an ask of its own. NO GRANTS: the count is every
+card answered "Allow once" — a person who answered the first one "Allow for
+this chat" would have been asked less.
 """
 
 from __future__ import annotations
@@ -41,6 +51,9 @@ CODEX_ITEM_TOOLS = {
 
 #: At most this many calls are replayed per run (a runaway run is bounded).
 MAX_CALLS = 2000
+
+#: The model's questions to the person: an ask whatever the posture.
+QUESTION_TOOLS = frozenset({"ask_user"})
 
 
 def default_permissions() -> Any:
@@ -94,20 +107,35 @@ def codex_tool(kind: str) -> str:
     return _served(CODEX, key)
 
 
+def _perm_key(name: str, registry: Any) -> str:
+    if registry is not None:
+        try:
+            tool = registry.get(name)
+            if tool is not None:
+                return str(tool.perm_key())
+        except Exception:  # noqa: BLE001
+            pass
+    return name
+
+
 def would_have_asked(
-    calls: Iterable[tuple[str, Any]], *, runner: str, permissions: Any = None, registry: Any = None,
+    calls: Iterable[tuple], *, runner: str, permissions: Any = None, registry: Any = None,
 ) -> dict[str, Any]:
     """``{calls, asked, not_known, by_tool}`` for one run. ``calls`` are
-    ``(name, args)`` in the runner's own vocabulary (``runner``: ``jarvis`` |
-    ``claude`` | ``codex``); ``by_tool`` counts the asks per JARVIS tool."""
+    ``(name, args)`` or ``(name, args, round)`` in the runner's own
+    vocabulary (``runner``: ``jarvis`` | ``claude`` | ``codex``); calls of one
+    round needing the same permission are ONE ask (the lane's batch card; no
+    round = one ask each). ``by_tool`` counts the asks per JARVIS tool."""
     from ..eval.autonomy import would_card
 
     perms = permissions if permissions is not None else default_permissions()
     asked = not_known = total = 0
     by_tool: dict[str, int] = {}
-    for name, args in calls:
+    carded: set[tuple[Any, str]] = set()
+    for call in calls:
         if total >= MAX_CALLS:
             break
+        name, args, round_ = (tuple(call) + (None, None))[:3]
         total += 1
         if runner == "claude":
             real = claude_tool(name, args)
@@ -125,12 +153,22 @@ def would_have_asked(
         if not real:
             not_known += 1
             continue
+        if real in QUESTION_TOOLS:
+            # The model asking the person: always an ask, never batched.
+            asked += 1
+            by_tool[real] = by_tool.get(real, 0) + 1
+            continue
         # Every runner is judged as a coding session's turn — how the
         # benchmark runs Jarvis — so the three read alike.
         verdict = would_card(real, permissions=perms, registry=registry, harness=True)
         if verdict is None:
             not_known += 1
         elif verdict:
+            if round_ is not None:
+                batch = (round_, _perm_key(real, registry))
+                if batch in carded:
+                    continue  # the round's card for this kind already asked
+                carded.add(batch)
             asked += 1
             by_tool[real] = by_tool.get(real, 0) + 1
     return {"calls": total, "asked": asked, "not_known": not_known, "by_tool": by_tool}
@@ -143,13 +181,13 @@ def calls_of(outcome: Any, trajectory: Any = None) -> tuple[str, list[tuple[str,
     extra = getattr(outcome, "extra", None) or {}
     if isinstance(trajectory, list):
         return "jarvis", [
-            (str(e.get("tool") or ""), e.get("args"))
+            (str(e.get("tool") or ""), e.get("args"), e.get("round"))
             for e in trajectory
             if isinstance(e, dict) and e.get("kind") == "call"
         ]
     if isinstance(extra.get("tool_uses"), list):
         return "claude", [
-            (str(u.get("name") or ""), u.get("input"))
+            (str(u.get("name") or ""), u.get("input"), u.get("round"))
             for u in extra["tool_uses"] if isinstance(u, dict)
         ]
     if isinstance(extra.get("tool_items"), list):
@@ -158,5 +196,6 @@ def calls_of(outcome: Any, trajectory: Any = None) -> tuple[str, list[tuple[str,
 
 
 __all__ = [
-    "CODEX_ITEM_TOOLS", "calls_of", "claude_tool", "codex_tool", "default_permissions", "would_have_asked",
+    "CODEX_ITEM_TOOLS", "QUESTION_TOOLS", "calls_of", "claude_tool", "codex_tool", "default_permissions",
+    "would_have_asked",
 ]

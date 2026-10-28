@@ -436,11 +436,26 @@ def _would_have_asked(runner: Any, outcome: RunOutcome, trajectory: Any) -> "dic
         if not vocab:
             return None
         platform = getattr(runner, "platform", None)
-        return _asks.would_have_asked(
+        got = _asks.would_have_asked(
             calls, runner=vocab,
             permissions=getattr(platform, "permissions", None),
             registry=getattr(platform, "registry", None),
         )
+        # (review) A run whose record hit its bound (the trajectory keeps
+        # TRAJECTORY_ENTRIES steps, the CLI parsers 2000 calls) kept fewer
+        # calls than it made: the ones it could not replay are "not known",
+        # never silently left out.
+        from .runners import TRAJECTORY_ENTRIES
+
+        capped = (
+            isinstance(trajectory, list) and len(trajectory) >= TRAJECTORY_ENTRIES
+            if vocab == "jarvis" else len(calls) >= _asks.MAX_CALLS
+        )
+        missing = max(0, int(getattr(outcome, "tool_calls", 0) or 0) - int(got.get("calls") or 0))
+        if capped and missing:
+            got["calls"] = int(got.get("calls") or 0) + missing
+            got["not_known"] = int(got.get("not_known") or 0) + missing
+        return got
     except Exception:  # noqa: BLE001
         return None
 
