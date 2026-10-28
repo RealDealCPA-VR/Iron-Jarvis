@@ -1507,6 +1507,7 @@ def _arm(plan: Plan, a: Attempt) -> contextvars.Context:
     from . import branches as B
     from . import command_shell as _cmd
     from . import compact as _compact
+    from . import team as _team
 
     ctx = contextvars.copy_context()
 
@@ -1517,6 +1518,9 @@ def _arm(plan: Plan, a: Attempt) -> contextvars.Context:
         _fw.set_build_surface()
         _cmd.set_turn_rule(plan.command_rule)
         _compact.set_summary(plan.summary)
+        # v1.403.0: each attempt does the WHOLE task alone — never as the
+        # session's team lead (Try on several models stays separate).
+        _team.set_team(None)
 
     ctx.run(arm)
     return ctx

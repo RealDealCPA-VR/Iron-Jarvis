@@ -564,6 +564,11 @@ class BuildFolderRecord(SQLModel, table=True):
     path: str = ""
     name: str = ""
     updated_at: datetime = Field(default_factory=utcnow)
+    #: v1.403.0 (the coding-session team, ``harness/team``): the TEAM a new
+    #: session in this folder starts with — ``{"workers": [...], "reviewer":
+    #: name | ""}`` as JSON, "" = none. Additive (the reconciler adds the
+    #: column to an older database); the display name above is untouched by it.
+    team_json: str = ""
 
 
 class SavedPromptRecord(SQLModel, table=True):

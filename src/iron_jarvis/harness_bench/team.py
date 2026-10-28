@@ -58,6 +58,18 @@ a file without the key, or with ``team_first = false``, is the team exactly as
 before (the same identity, the same folder), and ``true`` is a new folder. The
 report shows such a setup as ``jarvis-team (team-first)``.
 
+TEAM MODE (v1.403.0). ``team = true`` under ``[planner]`` runs the planner as
+a CODING SESSION's team LEAD (``harness/team``): it holds no tool that changes
+a file or runs a command — enforced, not asked — and hands each piece to its
+WORKERS (the members with the ``code`` role, one or two) while Iron Jarvis
+hands every change to its REVIEWER (the member with ``review`` and not
+``code``) before the reply ends. The runner arms the session's team around
+every task's turn exactly as a Build session with a team does
+(:meth:`JarvisTeamRunner.turn_scope`). It is in the identity ONLY when true
+(``team_mode`` — and the team module's source), and the report shows such a
+setup with ``lead (locked)``. This is how the 0-of-108 result (a planner told
+to hand work out handed out nothing) is measured again.
+
 WHERE THE TEAM LIVES. In the benchmark's own scratch home (``--root``), never
 the user's — the members are made there before the first task
 (:meth:`JarvisTeamRunner.prepare`) and removed again when the invocation ends
@@ -100,7 +112,7 @@ TEAM_RUNNER = "jarvis-team"
 MAX_MEMBERS = 10
 #: A member's name: what the planner calls it and the registry keys it by.
 _NAME_RX = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
-_PLANNER_KEYS = frozenset({"provider", "model", "team_first"})
+_PLANNER_KEYS = frozenset({"provider", "model", "team_first", "team"})
 _MEMBER_KEYS = frozenset({"name", "provider", "model", "roles", "description", "account", "effort", "max_steps"})
 #: v1.396.0 review: a member's step limit when the file names none is the
 #: planner's own round budget (``--rounds``, 60 by default). A member handed a
@@ -165,6 +177,11 @@ class TeamSpec:
     #: v1.400.0: the file's ``team_first`` under ``[planner]`` — the runs use
     #: the "Hand work to my team first" setting (see the module docstring).
     team_first: bool = False
+    #: v1.403.0: the file's ``team`` under ``[planner]`` — the planner runs as
+    #: a coding session's team LEAD (``harness/team``: locked — no tool that
+    #: changes a file or runs something), the members holding ``code`` as its
+    #: WORKERS and the member holding only ``review`` as its REVIEWER.
+    team_mode: bool = False
 
     def identity(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -175,7 +192,23 @@ class TeamSpec:
         # and ``team_first = false``) keeps exactly its identity.
         if self.team_first:
             out["team_first"] = True
+        # v1.403.0: the same rule — a file without ``team`` (or false) keeps
+        # exactly its identity; ``team = true`` is a new setup.
+        if self.team_mode:
+            out["team_mode"] = True
         return out
+
+    def session_team(self) -> Any:
+        """v1.403.0: the coding session's team of a ``team = true`` file —
+        its workers (members holding ``code``) and its reviewer (the member
+        holding ``review`` and not ``code``), or None for any other file."""
+        if not self.team_mode:
+            return None
+        from ..harness.team import SessionTeam
+
+        workers = tuple(m.name for m in self.members if "code" in m.roles)
+        reviewer = next((m.name for m in self.members if "review" in m.roles and "code" not in m.roles), "")
+        return SessionTeam(workers=workers, reviewer=reviewer)
 
     @property
     def key(self) -> str:
@@ -270,8 +303,31 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
         members.append(Member(name=name, provider=m_provider, model=m_model,
                               roles=tuple(MT.clean_roles(roles)), description=description, account=account,
                               effort=effort, max_steps=int(steps or 0)))
+    team_mode = planner.get("team", False)
+    if not isinstance(team_mode, bool):
+        raise _refused("The team file's [planner] team is true or false (without quotes).")
+    if team_mode:
+        # v1.403.0: a coding session's team — one or two WORKERS (the members
+        # holding code) and at most one REVIEWER (holding review, not code);
+        # every member is one or the other.
+        from ..harness.team import MAX_WORKERS
+
+        workers = [m for m in members if "code" in m.roles]
+        reviewers = [m for m in members if "review" in m.roles and "code" not in m.roles]
+        others = [m.name for m in members if m not in workers and m not in reviewers]
+        if not workers:
+            raise _refused("With team = true the team file needs a worker: a member with the code role.")
+        if len(workers) > MAX_WORKERS:
+            raise _refused(f"With team = true a team has at most {MAX_WORKERS} workers (members with the code "
+                           f"role); this file names {len(workers)}.")
+        if len(reviewers) > 1:
+            raise _refused("With team = true a team has at most one reviewer (a member with the review role "
+                           "and not code); this file names " + ", ".join(m.name for m in reviewers) + ".")
+        if others:
+            raise _refused("With team = true every member is a worker (code) or the reviewer (review); "
+                           + ", ".join(others) + " is neither.")
     return TeamSpec(planner_provider=p_provider, planner_model=p_model, members=tuple(members), source=source,
-                    team_first=team_first)
+                    team_first=team_first, team_mode=team_mode)
 
 
 def load_team_file(path: str | Path) -> TeamSpec:
@@ -297,6 +353,12 @@ TEAM_FIRST_OFF_LINE = "Team-first: off (the planner is shown the team and decide
 
 def team_first_line(on: bool) -> str:
     return TEAM_FIRST_ON_LINE if on else TEAM_FIRST_OFF_LINE
+
+
+#: v1.403.0: a dry run's line for a ``team = true`` file.
+TEAM_MODE_LINE = ("Team lead: locked (the planner runs as a coding session's team lead: no tool that "
+                  "changes a file or runs a command; the members with the code role are its workers, the "
+                  "member with the review role its reviewer).")
 
 
 def router_identity() -> dict[str, Any]:
@@ -352,7 +414,7 @@ class JarvisTeamRunner(JarvisRunner):
     def identity(self) -> dict[str, Any]:
         """The Jarvis runner's identity (unchanged) plus the TEAM, the router
         and the instructions every member is made with."""
-        return {
+        out = {
             **super().identity(),
             "team": self.team.identity(),
             "router": router_identity(),
@@ -363,12 +425,48 @@ class JarvisTeamRunner(JarvisRunner):
             "member_steps": {m.name: self.member_steps(m) for m in self.team.members},
             "member_effort": {m.name: self.member_effort(m) for m in self.team.members},
         }
+        if self.team.team_mode:
+            # v1.403.0: the coding-session team's own rules (the lead's lock,
+            # its brief, the worker rules) are part of a team-mode setup.
+            from ..harness import team as harness_team
+
+            out["team_mode_sha256"] = _sha(_module_bytes(harness_team))
+        return out
+
+    # -- v1.403.0: the planner as a coding session's team LEAD -------------- #
+
+    def lead_locked(self) -> bool:
+        return bool(self.team.team_mode)
+
+    def turn_scope(self) -> Any:
+        """A ``team = true`` file's turns run with the coding session's team
+        armed (``harness/team.SESSION_TEAM``) — exactly as a Build session with
+        a team arms it — so the planner is the team LEAD."""
+        import contextlib
+
+        team = self.team.session_team()
+        if team is None:
+            return contextlib.nullcontext()
+        from ..harness import team as harness_team
+
+        @contextlib.contextmanager
+        def _armed():
+            token = harness_team.set_team(team)
+            try:
+                yield
+            finally:
+                harness_team.reset_team(token)
+
+        return _armed()
 
     def dry_run_lines(self) -> list[str]:
         lines = [f"Team: planner {self.team.planner_provider} / {self.team.planner_model}; "
                  f"{len(self.team.members)} member(s):"]
         # v1.400.0: whether the planner is told to hand work to the team first.
         lines.append("  " + team_first_line(self.team.team_first))
+        # v1.403.0: whether the planner runs as the coding session's team lead.
+        if self.team.team_mode:
+            lines.append("  " + TEAM_MODE_LINE)
         for m in sorted(self.team.members, key=lambda m: m.name):
             effort = self.member_effort(m)
             lines.append(f"  {m.words()}")

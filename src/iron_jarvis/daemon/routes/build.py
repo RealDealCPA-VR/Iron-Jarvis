@@ -192,6 +192,19 @@ class BuildSessionCreate(BaseModel):
     #: screen or an API caller) = a branch when the folder can have one, else
     #: the folder directly.
     branch: bool | None = None
+    #: v1.403.0 (the coding-session team, ``harness/team``): ``{workers:
+    #: [1..2 member names], reviewer: name | ""}``; null or no workers = a
+    #: solo session. OMITTED = the folder's saved team
+    #: (``BuildFolderRecord.team_json``), when it has one.
+    team: dict[str, Any] | None = None
+
+
+class BuildFolderTeam(BaseModel):
+    """``PUT /build/folders/team`` (v1.403.0): the team a NEW session in
+    ``folder`` starts with; null clears it."""
+
+    folder: str = Field(min_length=1, max_length=1000)
+    team: dict[str, Any] | None = None
 
 
 class BuildSessionPatch(BaseModel):
@@ -213,6 +226,11 @@ class BuildSessionPatch(BaseModel):
     #: ``null`` removes it (no cap: the default). Checked by
     #: ``harness/reply_cap.clean`` (a cap with nothing valid is a 400).
     cap: dict[str, Any] | None = None
+    #: v1.403.0 (the coding-session team): ``{workers, reviewer}``; null (or
+    #: no workers) = solo. Checked by ``harness/team.validate`` (a 400 in one
+    #: sentence). Partial like every field: omitted = keep. It applies from
+    #: the NEXT reply (a running one keeps its own).
+    team: dict[str, Any] | None = None
 
 
 #: v1.392.0: a cap the PATCH could not keep, in words.
@@ -1092,6 +1110,15 @@ class _ReplyWatch:
             card = saved_card(done.get(_ATTEMPTS_KEY))
             if card is not None:
                 line[_ATTEMPTS_KEY] = card
+            # v1.403.0 (the coding-session team): who led, who worked, who
+            # reviewed, how many pieces went out, and every time the lead did
+            # a piece itself (``harness/team.saved_record``) — only on a team
+            # turn's reply.
+            from ...harness.team import saved_record as _saved_team
+
+            team_rec = _saved_team(done.get("team"))
+            if team_rec is not None:
+                line["team"] = team_rec
             if done.get("trust") and done.get("trust") != "full":
                 line["trust"] = done.get("trust")
                 line["trustReason"] = done.get("trust_reason") or ""
@@ -3001,6 +3028,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         from ...providers import failure_words as _failure_words
 
         surface_token = _failure_words.set_build_surface()
+        # v1.403.0 (the coding-session team, ``harness/team``): the session's
+        # TEAM for this turn — its model runs as the team LEAD (no tool that
+        # changes a file or runs something), its workers do the code. Armed
+        # like the pin (the driver task copies it); None for a solo session —
+        # nothing is set that any turn reads then.
+        from ...harness import team as _team
+
+        team_token = _team.set_team(_team.from_setup(setup))
         # v1.381.0: the command rule (read above), armed last and reset first.
         command_token = _cmd_shell.set_turn_rule(command_rule)
         # v1.398.0 (night shift N1, decision 1): a night task's turn — its
@@ -3132,6 +3167,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             if night_token is not None:
                 _night.reset_turn(night_token)
             _cmd_shell.reset_turn_rule(command_token)
+            _team.reset_team(team_token)
             _failure_words.reset_surface(surface_token)
             _branches.reset_turn_branch(branch_token)
             _compact.reset_summary(summary_token)
@@ -3902,6 +3938,14 @@ def register(app: FastAPI, d: Any) -> None:
             # v1.379.0: where a session with no folder makes its own folder
             # (the header says it before the first turn makes it).
             view["work_root"] = str(d.platform.config.chat_files_dir)
+        # v1.403.0 (the coding-session team): ONLY when a team is set — the
+        # lead's model and each member's, with its state from CACHED reads
+        # (never a vendor call, never a sign-in check started from here).
+        from ...harness.team import session_view as _team_view
+
+        team_view = _team_view(d.platform, setup)
+        if team_view is not None:
+            view["team"] = team_view
         return view
 
     def _vendor_switch(setup: dict[str, Any], provider: "str | None") -> dict[str, Any]:
@@ -4021,6 +4065,28 @@ def register(app: FastAPI, d: Any) -> None:
         # or an API key: none (exactly Phase 4). Off the loop: the vendor of a
         # keyless API provider is read through provider availability.
         setup = await asyncio.to_thread(_with_initial_account, d.platform, setup, body.account.strip())
+        # v1.403.0 (the coding-session team): the team asked for, else the
+        # folder's saved team; checked against the model team as it is NOW
+        # (off the loop: registry reads). A 400 in one sentence.
+        from ...harness import team as _team
+
+        if "team" in body.model_fields_set:
+            try:
+                team = await asyncio.to_thread(_team.validate, d.platform, body.team)
+            except _team.TeamRefused as exc:
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        else:
+            team = await asyncio.to_thread(_team.folder_team, engine_of(), folder) if folder else None
+            if team is not None:
+                try:
+                    team = await asyncio.to_thread(_team.validate, d.platform, team)
+                except _team.TeamRefused:
+                    # A saved default whose member is gone since: the session
+                    # starts solo rather than not at all (the folder's view
+                    # still shows what was saved).
+                    team = None
+        if team is not None:
+            setup[_team.SETUP_KEY] = team
         if folderless:
             row = await asyncio.to_thread(
                 S.create, engine_of(), "", body.title, {**setup, S.NO_FOLDER_KEY: True},
@@ -4117,6 +4183,18 @@ def register(app: FastAPI, d: Any) -> None:
                 if cleaned is None:
                     raise HTTPException(status_code=400, detail=CAP_REFUSED)
                 setup[_CAP_KEY] = cleaned
+        if "team" in fields:
+            # v1.403.0 (the coding-session team): set, change or remove the
+            # session's team — checked against the model team as it is now
+            # (a 400 in one sentence); null or no workers = solo. From the
+            # NEXT reply (a running one keeps its own).
+            from ...harness import team as _team
+
+            try:
+                team = _team.validate(d.platform, body.team)
+            except _team.TeamRefused as exc:
+                raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+            setup[_team.SETUP_KEY] = team
         title = body.title if "title" in fields else None
         row = S.update(engine_of(), thread_id, title=title, setup=setup)
         if row is None:
@@ -4239,6 +4317,35 @@ def register(app: FastAPI, d: Any) -> None:
             return S.rename_folder(engine_of(), S.resolved_folder(body.path), body.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    @app.get("/build/folders/team")
+    def get_folder_team(folder: str = "") -> dict[str, Any]:
+        """v1.403.0 (the coding-session team): the team a NEW session in
+        ``folder`` (the folder the user PICKED — a branch session's
+        ``git.checkout``, never its worktree) starts with — ``{folder, team |
+        null}``. Every folder answers 200, an empty one too (a session with no
+        folder has no saved team): the screen reads a 404 as an older daemon."""
+        from ...harness import team as _team
+
+        path = S.resolved_folder(folder) if str(folder or "").strip() else ""
+        if not path:
+            return {"folder": "", "team": None}
+        return {"folder": path, "team": _team.folder_team(engine_of(), path)}
+
+    @app.put("/build/folders/team")
+    def put_folder_team(body: BuildFolderTeam) -> dict[str, Any]:
+        """v1.403.0: save (or with ``team: null`` clear) ``folder``'s default
+        team, checked like a session's (a 400 in one sentence). A session
+        already made keeps its own team."""
+        from ...harness import team as _team
+
+        path = S.resolved_folder(body.folder)
+        try:
+            team = _team.validate(d.platform, body.team)
+            saved = _team.set_folder_team(engine_of(), path, team)
+        except _team.TeamRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        return {"folder": path, "team": saved}
 
     @app.get("/build/sessions/{thread_id}/rewind")
     async def build_rewind_points(thread_id: str, to: str = "") -> dict[str, Any]:
@@ -4382,6 +4489,8 @@ def register(app: FastAPI, d: Any) -> None:
                 # expansions, so their shell lines still ask there
                 # (harness/command_shell).
                 "command_shell",
+                # v1.403.0: the session's team goes with it.
+                "team",
             ) if setup.get(k) not in (None, "", [])
         }
         branched = {"thread_id": thread_id, "title": row.title or "", "turn_id": turn_id, "at": at}

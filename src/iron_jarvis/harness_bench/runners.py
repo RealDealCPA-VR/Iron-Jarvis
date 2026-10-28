@@ -795,6 +795,20 @@ class JarvisRunner:
             known = None
         return components.read_project_layer(self.layer_dir, known_tools=known, session_id=None)
 
+    def lead_locked(self) -> bool:
+        """v1.403.0: do this runner's turns run their model as a coding
+        session's team LEAD (the team runner with ``team = true``)? False:
+        the model works as before."""
+        return False
+
+    def turn_scope(self) -> Any:
+        """v1.403.0: the context each task's turn runs in beside the model
+        hold — the team runner arms a coding session's team there
+        (``harness/team.SESSION_TEAM``); nothing for a single model."""
+        import contextlib
+
+        return contextlib.nullcontext()
+
     def harness(self) -> Any:
         """The harness turn this runner's turns will build (no folder: a
         task's copy carries no harness layer; a refine probe's candidate
@@ -816,6 +830,9 @@ class JarvisRunner:
             # one a Build session's model is shown (the user's PATH).
             shell_description="" if bash_words else build_shell_description(),
             bash_description=bash_words,
+            # v1.403.0: a team LEAD's turn shows the lead's tools (the team
+            # runner with ``team = true``); False keeps the build as before.
+            **({"lead": True} if self.lead_locked() else {}),
         )
 
     def identity(self) -> dict[str, Any]:
@@ -970,7 +987,7 @@ class JarvisRunner:
         # commands' environment — without the bench root in it.
         with session_ended_on_escape(session), \
                 counting_router(self.platform, rollout, observed, reasoning_for=self.call_reasoning), \
-                layer_source(self.layer_dir), hidden_environ():
+                layer_source(self.layer_dir), hidden_environ(), self.turn_scope():
             hold_token = set_hold(*_harness_model(self.platform, self.provider, self.model))
             try:
                 gen = await stream_chat_turn(

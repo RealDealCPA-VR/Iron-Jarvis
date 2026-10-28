@@ -1160,6 +1160,18 @@ def _clean_setup(raw: Any) -> str:
     cap = _clean_cap(raw.get(_CAP_KEY))
     if cap:
         out[_CAP_KEY] = cap
+    # v1.403.0 (the coding-session team, ``harness/team``): a Build session's
+    # TEAM — {workers: [1..2 member names], reviewer: name | ""} — by its own
+    # whitelist. Only the /build routes write it (validated there: every name
+    # a member holding its role); Branch from here copies it, Rewind keeps it.
+    # Absent = a solo session, exactly as before. Nothing reads it from a
+    # chat thread (a chat PUT refuses a Build session).
+    from ...harness.team import SETUP_KEY as _TEAM_KEY
+    from ...harness.team import clean_record as _clean_team
+
+    team = _clean_team(raw.get(_TEAM_KEY))
+    if team:
+        out[_TEAM_KEY] = team
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -4532,6 +4544,8 @@ async def chat_stream(
             harness, tool_session=_tool_session, tool_ws=tool_ws,
             in_project_folder=in_project_folder,
             project_id=(pid if resolved_proj is not None else None),
+            # v1.403.0: the coding-session team (lock-step: chat_turn).
+            team=getattr(_harness, "team", None),
         )
         if ctx is not None else None
     )
@@ -4754,6 +4768,14 @@ async def chat_stream(
                 _note = await _steer()
                 if _note:
                     msgs.append(LLMMessage(role="user", content=_note))
+                # THE CODING-SESSION TEAM (v1.403.0): a worker piece no worker
+                # could take unlocks the LEAD's coding tools for the rest of
+                # this reply — here, before the model is asked again, so the
+                # note it read is true. MIRROR NOTE (lock-step): chat_turn.
+                _chat_turn.apply_team_unlock(
+                    _harness, d.platform, armed=armed, ask_armed=ask_armed, tool_specs=tool_specs,
+                    overrides=overrides, armed_grant=armed_grant, trust_state=_trust_state,
+                )
                 if reply_record is not None:
                     # v1.391.0: a coding session's reply keeps its own
                     # conversation — here, with the last round's results
@@ -5224,8 +5246,13 @@ async def chat_stream(
                 # after Allow pays no second estimate. MIRROR NOTE:
                 # `_would_card` and the per-call branch read `_spend` the
                 # same way; the agent runtime's `_pause_needed` mirrors it.
+                # v1.403.0: the round's gate — the armed set, plus a team
+                # turn's finish-check test run (the lead holds no command
+                # tool; ``round_gate``). Every reader below uses it.
+                # MIRROR NOTE (lock-step): chat_turn.
+                _turn_tools = _chat_turn.round_gate({*armed, *ask_armed}, _finish, calls)
                 _spend = await spend_checks_for(
-                    d.platform.registry, calls, ctx, {*armed, *ask_armed}
+                    d.platform.registry, calls, ctx, _turn_tools
                 )
 
                 def _spend_once(_c) -> bool:
@@ -5241,7 +5268,7 @@ async def chat_stream(
                     # A PROTECTED setting is carded even in Auto-approve
                     # (redesign S3, ALWAYS_CARD_TOOLS). MIRROR NOTE: the
                     # per-call branch below repeats this rule.
-                    if _c.name not in {*armed, *ask_armed}:
+                    if _c.name not in _turn_tools:
                         return ""
                     if _c.name in _ONCE_ONLY or _spend_once(_c):
                         # v1.367.0: the plan door cards in EVERY posture, by
@@ -5348,7 +5375,8 @@ async def chat_stream(
                 #      `finished` frame and the role="tool" message — so the
                 #      frames and the assistant turn's tool results keep the
                 #      model's order whatever order the readers finished in.
-                _turn_tools = {*armed, *ask_armed}
+                # (`_turn_tools` — the round's gate — was read above, before
+                # the spend checks: v1.403.0's `round_gate`.)
                 _plans: list[dict[str, Any]] = []
                 for tc in calls:
                     _t = d.platform.registry.get(tc.name)
@@ -6897,6 +6925,13 @@ async def chat_stream(
         # chat_turn.py's response carries the same conditional key.
         if _finish is not None and _finish.ran:
             done_frame["finish"] = await _finish.record()
+        # THE CODING-SESSION TEAM (v1.403.0): {lead, workers, reviewer, pieces,
+        # lead_did} — LAST, and present ONLY for a turn of a session with a
+        # team (every other frame is byte-identical). The Build reply line
+        # keeps it (`team`). MIRROR NOTE (lock-step): chat_turn.py's response.
+        _team_rec = _chat_turn.team_record(_harness)
+        if _team_rec is not None:
+            done_frame["team"] = _team_rec
         yield _sse("done", done_frame)
 
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404
