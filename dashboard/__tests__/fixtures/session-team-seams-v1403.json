@@ -1,0 +1,109 @@
+{
+ "empty_folder": {
+  "team": null
+ },
+ "finish": {
+  "after": "",
+  "command": "pytest -q",
+  "kept": 0,
+  "points": 1,
+  "removed": 0,
+  "review": {
+   "member": "gpt-6-astra",
+   "model": "GPT-6 Astra",
+   "rounds": 2,
+   "state": "done",
+   "verdict": "approved"
+  },
+  "tests": "passed",
+  "unmet": 0
+ },
+ "from_model_reviewer": {
+  "created": true,
+  "label": "gpt-6-astra",
+  "model": "gpt-6-astra",
+  "name": "gpt-6-astra",
+  "provider": "codex-cli",
+  "roles": [
+   "review"
+  ]
+ },
+ "from_model_worker": {
+  "created": true,
+  "label": "Qwen3 8B",
+  "model": "qwen3:8b",
+  "name": "qwen3-8b",
+  "provider": "ollama",
+  "roles": [
+   "read",
+   "code",
+   "test"
+  ]
+ },
+ "reply_team": {
+  "lead": "claude-opus-5-5",
+  "lead_did": [
+   {
+    "reason": "Qwen3 8B is at its limit."
+   }
+  ],
+  "pieces": 1,
+  "reviewer": "gpt-6-astra",
+  "workers": [
+   "qwen3:8b"
+  ]
+ },
+ "view": {
+  "account": null,
+  "account_limit": null,
+  "account_vendor": "",
+  "account_wait": null,
+  "archived": false,
+  "branched_from": null,
+  "compacting": false,
+  "compaction": null,
+  "folder_name": "work",
+  "is_project": false,
+  "messages": [],
+  "mode": "act",
+  "plan": null,
+  "plan_run": false,
+  "project_id": null,
+  "queued": [],
+  "running": false,
+  "session_id": "build:chat_e47d309b5b23",
+  "setup": {
+   "team": {
+    "reviewer": "gpt-6-astra",
+    "workers": [
+     "qwen3-8b"
+    ]
+   }
+  },
+  "team": {
+   "lead": {
+    "label": "claude-opus-4-8",
+    "model": "claude-opus-4-8",
+    "provider": "mock"
+   },
+   "reviewer": {
+    "label": "gpt-6-astra",
+    "model": "gpt-6-astra",
+    "name": "gpt-6-astra",
+    "provider": "codex-cli",
+    "state": "unavailable"
+   },
+   "workers": [
+    {
+     "label": "qwen3:8b",
+     "model": "qwen3:8b",
+     "name": "qwen3-8b",
+     "provider": "ollama",
+     "state": "unavailable"
+    }
+   ]
+  },
+  "turn_id": "",
+  "waiting": false
+ }
+}

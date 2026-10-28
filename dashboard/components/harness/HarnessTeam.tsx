@@ -44,6 +44,7 @@ import { tryOnMenuPosition } from "@/lib/buildAttempts";
 import { matchTryOn, placeWord, tryOnGroups, type TryOnGroup, type TryOnModel } from "@/lib/tryOnMenu";
 import { KIND_BADGE, MODEL_FILTER_MAX } from "@/components/chat/ModelMenu";
 import { workerModelName } from "@/lib/buildHelpers";
+import { friendlyModelName } from "@/lib/friendlyModelName";
 import { isPhone } from "@/components/harness/TryOnModels";
 import { patchSession, type BuildSessionView } from "@/lib/buildSessions";
 import {
@@ -781,7 +782,14 @@ function TeamModelPicker({
 export function TeamReplyLine({ raw }: { raw: unknown }) {
   const t = decodeReplyTeam(raw);
   if (!t) return null;
-  const line = teamLineWords(t);
+  // v1.403.0 integrate: the record keeps each model's id ("claude-opus-5-5");
+  // the line says it the way the menu does ("Opus 5.5") — a user reads
+  // names, never ids. (An id with no friendlier shape stays as it is.)
+  const line = teamLineWords({
+    lead: friendlyModelName(t.lead),
+    workers: t.workers.map(friendlyModelName),
+    reviewer: t.reviewer ? friendlyModelName(t.reviewer) : "",
+  });
   const pieces = piecesWords(t.pieces);
   return (
     <div data-testid="harness-team-line" className="mb-2 grid gap-0.5">
