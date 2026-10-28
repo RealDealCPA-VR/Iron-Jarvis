@@ -50,6 +50,30 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="goal not found")
         return d._goal_view(rec)
 
+    @app.get("/autonomy/metrics")
+    async def autonomy_metrics(days: int = 30) -> dict[str, Any]:
+        """How hands-off Jarvis is (v1.402.0): the user's three numbers —
+        interruptions per task (and how many could have been avoided), human
+        nudges per successful task, and the share of tasks finished with no
+        help — over the last ``days`` (1–365, default 30). Counted by
+        ``eval.autonomy`` (its docstring is the definition of a task, of
+        success and of "avoidable"); every read is off the loop and bounded.
+        No data answers zeros; a read that fails answers zeros with ``error``
+        (one plain sentence), never a 500."""
+        import asyncio
+        import logging
+
+        from ...eval import autonomy as _autonomy
+
+        days = max(1, min(int(days or 30), 365))
+        try:
+            return await asyncio.to_thread(_autonomy.read_metrics, d.platform.engine, days)
+        except Exception:  # noqa: BLE001 — a metric page never 500s
+            logging.getLogger(__name__).warning("autonomy metrics could not be read", exc_info=True)
+            out = _autonomy.empty(days)
+            out["error"] = "The numbers could not be read right now."
+            return out
+
     @app.get("/proposals")
     def list_proposals(status: str | None = None) -> dict[str, Any]:
         return {

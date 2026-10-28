@@ -235,6 +235,54 @@ def _repeats(records: list[Mapping[str, Any]], interrupted: list[Mapping[str, An
     }
 
 
+def _asks(records: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """v1.402.0 (the autonomy metrics): how often a person sitting there WOULD
+    HAVE BEEN ASKED (``facts.would_have_asked`` — every call replayed through
+    the real permission engine under the default posture, no grants), and the
+    cards / questions the runner answered itself (``facts.asks``, Jarvis).
+    ``per_task`` is over the runs that recorded their calls."""
+    rows = [
+        (r.get("facts") or {}).get("would_have_asked") for r in records
+    ]
+    rows = [w for w in rows if isinstance(w, Mapping)]
+    asked = sum(int(w.get("asked") or 0) for w in rows)
+    not_known = sum(int(w.get("not_known") or 0) for w in rows)
+    by_tool: dict[str, int] = {}
+    for w in rows:
+        for tool, n in (w.get("by_tool") or {}).items():
+            by_tool[str(tool)] = by_tool.get(str(tool), 0) + int(n or 0)
+    answered = [(r.get("facts") or {}).get("asks") for r in records]
+    answered = [a for a in answered if isinstance(a, Mapping)]
+    return {
+        "would_ask_runs": len(rows),
+        "would_ask": asked,
+        "would_ask_not_known": not_known,
+        "would_ask_per_task": (asked / len(rows)) if rows else None,
+        "would_ask_by_tool": dict(sorted(by_tool.items(), key=lambda kv: (-kv[1], kv[0]))[:5]),
+        "auto_answered": sum(int(a.get("cards") or 0) + int(a.get("questions") or 0) for a in answered),
+    }
+
+
+def asks_words(s: Mapping[str, Any]) -> str:
+    """One sentence: "Would have asked you 2.3 times per task …" — or what is
+    not known."""
+    if not s.get("would_ask_runs"):
+        return "Would have asked you: not known (no run recorded its calls)."
+    per = s.get("would_ask_per_task")
+    tools = ", ".join(f"{t} {n}" for t, n in (s.get("would_ask_by_tool") or {}).items())
+    words = (
+        f"Would have asked you {per:.1f} times per task (approve-for-me, as a fresh install "
+        f"asks, no grants; over {s['would_ask_runs']} run(s)"
+        + (f"; most often for {tools}" if tools else "")
+        + ")."
+    )
+    if s.get("would_ask_not_known"):
+        words += f" {s['would_ask_not_known']} call(s) could not be mapped to a Jarvis tool: not known."
+    if s.get("auto_answered"):
+        words += f" The benchmark answered {s['auto_answered']} card(s) or question(s) itself."
+    return words
+
+
 def summarize(records: list[Mapping[str, Any]]) -> dict[str, Any]:
     # (review) A STALE run — a repeat beyond this invocation's count, left by
     # an earlier one — counts in nothing; the reports say how many there were.
@@ -303,6 +351,7 @@ def summarize(records: list[Mapping[str, Any]]) -> dict[str, Any]:
         "stale_repeats": sorted({repeat_of(r) for r in stale}),
         **_repeats(records, interrupted),
         **_model_facts(records),
+        **_asks(records),
     }
 
 
@@ -562,6 +611,8 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
         f"{_money(s['cost_list_price_usd'], s['cost_list_price_unknown'], s['tasks'])} at list price "
         "(subscription work, not billed).",
         "",
+        asks_words(s),
+        "",
     ]
     return "\n".join(lines)
 
@@ -678,6 +729,21 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
         lines.append(
             f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | "
             f"{_setup(config)} | " + " | ".join(cells) + " |"
+        )
+    # v1.402.0 (the autonomy metrics): how often each setup would have asked
+    # a person sitting there — every call replayed through the real
+    # permission engine under approve-for-me (as a fresh install asks), no grants.
+    lines += ["", "## How often you would have been asked", "",
+              "Every tool call replayed through the real permission engine under approve-for-me (how a "
+              "fresh install asks) with no grants. The pass rate above is the share of tasks "
+              "finished with no help: each task is one prompt, and nobody nudged.", "",
+              "| Runner | Model | Setup | Would have asked you (per task) | Calls not known |",
+              "|---|---|---|---|---|"]
+    for config, _records, s in summaries:
+        per = s.get("would_ask_per_task")
+        lines.append(
+            f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | {_setup(config)} | "
+            f"{'not known' if per is None else f'{per:.1f}'} | {s.get('would_ask_not_known', 0)} |"
         )
     # v1.396.0: a TEAM setup beside the single-model ones, and the answer.
     from .team_report import side_by_side

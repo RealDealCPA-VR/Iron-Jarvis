@@ -895,6 +895,7 @@ class JarvisRunner:
         return bash_identity() if harness_dialects.speaks_bash(turn.plan.dialect) else ""
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
+        from ..core.approvals import resolve_as
         from ..core.fs_policy import usable_workspace_root
         from ..daemon.chat_stream import stream_chat_turn
         from ..daemon.routes.chat import _approvals
@@ -931,6 +932,15 @@ class JarvisRunner:
         #: (the refine loop's evidence; never shown to the agent).
         trajectory: list[dict[str, Any]] = []
         words: list[str] = []
+        #: v1.402.0 (the autonomy metrics): every card and question the turn
+        #: put to "the person" — counted where this runner answers it, since
+        #: nobody is there (``facts.asks``).
+        asks: dict[str, Any] = {"cards": 0, "questions": 0, "by_tool": {}}
+
+        def _count_ask(kind: str, tool: Any) -> None:
+            asks[kind] += 1
+            name = str(tool or "?")[:80]
+            asks["by_tool"][name] = asks["by_tool"].get(name, 0) + 1
 
         def _note(entry: dict[str, Any]) -> None:
             if len(trajectory) < TRAJECTORY_ENTRIES:
@@ -993,9 +1003,17 @@ class JarvisRunner:
                                 elif event == "approval":
                                     # Belt and braces: yolo grants every card
                                     # these tools raise; one that still shows
-                                    # is answered for this call only.
-                                    if approvals.resolve(str(data.get("id") or ""), "once"):
-                                        out.notes.append(f"answered an approval for {data.get('tool')}")
+                                    # is answered for this call only — by the
+                                    # benchmark (the autonomy metrics' actor),
+                                    # and counted.
+                                    _count_ask("cards", data.get("tool"))
+                                    resolve_as(approvals, str(data.get("id") or ""), "once", actor="bench")
+                                elif event in ("ask_user", "mcp_elicitation"):
+                                    # A question nobody here can answer (the
+                                    # turn's own wait settles it): counted.
+                                    _count_ask("questions", "ask_user" if event == "ask_user" else "mcp_elicitation")
+                                elif event == "mcp_sampling":
+                                    _count_ask("cards", "mcp_sampling")
                                 elif event == "helper":
                                     # v1.396.0: WHO DID WHAT — each helper's
                                     # row, as the reply line keeps it (its
@@ -1007,10 +1025,11 @@ class JarvisRunner:
                                         # never handed down — a helper asks) is
                                         # answered the same way: this call only.
                                         _ask = data["ask"]
-                                        if approvals.resolve(str(_ask.get("id") or ""), "once"):
-                                            out.notes.append(
-                                                f"answered a helper's approval for {_ask.get('tool')}"
-                                            )
+                                        _ask_id = str(_ask.get("id") or "")
+                                        if _ask_id and _ask_id not in asks.setdefault("_seen", set()):
+                                            asks["_seen"].add(_ask_id)
+                                            _count_ask("cards", _ask.get("tool"))
+                                        resolve_as(approvals, _ask_id, "once", actor="bench")
                                 elif event == "error":
                                     error = str(data.get("detail") or data.get("title") or "the turn failed")
                                     error_fix_kind = str(data.get("fix_kind") or "")
@@ -1039,6 +1058,8 @@ class JarvisRunner:
         elif error:
             _note({"kind": "error", "text": error[:2000]})
         out.extra["trajectory"] = trajectory
+        asks.pop("_seen", None)
+        out.facts["asks"] = asks
         out.tool_calls = tools
         out.model_rounds = rounds
         out.extra["model_calls"] = len(rollout.calls)
@@ -1285,6 +1306,10 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
     words in ``errors`` (a list) and has no ``result`` — read from Claude
     Code 2.1.306's own result builder — so ``errors`` is kept too."""
     tool_ids: list[str] = []
+    #: v1.402.0 (the autonomy metrics): each tool call's NAME and its short
+    #: scalar inputs (what decides the Jarvis tool it maps to — a background
+    #: Bash), for "would have asked you" (``asks.would_have_asked``).
+    tool_uses: list[dict[str, Any]] = []
     answered = 0
     result: dict[str, Any] | None = None
     reported: str | None = None
@@ -1303,10 +1328,21 @@ def parse_claude_stream(stdout: str) -> dict[str, Any]:
                     bid = str(block.get("id") or f"anon-{len(tool_ids)}")
                     if bid not in tool_ids:
                         tool_ids.append(bid)
+                        if len(tool_uses) < 2000:
+                            raw_in = block.get("input") if isinstance(block.get("input"), dict) else {}
+                            tool_uses.append({
+                                "name": str(block.get("name") or ""),
+                                "input": {
+                                    k: v for k, v in raw_in.items()
+                                    if isinstance(v, (bool, int, float))
+                                    or (isinstance(v, str) and len(v) <= 300)
+                                },
+                            })
         elif kind == "result":
             result = obj
     parsed: dict[str, Any] = {
         "tool_calls": len(tool_ids), "answered": answered, "result": result, "model_reported": reported,
+        "tool_uses": tool_uses,
     }
     if result is None:
         return parsed
@@ -1348,6 +1384,9 @@ def parse_codex_events(stdout: str, model: str = "", billing: str = "list_price"
     list-price equivalent on a ChatGPT plan; without a price row, unknown."""
     tools = 0
     items = 0
+    #: v1.402.0: the KIND of each tool item, in order (Codex reports no tool
+    #: names) — mapped through the parity table for "would have asked you".
+    tool_items: list[str] = []
     turns: list[dict[str, Any]] = []
     error = ""
     reply = ""
@@ -1365,6 +1404,8 @@ def parse_codex_events(stdout: str, model: str = "", billing: str = "list_price"
             item = obj.get("item") or {}
             if item.get("type") in CODEX_TOOL_ITEMS:
                 tools += 1
+                if len(tool_items) < 2000:
+                    tool_items.append(str(item.get("type")))
             elif item.get("type") == "agent_message":
                 reply = str(item.get("text") or reply)
         elif kind == "turn.completed":
@@ -1399,7 +1440,7 @@ def parse_codex_events(stdout: str, model: str = "", billing: str = "list_price"
             "cost_metered_usd": metered_cost, "cost_list_price_usd": list_cost,
         })
     return {"tool_calls": tools, "items": items, "turns": entries, "error": error, "reply": reply,
-            "model_reported": reported}
+            "model_reported": reported, "tool_items": tool_items}
 
 
 #: Environment names under which ``codex exec`` bills an API account.
@@ -1556,6 +1597,7 @@ class ClaudeRunner(_CliRunner):
         stderr = procs.text(result.stderr or b"", "utf-8")
         parsed = parse_claude_stream(stdout)
         out.tool_calls = parsed["tool_calls"]
+        out.extra["tool_uses"] = parsed.get("tool_uses") or []
         out.model_reported = parsed.get("model_reported")
         out.extra["exit_code"] = result.returncode
         out.facts["timed_out"] = bool(result.timed_out)
@@ -1657,6 +1699,7 @@ class CodexRunner(_CliRunner):
         stderr = procs.text(result.stderr or b"", "utf-8")
         parsed = parse_codex_events(stdout, self.model, billing)
         out.tool_calls = parsed["tool_calls"]
+        out.extra["tool_items"] = parsed.get("tool_items") or []
         out.model_reported = parsed.get("model_reported")
         out.final_reply = parsed["reply"][:REPLY_CHARS]
         out.extra["exit_code"] = result.returncode

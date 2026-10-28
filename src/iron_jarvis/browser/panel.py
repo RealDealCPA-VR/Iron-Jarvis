@@ -1150,12 +1150,15 @@ class PanelTurns:
         on = bool(params.get("on"))
         state = self._set_auto_allow(on)
         if state:
+            from ..core.approvals import resolve_as as _resolve_as
             from ..daemon.routes.chat import _approvals
 
             registry = _approvals(SimpleNamespace(platform=self.platform))
             for approval_id in list(self._offered):
                 try:
-                    registry.resolve(approval_id, "once")
+                    # v1.402.0: settled by the switch the person just turned
+                    # on — a grant, not a second answer (the autonomy metrics).
+                    _resolve_as(registry, approval_id, "once", actor="grant")
                 except Exception:  # noqa: BLE001 — an already-answered card
                     logger.debug("auto-allow: card %s not resolvable", approval_id, exc_info=True)
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state())

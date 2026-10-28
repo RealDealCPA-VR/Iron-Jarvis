@@ -332,6 +332,11 @@ _REVERSIBLE = "reversible"
 #: ``invocation_id``), so these two event types are MERGED into that row rather
 #: than listed a second time from the event stream.
 _TOOL_EVENT_TYPES = ("tool.executed", "tool.denied")
+#: v1.402.0: the autonomy metrics' own events (``core.approvals``
+#: ``InterruptNote``, ``core.nudges``) are for COUNTING only — every ask
+#: already has its ``approval.requested`` row here — so the timeline leaves
+#: them out (``GET /autonomy/metrics`` reads them).
+_METRIC_EVENT_TYPES = ("interrupt.asked", "interrupt.answered", "autonomy.nudged")
 _TOKEN_EVENT_TYPES = ("llm.completed",)
 _LIFECYCLE_EVENT_TYPES = (
     "session.created",
@@ -491,7 +496,7 @@ class AuditTimeline:
         include_events = True
         tool_verdict: str | None = None  # None=both | "allow" | "deny"
         event_types_in: tuple | None = None
-        event_types_ex: tuple = _TOOL_EVENT_TYPES
+        event_types_ex: tuple = _TOOL_EVENT_TYPES + _METRIC_EVENT_TYPES
 
         if kind == _KIND_TOOL:
             include_events = False
@@ -510,6 +515,7 @@ class AuditTimeline:
             event_types_in = None
             event_types_ex = (
                 _TOOL_EVENT_TYPES
+                + _METRIC_EVENT_TYPES
                 + _TOKEN_EVENT_TYPES
                 + _LIFECYCLE_EVENT_TYPES
                 + _DECISION_EVENT_TYPES

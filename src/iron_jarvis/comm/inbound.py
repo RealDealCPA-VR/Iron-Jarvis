@@ -1893,7 +1893,10 @@ class InboundPoller:
                 "answer_error",
             )
         try:
-            ok = bool(approvals.resolve(prompt.ref_id, decision))
+            # v1.402.0 (the autonomy metrics): the phone answered it.
+            from ..core.approvals import resolve_as as _resolve_as
+
+            ok = bool(_resolve_as(approvals, prompt.ref_id, decision, actor="phone"))
         except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
             log.exception("approval resolve failed on %r", name)
             return await self._answer_reply(

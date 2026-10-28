@@ -1942,6 +1942,60 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## How hands-off Jarvis is (v1.402.0)
+
+The goal: give Jarvis a task, approve what it may do once, and let it work
+until it is done. **Autonomy** now has a card, **How hands-off Jarvis is**,
+that says how close it gets over the last 30 days, in three numbers:
+
+- **"62% of tasks finished with no help from you."** A task finished with no
+  help when its last reply ended cleanly and you never had to step in: no
+  approval card or question you answered, no nudge, no repeated request, no
+  note typed while it worked, no Continue press.
+- **"Asked you 1.4 times per task (0.6 could have been avoided)."** Every
+  approval card and every question put to you counts, on every surface: chat,
+  coding sessions, agent runs, the night shift. An ask *could have been
+  avoided* when you approved the very same call again within one task,
+  approved a tool you had already allowed for the chat or run, answered a
+  question with "you decide" (or skipped it, or took its first or
+  recommended choice), or approved a plan without changing it. Safety checks
+  never count as avoidable: a commit or a push, a project's own command
+  lines, a Local only ask, a paid call, a browser risk check. Neither does a
+  "no".
+- **"You nudged it 0.3 times per finished task."** A nudge is a short message
+  that only moves the work on ("continue", "keep going", "try again", "still
+  failing", a "yes" to an offer), the same request sent again, or the chat's
+  Continue press on a cut-off reply. "Continue the essay with a paragraph
+  about tax" is a new request, not a nudge.
+
+A quiet line under the numbers says how often Jarvis moved work on **by
+itself** (an approved plan that ran without a new message, a run that carried
+on past its step budget once, an offer to do more that it simply did). Those
+are counted apart and never make a task "not hands-off".
+
+**What a task is.** In a chat or a coding session, each message you type as a
+new request starts a task, and everything after it, until your next request,
+belongs to it. A run that a schedule, a goal, an objective, a queued task, a
+rule, your phone or another computer started is one task by itself; it
+finished when its result reads "completed". A run a chat started belongs to
+that chat's task, and a coding session's helpers belong to their session.
+
+**How it is counted.** Nothing here asks a model: the numbers come from what
+Iron Jarvis already records. Each card or question is noted once when it is
+asked and once when it is settled (what you answered, whether you answered in
+the app or on your phone, and how long it waited). Those notes are for the
+count only. They never ring the bell, pop up on your desktop or go to your
+phone, and they never hold the words of a card or your answer. **How this is
+counted** on the card says the same in short.
+
+**The coding benchmark** reports two of these too. Each benchmark task is one
+prompt that nobody nudges, so its pass rate *is* the share of tasks finished
+with no help. Because the benchmark answers every card itself, it also replays
+each run's tool calls through the real approval rules (the default setting,
+no grants) and reports how often a person sitting there **would have been
+asked**, for Jarvis, Claude Code and Codex alike. A call it cannot map to a
+Jarvis tool (an app's tool, for example) is counted as not known.
+
 ## Clearer model, effort and pane tabs in a coding session (v1.401.2)
 
 Three things in a coding session's box and panes read more simply.

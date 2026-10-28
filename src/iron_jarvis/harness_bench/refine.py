@@ -751,6 +751,7 @@ async def propose(
     pointer prompt, read-only tools + the file writers, every model call
     entered in ``rollout``. Returns the files it wrote into ``proposal/``."""
     from ..core import procs
+    from ..core.approvals import resolve_as
     from ..daemon.chat_stream import stream_chat_turn
     from ..daemon.routes.chat import _approvals
     from ..daemon.schemas import ChatBody, ChatMessageBody
@@ -787,7 +788,8 @@ async def propose(
                     async for chunk in frames:
                         for event, data in parse_sse(chunk):
                             if event == "approval":
-                                approvals.resolve(str(data.get("id") or ""), "once")
+                                # v1.402.0: the benchmark answers, not a person.
+                                resolve_as(approvals, str(data.get("id") or ""), "once", actor="bench")
                             elif event == "error":
                                 error = str(data.get("detail") or data.get("title") or "the turn failed")
                             elif event == "done":

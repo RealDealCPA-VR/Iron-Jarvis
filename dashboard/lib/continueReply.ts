@@ -27,6 +27,17 @@ export interface ContinuableMessage {
   documents?: string[];
   thinking?: string;
   interrupted?: boolean;
+  /** v1.402.0 (the autonomy metrics): how many Continue presses this reply
+   *  took to finish — each merge adds one, so the press is not lost when the
+   *  hidden turn is folded away. `GET /autonomy/metrics` counts each as a
+   *  nudge the person had to give. Absent = never continued. */
+  continuedPresses?: number;
+}
+
+/** A reply's Continue-press count; 0 when it has none (or a bad value). */
+function pressesOf(m: ContinuableMessage): number {
+  const n = m.continuedPresses;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 /**
@@ -73,6 +84,9 @@ export function mergeContinuation<T extends ContinuableMessage>(list: T[]): T[] 
     documents: union(cut.documents, reply.documents),
     thinking: [cut.thinking, reply.thinking].filter(Boolean).join("\n\n") || undefined,
     interrupted: undefined,
+    // v1.402.0: one more press — the cut reply's own count (it may have been
+    // continued before) plus this one.
+    continuedPresses: pressesOf(cut) + pressesOf(reply) + 1,
   };
   return [...list.slice(0, ci - 1), ...list.slice(ci + 1, n - 1), merged];
 }

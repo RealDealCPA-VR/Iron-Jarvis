@@ -856,6 +856,11 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
         compares = compares_line(t_config, alone[0]) if alone is not None else ""
         lines += ([compares, ""] if compares else [])
         lines += [f"**The answer:** {answer((t_config, t_records), alone)}", ""]
+        # v1.402.0 (the autonomy metrics): how often each would have asked a
+        # person sitting there (approve-for-me, as a fresh install asks).
+        asks = asks_line(t_s, next((s for c, _r, s in configs if alone is not None and c is alone[0]), None),
+                         alone_label(t_config))
+        lines += ([asks, ""] if asks else [])
         differ = _differing_tasks((t_config, t_records), alone)
         if differ:
             lines += [f"Tasks where they differ (team / {alone_label(t_config)} alone, passed of scored):", *differ, ""]
@@ -868,6 +873,21 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
             lines += ["What the team router learned (the numbers to tune from):", "", *rec, ""]
     lines += [MEASURED_LIMITS]
     return lines
+
+
+def asks_line(team_s: Mapping[str, Any], alone_s: "Mapping[str, Any] | None", alone_name: str) -> str:
+    """v1.402.0: "Would have asked you: the team 1.8 times per task; <planner>
+    alone 2.1." — "" when neither recorded its calls."""
+    def per(s: "Mapping[str, Any] | None") -> str:
+        value = (s or {}).get("would_ask_per_task")
+        return "not known" if value is None else f"{float(value):.1f} times per task"
+
+    if not (team_s or {}).get("would_ask_runs") and not (alone_s or {}).get("would_ask_runs"):
+        return ""
+    words = f"**Would have asked you:** the team {per(team_s)}"
+    if alone_s is not None:
+        words += f"; {alone_name} alone {per(alone_s)}"
+    return words + " (approve-for-me, as a fresh install asks; no grants)."
 
 
 def _differing_tasks(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],

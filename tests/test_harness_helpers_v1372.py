@@ -905,7 +905,8 @@ async def test_the_benchmark_answers_a_helpers_own_ask_for_that_call_only(tmp_pa
         120,
     )
     rec = res.records[0]
-    assert any("answered a helper's approval for shell" in n for n in rec["notes"]), rec["notes"]
+    # v1.402.0 (the autonomy metrics): counted on the run, not a free-text note.
+    assert rec["facts"]["asks"]["by_tool"].get("shell") == 1, rec["facts"]
     assert seen["helper"] == 2
 
 

@@ -40,6 +40,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { GrantRow, StandingGrants } from "@/components/StandingGrants";
+import { HandsOffCard } from "@/components/autonomy/HandsOffCard";
 import type { GrantOffer, StandingGrant } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
@@ -535,6 +536,12 @@ export default function AutonomyPage() {
             accent={!!s && s.pending_proposals > 0}
           />
         </div>
+      </Reveal>
+
+      {/* v1.402.0 (the autonomy metrics): how hands-off Jarvis is — the
+          three numbers in plain words. Renders nothing on an older daemon. */}
+      <Reveal>
+        <HandsOffCard />
       </Reveal>
 
       {/* v1.316.0 (UX wave 4): what waits on you sits right under the on/off

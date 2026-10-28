@@ -111,14 +111,23 @@ class _Ask:
     fields: list[dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     answered: bool = False
+    #: v1.402.0 (the autonomy metrics): an ``ask_user`` call's questions (to
+    #: tell an answer that hands the choice back), who settled the ask, and
+    #: the ``InterruptNote`` measuring it (``core/approvals``).
+    questions: list[dict[str, Any]] = field(default_factory=list)
+    actor: str = "app"
+    note: Any = None
 
-    def resolve(self, outcome: str, content: Any = None) -> bool:
+    def resolve(self, outcome: str, content: Any = None, *, actor: str = "app") -> bool:
         """Settle this ask from ANY thread (a route may run on another loop
-        in a test client). False when it was already settled."""
+        in a test client). False when it was already settled. ``actor``
+        (v1.402.0): who settled it — ``app`` (a press, or a Stop), ``timeout``
+        (the night shift's wait ran out)."""
         with self.lock:
             if self.answered:
                 return False
             self.answered = True
+            self.actor = str(actor or "app")
 
         def _set() -> None:
             if not self.fut.done():
@@ -245,8 +254,13 @@ class TurnInteractions:
         poll_s: float = ASK_POLL_S,
         owner: str = "",
         asks_user: bool = False,
+        interrupt_facts: "dict[str, Any] | None" = None,
     ) -> None:
         self.d = d
+        #: v1.402.0 (the autonomy metrics): where this turn's questions are
+        #: asked — ``{surface, thread_id, turn_id}`` — for the
+        #: ``interrupt.asked`` / ``interrupt.answered`` events (counting only).
+        self.interrupt_facts = dict(interrupt_facts or {})
         #: v1.367.0: the saved conversation this turn answers for ("" = none)
         #: — the ``ask_user`` answer route checks an ask belongs to the
         #: session it is answered from.
@@ -342,17 +356,63 @@ class TurnInteractions:
         except Exception:  # noqa: BLE001 — a broken predicate never strands an ask
             return False
 
-    def _open(self, kind: str, pack: str, call_id: str, fields=None) -> _Ask:
+    def _open(self, kind: str, pack: str, call_id: str, fields=None, questions=None) -> _Ask:
         loop = asyncio.get_running_loop()
         ask = _Ask(
             id=_new_id({"elicitation": "el", "sampling": "sa"}.get(kind, "aq")),
             kind=kind, turn=self, loop=loop, fut=loop.create_future(),
             pack=str(pack or ""), call_id=call_id, fields=list(fields or []),
+            questions=list(questions or []),
         )
         with _PENDING_LOCK:
             PENDING[ask.id] = ask
         self._mine[ask.id] = ask
+        ask.note = self._interrupt_note(ask)
         return ask
+
+    def _interrupt_note(self, ask: _Ask) -> Any:
+        """v1.402.0 (the autonomy metrics): ``interrupt.asked`` for this ask,
+        for COUNTING ONLY. The model's own question and an app's question are
+        ``question``s; an app asking to put a question to the model is a
+        ``card`` (Allow / Deny). Never the question's words."""
+        from ..core.approvals import InterruptNote
+
+        facts = self.interrupt_facts
+        night = self.night is not None
+        note = InterruptNote(
+            getattr(getattr(self.d, "platform", None), "event_bus", None),
+            kind="card" if ask.kind == "sampling" else "question",
+            tool={"elicitation": "mcp_elicitation", "sampling": "mcp_sampling"}.get(ask.kind, ask.kind),
+            surface="night" if night else str(facts.get("surface") or "chat"),
+            ask_id=ask.id,
+            thread_id=str(facts.get("thread_id") or self.owner or ""),
+            turn_id=str(facts.get("turn_id") or ""),
+        )
+        note.asked()
+        return note
+
+    def _note_settled(self, ask: _Ask) -> None:
+        """``interrupt.answered`` for a settled ask (once — the note keeps
+        it so). ``deferred``: the person skipped the model's question, or
+        handed the choice back (``eval/autonomy.question_deferred``)."""
+        note = ask.note
+        if note is None:
+            return
+        outcome, content = "stopped", None
+        try:
+            if ask.fut.done() and not ask.fut.cancelled():
+                outcome, content = ask.fut.result()
+        except Exception:  # noqa: BLE001
+            pass
+        deferred = False
+        if ask.kind == "ask_user":
+            try:
+                from ..eval.autonomy import question_deferred
+
+                deferred = question_deferred(ask.questions, outcome, content)
+            except Exception:  # noqa: BLE001 — a metric never breaks a question
+                deferred = False
+        note.answered(str(outcome), ask.actor, deferred=deferred)
 
     async def _wait(self, ask: _Ask) -> tuple[str, Any]:
         """Park until the ask is settled. No clock: an answer, Stop, a
@@ -376,7 +436,7 @@ class TurnInteractions:
                         return await asyncio.shield(ask.fut)
                     if night is not None and deadline is not None and asyncio.get_running_loop().time() >= deadline:
                         what = NIGHT_WHAT.get(ask.kind, "a question")
-                        if ask.resolve(NIGHT_OUTCOMES.get(ask.kind, "stopped")):
+                        if ask.resolve(NIGHT_OUTCOMES.get(ask.kind, "stopped"), actor="timeout"):
                             night.note(
                                 "unanswered" if ask.kind == "ask_user" else "declined",
                                 night.note_words(what),
@@ -389,6 +449,7 @@ class TurnInteractions:
                 # Cancelled (the pack's call gave up): the card goes away.
                 ask.resolve("stopped")
                 self._emit("mcp_resolved", {"id": ask.id, "kind": ask.kind, "outcome": "stopped"})
+            self._note_settled(ask)
 
     def close(self) -> None:
         """The turn is over: every ask still parked is resolved ``stopped``
@@ -444,7 +505,7 @@ class TurnInteractions:
         ``POST /build/sessions/{id}/answer``."""
         if self.closed:
             return "stopped", None
-        ask = self._open("ask_user", "", call_id)
+        ask = self._open("ask_user", "", call_id, questions=questions)
         self._emit("ask_user", {
             "id": ask.id,
             "call_id": call_id,

@@ -2721,6 +2721,31 @@ class AgentRuntime:
         if count > 1:
             requested["count"] = count
             requested["examples"] = examples
+        # v1.402.0 (the autonomy metrics): this pause, for COUNTING ONLY —
+        # `interrupt.asked` beside `approval.requested`, `interrupt.answered`
+        # (decision, who answered, how long it took) when it settles. Never an
+        # alert, never the arguments (core/approvals). A priced ask is
+        # approved one spend at a time: a once-only safety card.
+        from ..core.approvals import InterruptNote as _InterruptNote
+        from ..core.approvals import run_place as _run_place
+        from ..core.approvals import settled_actor as _settled_actor
+
+        _priced = spend is not None and bool(getattr(spend, "ask", False))
+        _isurface, _ithread = _run_place(session, night=_night_turn)
+        _inote = _InterruptNote(
+            getattr(self.p, "event_bus", None),
+            kind="plan" if tc.name == PLAN_APPROVAL_TOOL else "card",
+            tool=tc.name,
+            surface=_isurface,
+            ask_id=approval_id,
+            thread_id=_ithread,
+            session_id=str(session.id),
+            once_only=bool(requested.get("once_only")) or _priced,
+            reason=str(requested.get("once_reason") or ("priced" if _priced else "")),
+            args_hash=str(requested.get("args_hash") or ""),
+        )
+        _m_normal = False
+        _m_actor = "app"
         decision = "timeout"
         # WAITING is flipped (and persisted) BEFORE the ask is announced, so a
         # surface that reacts to `approval.requested` by reading the row
@@ -2737,6 +2762,7 @@ class AgentRuntime:
                 requested,
                 session_id=session.id,
             )
+            _inote.asked()
             if timeout is None:
                 # No clock: an answer, a decline, or a cancel of the session
                 # (CancelledError lands HERE and the ``finally`` pops the ask)
@@ -2744,9 +2770,16 @@ class AgentRuntime:
                 decision = await fut
             else:
                 decision = await asyncio.wait_for(fut, timeout=timeout)
+            _m_normal = True
         except asyncio.TimeoutError:
             decision = "timeout"
+            _m_normal = True
         finally:
+            # v1.402.0: who answered, read before the registry forgets it; a
+            # wait cut off by a cancel is settled "stopped".
+            _m_actor = _settled_actor(approvals, approval_id, decision)
+            if not _m_normal:
+                _inote.answered("stopped", "app")
             approvals.pop(approval_id)
             # Runs on the answer, the timeout AND a cancel: the row must never
             # be left WAITING (a cancel then settles it CANCELLED, sequentially,
@@ -2759,6 +2792,7 @@ class AgentRuntime:
         if _once_spend(spend) and decision in ("conversation", "always", "tab"):
             # v1.375.0: approving one commit / push never approves the next.
             decision = "once"
+        _inote.answered(decision, _m_actor)
         await self.p.event_bus.publish(
             EventType.APPROVAL_RESOLVED,
             {"approval_id": approval_id, "tool": tc.name, "decision": decision},

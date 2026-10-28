@@ -239,7 +239,8 @@ class ChatApprovals:
         return rows
 
     def resolve_where(
-        self, session_id: str | None, tool: "str | Iterable[str]", decision: str
+        self, session_id: str | None, tool: "str | Iterable[str]", decision: str,
+        *, actor: str = "grant",
     ) -> int:
         """Answer EVERY pending ask for ``session_id`` whose tool is ``tool``
         (a name or a set of names) with ``decision``; returns how many were
@@ -251,7 +252,11 @@ class ChatApprovals:
         in their own ``wait_for`` and were then denied by the clock. The
         caller widens the grant, then calls this so the siblings wake with
         the same answer. Same delivery rules as :meth:`resolve` (cross-loop
-        marshal, done-guard inside the marshal)."""
+        marshal, done-guard inside the marshal).
+
+        ``actor`` (v1.402.0, the autonomy metrics): who settled them — a
+        sibling woken by an answer on another card is settled by the GRANT
+        that answer made, never counted as a second answer by the person."""
         if decision not in DECISIONS:
             return 0
         sid = str(session_id or "")
@@ -264,11 +269,21 @@ class ChatApprovals:
             if m.get("session_id") != sid or m.get("tool") not in names:
                 continue
             entry = self._pending.get(approval_id)
+            if entry is not None and not entry[0].done():
+                m.setdefault("actor", _clean_actor(actor))
             if entry is not None and self._deliver(entry, decision):
                 n += 1
         return n
 
-    def resolve(self, approval_id: str, decision: str) -> bool:
+    def actor_of(self, approval_id: str) -> str:
+        """Who answered ``approval_id`` (v1.402.0): the ``actor`` the answer
+        that settled it named (``app`` | ``phone`` | ``grant`` | ``bench``),
+        ``""`` when nobody has answered it (yet) or the id is unknown. Read
+        it BEFORE :meth:`pop`, which forgets the ask."""
+        meta = self._meta.get(str(approval_id or ""))
+        return str((meta or {}).get("actor") or "")
+
+    def resolve(self, approval_id: str, decision: str, *, actor: str = "app") -> bool:
         """Answer a pending request. False = unknown/expired/already answered,
         or the asker's loop is already gone (a scheduled fire that ended).
 
@@ -279,12 +294,20 @@ class ChatApprovals:
         on the future's own loop, because the answered-already race moves with
         the marshal (two concurrent cross-loop answers may both return True;
         exactly one lands, the loser is a no-op — never an exception in
-        somebody else's loop)."""
+        somebody else's loop).
+
+        ``actor`` (v1.402.0, the autonomy metrics): who answered — ``app``
+        (a press in Iron Jarvis, the default), ``phone`` (a reply on the
+        user's phone), ``bench`` (the benchmark answering for nobody). The
+        FIRST answer that reaches a still-open ask names it."""
         if decision not in DECISIONS:
             return False
         entry = self._pending.get(approval_id)
         if entry is None:
             return False
+        meta = self._meta.get(approval_id)
+        if meta is not None and not entry[0].done():
+            meta.setdefault("actor", _clean_actor(actor))
         return self._deliver(entry, decision)
 
     @staticmethod
@@ -326,9 +349,10 @@ class ChatApprovals:
             return False
         return True
 
-    def pop(self, approval_id: str) -> None:
+    def pop(self, approval_id: str) -> "dict[str, Any] | None":
         """The awaiter is done with this id (answered, timed out, or the stream
-        died). After this, ``resolve`` honestly reports it unknown."""
+        died). After this, ``resolve`` honestly reports it unknown. Returns
+        what was recorded for it (v1.402.0: its ``actor`` included), or None."""
         self._pending.pop(approval_id, None)
         meta = self._meta.pop(approval_id, None)
         sid = str((meta or {}).get("session_id") or "")
@@ -338,6 +362,7 @@ class ChatApprovals:
             self._waited.move_to_end(sid)
             while len(self._waited) > WAITED_SESSIONS_MAX:
                 self._waited.popitem(last=False)
+        return meta
 
     def waited_s(self, session_id: str | None) -> float:
         """Seconds ``session_id``'s run has spent waiting on asks so far
@@ -356,3 +381,231 @@ class ChatApprovals:
         so a listing surface reconstructs display metadata from the
         ``approval.requested`` event log instead."""
         return list(self._pending)
+
+
+# --------------------------------------------------------------------------- #
+# Interruptions, measured (v1.402.0, the autonomy metrics)
+# --------------------------------------------------------------------------- #
+#
+# EVERY card or question a lane puts to the person, and how it was settled,
+# is published as ``interrupt.asked`` / ``interrupt.answered`` so ``GET
+# /autonomy/metrics`` (``eval/autonomy``) can count how often Jarvis stopped
+# to ask, how long the person took, and which of those asks could have been
+# avoided.
+#
+# FOR COUNTING ONLY. These two events are never a default alert, never a bell
+# row, never a desktop notice and never sent to the phone (pinned in
+# ``tests/test_autonomy_metrics_v1402.py``); the asking surfaces keep their own
+# frames and ``approval.requested`` exactly as they were. They are published
+# with NO session id (the id rides the payload) so a run's live activity list,
+# which shows every event tagged with its session, does not grow a second row
+# per ask, and the audit timeline leaves them out (``eval/observability``).
+#
+# NEVER THE ARGUMENTS, NEVER TEXT: a payload carries the tool's NAME, the
+# card's kind, where it was asked, the exact call's ``args_hash`` (a hash of
+# the real arguments — what the standing grants key on — never the arguments
+# themselves) and plain flags. A question's answer is reduced to one boolean
+# (``deferred``: the person skipped or handed the choice back) by the asker.
+#
+# FIRE AND FORGET: the publish runs as its own task, so a card is never held
+# up by the event log's write (a busy SQLite retries for up to ~2 s). A
+# publish failure is swallowed — a metric never breaks a turn.
+
+#: Who settled an ask. ``app``: a press in Iron Jarvis; ``phone``: a reply on
+#: the user's phone; ``grant``: a grant the person made a moment earlier (a
+#: sibling woken by "Allow for this run", the sidebar's "allow everything"
+#: switch); ``timeout``: nobody answered in time (the night shift's card wait
+#: included); ``bench``: the benchmark answering because nobody is there.
+ACTORS = ("app", "phone", "grant", "timeout", "bench")
+#: What was asked: an approval ``card``, a ``question`` (the model's own
+#: ``ask_user``, an app's question), or a ``plan`` to approve.
+INTERRUPT_KINDS = ("card", "question", "plan")
+#: Where it was asked.
+INTERRUPT_SURFACES = ("chat", "build", "agent", "night", "bench")
+#: The two metric event types (== ``core.events.EventType.INTERRUPT_*``).
+INTERRUPT_ASKED = "interrupt.asked"
+INTERRUPT_ANSWERED = "interrupt.answered"
+
+#: The longest a name or an id may be on a payload.
+_FACT_CHARS = 120
+
+#: Tasks of in-flight publishes (strong references: an unreferenced task may
+#: be collected before it runs).
+_NOTE_TASKS: "set[asyncio.Task[Any]]" = set()
+
+
+def _clean_actor(actor: Any) -> str:
+    text = str(actor or "").strip().lower()
+    return text if text in ACTORS else "app"
+
+
+def _short(value: Any) -> str:
+    return " ".join(str(value or "").split())[:_FACT_CHARS]
+
+
+def _publish_later(bus: Any, event_type: str, payload: dict[str, Any]) -> None:
+    publish = getattr(bus, "publish", None)
+    if publish is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop, no publish — a metric is never worth a new failure
+
+    async def _go() -> None:
+        try:
+            await publish(event_type, payload)
+        except Exception:  # noqa: BLE001 — a metric never breaks a turn
+            pass
+
+    try:
+        task = loop.create_task(_go())
+    except Exception:  # noqa: BLE001
+        return
+    _NOTE_TASKS.add(task)
+    task.add_done_callback(_NOTE_TASKS.discard)
+
+
+async def flush_interrupt_notes() -> None:
+    """Wait for every interrupt event still being published on THIS loop
+    (tests, and a benchmark that reads its own event log right after a run)."""
+    loop = asyncio.get_running_loop()
+    for _ in range(50):
+        pending = [t for t in list(_NOTE_TASKS) if not t.done() and t.get_loop() is loop]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+class InterruptNote:
+    """One ask being measured: :meth:`asked` when it goes to the person,
+    :meth:`answered` ONCE when it settles (a second call is a no-op, so every
+    exit of a wait may call it). ``wait_ms`` is measured on this object's own
+    monotonic clock, from :meth:`asked` to :meth:`answered`."""
+
+    def __init__(
+        self,
+        bus: Any,
+        *,
+        kind: str,
+        tool: str,
+        surface: str,
+        ask_id: str = "",
+        thread_id: str = "",
+        turn_id: str = "",
+        session_id: str = "",
+        once_only: bool = False,
+        reason: str = "",
+        args_hash: str = "",
+    ) -> None:
+        self._bus = bus
+        facts: dict[str, Any] = {
+            "kind": kind if kind in INTERRUPT_KINDS else "card",
+            "tool": _short(tool),
+            "surface": surface if surface in INTERRUPT_SURFACES else "chat",
+        }
+        for key, value in (("ask_id", ask_id), ("thread_id", thread_id), ("turn_id", turn_id),
+                           ("session_id", session_id), ("args_hash", args_hash)):
+            text = _short(value)
+            if text:
+                facts[key] = text
+        if once_only is True:
+            facts["once_only"] = True
+            why = str(reason or "").strip()
+            if why and len(why) <= 32 and why.replace("-", "_").isidentifier():
+                facts["reason"] = why
+        self.facts = facts
+        self._t0 = time.monotonic()
+        self._asked = False
+        self._done = False
+
+    def asked(self) -> None:
+        if self._asked:
+            return
+        self._asked = True
+        self._t0 = time.monotonic()
+        _publish_later(self._bus, INTERRUPT_ASKED, {**self.facts, "at": round(time.time(), 3)})
+
+    def answered(self, decision: str, actor: str, **flags: Any) -> None:
+        """Settle it: ``decision`` (the lane's own word: once / conversation
+        / deny / tab / always / timeout / stopped, or a question's answered /
+        skipped / unanswered / accept / decline …), ``actor`` (:data:`ACTORS`)
+        and plain boolean ``flags`` (``deferred``, ``edited``) — only a
+        ``True`` flag is written."""
+        if self._done:
+            return
+        self._done = True
+        payload: dict[str, Any] = {
+            **self.facts,
+            "decision": _short(decision) or "none",
+            "actor": _clean_actor(actor),
+            "wait_ms": max(0, int((time.monotonic() - self._t0) * 1000)),
+            "at": round(time.time(), 3),
+        }
+        for key, value in flags.items():
+            if value is True and str(key).isidentifier():
+                payload[str(key)] = True
+        _publish_later(self._bus, INTERRUPT_ANSWERED, payload)
+
+
+def surface_for(session_id: Any, *, night: Any = None) -> str:
+    """Where a STREAM-lane ask was put: a night task's turn ``night``, the
+    benchmark's Build turn (``build:bench-…``) ``bench``, a Build session
+    ``build``, anything else ``chat``."""
+    if night is not None:
+        return "night"
+    sid = str(session_id or "")
+    if sid.startswith("build:bench-"):
+        return "bench"
+    if sid.startswith("build:"):
+        return "build"
+    return "chat"
+
+
+def run_place(session: Any, *, night: Any = None) -> tuple[str, str]:
+    """``(surface, thread_id)`` of an AGENT RUN's ask: a helper of a Build
+    session (``options.build_session``) asks in that session — ``build``, or
+    ``bench`` for the benchmark's; a run a chat started (``options.
+    chat_thread_id``) reports to that chat; every other run is ``agent`` with
+    no thread. A night task's helper is ``night``."""
+    import json as _json
+
+    try:
+        raw = getattr(session, "options_json", None) or "{}"
+        opts = _json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        if not isinstance(opts, dict):
+            opts = {}
+    except Exception:  # noqa: BLE001
+        opts = {}
+    build = str(opts.get("build_session") or "")
+    thread = build.split(":", 1)[1] if build.startswith("build:") else str(opts.get("chat_thread_id") or "")
+    if night is not None:
+        return "night", thread
+    if build.startswith("build:bench-"):
+        return "bench", thread
+    if build.startswith("build:"):
+        return "build", thread
+    return "agent", thread
+
+
+def settled_actor(registry: Any, approval_id: str, decision: str) -> str:
+    """Who settled ``approval_id`` — read from the registry BEFORE it is
+    popped. A wait that ran out is ``timeout`` whoever else was asked; an ask
+    nobody named (a registry double, a Stop) reads ``app``."""
+    if str(decision or "") == "timeout":
+        return "timeout"
+    fn = getattr(registry, "actor_of", None)
+    try:
+        actor = fn(approval_id) if callable(fn) else ""
+    except Exception:  # noqa: BLE001
+        actor = ""
+    return _clean_actor(actor) if actor else "app"
+
+
+def resolve_as(registry: Any, approval_id: str, decision: str, *, actor: str) -> bool:
+    """Answer through ``registry`` naming WHO answered — for a caller that may
+    hold a registry double whose ``resolve`` takes no ``actor`` (only the real
+    :class:`ChatApprovals` is asked to record one)."""
+    if isinstance(registry, ChatApprovals):
+        return registry.resolve(approval_id, decision, actor=actor)
+    return bool(registry.resolve(approval_id, decision))

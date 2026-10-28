@@ -424,6 +424,27 @@ def passed_facts(runner: Any, config: Configuration) -> dict[str, Any]:
     return {"model_passed": config.model, "effort_passed": config.effort or None}
 
 
+def _would_have_asked(runner: Any, outcome: RunOutcome, trajectory: Any) -> "dict[str, Any] | None":
+    """``facts.would_have_asked`` for one run (``asks.would_have_asked``), or
+    None when the run recorded no calls to replay. A Jarvis run is judged by
+    its own platform's permission engine and registry; a CLI run by the one a
+    fresh install starts with. Never raises (a metric never fails a run)."""
+    try:
+        from . import asks as _asks
+
+        vocab, calls = _asks.calls_of(outcome, trajectory)
+        if not vocab:
+            return None
+        platform = getattr(runner, "platform", None)
+        return _asks.would_have_asked(
+            calls, runner=vocab,
+            permissions=getattr(platform, "permissions", None),
+            registry=getattr(platform, "registry", None),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _record(
     task: Task, config: Configuration, fingerprint: str, outcome: RunOutcome, grade_: Grade | None,
     *, wall_s: float, started: str, files_outside: list[str], model_calls: int,
@@ -650,6 +671,12 @@ async def _run_in_agent_folder(
     # Written AFTER the "outside its folder" snapshot: it is the bench's own
     # file, not something the agent touched.
     trajectory = outcome.extra.pop("trajectory", None) if isinstance(outcome.extra, dict) else None
+    # v1.402.0 (the autonomy metrics): how often a person sitting there WOULD
+    # HAVE BEEN ASKED — every call of the run replayed through the real
+    # permission engine under the default posture, no grants (``asks``).
+    asked = _would_have_asked(runner, outcome, trajectory)
+    if asked is not None:
+        outcome.facts["would_have_asked"] = asked
     if trajectory is not None:
         await asyncio.to_thread(_write_json, run_dir / TRAJECTORY_NAME, trajectory)
     g = await asyncio.to_thread(grade, task, work, run_dir / "grade")

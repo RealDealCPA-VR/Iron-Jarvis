@@ -1117,7 +1117,8 @@ async def test_a_card_that_still_shows_is_answered_once(tmp_path, monkeypatch):
     runner = JarvisRunner(platform, provider="scripted", model="s")
     res = await run_bench(runner=runner, home=platform.config.home, tasks=load_tasks(), names=["bugfix-leap-year"])
     assert decided == ["once"]
-    assert "answered an approval for shell" in res.records[0]["notes"]
+    # v1.402.0 (the autonomy metrics): counted on the run, not a free-text note.
+    assert res.records[0]["facts"]["asks"] == {"cards": 1, "questions": 0, "by_tool": {"shell": 1}}
 
 
 # --------------------------------------------------------------------------- #

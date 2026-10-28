@@ -40,6 +40,9 @@ from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
+from ...core.approvals import InterruptNote as _InterruptNote
+from ...core.approvals import settled_actor as _settled_actor
+from ...core.approvals import surface_for as _interrupt_surface
 from ...core.grants import args_hash as _grant_hash
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...tools.reversible import reversible_flag as _reversible_flag
@@ -4470,6 +4473,15 @@ async def chat_stream(
         # `_build_harness(ask_user=)`). A chat turn that armed it by name
         # from the "+" menu gets a refusal, never an unrendered question.
         asks_user=_harness is not None and "ask_user" in {*armed, *ask_armed},
+        # v1.402.0 (the autonomy metrics): where its questions are asked.
+        interrupt_facts={
+            "surface": _interrupt_surface(_tool_session, night=_night_turn),
+            "thread_id": (
+                _tool_session.split(":", 1)[1] if _tool_session.startswith("build:")
+                else str(getattr(body, "thread_id", "") or "")
+            ),
+            "turn_id": _step_turn,
+        },
     )
     # v1.327.0: the chat list's "waiting" reads this turn's open app asks
     # live; an approval card parks it below (`thread_turn.park`).
@@ -5520,6 +5532,32 @@ async def chat_stream(
                             else:
                                 _ap_id, _fut = _apr.request(tc.name, safe_args)
                             _frame["id"] = _ap_id
+                            # v1.402.0 (the autonomy metrics): this card, for
+                            # COUNTING ONLY — `interrupt.asked` now, and
+                            # `interrupt.answered` (decision, who answered,
+                            # how long it took) when it settles. Never an
+                            # alert, never the arguments (core/approvals).
+                            # A priced card is approved one spend at a time,
+                            # so it counts as a once-only safety card.
+                            _inote = _InterruptNote(
+                                getattr(d.platform, "event_bus", None),
+                                kind="plan" if tc.name in _ONCE_ONLY else "card",
+                                tool=tc.name,
+                                surface=_interrupt_surface(_tool_session, night=_night_turn),
+                                ask_id=_ap_id,
+                                thread_id=(
+                                    _tool_session.split(":", 1)[1] if _tool_session.startswith("build:")
+                                    else str(getattr(body, "thread_id", "") or "")
+                                ),
+                                turn_id=_step_turn,
+                                once_only=bool(_local_ask or _once_only or _spend_card),
+                                reason=str(
+                                    _frame.get("once_reason")
+                                    or ("local_only" if _local_ask else "priced" if _spend_card else "")
+                                ),
+                                args_hash=str(_frame.get("args_hash") or ""),
+                            )
+                            _inote.asked()
                             # v1.327.0: the chat reads "waiting on you" from
                             # BEFORE the card goes out until it is answered
                             # (unparked in the `finally` below; the entry
@@ -5567,6 +5605,7 @@ async def chat_stream(
                                 )
                                 else None
                             )
+                            _m_normal = False
                             try:
                                 while True:
                                     _now = _aloop.time()
@@ -5602,7 +5641,17 @@ async def chat_stream(
                                             # human decision without
                                             # inventing a frame type.
                                             yield ": keepalive\n\n"
+                                _m_normal = True
                             finally:
+                                # v1.402.0: who answered, read before the
+                                # registry forgets the ask. A wait that never
+                                # ended by itself (the client went away, the
+                                # turn was cut off) is settled "stopped".
+                                _m_actor = _settled_actor(
+                                    _apr, _ap_id, "stopped" if _stopped else _decision
+                                )
+                                if not _m_normal:
+                                    _inote.answered("stopped", "app")
                                 _apr.pop(_ap_id)
                                 if thread_turn is not None:
                                     thread_turn.unpark()
@@ -5611,6 +5660,7 @@ async def chat_stream(
                                     # (`approval.resolved`, only when it went).
                                     _phone.close("stopped" if _stopped else _decision)
                             if _stopped:
+                                _inote.answered("stopped", _m_actor)
                                 # Completed rounds were billed; the ledger
                                 # says CANCELLED through the one writer, and
                                 # no frame is emitted (as every stop path).
@@ -5630,6 +5680,9 @@ async def chat_stream(
                                 # out, so a panel painting "allowed in this
                                 # tab" from that frame reads a fact.
                                 _grant_tab(tc)
+                            # v1.402.0: the answer as it took effect (a wider
+                            # answer on a once-only card counts as "once").
+                            _inote.answered(_decision, _m_actor)
                             yield _sse("approval_resolved", {
                                 "id": _ap_id, "call_id": tc.id,
                                 "tool": tc.name, "decision": _decision,

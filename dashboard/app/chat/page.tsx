@@ -610,6 +610,9 @@ interface SessionAsk {
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** v1.402.0 (the autonomy metrics): on a reply, how many Continue presses
+   *  it took to finish (lib/continueReply `mergeContinuation` counts them). */
+  continuedPresses?: number;
   /** v1.324.0: what the user attached from their apps ("@"), and — on the
    *  reply — whether each one could be read. */
   appResources?: ResourceReceipt[];
