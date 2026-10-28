@@ -301,12 +301,16 @@ def test_a_browser_agent_turn_runs_past_six_rounds_and_ends_in_chat(tmp_path, mo
         app.pair()
         calls = app.stub_tools()
         # A model that ALWAYS reads the page: no card, every round consumed.
-        _scripted(app, [[ToolCall(id=f"c{i}", name="browser_read_page", arguments={})] for i in range(40)])
+        _scripted(app, [[ToolCall(id=f"c{i}", name="browser_read_page", arguments={})] for i in range(80)])
         app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
         reads = _tool_names(calls).count("browser_read_page")
         assert reads > chat_turn._MAX_TOOL_ROUNDS, f"only {reads} rounds ran"
-        assert reads == chat_turn._BROWSER_TOOL_ROUNDS - 1, f"{reads} reads for a {chat_turn._BROWSER_TOOL_ROUNDS}-round budget"
+        # v1.402.0 (moved on purpose): the last round gives ONE more allotment
+        # of the same size (chat_turn.more_rounds), then the turn ends in chat
+        # exactly as before.
+        budget = 2 * chat_turn._BROWSER_TOOL_ROUNDS
+        assert reads == budget - 1, f"{reads} reads for a {budget}-round budget"
         words = " ".join(p.get("text", "") for e, p in app.panel.events() if e == P.PANEL_EVENT_DELTA)
         assert "needs the full Iron Jarvis agent" not in words, words
         assert words.strip(), "the cut turn said nothing"

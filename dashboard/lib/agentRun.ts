@@ -211,6 +211,17 @@ export function atStepLimit(summary: unknown): boolean {
   return typeof summary === "string" && STEP_LIMIT.test(summary.trim());
 }
 
+/** v1.402.0: the words "Keep going" sends — the user's message in the chat
+ *  and the follow-up the run carries on with (its conversation kept). */
+export const KEEP_GOING_MESSAGE = "Keep going: finish the task from where it stopped.";
+
+/** v1.402.0: did this run stop FOR REAL at its step limit (an attended run
+ *  carries on once by itself first; this is the second limit, or a budget
+ *  its caller set)? Then "Keep going" is offered beside "Try again". */
+export function stoppedAtStepLimit(r: { status?: unknown; summary?: unknown } | null | undefined): boolean {
+  return !!r && r.status === "failed" && atStepLimit(r.summary);
+}
+
 /** What finalize read about the run's END, beyond its times and step count:
  *  the session row (status, outcome, the served pair, its folder, its
  *  summary) and the ledger result (route note, per-tool counts). */

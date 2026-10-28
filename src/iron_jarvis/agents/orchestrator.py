@@ -2640,10 +2640,22 @@ class Orchestrator:
         # v1.337.0: a resume carries the conversation of the run it resumes;
         # any other continuation never does (an inherited one is dropped).
         options.pop("resume_run", None)
+        # v1.402.0: why it resumes — only "Keep going" on a run that stopped
+        # at its step limit says so (the model is told the true reason); any
+        # other continuation never inherits it.
+        from .runtime import RESUME_REASON_OPTION, RESUME_REASON_STEP_LIMIT, stopped_at_step_limit
+
+        options.pop(RESUME_REASON_OPTION, None)
         if resume:
             _from = self._resumable_run(prev.id)
             if _from:
                 options["resume_run"] = _from
+                if (
+                    prev.status is SessionStatus.FAILED
+                    and getattr(prev, "interrupted_at", None) is None
+                    and stopped_at_step_limit(_prose(prev.summary))
+                ):
+                    options[RESUME_REASON_OPTION] = RESUME_REASON_STEP_LIMIT
         # v1.344.0 (lane P): what the chat ran belongs to ONE turn; a
         # follow-up carries its own list or none, never the parent's.
         options.pop("prior_tool_results", None)

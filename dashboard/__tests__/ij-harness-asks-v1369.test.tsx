@@ -159,19 +159,22 @@ describe("the plan door (exit_plan_mode)", () => {
     expect(screen.getByTestId("approval-plan-text")).not.toHaveTextContent("the reply");
   });
 
-  it("is once-only BY NAME: Allow once and Deny, nothing wider, even when the row says it could be", async () => {
+  // v1.402.0 (moved on purpose): Allow approves the plan AND starts the
+  // work — the daemon carries it out by itself once the plan turn ends — so
+  // the door's one Allow says so ("Allow and run"); the value is still once.
+  it("is once-only BY NAME: Allow and run and Deny, nothing wider, even when the row says it could be", async () => {
     render(
       <ApprovalCard approval={{ ...PLAN, canAlways: true, onceOnly: false }} docked scope="session" planText="Plan" />,
     );
     const buttons = screen.getAllByRole("button").map((b) => b.textContent?.trim());
-    expect(buttons).toEqual(["Allow once", "Deny"]);
+    expect(buttons).toEqual(["Allow and run", "Deny"]);
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "Nothing changes until you answer. “Allow once” approves this plan and the session starts working on it; Deny keeps it planning.",
+      "Nothing changes until you answer. “Allow and run” approves this plan and Iron Jarvis starts carrying it out at once, with no message from you; Deny keeps it planning.",
     );
     // A plan is not an action: no undo line, and it is not a local-only card.
     expect(screen.queryByTestId("approval-undo")).toBeNull();
     expect(screen.queryByTestId("approval-local-only")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow and run" }));
     await waitFor(() => expect(H.post).toHaveBeenCalledWith("/chat/approvals/apr_p", { decision: "once" }));
   });
 

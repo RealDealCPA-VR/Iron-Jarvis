@@ -534,12 +534,15 @@ def test_an_office_turn_gets_twelve_rounds_and_ends_in_chat(tmp_path, monkeypatc
     })
     assert r.status_code == 200
     body = r.json()
-    assert len([c for c in calls if c["tools"]]) == 12
+    # v1.402.0 (moved on purpose): at its last round an office turn gets ONE
+    # more allotment of the same size (chat_turn.more_rounds), then ends here
+    # exactly as before (tests/test_chat_more_rounds_v1402.py).
+    assert len([c for c in calls if c["tools"]]) == 2 * chat_turn._DOC_TOOL_ROUNDS == 24
     nudges = [c for c in calls if c["tools"] == []]
     assert len(nudges) == 1 and nudges[0]["last"] == chat_turn.OUT_OF_ROUNDS_INSTRUCTION
     assert body["escalate"] is False, "an office turn must not hand its work away"
     assert body["reply"].startswith(_ANSWER)
-    assert "stopped after 11 tool rounds" in body["reply"]
+    assert "stopped after 23 tool rounds" in body["reply"]
 
 
 def test_the_stream_lane_gives_an_office_turn_the_same_budget(tmp_path, monkeypatch):
@@ -574,11 +577,12 @@ def test_the_stream_lane_gives_an_office_turn_the_same_budget(tmp_path, monkeypa
         "tools": ["write_document"],
     })
     done = next(d for ev, d in _frames(r.text) if ev == "done")
-    assert rounds["n"] == 12
+    # v1.402.0 (moved on purpose): the same one extra allotment, lock-step.
+    assert rounds["n"] == 2 * chat_turn._DOC_TOOL_ROUNDS == 24
     assert nudges == [chat_turn.OUT_OF_ROUNDS_INSTRUCTION]
     assert done["escalate"] is False
     assert done["reply"].startswith(_ANSWER)
-    assert "stopped after 11 tool rounds" in done["reply"]
+    assert "stopped after 23 tool rounds" in done["reply"]
 
 
 # --------------------------------------------------------------------------- #

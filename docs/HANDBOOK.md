@@ -1942,6 +1942,38 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Approve once, and the work goes on by itself (v1.402.0)
+
+Three places where you used to have to type "go" or "continue" now carry on
+by themselves.
+
+- **An approved plan runs.** In a coding session's plan mode, the plan card's
+  button now reads **Allow and run**. Pressing it approves the plan, and as
+  soon as the planning reply ends, Iron Jarvis starts carrying the plan out
+  in the same session: the same model, account, folder and branch. You don't
+  send anything, and the screen follows the work as it starts. **Deny**
+  keeps the session planning, as before. Nothing starts by itself if you
+  wrote something after approving (a note, a message waiting to go, or a new
+  message), if the planning reply failed or was stopped, if you switched the
+  session back to plan mode, or for a night task.
+- **Runs you start get room to finish.** An agent run you start and watch
+  (from chat, an objective on the Agents page, a project task, or the
+  Sessions page) now gets 60 steps instead of 12. The number is **Settings ›
+  Agents & automation › Steps for runs you start** (12 to 200). Runs that start on their own
+  (schedules, goals, workflows, rules, the phone) keep **Max steps per run**.
+  A run whose caller set its own number keeps that number.
+- **At its limit, such a run carries on once.** When a run you started uses
+  all its steps before finishing, it carries on once by itself with the same
+  number again. It keeps everything it already did, so no step is repeated.
+  If it runs out a second time it stops, and the chat offers **Keep going**
+  beside **Try again**. Keep going picks the run up where it stopped, with its
+  work kept; Try again starts the task over.
+- **Document and browser work in chat gets one more round of steps.** A chat
+  reply that writes a document or works in your browser used to stop at its
+  limit with "what is still left to do". It now gets the same number of steps
+  once more, then stops and says what is left, as before. Ordinary chat
+  replies are unchanged: they still hand longer work to an agent.
+
 ## Clearer model, effort and pane tabs in a coding session (v1.401.2)
 
 Three things in a coding session's box and panes read more simply.
@@ -3370,9 +3402,10 @@ v1.370.0); this section is the whole picture in one place.
   the connection and the session finishes its work. Stop ends it. A restart
   in the middle of a reply leaves one line saying it was cut off.
 - **Plan first, if you like.** In plan mode the model can only read and plan.
-  When the plan is ready it asks you once; Allow switches the session to
-  doing the work and keeps the plan, Deny keeps it planning. No approval
-  setting answers that question for you.
+  When the plan is ready it asks you once; **Allow and run** keeps the plan
+  and the session starts doing the work at once, with no message from you
+  (v1.402.0); Deny keeps it planning. No approval setting answers that
+  question for you.
 - The model can stop and ask you a question with choices, and waits for your
   answer.
 - Deleting or archiving a session stops the programs it started.

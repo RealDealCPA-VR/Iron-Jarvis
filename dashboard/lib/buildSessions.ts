@@ -193,6 +193,10 @@ export interface BuildSessionView extends BuildSessionRow {
   /** v1.377.0 (Phase 6): Compact is writing this session's summary right now
    *  (a return mid-Compact says "Summarizing earlier turns…"). */
   compacting: boolean;
+  /** v1.402.0: an approved plan's act turn is due or starting (the daemon
+   *  starts it by itself when the plan turn ends) — keep reading until it
+   *  runs, then follow it. */
+  planRun: boolean;
   /** v1.377.0: the session and message this one was branched from. */
   branchedFrom: BranchedFrom | null;
   /** v1.379.0: started with NO folder — it works in its own folder
@@ -506,6 +510,7 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
     compaction: r.compaction ?? null,
     git: decodeSessionGit(r.git),
     compacting: r.compacting === true,
+    planRun: r.plan_run === true,
     branchedFrom: decodeBranchedFrom(r.branched_from),
     noFolder: r.no_folder === true,
     workFolder: r.no_folder === true ? str(r.work_folder, 1000) : "",

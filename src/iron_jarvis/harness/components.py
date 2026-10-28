@@ -669,8 +669,9 @@ def plan_mode_text(*, exit_name: str, plan_name: str) -> str:
     if exit_name:
         done = (
             f" When the plan is ready, write it out in your reply and call {exit_name}: "
-            "the user approves it on a card before anything changes, and the session works "
-            "in act mode from their next message. If they decline, revise the plan with them."
+            "the user approves it on a card before anything changes, and once they do, this "
+            "turn ends and Iron Jarvis carries the plan out in act mode at once. If they "
+            "decline, revise the plan with them."
         )
     else:
         done = (

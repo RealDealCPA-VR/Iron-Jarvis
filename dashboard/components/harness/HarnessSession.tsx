@@ -263,6 +263,11 @@ import {
 /** How many times a finished turn's reply is looked for before giving up. */
 const REREAD_TRIES = 4;
 const REREAD_GAP_MS = 500;
+/** v1.402.0: how long a finished plan turn's screen waits for the act turn
+ *  the daemon starts by itself (the view's `planRun`) before it stops
+ *  looking — a few seconds; the daemon starts it in well under one. */
+export const PLAN_RUN_TRIES = 20;
+export const PLAN_RUN_GAP_MS = 300;
 /** The chat's own cap on waiting messages (routes/chat MAX_THREAD_QUEUE). */
 const MAX_QUEUED = 3;
 /** v1.377.0: how often a session read mid-Compact is read again. */
@@ -902,17 +907,21 @@ export function HarnessSession({
       }
       setTurnsEnded((n) => n + 1);
       onChanged();
+      // v1.402.0: an approved plan's act turn the daemon starts by itself is
+      // due (or already running): no Next step suggestions for a reply that
+      // is about to be followed by the work itself.
+      const planDue = !!v && (v.planRun || (v.running && !!v.turnId && v.turnId !== finished));
       // v1.377.0: Next step — asked once a reply ended cleanly and nothing
       // else started meanwhile (the daemon answers "off", making no model
       // call, unless the user switched suggestions on).
       const ask = nextGenRef.current;
       const replied = !!v?.messages.some((m) => m.role === "assistant" && m.turnId === finished && !m.error);
-      if (clean && replied && turnRef.current === null) {
+      if (clean && replied && turnRef.current === null && !planDue) {
         void fetchNextSteps(threadId).then((steps) => {
           if (nextGenRef.current === ask && turnRef.current === null) setNextSteps(steps);
         });
       }
-      return clean;
+      return v;
     },
     [load, onChanged, threadId, refreshAccounts, setSteers, setPageHelpers, setPageAttempts, setPageQuestions],
   );
@@ -1122,7 +1131,28 @@ export function HarnessSession({
           dropTurn(threadId, id);
         }
       }
-      if (started && !leavingRef.current) await settle(id, unread, clean);
+      if (!started || leavingRef.current) return;
+      let v = await settle(id, unread, clean);
+      // v1.402.0: AN APPROVED PLAN RUNS. When this turn approved a plan and
+      // ended cleanly, the daemon starts the act turn BY ITSELF (the view
+      // says `planRun` until it runs): read again (bounded) and FOLLOW it —
+      // the same follow a turn the list saw start gets. Never over a turn
+      // this window started meanwhile (the user's own message wins).
+      for (
+        let i = 0;
+        i < PLAN_RUN_TRIES && clean && v?.planRun && !v.running && turnRef.current === null && !leavingRef.current;
+        i += 1
+      ) {
+        await sleep(PLAN_RUN_GAP_MS);
+        if (turnRef.current !== null || leavingRef.current) return;
+        v = await load();
+      }
+      if (
+        clean && turnRef.current === null && !leavingRef.current &&
+        v?.running && v.turnId && v.turnId !== "running" && v.turnId !== id
+      ) {
+        void runTurn(null, v.turnId);
+      }
     },
     [stream, threadId, onFrame, load, settle, restoreToBox, keepRunning, setPageHelpers, setPageAttempts, timeline],
   );

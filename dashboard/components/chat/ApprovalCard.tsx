@@ -86,10 +86,12 @@ import { LoaderInline } from "@/components/ui";
 import { post } from "@/lib/api";
 import { exampleValue } from "@/lib/approvalPreview";
 import {
+  ALLOW_AND_RUN,
   ALLOW_ONCE,
   ALLOW_TAB,
   ALWAYS_EXACT,
   DENY,
+  PLAN_RUN_SENTENCE,
   scopeLabel,
   scopeNoun,
   undoLine,
@@ -324,10 +326,8 @@ export function ApprovalCard({
       </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
         {buildPlanAsk ? (
-          <>
-            Nothing changes until you answer. “Allow once” approves this plan
-            and the session starts working on it; Deny keeps it planning.
-          </>
+          // v1.402.0: Allow approves the plan AND starts the work.
+          <>{PLAN_RUN_SENTENCE}</>
         ) : planAsk ? (
           <>
             No step runs until you answer. “Allow once” lets it follow this
@@ -422,6 +422,8 @@ export function ApprovalCard({
             <LoaderInline label="Running…" />
           ) : batch ? (
             `Allow these ${count}`
+          ) : buildPlanAsk ? (
+            ALLOW_AND_RUN
           ) : (
             ALLOW_ONCE
           )}

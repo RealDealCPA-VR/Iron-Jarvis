@@ -412,7 +412,17 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask-floor", restart=True, put=False, aliases=("mcp auto approve",)),
     # -------------------------------------------------------------- automation
     S("max_agent_steps", "Max steps per run", "automation", "number",
-      "Safety ceiling on how many steps one agent run may take.", tier="ask", check=_range(1, 1000)),
+      "Safety ceiling on how many steps one agent run may take. Runs you start and watch "
+      "(from chat, the Agents page, a project) use “Steps for runs you start” instead.",
+      tier="ask", check=_range(1, 1000)),
+    # v1.402.0: a run a person started and is watching gets its own, larger
+    # budget, and carries on ONCE by itself when it spends it.
+    S("attended_run_steps", "Steps for runs you start", "automation", "number",
+      "How many steps an agent run you start and watch (from chat, the Agents page, a project "
+      "task) may take when nothing else says. If it uses them all before finishing, it "
+      "carries on once by itself with the same number again, then stops and offers Keep going.",
+      tier="allow", check=_range(12, 200),
+      aliases=("attended steps", "steps for my runs", "agent step budget")),
     S("tool_call_timeout_s", "Time limit for one step (seconds)", "automation", "number",
       "How long one step of a run (reading a file, running a command, using an app) may take "
       "before it is stopped and recorded as failed. 0 = no limit.",

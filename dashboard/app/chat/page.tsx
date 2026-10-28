@@ -416,10 +416,12 @@ import {
   handOffSentence,
   readAgentRun,
   remoteName,
+  KEEP_GOING_MESSAGE,
   settleHandOff,
   settledRunName,
   stampMs,
   stopHandOff,
+  stoppedAtStepLimit,
   type AgentRunStamp,
 } from "@/lib/agentRun";
 // v1.350.0 (lane C1): the live plan checklist in that row.
@@ -2867,6 +2869,11 @@ const VoiceAutoSend = memo(function VoiceAutoSend({
  *  (v1.250.0, S-05). */
 export interface RowHandlers {
   retryTask: (task: string) => void;
+  /** v1.402.0: "Keep going" under a run that stopped for real at its step
+   *  limit — continue THAT run's session with its conversation kept
+   *  (POST /sessions/{id}/continue with `resume`), followed here like any
+   *  hand-off. */
+  keepGoing: (session: string) => void;
   /** v1.325.0: `choice` = "Try again with…" another model, for this turn. */
   regenerate: (choice?: string) => void;
   /** v1.325.0: show version `to` of the conversation from message `index`. */
@@ -2903,6 +2910,22 @@ export interface RowHandlers {
   openDocument: NonNullable<ComponentProps<typeof TurnReceipt>["onOpenDocument"]>;
   undoFor: NonNullable<ComponentProps<typeof TurnReceipt>["undoFor"]>;
   undoWrite: NonNullable<ComponentProps<typeof TurnReceipt>["onUndo"]>;
+}
+
+/** v1.402.0: "Keep going" is offered under the NEWEST reply only, when its
+ *  run stopped for real at its step limit and nothing is running — the press
+ *  continues that run's own session (its conversation kept). */
+function keepGoingFor(
+  m: ChatMessage,
+  isLast: boolean,
+  busy: boolean,
+  h: RowHandlers,
+): (() => void) | undefined {
+  const r = m.runResult;
+  if (!isLast || busy || !r || !r.session_id) return undefined;
+  if (!stoppedAtStepLimit(r)) return undefined;
+  const session = r.session_id;
+  return () => h.keepGoing(session);
 }
 
 /**
@@ -3133,6 +3156,7 @@ const MessageRow = memo(function MessageRow({
             result={m.runResult}
             withRow={underRow}
             onRetry={() => h.retryTask(m.runResult?.task || "")}
+            onKeepGoing={keepGoingFor(m, isLast, busy, h)}
           />
         )}
         {/* v1.355.0 (G62): the agent reply's receipt line, in the voice of
@@ -3187,6 +3211,7 @@ const MessageRow = memo(function MessageRow({
           result={m.runResult}
           withRow={underRow}
           onRetry={() => h.retryTask(m.runResult?.task || "")}
+          onKeepGoing={keepGoingFor(m, isLast, busy, h)}
         />
       </div>
     );
@@ -9337,6 +9362,10 @@ export default function ChatPage() {
        *  session body this hand-off posts, so the agent does not redo the
        *  reads the chat already made. Absent = the body is exactly today's. */
       priorToolResults?: PriorToolResult[];
+      /** v1.402.0: "Keep going" on a run that stopped at its step limit —
+       *  continue THIS session (its id) with `resume: true`, so the run picks
+       *  up its own conversation instead of starting over. */
+      keepGoing?: string;
     } = {},
   ) {
     // ESCALATION (v1.108.0): chat already appended the user's bubble and
@@ -9389,7 +9418,7 @@ export default function ChatPage() {
         : "builder";
     const reopen =
       Boolean(sessionId) && Boolean(wanted) && wouldRun !== (sessionTargetRef.current || "builder");
-    const opensSession = !sessionId || reopen;
+    const opensSession = (!sessionId || reopen) && !opts.keepGoing;
     const picked = (opensSession && opts.agentType) || "";
     // Slug stripped from the CANONICAL name (roster.py's NAME CONTRACT: the
     // remainder after ":" is the registry key, original casing preserved).
@@ -9467,11 +9496,15 @@ export default function ChatPage() {
       // escalated run still asks once per ask-tier tool.
       const posture =
         approvalMode !== "approve_for_me" ? { approval_mode: approvalMode } : {};
-      if (sessionId && !reopen) {
+      if ((sessionId && !reopen) || opts.keepGoing) {
         // Continue the same chat — runs in the background (wait:false).
-        session = await post<SessionView>(`/sessions/${sessionId}/continue`, {
+        // v1.402.0: Keep going continues the stopped run's OWN session and
+        // resumes its conversation (`resume`).
+        const continueOf = opts.keepGoing || sessionId;
+        session = await post<SessionView>(`/sessions/${continueOf}/continue`, {
           message: task,
           wait: false,
+          ...(opts.keepGoing ? { resume: true } : {}),
           // GRANTS RIDE THE CONTINUE (v1.232.0, A6): a tool granted on a card
           // AFTER the opener reached no later turn — the daemon unions this
           // with the session's stored grant, so a continue can widen but
@@ -10834,6 +10867,19 @@ export default function ChatPage() {
       if (task) composer.setText(task);
       inputRef.current?.focus();
     },
+    // v1.402.0: Keep going — the stopped run's own session carries on, its
+    // conversation kept; the hand-off is followed here like any other.
+    keepGoing: (session) => {
+      if (busy || sendingRef.current) return;
+      // The same start a send makes (`send`): one turn at a time, re-pinned
+      // to the bottom, no stale error above it.
+      sendingRef.current = true;
+      pinnedRef.current = true;
+      setShowJump(false);
+      setError(null);
+      setOffline(false);
+      void sendAgent(KEEP_GOING_MESSAGE, { keepGoing: session });
+    },
     regenerate: (choice) => regenerate(choice),
     switchVersion: (index, to) => switchVersion(index, to),
     continueReply: () => continueReply(),
@@ -11044,6 +11090,7 @@ export default function ChatPage() {
   const rowHandlers = useMemo<RowHandlers>(
     () => ({
       retryTask: (task) => rowImplRef.current.retryTask(task),
+      keepGoing: (session) => rowImplRef.current.keepGoing(session),
       regenerate: (choice) => rowImplRef.current.regenerate(choice),
       switchVersion: (index, to) => rowImplRef.current.switchVersion(index, to),
       continueReply: () => rowImplRef.current.continueReply(),

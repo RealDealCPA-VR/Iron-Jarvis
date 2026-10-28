@@ -331,7 +331,9 @@ def test_the_continue_route_and_the_spawn_carry_the_posture(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_the_chat_page_sends_the_grant_and_posture_on_the_continue():
     src = (ROOT / "dashboard" / "app" / "chat" / "page.tsx").read_text(encoding="utf-8")
-    m = re.search(r"/sessions/\$\{sessionId\}/continue`, \{(.*?)\}\);", src, re.S)
+    # v1.402.0 (moved on purpose): the continue posts to `continueOf` — the
+    # conversation's session, or the stopped run's own one for Keep going.
+    m = re.search(r"/sessions/\$\{(?:sessionId|continueOf)\}/continue`, \{(.*?)\}\);", src, re.S)
     assert m, "the continue POST moved — re-anchor this pin"
     body = m.group(1)
     assert "allow_tools: armedNow" in body, "the continue no longer sends the armed set"

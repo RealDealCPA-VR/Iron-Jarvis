@@ -42,6 +42,7 @@ import {
   Ban,
   ChevronDown,
   ChevronRight,
+  Play,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import type { SessionOutcome } from "@/lib/types";
@@ -125,6 +126,14 @@ export function runEnd(result: Pick<RunResult, "status" | "summary">): RunEnd {
   if (result.status === "failed") return atStepLimit(result.summary) ? "step_limit" : "failed";
   return "other";
 }
+
+/** v1.402.0: the "Keep going" press under a run that stopped FOR REAL at
+ *  its step limit (an attended run carries on once by itself first): it
+ *  continues the run with its conversation kept, where "Try again" starts
+ *  the task over. */
+export const KEEP_GOING_LABEL = "Keep going";
+export const KEEP_GOING_TITLE =
+  "Carry on from where it stopped, with everything it already did kept";
 
 /** The headline, as a pure function so the words are testable. A "completed"
  *  status is NOT "Done" when the ledger says the job fell short.
@@ -334,12 +343,17 @@ const REST_BUTTON =
 export function RunResultCard({
   result,
   onRetry,
+  onKeepGoing,
   onReverted,
   withRow = false,
 }: {
   result: RunResult;
   /** Re-run the same task (POST /sessions/{id}/rerun happens upstream). */
   onRetry?: () => void;
+  /** v1.402.0: carry the run on from where it stopped (its conversation
+   *  kept; POST /sessions/{id}/continue with `resume` happens upstream).
+   *  Shown only for a run that stopped at its step limit. */
+  onKeepGoing?: () => void;
   /** Called after a successful revert so the caller can refresh. */
   onReverted?: (summary: string) => void;
   /** v1.358.0 (lane 8C): the run's settled hand-off row sits right above this
@@ -358,6 +372,8 @@ export function RunResultCard({
   const failed = end === "failed";
   const stopped = end === "stopped";
   const atLimit = end === "step_limit";
+  // v1.402.0: "Keep going" — only under a run that stopped at its limit.
+  const keepGoing = atLimit ? onKeepGoing : undefined;
   // v1.352.0 (G16): a run that ended early (stopped, or at its step limit)
   // is neither the red failure nor a "finished" run the notes below judge.
   const endedEarly = failed || stopped || atLimit;
@@ -422,7 +438,7 @@ export function RunResultCard({
     // v1.358.0 (lane 8C): ONE receipt. The row above says how the run ended,
     // what it did, the model, the folder and "Open run"; this says only the
     // rest, in the calm chat's quiet lines.
-    const hasActions = !!onRetry || canRevert || result.status === "active";
+    const hasActions = !!onRetry || !!keepGoing || canRevert || result.status === "active";
     return (
       <div data-testid="run-result-rest" data-end={end} className="mt-1.5 grid max-w-[640px] gap-1.5">
         {/* The honesty case: a run that finished without touching a single
@@ -509,6 +525,17 @@ export function RunResultCard({
         )}
         {hasActions && (
           <div data-testid="run-result-actions" className="-ml-2 flex flex-wrap items-center gap-0.5">
+            {keepGoing && (
+              <button
+                type="button"
+                data-testid="run-result-keep-going"
+                onClick={keepGoing}
+                title={KEEP_GOING_TITLE}
+                className={`${REST_BUTTON} text-accent-soft hover:text-accent`}
+              >
+                <Play size={12} aria-hidden="true" /> {KEEP_GOING_LABEL}
+              </button>
+            )}
             {onRetry && (
               <button type="button" onClick={onRetry} className={`${REST_BUTTON} hover:text-zinc-200`}>
                 <RotateCcw size={12} aria-hidden="true" /> Try again
@@ -715,6 +742,17 @@ export function RunResultCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 border-t border-white/[0.05] px-3.5 py-2">
+        {keepGoing && (
+          <button
+            type="button"
+            data-testid="run-result-keep-going"
+            onClick={keepGoing}
+            title={KEEP_GOING_TITLE}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 px-2.5 py-1 text-[12px] font-medium text-accent-soft transition-colors hover:border-accent/60 hover:text-accent"
+          >
+            <Play size={12} aria-hidden="true" /> {KEEP_GOING_LABEL}
+          </button>
+        )}
         {onRetry && (
           <button
             type="button"
