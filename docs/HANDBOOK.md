@@ -1982,7 +1982,10 @@ here the roles are kept by Iron Jarvis, not suggested.
   tools for the rest of that reply and must say in its reply that it did the
   piece itself and why. The reply shows "The team lead did this itself:"
   with the reason. A worker whose run failed does not count: the lead hands
-  the piece again, or to the other worker.
+  the piece again, or to the other worker. If every worker of the session
+  was removed from your model team (or no longer writes code), the session
+  still says so: the lead does the work and the reply shows the same line.
+  A member that hands work out to other agents itself cannot be a worker.
 - **The reviewer, twice at most.** When a reply changed files, Iron Jarvis
   hands the change to the session's reviewer before the reply ends (you do
   not need "Hand work to my team first" for this). If it says changes are

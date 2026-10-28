@@ -184,6 +184,11 @@ def validate(platform: Any, raw: Any) -> "dict[str, Any] | None":
             raise TeamRefused(f"There is no member of your model team named {name}.")
         if WORKER_ROLE not in MT.roles_of(rec):
             raise TeamRefused(f"{name} cannot be a worker: it does not hold the Writing code role.")
+        if _coordinates(platform, rec):
+            # v1.403.0 integrate: the router never hands a piece to a member
+            # that hands work out itself, so a coordinator as a worker would
+            # unlock the lead on its first piece.
+            raise TeamRefused(f"{name} cannot be a worker: it hands work out to other agents itself.")
     reviewer = _name(reviewer_raw)
     if reviewer:
         if reviewer.casefold() in seen:
@@ -229,6 +234,30 @@ class SessionTeam:
         if n.lower().startswith("custom:"):
             n = n.split(":", 1)[1].strip()
         return bool(self.reviewer) and n.casefold() == self.reviewer.casefold()
+
+
+def _coordinates(platform: Any, record: Any) -> bool:
+    """Does this member hand work out itself (a coordinator the team router
+    never gives a piece to — ``model_team._coordinator``)? Never raises."""
+    try:
+        from ..agents import model_team as MT
+
+        return bool(MT._coordinator(platform, record))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def gone_record(platform: Any, team: "SessionTeam", *, lead_provider: str, lead_model: str) -> dict[str, Any]:
+    """The turn record of a session whose team has no worker left (see
+    :data:`NO_WORKERS_LEFT`): the lead did the work, and the record says so.
+    BLOCKING (registry reads); never raises."""
+    names = ", ".join(team.workers) or "its workers"
+    try:
+        lead = label_of(platform, lead_provider, lead_model)
+    except Exception:  # noqa: BLE001
+        lead = str(lead_model or lead_provider or "")
+    return {"lead": lead, "workers": [], "reviewer": "", "pieces": 0,
+            "lead_did": [{"reason": NO_WORKERS_LEFT.format(names=names)[:REASON_CHARS]}]}
 
 
 def from_setup(setup: Any) -> "SessionTeam | None":
@@ -383,6 +412,19 @@ NO_REVIEWER_LINE = "No reviewer is on this team: read each change yourself befor
 UNLOCK_NOTE = (
     "No worker could take this: {reason} You may do this piece yourself now; say in your "
     "reply that you did it yourself and why."
+)
+#: v1.403.0 integrate: a session whose team has NO worker left that can write
+#: code (each removed from the model team, or no longer holding Writing code)
+#: runs unlocked — and SAYS SO, like any piece no worker could take: the
+#: record's ``lead_did`` carries this reason and the model is told.
+NO_WORKERS_LEFT = (
+    "None of this session's workers can write code now ({names} removed from the team, or no "
+    "longer holding Writing code), so the team lead did the work itself."
+)
+NO_WORKERS_LEFT_NOTE = (
+    "# Your team\nThis session has a team, but none of its workers can write code right now "
+    "({names}). Do the work yourself, and say in your reply that you, the team lead, did it "
+    "yourself and why."
 )
 #: What every helper door refuses a name outside the session's team with.
 OFF_TEAM = (

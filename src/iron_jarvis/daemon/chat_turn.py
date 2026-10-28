@@ -5486,8 +5486,16 @@ async def _build_harness(
     from ..harness import team as _team_mod
 
     _session_team = None
+    _team_gone: "dict[str, Any] | None" = None
     if build_call and not plan_mode and not text_only and _team_mod.current() is not None:
         _session_team = await asyncio.to_thread(_team_mod.resolve, d.platform, _team_mod.current())
+        if _session_team is None:
+            # v1.403.0 integrate: a team with NO worker left runs unlocked —
+            # and says so (the record's lead_did; the model is told below).
+            _team_gone = await asyncio.to_thread(
+                _team_mod.gone_record, d.platform, _team_mod.current(),
+                lead_provider=prov, lead_model=mod,
+            )
     turn = _mode.build(
         registry=d.platform.registry,
         permissions=d.platform.permissions,
@@ -5556,6 +5564,12 @@ async def _build_harness(
         except Exception:  # noqa: BLE001 — the team list never breaks a turn
             log.debug("model team block failed", exc_info=True)
             turn.team_section, turn.team_first = "", ()
+    if _team_gone is not None:
+        turn.team_gone = _team_gone
+        turn.team_section = _team_mod.NO_WORKERS_LEFT_NOTE.format(
+            names=", ".join(_team_mod.current().workers) or "its workers",
+        )
+        turn.team_first = ()
     # IJ harness part 3, Phase 3 — MIRROR NOTE (lock-step): both lanes build
     # their harness turn here, so both get all three.
     _window = _context_window(d, prov, mod)
@@ -5918,7 +5932,9 @@ def team_record(harness_turn: Any) -> "dict[str, Any] | None":
     LAST on the done frame / POST answer."""
     team = getattr(harness_turn, "team", None) if harness_turn is not None else None
     if team is None:
-        return None
+        # v1.403.0 integrate: a session whose team had no worker left.
+        gone = getattr(harness_turn, "team_gone", None) if harness_turn is not None else None
+        return dict(gone) if isinstance(gone, dict) else None
     try:
         return team.record()
     except Exception:  # noqa: BLE001
