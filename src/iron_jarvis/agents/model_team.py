@@ -1967,14 +1967,22 @@ def _piece_passed_over(engine: Any, scope: str, role: str, piece: str) -> str:
 def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin: Any = None,
                caller_provider: str = "", caller_model: str = "", scope: str = "",
                piece: str = "", now: Any = None, team: "list[str] | None" = None,
-               team_words: str = "this project's team") -> RolePick:
+               team_words: str = "this project's team", team_takes_role: bool = False) -> RolePick:
     """THE TEAM ROUTER: the member that takes a piece of ``role`` now, and
     why (see the section comment above). ``team`` — a PROJECT mission's team
     (roster names, ``agents/team.mission_team``): only its members are asked
     (the doors refuse anyone else). v1.403.0: or a CODING SESSION's team
     (``harness/team``: its workers for a code / test / read piece, its
     reviewer for a review), named in the refusals by ``team_words``
-    ("this session's team"). BLOCKING (SQLite reads: the record, the
+    ("this session's team").
+
+    ``team_takes_role`` (v1.403.0 review): every member of ``team`` may take
+    a piece of ``role`` whether or not it HOLDS that role — a coding
+    session's WORKERS for a code / test / read piece (the user picked them as
+    workers; a worker needs only Writing code). Without it a test or read
+    piece on a code-only team was refused "no one holds …", and that refusal
+    UNLOCKED the team lead's coding tools. The member's record is credited
+    only for a role it holds (the doors' rule). BLOCKING (SQLite reads: the record, the
     allowance, the month's spend) — the doors call it off the loop. Never
     raises (an internal fault is a refusal in words).
 
@@ -1986,7 +1994,8 @@ def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin
         with _placements(platform).lock:
             return _route(platform, role, noun, local_only=local_only, caller_pin=caller_pin,
                           caller_provider=caller_provider, caller_model=caller_model, scope=scope,
-                          piece=piece, now=now, team=list(team or []), team_words=team_words)
+                          piece=piece, now=now, team=list(team or []), team_words=team_words,
+                          team_takes_role=team_takes_role)
     except Exception:  # noqa: BLE001
         log.warning("model team routing failed", exc_info=True)
         return RolePick(role, refusal=(
@@ -1996,21 +2005,26 @@ def route_role(platform: Any, role: str, *, local_only: bool = False, caller_pin
 
 def _route(platform: Any, role: str, noun: str, *, local_only: bool, caller_pin: Any,
            caller_provider: str, caller_model: str, scope: str, piece: str, now: Any,
-           team: "list[str] | None" = None, team_words: str = "this project's team") -> RolePick:
+           team: "list[str] | None" = None, team_words: str = "this project's team",
+           team_takes_role: bool = False) -> RolePick:
     from datetime import datetime, timezone
 
     from . import allowance
+    from . import team as _team
     from . import team_record as TR
 
     now = now or datetime.now(timezone.utc)
     engine = getattr(platform, "engine", None)
     config = _config(platform)
     default_provider = str(getattr(config, "default_provider", "") or "")
-    members = [r for r in team_members(platform) if role in roles_of(r)]
+    if team and team_takes_role:
+        # v1.403.0 review: a coding session's WORKERS take every worker
+        # role's piece (see ``route_role``) — the team, whatever it holds.
+        members = [r for r in team_members(platform) if _team.on_team(team, f"custom:{r.name}")]
+    else:
+        members = [r for r in team_members(platform) if role in roles_of(r)]
     if team:
         # A PROJECT mission: only the project's team (the user picked it).
-        from . import team as _team
-
         members = [r for r in members if _team.on_team(team, f"custom:{r.name}")]
         if not members:
             return RolePick(role, reason=f"not started: no one on {team_words} holds {noun}",
@@ -2225,7 +2239,7 @@ def _picked(role: str, cand: _Cand, reason: str) -> RolePick:
 
 def route_for_call(platform: Any, *, role: str, piece: str, session_id: str,
                    helper_parent: Any = None, team: "list[str] | None" = None,
-                   team_words: str = "this project's team") -> RolePick:
+                   team_words: str = "this project's team", team_takes_role: bool = False) -> RolePick:
     """:func:`route_role` for one ``delegate`` / ``spawn_agent`` call: the
     caller's account pin, model and Local only read from where the call runs
     — a coding session's turn (``helper_parent``) or the calling run's own
@@ -2260,7 +2274,8 @@ def route_for_call(platform: Any, *, role: str, piece: str, session_id: str,
             pass
     return route_role(platform, role, local_only=local_only, caller_pin=pin,
                       caller_provider=caller_provider, caller_model=caller_model,
-                      scope=str(session_id or ""), piece=piece, team=team, team_words=team_words)
+                      scope=str(session_id or ""), piece=piece, team=team, team_words=team_words,
+                      team_takes_role=team_takes_role)
 
 
 def _user_decided(report: Any) -> bool:

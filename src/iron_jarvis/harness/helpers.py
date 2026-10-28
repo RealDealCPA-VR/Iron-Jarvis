@@ -1056,13 +1056,22 @@ def note_route(parent: "HelperParent | None", *, role: str = "", reason: str = "
 def team_route_kwargs(parent: "HelperParent | None", role: str, project_team: Any) -> dict[str, Any]:
     """The team router's ``team`` for one role piece: a coding session's team
     (v1.403.0 — its workers for code / test / read, its reviewer for a review,
-    named "this session's team"), else a project mission's team as before."""
+    named "this session's team"), else a project mission's team as before.
+
+    v1.403.0 review: a WORKER piece may go to any of the session's workers,
+    whatever roles it holds (``team_takes_role``) — the user picked them as
+    workers, and a refusal of a test or read piece on a code-only team used
+    to UNLOCK the lead. A review still goes only to a member holding the
+    review role."""
     team = getattr(parent, "team", None) if parent is not None else None
     if team is None:
         return {"team": project_team}
-    from .team import TEAM_WORDS
+    from .team import TEAM_WORDS, WORKER_ROLES
 
-    return {"team": team.route_names(role), "team_words": TEAM_WORDS}
+    out: dict[str, Any] = {"team": team.route_names(role), "team_words": TEAM_WORDS}
+    if role in WORKER_ROLES:
+        out["team_takes_role"] = True
+    return out
 
 
 def team_role_refusal(parent: "HelperParent | None", role: str) -> Any:
