@@ -136,6 +136,7 @@ from ..chat_turn import (
     _attachment_budgets,
     _browser_section,
     _page_context_section,
+    wants_page_section,
     _prepare_attachments,
     _compose_recall_query,
     _connector_memory_block,  # noqa: F401 — re-exported; the lane reaches it via _gather_grounding (v1.311.0)
@@ -3695,7 +3696,9 @@ async def chat_stream(
             (resolved_proj.root or "") if resolved_proj is not None else ""
         ),
     ))
-    if getattr(body, "page_context", None) is not None:
+    # v1.400.9: the dashboard page AND the element the user pointed at — the
+    # ONE question chat_turn's lane asks too (MIRROR NOTE, lock-step).
+    if wants_page_section(body):
         _prep.start("page", _page_context_section(d, body))
     if getattr(body, "resources", None):
         _prep.start("resources", read_turn_resources(d, body))

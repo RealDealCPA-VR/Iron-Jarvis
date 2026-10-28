@@ -1206,7 +1206,9 @@ def test_the_eight_acting_tools_are_all_on_the_ask_tier_this_covers(harness):
 
     If a future tool arrives on the ask tier, or one of these is quietly
     downgraded, that is a change to what an MCP harness can do without a human -
-    and it should be a failing test, not a surprise.
+    and it should be a failing test, not a surprise. v1.400.9 added
+    ``browser_fill_form`` (one card for a list of type/click/key steps; each step
+    still passes its own risk door): nine now, on purpose.
     """
     from iron_jarvis.tools.permissions import PermissionMode
 
@@ -1222,6 +1224,7 @@ def test_the_eight_acting_tools_are_all_on_the_ask_tier_this_covers(harness):
         "browser_click",
         "browser_close_tab",
         "browser_create_tab",
+        "browser_fill_form",
         "browser_navigate",
         "browser_press_key",
         "browser_scroll",

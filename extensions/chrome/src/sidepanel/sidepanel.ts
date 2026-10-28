@@ -170,6 +170,11 @@ const el = {
   send: document.getElementById("send") as HTMLButtonElement | null,
   stop: document.getElementById("stop") as HTMLButtonElement | null,
   steer: document.getElementById("steer") as HTMLButtonElement | null,
+  // v1.400.9: "Point at it".
+  point: document.getElementById("point") as HTMLButtonElement | null,
+  pointed: document.getElementById("pointed"),
+  pointedText: document.getElementById("pointed-text"),
+  unpoint: document.getElementById("unpoint") as HTMLButtonElement | null,
 };
 
 /** The id of the ask the approval card is currently showing, or `""`. */
@@ -453,6 +458,93 @@ function clearApproval(): void {
   }
 }
 
+// --- "Point at it" (v1.400.9) -------------------------------------------------
+
+/** The element the user pointed at and the tab it is in, until the next Send. */
+export interface Pointed {
+  tab_id: number;
+  element: Record<string, unknown>;
+}
+
+let pointed: Pointed | null = null;
+
+/**
+ * What the chip and the user's bubble say about a pointed element, from what
+ * the picker read: "button 'Submit'", "textbox 'Email'", "a table". Page words,
+ * bounded — the chip is `textContent`, never markup.
+ */
+export function pointedWords(element: Record<string, unknown>): string {
+  const clip = (value: unknown, n: number): string => {
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    return text.length > n ? text.slice(0, n - 1) + "…" : text;
+  };
+  const role = clip(element["role"], 30);
+  const name = clip(element["name"], 60) || clip(element["text"], 60);
+  const tag = clip(element["tag"], 20);
+  const kind = role || (tag ? `${tag} element` : "element");
+  return name ? `${kind} '${name}'` : `a ${kind}`;
+}
+
+/** What a pick that could not start says, by the add-on's own refusal code. */
+export function pickRefusal(code: string, reason = ""): string {
+  if (reason === "popup") {
+    return "A pop-up on the page is in the way. Close it, then point again.";
+  }
+  if (code === "PERMISSION_DENIED") {
+    return "Pointing needs site access in this browser. Press Grant site access, then try again.";
+  }
+  if (code === "UNSUPPORTED_PAGE") {
+    return "This page is closed to add-ons (a browser page or an add-on store), so there is nothing to point at here.";
+  }
+  if (code === "PAGE_FAILED_TO_LOAD") {
+    return "This page did not load, so there is nothing to point at yet.";
+  }
+  return "Could not start pointing in this tab.";
+}
+
+function paintPointed(): void {
+  const on = pointed !== null;
+  if (el.pointed) {
+    el.pointed.hidden = !on;
+  }
+  if (el.pointedText) {
+    el.pointedText.textContent = on && pointed ? `Pointing at ${pointedWords(pointed.element)}` : "";
+  }
+}
+
+function setPicking(on: boolean): void {
+  document.body.dataset["picking"] = on ? "on" : "off";
+}
+
+async function startPicking(): Promise<void> {
+  let windowId: number | undefined;
+  try {
+    windowId = (await chrome.windows?.getCurrent?.())?.id;
+  } catch {
+    windowId = undefined;
+  }
+  type PickReply = { started?: boolean; code?: string; reason?: string } | null;
+  let reply: PickReply;
+  try {
+    reply = (await chrome.runtime.sendMessage({ kind: "pick_element", windowId })) as PickReply;
+  } catch {
+    reply = null;
+  }
+  if (reply?.started) {
+    setPicking(true);
+    return;
+  }
+  setPicking(false);
+  say("error", pickRefusal(String(reply?.code ?? ""), String(reply?.reason ?? "")));
+}
+
+function cancelPicking(): void {
+  if (document.body.dataset["picking"] === "on") {
+    void chrome.runtime.sendMessage({ kind: "pick_cancel" }).catch(() => {});
+  }
+  setPicking(false);
+}
+
 // --- talking to the worker --------------------------------------------------
 
 /**
@@ -618,10 +710,14 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
   }
 }
 
-chrome.runtime.onMessage.addListener((message: unknown) => {
+chrome.runtime.onMessage.addListener((message: unknown, sender?: chrome.runtime.MessageSender) => {
   // Read the discriminant as a plain string first: this arrives from another
   // context, so it is untrusted input rather than a value TypeScript has narrowed.
   const body = (message ?? {}) as { kind?: string; event?: string; payload?: unknown };
+  // v1.400.9: a pointed element comes from the WORKER, which took it only from
+  // the tab it started the pick in. A message a content script sent (it carries
+  // `sender.tab`) is never one.
+  const fromATab = Boolean(sender?.tab);
   if (body.kind === "panel_event") {
     const payload = (body.payload ?? {}) as Record<string, unknown>;
     applyPanelEvent(String(body.event ?? ""), payload);
@@ -629,6 +725,22 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   }
   if (body.kind === "panel_status") {
     void refresh();
+    return;
+  }
+  if (body.kind === "pointed" && !fromATab) {
+    // v1.400.9: the user clicked the element they mean. It rides the next Send.
+    const tab = (body as { tab_id?: unknown }).tab_id;
+    const element = (body as { element?: unknown }).element;
+    setPicking(false);
+    if (typeof tab === "number" && element && typeof element === "object") {
+      pointed = { tab_id: tab, element: element as Record<string, unknown> };
+      paintPointed();
+      el.ask?.focus();
+    }
+    return;
+  }
+  if (body.kind === "pick_ended" && !fromATab) {
+    setPicking(false);
     return;
   }
   if (body.kind === "mic_permission") {
@@ -698,7 +810,19 @@ function sendNow(): void {
   if (!text) {
     return;
   }
-  say("you", text);
+  const you = say("you", text);
+  // v1.400.9: the pointed element rides THIS Send, then the chip clears.
+  const point = pointed;
+  // v1.400.9: a pick still running would keep the page's clicks; Send ends it.
+  cancelPicking();
+  if (point) {
+    const note = document.createElement("span");
+    note.className = "pointed-note";
+    note.textContent = `Pointing at ${pointedWords(point.element)}`;
+    you.appendChild(note);
+    pointed = null;
+    paintPointed();
+  }
   if (el.ask) {
     el.ask.value = "";
   }
@@ -710,13 +834,22 @@ function sendNow(): void {
   const startedAt = turnStartedAt;
   // v1.267.0: the pick rides every Send; nothing is stored on the daemon for it.
   const pick = currentPick();
-  void post(PANEL_ACTION_SEND, { text, ...(pick ? pick : {}) }).then((sent) => {
+  const send: Record<string, unknown> = { text, ...(pick ? pick : {}) };
+  if (point) {
+    send["pointed"] = { ...point.element, tab_id: point.tab_id };
+  }
+  void post(PANEL_ACTION_SEND, send).then((sent) => {
     if (!sent) {
       // v1.353.0 (G53 review): no turn started, so no start time is kept —
       // another window's turn this panel later sees must not borrow it.
       if (turnStartedAt === startedAt) turnStartedAt = 0;
       setTurn(false);
       say("error", "That did not reach Iron Jarvis — this browser is not connected.");
+      // The message never left, so the element it pointed at is still meant.
+      if (point && pointed === null) {
+        pointed = point;
+        paintPointed();
+      }
     }
   });
   refreshComposer();
@@ -1180,6 +1313,24 @@ void loadPick();
 // for an extension page, and a close nobody reported leaves the daemon streaming.
 window.addEventListener("pagehide", () => {
   void post(PANEL_ACTION_CLOSE);
+  // v1.400.9: a pick left running would swallow the user's next real click.
+  cancelPicking();
+});
+
+// v1.400.9: "Point at it". The button starts a pick in the tab the user is
+// looking at, or stops one that is running; the × on the chip forgets a point.
+el.point?.addEventListener("click", () => {
+  if (document.body.dataset["picking"] === "on") {
+    cancelPicking();
+    return;
+  }
+  void startPicking();
+});
+
+el.unpoint?.addEventListener("click", () => {
+  pointed = null;
+  paintPointed();
+  el.ask?.focus();
 });
 
 paintVersion();

@@ -218,6 +218,11 @@ ALL_EVENTS: tuple[str, ...] = (
 #: future the daemon is waiting on, which is precisely what ``evt_`` exists to
 #: prevent.
 PANEL_ACTION_OPEN = "open"
+#: ``{text, provider?, model?, pointed?}``. v1.400.9: ``pointed`` is the element
+#: the user clicked with the panel's "Point at it" picker -- ``{tab_id, url,
+#: title, role, name, tag, input_type, text, css, unique_name}``, read off the
+#: page the way a snapshot reads it (never a field's value). It describes; it
+#: grants nothing, and the daemon fences it as untrusted data for that turn.
 PANEL_ACTION_SEND = "send"
 PANEL_ACTION_STOP = "stop"
 PANEL_ACTION_STEER = "steer"

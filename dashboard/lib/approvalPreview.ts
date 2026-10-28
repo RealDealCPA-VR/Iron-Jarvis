@@ -77,9 +77,53 @@ export type PreviewPart =
   | { type: "content"; lines: string[] }
   | { type: "command"; command: string }
   | { type: "code"; code: string }
-  | { type: "plan"; steps: string[]; more: number };
+  | { type: "plan"; steps: string[]; more: number; label?: string };
 
-export type PreviewKind = "edit" | "write" | "command" | "code" | "plan" | "args";
+export type PreviewKind = "edit" | "write" | "command" | "code" | "plan" | "form" | "args";
+
+/** v1.400.9: the browser's one-card form tool, by EXACT name. */
+export const FORM_TOOL = "browser_fill_form";
+
+/** The first `n` CHARACTERS (code points, Python's slice), never half an emoji. */
+function cutPoints(text: string, n: number): string {
+  return Array.from(text).slice(0, n).join("");
+}
+
+/** One form step in words — the twin of the daemon's
+ *  `browser/tools.describe_form_step` (pinned equal on a shared fixture,
+ *  `__tests__/fixtures/form-steps-v1400-9.json`). It reads the card's REDACTED
+ *  arguments, so typed text is a count ("type 18 characters into 'Email'"),
+ *  never the characters. */
+export function formStepWords(step: unknown): string {
+  const s = step && typeof step === "object" && !Array.isArray(step) ? (step as Record<string, unknown>) : {};
+  const action = String(s.action ?? "");
+  const t =
+    s.target && typeof s.target === "object" && !Array.isArray(s.target)
+      ? (s.target as Record<string, unknown>)
+      : {};
+  const elementId = t.element_id;
+  const rawLabel =
+    (t.name as string) ||
+    (t.css as string) ||
+    (elementId !== undefined && elementId !== null && elementId !== "" ? `element ${String(elementId)}` : "") ||
+    "";
+  const label = cutPoints(String(rawLabel).split(/\s+/).filter(Boolean).join(" "), 60);
+  const where = label ? `'${label}'` : "";
+  if (action === "type") {
+    let count: number | null = typeof s.chars === "number" && Number.isInteger(s.chars) ? (s.chars as number) : null;
+    if (count === null && typeof s.text === "string" && s.text !== "***REDACTED***") count = s.text.length;
+    const what = count === null ? "type some text" : `type ${count} character${count === 1 ? "" : "s"}`;
+    const clear = s.clear ? " (clearing it first)" : "";
+    return where ? `${what} into ${where}${clear}` : `${what}${clear}`;
+  }
+  if (action === "click") return where ? `click ${where}` : "click on the page";
+  if (action === "press_key") {
+    const key = cutPoints(String(s.key ?? "").split(/\s+/).filter(Boolean).join(" "), 30);
+    const on = where ? ` on ${where}` : "";
+    return key ? `press ${key}${on}` : `press a key${on}`;
+  }
+  return "do a step";
+}
 
 /** The plan ask's tool (lane C2's optional `plan_approval` ask), defined
  *  once in lib/toolWords (dependency-free, so the bell can read it too). */
@@ -365,6 +409,17 @@ export function approvalPreview(tool: string, args: Record<string, unknown>): Ap
     } else if (typeof args.code === "string") {
       special.set("code", { type: "code", code: args.code });
       kind = "code";
+    } else if (name === FORM_TOOL && Array.isArray(args.steps) && args.steps.length > 0) {
+      // v1.400.9: a form in one call — every step on its own numbered line,
+      // so the one Allow covers a list the user could read in full.
+      const steps = (args.steps as unknown[]).map(formStepWords);
+      special.set("steps", {
+        type: "plan",
+        steps: steps.slice(0, PLAN_STEPS_MAX),
+        more: Math.max(0, steps.length - PLAN_STEPS_MAX),
+        label: "form",
+      });
+      kind = "form";
     } else if (name === PLAN_TOOL) {
       // v1.350.0: the plan the agent asks to follow, as a numbered list.
       const steps = planSteps(args.steps);

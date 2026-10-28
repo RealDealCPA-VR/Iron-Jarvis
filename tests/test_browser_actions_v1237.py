@@ -318,7 +318,9 @@ def test_ship_three_registers_all_fourteen_tools_with_the_declared_tiers():
     one of those failures is quiet.
     """
     by_name = {tool.name: tool for tool in browser_tools(None)}
-    assert len(by_name) == 14
+    # Fourteen in Ship 3; v1.400.9 added browser_fill_form, whose steps run
+    # through three of them (tests/test_browser_fill_form_v14009.py).
+    assert len(by_name) == 15
     for name in ACTING_NAMES:
         tool = by_name[name]
         assert tool.min_access == "interactive", name

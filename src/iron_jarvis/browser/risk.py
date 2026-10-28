@@ -87,6 +87,11 @@ BASE_RISK: dict[str, RiskClass] = {
     "browser_type": RiskClass.PAGE_ACTION,
     "browser_press_key": RiskClass.PAGE_ACTION,
     "browser_navigate": RiskClass.PAGE_ACTION,
+    # v1.400.9: a whole form in one call. It never reaches the risk door under
+    # its own name — every step is judged as the click, type or key press it
+    # is — but it CHANGES a page, so a tab grant covers it and it is never read
+    # as a read.
+    "browser_fill_form": RiskClass.PAGE_ACTION,
 }
 
 #: The tools that CHANGE a page — the ones Q03's action justification constrains.

@@ -1,0 +1,150 @@
+{
+  "cases": [
+    {
+      "step": {
+        "action": "type",
+        "target": {
+          "role": "textbox",
+          "name": "Email"
+        },
+        "text": "***REDACTED***",
+        "chars": 18
+      },
+      "words": "type 18 characters into 'Email'"
+    },
+    {
+      "step": {
+        "action": "type",
+        "target": {
+          "role": "textbox",
+          "name": "Email"
+        },
+        "text": "***REDACTED***",
+        "chars": 1,
+        "clear": true
+      },
+      "words": "type 1 character into 'Email' (clearing it first)"
+    },
+    {
+      "step": {
+        "action": "type",
+        "target": {
+          "role": "textbox",
+          "name": "Email"
+        },
+        "text": "***REDACTED***"
+      },
+      "words": "type some text into 'Email'"
+    },
+    {
+      "step": {
+        "action": "type",
+        "target": {
+          "element_id": "e7"
+        },
+        "text": "***REDACTED***",
+        "chars": 0
+      },
+      "words": "type 0 characters into 'element e7'"
+    },
+    {
+      "step": {
+        "action": "type",
+        "target": {
+          "css": "#zip"
+        },
+        "text": "***REDACTED***",
+        "chars": 5
+      },
+      "words": "type 5 characters into '#zip'"
+    },
+    {
+      "step": {
+        "action": "type",
+        "text": "***REDACTED***",
+        "chars": 3
+      },
+      "words": "type 3 characters"
+    },
+    {
+      "step": {
+        "action": "click",
+        "target": {
+          "role": "checkbox",
+          "name": "I agree to the terms"
+        }
+      },
+      "words": "click 'I agree to the terms'"
+    },
+    {
+      "step": {
+        "action": "click",
+        "target": {
+          "role": "button",
+          "name": "  Next \n step  "
+        }
+      },
+      "words": "click 'Next step'"
+    },
+    {
+      "step": {
+        "action": "click",
+        "target": {
+          "role": "button",
+          "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN"
+        }
+      },
+      "words": "click 'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN'"
+    },
+    {
+      "step": {
+        "action": "click",
+        "target": {
+          "role": "button",
+          "name": "Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 "
+        }
+      },
+      "words": "click 'Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café 🍰 Café'"
+    },
+    {
+      "step": {
+        "action": "click"
+      },
+      "words": "click on the page"
+    },
+    {
+      "step": {
+        "action": "press_key",
+        "key": "Tab"
+      },
+      "words": "press Tab"
+    },
+    {
+      "step": {
+        "action": "press_key",
+        "key": "Enter",
+        "target": {
+          "role": "textbox",
+          "name": "Search"
+        }
+      },
+      "words": "press Enter on 'Search'"
+    },
+    {
+      "step": {
+        "action": "press_key"
+      },
+      "words": "press a key"
+    },
+    {
+      "step": {
+        "action": "scroll"
+      },
+      "words": "do a step"
+    },
+    {
+      "step": "not a step",
+      "words": "do a step"
+    }
+  ]
+}

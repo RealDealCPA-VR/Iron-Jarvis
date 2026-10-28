@@ -490,6 +490,8 @@
       }
       #approval p {
         margin: 0 0 8px;
+        /* v1.400.9: a form's card lists one step per line. */
+        white-space: pre-line;
       }
       .row {
         display: flex;
@@ -566,6 +568,63 @@
       }
       #model:focus-visible + .icon {
         color: var(--cyan);
+      }
+      /* v1.400.9: "Point at it" — the same small round icon as the model pick,
+         lit while a pick waits for the user's click in the page. */
+      #point {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        display: inline-grid;
+        place-items: center;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      #point:hover,
+      #point:focus-visible,
+      body[data-picking="on"] #point {
+        color: var(--cyan);
+        background: var(--cyan-wash);
+      }
+      #pointed {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 4px 4px;
+        padding: 3px 4px 3px 10px;
+        border-radius: 999px;
+        background: var(--cyan-wash);
+        color: var(--ink);
+        font-size: 12px;
+      }
+      #pointed[hidden] {
+        display: none;
+      }
+      #pointed-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #unpoint {
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .pointed-note {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11.5px;
       }
       /* The one button with two jobs. `data-mode` is painted by the panel from
          the box's content; `body[data-voice]` from the dictation state. */
@@ -719,11 +778,26 @@
       <div class="composer">
         <!-- v1.264.0's keyboard contract, in the tooltip: Enter sends (Steer
              while Jarvis is working) · Shift+Enter starts a new line. -->
+        <!-- v1.400.9: the element the user pointed at, until the next Send. -->
+        <div id="pointed" hidden>
+          <span id="pointed-text"></span>
+          <button id="unpoint" type="button" aria-label="Stop pointing" title="Forget this element">×</button>
+        </div>
         <textarea id="ask" rows="2" placeholder="Ask about this page…" title="Enter sends (Steer while Jarvis is working) · Shift+Enter starts a new line · Esc stops"></textarea>
         <div class="controls">
           <button class="warn" id="stop" type="button" title="Stop prevents the next step. A tool that is already running finishes, and what it wrote stays written.">Stop</button>
           <button class="ghost" id="steer" type="button" title="Adds a note the turn picks up at its next step — it cannot interrupt a sentence already being written.">Steer</button>
           <span class="spacer"></span>
+          <!-- v1.400.9: "POINT AT IT". Click this, then click the thing on the
+               page you mean: Jarvis is told exactly which element "this" is.
+               The click goes to Iron Jarvis, not to the page. -->
+          <button id="point" type="button" aria-label="Point at something on the page" title="Point at it: click something on the page to show Jarvis what you mean. The page does not see that click. Esc cancels.">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="7" />
+              <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+              <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" />
+            </svg>
+          </button>
           <!-- v1.267.0/v1.269.0: THE MODEL, as a small icon. The select below is
                the real control, laid invisibly over the icon: filled from the
                daemon's `models` frame, Default names the model Jarvis would use,

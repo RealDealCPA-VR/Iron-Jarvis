@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.8 (2026-10-25).*
+holds itself to. Current as of v1.400.9 (2026-10-25).*
 
 ---
 
@@ -1256,6 +1256,36 @@ to the front instead of opening another. In chat, the model menu opens with a
 box: type part of a model's name and every match across your providers is
 listed — Enter picks the first — and with the box empty the menu opens on the
 last three models you picked, above the provider list it always had.
+
+**One card for a whole form, and Point at it (v1.400.9).** Two ideas borrowed
+from another browser agent's design. *One card for a whole form:* when Jarvis
+fills in a form it now sends all of the fields as one list, and the sidebar (or
+the chat page) shows ONE card that lists every step — "type 18 characters into
+'Email'", "click 'I agree to the terms'" — never the characters themselves.
+**Allow** runs exactly that list, in the tab it started in, and stops at the
+first step that does not work or that leaves the page (a Submit that opens the
+next page); Jarvis is told which steps are done, so it never types a field
+twice. Nothing in the list is judged more leniently than the same step on its
+own: a payment or password field, a "delete"-shaped button or a page that tried
+to instruct Jarvis still stops at that step for its own card. Each step is sent
+exactly as Jarvis wrote it: if one step changes the page so that a field Jarvis
+read earlier is no longer the same, the list stops there and Jarvis reads the
+page again, rather than typing into whatever box has taken its place. A step
+you set to **Deny** refuses the whole list. *Point at it:* the
+crosshair beside the model icon lets you click the thing you mean on the page —
+a button, a field, a table. The page never receives that click (a clear layer
+covers it while you point, so even a payment box embedded in the page is not
+pressed); **Esc** cancels, and pointing stops by itself after a minute. The
+sidebar shows "Pointing at button 'Apply coupon'" above the box, your next
+message carries it, and Jarvis is told exactly which element "this" is and how
+to reach it. What is read is what Jarvis reads on a page anyway — the element's
+kind, its label, the visible words around it, and the page's address without
+its query string — never what is typed in a field. The **×** forgets it before
+you send; pressing **Send** also ends a pick still waiting for your click.
+Pointing does not start while the page has a pop-up, dialog or full-screen
+view open (they sit above anything the add-on can draw) — the sidebar says so;
+close it and point again. Pointing needs the add-on's site access, like
+reading a page.
 
 **Steer a running turn, and edit a sent message (v1.278.0).** While Jarvis is
 working on your message, the box says so, and **Enter** sends what you typed

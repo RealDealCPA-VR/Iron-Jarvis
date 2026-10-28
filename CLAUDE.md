@@ -1271,6 +1271,79 @@ does not need a bump, stop and bump it.
   The sidebar's own in-panel mark (the arc-reactor SVG with the connection dot)
   is unchanged.
 
+- **One card for a whole form; Point at it** (v1.400.9, Sitegeist ideas 1 + 2
+  — Sitegeist is AGPL-3.0, so IDEAS only, no code). FORM: `browser_fill_form`
+  (`browser/tools.BrowserFillFormTool`, the 15th browser tool) takes ≤ 20
+  type / click / press_key steps; ask tier, deny floor, PAGE_ACTION, so the
+  lane cards the ONE call. `execute` never reaches the browser itself: each step
+  runs the REAL `BrowserTypeTool`/`BrowserClickTool`/`BrowserPressKeyTool`
+  `.execute` (access gate, `prepare_action`, the one risk door, that step's own
+  approval) — a payment/password/destructive/flagged step still stops for ITS
+  card. The tab is resolved ONCE and every step names it; the list stops at the
+  first step that is not ok or that navigates, and the answer lists done / not
+  sent. EVERY STEP RUNS EXACTLY AS SENT: an `element_id` is never rewritten
+  into a role and name (the review proved a rewritten step typed into a NEW
+  "Amount" box after "Continue" swapped the page, where the same call alone
+  refused as stale), so a stale id stops the list honestly and the
+  description steers forms to role+name targets (found again each step). A
+  waiting step's own "make the identical call again" is reworded
+  (`_batch_waiting_words`: resend THIS step and the ones after it, never the
+  done ones — a checkbox clicked twice turns back off). `acts_through` names
+  the three step tools and `registry.invoke` refuses the batch when any is
+  Deny for the RUN (`perms.mode_for(sub, agent_overrides)` — an agent's
+  `deny_tools` too; the steps never pass `invoke` themselves). `redact_args`
+  keeps only `chars`, and redacts a MALFORMED call too (a JSON-string
+  `steps`, one object, a string step, unknown keys) — a refused call is still
+  written to the ledger.
+  Card words: `describe_form_step` (Python, the sidebar's card via
+  `panel.describe_form_call(card=True)`) == `lib/approvalPreview.formStepWords`
+  on ONE fixture (`dashboard/__tests__/fixtures/form-steps-v1400-9.json`,
+  `IJ_REGEN_FORM_STEPS=1`); the chat card draws it as `PlanSteps` with
+  `label: "form"`. A bare press_key (no target) still asks, as alone. Adding a
+  browser tool moves EVERY count pin (14 → 15: roster, ledger, actions, risk,
+  read-tools, work-words, ux-wave3, desktop-tool-words + its fixture,
+  test_desktop_words) and `scripts/gen_tool_words.py`. POINT AT IT:
+  `content/picker.ts` — while picking a transparent full-window SHIELD (max
+  z-index, appended last) takes every pointer event (a click over an embedded
+  frame must not reach the frame; a top-window capture listener cannot stop
+  that), `elementsFromPoint` finds the element under it, only `isTrusted`
+  clicks pick AND ONLY TRUSTED EVENTS ARE SWALLOWED — the add-on's own
+  `click()`/typing is untrusted, and swallowing it made `browser_click` report
+  "clicked" on a page that never saw it (review, verified); the content
+  script also `cancelPick()`s before any acting op and Send ends a pick. A
+  pick refuses to start over the browser's TOP LAYER (`topLayerInTheWay`:
+  `dialog:modal`, `:popover-open`, full screen — above any z-index, and a
+  modal dialog makes the shield inert) with reason "popup". Esc / 60 s / a
+  new pick cancel; `describePicked` reads role, accessible name, tag, field
+  TYPE, text OUTSIDE fields (never a value), a selector checked unique, and
+  the address without query/fragment. The worker accepts a pick only from the
+  tab it started it in (`pickTab`), cancels a pick left in another tab before
+  starting one, ends it when that tab loads or closes (`endPickIn`) and
+  broadcasts `pointed`; the side panel ignores a `pointed`/`pick_ended` that
+  carries `sender.tab`, and a Send that never left keeps the pointer. The panel sends it as
+  `send.pointed` → `panel.pointed_from` (known keys, coerced) →
+  `ChatBody.pointed` (`schemas.PointedElement`: cut to bounds; a css past its
+  bound is DROPPED — a cut selector can match another element; a cut name is
+  never `unique_name`) → `chat_turn._pointed_section` at the attachments seam
+  of BOTH lanes (`wants_page_section`, lock-step): every page value inside
+  `wrap_untrusted`, promptguard-scanned (`context.blocked`), the targeting
+  advice outside in the daemon's words. `_pointed_value`, NOT
+  `_browser_line_value`: that one strips markdown lead-ins and turned
+  `#coupon-apply` into a different selector. One turn only; never written to
+  the sidebar's history. Proven in real Edge 156 (scratch daemon on 8797,
+  Playwright trusted clicks): a 4-step form in one call, the password step
+  stopped with nothing after it, a pick that never fired the button, a pick
+  over an iframe that pressed nothing in it. KNOWN: the worker's pick routing
+  has no runtime test; `_role_name_match` (daemon, walks shadow roots, skips
+  aria-hidden) and `resolveTarget` (page, `querySelectorAll`) can disagree on
+  a web-component form — older than this change, and it applies to a single
+  role+name call too. Pins:
+  `tests/test_browser_{fill_form,pointed}_v14009.py`,
+  `dashboard/__tests__/{form-card-v1400-9,addon-picker-v1400-9}.test.ts(x)`,
+  the "Point at it" block of `sidepanel-runtime-v1242.test.ts` (28
+  mutations, all red; the side-panel ones on a REBUILT bundle) and a
+  real-Edge run against a scratch daemon on 8797 (14 checks).
+
 - **Updates come from the `updates` branch manifest first; GitHub's releases
   feed is the FALLBACK, and no raw HttpError ever reaches the Updates page**
   (v1.260.0). electron-updater's GitHub provider opens every check by reading

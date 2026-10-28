@@ -243,14 +243,16 @@ function PlanSteps({ part }: { part: Extract<PreviewPart, { type: "plan" }> }) {
   const n = part.steps.length + part.more;
   const capped = part.steps.length > PREVIEW_LINES;
   const shown = open || !capped ? part.steps : part.steps.slice(0, PREVIEW_LINES);
+  // v1.400.9: the same numbered list carries a form's steps; it says which.
+  const word = part.label ?? "plan";
   return (
-    <div data-testid="approval-plan" className="space-y-1">
+    <div data-testid="approval-plan" data-list={word} className="space-y-1">
       <p className="text-[11px] text-zinc-400">
-        <span className="text-zinc-500">plan:</span> {n === 1 ? "1 step" : `${n} steps`}
+        <span className="text-zinc-500">{word}:</span> {n === 1 ? "1 step" : `${n} steps`}
       </p>
       <ol
         id={id}
-        aria-label={n === 1 ? "The plan, 1 step" : `The plan, ${n} steps`}
+        aria-label={n === 1 ? `The ${word}, 1 step` : `The ${word}, ${n} steps`}
         className="list-decimal space-y-0.5 pl-6 text-[12px] leading-relaxed text-zinc-300 marker:text-zinc-500"
       >
         {shown.map((goal, i) => (

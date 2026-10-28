@@ -44,7 +44,7 @@ describe("one set of words for an ask, card and desktop toast (v1.358.0)", () =>
     }
   });
 
-  it("covers all fourteen built-in browser tools and every kind of id", () => {
+  it("covers all fifteen built-in browser tools and every kind of id", () => {
     const browsers = rows.filter((r) => r.kind === "browser").map((r) => r.tool);
     expect(new Set(browsers)).toEqual(new Set(BROWSER_TOOLS));
     expect(new Set(rows.map((r) => r.kind))).toEqual(new Set(["table", "browser", "app", "unknown"]));

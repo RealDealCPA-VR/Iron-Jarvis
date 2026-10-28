@@ -489,14 +489,14 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "page_read": ("read the page in its browser", "page read"),
 }
 
-#: browser/tools.py's 14 built-in browser tools, by EXACT name (the
+#: browser/tools.py's 15 built-in browser tools, by EXACT name (the
 #: dashboard's lib/toolWords BROWSER_TOOLS) — never a ``browser_`` prefix.
 _BROWSER_TOOLS = frozenset({
     "browser_get_status", "browser_list_tabs", "browser_get_active_tab",
     "browser_read_page", "browser_get_elements", "browser_screenshot",
     "browser_activate_tab", "browser_scroll", "browser_create_tab",
     "browser_close_tab", "browser_click", "browser_type", "browser_press_key",
-    "browser_navigate",
+    "browser_navigate", "browser_fill_form",
 })
 
 #: lib/workTarget.ts KIND_OF: the built-ins the work line words by kind.

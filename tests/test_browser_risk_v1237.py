@@ -194,16 +194,18 @@ def test_the_browser_does_not_hold_its_own_word_lists():
 
 
 def test_base_risk_declares_all_fourteen_tools_at_the_plans_classes():
-    assert len(R.BASE_RISK) == 14
+    # Fourteen in Ship 3, plus v1.400.9's form-in-one-call (a PAGE_ACTION).
+    assert len(R.BASE_RISK) == 15
     reads = {n for n, r in R.BASE_RISK.items() if r is RiskClass.READ}
     local = {n for n, r in R.BASE_RISK.items() if r is RiskClass.LOCAL_UI}
     actions = {n for n, r in R.BASE_RISK.items() if r is RiskClass.PAGE_ACTION}
-    assert len(reads) == 6 and len(local) == 4 and len(actions) == 4
+    assert len(reads) == 6 and len(local) == 4 and len(actions) == 5
     assert actions == {
         "browser_click",
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        "browser_fill_form",
     }
     # The table and the wire agree: every tool's method sits in the method tuple
     # of its own risk class, so a tool cannot be classified one way here and
@@ -222,6 +224,8 @@ def test_the_state_changing_set_is_exactly_the_deny_floor_four():
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        # v1.400.9: a whole form in one call, on the floor like its steps.
+        "browser_fill_form",
     }
     assert R.STATE_CHANGING_TOOLS <= DENY_FLOOR_TOOLS
 

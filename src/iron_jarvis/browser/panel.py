@@ -294,7 +294,36 @@ def _cap(sentence: str) -> str:
     return sentence[:1].upper() + sentence[1:] if sentence else sentence
 
 
-def describe_browser_call(name: str, args: object) -> str:
+#: How many steps of a form a card lists before it says "and N more" (v1.400.9).
+#: The tool takes twenty; a card that listed twenty in full would still fit, so
+#: this is the whole list — named so a later cap has one place to change.
+FORM_CARD_STEPS = 20
+
+
+def describe_form_call(args: object, *, card: bool = False) -> str:
+    """A ``browser_fill_form`` call in words (v1.400.9).
+
+    ``card=False`` is the ONE line a step in the work fold reads ("fill in a
+    form: 3 steps"). ``card=True`` is the approval card's text body: every step
+    on its own numbered line, so the user approves the list they can read —
+    "type 18 characters into 'Email'", never the characters (the args are the
+    tool's own redacted ones).
+    """
+    from .tools import describe_form_step
+
+    a = args if isinstance(args, dict) else {}
+    steps = a.get("steps") if isinstance(a.get("steps"), list) else []
+    count = len(steps)
+    head = f"fill in a form: {count} step{'' if count == 1 else 's'}" if count else "fill in a form"
+    if not card or not steps:
+        return head
+    lines = [f"{n}. {describe_form_step(step)}" for n, step in enumerate(steps[:FORM_CARD_STEPS], 1)]
+    if count > FORM_CARD_STEPS:
+        lines.append(f"…and {count - FORM_CARD_STEPS} more")
+    return head + "\n" + "\n".join(lines)
+
+
+def describe_browser_call(name: str, args: object, *, card: bool = False) -> str:
     """A browser tool call as the user would say it (v1.262.0): "click 'Search'",
     "type 'flights to denver' into the search box", "open https://…".
 
@@ -303,8 +332,13 @@ def describe_browser_call(name: str, args: object) -> str:
     never heard of is described as "run <name>" — never dropped, never guessed.
     The args are whatever the lane sent, already redacted by the tool's own
     ``redact_args``; only a bounded excerpt of a text or a URL is repeated.
+
+    ``card`` (v1.400.9) asks for the approval card's wording: the same words
+    for every tool but ``browser_fill_form``, whose card lists each step.
     """
     a = args if isinstance(args, dict) else {}
+    if name == "browser_fill_form":
+        return describe_form_call(a, card=card)
     # v1.274.0: THE REAL ARGS NEST THE TARGET. `browser_click`/`browser_type`
     # carry `{"target": {"element_id"|"role","name"|"css"}}`, and this function
     # read only flat keys — so every card read "click on the page" and the
@@ -364,6 +398,43 @@ def describe_browser_call(name: str, args: object) -> str:
     if name == "browser_get_status":
         return "check the browser connection"
     return f"run {name or 'a step'}"
+
+
+#: The keys of a pointed element the panel passes on (v1.400.9) — the picker's
+#: own vocabulary (extensions/chrome/src/content/picker.ts). Anything else is
+#: dropped here; the lane's model cuts every value to its bound.
+POINTED_KEYS: tuple[str, ...] = (
+    "tab_id", "url", "title", "role", "name", "tag", "input_type", "text", "css",
+    "unique_name",
+)
+
+
+def pointed_from(raw: object) -> dict[str, Any] | None:
+    """The ``pointed`` param of a ``send`` as the lane's field, or ``None``.
+
+    The panel is a page the daemon does not trust with policy, and this is a
+    description of a page element, so nothing here grants or decides anything:
+    unknown keys are dropped, and a value that is not an object is no pointer
+    at all. Never raises.
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in POINTED_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if key == "tab_id":
+            if isinstance(value, int) and not isinstance(value, bool):
+                out[key] = value
+        elif key == "unique_name":
+            out[key] = value is True
+        elif isinstance(value, str):
+            out[key] = value
+    # A pointer with nothing that names an element is no pointer at all.
+    if not any(out.get(k) for k in ("role", "name", "css")):
+        return None
+    return out
 
 
 def parse_sse(chunk: str) -> list[tuple[str, dict[str, Any]]]:
@@ -541,6 +612,7 @@ class PanelTurns:
                 str(params.get("text") or "").strip(),
                 provider=str(params.get("provider") or "").strip(),
                 model=str(params.get("model") or "").strip(),
+                pointed=pointed_from(params.get("pointed")),
             )
             return
         if act == P.PANEL_ACTION_STOP:
@@ -908,7 +980,15 @@ class PanelTurns:
             return True
         return False
 
-    async def _send(self, conn: Any, text: str, *, provider: str = "", model: str = "") -> None:
+    async def _send(
+        self,
+        conn: Any,
+        text: str,
+        *,
+        provider: str = "",
+        model: str = "",
+        pointed: dict[str, Any] | None = None,
+    ) -> None:
         if not text:
             await self.emit(
                 conn, P.PANEL_EVENT_ERROR, {"text": "There was nothing to send."}
@@ -948,7 +1028,9 @@ class PanelTurns:
         self._remembered = False
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
         self._task = asyncio.ensure_future(
-            self._run(conn, text, self._turn_id, provider=provider, model=model)
+            self._run(
+                conn, text, self._turn_id, provider=provider, model=model, pointed=pointed
+            )
         )
 
     def _state(self, *, running: bool | None = None) -> dict[str, Any]:
@@ -1261,7 +1343,14 @@ class PanelTurns:
         return "\n".join(note["text"] for note in taken)
 
     async def _run(
-        self, conn: Any, text: str, turn_id: str, *, provider: str = "", model: str = ""
+        self,
+        conn: Any,
+        text: str,
+        turn_id: str,
+        *,
+        provider: str = "",
+        model: str = "",
+        pointed: dict[str, Any] | None = None,
     ) -> None:
         """Run one turn and translate its SSE frames into panel events.
 
@@ -1294,6 +1383,10 @@ class PanelTurns:
             turn_id=turn_id,
             provider=provider,
             model=model,
+            # v1.400.9: the element the user pointed at, for THIS turn only —
+            # the lane fences and scans it (``chat_turn._pointed_section``).
+            # Not remembered with the conversation: its words are the page's.
+            pointed=pointed,
         )
         # THE CEILING. Computed here, per turn, from the live registry, and
         # passed to the chat lane — which drops anything outside it BEFORE the
@@ -1448,14 +1541,17 @@ class PanelTurns:
             # recorded. `_decide` refuses anything absent from this set.
             if approval_id:
                 self._offered.add(approval_id)
-            what = describe_browser_call(tool, data.get("args"))
+            what = describe_browser_call(tool, data.get("args"), card=True)
+            # A card that lists steps (a form, v1.400.9) ends its list on its
+            # own line; the question goes under it, not after the last step.
+            ask = "\nAllow it?" if "\n" in what else ". Allow it?"
             await self.emit(
                 conn,
                 P.PANEL_EVENT_APPROVAL,
                 {
                     "id": approval_id,
                     "tool": tool,
-                    "text": f"Iron Jarvis wants to {what}. Allow it?",
+                    "text": f"Iron Jarvis wants to {what}{ask}",
                 },
             )
             return

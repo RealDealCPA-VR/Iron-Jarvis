@@ -23,6 +23,24 @@
 /** The discriminant on every message the worker sends into a page. */
 export const PAGE_CHANNEL = "ironjarvis.page.v1";
 
+/**
+ * v1.400.9: the "Point at it" picker's op. NOT a daemon wire method: the side
+ * panel asks for it through the worker, the page answers `{started: true}` at
+ * once, and the element the user then clicks travels back as its own message
+ * (`PICKED_KIND`) — a pick can take a minute, and a reply port held open that
+ * long is a port a navigation closes under it.
+ */
+export const PICK_OP = "pick_element";
+
+/** Worker -> page: stop a pick that is still waiting for its click. */
+export const PICK_CANCEL_OP = "pick_cancel";
+
+/** Page -> worker, when the user clicked the element they mean. */
+export const PICKED_KIND = "element_picked";
+
+/** Page -> worker, when the pick ended without one (Esc, time out, a new pick). */
+export const PICK_CANCELLED_KIND = "pick_cancelled";
+
 /** Worker -> page: run one page operation. `params` is the command's own params. */
 export interface PageRequest {
   channel: string;

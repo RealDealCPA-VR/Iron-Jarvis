@@ -29,6 +29,7 @@ export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
   "browser_click": "act in a browser tab",
   "browser_close_tab": "act in a browser tab",
   "browser_create_tab": "act in a browser tab",
+  "browser_fill_form": "act in a browser tab",
   "browser_get_active_tab": "act in a browser tab",
   "browser_get_elements": "act in a browser tab",
   "browser_get_status": "act in a browser tab",

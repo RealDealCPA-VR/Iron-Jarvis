@@ -289,6 +289,8 @@ def test_the_read_tools_come_first_and_the_acting_tools_after_them():
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        # v1.400.9: a whole form in one call.
+        "browser_fill_form",
     ])
     for acting in ("browser_click", "browser_type", "browser_press_key", "browser_navigate"):
         assert acting not in names[:6], (

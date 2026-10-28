@@ -266,6 +266,12 @@
       "desktop": "act in a browser tab"
     },
     {
+      "tool": "browser_fill_form",
+      "kind": "browser",
+      "card": "act in a browser tab",
+      "desktop": "act in a browser tab"
+    },
+    {
       "tool": "mcp__github__create_issue",
       "kind": "app",
       "card": "use github (create issue)",

@@ -89,10 +89,12 @@ import {
   navigate,
   pressKeyInPage,
   readPage,
+  runInPage,
   scrollInPage,
   tabRow,
   typeTextInPage,
 } from "./tabs";
+import { PICK_CANCEL_OP, PICK_CANCELLED_KIND, PICK_OP, PICKED_KIND } from "../content/channel";
 
 /** The dashboard page the side panel's Open Jarvis button goes to. */
 // Loopback at run time; a developer BUILD may point this at another loopback port
@@ -125,7 +127,21 @@ export type WorkerMessage =
   | { kind: "mic_permission"; granted: boolean }
   | { kind: "panel_action"; action: string; params?: Record<string, unknown> }
   | { kind: "panel_event"; event: string; payload: Record<string, unknown> }
-  | { kind: "panel_status" };
+  | { kind: "panel_status" }
+  // v1.400.9: "Point at it". The panel starts and cancels a pick; the page
+  // reports the element (or the cancel); the worker tells the panel which tab
+  // and which element, as `pointed`/`pick_ended`.
+  | { kind: "pick_element"; windowId?: number }
+  | { kind: "pick_cancel" }
+  | { kind: "element_picked"; element: Record<string, unknown> }
+  | { kind: "pick_cancelled"; reason?: string }
+  | { kind: "pointed"; tab_id: number; element: Record<string, unknown> }
+  | { kind: "pick_ended"; reason: string };
+
+/** The tab a pick is running in, or `null` (v1.400.9). Only THAT tab's answer is
+ * passed to the panel: a late answer from a tab whose pick was replaced is not
+ * the element the user is pointing at now. */
+let pickTab: number | null = null;
 
 const manifest = chrome.runtime.getManifest();
 const dispatcher = new Dispatcher();
@@ -179,6 +195,19 @@ const socket = new BridgeSocket({
  * worker is noise in the one console a reviewer reads, so it is swallowed here — and
  * only here, where the absence genuinely means nothing.
  */
+/**
+ * v1.400.9: the pick in `tabId` is over without a click (the tab closed or
+ * started loading another page): forget it and tell the panel, so it does not
+ * sit on "picking" for a page that is gone.
+ */
+function endPickIn(tabId: number, reason: string): void {
+  if (pickTab === null || pickTab !== tabId) {
+    return;
+  }
+  pickTab = null;
+  broadcast({ kind: "pick_ended", reason });
+}
+
 function broadcast(message: Record<string, unknown>): void {
   try {
     void chrome.runtime.sendMessage(message).catch(() => {});
@@ -405,6 +434,7 @@ chrome.tabs.onActivated.addListener((info) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   glow.forget(tabId); // v1.273.0
+  endPickIn(tabId, "tab closed"); // v1.400.9
   // THE TAB CLOSED (v1.266.0). The daemon ends that tab's approval grant — "one
   // approval per tab, for as long as the tab is open" is only true if the close
   // is reported — and drops its cached snapshot. No lookup: the tab is gone, and
@@ -414,6 +444,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  // v1.400.9: a page that starts loading took its picker with it.
+  if (change.status === "loading") {
+    endPickIn(tabId, "page changed");
+  }
   // SAME-TAB NAVIGATION. Without this the daemon only ever hears onActivated,
   // which fires when the user SWITCHES tabs — so following a link in the tab you
   // are already in left Jarvis asserting the previous page's title and URL in the
@@ -483,7 +517,7 @@ onHostPermissionChanged(() => {
 
 // --- messages from the side panel and the setup page ------------------------
 
-chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) => {
+chrome.runtime.onMessage.addListener((message: WorkerMessage, sender, respond) => {
   // Read the discriminant into a plain string first. A message arrives from a page,
   // so it is untrusted input rather than a value TypeScript has already narrowed:
   // switching on the union directly leaves the default branch typed `never` and
@@ -545,6 +579,82 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
         const body = message as { action?: string; params?: Record<string, unknown> };
         const sent = socket.sendPanel(String(body.action ?? ""), body.params ?? {});
         respond({ sent });
+        return;
+      }
+      case "pick_element": {
+        // v1.400.9: "Point at it" — in the tab the user is looking at in the
+        // panel's own window. The page reader starts the picker and answers at
+        // once; the element arrives later as `element_picked`.
+        const windowId = (message as { windowId?: unknown }).windowId;
+        try {
+          const [tab] = await chrome.tabs.query(
+            typeof windowId === "number"
+              ? { active: true, windowId }
+              : { active: true, lastFocusedWindow: true },
+          );
+          if (!tab || typeof tab.id !== "number") {
+            throw new BridgeError("TAB_NOT_FOUND", { tab_id: "active" });
+          }
+          // One pick at a time across the browser: a pick still running in
+          // another tab would keep catching that page's clicks for a minute,
+          // and its result would be dropped (review fix).
+          if (pickTab !== null && pickTab !== tab.id) {
+            const old = pickTab;
+            pickTab = null;
+            try {
+              await runInPage(PICK_CANCEL_OP, { tab_id: old }, await hasHostPermission());
+            } catch {
+              // That tab navigated or closed: its picker went with it.
+            }
+          }
+          const answer = (await runInPage(PICK_OP, { tab_id: tab.id }, await hasHostPermission())) as
+            | { started?: boolean; reason?: string }
+            | null;
+          if (answer && answer.started === false) {
+            // The page refused, in its own words (a pop-up is in the way).
+            respond({ started: false, code: "", reason: String(answer.reason ?? "") });
+            return;
+          }
+          pickTab = tab.id;
+          respond({ started: true, tab_id: tab.id });
+        } catch (err) {
+          respond({ started: false, code: err instanceof BridgeError ? err.code : "EXTENSION_ERROR" });
+        }
+        return;
+      }
+      case "pick_cancel": {
+        const tabId = pickTab;
+        pickTab = null;
+        if (tabId !== null) {
+          try {
+            await runInPage(PICK_CANCEL_OP, { tab_id: tabId }, await hasHostPermission());
+          } catch {
+            // The tab navigated or closed: the picker went with it.
+          }
+        }
+        respond({ cancelled: tabId !== null });
+        return;
+      }
+      case PICKED_KIND: {
+        // Only from the page a pick was started in, and only once.
+        const from = sender.tab?.id;
+        if (typeof from === "number" && from === pickTab) {
+          pickTab = null;
+          const element = (message as { element?: unknown }).element;
+          if (element && typeof element === "object") {
+            broadcast({ kind: "pointed", tab_id: from, element });
+          }
+        }
+        respond({ noted: true });
+        return;
+      }
+      case PICK_CANCELLED_KIND: {
+        const from = sender.tab?.id;
+        if (typeof from === "number" && from === pickTab) {
+          pickTab = null;
+          broadcast({ kind: "pick_ended", reason: String((message as { reason?: unknown }).reason ?? "") });
+        }
+        respond({ noted: true });
         return;
       }
       case "host_permission_result":

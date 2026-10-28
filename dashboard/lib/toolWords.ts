@@ -112,7 +112,7 @@ const WORDS: Record<string, string> = {
   spawn_agent: "start a helper agent",
 };
 
-// The 14 built-in browser tools, by EXACT name (src/iron_jarvis/browser/
+// The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/
 // tools.py). Never a `browser_` prefix: an agent may create a custom
 // CommandTool under any name the built-ins do not already use
 // (tools/dynamic.py), so `browser_backup` would be a command of its author's
@@ -136,9 +136,10 @@ export const BROWSER_TOOLS: ReadonlySet<string> = new Set([
   "browser_type",
   "browser_press_key",
   "browser_navigate",
+  "browser_fill_form",
 ]);
 
-/** v1.315.0: true only for the 14 BUILT-IN browser tools, by exact name —
+/** v1.315.0: true only for the 15 BUILT-IN browser tools, by exact name —
  *  never a `browser_` prefix and never trimmed or case-folded (`Browser_click`
  *  is not one). The approval card offers "Allow for this tab" only for these:
  *  the daemon grants tabs to the real acting browser tools alone, so the

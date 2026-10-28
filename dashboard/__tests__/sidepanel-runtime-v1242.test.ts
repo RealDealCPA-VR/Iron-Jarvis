@@ -67,6 +67,8 @@ interface Harness {
   emit: (event: string, payload?: Record<string, unknown>) => void;
   /** Tell the panel the status changed, the way `onStatusChange` does. */
   restatus: () => Promise<void>;
+  /** v1.400.9: what the worker answers any other message kind (a pick). */
+  answer?: (message: Message) => unknown;
 }
 
 /** A status frame with every field the panel reads, so no test invents a shape. */
@@ -147,7 +149,8 @@ function mountPanel(over: Record<string, unknown> = {}): Harness {
         harness.sent.push(message);
         if (message["kind"] === "status") return harness.status;
         if (message["kind"] === "panel_action") return { sent: harness.delivered };
-        return {};
+        const answered = harness.answer?.(message);
+        return answered === undefined ? {} : answered;
       },
       onMessage: {
         addListener: (fn: (message: unknown) => void) => {
@@ -907,6 +910,152 @@ if (absent.length) {
         expect(note?.dataset["pending"]).toBe("false");
         expect(note?.textContent).toContain("not sent; this browser is not connected");
       });
+    });
+  });
+
+  /* ------------------------------------------------------------------------ */
+  /*  Point at it (v1.400.9)                                                  */
+  /* ------------------------------------------------------------------------ */
+
+  describe("Point at it: the element the user clicked rides the next Send (v1.400.9)", () => {
+    const PICKED = {
+      role: "button",
+      name: "Apply coupon",
+      tag: "button",
+      text: "Apply coupon",
+      css: "#coupon-apply",
+      unique_name: true,
+      url: "https://shop.example/cart",
+      title: "Your cart",
+    };
+    /** The worker's message, from the worker (no `sender.tab`) unless told otherwise. */
+    const deliver = (message: Record<string, unknown>, sender: Record<string, unknown> = {}) =>
+      (globalThis as unknown as { __ijListener: (m: unknown, s?: unknown) => void }).__ijListener(
+        message,
+        sender,
+      );
+    const sends = (h: Harness) =>
+      h.sent.filter((m) => m["kind"] === "panel_action" && m["action"] === "send");
+
+    async function pointing(): Promise<Harness> {
+      const h = await panelReady({
+        state: "connected",
+        access: "interactive",
+        paired: true,
+        hostPermission: true,
+      });
+      h.answer = (m) => (m["kind"] === "pick_element" ? { started: true, tab_id: 42 } : undefined);
+      return h;
+    }
+
+    it("the button starts a pick through the worker and the panel says it is picking", async () => {
+      const h = await pointing();
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["picking"]).toBe("on"));
+      expect(h.sent.some((m) => m["kind"] === "pick_element")).toBe(true);
+      // A second press while picking stops the pick.
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["kind"] === "pick_cancel")).toBe(true));
+      expect(document.body.dataset["picking"]).toBe("off");
+    });
+
+    it("the picked element shows as a chip, rides the next Send once, and is said on the bubble", async () => {
+      const h = await pointing();
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["picking"]).toBe("on"));
+      deliver({ kind: "pointed", tab_id: 42, element: PICKED });
+      await waitFor(() => expect((el("pointed") as HTMLElement).hidden).toBe(false));
+      expect(document.body.dataset["picking"]).toBe("off");
+      expect(el("pointed-text").textContent).toBe("Pointing at button 'Apply coupon'");
+
+      (el("ask") as HTMLTextAreaElement).value = "what does this do?";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(sends(h)).toHaveLength(1));
+      const params = sends(h)[0]["params"] as Record<string, unknown>;
+      expect(params["text"]).toBe("what does this do?");
+      expect(params["pointed"]).toEqual({ ...PICKED, tab_id: 42 });
+      // The chip clears; the user's bubble keeps what was pointed at.
+      expect((el("pointed") as HTMLElement).hidden).toBe(true);
+      const you = turns().find((t) => t.dataset["who"] === "you");
+      expect(you?.querySelector(".pointed-note")?.textContent).toBe(
+        "Pointing at button 'Apply coupon'",
+      );
+
+      // The NEXT Send carries no pointer.
+      h.emit("done", {});
+      await waitFor(() => expect(document.body.dataset.turn).toBe("idle"));
+      (el("ask") as HTMLTextAreaElement).value = "and now?";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(sends(h)).toHaveLength(2));
+      expect((sends(h)[1]["params"] as Record<string, unknown>)["pointed"]).toBeUndefined();
+    });
+
+    it("the close button forgets the point before it is sent", async () => {
+      const h = await pointing();
+      deliver({ kind: "pointed", tab_id: 42, element: PICKED });
+      await waitFor(() => expect((el("pointed") as HTMLElement).hidden).toBe(false));
+      (el("unpoint") as HTMLButtonElement).click();
+      expect((el("pointed") as HTMLElement).hidden).toBe(true);
+      (el("ask") as HTMLTextAreaElement).value = "hello";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(sends(h)).toHaveLength(1));
+      expect((sends(h)[0]["params"] as Record<string, unknown>)["pointed"]).toBeUndefined();
+    });
+
+    it("a pointed message a page's content script sent is ignored", async () => {
+      await pointing();
+      deliver({ kind: "pointed", tab_id: 42, element: PICKED }, { tab: { id: 42 } });
+      await new Promise((r) => setTimeout(r, 30));
+      expect((el("pointed") as HTMLElement).hidden).toBe(true);
+    });
+
+    it("a pick that cannot start says why, in words", async () => {
+      const h = await pointing();
+      h.answer = (m) =>
+        m["kind"] === "pick_element" ? { started: false, code: "PERMISSION_DENIED" } : undefined;
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("Pointing needs site access in this browser"));
+      expect(document.body.dataset["picking"]).toBe("off");
+    });
+
+    it("a pick a page pop-up refused says so", async () => {
+      const h = await pointing();
+      h.answer = (m) =>
+        m["kind"] === "pick_element" ? { started: false, code: "", reason: "popup" } : undefined;
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("A pop-up on the page is in the way"));
+      expect(document.body.dataset["picking"]).toBe("off");
+    });
+
+    it("Send ends a pick still running, so the page gets its clicks back", async () => {
+      const h = await pointing();
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["picking"]).toBe("on"));
+      (el("ask") as HTMLTextAreaElement).value = "go on";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(h.sent.some((m) => m["kind"] === "pick_cancel")).toBe(true));
+      expect(document.body.dataset["picking"]).toBe("off");
+    });
+
+    it("a Send that never left the browser keeps the element it pointed at", async () => {
+      const h = await pointing();
+      deliver({ kind: "pointed", tab_id: 42, element: PICKED });
+      await waitFor(() => expect((el("pointed") as HTMLElement).hidden).toBe(false));
+      h.delivered = false;
+      (el("ask") as HTMLTextAreaElement).value = "what does this do?";
+      (el("send") as HTMLButtonElement).click();
+      await waitFor(() => expect(transcript()).toContain("did not reach Iron Jarvis"));
+      expect((el("pointed") as HTMLElement).hidden).toBe(false);
+      expect(el("pointed-text").textContent).toBe("Pointing at button 'Apply coupon'");
+    });
+
+    it("an ended pick (Esc, time out) turns the picking state off", async () => {
+      await pointing();
+      (el("point") as HTMLButtonElement).click();
+      await waitFor(() => expect(document.body.dataset["picking"]).toBe("on"));
+      deliver({ kind: "pick_ended", reason: "escape" });
+      await waitFor(() => expect(document.body.dataset["picking"]).toBe("off"));
+      expect((el("pointed") as HTMLElement).hidden).toBe(true);
     });
   });
 }

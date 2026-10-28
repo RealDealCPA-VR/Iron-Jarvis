@@ -2922,7 +2922,9 @@ _BROWSER_ELEMENT_RULES: list[tuple[re.Pattern[str], dict[str, int], dict[str, in
             r"\b(?:this|that|the)\s+(?:\w+\s+){0,2}(?:page|site|tab)\b",
             re.IGNORECASE,
         ),
-        {"browser_type": 8, "browser_press_key": 3},
+        # v1.400.9: a form is several fields, so the one-card batch rides
+        # beside browser_type; both are ask-armed, never granted.
+        {"browser_type": 8, "browser_fill_form": 7, "browser_press_key": 3},
         {"browser_read_page": 7},
     ),
     (
@@ -3216,6 +3218,8 @@ ASK_TIER_TOOLS: frozenset[str] = frozenset(
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        # v1.400.9: a whole form in one call — page-acting, so ask tier.
+        "browser_fill_form",
         # SELF-REPAIR (v1.344.0). `pack_restart` kills and respawns a pack's
         # child process (irreversible — a call that was mid-flight is gone);
         # `provider_rescan` re-detects providers and can change which model

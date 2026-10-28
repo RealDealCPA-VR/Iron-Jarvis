@@ -366,6 +366,94 @@ class PageContext(BaseModel):
         return v[:keep] + PAGE_CONTEXT_CUT_MARKER
 
 
+#: Bounds of :class:`PointedElement` (v1.400.9). Everything here was read off a
+#: page the user does not control, so every field is CUT to its bound — never
+#: refused: a long accessible name is not a malformed request.
+POINTED_SHORT_CHARS = 40
+POINTED_NAME_CHARS = 200
+POINTED_TEXT_CHARS = 300
+POINTED_CSS_CHARS = 300
+
+
+class PointedElement(BaseModel):
+    """The element the user pointed at in the browser sidebar ("Point at it",
+    v1.400.9): they clicked it in the page, the add-on's picker read what a
+    snapshot would read about it (its role, accessible name, tag, the visible
+    text outside any field — never a field's value), and the next message
+    carries it. Injected for THAT turn only, scanned and fenced as untrusted
+    data (``chat_turn._pointed_section``), at the attachments seam of BOTH
+    lanes. Every field is cut to its bound instead of refused."""
+
+    tab_id: int | None = None
+    url: str = ""
+    title: str = ""
+    role: str = ""
+    name: str = ""
+    tag: str = ""
+    input_type: str = ""
+    text: str = ""
+    css: str = ""
+    #: Whether the role and name above match exactly ONE control on the page
+    #: right now — the picker counted. When they do, a ``{"role", "name"}``
+    #: target reaches it and the risk door reads its name; when they do not,
+    #: the css selector (checked unique by the picker) is the way to it.
+    unique_name: bool = False
+
+    @field_validator(
+        "url", "title", "role", "name", "tag", "input_type", "text", "css", mode="before"
+    )
+    @classmethod
+    def _none_is_empty(cls, v: Any) -> Any:
+        return "" if v is None else v
+
+    @field_validator("tab_id", mode="before")
+    @classmethod
+    def _tab_or_none(cls, v: Any) -> Any:
+        if isinstance(v, bool) or not isinstance(v, int):
+            return None
+        return v
+
+    @field_validator("role", "tag", "input_type")
+    @classmethod
+    def _cut_short(cls, v: str) -> str:
+        return v[:POINTED_SHORT_CHARS]
+
+    @field_validator("name", "title")
+    @classmethod
+    def _cut_name(cls, v: str) -> str:
+        return v[:POINTED_NAME_CHARS]
+
+    @field_validator("text")
+    @classmethod
+    def _cut_text(cls, v: str) -> str:
+        return v[:POINTED_TEXT_CHARS]
+
+    @field_validator("url")
+    @classmethod
+    def _cut_long(cls, v: str) -> str:
+        return v[:POINTED_CSS_CHARS]
+
+    @field_validator("css")
+    @classmethod
+    def _whole_or_nothing(cls, v: str) -> str:
+        # A selector is exact or it is nothing: a cut one can match a DIFFERENT
+        # element (``div > a:nth-of-type(3)`` cut to ``div > a`` matches every
+        # link). The picker never sends a longer one; a body that does gets no
+        # selector rather than a wrong one.
+        return v if len(v) <= POINTED_CSS_CHARS else ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _cut_name_is_not_unique(cls, data: Any) -> Any:
+        # A name past its bound is cut, and a cut name matches no control — so
+        # the block must not tell the model to target by it.
+        if isinstance(data, dict):
+            name = data.get("name")
+            if isinstance(name, str) and len(name) > POINTED_NAME_CHARS:
+                return {**data, "unique_name": False}
+        return data
+
+
 class ThreadQueueBody(BaseModel):
     """``PUT /chat/threads/{id}/queue`` (v1.336.0): the messages waiting for
     the chat's running reply, as the page holds them (at most 3)."""
@@ -502,6 +590,11 @@ class ChatBody(BaseModel):
     #: attachments seam, scanned and fenced as untrusted data; empty or
     #: whitespace text injects nothing. No receipt field.
     page_context: PageContext | None = None
+    #: v1.400.9: the element the user pointed at in the browser sidebar
+    #: ("Point at it"). BOTH lanes inject it for THIS turn only, at the
+    #: attachments seam (the page context's helper), scanned and fenced as
+    #: untrusted data. Only the sidebar sends it today. No receipt field.
+    pointed: PointedElement | None = None
     #: v1.326.0: saved chats the user pointed to with "@" (thread ids). BOTH
     #: lanes read at most 3 of them (``chat_refs.read_thread_refs``) at the
     #: attachments seam as fenced reference material; extras, unknown ids and

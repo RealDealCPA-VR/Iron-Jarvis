@@ -756,6 +756,28 @@ class ToolRegistry:
                     from ..mcp.tools import take_asking_about
 
                     take_asking_about()
+        # A TOOL THAT ACTS THROUGH OTHER TOOLS (v1.400.9, `browser_fill_form`):
+        # its steps call those tools' `execute` directly, so their own Deny
+        # (the global table, or this run's overrides — an agent's `deny_tools`)
+        # would never be read. Any of them at Deny refuses the whole call,
+        # through the ordinary denial path below. A tool without the
+        # attribute, and an engine double without `mode_for`, change nothing.
+        _through = tuple(getattr(tool, "acts_through", ()) or ())
+        _mode_for = getattr(perms, "mode_for", None)
+        if decision.allowed and _through and callable(_mode_for):
+            for _sub in _through:
+                try:
+                    _denied = _mode_for(_sub, agent_overrides) is PermissionMode.DENY
+                except Exception:  # noqa: BLE001 — an unreadable mode is not a deny
+                    _denied = False
+                if _denied:
+                    decision = PermissionDecision(
+                        False,
+                        PermissionMode.DENY,
+                        f"`{name}` does its work through `{_sub}`, which is set "
+                        "to Deny here, so nothing was done",
+                    )
+                    break
         grant_id = str(getattr(decision, "grant_id", "") or "")
         reversibility = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
         rev_value = reversibility.value if isinstance(reversibility, Reversibility) else str(reversibility)

@@ -323,7 +323,7 @@ function flatten(value: string | null | undefined): string {
  * Depth-bounded by `MAX_AX_DEPTH` like the walk itself: this recurses, and a name is
  * not worth a stack overflow on a pathological page.
  */
-function textOutsideFields(el: Element): string {
+export function textOutsideFields(el: Element): string {
   if (stopsTheWalk(el)) {
     return "";
   }

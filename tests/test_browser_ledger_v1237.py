@@ -603,13 +603,14 @@ async def test_eight_calls_write_eight_rows_and_no_more(platform, tmp_path):
     is invisible per-test and obvious here."""
     ctx = _ctx(platform, tmp_path)
     acting = [n for n, r in BASE_RISK.items() if r is not RiskClass.READ]
-    assert len(acting) == 8
+    # Ship 3's eight, plus v1.400.9's form-in-one-call.
+    assert len(acting) == 9
 
     for name in acting:
         await _invoke(platform, _ActingStandIn(name), {"target": TARGET}, ctx)
 
     rows = _rows(platform)
-    assert len(rows) == 8
+    assert len(rows) == 9
     assert sorted(r.tool for r in rows) == sorted(acting)
 
 

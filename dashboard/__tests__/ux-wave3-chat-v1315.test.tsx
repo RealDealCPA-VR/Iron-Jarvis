@@ -830,7 +830,8 @@ describe("the tab answer is for the BUILT-IN browser tools only (carry-approval-
   });
 
   it("CONTROL: every built-in browser tool keeps the tab answer and its note", () => {
-    expect(PY_BROWSER_TOOLS).toHaveLength(14);
+    // v1.400.9: fifteen — browser_fill_form joined.
+    expect(PY_BROWSER_TOOLS).toHaveLength(15);
     for (const tool of PY_BROWSER_TOOLS) {
       render(<ApprovalCard approval={{ id: `apr_${tool}`, callId: "c1", tool, args: {} }} />);
       expect(screen.getByTestId("approval-tab").textContent).toContain("Allow for this tab");
@@ -839,7 +840,7 @@ describe("the tab answer is for the BUILT-IN browser tools only (carry-approval-
     }
   });
 
-  it("lib/toolWords.ts exports isBuiltinBrowserTool: exactly the 14 names in browser/tools.py", async () => {
+  it("lib/toolWords.ts exports isBuiltinBrowserTool: exactly the 15 names in browser/tools.py", async () => {
     const spec = ["@/lib", "toolWords"].join("/");
     const mod = (await import(/* @vite-ignore */ spec)) as { isBuiltinBrowserTool?: (t: string) => boolean };
     expect(typeof mod.isBuiltinBrowserTool).toBe("function");

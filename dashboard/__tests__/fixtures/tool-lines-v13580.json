@@ -52,6 +52,10 @@
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"
     },
+    "browser_fill_form": {
+      "ok": "used your browser",
+      "failed": "tried a browser step and it failed"
+    },
     "browser_get_active_tab": {
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"

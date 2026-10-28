@@ -235,8 +235,9 @@ describe("the kinds stay EXACT: never a prefix, never a guess", () => {
     expect(appToolParts("mcp__gmail__a\nb")).toBeNull();
   });
 
-  it("the browser kind is the 14 built-ins by exact name (the approval card's list)", () => {
-    expect(BROWSER_TOOLS.size).toBe(14);
+  // v1.400.9: fifteen — browser_fill_form (one card for a whole form) joined.
+  it("the browser kind is the 15 built-ins by exact name (the approval card's list)", () => {
+    expect(BROWSER_TOOLS.size).toBe(15);
     for (const t of BROWSER_TOOLS) {
       expect(toolKind(t), t).toBe("browser");
       expect(isBuiltinBrowserTool(t)).toBe(true);

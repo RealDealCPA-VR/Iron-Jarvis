@@ -288,7 +288,11 @@ def test_the_panel_has_a_model_select_wired_to_the_daemon_and_to_send():
     ts = _src(PANEL_TS)
     assert "case PANEL_EVENT_MODELS:" in ts and "paintModels(payload)" in ts
     assert 'STORAGE_MODEL_KEY = "ij.panel.model"' in ts
-    assert re.search(r'post\(PANEL_ACTION_SEND, \{ text, \.\.\.\(pick \? pick : \{\}\) \}\)', ts), (
+    # v1.400.9: the Send's params are built first (the pointed element rides
+    # them too), so the pin reads the params object, not the call's literal.
+    assert re.search(r'const send: Record<string, unknown> = \{ text, \.\.\.\(pick \? pick : \{\}\) \}', ts) and (
+        "post(PANEL_ACTION_SEND, send)" in ts
+    ), (
         "the pick does not ride the Send"
     )
     assert "option.disabled = true" in ts, "an unavailable model must be greyed, not hidden"

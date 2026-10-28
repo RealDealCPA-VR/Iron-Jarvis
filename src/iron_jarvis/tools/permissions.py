@@ -108,6 +108,8 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
         "browser_type",
         "browser_press_key",
         "browser_navigate",
+        # v1.400.9: a whole form in one call, through the three above.
+        "browser_fill_form",
     }
 )
 

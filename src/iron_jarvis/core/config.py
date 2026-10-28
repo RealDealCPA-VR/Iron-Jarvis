@@ -396,6 +396,9 @@ def default_permissions() -> dict[str, str]:
         "browser_type": "ask",
         "browser_press_key": "ask",
         "browser_navigate": "ask",
+        # v1.400.9: a form in one call — ask, on the deny floor, like the four
+        # tools its steps run through.
+        "browser_fill_form": "ask",
     }
 
 

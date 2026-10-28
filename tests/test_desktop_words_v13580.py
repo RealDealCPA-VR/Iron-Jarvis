@@ -178,7 +178,8 @@ def test_the_toast_table_is_the_approval_cards_table():
     assert not differ, f"the toast and the card describe one ask two ways: {differ}"
     extra = set(desk) - set(card)
     assert extra <= set(DESKTOP_AHEAD), f"desktop-only words with no reason: {sorted(extra - set(DESKTOP_AHEAD))}"
-    assert _desktop_browser_tools() == _ts_browser_tools() and len(_ts_browser_tools()) == 14
+    # v1.400.9: fifteen — browser_fill_form (one card for a whole form) joined.
+    assert _desktop_browser_tools() == _ts_browser_tools() and len(_ts_browser_tools()) == 15
 
 
 def test_the_cross_check_fixture_covers_every_kind_of_tool():

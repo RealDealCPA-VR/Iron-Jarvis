@@ -138,6 +138,31 @@ the turn ends. No tool settings, no pairing control, no access switch —
 those are governed in Jarvis. Jarvis is the product; the panel is a window onto
 it.
 
+One card for a whole form (v1.400.9): Jarvis fills a form with one
+`browser_fill_form` call, so the panel shows one card listing every step ("type
+18 characters into 'Email'" — never the characters). Allow runs that list in the
+tab it started in and stops at the first step that fails or leaves the page;
+a payment or password field, a "delete"-shaped control or a flagged page still
+stops at its own step for its own card. Steps run exactly as sent: an
+`element_id` from an earlier read that a previous step made stale stops the list
+(role+name targets are found again at every step).
+
+Point at it (v1.400.9): the crosshair beside the model icon starts a pick in
+the tab you are looking at (`content/picker.ts`). While you point, a clear layer
+covers the page, so your click reaches no page element — not even an embedded
+frame — and only a real click picks (a click a page script fakes does not).
+Only TRUSTED events are swallowed, so the add-on's own clicks and typing still
+reach the page during a pick, and the content script ends a pick before it
+acts. A pick does not start over the browser's top layer (a modal dialog, a
+popover, full screen), which no page element can cover; the panel says a pop-up
+is in the way. **Esc** cancels; a minute with no click cancels; Send ends it;
+the worker ends it when its tab loads another page or closes. What the pick reads is what a
+snapshot reads: role, accessible name, tag, a field's type, the visible text
+outside any field, a CSS selector checked to match only that element, and the
+page address without its query or fragment — never a field's value. The chip
+above the box says what you pointed at, the next Send carries it (once), and
+the **×** forgets it.
+
 ## Known limits, named rather than discovered later
 
 - **The service worker is kept awake by the daemon.** Manifest V3 evicts an
@@ -156,7 +181,11 @@ it.
   older one is told why.
 - **Only the top document of a tab is read.** Nothing inside an `<iframe>` is in
   the snapshot, this site's or another's. An open shadow root is walked; a closed
-  one cannot even be counted.
+  one cannot even be counted. Pointing works the same way: a click over an
+  embedded frame points at the frame itself, never at what is inside it.
+- **A pick in progress lives in the worker's memory.** If the browser unloads the
+  worker in the middle of a pick (it does not while Iron Jarvis is connected —
+  the heartbeat above keeps it), the click is dropped; press the crosshair again.
 
 ---
 

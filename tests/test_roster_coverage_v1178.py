@@ -182,6 +182,8 @@ _OFF_ROSTER_BY_DESIGN = {
     # 3am has nobody to ask, which is exactly why none of these is on a roster.
     "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
     "browser_click", "browser_type", "browser_press_key", "browser_navigate",
+    # v1.400.9: a whole form in one call — the same tier, the same reason.
+    "browser_fill_form",
     # SETTINGS FROM CHAT (calm UI redesign S3/S4) — the same reasoning as the
     # browser: they change the user's own configuration and ask for their
     # credentials, so they belong to the surface where the user is present to
@@ -248,6 +250,8 @@ _OFF_ROSTER_BY_DESIGN = {
 _BROWSER_ACTING = frozenset({
     "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
     "browser_click", "browser_type", "browser_press_key", "browser_navigate",
+    # v1.400.9: a whole form in one call.
+    "browser_fill_form",
 })
 _OFF_ROSTER_OPEN = {
     # Documents/media the acceptance job plausibly needs, on no definition:

@@ -91,6 +91,7 @@ import logging
 
 import asyncio
 import hashlib
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -1983,8 +1984,395 @@ class BrowserNavigateTool(_ActingTool):
         )
 
 
+#: The most steps one ``browser_fill_form`` call may carry (v1.400.9). A long
+#: application form is a dozen fields and a few boxes; twenty covers it while
+#: keeping the card the user answers short enough to read in full.
+MAX_FORM_STEPS = 20
+
+#: A form step's ``action`` -> the tool that runs it. ONE path per kind of step:
+#: each step goes through that tool's own ``execute`` — the access gate, the
+#: target resolution, the ONE risk door, the approval gate, the send and the
+#: ledger context — so a step can never be judged more leniently than the same
+#: action made on its own.
+FORM_STEP_TOOLS: dict[str, str] = {
+    "type": "browser_type",
+    "click": "browser_click",
+    "press_key": "browser_press_key",
+}
+
+#: The keys a step may carry, per action. Anything else is refused by name
+#: before a single step runs, so a typo ("txt") never becomes an empty field.
+_FORM_STEP_KEYS: dict[str, frozenset[str]] = {
+    "type": frozenset({"action", "target", "text", "clear"}),
+    "click": frozenset({"action", "target"}),
+    "press_key": frozenset({"action", "target", "key"}),
+}
+
+
+def form_steps_problem(steps: Any) -> str:
+    """Why *steps* cannot run, in one sentence, or ``""`` when they can.
+
+    Checked BEFORE anything reaches the page: a list that is wrong at step
+    five must not have typed four fields first. The words name the step, so
+    the model can correct exactly that one.
+    """
+    if not isinstance(steps, list) or not steps:
+        return 'steps must be a list of 1 to 20 steps, each like {"action": "type", "target": {...}, "text": "..."}.'
+    if len(steps) > MAX_FORM_STEPS:
+        return f"steps holds {len(steps)} steps; one call takes at most {MAX_FORM_STEPS}. Send the rest in a second call."
+    for n, step in enumerate(steps, 1):
+        if not isinstance(step, Mapping):
+            return f"step {n} is not an object."
+        action = str(step.get("action") or "")
+        if action not in FORM_STEP_TOOLS:
+            return f'step {n} has action {action!r}; use "type", "click" or "press_key".'
+        extra = sorted(str(k) for k in step.keys() if str(k) not in _FORM_STEP_KEYS[action])
+        if extra:
+            return f"step {n} ({action}) has keys it does not take: {', '.join(extra)}."
+        target = step.get("target")
+        if action != "press_key" and not isinstance(target, Mapping):
+            return f"step {n} ({action}) needs a target, addressed like browser_click."
+        if target is not None and not isinstance(target, Mapping):
+            return f"step {n} has a target that is not an object."
+        if action == "type" and not isinstance(step.get("text"), str):
+            return f"step {n} (type) needs the text to type."
+        if action == "press_key" and not str(step.get("key") or "").strip():
+            return f'step {n} (press_key) needs a key, for example "Tab".'
+    return ""
+
+
+class BrowserFillFormTool(_BrowserTool):
+    """Fill in a form in ONE call: one card, many fields (v1.400.9).
+
+    The user's complaint this answers: a twelve-field form was twelve approval
+    cards, or the Auto-allow switch for every page. A batch is the middle: the
+    card lists every step, one Allow covers exactly that list (the chat lane's
+    ordinary per-call card — this tool is PAGE_ACTION, ask tier, on the deny
+    floor), and nothing in the list is judged more leniently than the same
+    action made alone.
+
+    That last part is the design, not a hope. ``execute`` does not reach the
+    browser itself: each step is handed to the REAL click, type or press_key
+    tool's own ``execute`` — the one acting path, final on ``_ActingTool`` — so
+    every step passes the access gate, its own target resolution, the ONE risk
+    door and its approval gate. A payment field, a password field, the
+    destructive vocabulary, a flagged page or a target the daemon cannot read
+    still stops THAT step for its own card (the sidebar answers it in place,
+    v1.276.0), exactly as it would alone.
+
+    Four rules around the loop:
+
+    * **one tab.** The tab is resolved ONCE, before the first step, and every
+      step names it. A user who switches tabs while the form fills must not
+      have the remaining fields typed into whatever they switched to.
+    * **each step runs exactly as the model sent it.** An ``element_id`` is NOT
+      rewritten into a role and name: a step that changed the page (a
+      "Continue" that swaps in the next part of a wizard) retires the ids from
+      the read, and a rewritten step would then land on whatever NEW control
+      happens to share the old one's name — a step the same call made alone
+      refuses as stale (review fix, v1.400.9). So a stale id stops the list
+      honestly, and the answer says how to go on.
+    * **stop at the first step that does not finish** — a refusal, a card
+      the user declined or that went unanswered, a target that no longer
+      resolves — and stop when a step LEAVES the page (a submit that
+      navigates): the rest of the list was written for a page that is gone.
+      The answer says which steps ran and which did not, in order, so the
+      model never re-types a field that was already filled.
+    * **a denied step tool denies the list.** ``acts_through`` names the three
+      step tools; the registry refuses the batch when any of them resolves to
+      Deny for THIS run (the global table, an agent's own ``deny_tools``),
+      because the steps never pass ``registry.invoke`` themselves.
+      ``_denied_step`` repeats the global check for a direct caller.
+
+    The typed text is redacted from the arguments exactly as ``browser_type``
+    redacts its own (``redact_args``), unconditionally; the card says how many
+    characters will be typed into which field, never the characters.
+    """
+
+    name = "browser_fill_form"
+    description = (
+        "Fill in a form on a page in the user's own browser in ONE call: up to 20 "
+        'steps, run in order in one tab. Each step is {"action": "type", '
+        '"target": {...}, "text": "...", "clear": true}, {"action": "click", '
+        '"target": {...}} (a checkbox, a radio button, a button) or {"action": '
+        '"press_key", "key": "Enter", "target": {...}} (a key with no target '
+        "stops for the user's approval). The user approves the whole list at once "
+        "instead of one card per field, so use this whenever you would make two "
+        "or more browser_type/browser_click calls on the same form. Target each "
+        'step like browser_click; {"role": "textbox", "name": "Email"} is found '
+        "again at every step, while an element_id from browser_read_page stops "
+        "the list if an earlier step changed the page. The steps stop at the "
+        "first one that fails or leaves the page (a submit that navigates), and "
+        "the answer says which ran. Payments, passwords, deletions and flagged "
+        "pages still stop for the user's approval at that step. NEVER type a "
+        "password or card number. Call browser_read_page first."
+    )
+    permission_key = "browser_fill_form"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "tab_id": {
+                "type": "integer",
+                "description": "Which tab. Omit for the tab the user is looking at.",
+            },
+            "steps": {
+                "type": "array",
+                "description": (
+                    "1 to 20 steps, in order. Each is an object with action "
+                    '"type" (target, text, optional clear), "click" (target) or '
+                    '"press_key" (key, optional target).'
+                ),
+                "items": {"type": "object"},
+            },
+        },
+        "required": ["steps"],
+    }
+    min_access = "interactive"
+    risk_class = RiskClass.PAGE_ACTION
+    reversibility = Reversibility.IRREVERSIBLE
+    #: False for the reason every acting tool sets it False: the steps have
+    #: already happened, and an answer withheld as "suspected injection" would
+    #: leave the model blind to what it just did to the user's form.
+    returns_untrusted_content = False
+    #: The tools each step really runs as. ``registry.invoke`` refuses this
+    #: tool when any of them is set to Deny for the run (see the class
+    #: docstring): Deny on ``browser_type`` must stop typing through a form.
+    acts_through: tuple[str, ...] = ("browser_type", "browser_click", "browser_press_key")
+
+    def __init__(self, browser: Any, step_tools: Mapping[str, Tool] | None = None) -> None:
+        super().__init__(browser)
+        tools = dict(step_tools or {})
+        self._step_tools: dict[str, Tool] = {
+            "type": tools.get("type") or BrowserTypeTool(browser),
+            "click": tools.get("click") or BrowserClickTool(browser),
+            "press_key": tools.get("press_key") or BrowserPressKeyTool(browser),
+        }
+
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Every typed text replaced, UNCONDITIONALLY — ``browser_type``'s rule.
+
+        The arguments are stored at rest (the ledger's ``args_json``, session
+        export, backups) and ride the approval frame. What survives is the
+        LENGTH of each text (``chars``), which is what lets the card say "type
+        18 characters into 'Email'" without saying the 18 characters.
+
+        A call the registry will REFUSE is still written down (its ``_record``
+        stores the redacted args), so a malformed list is redacted too (review
+        fix): ``steps`` that is not a list — a JSON string a local model sent,
+        one step object — is replaced whole, a step that is not an object is
+        replaced, and a step object keeps only the keys a step may carry, with
+        its text replaced.
+        """
+        if not isinstance(args, Mapping):
+            return {"steps": _REDACTED}
+        red = {k: v for k, v in args.items() if k in ("tab_id", "steps")}
+        steps = args.get("steps")
+        if "steps" not in args:
+            return red
+        if not isinstance(steps, list):
+            red["steps"] = _REDACTED
+            return red
+        out: list[Any] = []
+        for step in steps:
+            if not isinstance(step, Mapping):
+                out.append(_REDACTED)
+                continue
+            clean: dict[str, Any] = {}
+            for key, value in step.items():
+                if key in ("action", "target", "clear", "key"):
+                    clean[key] = value
+                elif key == "text":
+                    clean["text"] = _REDACTED
+                    clean["chars"] = len(value) if isinstance(value, str) else 0
+                else:
+                    clean[key] = _REDACTED
+            out.append(clean)
+        red["steps"] = out
+        return red
+
+    def _denied_step(self, ctx: ToolContext, steps: list[Any]) -> str:
+        """The first step whose tool the user's permission table DENIES, as words."""
+        table = getattr(getattr(ctx, "config", None), "permissions", None)
+        if not isinstance(table, Mapping):
+            return ""
+        for n, step in enumerate(steps, 1):
+            tool = FORM_STEP_TOOLS.get(str(step.get("action") or ""), "")
+            if tool and str(table.get(tool) or "").strip().lower() == "deny":
+                return (
+                    f"step {n} uses {tool}, which you set to Deny in Iron Jarvis's "
+                    "permissions. Nothing was done to the page."
+                )
+        return ""
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        refusal = self._refuse_if_unavailable()
+        if refusal:
+            return refusal
+        steps = args.get("steps")
+        problem = form_steps_problem(steps)
+        if problem:
+            text = f"Nothing was done to the page: {problem}"
+            return ToolResult(ok=False, error=text, output=text, data={"status": "invalid"})
+        denied = self._denied_step(ctx, steps)
+        if denied:
+            return ToolResult(ok=False, error=denied, output=denied, data={"status": "denied"})
+        # ONE TAB, resolved once (see the class docstring).
+        try:
+            row = await self.browser.resolve_page_tab(args.get("tab_id"))
+        except BrowserError as exc:
+            return self._refusal_from(exc)
+        tab_id = row.get("id")
+
+        lines: list[str] = []
+        rows: list[dict[str, Any]] = []
+        stopped = ""
+        navigated = False
+        invalidated = False
+        for n, step in enumerate(steps, 1):
+            action = str(step.get("action") or "")
+            step_args: dict[str, Any] = {"tab_id": tab_id}
+            for key in ("target", "text", "clear", "key"):
+                if key in step:
+                    step_args[key] = step[key]
+            result = await self._step_tools[action].execute(step_args, ctx)
+            data = result.data if isinstance(result.data, Mapping) else {}
+            status = "done" if result.ok else (
+                "waiting" if data.get("status") == "pending" else "refused"
+            )
+            rows.append(
+                {
+                    "n": n,
+                    "action": action,
+                    "ok": bool(result.ok),
+                    "status": status,
+                    "target": dict(data.get("target") or {}) if isinstance(data.get("target"), Mapping) else {},
+                    "risk": dict(data.get("risk") or {}) if isinstance(data.get("risk"), Mapping) else {},
+                }
+            )
+            prefix = f"{n}. " if result.ok else f"{n}. Not done: "
+            said = " ".join(str(result.output or result.error or "").split())
+            if status == "waiting":
+                said = _batch_waiting_words(said)
+            lines.append(prefix + said)
+            invalidated = invalidated or bool(data.get("snapshot_invalidated"))
+            if not result.ok:
+                stopped = (
+                    f"step {n} is waiting for the user's approval"
+                    if status == "waiting"
+                    else f"step {n} could not be done"
+                )
+                break
+            if data.get("navigated") and n < len(steps):
+                navigated = True
+                stopped = (
+                    f"step {n} took the page to "
+                    f"{_fence_label(str(data.get('url') or '')) or 'another page'}, "
+                    "and the rest of the list was written for the page that was there"
+                )
+                break
+            navigated = navigated or bool(data.get("navigated"))
+
+        done = sum(1 for r in rows if r["ok"])
+        total = len(steps)
+        left = [
+            f"{n}. {describe_form_step(steps[n - 1])}"
+            for n in range(len(rows) + 1, total + 1)
+        ]
+        if stopped:
+            head = f"Stopped after {done} of {total} steps in tab {tab_id}: {stopped}."
+        else:
+            head = f"Filled the form in tab {tab_id}: all {total} steps done."
+        out = [head, *lines]
+        if left:
+            out.append("Not sent to the page: " + "; ".join(left) + ".")
+        if stopped:
+            out.append(
+                "The steps marked done are already on the page; when you go on, "
+                "send only the steps that were not done."
+            )
+        if invalidated and not navigated:
+            out.append(
+                "The page changed while it was filled, so element ids you hold are "
+                "out of date - call browser_read_page before acting again."
+            )
+        text = "\n".join(out)
+        return ToolResult(
+            ok=not stopped,
+            output=text,
+            error="" if not stopped else text,
+            data={
+                "tab_id": tab_id,
+                "total": total,
+                "done": done,
+                "steps": rows,
+                "stopped": stopped,
+                "navigated": navigated,
+                "snapshot_invalidated": invalidated,
+            },
+        )
+
+
+#: The marker every redacted value reads as (``browser_type``'s own word).
+_REDACTED = "***REDACTED***"
+
+
+def _batch_waiting_words(said: str) -> str:
+    """A step tool's "approval required" answer, reworded for a list.
+
+    Alone, the step tool tells the model to "make the identical call again"
+    once the user approves. Inside a list that would mean re-sending every
+    step — and the steps above it already ran (a checkbox clicked twice is a
+    checkbox turned back off). So that sentence and the approval id are cut,
+    and the batch says what to send instead.
+    """
+    text = re.sub(r"\s*Ask the user to approve it in Iron Jarvis,[^.]*\.", "", said)
+    text = re.sub(r"\s*Pending approval id=\S+", "", text).strip()
+    if text and not text.endswith("."):
+        text += "."
+    return (
+        f"{text} Once the user approves it, send this step and the ones after it "
+        "again in one call - not the steps above, which are already done."
+    ).strip()
+
+
+def describe_form_step(step: Any) -> str:
+    """One form step as the user would say it: "type 18 characters into 'Email'".
+
+    Works on the REDACTED arguments (the card's) and on the real ones (the
+    answer's "not sent" list) alike: neither ever repeats typed text — the
+    redacted form carries ``chars``, the real one its length.
+    """
+    s = step if isinstance(step, Mapping) else {}
+    action = str(s.get("action") or "")
+    t = s.get("target") if isinstance(s.get("target"), Mapping) else {}
+    label = " ".join(
+        str(
+            t.get("name")
+            or t.get("css")
+            or (f"element {t['element_id']}" if t.get("element_id") not in (None, "") else "")
+            or ""
+        ).split()
+    )[:60]
+    where = f"'{label}'" if label else ""
+    if action == "type":
+        text = s.get("text")
+        count = s.get("chars")
+        if not isinstance(count, int) or isinstance(count, bool):
+            count = len(text) if isinstance(text, str) and text != "***REDACTED***" else None
+        what = f"type {count} character{'' if count == 1 else 's'}" if isinstance(count, int) else "type some text"
+        clear = " (clearing it first)" if s.get("clear") else ""
+        return f"{what} into {where}{clear}" if where else f"{what}{clear}"
+    if action == "click":
+        return f"click {where}" if where else "click on the page"
+    if action == "press_key":
+        key = " ".join(str(s.get("key") or "").split())[:30]
+        on = f" on {where}" if where else ""
+        return f"press {key}{on}" if key else f"press a key{on}"
+    return "do a step"
+
+
 def browser_tools(runtime: Any) -> list[Tool]:
-    """Build all fourteen Browser tools bound to a ``BrowserRuntime`` (D11).
+    """Build all fifteen Browser tools bound to a ``BrowserRuntime`` (D11).
 
     Six READ, four LOCAL_UI, four PAGE_ACTION — the whole of D11's table, in its
     order. Registered on the platform beside the computer-use tools.
@@ -2014,4 +2402,7 @@ def browser_tools(runtime: Any) -> list[Tool]:
         BrowserTypeTool(runtime),
         BrowserPressKeyTool(runtime),
         BrowserNavigateTool(runtime),
+        # v1.400.9: a whole form in one call — every step through the three
+        # tools above, so it adds no path to the page of its own.
+        BrowserFillFormTool(runtime),
     ]

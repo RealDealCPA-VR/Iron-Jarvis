@@ -183,6 +183,26 @@ function candidates(): Element[] {
 }
 
 /**
+ * How many controls a `{"role", "name"}` target would match right now (v1.400.9).
+ *
+ * The "Point at it" picker asks this to decide whether to tell the model to
+ * target a pointed element by role and name. It is the SAME match
+ * `resolveTarget` makes — these candidates, `roleFor`, `nameOf`, case-folded —
+ * so "unique" here means the role target the model sends next resolves to the
+ * element the user pointed at, and not to its twin.
+ */
+export function countRoleName(role: string, name: string): number {
+  const wantedRole = role.trim().toLowerCase();
+  const wantedName = name.trim().toLowerCase();
+  if (!wantedRole || !wantedName) {
+    return 0;
+  }
+  return candidates().filter(
+    (el) => roleFor(el).toLowerCase() === wantedRole && nameOf(el).toLowerCase() === wantedName,
+  ).length;
+}
+
+/**
  * Pick one element out of `matches`, or refuse naming the ambiguity.
  *
  * Visible candidates win over hidden ones, because a page routinely keeps an

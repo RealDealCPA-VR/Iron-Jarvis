@@ -34,7 +34,15 @@ import {
 } from "../protocol";
 import { BridgeError } from "../bridge/errors";
 import { click, pressKey, scroll, typeText } from "./actions";
-import { isPageRequest, type PageFailure, type PageReply, type PageRequest } from "./channel";
+import {
+  isPageRequest,
+  PICK_CANCEL_OP,
+  PICK_OP,
+  type PageFailure,
+  type PageReply,
+  type PageRequest,
+} from "./channel";
+import { cancelPick, startPick } from "./picker";
 import { registry } from "./elements";
 import { getElements, readPage } from "./snapshot";
 
@@ -42,6 +50,14 @@ import { getElements, readPage } from "./snapshot";
 const INSTALL_FLAG = "__ironJarvisPageReader";
 
 type Installable = Record<string, unknown>;
+
+/** The page operations that change the page (v1.400.9: each ends a pick). */
+const ACTING_OPS: ReadonlySet<string> = new Set([
+  METHOD_CLICK,
+  METHOD_TYPE_TEXT,
+  METHOD_PRESS_KEY,
+  METHOD_SCROLL,
+]);
 
 /** Run one page operation, or throw a `BridgeError` a model can act on. */
 function handle(request: PageRequest): Record<string, unknown> {
@@ -57,6 +73,14 @@ function handle(request: PageRequest): Record<string, unknown> {
   // can see everything this add-on will do inside a page. Every one of them is
   // SYNCHRONOUS — see the listener below for why that is load-bearing rather than
   // stylistic.
+  //
+  // v1.400.9: Jarvis acting on the page ends a pick the user left running. The
+  // picker ignores events it did not get from a person, so an action would work
+  // anyway — this keeps the user's crosshair from lingering over a page that is
+  // being changed under it, and is the second lock on that rule.
+  if (ACTING_OPS.has(request.op)) {
+    cancelPick();
+  }
   if (request.op === METHOD_CLICK) {
     return { ...click(params) };
   }
@@ -68,6 +92,15 @@ function handle(request: PageRequest): Record<string, unknown> {
   }
   if (request.op === METHOD_SCROLL) {
     return { ...scroll(params) };
+  }
+  // v1.400.9: "Point at it". Starting answers at once (synchronous, like
+  // everything here); the element the user clicks is sent on its own message
+  // when they click it (picker.ts).
+  if (request.op === PICK_OP) {
+    return { ...startPick() };
+  }
+  if (request.op === PICK_CANCEL_OP) {
+    return { ...cancelPick() };
   }
   // Anything else. An honest "not in this version, and here is the name" beats a
   // silent no-op: a daemon built ahead of the add-on learns which half is missing
