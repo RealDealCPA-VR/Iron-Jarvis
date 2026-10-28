@@ -57,7 +57,6 @@ OFFERS = [
     "I can also write a migration script if you'd like.",
     "Happy to add the integration tests too if you want.",
     "Want me to run the full test suite?",
-    "Would you like me to commit these changes?",
     "Next, shall I add pagination?",
     "Shall I go ahead, or would you rather review the diff first?",
     "Should I proceed with the remaining endpoints?",
@@ -68,7 +67,6 @@ OFFERS = [
     "- Want me to also handle the Windows paths?",
     "Ready for me to apply the patch?",
     "Say the word and I'll add the caching layer.",
-    "Shall we ship it?",
     "I fixed the bug in parser.py and the tests pass.\n\nWant me to add a regression test?",
     "Should I also update the config schema?",
     "Would you like me to proceed? \U0001F642",
@@ -77,6 +75,53 @@ OFFERS = [
     "Done!\nWant me to also add tests?",
     "I'd be happy to add the retry logic too if that's helpful.",
     "The fix is in.\r\n\r\nShould I also apply it to the v2 branch?",
+    # review (v1.402.0): common phrasings the first cut missed
+    "Would it help if I added a regression test?",
+    "Let me know and I'll add the tests.",
+    "Should I add tests as well?",
+    "Should I write a migration for the new column?",
+    "Should I fix the other two call sites as well?",
+    "Need me to add type hints?",
+    "Let me know if I should add a --verbose flag.",
+    "Next, I could add pagination to the list endpoint.",
+    "Happy to add tests for this too.",
+    # work whose words merely look like an outward action
+    "Should I update the release notes?",
+    "Want me to add a POST endpoint for it?",
+    "Want me to send a test request to the dev server?",
+    "Want me to remove the unused imports?",
+]
+
+#: Review (v1.402.0): an offer whose action is the USER'S decision — it reaches
+#: other people, money or the shared history, or cannot be taken back. The
+#: reply keeps its question (the git guard asks before every commit and push
+#: for the same reason), so these are NOT offers the nudge acts on.
+USER_OWNED = [
+    "Let me know if you'd like me to send this to the client.",
+    "Would you like me to email the summary to Dana?",
+    "Want me to post this to the team's Slack channel?",
+    "Shall I publish the post?",
+    "Want me to share it with the team?",
+    "Would you like me to commit these changes?",
+    "Want me to push it?",
+    "Say the word and I'll push the branch.",
+    "Should I go ahead and merge the PR?",
+    "Should I merge this into main?",
+    "Want me to open a pull request?",
+    "Should I deploy it?",
+    "Shall we ship it?",
+    "Want me to release v2?",
+    "Shall I submit the form?",
+    "Would you like me to pay the invoice?",
+    "Should I buy the domain?",
+    "Shall I delete the old files?",
+    "Is it okay if I delete the cache folder?",
+    "Want me to remove the old migration files?",
+    "Want me to drop the users table?",
+    "Should I proceed with sending the invoices?",
+    "I can send it to the team if you'd like.",
+    "Should I run the migration against the production database?",
+    "Would you like me to send it, or keep it as a draft?",
 ]
 
 NOT_OFFERS = [
@@ -122,6 +167,14 @@ NOT_OFFERS = [
     # DECIDED: a reply that is done and only parks an idea for LATER
     "If you'd like, I can add rate limiting later.",
     "Done.\n\nA possible follow-up for another time: caching the lookups.",
+    # review (v1.402.0): an offer to explain, phrased "Shall I …"; a vague
+    # "further changes"; a pleasantry with "too"
+    "Shall I explain how the parser works?",
+    "Let me know if you'd like me to make further changes.",
+    "Glad to hear it works for you too!",
+    "Happy to report the tests pass too.",
+    "Next, I can't go on without the API key.",
+    "Next, I could not reproduce the crash.",
     "The tests pass. I could also add a benchmark in a follow-up PR if you want.",
     "All four endpoints are fixed and the tests pass.\n\nIf you'd like, I can also add rate limiting in the future.",
 ]
@@ -139,6 +192,26 @@ def test_an_ending_that_offers_more_work_is_an_offer(text):
 @pytest.mark.parametrize("text", NOT_OFFERS)
 def test_an_ending_that_offers_no_work_is_not_an_offer(text):
     assert not CO.ends_on_offer(text), repr(CO.last_sentence(text))
+
+
+@pytest.mark.parametrize("text", USER_OWNED)
+def test_review_an_offer_to_send_publish_push_pay_or_delete_keeps_its_question(text):
+    """Review (v1.402.0): the first cut nudged "Want me to send this to the
+    client?", "Shall I delete the old files?" and "Want me to push it?" —
+    and the nudge said "do it now". Those are the user's to decide."""
+    assert CO.user_owns(CO.last_sentence(text)), repr(CO.last_sentence(text))
+    assert not CO.ends_on_offer(text), repr(CO.last_sentence(text))
+
+
+def test_review_the_nudge_itself_refuses_outward_and_irreversible_actions():
+    """An offer that only points back ("Next I would push and deploy. Shall I
+    proceed?") still reads as an offer — the nudge's own words keep it from
+    being taken as permission."""
+    assert CO.ends_on_offer("The fix is ready. Next I would push to main and deploy it. Shall I proceed?")
+    for verb in ("send", "post", "share", "publish", "commit", "push", "merge", "deploy", "delete",
+                 "pay for", "buy"):
+        assert verb in NUDGE, verb
+    assert "those are the user's decisions" in NUDGE
 
 
 def test_decided_a_done_reply_with_an_idea_for_later_keeps_its_ending_but_an_offer_now_is_one():
@@ -164,6 +237,25 @@ def test_the_gate_reads_only_an_ending_with_no_call_armed_and_rounds_left():
     offer = CO.ClosingOffer()
     assert offer.take("A?") == CO.CLOSING_OFFER_NUDGE and offer.fired
     assert not offer.wants("Want me to?", has_calls=False, round_index=0, rounds=10, armed=True)
+
+
+def test_review_a_resumed_reply_past_its_finish_note_is_not_nudged():
+    """Review (v1.402.0): a reply resumed after a restart whose cut part had
+    already sent the finish note (``FinishCheck.checked_before``) is past the
+    check — its next ending is the check's answer, which ends the reply."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.daemon.chat_turn import closing_offer_wanted
+
+    def wanted(**finish):
+        harness = SimpleNamespace(closing_offer=CO.ClosingOffer(), plan_mode=False)
+        check = SimpleNamespace(**{"ran": False, "checked_before": False, **finish})
+        return closing_offer_wanted(harness, check, "Done. Want me to also add tests?", has_calls=False,
+                                    round_index=0, rounds=10, armed=True, truncated=False, trust_state={})
+
+    assert wanted() is True  # the control
+    assert wanted(ran=True) is False
+    assert wanted(checked_before=True) is False
 
 
 def test_the_join_never_says_a_text_twice():
@@ -462,6 +554,7 @@ def _agent(tmp_path, steps: list, monkeypatch=None, **session_kw):
 
 
 AGENT_FIRST = "There is one file, notes.txt. Want me to also list the folder above it?"
+OFFER_CUT_LEAD_TEXT = "reached its step limit before finishing that"
 LIST = [ToolCall(id="l1", name="list_files", arguments={"path": "."})]
 
 
@@ -534,6 +627,78 @@ def test_the_runtime_reads_only_the_flat_lanes_answer_with_tools_and_never_a_rev
     assert wanted(steps_left=1) is False and wanted(steps_left=2) is True
     reviewer = SimpleNamespace(id="s2", trust="full", options_json='{"review_only": true}')
     assert wanted(session=reviewer) is False
+
+
+def test_review_a_child_run_is_never_nudged(tmp_path):
+    """Review (v1.402.0): a delegated or spawned teammate, a Build helper or a
+    mission's member hands its answer to the MODEL that gave out the piece —
+    no user waits on its "Want me to …?", and a child widening its own piece
+    can collide with its siblings'."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents.runtime import AgentRuntime
+    from iron_jarvis.agents.team import MISSION_MEMBER_ORIGIN
+    from iron_jarvis.harness.helpers import HELPER_ORIGIN
+
+    rt = AgentRuntime(build_platform(str(tmp_path / "home")))
+
+    def wanted(session, **kw):
+        return rt._closing_offer_wanted(session, AGENT_FIRST, transcript=True,
+                                        tool_specs=[{"name": "list_files"}], messages=[], steps_left=10, **kw)
+
+    top = SimpleNamespace(id="s1", trust="full", options_json=None, origin="chat")
+    assert wanted(top) is True  # the control
+    assert wanted(top, child=True) is False
+    for origin in (HELPER_ORIGIN, MISSION_MEMBER_ORIGIN):
+        assert wanted(SimpleNamespace(id="s2", trust="full", options_json=None, origin=origin)) is False
+
+
+def test_review_a_delegated_childs_offer_is_its_answer_unchanged(tmp_path):
+    """Through the REAL runtime: a child run (``parent_id`` set) that ends on
+    an offer returns that answer as it is — one model call, no nudge."""
+    from iron_jarvis.agents.runtime import AgentRuntime
+    from iron_jarvis.agents.types import get_agent_definition
+
+    p = build_platform(str(tmp_path / "home"))
+    calls: list = []
+
+    class Scripted(MockLLMAdapter):
+        async def complete(self, *, system, messages, tools, **kw):
+            calls.append(list(messages))
+            return LLMResponse(text=AGENT_FIRST, finish_reason="stop")
+
+    p.providers.register("mock", lambda model=None: Scripted())
+    orch = Orchestrator(p)
+
+    async def go():
+        s = await orch.create_session("list the files", provider="mock", model="mock-1")
+        return await AgentRuntime(p).run(s, get_agent_definition(s.agent_type), parent_id="parent-run")
+
+    run = asyncio.run(go())
+    assert len(calls) == 1 and run.result == AGENT_FIRST
+    assert not any(m.role == "user" and m.content == NUDGE for m in calls[0])
+
+
+def test_review_extra_work_that_runs_out_of_steps_keeps_the_finished_answer(tmp_path):
+    """Review (v1.402.0): the nudge sent a FINISHED run on to the work it
+    offered; when that work ran out of steps the whole run ended FAILED with
+    "reached max steps" and the answer was lost. The answer stands; what the
+    extra steps did, and that they were cut, follows it."""
+    from iron_jarvis.agents.runtime import OFFER_CUT_LEAD
+
+    s, calls, events = _agent(tmp_path, [AGENT_FIRST, LIST, LIST, LIST], max_steps=3)
+    assert len(calls) == 3 and len(events) == 1
+    assert s.status.value == "completed", (s.status, s.summary)
+    assert s.summary.startswith(AGENT_FIRST + SEP + OFFER_CUT_LEAD), s.summary
+    assert "list_files x2" in s.summary
+
+
+def test_review_a_run_that_never_finished_still_fails_at_its_step_limit(tmp_path):
+    """The control: no closing offer, the step limit is the old failure."""
+    s, calls, events = _agent(tmp_path, [LIST, LIST, LIST], max_steps=3)
+    assert len(calls) == 3 and not events
+    assert s.status.value == "failed", (s.status, s.summary)
+    assert OFFER_CUT_LEAD_TEXT not in (s.summary or "")
 
 
 def test_the_nudge_in_a_runs_messages_is_its_record(tmp_path):

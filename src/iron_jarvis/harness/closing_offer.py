@@ -36,7 +36,19 @@ WHAT IS NOT AN OFFER (each pinned in ``tests/test_closing_offer_v1402.py``):
   and only parks an idea for another time keeps its ending; the model has
   already judged the idea outside this request;
 * a question inside a code block or a quoted line, or earlier in the reply —
-  only the LAST sentence of the last paragraph is read.
+  only the LAST sentence of the last paragraph is read;
+* an offer whose action is the USER'S TO DECIDE (v1.402.0 review): sending,
+  posting, sharing, publishing, committing, pushing, merging, deploying,
+  opening a pull request, paying, buying, deleting, or removing files and
+  data ("Want me to send it to the client?", "Shall I push?", "Shall I delete
+  the old files?"). Those reach other people or cannot be taken back — the
+  app's own git guard asks before EVERY commit and push for the same reason —
+  so the reply keeps its question. The nudge's own words say the same thing
+  (:data:`CLOSING_OFFER_NUDGE`), for an offer that only points back at one
+  ("Next I would push and deploy. Shall I proceed?").
+
+English only: a reply in another language never reads as an offer, and ends
+where the model ended it.
 
 The reply the user keeps is the first answer, then the continuation
 (:meth:`ClosingOffer.combine` — the finish check's ``combine`` shape: one
@@ -53,7 +65,9 @@ from typing import Any, Iterable
 CLOSING_OFFER_NUDGE = (
     "You ended by offering to do more. If it is part of what the user asked, or "
     "plainly needed to finish it, and needs no decision only the user can make, do "
-    "it now with your tools and then end with a short summary. If it really needs "
+    "it now with your tools and then end with a short summary. Never send, post, "
+    "share, publish, commit, push, merge, deploy, delete, pay for or buy anything "
+    "because of this message: those are the user's decisions. If it really needs "
     "the user's decision, end your reply with that one question, with your "
     "recommendation."
 )
@@ -88,9 +102,15 @@ _ASKS = re.compile(
     r"(?:would|do|did|will)\s+you\s+(?:like|want)\s+me\s+to\b"
     r"|you\s+want\s+me\s+to\b"
     r"|(?:want|wanna)\s+me\s+to\b"
+    r"|(?:do\s+you\s+)?need\s+me\s+to\b"
+    r"|would\s+it\s+(?:help|be\s+(?:helpful|useful))\s+(?:if\s+i|for\s+me\s+to)\b"
     r"|shall\s+(?:i|we)\b"
     r"|should\s+i\s+(?:go\s+ahead|proceed|continue|carry\s+on|keep\s+going|start|begin|also|now|"
-    r"do\s+(?:that|this|it|so|the\s+rest)|implement|apply|make\s+(?:the|that|these|this)\b)"
+    r"do\s+(?:that|this|it|so|the\s+rest)|implement|apply|make\s+(?:the|that|these|this)\b|"
+    # review: the commonest "Should I <do the work>?" verbs; "Should I use
+    # X?" and "Should I be worried?" stay questions (no verb here).
+    r"add|write|fix|update|create|refactor|wire|run|handle|include|extend|cover|rename|move|port|"
+    r"convert|build|set\s+up|clean\s+up|split|remove|delete)\b"
     r"|(?:may|can|could)\s+i\s+(?:go\s+ahead|proceed|continue|start|also)\b"
     r"|ready\s+for\s+me\s+to\b"
     r"|(?:is\s+it\s+)?ok(?:ay)?\s+(?:if\s+i|for\s+me\s+to)\b"
@@ -100,6 +120,9 @@ _ASKS = re.compile(
 _STATES = re.compile(
     _LEAD + r"(?:"
     r"(?:just\s+)?let\s+me\s+know\s+if\s+you(?:'d|’d|\s+would)?\s+(?:like|want)\s+me\s+to\b"
+    r"|(?:just\s+)?let\s+me\s+know\s+if\s+i\s+should\b"
+    r"|(?:just\s+)?let\s+me\s+know\s+and\s+i(?:'ll|’ll|\s+will)\b"
+    r"|^next,?\s+i\s+(?:can(?!['’]t|not)|could(?!n['’]t|\s+not))\b"
     r"|(?:just\s+)?say\s+the\s+word\b"
     r"|if\s+you(?:'d|’d|\s+would)?\s+(?:like|want)(?:\s+me\s+to)?\s*,?\s*(?:i\s+can|i'll|i\s+will|i’ll)\b"
     r"|if\s+you(?:'d|’d|\s+would)?\s+like\s+me\s+to\b"
@@ -115,7 +138,11 @@ _CAN_IF = re.compile(
     r"(?:\bif\s+you(?:'d|’d|\s+would)?\s+(?:like|want)\b"
     r"|\bif\s+(?:that'?s|that\s+is|it'?s|it\s+is|it\s+would\s+be|that\s+would\s+be)\s+(?:helpful|useful)\b"
     r"|\b(?:just\s+)?let\s+me\s+know\b"
-    r"|\bwant\s+me\s+to\b)",
+    r"|\bwant\s+me\s+to\b)"
+    # review: "Happy to add tests for this too." — an offer with no "if".
+    r"|" + _LEAD + r"(?:i(?:'m|’m|\s+am)\s+)?(?:happy|glad)\s+to\s+(?:also\s+)?"
+    r"(?:add|write|fix|update|create|refactor|wire|run|handle|include|extend|cover|rename|move|port|"
+    r"convert|build|set\s+up|clean\s+up|implement|apply|make|do)\b.*\b(?:too|as\s+well)\s*[.!]?$",
     re.IGNORECASE,
 )
 
@@ -131,7 +158,7 @@ _EXPLAIN_RX = re.compile(
 _VAGUE_RX = re.compile(
     r"\bme\s+to\s+(?:(?:change|tweak|adjust|do|add|fix|update|modify|help\s+with)\s+)?"
     r"(?:anything|something)(?:\s+else)?\b"
-    r"|\b(?:any|some)\s+(?:other|more|further)\s+(?:changes|tweaks|adjustments|edits|help)\b"
+    r"|\b(?:(?:any|some)\s+)?(?:other|more|further|additional)\s+(?:changes|tweaks|adjustments|edits|help)\b"
     r"|\bme\s+to\s+make\s+any\s+(?:changes|tweaks|adjustments|edits)\b"
     r"|\bme\s+to\s+help\s+(?:further|more|with\s+anything)\b",
     re.IGNORECASE,
@@ -142,6 +169,62 @@ _LATER_RX = re.compile(
     r"\b(?:later(?:\s+on)?|in\s+a\s+follow[- ]?up(?:\s+\w+)?|as\s+a\s+follow[- ]?up|next\s+time|"
     r"in\s+the\s+future|at\s+some\s+point|down\s+the\s+road|another\s+time|some\s+other\s+time|"
     r"in\s+a\s+(?:separate|later|future)\s+(?:pr|pull\s+request|change|commit|session|turn))\b",
+    re.IGNORECASE,
+)
+#: Where an offer's ACTION starts: right after "me to", "shall I", "I can",
+#: "happy to", "and I'll" and the like (review, v1.402.0). Every such place
+#: in the sentence is read.
+_ACTION_LEAD_RX = re.compile(
+    r"\b(?:me\s+to|shall\s+(?:i|we)|should\s+i|(?:may|can|could)\s+i|if\s+i|i\s+can(?!['’]t|not)|"
+    r"i\s+could(?!n['’]t|\s+not)|i(?:'d|’d|\s+would)\s+be\s+happy\s+to|happy\s+to|glad\s+to|"
+    r"i(?:'ll|’ll|\s+will))\s+",
+    re.IGNORECASE,
+)
+#: Words before the action that do not change what it is ("also", "go ahead
+#: and", "proceed with").
+_ACTION_FILLER_RX = re.compile(
+    r"^(?:(?:also|just|then|now|first|quickly|actually|go\s+ahead\s+(?:and|with)|proceed\s+(?:with|to)|"
+    r"continue\s+(?:with|by)|carry\s+on\s+with|move\s+on\s+to|get\s+on\s+with|start\s+(?:on|with|by))\s+)+",
+    re.IGNORECASE,
+)
+#: An action that is the USER'S to decide: it reaches other people, money or
+#: the shared history, or cannot be taken back (see the module docstring).
+#: Read at the start of the action only — "add a POST endpoint" and "update
+#: the release notes" are work.
+_USER_OWNS_RX = re.compile(
+    r"^(?:"
+    r"send(?:ing)?(?!\s+(?:a\s+|an\s+|the\s+|some\s+)?(?:test\s+|sample\s+|dummy\s+|http\s+)?"
+    r"(?:requests?|quer(?:y|ies)|pings?|signals?|keys?|keystrokes?|inputs?)\b)|"
+    r"e-?mail(?:ing)?|forward(?:ing)?|repl(?:y|ying)\s+to|respond(?:ing)?\s+to|"
+    r"post(?:ing)?|publish(?:ing)?|tweet(?:ing)?|shar(?:e|ing)|upload(?:ing)?|notify(?:ing)?|"
+    r"invit(?:e|ing)|messag(?:e|ing)|"
+    r"commit(?:ting)?|(?:force[- ]?)?push(?:ing)?(?!\s+notifications?)|deploy(?:ing)?|"
+    r"merg(?:e|ing)(?:\s+(?:it|this|that|them)\b|(?=\s*[.?!]*$)|"
+    r"\s+(?:the\s+|this\s+|that\s+|my\s+|your\s+)?(?:pr|pull\s+request|branch(?:es)?|changes|fix)\b|"
+    r"\s+(?:\S+\s+){0,4}?into\s+(?:main|master|dev|develop|release|production|prod|the\s+\S+\s+branch)\b)|"
+    r"ship(?:ping)?|releas(?:e|ing)(?!\s+notes?)|"
+    r"(?:open|opening|create|creating|file|filing|raise|raising|submit|submitting)\s+(?:a\s+|an\s+|the\s+)?"
+    r"(?:new\s+)?(?:pr|pull\s+request)s?|submit(?:ting)?|"
+    r"pay(?:ing)?|purchas(?:e|ing)|buy(?:ing)?|refund(?:ing)?|"
+    r"delet(?:e|ing)|eras(?:e|ing)|wip(?:e|ing)|purg(?:e|ing)|destroy(?:ing)?|uninstall(?:ing)?|discard(?:ing)?|"
+    r"drop(?:ping)?\s+(?:the\s+|that\s+|this\s+|those\s+|these\s+)?(?:\w+\s+)?"
+    r"(?:tables?|databases?|db|columns?|schemas?|collections?)|"
+    r"remov(?:e|ing)\s+(?:\S+\s+){0,3}?(?:files?|folders?|director(?:y|ies)|branch(?:es)?|"
+    r"repo(?:sitor(?:y|ies))?s?|backups?|databases?|tables?|records?|rows?|entries|data|accounts?|users?|"
+    r"containers?|volumes?)"
+    r")\b",
+    re.IGNORECASE,
+)
+#: An action aimed at PRODUCTION (anywhere in it): "Should I run the
+#: migration against the production database?" is the user's call too.
+_PRODUCTION_RX = re.compile(
+    r"\b(?:production|prod|live\s+(?:site|server|database|db|environment|system))\b",
+    re.IGNORECASE,
+)
+#: An offer to EXPLAIN, read where the action starts ("Shall I explain …").
+_EXPLAIN_START_RX = re.compile(
+    r"^(?:explain|clarify|walk\s+you\s+through|go\s+over|go\s+through|elaborate|describe|answer|"
+    r"expand\s+on|break\s+(?:it|this|that)\s+down|summari[sz]e)\b",
     re.IGNORECASE,
 )
 #: What may follow " or " and still leave an offer an offer: declining,
@@ -208,6 +291,25 @@ def last_sentence(text: str) -> str:
     return _LEAD_MARK_RX.sub("", last).strip()
 
 
+def _actions(sentence: str) -> list[str]:
+    """Where each offered action starts in ``sentence`` (the words after
+    "me to", "shall I", "I can", …, fillers like "also" taken off)."""
+    out = []
+    for m in _ACTION_LEAD_RX.finditer(sentence):
+        out.append(_ACTION_FILLER_RX.sub("", sentence[m.end():]).strip())
+    return out
+
+
+def user_owns(sentence: str) -> bool:
+    """Is an action this sentence offers the USER'S to decide (send, post,
+    commit, push, merge, deploy, pay, delete, remove files …)? See the module
+    docstring. Never raises."""
+    try:
+        return any(_USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a) for a in _actions(str(sentence or "")))
+    except Exception:  # noqa: BLE001 — a reading never breaks a turn
+        return True
+
+
 def ends_on_offer(text: str) -> bool:
     """Does the reply END by offering to do MORE WORK and asking permission?
     Deterministic, never raises. See the module docstring for what is not an
@@ -222,6 +324,12 @@ def ends_on_offer(text: str) -> bool:
     if not offered:
         return False
     if _EXPLAIN_RX.search(sentence) or _VAGUE_RX.search(sentence) or _LATER_RX.search(sentence):
+        return False
+    actions = _actions(sentence)
+    if any(_EXPLAIN_START_RX.match(a) for a in actions):
+        return False
+    # The USER'S decision (review, v1.402.0): the reply keeps its question.
+    if any(_USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a) for a in actions):
         return False
     # A CHOICE between alternatives is a decision question, not an offer —
     # unless the alternative only declines or waits.
@@ -318,4 +426,5 @@ __all__ = [
     "join",
     "last_sentence",
     "nudge_index",
+    "user_owns",
 ]
