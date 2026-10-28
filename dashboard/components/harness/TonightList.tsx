@@ -14,12 +14,21 @@
  * cancelled (never starts) or removed (two presses). A running task can be
  * opened or stopped; an ended one opened or removed. No new card styles: the
  * session list's own row look, the calm Badge and ConfirmButton.
+ *
+ * v1.400.8 (the user): "Try it on several models" is the coding session box's
+ * own grouped list (components/harness/TryOnModels, lib/tryOnMenu) — one row
+ * per provider, local first, each marked where it runs and opening its models
+ * in place, each model marked local or cloud, no model twice — instead of one
+ * flat checkbox per GET /models row.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Moon, Plus } from "lucide-react";
 import { Badge, ConfirmButton } from "@/components/ui";
+import { TryOnModels } from "@/components/harness/TryOnModels";
+import { MAX_ATTEMPTS, type TryOnPick } from "@/lib/buildAttempts";
 import { modelPickWords } from "@/lib/onboarding";
+import { pickEntry, tryOnGroups } from "@/lib/tryOnMenu";
 import { useModels } from "@/lib/useModels";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import type { ModelOption } from "@/lib/types";
@@ -47,8 +56,6 @@ import {
 
 const QUIET_BUTTON =
   "inline-flex min-h-7 items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-40";
-
-const MAX_TRY_ON = 3;
 
 function errorWords(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -89,7 +96,15 @@ function TaskForm({
   const [tryOn, setTryOn] = useState<NightPick[]>(initial.tryOn ?? []);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const nameOf = (p: NightPick) => modelPickWords(p, models);
+  // A night task never runs on Local only (it has no such switch); the demo
+  // model is left out, as in the box's Try on.
+  const groups = useMemo(() => tryOnGroups(models, false), [models]);
+  // The picks in the list's own words; a pick saved before the list changed
+  // (no group lists it) keeps the model menu's words and can be removed.
+  const picked = useMemo<TryOnPick[]>(
+    () => tryOn.map((p) => ({ ...p, label: pickEntry(groups, p)?.model.label ?? modelPickWords(p, models) })),
+    [tryOn, groups, models],
+  );
 
   async function submit() {
     if (busy) return;
@@ -106,16 +121,6 @@ function TaskForm({
     const err = await onSubmit(draft);
     setBusy(false);
     if (err) setProblem(err);
-  }
-
-  function toggle(p: NightPick) {
-    setTryOn((cur) =>
-      cur.some((c) => pickKey(c) === pickKey(p))
-        ? cur.filter((c) => pickKey(c) !== pickKey(p))
-        : cur.length >= MAX_TRY_ON
-          ? cur
-          : [...cur, p],
-    );
   }
 
   return (
@@ -180,23 +185,18 @@ function TaskForm({
       </label>
       {how === "try" ? (
         <fieldset data-testid="tonight-try-on" className="space-y-1">
-          <legend className="text-[12px] text-zinc-400">Pick 2 or 3 models; each tries it on its own branch.</legend>
-          <div className="max-h-40 space-y-0.5 overflow-y-auto">
-            {models.map((m) => {
-              const on = tryOn.some((c) => pickKey(c) === pickKey(m));
-              return (
-                <label key={pickKey(m)} className="flex min-w-0 items-center gap-2 text-[13px] text-zinc-300">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={!on && tryOn.length >= MAX_TRY_ON}
-                    onChange={() => toggle({ provider: m.provider, model: m.model })}
-                  />
-                  <span className="min-w-0 truncate">{nameOf(m)}</span>
-                </label>
-              );
-            })}
-          </div>
+          <legend className="text-[12px] text-zinc-400">
+            Pick 2 or {MAX_ATTEMPTS} models; each tries it on its own branch.
+          </legend>
+          <TryOnModels
+            groups={groups}
+            picks={picked}
+            onChange={(next) => setTryOn(next.map(({ provider, model }) => ({ provider, model })))}
+            localOnly={false}
+            layout="inline"
+            className="rounded-xl border border-white/[0.06] p-1"
+            listClassName="max-h-72"
+          />
         </fieldset>
       ) : null}
       {problem ? (

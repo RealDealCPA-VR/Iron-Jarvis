@@ -260,10 +260,20 @@ export function matchTryOn(
   return { hits, more };
 }
 
+/** The entry a pick is (its provider row and its model), or null when no
+ *  group lists it — a pick saved before the list changed. */
+export function pickEntry(
+  groups: readonly TryOnGroup[],
+  pick: { provider: string; model: string },
+): { group: TryOnGroup; model: TryOnModel } | null {
+  for (const group of groups) {
+    const model = group.models.find((m) => m.provider === pick.provider && m.model === pick.model);
+    if (model) return { group, model };
+  }
+  return null;
+}
+
 /** Where a pick runs, for the picked list ("Opus 5.5 · Claude Code"). */
 export function pickWhere(groups: readonly TryOnGroup[], pick: TryOnPick): string {
-  for (const g of groups) {
-    if (g.models.some((m) => m.provider === pick.provider && m.model === pick.model)) return g.label;
-  }
-  return "";
+  return pickEntry(groups, pick)?.group.label ?? "";
 }

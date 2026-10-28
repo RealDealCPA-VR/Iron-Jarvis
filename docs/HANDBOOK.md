@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.400.7 (2026-10-25).*
+holds itself to. Current as of v1.400.8 (2026-10-25).*
 
 ---
 
@@ -2063,6 +2063,11 @@ branch.
   choices are your default model, one model, your model team, or try on 2
   or 3 models. Ctrl+Enter adds it. Queued tasks can be moved up or down,
   edited, cancelled or removed.
+  - **Try it on several models** shows the same list as the **Try on…**
+    button in a session's box: one row per provider, your own hardware
+    first, each marked where it runs, every model marked local or cloud, no
+    model listed twice. A provider's models open under its row; the find box
+    searches every provider (v1.400.8).
 - **When tasks run.**
   - Tasks start only in the night window: 11 PM to 7 AM by default.
   - At most 2 run at once, and never two in the same folder.

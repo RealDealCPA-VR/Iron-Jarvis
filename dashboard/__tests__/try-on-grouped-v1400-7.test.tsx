@@ -18,6 +18,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import fold from "./fixtures/harness-model-fold-v1376.json";
+import { CATALOG, catalogPairs, local, routedOut } from "./helpers/tryOnCatalog";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
 import { KIND_BADGE, modelProvidersOf } from "@/components/chat/ModelMenu";
 import { floatEdges } from "@/components/chat/FitPanel";
@@ -27,47 +28,6 @@ import { MIXED_BADGE, groupBadge, matchTryOn, tryOnGroups, type TryOnGroup } fro
 import type { ModelOption } from "@/lib/types";
 
 afterEach(cleanup);
-
-const local = (provider: string, model: string, extra: Partial<ModelOption> = {}): ModelOption => ({
-  provider,
-  model,
-  available: true,
-  kind: "local",
-  on_this_network: true,
-  inherited_from: null,
-  ...extra,
-});
-const routedOut = (provider: string, model: string, extra: Partial<ModelOption> = {}): ModelOption =>
-  local(provider, model, { on_this_network: false, ...extra });
-
-/** The user's own servers, as GET /models lists them. */
-const GATEWAY: ModelOption[] = [
-  // Listed before the gateway's own model: the list still puts local first.
-  routedOut("custom", "frontier"),
-  local("custom", "glm-5.3-flash"),
-  // The hidden "fleet" alias: unlisted, on a gateway with a cloud upstream —
-  // the daemon reads it as cloud (v1.362.0).
-  routedOut("custom", "fleet"),
-  local("custom", "glm-5.3-flash-think"),
-  routedOut("custom", "deepseek/deepseek-v4.1-flash"),
-  routedOut("custom", "~z-ai/glm-flash-latest"),
-  // The registry's fleet node for the same slot: one row per deployment, the
-  // other names in `aliases` (fleet/picker.py), the registry's default label.
-  local("fleet-custom", "glm-5.3-flash", {
-    name: "Custom endpoint",
-    source: "endpoint",
-    aliases: ["glm-5.3-flash-think", "vision"],
-  } as Partial<ModelOption>),
-  routedOut("fleet-custom", "frontier", { name: "Custom endpoint", source: "endpoint" }),
-  routedOut("fleet-custom", "deepseek/deepseek-v4.1-flash", { name: "Custom endpoint", source: "endpoint" }),
-  local("fleet-rtx6000ada", "Qwen3.8-27B (RTX)", { name: "RTX6000ada", source: "endpoint", size_b: 27 }),
-];
-const CATALOG: ModelOption[] = [
-  ...(fold.models as unknown as ModelOption[]),
-  ...GATEWAY,
-  { provider: "mock", model: "mock-1", available: true },
-];
-const catalogPairs = new Set(CATALOG.map((m) => `${m.provider}::${m.model}`));
 
 const byId = (groups: TryOnGroup[], id: string) => groups.find((g) => g.id === id)!;
 const labels = (g: TryOnGroup) => g.models.map((m) => m.label);

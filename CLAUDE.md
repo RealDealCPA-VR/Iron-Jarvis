@@ -4123,9 +4123,29 @@ does not need a bump, stop and bump it.
   byte-identical (`chat-model-menu-v1376.json`). Pins:
   `dashboard/__tests__/try-on-grouped-v1400-7.test.tsx`, e2e
   `dashboard/e2e/try-on-grouped-v1400-7.spec.ts` (1280 × 720, 390 × 844);
-  the v1397 pins open a provider first. OPEN: Tonight's own try-on checkboxes
-  (`TonightList`) are still one flat list; an attempt's account is chosen by
-  the daemon, never in the list.
+  the v1397 pins open a provider first. OPEN: an attempt's account is chosen
+  by the daemon, never in the list.
+  v1.400.8 (the user, after v1.400.7): Tonight's "Try it on several models"
+  is the SAME list. `components/harness/TryOnModels.tsx` is the one list
+  (picks on top, find box, provider rows, models) and both callers render
+  it: HarnessTryOn is only the menu around it (portal, chip, header, Done;
+  it keeps the open provider itself, `openGroup`/`onOpenGroup`, so Escape
+  from its own Done/Clear closes the provider first), and TonightList passes
+  `layout="inline"` (a provider opens UNDER its row — the form sits in a
+  scrolling column, so a pop-out fixed to the window would have to follow
+  every scroll). Enter in the find box is prevented (it would send the
+  form); every button is `type="button"`. Tonight's picks are labelled by
+  `tryOnMenu.pickEntry` (the list's words) and a saved pick the list no
+  longer shows (a `fleet-custom` pair from before v1.400.7) stays on top,
+  removable, counting toward three. The demo model is never offered there
+  now (it was). Pins: `dashboard/__tests__/tonight-try-on-v1400-8.test.tsx`
+  (15 mutations red with the v1397/v1398/v1400-7 pins), e2e
+  `dashboard/e2e/tonight-try-on-v1400-8.spec.ts` (1280 × 800, 390 × 844);
+  the user's catalog is `__tests__/helpers/tryOnCatalog.ts`. OPEN: the
+  form's "Runs on" select still lists every model flat. LESSON: on this PC
+  Python's `Path.write_text` and the Write tool write CRLF; git's
+  `autocrlf=input` hides it, but an anchored edit (a mutation harness, a
+  multi-line replace) then misses every match — read and write BYTES.
   v1.397.1 (test-only): v1.397.0's Tests gate went red (Release passed and
   published) on `test_iron_proxy_routes_v1301::test_the_real_bundle_starts_
   answers_and_stops` — the account list read `[]` right after a 201 create.

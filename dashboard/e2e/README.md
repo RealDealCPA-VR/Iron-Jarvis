@@ -89,6 +89,15 @@ pop-out, then the list; and the next message's `try_on` (caught in the
 browser) carries the catalog pairs. `IJ_TRYON_OUT=<folder>` writes a
 screenshot of each step.
 
+`e2e/tonight-try-on-v1400-8.spec.ts` (v1.400.8) does the same for Coding
+sessions › Tonight's "Try it on several models", at 1280 × 800 and
+390 × 844, with the same stubbed catalog: one row per provider, a provider
+opened IN PLACE under its row inside the form (never fixed to the window),
+the last of 32 models reached by scrolling the list, a model ticked from the
+keyboard, Escape closing the provider and leaving the form, Enter in the find
+box sending nothing, no sideways pan, and the task's `try_on` (caught in the
+browser) carrying the catalog pairs.
+
 Run from `dashboard/`:
 
 ```bash

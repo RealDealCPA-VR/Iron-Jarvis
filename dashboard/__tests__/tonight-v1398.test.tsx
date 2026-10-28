@@ -187,9 +187,26 @@ describe("Tonight", () => {
     fireEvent.change(screen.getByTestId("tonight-words"), { target: { value: "Try it" } });
     fireEvent.change(screen.getByTestId("tonight-how"), { target: { value: "try" } });
     const box = screen.getByTestId("tonight-try-on");
-    const checks = within(box).getAllByRole("checkbox") as HTMLInputElement[];
-    for (const c of checks.slice(0, 3)) fireEvent.click(c);
-    expect(checks[3].disabled).toBe(true);
+    // v1.400.8: one row per provider (the box's Try on list); a provider's
+    // models open under its row.
+    const tick = (provider: string, model: string) => {
+      const row = within(box).getAllByTestId("harness-try-on-group").find((g) => g.dataset.group === provider)!;
+      if (row.getAttribute("aria-expanded") !== "true") fireEvent.click(row);
+      const check = (within(box).getAllByTestId("harness-try-on-row") as HTMLInputElement[]).find(
+        (c) => c.dataset.provider === provider && c.dataset.model === model,
+      )!;
+      fireEvent.click(check);
+      return check;
+    };
+    tick("claude-cli", "claude-opus-4-8");
+    tick("codex-cli", "gpt-6");
+    tick("custom", "glm-5.3");
+    const row = within(box).getAllByTestId("harness-try-on-group").find((g) => g.dataset.group === "ollama")!;
+    fireEvent.click(row);
+    const fourth = (within(box).getAllByTestId("harness-try-on-row") as HTMLInputElement[]).find(
+      (c) => c.dataset.model === "qwen3",
+    )!;
+    expect(fourth.disabled).toBe(true);
     fireEvent.click(screen.getByTestId("tonight-submit"));
     await waitFor(() => expect(api.calls.some(([m, p]) => m === "POST" && p === "/build/night")).toBe(true));
     const body = api.calls.find(([m, p]) => m === "POST" && p === "/build/night")![2] as { try_on: unknown[] };
