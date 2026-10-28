@@ -246,6 +246,42 @@ def _closing_offer_reply(messages: list[LLMMessage], text: str) -> str:
     return join(head, tail)
 
 
+#: v1.402.0 review: what follows the answer that ended on a closing offer
+#: when the work the nudge started ran out of steps. The answer above it was
+#: the run's own finished answer — it stands; only the EXTRA work was cut.
+OFFER_CUT_LEAD = (
+    "It went on to the extra work it offered above and reached its step limit "
+    "before finishing that."
+)
+
+
+def _closing_offer_cut_reply(messages: list[LLMMessage]) -> str:
+    """The run's answer when a CLOSING OFFER fired and the loop then ran out
+    of steps (v1.402.0 review): the answer that ended on the offer, then
+    :data:`OFFER_CUT_LEAD` and what the extra steps ran. Before this, the
+    whole run ended FAILED with "reached max steps" — the nudge turned a
+    finished task into a failed one and the answer was lost. "" when there
+    is no nudge (or no answer before it): the caller's max-steps path."""
+    from ..harness.closing_offer import join, nudge_index
+
+    i = nudge_index(messages)
+    if i < 1:
+        return ""
+    before = messages[i - 1]
+    head = str(getattr(before, "content", "") or "") if getattr(before, "role", "") == "assistant" else ""
+    if not head.strip():
+        return ""
+    counts: dict[str, int] = {}
+    for m in messages[i + 1:]:
+        if m.role == "tool":
+            name = m.name or "(unknown)"
+            counts[name] = counts.get(name, 0) + 1
+    tail = OFFER_CUT_LEAD
+    if counts:
+        tail += " It ran: " + ", ".join(f"{n} x{c}" for n, c in counts.items()) + "."
+    return join(head, tail)
+
+
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
 #: that stamps one of these has a channel: chat/job/project/user are watched
@@ -1212,17 +1248,22 @@ class AgentRuntime:
         tool_specs: list,
         messages: list[LLMMessage],
         steps_left: int,
+        child: bool = False,
     ) -> bool:
         """Should this final answer get the CLOSING-OFFER nudge (v1.402.0,
         part 4 — ``harness/closing_offer``)? Only the FLAT lane's answer
         (``transcript`` — its final text IS the run's answer; a decomposed
         step's is not), with tools offered, at least ``MIN_ROUNDS_LEFT``
         steps left after this one, not in low trust, never a read-only
-        reviewer (its verdict is its report's last line), and at most ONCE
-        per run — the nudge in the run's own messages is the record, so a
-        second invocation of the loop or a resume never sends it again.
-        Never raises."""
-        if not transcript or not tool_specs:
+        reviewer (its verdict is its report's last line), never a CHILD run
+        (v1.402.0 review: a delegated or spawned teammate, a Build helper, a
+        mission's member — ``child``, the run's ``parent_id``; its offer is
+        read by the model that handed out the piece, which decides at no cost
+        to the user, and a child widening its own piece can collide with the
+        pieces handed to its siblings), and at most ONCE per run — the nudge
+        in the run's own messages is the record, so a second invocation of
+        the loop or a resume never sends it again. Never raises."""
+        if not transcript or not tool_specs or child:
             return False
         try:
             from ..harness.closing_offer import MIN_ROUNDS_LEFT, ends_on_offer, nudge_index
@@ -1235,6 +1276,11 @@ class AgentRuntime:
             from ..scheduling.knobs import session_options
 
             if session_options(session).get(REVIEW_ONLY_OPTION) is True:
+                return False
+            from .team import MISSION_MEMBER_ORIGIN
+            from ..harness.helpers import HELPER_ORIGIN
+
+            if str(getattr(session, "origin", "") or "").startswith((HELPER_ORIGIN, MISSION_MEMBER_ORIGIN)):
                 return False
             return ends_on_offer(text or "")
         except Exception:  # noqa: BLE001 — a reading never breaks a run
@@ -3331,6 +3377,7 @@ class AgentRuntime:
                 if self._closing_offer_wanted(
                     session, resp.text, transcript=transcript, tool_specs=tool_specs,
                     messages=messages, steps_left=max_steps - (run.steps - _offer_from),
+                    child=bool(getattr(run, "parent_id", None)),
                 ):
                     from ..core.nudges import CLOSING_QUESTION, note_nudge
                     from ..harness.closing_offer import CLOSING_OFFER_NUDGE, SEPARATOR
@@ -3711,6 +3758,16 @@ class AgentRuntime:
                 await _transcript.save(self.p.engine, run.id, session.id, messages)
             if sink:
                 sink.step_end(run.steps)
+        if transcript:
+            # A CLOSING OFFER whose extra work ran out of steps (v1.402.0
+            # review): the model had already FINISHED and answered; the nudge
+            # sent it on to the work it offered. Running out of steps there is
+            # not the task failing — the answer stands, followed by what the
+            # extra steps did and that they were cut.
+            _cut_offer = _closing_offer_cut_reply(messages)
+            if _cut_offer:
+                await asyncio.to_thread(self._save, run)
+                return True, _cut_offer
         # Round budget spent before the model finalized — the CALLER owns what
         # that means (whole-run failure vs. a single step's outcome).
         return False, ""

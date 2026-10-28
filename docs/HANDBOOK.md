@@ -1968,6 +1968,17 @@ Iron Jarvis now asks you fewer questions, and better ones.
   ("Which colour should the button be?"), a choice between options, an offer
   to explain, and an idea it parks "for later" all end the reply as before.
   After the finish check has run, its answer ends the reply.
+- **What stays your decision.** An offer to send, email, post, share,
+  publish, commit, push, merge, deploy, open a pull request, pay, buy,
+  delete, or remove files or data ("Want me to send this to the client?",
+  "Shall I push?") — or to do anything to production — is never acted on:
+  the reply keeps its question for you. The message that tells it to carry
+  on says the same, so an offer that only points back ("Shall I proceed?")
+  is not taken as permission for those either. A helper or teammate an agent
+  handed a piece to is never told to carry on (the agent that gave out the
+  piece reads its answer), and when the extra work runs out of steps the
+  answer it had already finished still stands, with a line saying the extra
+  work was cut short. English replies only.
 - Each time it happens, the app counts it as one of its own nudges (an
   `autonomy.nudged` event), apart from the times you nudge it yourself.
 

@@ -6125,7 +6125,12 @@ def closing_offer_wanted(
             has_calls=has_calls, round_index=round_index, rounds=rounds, armed=armed,
             truncated=truncated, low_trust=finish_low_trust(trust_state),
             plan_mode=bool(getattr(harness, "plan_mode", False)),
-            after_finish=bool(finish is not None and getattr(finish, "ran", False)),
+            # v1.402.0 review: a reply resumed after a restart whose cut part
+            # already carried the finish note (`checked_before`) is past the
+            # check too — its next ending is the check's answer.
+            after_finish=bool(finish is not None and (
+                getattr(finish, "ran", False) or getattr(finish, "checked_before", False)
+            )),
         ))
     except Exception:  # noqa: BLE001 — a reading never breaks a turn
         return False
