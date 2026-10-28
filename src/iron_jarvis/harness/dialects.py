@@ -76,6 +76,16 @@ from typing import Any, Callable, Iterable
 #: ``read_file`` (Claude Code's Read shows images; Jarvis's reader is text).
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
+#: v1.402.0 (part 4): the ONE line every question tool's description ends
+#: with — Claude Code's ``AskUserQuestion``, Codex's ``request_user_input``
+#: (which had none) and Jarvis's own ``ask_user`` (``harness/session_tools``).
+#: The prompt's whole policy is ``components.ASK_POLICY``; this is its rule
+#: in the place a model reads just before it asks.
+ASK_TOOL_RULE = (
+    "Ask only what is the user's to decide: what they want or what counts as done, "
+    "never how to do it."
+)
+
 #: Every family the table knows, and the dialect it speaks. A row is either
 #: CHOSEN BY A MEASUREMENT (its :data:`FAMILY_MEASURED` entry names the
 #: dialect that won) or the vendor's own advice, marked not yet measured.
@@ -935,8 +945,7 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         "Asks the user one to four multiple-choice questions and waits for the answers. Each "
         "question has a short header, two to four options (label + description; put the "
         "recommended one first and add \"(Recommended)\" to its label) and multiSelect. The "
-        "user can always answer in their own words instead. Ask only what is the user's to "
-        "decide.",
+        "user can always answer in their own words instead. " + ASK_TOOL_RULE,
         _obj({
             "questions": {
                 "type": "array",
@@ -1109,7 +1118,7 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
         "Request user input for one to three short questions and wait for the response. Each "
         "question has an id, a short header, the question and 2-3 options (label + "
         "description; the recommended one first with \"(Recommended)\" in its label). The "
-        "user can always answer in their own words instead.",
+        "user can always answer in their own words instead. " + ASK_TOOL_RULE,
         _obj({
             "questions": {
                 "type": "array",

@@ -82,6 +82,7 @@ from ...harness.helpers import asking as _helper_asking
 # Part 3, Phase 2: what separates a Build reply's words from its answer to
 # the finish check (lock-step with chat_turn's `combine`).
 from ...harness.finish import SEPARATOR as _FINISH_SEPARATOR
+from ...harness.closing_offer import SEPARATOR as _CLOSING_OFFER_SEPARATOR
 # Part 3, Phase 3: the ledger name of a project checker's run (lock-step with
 # chat_turn).
 from ...harness.checkers import CALLED_AS as _checkers_called_as
@@ -104,6 +105,9 @@ from ..chat_turn import (
     repeated_call_refusal,
     # v1.344.0 — recovery seams, lock-step with chat_turn (M1/M2/M3).
     RECOVERY_BLOCK,
+    # v1.402.0 — the asking policy's short form, lock-step with chat_turn.
+    CHAT_ASK_POLICY,
+    arms_work,
     with_second_failure_note,
     refusal_label,
     refusal_footnotes,
@@ -4313,6 +4317,10 @@ async def chat_stream(
             # one. MIRROR NOTE (lock-step): chat_turn.py's Tools seam carries
             # the same constant at the same place — edit both or neither.
             + "\n" + RECOVERY_BLOCK
+            # ASKING (v1.402.0): the asking policy's short form, only on a
+            # turn that armed or ask-armed a tool that does work. MIRROR NOTE
+            # (lock-step): chat_turn.py's Tools seam, same constant, same place.
+            + ("\n" + CHAT_ASK_POLICY if arms_work({*armed, *ask_armed}) else "")
             + (
                 "\nSPREADSHEET FIGURES: never compute numbers yourself —"
                 " call excel_query (profile the workbook first with"
@@ -4989,6 +4997,27 @@ async def chat_stream(
                     msgs.append(LLMMessage(role="assistant", content=reply_text))
                     msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
                     yield _sse("reset", {"reason": "text_tool_call"})
+                    continue
+                # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4) — the
+                # lock-step copy of chat_turn's: ONCE per reply, before the
+                # finish check. The offer stays on screen (it is the head of
+                # the reply the user keeps); the separator token keeps what
+                # follows off its line, like the finish check's.
+                if not calls and _chat_turn.closing_offer_wanted(
+                    _harness, _finish, reply_text,
+                    has_calls=bool(calls), round_index=_round, rounds=_rounds,
+                    armed=bool(armed or ask_armed), truncated=_truncated, trust_state=_trust_state,
+                    messages=msgs,
+                ):
+                    msgs.append(LLMMessage(
+                        role="assistant", content=reply_text,
+                        raw_blocks=list(getattr(final_resp, "raw_blocks", None) or []),
+                    ))
+                    msgs.append(LLMMessage(
+                        role="user", content=_chat_turn.take_closing_offer(_harness, reply_text),
+                    ))
+                    await _chat_turn.note_closing_offer(d.platform, body, _tool_session, _round)
+                    yield _sse("token", {"text": _CLOSING_OFFER_SEPARATOR})
                     continue
                 # THE FINISH CHECK (part 3, Phase 2): the model ends a Build
                 # reply that changed files — ONCE, before the reply ends, its
@@ -6471,6 +6500,12 @@ async def chat_stream(
                     reply_text = (_f_resp.text or "").strip() or reply_text
                     # v1.323.0: the nudge was the final answering call.
                     _truncated = _chat_turn._truncated_by(_f_resp)
+            # A CLOSING OFFER THAT FIRED (v1.402.0, part 4): the answer that
+            # ended on the offer, then what came after it (the live bubble
+            # showed both, split by the separator token) — after the final-
+            # answer nudge, before the language guard. MIRROR NOTE
+            # (lock-step): chat_turn.run_chat_turn combines at the same point.
+            reply_text = _chat_turn.combine_closing_offer(_harness, reply_text)
             _l_in = _l_out = _l_n = 0
             lang_note = ""
             _user_text = _last_user_text(body.messages)

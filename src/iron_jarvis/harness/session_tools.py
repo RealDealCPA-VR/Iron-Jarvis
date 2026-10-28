@@ -36,6 +36,7 @@ import re
 from typing import Any
 
 from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
+from .dialects import ASK_TOOL_RULE
 
 #: Questions in one ask, options per question, and the text caps.
 MAX_QUESTIONS = 4
@@ -181,8 +182,9 @@ class AskUserTool(Tool):
     description = (
         "Ask the user one to four short questions and wait for their answer. Each "
         "question may offer options (the user can always answer in their own words "
-        "instead); `multi` lets them pick several. Ask only what is the user's to "
-        "decide — find everything else out yourself with your other tools."
+        "instead); `multi` lets them pick several. " + ASK_TOOL_RULE + " Find "
+        "everything else out yourself with your other tools, decide the rest, and "
+        "say what you assumed."
     )
     reversibility = Reversibility.READONLY
     risk_class = RiskClass.READ

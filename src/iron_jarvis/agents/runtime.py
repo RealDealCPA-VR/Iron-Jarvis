@@ -221,6 +221,31 @@ def _no_final_text_result(run_messages: list[LLMMessage]) -> str:
         text += f"\nHere is what {name} returned last:\n{snippet}"
     return text
 
+
+def _closing_offer_reply(messages: list[LLMMessage], text: str) -> str:
+    """The run's answer after a CLOSING OFFER fired in it (v1.402.0, part 4
+    — ``harness/closing_offer``): the answer that ended on the offer, then
+    what came after it, the chat lanes' shape. A continuation that ended
+    silently after running tools reads as what it ran
+    (:func:`_no_final_text_result`, over the steps after the nudge only); one
+    that did nothing at all leaves the first answer alone. No nudge in the
+    run's messages: ``text`` as it is."""
+    from ..harness.closing_offer import join, nudge_index
+
+    i = nudge_index(messages)
+    if i < 1:
+        return text
+    before = messages[i - 1]
+    head = str(getattr(before, "content", "") or "") if getattr(before, "role", "") == "assistant" else ""
+    if not head.strip():
+        return text
+    tail = text or ""
+    if not tail.strip():
+        after = messages[i + 1:]
+        tail = _no_final_text_result(after) if any(m.role == "tool" for m in after) else ""
+    return join(head, tail)
+
+
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
 #: that stamps one of these has a channel: chat/job/project/user are watched
@@ -1271,6 +1296,43 @@ class AgentRuntime:
                 keys.add(tool.perm_key())
         return frozenset(keys)
 
+    def _closing_offer_wanted(
+        self,
+        session: Session,
+        text: str,
+        *,
+        transcript: bool,
+        tool_specs: list,
+        messages: list[LLMMessage],
+        steps_left: int,
+    ) -> bool:
+        """Should this final answer get the CLOSING-OFFER nudge (v1.402.0,
+        part 4 — ``harness/closing_offer``)? Only the FLAT lane's answer
+        (``transcript`` — its final text IS the run's answer; a decomposed
+        step's is not), with tools offered, at least ``MIN_ROUNDS_LEFT``
+        steps left after this one, not in low trust, never a read-only
+        reviewer (its verdict is its report's last line), and at most ONCE
+        per run — the nudge in the run's own messages is the record, so a
+        second invocation of the loop or a resume never sends it again.
+        Never raises."""
+        if not transcript or not tool_specs:
+            return False
+        try:
+            from ..harness.closing_offer import MIN_ROUNDS_LEFT, ends_on_offer, nudge_index
+
+            if int(steps_left) < MIN_ROUNDS_LEFT or nudge_index(messages) >= 0:
+                return False
+            if self._effective_trust(session) == TRUST_LOW:
+                return False
+            from ..harness.helpers import REVIEW_ONLY_OPTION
+            from ..scheduling.knobs import session_options
+
+            if session_options(session).get(REVIEW_ONLY_OPTION) is True:
+                return False
+            return ends_on_offer(text or "")
+        except Exception:  # noqa: BLE001 — a reading never breaks a run
+            return False
+
     def _effective_trust(self, session: Session) -> str:
         return effective_trust(
             getattr(session, "trust", ""), bool(self._tainted.get(session.id))
@@ -2156,6 +2218,15 @@ class AgentRuntime:
                 f"\n\nYour manager is {reports_to}. When you are blocked or finished, "
                 f"say so plainly — {reports_to} and the user read your result."
             )
+        # THE ASKING POLICY (v1.402.0, part 4 — "ask about intent, decide the
+        # rest"): every agent run, attended and unattended, carries the ONE
+        # policy the Build harness carries (``harness/components.ASK_POLICY``)
+        # — ask only about what the user wants or what counts as done, decide
+        # the rest and say so. Here, before the planner prices the prompt
+        # (v1.152.0).
+        from ..harness.components import ASK_POLICY as _ASK_POLICY
+
+        system_prompt += "\n\n" + _ASK_POLICY
         # THE MISSION (v1.307.0): a run started from the Agents page's mission
         # door (``options.deliverable``) is read DELIVERABLE-FIRST — its final
         # message is what the user sees in the centre of the screen, so it must
@@ -3173,6 +3244,9 @@ class AgentRuntime:
         _cut_count = 0
         _cut_streak = 0  # review: cut steps IN A ROW (the notes' bound)
         _cut_pending = ""
+        # v1.402.0 (the closing offer): where this invocation's steps start,
+        # so the final-answer exit knows how many are LEFT.
+        _offer_from = run.steps
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
@@ -3427,8 +3501,32 @@ class AgentRuntime:
                 _cut_pending = _cut_note
 
             if not resp.wants_tools:
+                # A FINAL ANSWER THAT ENDS ON AN OFFER (v1.402.0, part 4 —
+                # harness/closing_offer, the chat lanes' rule): "Want me to
+                # also add tests?" with steps left is told ONCE to do it
+                # unless only the user can decide, and the run goes on.
+                if self._closing_offer_wanted(
+                    session, resp.text, transcript=transcript, tool_specs=tool_specs,
+                    messages=messages, steps_left=max_steps - (run.steps - _offer_from),
+                ):
+                    from ..core.nudges import CLOSING_QUESTION, note_nudge
+                    from ..harness.closing_offer import CLOSING_OFFER_NUDGE, SEPARATOR
+
+                    messages.append(LLMMessage(
+                        role="assistant", content=resp.text,
+                        raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
+                    ))
+                    messages.append(LLMMessage(role="user", content=CLOSING_OFFER_NUDGE))
+                    await note_nudge(
+                        self.p.event_bus, CLOSING_QUESTION, session_id=session.id,
+                        run_id=run.id, step=int(run.steps), surface="agent",
+                    )
+                    if sink:
+                        sink.token_delta(SEPARATOR)
+                    await asyncio.to_thread(self._save, run)
+                    continue
                 await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
-                return True, resp.text
+                return True, _closing_offer_reply(messages, resp.text) if transcript else resp.text
 
             messages.append(
                 LLMMessage(
