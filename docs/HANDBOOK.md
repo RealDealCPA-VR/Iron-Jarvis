@@ -1955,19 +1955,26 @@ by themselves.
   keeps the session planning, as before. Nothing starts by itself if you
   wrote something after approving (a note, a message waiting to go, or a new
   message), if the planning reply failed or was stopped, if you switched the
-  session back to plan mode, or for a night task.
+  session back to plan mode, or for a night task. If the planning reply read
+  something flagged as trying to give it instructions, the plan is carried
+  out at low trust (its commands need the sandbox), as a night task's next
+  turn is.
 - **Runs you start get room to finish.** An agent run you start and watch
-  (from chat, an objective on the Agents page, a project task, or the
-  Sessions page) now gets 60 steps instead of 12. The number is **Settings ›
-  Agents & automation › Steps for runs you start** (12 to 200). Runs that start on their own
-  (schedules, goals, workflows, rules, the phone) keep **Max steps per run**.
-  A run whose caller set its own number keeps that number.
+  (from chat, an objective on the Agents page, or a project task) now gets 60
+  steps instead of 12, and so do the helpers a coding session or an objective
+  starts. The number is **Settings › Agents & automation › Steps for runs you
+  start** (12 to 200). Runs that start on their own (schedules, goals,
+  workflows, rules, the phone) and a run started from the Sessions page's New
+  session form keep **Max steps per run**. A run whose caller set its own
+  number keeps that number.
 - **At its limit, such a run carries on once.** When a run you started uses
   all its steps before finishing, it carries on once by itself with the same
   number again. It keeps everything it already did, so no step is repeated.
   If it runs out a second time it stops, and the chat offers **Keep going**
   beside **Try again**. Keep going picks the run up where it stopped, with its
-  work kept; Try again starts the task over.
+  work kept; Try again starts the task over. One of your own agents that is
+  paused, or whose monthly allowance this run has used up, does not carry on:
+  it stops at its limit.
 - **Document and browser work in chat gets one more round of steps.** A chat
   reply that writes a document or works in your browser used to stop at its
   limit with "what is still left to do". It now gets the same number of steps

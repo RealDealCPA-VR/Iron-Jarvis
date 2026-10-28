@@ -5951,8 +5951,9 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
 
     try:
         from .routes.build import CONTINUE_TEXT as _carry_on
+        from .routes.build import PLAN_RUN_TEXT as _plan_run
     except Exception:  # noqa: BLE001 — the route module is optional here
-        _carry_on = ""
+        _carry_on = _plan_run = ""
     resumed_tail = list(getattr(resumed, "resume_tail", None) or []) if resumed is not None else []
     is_resume = bool(resumed_tail and str(getattr(resumed, "resumed_from", "") or ""))
     # Review: a daemon "carry on" (Resume when ready / Continue on another
@@ -5980,7 +5981,14 @@ async def finish_for_turn(d, body, harness_turn, *, tool_session: str, tool_ws,
         folder=tool_ws,
         messages=list(getattr(body, "messages", None) or []),
         harness=harness_turn,
-        carry_on=[_carry_on] if _carry_on else [],
+        # v1.402.0 review: an approved plan's act turn is the daemon's own
+        # hidden question (``PLAN_RUN_TEXT``) — it says "carry it out", so the
+        # check reads the USER's request before it (the plan turn's question):
+        # read as the request it listed its sentences as the points and called
+        # every file the user's request named "a file the request does not
+        # name" (inviting the model to remove it), and the team's reviewer was
+        # handed it as "the request".
+        carry_on=[t for t in (_carry_on, _plan_run) if t],
         since=since or None,
         custom_tools=custom,
         turn_id=str(getattr(body, "turn_id", "") or ""),

@@ -1215,6 +1215,32 @@ def carries_on_at_step_limit(session) -> bool:
     return _decompose.explicit_max_steps(session) is None
 
 
+def _carry_on_held_back(platform, session, run) -> str:
+    """BLOCKING. Why an attended run does NOT carry on past its step budget,
+    or "" (v1.402.0 review): a custom agent's allowance
+    (``allowance.carry_on_refusal`` — paused, or used up counting this run's
+    spend so far). Never raises."""
+    try:
+        name = str(getattr(session, "agent_name", "") or "").strip()
+        if not name.lower().startswith("custom:"):
+            return ""
+        from . import allowance
+
+        tokens = int(getattr(run, "input_tokens", 0) or 0) + int(getattr(run, "output_tokens", 0) or 0)
+        usd = float(getattr(run, "cost_usd", 0.0) or 0.0)
+        why = allowance.carry_on_refusal(
+            getattr(platform, "agents_registry", None), getattr(platform, "engine", None), name,
+            tokens=tokens, usd=usd,
+        )
+        if why:
+            logging.getLogger("iron_jarvis.agents.runtime").info(
+                "run %s does not carry on past its step budget: %s", getattr(run, "id", ""), why,
+            )
+        return why
+    except Exception:  # noqa: BLE001 — a broken ledger costs the check, never the run
+        return ""
+
+
 def _effective(messages, system_prompt: str, summary: str, covers: int):
     """Apply an existing compaction WITHOUT touching the caller's list.
 
@@ -2506,7 +2532,19 @@ class AgentRuntime:
                 breaker_state=_flat_breaker,
                 transcript=True,
             )
-            if not finished and not final_text and carries_on_at_step_limit(session):
+            _carry = not finished and not final_text and carries_on_at_step_limit(session)
+            if _carry:
+                # v1.402.0 review: the carry-on is spending nobody pressed
+                # for — a custom agent that is paused, or whose monthly
+                # allowance this run has used up, stops at its limit as before
+                # (every door refuses it the same way; the run's own spend so
+                # far counts, its session row is stamped only at the end).
+                _held = await asyncio.to_thread(
+                    _carry_on_held_back, self.p, session, run,
+                )
+                if _held:
+                    _carry = False
+            if _carry:
                 # AT ITS LIMIT, AN ATTENDED RUN CARRIES ON ONCE BY ITSELF
                 # (v1.402.0). It spent its step budget with the model still
                 # working (an empty reason is the step limit; the streamed-

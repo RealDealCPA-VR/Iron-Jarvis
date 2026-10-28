@@ -9372,13 +9372,17 @@ export default function ChatPage() {
     // already consumed the attachment chips, so re-doing either would show the
     // message twice and drop the files. The turn is being RE-RUN, not restarted.
     const esc = opts.escalatedFrom;
-    const atts = esc ? esc.atts : attachments;
+    // v1.402.0 review: "Keep going" is a press on the run card, not a
+    // message from the box — the files waiting in the composer belong to the
+    // user's NEXT message, so they neither ride the continuation nor leave
+    // the box (they used to: attached as "Attached file:" lines and cleared).
+    const atts = esc ? esc.atts : opts.keepGoing ? [] : attachments;
     // THE CHAT'S WORK RIDES THE ESCALATION (v1.344.0): only when there is
     // some — a turn that ran nothing sends the key not at all.
     const carried = opts.priorToolResults?.length
       ? { prior_tool_results: opts.priorToolResults }
       : {};
-    if (!esc) setAttachments([]); // chips are consumed by this message
+    if (!esc && !opts.keepGoing) setAttachments([]); // chips are consumed by this message
     // A recap of the chat so far — prepended ONLY when opening a fresh session
     // below (switching to Agent mode drops all context otherwise). Captured
     // before the new user bubble is appended.
@@ -9644,6 +9648,18 @@ export default function ChatPage() {
       if (atts.length) setAttachments(atts);
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      if (opts.keepGoing) {
+        // v1.402.0 review: a Keep going that did not start takes its own
+        // bubble back — the stopped run's card is the newest reply again, so
+        // its Keep going is offered again — and puts nothing in the box (the
+        // words were the press's; sent from the box they would be an
+        // ordinary message, never a resume).
+        const back = withBubble.slice(0, -1);
+        setMessages(back);
+        messagesRef.current = back;
+        queueSave(back, box);
+        return;
+      }
       // Match the chat-mode failure path: the typed message survives navigation
       // (messagesRef already holds the appended user bubble by now) and returns
       // to the composer for an immediate edit/resend.
