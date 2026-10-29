@@ -1984,6 +1984,44 @@ The chat page now has one switch at the top, in the middle: **Chat | Code**.
   ("Your coding session finished", "A coding session is waiting for your
   OK"), never "Build session". **Ctrl K** has a row for **Code** itself.
 
+## The next step under a reply (v1.406.0)
+
+When a reply finishes, the newest one can end with a short **"here's where
+we are"** line and one or two buttons for the obvious next move, so you can
+press instead of typing. It is in a chat and in a coding session, in the same
+quiet style as the lines around it.
+
+- **What it says** comes only from what the reply's own record already says —
+  no extra model call: how many files it changed, how its finish check went
+  (tests passed, failing, fixed, not run), what the team's reviewer said,
+  points of your request still left, that it stopped at its step limit or
+  the session's limit, that the changes on the session's branch are not
+  committed yet, or what it offered to do next. A plain answer gets nothing:
+  no box, never filler.
+- **The buttons** (at most two; the first is the one it recommends) are
+  always things you could already do:
+  - in a coding session: **Keep going** after a step limit (the same press
+    as before, now in one place), **Fix the failing tests**, **Fix what the
+    reviewer found**, **Commit** (opens the branch's own Commit with its
+    drafted message; nothing is committed until you press Commit there) and
+    **Open a pull request** (opens the branch's own Create PR);
+  - in both: **Yes, do it** when the reply ended by offering more work
+    ("Want me to also add tests?") — it sends "Yes, go ahead.", exactly as
+    if you typed it; in a chat, **Continue** once the app it offered to
+    connect is connected.
+- **Your decisions stay yours.** When the offer is something only you
+  should decide — sending, posting, pushing, merging, deleting, paying — the
+  button only names it: a press puts the words in the message box (or opens
+  the existing Commit / Create PR form), and nothing happens until you press
+  Send. A button never skips an approval card, a grant or an "Allow once"
+  rule: it is the same as typing or pressing that thing yourself.
+- **It gets out of the way.** The line and buttons step aside as soon as
+  you type, and the box is gone while a reply runs. It is never saved as a
+  message: reopening a conversation shows it again under the newest reply
+  only. A failed reply keeps its own line (Retry, Sign in) instead.
+- **Suggested follow-up questions** (Settings › "Suggest follow-up
+  questions", off by default) appear inside the same box, below the line.
+
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 
 A coding session's **Changes** tab is one scrolling review. Every file the

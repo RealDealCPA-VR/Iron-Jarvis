@@ -1,0 +1,718 @@
+{
+ "rows": [
+  {
+   "text": "Done. Want me to also add tests?",
+   "sentence": "Want me to also add tests?",
+   "kind": "work",
+   "action": "add tests"
+  },
+  {
+   "text": "Would you like me to add a test for the empty case?",
+   "sentence": "Would you like me to add a test for the empty case?",
+   "kind": "work",
+   "action": "add a test for the empty case"
+  },
+  {
+   "text": "Do you want me to update the README too?",
+   "sentence": "Do you want me to update the README too?",
+   "kind": "work",
+   "action": "update the README"
+  },
+  {
+   "text": "Shall I proceed?",
+   "sentence": "Shall I proceed?",
+   "kind": "work",
+   "action": "proceed"
+  },
+  {
+   "text": "Should I go ahead and apply the migration?",
+   "sentence": "Should I go ahead and apply the migration?",
+   "kind": "work",
+   "action": "apply the migration"
+  },
+  {
+   "text": "Should I continue with the remaining three files?",
+   "sentence": "Should I continue with the remaining three files?",
+   "kind": "work",
+   "action": "the remaining three files"
+  },
+  {
+   "text": "Should I start on the frontend part?",
+   "sentence": "Should I start on the frontend part?",
+   "kind": "work",
+   "action": "the frontend part"
+  },
+  {
+   "text": "Let me know if you'd like me to wire it into the CLI.",
+   "sentence": "Let me know if you'd like me to wire it into the CLI.",
+   "kind": "work",
+   "action": "wire it into the CLI"
+  },
+  {
+   "text": "Let me know if you want me to add type hints as well.",
+   "sentence": "Let me know if you want me to add type hints as well.",
+   "kind": "work",
+   "action": "add type hints"
+  },
+  {
+   "text": "If you'd like, I can also refactor the parser.",
+   "sentence": "If you'd like, I can also refactor the parser.",
+   "kind": "work",
+   "action": "refactor the parser"
+  },
+  {
+   "text": "If you want, I can add a --dry-run flag.",
+   "sentence": "If you want, I can add a --dry-run flag.",
+   "kind": "work",
+   "action": "add a --dry-run flag"
+  },
+  {
+   "text": "I can also add logging if you want.",
+   "sentence": "I can also add logging if you want.",
+   "kind": "work",
+   "action": "add logging"
+  },
+  {
+   "text": "I can also write a migration script if you'd like.",
+   "sentence": "I can also write a migration script if you'd like.",
+   "kind": "work",
+   "action": "write a migration script"
+  },
+  {
+   "text": "Happy to add the integration tests too if you want.",
+   "sentence": "Happy to add the integration tests too if you want.",
+   "kind": "work",
+   "action": "add the integration tests too"
+  },
+  {
+   "text": "Want me to run the full test suite?",
+   "sentence": "Want me to run the full test suite?",
+   "kind": "work",
+   "action": "run the full test suite"
+  },
+  {
+   "text": "Next, shall I add pagination?",
+   "sentence": "Next, shall I add pagination?",
+   "kind": "work",
+   "action": "add pagination"
+  },
+  {
+   "text": "Shall I go ahead, or would you rather review the diff first?",
+   "sentence": "Shall I go ahead, or would you rather review the diff first?",
+   "kind": "work",
+   "action": "go ahead"
+  },
+  {
+   "text": "Should I proceed with the remaining endpoints?",
+   "sentence": "Should I proceed with the remaining endpoints?",
+   "kind": "work",
+   "action": "the remaining endpoints"
+  },
+  {
+   "text": "I can also update the docs — want me to?",
+   "sentence": "I can also update the docs — want me to?",
+   "kind": "work",
+   "action": "update the docs"
+  },
+  {
+   "text": "Do you want me to fix the two lint warnings as well?",
+   "sentence": "Do you want me to fix the two lint warnings as well?",
+   "kind": "work",
+   "action": "fix the two lint warnings"
+  },
+  {
+   "text": "Would you like me to go ahead and implement this?",
+   "sentence": "Would you like me to go ahead and implement this?",
+   "kind": "work",
+   "action": "implement this"
+  },
+  {
+   "text": "**Want me to add a CHANGELOG entry?**",
+   "sentence": "Want me to add a CHANGELOG entry?",
+   "kind": "work",
+   "action": "add a CHANGELOG entry"
+  },
+  {
+   "text": "- Want me to also handle the Windows paths?",
+   "sentence": "Want me to also handle the Windows paths?",
+   "kind": "work",
+   "action": "handle the Windows paths"
+  },
+  {
+   "text": "Ready for me to apply the patch?",
+   "sentence": "Ready for me to apply the patch?",
+   "kind": "work",
+   "action": "apply the patch"
+  },
+  {
+   "text": "Say the word and I'll add the caching layer.",
+   "sentence": "Say the word and I'll add the caching layer.",
+   "kind": "work",
+   "action": "add the caching layer"
+  },
+  {
+   "text": "I fixed the bug in parser.py and the tests pass.\n\nWant me to add a regression test?",
+   "sentence": "Want me to add a regression test?",
+   "kind": "work",
+   "action": "add a regression test"
+  },
+  {
+   "text": "Should I also update the config schema?",
+   "sentence": "Should I also update the config schema?",
+   "kind": "work",
+   "action": "update the config schema"
+  },
+  {
+   "text": "Would you like me to proceed? 🙂",
+   "sentence": "Would you like me to proceed?",
+   "kind": "work",
+   "action": "proceed"
+  },
+  {
+   "text": "If that looks right, I can apply the same fix to the other two modules — just let me know.",
+   "sentence": "If that looks right, I can apply the same fix to the other two modules — just let me know.",
+   "kind": "work",
+   "action": "apply the same fix to the other two modules"
+  },
+  {
+   "text": "The parser now handles empty input.\n\n```python\nparse('')\n```\n\nWant me to add the same guard to the lexer?",
+   "sentence": "Want me to add the same guard to the lexer?",
+   "kind": "work",
+   "action": "add the same guard to the lexer"
+  },
+  {
+   "text": "Done!\nWant me to also add tests?",
+   "sentence": "Want me to also add tests?",
+   "kind": "work",
+   "action": "add tests"
+  },
+  {
+   "text": "I'd be happy to add the retry logic too if that's helpful.",
+   "sentence": "I'd be happy to add the retry logic too if that's helpful.",
+   "kind": "work",
+   "action": "add the retry logic too"
+  },
+  {
+   "text": "The fix is in.\r\n\r\nShould I also apply it to the v2 branch?",
+   "sentence": "Should I also apply it to the v2 branch?",
+   "kind": "work",
+   "action": "apply it to the v2 branch"
+  },
+  {
+   "text": "Would it help if I added a regression test?",
+   "sentence": "Would it help if I added a regression test?",
+   "kind": "work",
+   "action": "added a regression test"
+  },
+  {
+   "text": "Let me know and I'll add the tests.",
+   "sentence": "Let me know and I'll add the tests.",
+   "kind": "work",
+   "action": "add the tests"
+  },
+  {
+   "text": "Should I add tests as well?",
+   "sentence": "Should I add tests as well?",
+   "kind": "work",
+   "action": "add tests"
+  },
+  {
+   "text": "Should I write a migration for the new column?",
+   "sentence": "Should I write a migration for the new column?",
+   "kind": "work",
+   "action": "write a migration for the new column"
+  },
+  {
+   "text": "Should I fix the other two call sites as well?",
+   "sentence": "Should I fix the other two call sites as well?",
+   "kind": "work",
+   "action": "fix the other two call sites"
+  },
+  {
+   "text": "Need me to add type hints?",
+   "sentence": "Need me to add type hints?",
+   "kind": "work",
+   "action": "add type hints"
+  },
+  {
+   "text": "Let me know if I should add a --verbose flag.",
+   "sentence": "Let me know if I should add a --verbose flag.",
+   "kind": "work",
+   "action": "should add a --verbose flag"
+  },
+  {
+   "text": "Next, I could add pagination to the list endpoint.",
+   "sentence": "Next, I could add pagination to the list endpoint.",
+   "kind": "work",
+   "action": "add pagination to the list endpoint"
+  },
+  {
+   "text": "Happy to add tests for this too.",
+   "sentence": "Happy to add tests for this too.",
+   "kind": "work",
+   "action": "add tests for this"
+  },
+  {
+   "text": "Should I update the release notes?",
+   "sentence": "Should I update the release notes?",
+   "kind": "work",
+   "action": "update the release notes"
+  },
+  {
+   "text": "Want me to add a POST endpoint for it?",
+   "sentence": "Want me to add a POST endpoint for it?",
+   "kind": "work",
+   "action": "add a POST endpoint for it"
+  },
+  {
+   "text": "Want me to send a test request to the dev server?",
+   "sentence": "Want me to send a test request to the dev server?",
+   "kind": "work",
+   "action": "send a test request to the dev server"
+  },
+  {
+   "text": "Want me to remove the unused imports?",
+   "sentence": "Want me to remove the unused imports?",
+   "kind": "work",
+   "action": "remove the unused imports"
+  },
+  {
+   "text": "Let me know if you'd like me to send this to the client.",
+   "sentence": "Let me know if you'd like me to send this to the client.",
+   "kind": "user",
+   "action": "send this to the client"
+  },
+  {
+   "text": "Would you like me to email the summary to Dana?",
+   "sentence": "Would you like me to email the summary to Dana?",
+   "kind": "user",
+   "action": "email the summary to Dana"
+  },
+  {
+   "text": "Want me to post this to the team's Slack channel?",
+   "sentence": "Want me to post this to the team's Slack channel?",
+   "kind": "user",
+   "action": "post this to the team's Slack channel"
+  },
+  {
+   "text": "Shall I publish the post?",
+   "sentence": "Shall I publish the post?",
+   "kind": "user",
+   "action": "publish the post"
+  },
+  {
+   "text": "Want me to share it with the team?",
+   "sentence": "Want me to share it with the team?",
+   "kind": "user",
+   "action": "share it with the team"
+  },
+  {
+   "text": "Would you like me to commit these changes?",
+   "sentence": "Would you like me to commit these changes?",
+   "kind": "user",
+   "action": "commit these changes"
+  },
+  {
+   "text": "Want me to push it?",
+   "sentence": "Want me to push it?",
+   "kind": "user",
+   "action": "push it"
+  },
+  {
+   "text": "Say the word and I'll push the branch.",
+   "sentence": "Say the word and I'll push the branch.",
+   "kind": "user",
+   "action": "push the branch"
+  },
+  {
+   "text": "Should I go ahead and merge the PR?",
+   "sentence": "Should I go ahead and merge the PR?",
+   "kind": "user",
+   "action": "merge the PR"
+  },
+  {
+   "text": "Should I merge this into main?",
+   "sentence": "Should I merge this into main?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Want me to open a pull request?",
+   "sentence": "Want me to open a pull request?",
+   "kind": "user",
+   "action": "open a pull request"
+  },
+  {
+   "text": "Should I deploy it?",
+   "sentence": "Should I deploy it?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Shall we ship it?",
+   "sentence": "Shall we ship it?",
+   "kind": "user",
+   "action": "ship it"
+  },
+  {
+   "text": "Want me to release v2?",
+   "sentence": "Want me to release v2?",
+   "kind": "user",
+   "action": "release v2"
+  },
+  {
+   "text": "Shall I submit the form?",
+   "sentence": "Shall I submit the form?",
+   "kind": "user",
+   "action": "submit the form"
+  },
+  {
+   "text": "Would you like me to pay the invoice?",
+   "sentence": "Would you like me to pay the invoice?",
+   "kind": "user",
+   "action": "pay the invoice"
+  },
+  {
+   "text": "Should I buy the domain?",
+   "sentence": "Should I buy the domain?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Shall I delete the old files?",
+   "sentence": "Shall I delete the old files?",
+   "kind": "user",
+   "action": "delete the old files"
+  },
+  {
+   "text": "Is it okay if I delete the cache folder?",
+   "sentence": "Is it okay if I delete the cache folder?",
+   "kind": "user",
+   "action": "delete the cache folder"
+  },
+  {
+   "text": "Want me to remove the old migration files?",
+   "sentence": "Want me to remove the old migration files?",
+   "kind": "user",
+   "action": "remove the old migration files"
+  },
+  {
+   "text": "Want me to drop the users table?",
+   "sentence": "Want me to drop the users table?",
+   "kind": "user",
+   "action": "drop the users table"
+  },
+  {
+   "text": "Should I proceed with sending the invoices?",
+   "sentence": "Should I proceed with sending the invoices?",
+   "kind": "user",
+   "action": "sending the invoices"
+  },
+  {
+   "text": "I can send it to the team if you'd like.",
+   "sentence": "I can send it to the team if you'd like.",
+   "kind": "user",
+   "action": "send it to the team"
+  },
+  {
+   "text": "Should I run the migration against the production database?",
+   "sentence": "Should I run the migration against the production database?",
+   "kind": "user",
+   "action": "run the migration against the production database"
+  },
+  {
+   "text": "Would you like me to send it, or keep it as a draft?",
+   "sentence": "Would you like me to send it, or keep it as a draft?",
+   "kind": "user",
+   "action": "send it"
+  },
+  {
+   "text": "Which colour should the button be?",
+   "sentence": "Which colour should the button be?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Do you prefer A or B?",
+   "sentence": "Do you prefer A or B?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "What should the default timeout be?",
+   "sentence": "What should the default timeout be?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Do you want the report as a PDF or a Word file?",
+   "sentence": "Do you want the report as a PDF or a Word file?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Here is the plan:\n1. Parse.\n2. Validate.\n\nDoes this plan match what you want?",
+   "sentence": "Does this plan match what you want?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Would you like to review the diff first?",
+   "sentence": "Would you like to review the diff first?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Can you confirm the API key is set?",
+   "sentence": "Can you confirm the API key is set?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "I can't run the tests without the API key — let me know where it lives.",
+   "sentence": "I can't run the tests without the API key — let me know where it lives.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "I couldn't find a config file; let me know if there is one somewhere else.",
+   "sentence": "I couldn't find a config file; let me know if there is one somewhere else.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Would you like me to use Postgres or SQLite?",
+   "sentence": "Would you like me to use Postgres or SQLite?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Should I use tabs or spaces?",
+   "sentence": "Should I use tabs or spaces?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "I added the tests. Should the CLI flag be called --force or --yes?",
+   "sentence": "Should the CLI flag be called --force or --yes?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Do you want me to keep the old flag or remove it?",
+   "sentence": "Do you want me to keep the old flag or remove it?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Here is a sketch:\n\n```python\n# Want me to add tests?\nx = 1\n```",
+   "sentence": "",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "```python\nprint('Want me to?')\n```",
+   "sentence": "",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "> Shall I proceed?",
+   "sentence": "",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Some notes:\n\n```\nprint(1)\n\nWant me to add tests?",
+   "sentence": "",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Want me to add tests? I went ahead and added them in tests/test_x.py.",
+   "sentence": "I went ahead and added them in tests/testx.py.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Why did the test fail? Because the fixture was stale; I fixed it.",
+   "sentence": "Because the fixture was stale; I fixed it.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Should I have used a different approach? No — the existing helper already covers it.",
+   "sentence": "No — the existing helper already covers it.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "All done — the build passes.",
+   "sentence": "All done — the build passes.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Let me know if you have any questions.",
+   "sentence": "Let me know if you have any questions.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Let me know what you think.",
+   "sentence": "Let me know what you think.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Hope this helps!",
+   "sentence": "Hope this helps!",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Feel free to ask if you need anything else.",
+   "sentence": "Feel free to ask if you need anything else.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Next steps you could take: deploy to staging.",
+   "sentence": "Next steps you could take: deploy to staging.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "",
+   "sentence": "",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Let me know if you'd like me to explain any part of this.",
+   "sentence": "Let me know if you'd like me to explain any part of this.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Would you like me to walk you through the changes?",
+   "sentence": "Would you like me to walk you through the changes?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Is there anything else you'd like me to do?",
+   "sentence": "Is there anything else you'd like me to do?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Want me to change anything else?",
+   "sentence": "Want me to change anything else?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Would you like me to make any other changes?",
+   "sentence": "Would you like me to make any other changes?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "If you'd like, I can add rate limiting later.",
+   "sentence": "If you'd like, I can add rate limiting later.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Done.\n\nA possible follow-up for another time: caching the lookups.",
+   "sentence": "A possible follow-up for another time: caching the lookups.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Shall I explain how the parser works?",
+   "sentence": "Shall I explain how the parser works?",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Let me know if you'd like me to make further changes.",
+   "sentence": "Let me know if you'd like me to make further changes.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Glad to hear it works for you too!",
+   "sentence": "Glad to hear it works for you too!",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Happy to report the tests pass too.",
+   "sentence": "Happy to report the tests pass too.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Next, I can't go on without the API key.",
+   "sentence": "Next, I can't go on without the API key.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Next, I could not reproduce the crash.",
+   "sentence": "Next, I could not reproduce the crash.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "The tests pass. I could also add a benchmark in a follow-up PR if you want.",
+   "sentence": "I could also add a benchmark in a follow-up PR if you want.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "All four endpoints are fixed and the tests pass.\n\nIf you'd like, I can also add rate limiting in the future.",
+   "sentence": "If you'd like, I can also add rate limiting in the future.",
+   "kind": "",
+   "action": ""
+  },
+  {
+   "text": "Done.\n\nWould you like me to commit these changes?",
+   "sentence": "Would you like me to commit these changes?",
+   "kind": "user",
+   "action": "commit these changes"
+  },
+  {
+   "text": "All set. Want me to open a pull request?",
+   "sentence": "Want me to open a pull request?",
+   "kind": "user",
+   "action": "open a pull request"
+  },
+  {
+   "text": "The tests pass.\n\nShall I push the branch?",
+   "sentence": "Shall I push the branch?",
+   "kind": "user",
+   "action": "push the branch"
+  },
+  {
+   "text": "Fixed it. Want me to also update the README — it still names the old flag?",
+   "sentence": "Want me to also update the README — it still names the old flag?",
+   "kind": "work",
+   "action": "update the README"
+  },
+  {
+   "text": "Want me to add a very long list of things including a parser, a lexer, a formatter, a linter and a whole test suite for it?",
+   "sentence": "Want me to add a very long list of things including a parser, a lexer, a formatter, a linter and a whole test suite for it?",
+   "kind": "work",
+   "action": "add a very long list of things including a parser"
+  },
+  {
+   "text": "Résumé parsing is fixed. Want me to add the café fixture too?",
+   "sentence": "Want me to add the café fixture too?",
+   "kind": "work",
+   "action": "add the café fixture"
+  }
+ ]
+}

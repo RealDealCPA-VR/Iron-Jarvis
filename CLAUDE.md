@@ -4128,6 +4128,61 @@ does not need a bump, stop and bump it.
   filters by it)); moved on purpose: `ij-harness-command-shell-v1381` and
   `ij-harness-helpers-v1372` ("for this session").
 
+- **The NEXT-STEP BOX under the newest settled reply is DERIVED, never
+  saved; every button is an existing action; the user's own decisions are
+  only named** (v1.406.0 part 4; the user: like Claude Code desktop, a short
+  "here's where we are" and one or two buttons for the obvious next move).
+  `lib/nextStep.ts` (pure, table-tested): `codeNextStep(codeReplyFacts(m),
+  gitFacts(view.git, branchStatus))` and `chatNextStep(chatReplyFacts(m),
+  {connected})` → `{recap, actions ≤ MAX_NEXT_ACTIONS (2)}` or null. Recap from
+  the record only: `documents` count, the finish record (tests via
+  `finishWarn`, the team review's verdict, `unmet`), `stepLimit` / `capMet`,
+  the branch (`GET /build/sessions/{id}/git`, read by HarnessSession only for
+  a LIVE branch and only shown after a reply that changed something), the
+  closing offer. NO box for a plain answer, a failed / account-limit /
+  declined reply (its own line is the next step) — never filler. Buttons, in
+  order: Keep going (the step-limit / cap line's OWN press moved here — the
+  line keeps its words, the button keeps its old test id
+  `harness-keep-going` / `harness-cap-keep-going`; never drawn twice), Fix
+  the failing tests, Fix what the reviewer found, Yes, do it (sends
+  `YES_TEXT` "Yes, go ahead." through the page's own send), the user-owned
+  offer (`fill_offer`: fills the box with "Yes, <action>."; a commit / PR
+  offer on a live branch maps to the Commit / Create PR press), Commit
+  (uncommitted), Open a pull request (committed, no PR). A "send" is the
+  host's ordinary send (HarnessSession `send({text})`, the chat page's
+  `send(text)`), so every card / grant / once-only rule applies to the turn
+  it starts; Commit / PR go HarnessSession `branchPress` → HarnessPanes
+  (opens Changes, holds `pendingPress` until made) → ChangesPane (Branch
+  scope) → BranchView `press` → its own `startCommit` / `startPr` (the form
+  waits; nothing is committed by the box), made once per `n` (`onPressed`
+  clears it so a remount never presses twice). THE OFFER READING is the
+  daemon's: `harness/closing_offer.offer_kind` ("work" | "user" | "") and
+  `offered_action` (new, `ends_on_offer` = `offer_kind == "work"`, unchanged)
+  with a TS twin `lib/closingOffer.ts` whose PATTERNS block is GENERATED from
+  the compiled Python patterns (`scripts/gen_closing_offer_ts.py`, `--check`
+  in `tests/test_closing_offer_twin_v1406.py`) and held equal on every v1.402.0
+  table row via `dashboard/__tests__/fixtures/closing-offer-v1406.json`
+  (`IJ_REGEN_CLOSING_OFFER=1`). An outward action asked with no offer shape
+  ("Should I deploy it?") reads "" — no button, the safe side. COMPONENT:
+  `components/chat/NextStepBox.tsx` (calm: the 13px quiet line + the
+  step-limit line's pills, no box style); the recap and buttons step aside
+  while the user types (`hidden`; harness `input`, chat `ChatNextStepBox` →
+  `useComposerEmpty` — the PAGE never subscribes to the composer), and the
+  model follow-ups (`chat_followups` chips / the harness `harness-next-steps`
+  strip) render INSIDE it as `children` and stay while typing, as before; the
+  chat's ConnectedElsewhere moved out of MessageRow into the box (its own
+  words and Continue). The chat box renders at page level after the
+  transcript for `messages[last]` only (never for runResult / agent / panel /
+  phone-thread replies, never while `failedTurn` — the failure line's Retry
+  is that next step). Pins: `dashboard/__tests__/next-step-v1406.test.tsx`
+  (the state table on real recorded lines — the Timeline fixture's saved
+  line, the team seams' finish — plus the harness screen),
+  `next-step-chat-v1406.test.tsx`, `closing-offer-twin-v1406.test.ts`,
+  `tests/test_closing_offer_twin_v1406.py` (21 mutations, all red). OPEN: the
+  chat's own Continue on a cut-off reply and RunResultCard's Keep going stay
+  where they were (not in the box); a failed chat turn shows no box (its
+  Retry line is the one place); an older reply's offer is never read.
+
 - **The coding sessions are the CHAT page's Code view; Build is the
   terminals; the sidebar is five rooms** (v1.406.0 part 1 + 5; the user's
   decision 2026-10-29: "the chat will contain the box at the top for chat vs

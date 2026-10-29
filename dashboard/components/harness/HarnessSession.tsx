@@ -34,7 +34,10 @@ import {
   Pencil,
   Square,
 } from "lucide-react";
-import { branchLine } from "@/lib/buildGit";
+import { branchLine, getBranchStatus, type BranchStatus } from "@/lib/buildGit";
+// v1.406.0 part 4: the next-step box under the newest settled reply.
+import { NextStepBox } from "@/components/chat/NextStepBox";
+import { codeNextStep, codeReplyFacts, gitFacts, type NextAction } from "@/lib/nextStep";
 import { ApiError, get, post, put } from "@/lib/api";
 // Harness gaps (fix 2, fix 3): the chat's failure line and receipt facts.
 import { FailureDetails, HarnessFailureLine } from "@/components/harness/HarnessFailure";
@@ -648,6 +651,29 @@ export function HarnessSession({
   const [branchError, setBranchError] = useState<string | null>(null);
   const nextGenRef = useRef(0);
   const busy = sending || stream.streaming;
+  // v1.406.0 part 4: the session's branch as the next-step box reads it
+  // (the Branch view's own GET, read again when a turn ends; only for a live
+  // branch — a removed worktree or a merged branch offers no Commit / PR).
+  const [branchStatus, setBranchStatus] = useState<BranchStatus | null>(null);
+  // v1.406.0 part 4: the box's Commit / "Open a pull request" open the
+  // Branch view's own press (its form waits for the user) — a counter, so a
+  // second press opens it again.
+  const [branchPress, setBranchPress] = useState<{ kind: "commit" | "pr"; n: number } | null>(null);
+  const branchSeq = useRef(0);
+  // The Branch view changed the branch (a commit, a push, a pull request).
+  const [branchReads, setBranchReads] = useState(0);
+  const liveBranch = !!view?.git && !view.git.removed && !view.git.merged;
+  useEffect(() => {
+    if (!liveBranch || busy) return;
+    const seq = ++branchSeq.current;
+    getBranchStatus(threadId)
+      .then((st) => {
+        if (seq === branchSeq.current) setBranchStatus(st);
+      })
+      .catch(() => {
+        if (seq === branchSeq.current) setBranchStatus(null);
+      });
+  }, [threadId, liveBranch, busy, turnsEnded, rewinds, branchReads]);
 
   // v1.374.0: while this session is on screen in front and its window has
   // focus, the bell knows the user is LOOKING at it (lib/buildWatching): a
@@ -1610,6 +1636,22 @@ export function HarnessSession({
   }
 
   /** v1.377.0: a Next step press puts its words in the box — never sends. */
+  /** v1.406.0 part 4: a next-step press — EXACTLY the existing action: a
+   *  "send" is the same as typing the words and pressing Send (every card,
+   *  grant and once-only rule applies to the turn it starts); a "fill" only
+   *  puts the words in the box; Commit / "Open a pull request" open the
+   *  Branch view's own press, whose form waits for the user. */
+  function onNextAction(a: NextAction) {
+    if (a.how === "send" && a.text) void send({ text: a.text });
+    else if (a.how === "fill" && a.text) {
+      const words = a.text;
+      setInput((cur) => withNextStep(cur, words));
+      boxRef.current?.focus({ preventScroll: true });
+    } else if (a.kind === "commit" || a.kind === "open_pr") {
+      setBranchPress((p) => ({ kind: a.kind === "commit" ? "commit" : "pr", n: (p?.n ?? 0) + 1 }));
+    }
+  }
+
   function pickNextStep(step: string) {
     setInput((cur) => withNextStep(cur, step));
     setNextSteps([]);
@@ -2583,39 +2625,29 @@ export function HarnessSession({
                 ) : null}
                 {/* v1.374.0: the turn's task list, folded into its reply. */}
                 <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
-                {/* v1.384.0: the reply met its STEP LIMIT — said plainly, and
-                    the newest one offers ONE press to carry on (a new turn,
-                    the same as typing "continue"; never automatic). */}
+                {/* v1.384.0: the reply met its STEP LIMIT — said plainly.
+                    v1.406.0 part 4: its ONE press to carry on ("Keep going",
+                    the same as typing "continue"; never automatic) is the
+                    next-step box's first button now, under the newest reply
+                    — one place, never twice. */}
                 {(() => {
                   const sl = decodeStepLimit(m.stepLimit);
                   if (!sl) return null;
-                  const offer = m === lastReply && !busy && !view.archived;
                   return (
                     <div data-testid="harness-step-limit" className="mt-2 flex flex-wrap items-center gap-2">
                       <p className="flex items-center gap-1.5 text-[12px] text-zinc-400">
                         <CircleAlert size={12} aria-hidden className="shrink-0" />
                         {stepLimitWords(sl)}
                       </p>
-                      {offer ? (
-                        <button
-                          type="button"
-                          data-testid="harness-keep-going"
-                          onClick={() => void send({ text: KEEP_GOING_TEXT })}
-                          title={`Carry on from where it stopped (sends "${KEEP_GOING_TEXT}")`}
-                          className="rounded-full bg-white/[0.06] px-3 py-1 text-[12px] text-zinc-200 transition-colors hover:bg-white/[0.1] hover:text-zinc-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
-                        >
-                          Keep going
-                        </button>
-                      ) : null}
                     </div>
                   );
                 })()}
                 {/* v1.392.0 (decision 8): the session's cap ended the reply —
-                    the step-limit way: said plainly, and the newest offers
-                    ONE press to carry on (a new reply, its own limit). */}
+                    the step-limit way: said plainly (its Keep going is the
+                    next-step box's, v1.406.0 part 4). */}
                 <CapMetLine
                   cap={decodeCapMet(m.capMet)}
-                  offer={m === lastReply && !busy && !view.archived}
+                  offer={false}
                   keepGoingText={KEEP_GOING_TEXT}
                   onKeepGoing={() => void send({ text: KEEP_GOING_TEXT })}
                 />
@@ -2701,26 +2733,41 @@ export function HarnessSession({
               </div>
             ),
           )}
-          {/* v1.377.0 (Phase 6): Next step — up to two follow-ups the session's
-              model suggests (only when "Suggest follow-up questions" is on). A
-              press puts the words in the box; nothing is sent. */}
-          {!busy && nextSteps.length ? (
-            <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[12px] text-zinc-500">Next:</span>
-              {nextSteps.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  data-testid="harness-next-step"
-                  onClick={() => pickNextStep(s)}
-                  title="Put this in the message box (it is not sent)"
-                  className="max-w-full truncate rounded-full bg-white/[0.06] px-3 py-1 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.1] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          ) : null}
+          {/* v1.406.0 part 4: THE NEXT-STEP BOX under the newest settled
+              reply — where things stand (files changed, the finish check's
+              tests and the team's review, what is not done) and at most two
+              presses for the obvious next move, read off the reply's own
+              record (lib/nextStep; nothing saved). Hidden while the user
+              types and while a turn runs. v1.377.0 (Phase 6): the follow-ups
+              the session's model suggests (only when "Suggest follow-up
+              questions" is on) render inside it — a press puts the words in
+              the box; nothing is sent. */}
+          {(() => {
+            if (busy || view.archived || !newestReply) return null;
+            const step = codeNextStep(codeReplyFacts(newestReply), gitFacts(view.git, branchStatus));
+            const chips = nextSteps.length ? (
+              <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[12px] text-zinc-500">Next:</span>
+                {nextSteps.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    data-testid="harness-next-step"
+                    onClick={() => pickNextStep(s)}
+                    title="Put this in the message box (it is not sent)"
+                    className="max-w-full truncate rounded-full bg-white/[0.06] px-3 py-1 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.1] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            ) : null;
+            return (
+              <NextStepBox step={step} hidden={!!input.trim()} onAction={onNextAction}>
+                {chips}
+              </NextStepBox>
+            );
+          })()}
           {busy ? (
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
@@ -3182,8 +3229,12 @@ export function HarnessSession({
           busy={busy}
           undoFor={undoFor}
           onUndo={onUndo}
-          onSessionChanged={() => void load()}
+          onSessionChanged={() => {
+            void load();
+            setBranchReads((n) => n + 1);
+          }}
           onSessionGone={onGone}
+          branchPress={branchPress}
         />
       </aside>
     </div>
