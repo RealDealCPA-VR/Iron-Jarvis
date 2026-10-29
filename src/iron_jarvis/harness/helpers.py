@@ -251,7 +251,7 @@ class HelperParent:
             out["local_only"] = True
         # v1.372.0 review: WHERE the helper's asks belong — the Build session
         # that started it — so the bell and the desktop open THAT session
-        # (``/terminals?session=<id>``), where its row and its card are.
+        # (``/chat?view=code&session=<id>``), where its row and its card are.
         thread = build_thread_of(self.session_id)
         if thread:
             out[BUILD_SESSION_OPTION] = thread

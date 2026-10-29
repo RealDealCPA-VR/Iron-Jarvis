@@ -3440,7 +3440,7 @@ function runOutcomeNotice(entry) {
       ts: runOutcomeTsMs(entry.ts),
       title,
       body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
-      href: `/terminals?session=${encodeURIComponent(thread)}`,
+      href: `/chat?view=code&session=${encodeURIComponent(thread)}`,
     };
   }
   if (entry.type === "build.turn_stalled") {

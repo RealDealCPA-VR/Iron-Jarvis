@@ -426,7 +426,7 @@
       "phone": true,
       "title": "Iron Jarvis stopped fixing your pull request's checks",
       "body": "Fix the parser · Iron Jarvis stopped after 3 rounds: Claude Code did not approve the fix. The work is on the side branch ij/fix-parser-1a2b…",
-      "href": "/terminals?session=bs_ci"
+      "href": "/chat?view=code&session=bs_ci"
     },
     {
       "case": "ci-passing",
@@ -449,7 +449,7 @@
       "phone": true,
       "title": "Your pull request's checks pass now",
       "body": "Fix the parser · The checks pass now with the reviewed fix Iron Jarvis pushed.",
-      "href": "/terminals?session=bs_ci"
+      "href": "/chat?view=code&session=bs_ci"
     }
   ]
 }

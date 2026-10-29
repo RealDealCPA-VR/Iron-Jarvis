@@ -111,7 +111,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   ci_watch: {
     label: "Pull request checks",
     problem: "Your pull requests' checks aren't being watched",
-    href: "/terminals",
+    href: CODE_VIEW_HREF,
   },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
