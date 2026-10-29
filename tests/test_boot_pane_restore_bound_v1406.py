@@ -166,6 +166,49 @@ def test_a_pane_that_starts_after_shutdown_began_is_closed_not_registered(tmp_pa
     assert m.get(stuck_id) is None
 
 
+def test_a_late_pane_that_opens_just_before_shutdown_cannot_wipe_the_shutdown_snapshot(
+    tmp_path, monkeypatch
+):
+    """Review (v1.406.0 part 6): a late restore registers its pane and THEN
+    persists. When the shutdown's ``kill_all`` runs between the two, the
+    shutdown snapshot holds every pane -- and the late thread's snapshot, taken
+    after the kill, saw no live pane and wrote an EMPTY index over it: every
+    pane lost on the next boot. Once shutdown began, only its own (inline)
+    snapshot may write."""
+    gate = _Gate()
+    m, entries = _manager(tmp_path, monkeypatch, gate, ["sh", STUCK])
+    ok_id, stuck_id = entries[0]["id"], entries[1]["id"]
+    m.rehydrate()
+    real_log = term_mgr.log
+    in_between = threading.Event()
+    go_on = threading.Event()
+
+    class _HoldingLog:
+        def __getattr__(self, name):
+            return getattr(real_log, name)
+
+        def info(self, msg, *a, **kw):
+            if "after the boot stopped waiting" in str(msg):
+                in_between.set()
+                go_on.wait(10)
+            return real_log.info(msg, *a, **kw)
+
+    monkeypatch.setattr(term_mgr, "log", _HoldingLog())
+    late = [t for t in threading.enumerate() if t.name.startswith("pane-restore")]
+    try:
+        gate.release.set()
+        assert in_between.wait(10), "the late restore never registered"
+        assert m.get(stuck_id) is not None
+        m.kill_all()  # the shutdown lands between registering and persisting
+        assert _saved_ids(m.state_path) == [ok_id, stuck_id]
+    finally:
+        go_on.set()
+        gate.release.set()
+        for t in late:
+            t.join(10)
+    assert _saved_ids(m.state_path) == [ok_id, stuck_id], "the late persist wiped the shutdown snapshot"
+
+
 def test_a_pane_that_starts_in_time_is_registered_with_the_boot(tmp_path, monkeypatch):
     """Control: nothing stuck = every pane is registered before rehydrate
     returns, exactly as before (one snapshot, snapshot order)."""

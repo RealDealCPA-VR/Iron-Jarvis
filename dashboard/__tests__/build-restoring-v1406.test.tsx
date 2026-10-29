@@ -78,6 +78,19 @@ vi.mock("@/components/ui", () => ({
   ConfirmButton: ({ label }: { label: string }) => <button type="button">{label}</button>,
   Empty: () => <div />,
 }));
+// Review: the hosts kept are recorded, so a pane still reopening keeps its
+// xterm + socket (paneHost) as well as its saved keys.
+const retained = vi.hoisted(() => ({ calls: [] as string[][] }));
+vi.mock("@/components/terminal/paneHost", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/components/terminal/paneHost")>();
+  return {
+    ...real,
+    retainPaneHosts: (ids: Iterable<string>) => {
+      retained.calls.push([...ids]);
+      return real.retainPaneHosts(ids);
+    },
+  };
+});
 vi.mock("@/components/terminal/DirectoryTree", () => ({
   DirectoryTree: () => <div />,
 }));
@@ -102,6 +115,7 @@ const term = (id: string) => ({
 beforeEach(() => {
   localStorage.clear();
   api.terminalReads = 0;
+  retained.calls = [];
   api.responses = {
     "/terminals/shells": { shells: [] },
     "/models": { models: [] },
@@ -128,6 +142,7 @@ describe("a pane the daemon is still reopening (v1.406.0 part 6)", () => {
     expect(localStorage.getItem("ij.pane.view.gone")).toBeNull();
     expect(localStorage.getItem("ij.pane.view.t2")).toBe("chat");
     expect(screen.queryByTestId("terminal-pane-t2")).toBeNull();
+    expect(retained.calls[0]).toEqual(["t1", "t2"]);
     // The page re-reads the list while a pane is restoring, and adds it.
     await screen.findByTestId("terminal-pane-t2", {}, { timeout: 10_000 });
     expect(localStorage.getItem("ij.pane.view.t2")).toBe("chat");

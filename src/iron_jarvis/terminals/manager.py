@@ -297,6 +297,14 @@ class TerminalManager:
         #: Set by ``kill_all``: a restore that finishes after shutdown began
         #: is closed instead of registered.
         self._closing = False
+        #: v1.406.0 part 6 review: ONE snapshot writes at a time, and once
+        #: ``kill_all`` began only its own (inline) snapshot writes. A late
+        #: restore registers its pane and then persists; a shutdown landing
+        #: between the two killed every pane, and the late thread's snapshot,
+        #: taken after the kill, found no live pane and wrote an EMPTY index
+        #: over the shutdown snapshot — every pane lost on the next boot.
+        #: Taken BEFORE ``_lock`` (never the other way round).
+        self._snapshot_lock = threading.RLock()
         # --- pane capability tokens (v1.238.0) -------------------------------
         # The manager owns the store because it owns the only two facts a pane
         # token is made of: the pane id (minted here, before the spawn) and the
@@ -735,14 +743,16 @@ class TerminalManager:
         # the history; a crash still has the per-pane files. A restore
         # prefers the inline copy: it is written only here (or by an older
         # app), always after the files, so it is never the older one.
-        with self._lock:
-            # A pane whose boot restore is still starting is closed when (if)
-            # its shell starts; its snapshot entry is kept below as read.
-            self._closing = True
-        try:
-            self.snapshot(inline=True)
-        except Exception:  # noqa: BLE001 — persistence never blocks a shutdown
-            log.debug("shutdown terminal snapshot failed", exc_info=True)
+        with self._snapshot_lock:
+            with self._lock:
+                # A pane whose boot restore is still starting is closed when
+                # (if) its shell starts; its snapshot entry is kept below as
+                # read.
+                self._closing = True
+            try:
+                self.snapshot(inline=True)
+            except Exception:  # noqa: BLE001 — persistence never blocks a shutdown
+                log.debug("shutdown terminal snapshot failed", exc_info=True)
         with self._lock:
             items = list(self._sessions.values())
         for session in items:
@@ -954,10 +964,13 @@ class TerminalManager:
         index, as every snapshot did before v1.333.0 (see :meth:`kill_all`)."""
         if not self.state_path:
             return
-        sessions = self._live_for_snapshot()
-        self._write_scrollbacks(sessions)
-        entries, text = self._index_text(sessions, inline)
-        self._write_index(entries, text)
+        with self._snapshot_lock:
+            if self._closing and not inline:
+                return  # the shutdown snapshot is the last word (see __init__)
+            sessions = self._live_for_snapshot()
+            self._write_scrollbacks(sessions)
+            entries, text = self._index_text(sessions, inline)
+            self._write_index(entries, text)
 
     def snapshot_if_changed(self) -> bool:
         """Write only what changed since the last write (v1.245.0; per pane
@@ -968,13 +981,16 @@ class TerminalManager:
         when it wrote. BLOCKING (file writes): call it off the loop."""
         if not self.state_path:
             return False
-        sessions = self._live_for_snapshot()
-        wrote = self._write_scrollbacks(sessions) > 0
-        entries, text = self._index_text(sessions)
-        if text != getattr(self, "_last_index", None):
-            self._write_index(entries, text)
-            wrote = True
-        return wrote
+        with self._snapshot_lock:
+            if self._closing:
+                return False  # the shutdown snapshot is the last word
+            sessions = self._live_for_snapshot()
+            wrote = self._write_scrollbacks(sessions) > 0
+            entries, text = self._index_text(sessions)
+            if text != getattr(self, "_last_index", None):
+                self._write_index(entries, text)
+                wrote = True
+            return wrote
 
     def _saved_scrollback(self, entry: Mapping[str, Any], rid: str) -> bytes:
         """A snapshot entry's scrollback: inline (an index written before

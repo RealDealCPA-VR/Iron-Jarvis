@@ -816,7 +816,15 @@ does not need a bump, stop and bump it.
   `tests/test_boot_pane_restore_bound_v1406.py` (10 mutations red),
   `dashboard/__tests__/{build-restoring,daemon-starting}-v1406.test.tsx`
   (6 mutations red); moved on purpose: `pane-keys-v1280`,
-  `terminal-host-v1243` (the kept set is `keep`).
+  `terminal-host-v1243` (the kept set is `keep`). REVIEW: a late restore
+  registers and THEN persists; a `kill_all` landing between the two killed
+  every pane and the late snapshot (no live pane left) wrote an EMPTY index
+  over the shutdown snapshot — every pane lost next boot (reproduced). Now
+  `_snapshot_lock` serialises every snapshot (taken BEFORE `_lock`), and once
+  `_closing` only the inline shutdown snapshot writes (`snapshot` returns,
+  `snapshot_if_changed` answers False). Pin:
+  `test_a_late_pane_that_opens_just_before_shutdown_cannot_wipe_the_shutdown_snapshot`;
+  Build's `retainPaneHosts` keeping a restoring id is pinned too.
 - **A backup that never leaves the disk it protects is one failure from
   nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
   `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND
