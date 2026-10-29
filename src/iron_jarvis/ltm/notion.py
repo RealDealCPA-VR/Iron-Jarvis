@@ -59,6 +59,44 @@ class NotionConnector(LTMConnector):
         self.token_resolver = token_resolver
         self.http = http
         self.title_property = title_property
+        #: v1.408.0: the database's REAL title column was looked up once.
+        self._title_checked = False
+
+    # -- the title column (v1.408.0) ---------------------------------------
+    @staticmethod
+    def _bad_request(exc: BaseException) -> bool:
+        resp = getattr(exc, "response", None)
+        return getattr(resp, "status_code", None) == 400
+
+    def _discover_title(self, headers: dict[str, str]) -> bool:
+        """Read the database's own schema for its TITLE column, once. A real
+        Notion database's title column is often not called "Name" ("Title",
+        "Page", a translated name), and every query and save naming "Name"
+        was refused with a 400. True when a different name was found."""
+        if self._title_checked:
+            return False
+        self._title_checked = True
+        try:
+            data = self._json(self.http.get(f"{API_BASE}/databases/{self.database_id}", headers=headers))
+        except Exception:  # noqa: BLE001 — the original refusal is the report
+            return False
+        for prop_name, spec in ((data or {}).get("properties") or {}).items():
+            if isinstance(spec, dict) and spec.get("type") == "title":
+                if prop_name != self.title_property:
+                    self.title_property = str(prop_name)
+                    return True
+                return False
+        return False
+
+    def _post_with_title(self, url: str, build: Callable[[], dict[str, Any]], headers: dict[str, str]) -> dict[str, Any]:
+        """POST ``build()``; on a 400, look up the real title column once and,
+        if it differs, POST again with it."""
+        try:
+            return self._json(self.http.post(url, json=build(), headers=headers))
+        except Exception as exc:  # noqa: BLE001
+            if self._bad_request(exc) and self._discover_title(headers):
+                return self._json(self.http.post(url, json=build(), headers=headers))
+            raise
 
     # -- auth -------------------------------------------------------------
     def _headers(self) -> dict[str, str] | None:
@@ -84,13 +122,17 @@ class NotionConnector(LTMConnector):
         if headers is None:
             return []  # missing token -> empty, never a crash
         url = f"{API_BASE}/databases/{self.database_id}/query"
-        body: dict[str, Any] = {"page_size": k}
-        if query.strip():
-            body["filter"] = {
-                "property": self.title_property,
-                "title": {"contains": query},
-            }
-        data = self._json(self.http.post(url, json=body, headers=headers))
+
+        def build() -> dict[str, Any]:
+            body: dict[str, Any] = {"page_size": k}
+            if query.strip():
+                body["filter"] = {
+                    "property": self.title_property,
+                    "title": {"contains": query},
+                }
+            return body
+
+        data = self._post_with_title(url, build, headers)
         hits = [self._parse_page(page) for page in data.get("results", [])]
         return hits[:k]
 
@@ -101,21 +143,24 @@ class NotionConnector(LTMConnector):
                 "Notion token not configured; set the Notion token secret to append."
             )
         url = f"{API_BASE}/pages"
-        body = {
-            "parent": {"database_id": self.database_id},
-            "properties": {
-                self.title_property: {"title": [{"text": {"content": title}}]}
-            },
-            "children": [
-                {
-                    "object": "block",
-                    "type": "paragraph",
-                    # v1.406.0 review: in pieces Notion accepts (see update).
-                    "paragraph": {"rich_text": rich_text_pieces(content)},
-                }
-            ],
-        }
-        data = self._json(self.http.post(url, json=body, headers=headers))
+
+        def build() -> dict[str, Any]:
+            return {
+                "parent": {"database_id": self.database_id},
+                "properties": {
+                    self.title_property: {"title": [{"text": {"content": title}}]}
+                },
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "paragraph",
+                        # v1.406.0 review: in pieces Notion accepts (see update).
+                        "paragraph": {"rich_text": rich_text_pieces(content)},
+                    }
+                ],
+            }
+
+        data = self._post_with_title(url, build, headers)
         return data.get("id", "")
 
     # -- parsing ----------------------------------------------------------

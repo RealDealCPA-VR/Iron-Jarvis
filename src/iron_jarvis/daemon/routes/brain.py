@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from ...brain import profiles as P
-from ...brain.tools import pending_rows, write_note
+from ...brain.tools import already_saved, pending_rows, write_note
 from ...brain.turn import forget_guides
 
 
@@ -104,17 +104,119 @@ def register(app: FastAPI, d: Any) -> None:
         label = P.base_label(d.platform, row.base)
         if conn is None:
             raise HTTPException(status_code=409, detail=f"{label} is not set up as a memory base any more.")
+        # v1.408.0: the earlier attempt may have LANDED and then lost its
+        # answer (a timeout on the reply) — then sending it again would add
+        # the same text twice. Look first.
+        landed = already_saved(d.platform, active, conn, row.title, row.content)
+        if landed:
+            _settle(pending_id, "saved")
+            return {"ok": True, "saved": {"ref": landed, "verified": True, "action": "already"}}
         res = write_note(d.platform, active, conn, row.title, row.content)
         if not res["ok"]:
-            if res.get("action"):
-                # It answered but the note is not there — do not keep re-sending.
-                _settle(pending_id, "pending", res["error"])
-                raise HTTPException(status_code=409, detail=f"Not confirmed in {label}: {res['error']}.")
+            kind = res.get("kind") or ("unconfirmed" if res.get("action") else "unreachable")
             _settle(pending_id, "pending", res["error"])
+            if kind == "unconfirmed":
+                # It answered but the note is not there — do not keep re-sending.
+                raise HTTPException(status_code=409, detail=f"Not confirmed in {label}: {res['error']}.")
+            if kind == "setup":
+                raise HTTPException(status_code=409, detail=res["error"])
+            if kind == "refused":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{label} refused it: {res['error']}. Retrying will not help; discard it or change it there.",
+                )
             raise HTTPException(status_code=409, detail=f"{label} is still unavailable: {res['error']}")
         _settle(pending_id, "saved")
         return {"ok": True, "saved": {"ref": res["ref"], "verified": bool(res["verified"]),
                                        "action": res["action"]}}
+
+    # -- v1.408.0: check a profile against the REAL memory base -------------
+    def _active_for(profile_id: str):
+        profile = _store().get(profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="That profile no longer exists.")
+        active = P.ActiveBrain(profile=profile, source="app")
+        conn = d.platform.ltm.get(active.base)
+        return active, conn, P.base_label(d.platform, active.base)
+
+    @app.post("/brain/profiles/{profile_id}/check")
+    def brain_check(profile_id: str) -> dict[str, Any]:
+        """READ-ONLY steps against the profile's memory base, each said in
+        words: can it be reached, does a search answer, can the operating
+        guide be read, and can it save (which tool, for an MCP base). Nothing
+        is written. Sync — the base's own calls run in the threadpool."""
+        active, conn, label = _active_for(profile_id)
+        steps: list[dict[str, Any]] = []
+        if conn is None:
+            steps.append({"step": "reach", "ok": False,
+                          "words": f"{label} is not set up as a memory base any more."})
+            return {"steps": steps}
+        health = getattr(conn, "health", None)
+        try:
+            verdict = health() if callable(health) else None
+        except Exception as exc:  # noqa: BLE001
+            verdict = {"available": False, "detail": str(exc)[:200]}
+        if isinstance(verdict, dict) and verdict.get("available") is False:
+            steps.append({"step": "reach", "ok": False,
+                          "words": f"{label} could not be reached: {verdict.get('detail') or 'no answer'}."})
+            return {"steps": steps}
+        steps.append({"step": "reach", "ok": True if isinstance(verdict, dict) else None,
+                      "words": f"{label} answered." if isinstance(verdict, dict)
+                      else f"{label} has no quick check; the search below tells."})
+        try:
+            hits = d.platform.ltm.search(active.name or "notes", 3, active.base, expand=False)
+            steps.append({"step": "search", "ok": True,
+                          "words": f"Search works ({len(hits)} note(s) for “{active.name or 'notes'}”)."})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"step": "search", "ok": False, "words": f"Search failed: {str(exc)[:200]}"})
+        ref = str(active.profile.get("guide_ref") or "").strip()
+        if ref:
+            try:
+                text = conn.read(ref)
+                ok = bool(str(text or "").strip())
+                steps.append({"step": "guide", "ok": ok, "words": (
+                    f"The operating guide “{ref}” was read ({len(text)} characters)." if ok
+                    else f"The operating guide “{ref}” is empty.")})
+            except Exception as exc:  # noqa: BLE001
+                steps.append({"step": "guide", "ok": False,
+                              "words": f"The operating guide “{ref}” could not be read: {str(exc)[:200]}"})
+        else:
+            steps.append({"step": "guide", "ok": None, "words": "No operating guide is set."})
+        if active.profile.get("save_to") == "never":
+            steps.append({"step": "save", "ok": None, "words": "This profile never saves."})
+        else:
+            setup = getattr(conn, "setup_needed", None)
+            sentence = setup("create") if callable(setup) else ""
+            if sentence:
+                steps.append({"step": "save", "ok": False, "words": sentence})
+            else:
+                tool = ((getattr(conn, "roles", None) or {}).get("create") or {}).get("tool")
+                steps.append({"step": "save", "ok": None, "words": (
+                    f"Saves use {tool}. Press Try a test save to check one." if tool
+                    else "Saving is possible. Press Try a test save to check one.")})
+        return {"steps": steps}
+
+    @app.post("/brain/profiles/{profile_id}/test-save")
+    def brain_test_save(profile_id: str) -> dict[str, Any]:
+        """ONE real save the user pressed for, through the SAME save path a
+        chat uses (look up, add or create, read back), of a note that says
+        what it is. Nothing is queued on failure: this is a test."""
+        import datetime as _dt
+
+        active, conn, label = _active_for(profile_id)
+        if conn is None:
+            raise HTTPException(status_code=409, detail=f"{label} is not set up as a memory base any more.")
+        if active.profile.get("save_to") == "never":
+            raise HTTPException(status_code=409, detail="This profile never saves, so there is nothing to test.")
+        stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+        title = "Iron Jarvis test note"
+        content = f"A test save from Iron Jarvis ({stamp}). It is safe to delete this note."
+        res = write_note(d.platform, active, conn, title, content)
+        if res["ok"]:
+            confirmed = "read back and confirmed" if res["verified"] else "saved, but this base cannot be read back to confirm it"
+            return {"ok": True, "ref": res["ref"], "verified": bool(res["verified"]),
+                    "words": f"Saved “{title}” to {label} ({confirmed}). You can delete it there."}
+        return {"ok": False, "verified": False, "words": f"The test save did not work: {res['error']}"}
 
     @app.delete("/brain/pending/{pending_id}")
     def brain_pending_discard(pending_id: str) -> dict[str, Any]:

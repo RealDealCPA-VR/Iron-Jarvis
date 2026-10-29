@@ -59,7 +59,7 @@ _QUERY_KEYS = ("query", "q", "text", "search", "keywords", "prompt", "input")
 _TITLE_KEYS = ("title", "name", "subject", "summary", "heading", "filename", "path")
 _CONTENT_KEYS = ("content", "text", "body", "note", "markdown", "data")
 _LIMIT_KEYS = ("k", "limit", "top_k", "max_results", "count")
-_RESULT_LIST_KEYS = ("results", "hits", "items", "notes", "documents", "matches")
+_RESULT_LIST_KEYS = ("results", "result", "hits", "items", "notes", "documents", "matches")
 
 #: WORDS that make a tool unfit to serve search, whatever else its name says
 #: (v1.290.0). A search is sent the caller's query text VERBATIM — from a chat
@@ -175,6 +175,64 @@ def _content_text(res: dict[str, Any] | None) -> str:
     return "\n".join(parts)
 
 
+def _result_items(res: "dict[str, Any] | None") -> "list[Any] | None":
+    """The list a tools/call answered with, when it answered with one
+    (v1.408.0). Measured on the user's real wiki server (a Python MCP SDK
+    server): a tool that returns a list arrives as ``structuredContent``
+    ``{"result": [...]}`` and as ONE text block PER ITEM — joined, those
+    blocks are not JSON, and the whole reply used to collapse into a single
+    "hit" holding the first 80 characters."""
+    res = res or {}
+    sc = res.get("structuredContent")
+    if isinstance(sc, list):
+        return sc
+    if isinstance(sc, dict):
+        for key in _RESULT_LIST_KEYS:
+            if isinstance(sc.get(key), list):
+                return sc[key]
+    blocks = [str(c.get("text", "")) for c in res.get("content") or []
+              if isinstance(c, dict) and c.get("type") == "text"]
+    if len(blocks) > 1:
+        items = []
+        for b in blocks:
+            try:
+                items.append(json.loads(b))
+            except (ValueError, TypeError):
+                return None
+        if all(isinstance(i, dict) for i in items):
+            return items
+    return None
+
+
+def _hits_from_res(res: "dict[str, Any] | None", source: str, k: int) -> list[dict[str, Any]]:
+    items = _result_items(res)
+    if items is not None:
+        return _hits_from_text(json.dumps(items), source, k)
+    return _hits_from_text(_content_text(res), source, k)
+
+
+def note_text(res: "dict[str, Any] | None") -> str:
+    """One note's TEXT out of a read reply (v1.408.0): a server that answers
+    JSON (``{"path", "frontmatter", "content", ...}`` — the user's wiki)
+    gives its ``content``/``body``/``text``; anything else is the text as
+    sent. Read-back compared against the JSON used to fail on any quote."""
+    res = res or {}
+    candidates: list[Any] = []
+    if isinstance(res.get("structuredContent"), dict):
+        candidates.append(res["structuredContent"])
+    text = _content_text(res)
+    try:
+        candidates.append(json.loads(text))
+    except (ValueError, TypeError):
+        pass
+    for data in candidates:
+        if isinstance(data, dict):
+            for key in ("content", "body", "text", "markdown"):
+                if isinstance(data.get(key), str):
+                    return data[key]
+    return text
+
+
 def _hits_from_text(text: str, source: str, k: int) -> list[dict[str, Any]]:
     """Normalize a server's reply to uniform hits — JSON first, prose fallback."""
     data: Any = None
@@ -233,8 +291,14 @@ class McpBrainConnector(LTMConnector):
         args: "list[str] | None" = None,
         env: "dict[str, str] | None" = None,
         client: Any = None,
+        roles: "dict[str, dict[str, Any]] | None" = None,
     ) -> None:
         self.name = name
+        #: The tools the USER confirmed per role (v1.408.0, ``mcp_roles``);
+        #: None = never confirmed: search and read use the read-only safe
+        #: pick, and nothing saves, adds to or changes a note through the
+        #: brain tools.
+        self.roles = roles
         self._url = url
         self._headers = dict(headers or {})
         self._token_resolver = token_resolver
@@ -598,6 +662,9 @@ class McpBrainConnector(LTMConnector):
     # -- the LTMConnector contract ------------------------------------------
     def search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         client = self._connect()
+        if self.roles and self.roles.get("search"):
+            res = self._call_role("search", {"query": query})
+            return _hits_from_res(res, self.name, k)
         tool = self._pick_search()
         if tool is None:
             try:
@@ -623,7 +690,7 @@ class McpBrainConnector(LTMConnector):
         text = _content_text(res)
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'search failed'}")
-        return _hits_from_text(text, self.name, k)
+        return _hits_from_res(res, self.name, k)
 
     def list_items(self, limit: int = 60) -> list[dict[str, Any]]:
         """OPTIONAL enumeration for the Memory list/graph views: when the
@@ -648,10 +715,13 @@ class McpBrainConnector(LTMConnector):
         text = _content_text(res)
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'list failed'}")
-        return _hits_from_text(text, self.name, limit)
+        return _hits_from_res(res, self.name, limit)
 
     def append(self, title: str, content: str) -> str:
         client = self._connect()
+        if self.roles and self.roles.get("create"):
+            res = self._call_role("create", {"title": title, "content": content})
+            return _created_ref(res) or title
         tool = self._pick_or_refresh(_APPEND_RX, exclude=_SEARCH_RX)
         if tool is None:
             raise RuntimeError(
@@ -735,49 +805,95 @@ class McpBrainConnector(LTMConnector):
     def read(self, ref: str) -> str:
         from .base import NoteOpUnsupported
 
+        if self.roles and self.roles.get("read"):
+            return note_text(self._call_role("read", {"ref": ref}))
         tool = self._pick_op(("read", "get", "fetch", "open", "view"), refuse=_WRITE_WORDS)
         if tool is None:
             raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that reads one note")
-        return self._call_op(tool, {str(self._ref_key(tool)): ref}, "read")
+        client = self._connect()
+        res = _resolve_maybe_async(client.call_tool(str(tool.get("name")), {str(self._ref_key(tool)): ref}))
+        if (res or {}).get("isError"):
+            raise RuntimeError(f"{self.name}: {_content_text(res)[:300] or 'read failed'}")
+        return note_text(res)
 
-    def update(self, ref: str, content: str) -> str:
+    def update(self, ref: str, content: str, title: str = "") -> str:
+        """v1.408.0: only a tool the USER confirmed adds to a note — a name is
+        a hint, and a wrong guess writes the text into the wrong field (the
+        user's wiki: ``update_page``'s ``note`` is a log comment)."""
         from .base import NoteOpUnsupported
 
-        tool = self._pick_op(
-            # v1.406.0 review: append/add first — an "update" tool may
-            # REPLACE the note; set/write/overwrite say they do.
-            ("append", "add", "update"),
-            refuse=frozenset({"delete", "remove", "archive", "replace", "drop", "trash",
-                              "overwrite", "set", "write"}),
-        )
-        if tool is None:
-            raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that adds to a note")
-        keys = self._schema_keys(tool)
-        args: dict[str, Any] = {str(self._ref_key(tool)): ref}
-        content_key = next((c for c in _CONTENT_KEYS if c in keys and c not in args), None)
-        if content_key is None:
-            raise NoteOpUnsupported(f"{self.name}: {tool.get('name')} takes no text to add")
-        args[content_key] = content
-        self._call_op(tool, args, "update")
+        if not (self.roles and self.roles.get("append")):
+            raise NoteOpUnsupported(self.setup_sentence("append"))
+        self._call_role("append", {"ref": ref, "content": content, "title": title})
         return ref
 
     def change(self, action: str, ref: str, to: str = "") -> str:
+        """v1.408.0: only a tool the USER confirmed for that action."""
         from .base import CHANGE_ACTIONS, NoteOpUnsupported
 
         action = str(action or "").strip().lower()
         if action not in CHANGE_ACTIONS:
             raise NoteOpUnsupported(f"{self.name}: unknown change {action!r}")
-        verbs = {"archive": ("archive", "trash"), "delete": ("delete", "remove", "trash"),
-                 "rename": ("rename",), "move": ("move",)}[action]
-        tool = self._pick_op(verbs)
-        if tool is None:
-            raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that can {action} a note")
-        args: dict[str, Any] = {str(self._ref_key(tool)): ref}
-        if action in ("rename", "move"):
-            keys = self._schema_keys(tool)
-            dest = next((k for k in ("to", "new_title", "new_name", "destination", "new_path", "target") if k in keys), None)
-            if dest is None or not str(to or "").strip():
-                raise NoteOpUnsupported(f"{self.name}: {tool.get('name')} needs a destination it cannot be given")
-            args[dest] = to
-        self._call_op(tool, args, action)
+        if not (self.roles and self.roles.get(action)):
+            raise NoteOpUnsupported(self.setup_sentence(action))
+        self._call_role(action, {"ref": ref, "to": to})
         return ref
+
+    # -- confirmed roles (v1.408.0, ``mcp_roles``) ----------------------------
+    def tool_list(self) -> list[dict[str, Any]]:
+        """The server's tools (connecting once). Raises when unreachable."""
+        self._connect()
+        return list(self._tools or [])
+
+    def setup_sentence(self, role: str) -> str:
+        from .mcp_roles import WORDS
+
+        return (
+            f"{self.name}: choose which of its tools to use to {WORDS.get(role, role).lower()} "
+            f"(Memory › Long-term › {self.name} › Set up tools). Nothing was changed."
+        )
+
+    def setup_needed(self, op: str) -> str:
+        """The sentence that says a write cannot happen until the user
+        confirms a tool for it ("" = it can). ``op``: create | append |
+        archive | delete | rename | move."""
+        if self.roles and self.roles.get(op):
+            return ""
+        return self.setup_sentence(op)
+
+    def _call_role(self, role: str, values: dict[str, str]) -> "dict[str, Any] | None":
+        from .mcp_roles import build_args
+
+        mapping = (self.roles or {})[role]
+        client = self._connect()
+        tool = next((t for t in self._tools or [] if isinstance(t, dict)
+                     and t.get("name") == mapping.get("tool")), None)
+        if tool is None:
+            raise RuntimeError(
+                f"{self.name}: the tool {mapping.get('tool')!r} chosen to {role} notes "
+                "is not on the server any more; set up its tools again"
+            )
+        res = _resolve_maybe_async(
+            client.call_tool(str(mapping["tool"]), build_args(mapping, tool, values))
+        )
+        if (res or {}).get("isError"):
+            raise RuntimeError(f"{self.name}: {_content_text(res)[:300] or role + ' failed'}")
+        return res
+
+
+def _created_ref(res: "dict[str, Any] | None") -> str:
+    """The new note's reference out of a create reply: a JSON ``path``/
+    ``id``/``url``/``ref`` when there is one, else the reply's first line."""
+    res = res or {}
+    candidates: list[Any] = [res.get("structuredContent")]
+    text = _content_text(res)
+    try:
+        candidates.append(json.loads(text))
+    except (ValueError, TypeError):
+        pass
+    for data in candidates:
+        if isinstance(data, dict):
+            for key in ("path", "id", "ref", "url", "uri", "slug"):
+                if isinstance(data.get(key), str) and data[key].strip():
+                    return data[key].strip()[:300]
+    return text.strip().splitlines()[0][:200] if text.strip() else ""

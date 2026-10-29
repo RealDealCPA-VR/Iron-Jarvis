@@ -3954,6 +3954,48 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **An MCP memory base WRITES only through tools the user CONFIRMED;
+  a refusal is never "unavailable"; a save that landed is never sent twice**
+  (v1.408.0, the four open points of v1.406.0, found against the user's REAL
+  wiki server hermes-brain — read-only calls, schemas and reply shapes
+  recorded in `tests/test_memory_profile_fixes_v1408.py`). `ltm/mcp_roles.py`
+  (pure): ROLES search/read/create/append/archive/delete/rename/move, a
+  mapping `{tool, args: {param: query|ref|title|content|to|{const}}}`;
+  `propose(tools)` is a SUGGESTION (verb order, a note noun, server order);
+  `problems()`/`clean()` refuse an unknown tool, a write-like tool as a reader,
+  an unfilled REQUIRED param, a comment field (`note`/`reason`/…) as the text,
+  a role missing what it needs; `build_args` splits a list-typed fixed value on
+  commas. Confirmed roles live in `LTMSourceRecord.roles_json` (additive),
+  written ONLY by `PUT /ltm/sources/{name}/roles` (validated against the live
+  `tools/list`; GET answers tools + proposed + saved + problems).
+  `McpBrainConnector(roles=)`: search/read use a confirmed role else the
+  read-only safe pick; `update`/`change` raise `NoteOpUnsupported` with
+  `setup_sentence` until confirmed (the v1.406.0 name-word picks for writes
+  are gone); `append` uses a confirmed `create` else the LEGACY picker (kept
+  for `ltm_append`); `brain/tools.write_note` refuses up front via
+  `setup_needed("create")` (kind "setup": nothing sent, nothing queued).
+  REPLY SHAPES: a Python MCP SDK server sends a list as `structuredContent
+  {"result": [...]}` + one text block PER ITEM (`_result_items`; joined they
+  are not JSON and the reply collapsed into one 80-char hit), a read as JSON
+  (`note_text` → `content`/`body`/`text`). `write_note` kinds: saved |
+  setup | unconfirmed | refused | unreachable; ONLY `unreachable()`
+  (transport/timeout/5xx/429/OSError/MCPServerStopped/"did not answer"…,
+  walking causes) queues a `BrainPendingWrite`; a raised write is first
+  checked with `already_saved` (same-title note already holding the text →
+  saved), and Retry checks it BEFORE re-sending. `DELETE /ltm/sources/{name}`
+  deregisters the live base (+ closes its client); `/ltm/sources` `bases[].kind`
+  is the record's kind (+ `tools_set_up` for mcp). `NotionConnector` on a 400
+  reads `GET /databases/{id}` ONCE for the real title column and retries.
+  `POST /brain/profiles/{id}/check` (read-only steps reach/search/guide/save)
+  and `/test-save` (one real save via `write_note`, never queued). The UI name
+  is **Memory profile** (vocabulary canon; both ALLOW entries removed; ids,
+  `brain_profile` and `brain_*` unchanged; "brain profile" stays a search
+  alias). Dashboard: `components/memory/McpBaseRoles.tsx` (Set up tools),
+  Check / Try a test save on each profile. NOT DONE: Notion's hosted MCP
+  (OAuth) cannot be a memory base; the REST connector searches titles in one
+  database. Pins: `tests/test_memory_profile_fixes_v1408.py` (14 mutations
+  red), `dashboard/__tests__/memory-profile-v1408.test.tsx`.
+
 - **A BRAIN PROFILE names the durable memory base; ONE resolve rule; the
   guide is trusted, every retrieved note is DATA; a save is "saved" only
   when read back; a structural change asks every time** (v1.406.0; the user:

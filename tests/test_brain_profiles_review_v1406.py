@@ -243,13 +243,25 @@ def test_an_mcp_brain_adds_with_append_before_update_and_reads_with_read():
         _tool("append_section", "slug", "content"),
         _tool("delete_page", "slug"),
     ])
+    # v1.408.0: these are now PROPOSALS the user confirms (``ltm/mcp_roles``)
+    # — the same ranking (append before update, read before get, a note noun
+    # first) — and an unconfirmed update or change calls NOTHING.
+    from iron_jarvis.ltm import mcp_roles
+    from iron_jarvis.ltm.base import NoteOpUnsupported
+
+    prop = mcp_roles.propose(fake.list_tools())
+    assert prop["append"]["tool"] == "append_section"
+    assert prop["read"]["tool"] == "read_page"
+    assert prop["delete"]["tool"] == "delete_page"
     conn = McpBrainConnector("hermes", client=fake)
-    conn.update("acme", "more text")
-    assert fake.calls[-1][0] == "append_section", fake.calls
     conn.read("acme")
     assert fake.calls[-1][0] == "read_page", fake.calls
-    conn.change("delete", "acme")
-    assert fake.calls[-1][0] == "delete_page", fake.calls
+    before = list(fake.calls)
+    with pytest.raises(NoteOpUnsupported):
+        conn.update("acme", "more text")
+    with pytest.raises(NoteOpUnsupported):
+        conn.change("delete", "acme")
+    assert fake.calls == before
 
 
 # --------------------------------------------------------------------------- #
