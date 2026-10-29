@@ -100,6 +100,13 @@ ASK_RULES: dict[str, str] = {
     # machine...) — work that outlives the turn or carries what it read away.
     "standing": "it sets up or changes something that outlives this chat, or hands work to another machine",
     "custom_command": "it runs a saved command",
+    # v1.406.0 part 2 follow-ups: a file inside the folder that steers git, the
+    # editor, CI or the agent itself (.git/**, .ironjarvis/**, .claude/**,
+    # .vscode/tasks.json|settings.json, .github/workflows/**, .gitattributes,
+    # .gitconfig, .gitmodules) — an edit there can run code later.
+    "sensitive_path": "it edits a file that controls git, your editor, CI or Iron Jarvis itself",
+    "code_destructive": "its code may delete, overwrite or run other programs",
+    "code_sends": "its code may send something over the network",
 }
 
 #: The model judgement's name on a receipt and an event.
@@ -126,6 +133,27 @@ class Verdict:
 
 def eased(mode: Any) -> bool:
     return str(mode or "").strip().lower() in EASED_MODES
+
+
+#: Who starts a coding-session turn when it is a person (``harness/night.
+#: BY_PERSON``); repeated here so this module imports nothing at load.
+BY_PERSON = "person"
+
+
+def unwatched_mode(mode: Any, *, started_by: Any = BY_PERSON, continuation: bool = False) -> str:
+    """The posture a coding-session turn runs with (v1.406.0 part 2
+    follow-ups). A turn Iron Jarvis started BY ITSELF — a restart resume,
+    Resume when ready, a move to another account, an approved plan's act
+    turn, the night shift (``started_by`` other than a person, or the
+    daemon's own ``continuation`` question) — has nobody watching it start,
+    so Accept edits and Auto run as Ask first (``approve_for_me``). Every
+    other posture, and a person's own message, is returned unchanged."""
+    text = str(mode or "")
+    if not eased(text):
+        return text
+    if continuation or str(started_by or BY_PERSON) != BY_PERSON:
+        return "approve_for_me"
+    return text
 
 
 # --------------------------------------------------------------------------- #
@@ -454,6 +482,176 @@ def _inside(path: Any, workspace: "Path | None") -> bool:
         return False
 
 
+#: v1.406.0 part 2 follow-ups: folders inside the folder whose files steer
+#: git (``.git/config``, hooks — ``core.fsmonitor`` runs on Iron Jarvis's own
+#: ``git status``), the agent's own guardrails and permission rules
+#: (``.ironjarvis``), Claude Code (``.claude``): ANY file under one, at any
+#: depth, keeps its card.
+SENSITIVE_DIRS: frozenset[str] = frozenset({".git", ".ironjarvis", ".claude"})
+#: (folder, file) pairs: ``.vscode/tasks.json`` runs tasks, ``.vscode/
+#: settings.json`` can name programs; ``.github/workflows/*`` runs in CI.
+SENSITIVE_FILES_IN: dict[str, frozenset[str]] = {
+    ".vscode": frozenset({"tasks.json", "settings.json"}),
+}
+SENSITIVE_SUBDIRS: tuple[tuple[str, str], ...] = ((".github", "workflows"),)
+#: File names that steer git wherever they are.
+SENSITIVE_NAMES: frozenset[str] = frozenset({".gitattributes", ".gitconfig", ".gitmodules"})
+#: An 8.3 short name (``GIT~1``): what it stands for cannot be read off it,
+#: so it is treated as sensitive (fail safe).
+_SHORT_NAME = re.compile(r"^[^~]{1,8}~\d+(\.[^.]{0,3})?$")
+
+
+def _clean_part(part: str) -> str:
+    """One path part as Windows opens it: an alternate data stream (``x:s``)
+    and trailing dots / spaces dropped, lower case."""
+    base = part.split(":", 1)[0]
+    return base.rstrip(". ").lower()
+
+
+def _target_parts(path: Any, workspace: "Path | None") -> "list[str] | None":
+    """The cleaned parts of ``path`` RELATIVE to the resolved folder (``..``
+    and 8.3 names resolved as ``_inside`` resolves them), or None when it is
+    not inside. Blocking (resolve)."""
+    if workspace is None or not isinstance(path, str) or not path.strip():
+        return None
+    try:
+        root = Path(workspace).resolve()
+        p = Path(path.strip())
+        target = (p if p.is_absolute() else root / p).resolve()
+        if target != root and root not in target.parents:
+            return None
+        return [_clean_part(x) for x in target.relative_to(root).parts]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def sensitive_path(path: Any, workspace: "Path | None") -> bool:
+    """Does an edit of ``path`` touch a file that steers git, the editor, CI or
+    the agent (the rule ``sensitive_path``)? Cannot tell ⇒ True."""
+    parts = _target_parts(path, workspace)
+    if parts is None:
+        return True
+    for i, part in enumerate(parts):
+        if part in SENSITIVE_DIRS or part in SENSITIVE_NAMES:
+            return True
+        if _SHORT_NAME.match(part):
+            return True
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        if part in SENSITIVE_FILES_IN and nxt in SENSITIVE_FILES_IN[part]:
+            return True
+        for top, sub in SENSITIVE_SUBDIRS:
+            if part == top and nxt == sub:
+                return True
+    # The path as WRITTEN too (a short name or a stream the resolve kept).
+    for part in re.split(r"[\\/]", str(path)):
+        cp = _clean_part(part)
+        if cp in SENSITIVE_DIRS or cp in SENSITIVE_NAMES or (cp and _SHORT_NAME.match(cp)):
+            return True
+    return False
+
+
+#: v1.406.0 part 2 follow-ups: files a test run executes as SETUP. A turn that
+#: changed one (an edit, or a command or code that names one) never gets the
+#: free ``test_command`` pass for its test run afterwards: it is judged.
+SETUP_FILE_WORDS: tuple[str, ...] = (
+    "conftest", "pytest.ini", "tox.ini", "setup.cfg", "setup.py", "pyproject.toml", "noxfile",
+    "package.json", ".npmrc", "vitest.config", "vitest.workspace", "vitest.setup", "jest.config",
+    "jest.setup", "vite.config", ".mocharc", "babel.config", ".babelrc", "karma.conf",
+)
+_RUNNER_SCRIPT = re.compile(r"([\w.-]+)\.(?:bat|cmd|ps1|exe|com|sh)\b")
+
+
+def _runner_words(command: str) -> set[str]:
+    out: set[str] = set()
+    for w in re.split(r"[\s&|;()]+", str(command or "").lower()):
+        w = w.strip("\"'")
+        if not w:
+            continue
+        last = re.split(r"[\\/]", w)[-1]
+        for ext in (".exe", ".cmd", ".bat", ".ps1", ".com", ".sh"):
+            last = last.removesuffix(ext)
+        if last:
+            out.add(last)
+    return out
+
+
+def setup_touched(command: str, changed: Iterable[str]) -> bool:
+    """Did this turn change (or name, in an earlier command or code) a file
+    the test run ``command`` would execute as setup?"""
+    runners = _runner_words(command)
+    for item in changed or ():
+        low = str(item or "").lower()
+        if not low:
+            continue
+        if any(w in low for w in SETUP_FILE_WORDS):
+            return True
+        if re.search(r"~\d", low):
+            return True  # a short name: cannot tell what it stands for
+        for m in _RUNNER_SCRIPT.finditer(low):
+            if m.group(1).split("/")[-1].split("\\")[-1] in runners:
+                return True
+    return False
+
+
+def changes_of(name: str, args: Any) -> list[str]:
+    """What a call may have CHANGED, for :func:`setup_touched`: an edit's
+    target paths, a command's or a code cell's text (it may write files)."""
+    edit = edit_paths(name, args)
+    if edit is not None:
+        return [p for p in edit[0] if p]
+    if name in COMMAND_TOOLS:
+        c = command_of(args)
+        return [c] if c else []
+    if name in CODE_TOOLS:
+        c = code_of(args)
+        return [c] if c else []
+    return []
+
+
+#: v1.406.0 part 2 follow-ups: tools that run model-written CODE. The same
+#: word checks as a shell command, plus code's own, come before the judge.
+CODE_TOOLS: frozenset[str] = frozenset({"run_code", "code_run", "repl"})
+_CODE_DESTRUCTIVE = re.compile(
+    r"""(?x)
+    \bos\.(?:remove|unlink|rmdir|removedirs|rename|renames|replace|truncate|kill|killpg|chmod|chown|
+           system|popen|startfile|exec\w*|spawn\w*|fork)\b
+    |\bshutil\.(?:rmtree|move|copy|copy2|copyfile|copytree|chown)\b
+    |\.(?:unlink|rmdir|write_text|write_bytes|chmod|touch)\(
+    |\bsubprocess\b|\bctypes\b|\bwinreg\b|\b_winapi\b|\bmultiprocessing\b|\bsignal\b
+    |\b__import__\b|\bimportlib\b|\beval\(|\bexec\(|\bcompile\(
+    |\bopen\([^)]*['"][rbt]*[wax+]
+    |\bfs\.(?:unlink|rm|rmdir|writeFile|appendFile|rename)|\bchild_process\b|\bRemove-Item\b
+    """
+)
+_CODE_SENDS = re.compile(
+    r"""(?x)
+    \b(?:requests|httpx|aiohttp|session|client|urllib3)\.(?:post|put|patch|delete|request|send)\b
+    |\burlopen\(|\burllib\.request\b|\bsmtplib\b|\bsocket\b|\bftplib\b|\bparamiko\b
+    |\bhttp\.client\b|\bwebbrowser\b|\bfetch\(|\bXMLHttpRequest\b|\bnet\.connect\b
+    """
+)
+
+
+def code_of(args: Any) -> str:
+    if not isinstance(args, dict):
+        return ""
+    for key in ("code", "source", "script", "command"):
+        val = args.get(key)
+        if isinstance(val, str):
+            return val
+    return ""
+
+
+def code_risk(code: str) -> str:
+    """The always-ask rule a code cell trips, or "" (the judge decides)."""
+    text = str(code or "")
+    if command_destructive(text) or _CODE_DESTRUCTIVE.search(text):
+        return "code_destructive"
+    if command_sends(text) or _CODE_SENDS.search(text):
+        return "code_sends"
+    return ""
+
+
 def patch_paths(patch: Any) -> "tuple[list[str], bool]":
     """``(paths, removes)`` of a V4A patch: every file it adds, updates or moves
     to, and whether it deletes or moves a file away."""
@@ -524,6 +722,7 @@ def classify(
     quarantined: bool = False,
     needs_a_person: bool = False,
     posix: "bool | None" = None,
+    changed: "Iterable[str]" = (),
 ) -> Verdict:
     """The rules' verdict on ONE call the default posture would CARD.
 
@@ -536,7 +735,7 @@ def classify(
             str(name or ""), args, mode=str(mode or "").strip().lower(), tool=tool,
             workspace=Path(workspace) if workspace else None, forced=forced,
             low_trust=low_trust, quarantined=quarantined, needs_a_person=needs_a_person,
-            posix=posix,
+            posix=posix, changed=tuple(changed or ()),
         )
     except Exception:  # noqa: BLE001 — fail closed
         log.debug("auto approve: a rule could not decide %s", name, exc_info=True)
@@ -544,7 +743,7 @@ def classify(
 
 
 def _classify(name, args, *, mode, tool, workspace, forced, low_trust, quarantined,
-              needs_a_person, posix) -> Verdict:
+              needs_a_person, posix, changed=()) -> Verdict:
     if mode not in EASED_MODES:
         return Verdict(ASK, "")
     if forced:
@@ -563,6 +762,10 @@ def _classify(name, args, *, mode, tool, workspace, forced, low_trust, quarantin
         if removes:
             return Verdict(ASK, "destructive")
         if paths and all(_inside(p, workspace) for p in paths):
+            # v1.406.0 part 2 follow-ups: inside, but a file that steers git,
+            # the editor, CI or the agent keeps its card.
+            if any(sensitive_path(p, workspace) for p in paths):
+                return Verdict(ASK, "sensitive_path")
             return Verdict(PASS, "edit_in_folder")
         return Verdict(ASK, "outside_folder")
     if mode == ACCEPT_EDITS:
@@ -590,10 +793,25 @@ def _classify(name, args, *, mode, tool, workspace, forced, low_trust, quarantin
         if command_sends(cmd):
             return Verdict(ASK, "sends")
         if is_test_command(cmd, posix=posix):
+            # v1.406.0 part 2 follow-ups: a test run after this turn changed
+            # a file it executes as setup (conftest.py, package.json, a
+            # runner-named script…) is judged, never a free pass.
+            if setup_touched(cmd, changed):
+                return Verdict(JUDGE, JUDGE_RULE)
             return Verdict(PASS, "test_command")
         return Verdict(JUDGE, JUDGE_RULE)
     if _acts_for_you(name, tool):
         return Verdict(ASK, "acts_for_you")
+    if name in CODE_TOOLS:
+        # v1.406.0 part 2 follow-ups: model-written code — a shell command's
+        # word checks plus code's own, then the judge (never a rule pass).
+        code = code_of(args)
+        if not code.strip():
+            return Verdict(ASK, "code_destructive")
+        risk = code_risk(code)
+        if risk:
+            return Verdict(ASK, risk)
+        return Verdict(JUDGE, JUDGE_RULE)
     if _custom_command(name, tool):
         return Verdict(ASK, "custom_command")
     if name in _standing_tools():

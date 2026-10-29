@@ -1367,6 +1367,10 @@ class AgentRuntime:
         #: user answered from the list the escalation carried, and under
         #: ``always_ask`` only the former skips a pause. Reset per run.
         self._run_grants: dict[str, set[str]] = {}
+        #: v1.406.0 part 2 follow-ups: session id -> what an Accept edits /
+        #: Auto run may have changed (``_note_auto_changes``), so a test run
+        #: after a setup file changed is never passed by rule.
+        self._auto_changed: dict[str, list[str]] = {}
         #: session id -> True once THIS run's own reading lowered its trust
         #: (v1.298.0): the fence's ``detect_injection`` flag. Reset per run;
         #: the row (``Session.trust``/``tainted_at``) is the durable record
@@ -2869,6 +2873,24 @@ class AgentRuntime:
             return ""
         return perm
 
+    def _note_auto_changes(self, session: Session, calls) -> None:
+        """Keep what an Accept edits / Auto run may have changed (edit targets,
+        command and code text) for ``_auto_rule``'s setup-file check. Nothing
+        for any other posture."""
+        posture = inherited_approval_mode(
+            getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+        )
+        if posture not in ATTENDED_EASED_MODES:
+            return
+        from ..core import auto_approve as _auto
+
+        if not hasattr(self, "_auto_changed"):
+            self._auto_changed = {}
+        bucket = self._auto_changed.setdefault(session.id, [])
+        for c in calls or []:
+            bucket.extend(_auto.changes_of(c.name, c.arguments))
+        del bucket[:-500]
+
     def _auto_rule(self, session: Session, tc, agent_def: AgentDefinition) -> str:
         """The PASS rule Accept edits / Auto let ``tc`` through by, or "" —
         the rules only (v1.406.0 part 2). Under Local only a tool that
@@ -2895,6 +2917,8 @@ class AgentRuntime:
             tc.name, tc.arguments, mode=posture, tool=tool, workspace=ws, forced=forced,
             low_trust=self._effective_trust(session) == TRUST_LOW,
             quarantined=bool(getattr(tool, "quarantined", False)),
+            # v1.406.0 part 2 follow-ups: what this run may have changed.
+            changed=tuple(getattr(self, "_auto_changed", {}).get(session.id, ())),
         )
         return verdict.rule if verdict.passes else ""
 
@@ -3853,6 +3877,10 @@ class AgentRuntime:
             # call), a priced one pauses whatever the grants say, with the
             # words on the ask. MIRROR NOTE: the stream chat lane's
             # `_would_card` / per-call branch read the same map.
+            # v1.406.0 part 2 follow-ups: an eased run notes what this step
+            # may change BEFORE any pause is decided (an edit and a test run
+            # in one step: the test is judged).
+            self._note_auto_changes(session, resp.tool_calls)
             spend_by_call: dict[int, SpendCheck] = (
                 await spend_checks_for(self.p.registry, resp.tool_calls, ctx, armed_names)
                 if getattr(self.p, "approvals", None) is not None

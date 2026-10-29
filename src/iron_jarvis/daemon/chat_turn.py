@@ -9300,6 +9300,9 @@ async def run_chat_turn(
 
     _auto_mode = normalize_approval_mode(getattr(body, "approval_mode", ""))
     _auto_record = _auto.AutoRecord()
+    #: v1.406.0 part 2 follow-ups: what this turn may have changed (lock-step
+    #: with the stream lane's ``_auto_state["changed"]``).
+    _auto_changed: list[str] = []
     # CONVERSATION GRANTS (v1.312.0) — the page's "Allow for this
     # conversation" answers, honoured only for tools this turn ARMED (a grant
     # never arms; ``allowed_names`` below stays ``set(armed)``). In this lane
@@ -9702,6 +9705,9 @@ async def run_chat_turn(
             # words through the registry's ledgered deny path. Never the judge.
             _auto_refuse: dict[int, str] = {}
             if _auto_mode in _auto.EASED_MODES and calls:
+                for _atc in calls:
+                    _auto_changed.extend(_auto.changes_of(_atc.name, _atc.arguments))
+                _auto_seen = tuple(_auto_changed)
                 _auto_base = {k: v for k, v in overrides.items() if v != "allow"}
                 _auto_cands: list[tuple[int, Any, Any]] = []
                 for _ai, _atc in enumerate(calls):
@@ -9725,6 +9731,7 @@ async def run_chat_turn(
                                 forced="priced" if (_sc0 is not None and _sc0.ask) else "",
                                 low_trust=_auto_low, quarantined=_quarantined(d.platform, _tc.name),
                                 needs_a_person=bool(_finish is not None and _finish.needs_a_person(_tc)),
+                                changed=_auto_seen,
                             ))
                         return out
 

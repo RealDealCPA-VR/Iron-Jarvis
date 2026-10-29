@@ -2005,6 +2005,25 @@ card can be shown there) runs only what the rules pass and says, in words,
 that the rest needs your OK on the chat page. Turning Auto on from chat asks
 first, as Don't ask does.
 
+**What else always waits for you under Accept edits and Auto.**
+
+- An edit of a file inside the folder that steers git, your editor, CI or
+  Iron Jarvis itself: anything under `.git`, `.ironjarvis` or `.claude`,
+  `.vscode/tasks.json` and `.vscode/settings.json`, anything under
+  `.github/workflows`, and `.gitattributes`, `.gitconfig`, `.gitmodules`
+  (whatever the letter case, and however the path is spelled).
+- A test run in a reply that has changed a file the tests run first:
+  `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`,
+  `package.json`, a vitest or jest config, or a script named like the test
+  program (`pytest.bat`). Auto does not pass that run by its rule; the quick
+  check decides, and otherwise you are asked.
+- Code Jarvis writes and runs (`run_code`) that deletes, overwrites, starts
+  another program or sends something over the network. Other code gets the
+  quick check.
+- A coding-session reply Iron Jarvis carries on by itself (after a restart,
+  when an account's limit resets, on another account, the work of a plan you
+  approved, the night shift) runs as Ask first: nobody is watching it start.
+
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 
 A coding session's **Changes** tab is one scrolling review. Every file the

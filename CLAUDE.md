@@ -4204,10 +4204,40 @@ does not need a bump, stop and bump it.
   `delegate_remote`…), ASK `custom_command` (`custom:*` — the judge never
   sees the command), and a READONLY tool that reaches outside (`web_fetch`
   set to ask) is judged, not passed. `patch_paths` splits like
-  `parse_patch` (not `splitlines`). Known, by design: a test run executes
-  project code the agent may have just written (conftest.py, package.json,
-  a `pytest.bat` cmd.exe finds in the folder first) — Auto's test pass is
-  as strong as that. `tests/test_auto_approve_review_v14060.py`.
+  `parse_patch` (not `splitlines`). `tests/test_auto_approve_review_v14060.py`.
+  FOLLOW-UPS (each the SAFE way — keep the card or judge, never a rule pass):
+  (1) `sensitive_path`: an in-folder edit of `SENSITIVE_DIRS` (`.git`,
+  `.ironjarvis`, `.claude` at any depth — a `.git/config` `core.fsmonitor`
+  runs on Iron Jarvis's own `git status`, `.ironjarvis` holds the agent's
+  own rules), `SENSITIVE_FILES_IN` (`.vscode/tasks.json|settings.json`),
+  `SENSITIVE_SUBDIRS` (`.github/workflows`) or `SENSITIVE_NAMES`
+  (`.gitattributes`, `.gitconfig`, `.gitmodules`) keeps its card under both
+  eased postures; parts are compared after resolve (`..`, an existing 8.3
+  name), lower-cased, with a stream name (`x:s`) and trailing dots/spaces
+  dropped, and any part still shaped like a short name (`GIT~1`) counts as
+  sensitive. (2) `setup_touched`: a test run after THIS turn changed — or
+  named, in an earlier command or code cell (`changes_of`: edit targets,
+  command and code text; stream `_auto_state["changed"]`, POST
+  `_auto_changed`, runtime `_note_auto_changes` before a step's pauses) — a
+  `SETUP_FILE_WORDS` file (conftest, pytest.ini, tox.ini, setup.cfg,
+  setup.py, pyproject.toml, package.json, vitest/jest/vite/mocha/babel
+  config…), a short name, or a `.bat/.cmd/.ps1/.exe/.sh` named like a word
+  of the command is JUDGED, never passed. (3) `CODE_TOOLS` (run_code,
+  code_run; repl stays `acts_for_you`): `code_risk` = the shell word checks
+  + `_CODE_DESTRUCTIVE` (os.remove/rmtree/subprocess/ctypes/open(…'w')/
+  eval/exec…) → `code_destructive`, + `_CODE_SENDS` (requests.post, urlopen,
+  smtplib, socket…) → `code_sends`; plain code is judged. (4)
+  `unwatched_mode`: a coding-session turn Iron Jarvis started by itself
+  (`start_build_turn` `continuation` — restart resume, Resume when ready,
+  an account move, the approved plan's act turn — or `started_by` other
+  than a person — night, wait, restart) runs Accept edits / Auto as
+  approve_for_me; `start_build_turn` maps the body's posture through it.
+  OPEN (a decision for the user, not part of this switch): under Ask first
+  `write_file`/`edit_file` are allow-tier, so an edit of `.git/config` or
+  `.ironjarvis/harness/plugins.toml` runs with NO card in the default
+  posture too; only shell writes, helper runs' edits and other turns' edits
+  are unseen by `setup_touched`. `tests/test_auto_approve_followups_v14060.py`
+  (18 mutations red).
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

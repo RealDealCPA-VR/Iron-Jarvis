@@ -4263,7 +4263,7 @@ async def chat_stream(
     # let through by posture (the receipt's list) and its one judge. MIRROR
     # NOTE (lock-step): chat_turn.run_chat_turn keeps the same record (rules
     # only — the POST lane never calls the judge).
-    _auto_state: dict[str, Any] = {"record": _auto.AutoRecord(), "judge": None}
+    _auto_state: dict[str, Any] = {"record": _auto.AutoRecord(), "judge": None, "changed": []}
     # STANDING GRANTS (v1.299.0): the scopes this turn's calls run under —
     # chat, plus the RESOLVED project when grounded. Read by the card
     # predicates (a covered call never cards), minted into by an "always"
@@ -5377,6 +5377,13 @@ async def chat_stream(
                 # a price) never reaches either. `_auto_ok`: id(call) -> rule.
                 _auto_ok: dict[int, str] = {}
                 if approval_mode in _auto.EASED_MODES and calls:
+                    # v1.406.0 part 2 follow-ups: what THIS turn may have
+                    # changed so far — every edit's target and every command's
+                    # or code cell's text, this round's included — so a test
+                    # run after a setup file changed is judged, never passed.
+                    for _c in calls:
+                        _auto_state["changed"].extend(_auto.changes_of(_c.name, _c.arguments))
+                    _auto_changed = tuple(_auto_state["changed"])
                     _auto_cands: list[tuple[Any, str, bool, bool]] = []
                     for _c in calls:
                         if not _would_card(_c):
@@ -5403,7 +5410,7 @@ async def chat_stream(
                                     _c.name, _c.arguments, mode=approval_mode,
                                     tool=d.platform.registry.get(_c.name), workspace=_auto_ws,
                                     forced=_f, low_trust=_auto_low, quarantined=_q,
-                                    needs_a_person=_np,
+                                    needs_a_person=_np, changed=_auto_changed,
                                 )
                                 for _c, _f, _np, _q in _auto_cands
                             ]
