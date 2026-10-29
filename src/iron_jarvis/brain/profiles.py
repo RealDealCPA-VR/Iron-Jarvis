@@ -132,11 +132,11 @@ def _clean(platform: Any, values: dict[str, Any], *, partial: bool) -> dict[str,
     out: dict[str, Any] = {}
     unknown = sorted(set(values) - set(FIELDS))
     if unknown:
-        raise ProfileError(f"A brain profile has no setting called {unknown[0]!r}.")
+        raise ProfileError(f"A profile has no setting called {unknown[0]!r}.")
     if "name" in values or not partial:
         name = str(values.get("name") or "").strip()
         if not name:
-            raise ProfileError("Give the brain profile a name.")
+            raise ProfileError("Give the profile a name.")
         if len(name) > MAX_NAME:
             raise ProfileError(f"Keep the name under {MAX_NAME} characters.")
         out["name"] = name

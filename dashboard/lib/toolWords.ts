@@ -40,6 +40,10 @@ const WORDS: Record<string, string> = {
   // Connections (integrations/tools.RestCallTool); the card's own arguments
   // name the service, the method and the path. (REST_CALL_TOOL below.)
   rest_call: "call one of your saved web services",
+  // v1.406.0 (Brain Profiles, brain/tools.py): a save the profile wants
+  // asked, and every structural change to a note (agents/mission.ASK_WORDS).
+  brain_save: "save a note to your memory base",
+  brain_change: "change a note in your memory base",
   // Calm UI redesign S3: the chat's settings tools (settings/tools.py). Only
   // the two ask-tier ones ever reach a card; both change one setting, and
   // the card's own arguments name which one.

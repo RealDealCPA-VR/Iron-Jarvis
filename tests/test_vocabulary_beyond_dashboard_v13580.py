@@ -77,7 +77,13 @@ LOG_CALLS = frozenset(
 )
 
 #: Deliberate uses: (file, a piece of the text, why). Empty is the goal.
-ALLOW: list[tuple[str, str, str]] = []
+ALLOW: list[tuple[str, str, str]] = [
+    # v1.406.0: "Brain profile" is the feature's NAME, the user's own term
+    # (the dashboard's vocabulary test allows the same label); every sentence
+    # around it says "memory base".
+    ("src/iron_jarvis/settings/schema.py", "Brain profile",
+     "the feature's proper name, the user's own term"),
+]
 
 
 def _retired() -> list[tuple[str, re.Pattern[str]]]:

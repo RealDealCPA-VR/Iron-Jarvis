@@ -375,6 +375,13 @@ export function ApprovalCard({
           Shell steps from a project&apos;s or a plugin&apos;s slash command ask you every time,
           whatever this session&apos;s approval setting. Your own commands follow the setting.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "memory" ? (
+        // v1.406.0 (Brain Profiles): a structural change to a note in the
+        // user's memory base (src/iron_jarvis/brain/tools.py BrainChangeTool).
+        <p data-testid="approval-memory-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Archiving, deleting, renaming or moving a note in your memory base asks you every time,
+          whatever your approval setting.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.

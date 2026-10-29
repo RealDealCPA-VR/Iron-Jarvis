@@ -568,8 +568,8 @@ with the request typed in.
   `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
   other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
   Long-term memory** that opens it.
-- **Brain Profiles** (v1.406.0): choose which memory base is your durable
-  brain and how Jarvis searches, saves to and trusts it — see "Your durable
+- **Brain Profiles** (v1.406.0): choose where your durable memory lives
+  and how Jarvis searches, saves to and trusts it — see "Your durable
   brain: Brain Profiles" below.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
@@ -1951,11 +1951,11 @@ If you keep your long-term memory somewhere specific — Notion with an
 operating guide, an Obsidian vault, Iron Jarvis's own memory, a folder in a
 repository — you can now tell Iron Jarvis that this is your **durable brain**,
 instead of pasting a long "always check my Notion first…" prompt into every
-chat. A **Brain Profile** says which memory base it is and how Jarvis treats it.
+chat. A **Brain Profile** says where it lives and how Jarvis treats it.
 
 Set one up in **Settings › Memory & you › Brain profile**:
 
-- **Primary memory base** — any base you have added under Memory › Long-term
+- **Primary** — any place you have added under Memory › Long-term
   (Iron Jarvis memory is always there).
 - **Search it before answering** (on by default). Jarvis searches the brain
   with your message before it answers, and can search again or open a whole
@@ -1986,14 +1986,14 @@ What you can rely on:
 
 - **A save is reported only when it happened.** After every save Jarvis
   reads the note back; the reply's receipt says **Saved to <base>: <title>**
-  (or "not confirmed" when that base cannot be read back).
-- **Nothing is lost when the brain is down.** If the base cannot be reached
+  (or "not confirmed" when it cannot be read back).
+- **Nothing is lost when the brain is down.** If it cannot be reached
   (an unplugged drive, Notion offline), the note is kept as an **unsaved
   change**: the receipt says **Not saved yet** in amber, and the Memory page
   lists it with **Retry** and **Discard**.
 - **Structural changes always ask.** Archiving, deleting, renaming or moving
   a note shows a card with **Allow once** every time, whatever your approval
-  setting. In a folder base a delete moves the note to the folder's `.trash`.
+  setting. In a folder a delete moves the note to the folder's `.trash`.
 - **Local only is respected.** In a Local only chat a brain outside this PC
   is neither searched nor written.
 - **Runs from a message on your phone** (low trust) can search the brain but
@@ -2001,7 +2001,7 @@ What you can rely on:
 
 The same rules reach both chat lanes, a Build terminal's chat and every agent
 run, through four tools (brain search, read, save, change) that always go to
-the profile's base — so an agent never needs to know whether your brain is
+the profile's primary — so an agent never needs to know whether your brain is
 Notion or a folder.
 
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)

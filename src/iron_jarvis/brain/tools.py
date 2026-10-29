@@ -32,17 +32,17 @@ from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResul
 from .profiles import ActiveBrain, base_label, resolve
 
 NO_PROFILE = (
-    "No brain profile applies here, so there is no durable brain to use. The user "
-    "can choose one in Settings › Memory & you."
+    "No profile names a memory base for this, so there is nowhere durable to search "
+    "or save. The user can choose one in Settings › Memory & you."
 )
 READ_ONLY = (
-    "This brain profile keeps the brain read-only, so nothing was saved. The user "
+    "This profile keeps its memory base read-only, so nothing was saved. The user "
     "can change that in Settings › Memory & you."
 )
 CODE_REFUSAL = (
     "Not saved: knowledge about a code base belongs in that repository's own files "
     "(AGENTS.md, CLAUDE.md or docs/), so write it there with the file tools instead. "
-    "This brain profile sends code knowledge to the repository."
+    "This profile sends code knowledge to the repository."
 )
 READ_CAP = 12_000
 
@@ -235,7 +235,7 @@ def write_note(platform: Any, active: ActiveBrain, conn: Any, title: str, conten
     verified = _verify(conn, ref, content)
     if verified is False:
         return {"ok": False, "action": action, "ref": ref, "verified": False,
-                "error": "the brain said it saved the note, but reading it back did not find it"}
+                "error": "the memory base said it saved the note, but reading it back did not find it"}
     return {"ok": True, "action": action, "ref": ref, "verified": bool(verified), "error": ""}
 
 
@@ -372,7 +372,7 @@ class BrainChangeTool(_BrainTool):
         # shape): a structural change to the user's brain is never granted
         # by an earlier yes.
         active = await asyncio.to_thread(self._active, ctx)
-        label = base_label(self.platform, active.base) if active is not None else "the brain"
+        label = base_label(self.platform, active.base) if active is not None else "your memory base"
         action = str(args.get("action") or "change").strip().lower()
         ref = str(args.get("ref") or "")[:160]
         to = str(args.get("to") or "").strip()

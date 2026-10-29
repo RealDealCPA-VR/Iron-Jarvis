@@ -46,7 +46,7 @@ def register(app: FastAPI, d: Any) -> None:
         except P.ProfileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         if row is None:
-            raise HTTPException(status_code=404, detail="That brain profile no longer exists.")
+            raise HTTPException(status_code=404, detail="That profile no longer exists.")
         forget_guides()  # a new guide ref must be read at once, not in 10 minutes
         return row
 
@@ -54,7 +54,7 @@ def register(app: FastAPI, d: Any) -> None:
     def brain_delete(profile_id: str) -> dict[str, Any]:
         out = _store().delete(profile_id)
         if out is None:
-            raise HTTPException(status_code=404, detail="That brain profile no longer exists.")
+            raise HTTPException(status_code=404, detail="That profile no longer exists.")
         return out
 
     @app.get("/brain/effective")

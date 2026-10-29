@@ -176,7 +176,7 @@ def _brain_profile_shape(value: Any) -> None:
     import re as _re
 
     if not isinstance(value, str) or (value and not _re.fullmatch(r"bp_[A-Za-z0-9_-]{1,64}", value)):
-        raise ValueError("must be a brain profile from Settings › Memory & you")
+        raise ValueError("must be one of the profiles in Settings › Memory & you")
 
 
 def _account_groups_shape(v: Any) -> None:
@@ -593,9 +593,9 @@ SETTINGS: tuple[SettingDef, ...] = (
     # Jarvis SAVES what it learns (a cloud brain, a work vs personal one) is a
     # privacy decision, so from chat it asks first.
     S("brain_profile", "Brain profile", "memory", "string",
-      "Which memory base is your durable brain, and how Jarvis treats it: searched before it "
-      "answers, where new knowledge is saved, and the operating guide it follows. Empty = no "
-      "primary brain (memory is still used as before).",
+      "Which memory base holds your durable memory, and how Jarvis treats it: searched before "
+      "it answers, where new knowledge is saved, and the operating guide it follows. Empty = "
+      "none (memory is still used as before).",
       tier="ask", check=_brain_profile_shape,
       aliases=("brain", "durable brain", "primary brain", "memory profile", "notion brain",
                "second brain", "operating guide")),

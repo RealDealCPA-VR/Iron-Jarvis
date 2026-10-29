@@ -281,11 +281,11 @@ def _build(platform, project_id, query, *, event_bus, session_id, with_search) -
                 chunks = []
                 for h in hits:
                     snippet = promptguard.guard(
-                        str(h.get("snippet") or "")[:SNIPPET_CHARS], source=f"brain {label}",
+                        str(h.get("snippet") or "")[:SNIPPET_CHARS], source=f"memory base {label}",
                         event_bus=event_bus, session_id=session_id, cap=SNIPPET_CHARS,
                     )
                     title = promptguard.guard(
-                        str(h.get("title") or "")[:200], source=f"brain {label}",
+                        str(h.get("title") or "")[:200], source=f"memory base {label}",
                         event_bus=event_bus, session_id=session_id, cap=200,
                     )
                     chunks.append(f"- {title} (ref: {str(h.get('ref') or '')[:300]})\n  {snippet}")

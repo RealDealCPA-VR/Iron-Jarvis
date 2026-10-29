@@ -9,15 +9,17 @@
  * - "page" (v1.376.0 review): a click in the agent's browser that reads as
  *   deleting, sending or paying;
  * - "command" (v1.381.0): a shell step a project's or a plugin's Claude Code
- *   slash command asked for (src/iron_jarvis/harness/command_shell.py).
+ *   slash command asked for (src/iron_jarvis/harness/command_shell.py);
+ * - "memory" (v1.406.0): archiving, deleting, renaming or moving a note in
+ *   the Brain Profile's memory base (src/iron_jarvis/brain/tools.py).
  *
  * Kept OUT of lib/useChatStream.ts on purpose: ~50 test files mock that
  * module with a fixed list of exports, and lib/buildHelpers reads this too.
  */
 
-export type OnceReason = "git" | "page" | "command";
+export type OnceReason = "git" | "page" | "command" | "memory";
 
-const REASONS: ReadonlySet<string> = new Set(["git", "page", "command"]);
+const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory"]);
 
 /** The reason as a card reads it, or undefined for anything else. */
 export function onceReasonOf(raw: unknown): OnceReason | undefined {

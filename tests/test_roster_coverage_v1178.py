@@ -280,6 +280,10 @@ _OFF_ROSTER_OPEN = {
     # the tool would only ever refuse it). Reachability is pinned by
     # tests/test_agent_files_v1297.py::test_runtime_injects_the_notebook_and_arms_the_tool_for_a_custom_run_only.
     "notebook",
+    # BRAIN PROFILES (v1.406.0): armed by the chat lanes and the runtime only
+    # while a Brain Profile applies (the profile is the consent) — never on a
+    # roster the user edits. Pinned by tests/test_brain_profiles_v1406.py.
+    "brain_search", "brain_read", "brain_save", "brain_change",
     # Plausibly withheld on purpose (cost, consent, secrets) — NOT verified here,
     # which is why they sit under OPEN rather than BY_DESIGN:
     "repl", "run_code", "secret_set", "secret_list",

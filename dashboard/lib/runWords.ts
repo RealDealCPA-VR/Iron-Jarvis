@@ -60,6 +60,11 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // ltm/tools.py: the user's long-term knowledge base.
   ltm_search: { did: "Searched your knowledge base", noun: "knowledge base search", nouns: "knowledge base searches" },
   ltm_append: { did: "Added to your knowledge base", noun: "knowledge base note" },
+  // brain/tools.py (v1.406.0): the Brain Profile's primary memory base.
+  brain_search: { did: "Searched your memory base", noun: "memory base search", nouns: "memory base searches" },
+  brain_read: { did: "Read a note from your memory base", noun: "memory base note" },
+  brain_save: { did: "Saved a note to your memory base", noun: "memory base note" },
+  brain_change: { did: "Changed a note in your memory base", noun: "memory base change" },
   // filesearch/tools.py: across the configured roots, broader than grep.
   file_search: { did: "Searched your drives", noun: "drive search", nouns: "drive searches" },
   // computeruse/tools.py: an isolated browser context.

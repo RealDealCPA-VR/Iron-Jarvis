@@ -322,7 +322,7 @@ def register(app: FastAPI, d) -> None:
                     if db.get(BrainProfileRecord, choice) is None:
                         raise HTTPException(
                             status_code=400,
-                            detail="That brain profile no longer exists. Choose another one.",
+                            detail="That profile no longer exists. Choose another one.",
                         )
                 project.brain_profile = choice
             db.add(project)

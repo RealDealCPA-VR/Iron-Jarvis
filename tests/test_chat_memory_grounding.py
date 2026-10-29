@@ -573,8 +573,10 @@ def test_stream_mirror_carries_every_new_prep_site():
         "_compose_recall_query(body.messages)",
         "_resolve_persona(",
         "MIRROR NOTE",
-        # v1.311.0: both lanes ground through the ONE shared helper.
-        "await _gather_grounding(",
+        # v1.311.0: both lanes ground through the ONE shared helper
+        # (v1.406.0: gathered beside the ONE Brain Profile helper).
+        "_gather_grounding(\n",
+        "brain_turn(d, pid, recall_query)",
     ):
         assert needle in turn_src, f"chat_turn.py lost: {needle}"
         assert needle in stream_src, f"routes/chat.py (stream mirror) lost: {needle}"

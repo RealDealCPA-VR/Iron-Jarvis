@@ -440,6 +440,10 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # for. Same key in the SSE done frame; semantics pinned by
         # tests/test_settings_chat_tools_v1321.py.
         "config_cards",
+        # v1.406.0: one more — "brain" (the Brain Profile receipt, null when
+        # no profile applies; always present, LAST). Same key in the SSE done
+        # frame; semantics pinned by tests/test_brain_profiles_v1406.py.
+        "brain",
         # v1.323.0: two more — "thinking" (the model's display-only reasoning,
         # "" when none, capped at 20,000 chars) and "truncated" (bool, always
         # present: the final answer ran out of output tokens). Semantics

@@ -56,6 +56,18 @@
       "desktop": "call one of your saved web services"
     },
     {
+      "tool": "brain_save",
+      "kind": "table",
+      "card": "save a note to your memory base",
+      "desktop": "save a note to your memory base"
+    },
+    {
+      "tool": "brain_change",
+      "kind": "table",
+      "card": "change a note in your memory base",
+      "desktop": "change a note in your memory base"
+    },
+    {
       "tool": "config_change",
       "kind": "table",
       "card": "change a setting",

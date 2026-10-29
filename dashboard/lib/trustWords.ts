@@ -73,7 +73,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
   },
   {
     words: "memory",
-    tools: ["memory_write", "memory_propose", "ltm_append", "notebook", "remember_preference"],
+    tools: ["memory_write", "memory_propose", "ltm_append", "notebook", "remember_preference", "brain_save", "brain_change"],
   },
   {
     words: "agents or skills",
