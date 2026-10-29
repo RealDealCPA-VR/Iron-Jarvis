@@ -47,7 +47,7 @@ describe("the pull-request watch in the bell", () => {
       expect(item, kind).toBeTruthy();
       expect(item.quiet, kind).toBe(true);
       expect(item.attention, kind).toBeFalsy();
-      expect(item.href).toBe("/terminals?session=bs_ci");
+      expect(item.href).toBe("/chat?view=code&session=bs_ci");
     }
     const pushed = toActivity(ev("build.ci_step", "pushed"))!;
     expect(pushed.title).toBe("Pushed the reviewed fix to your pull request");
