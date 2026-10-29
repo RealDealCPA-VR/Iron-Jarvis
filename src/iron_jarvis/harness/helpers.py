@@ -590,6 +590,14 @@ def live_helpers(session_id: str) -> list[str]:
         return list(_LIVE.get(str(session_id or ""), {}))
 
 
+def child_parent(session_id: str, child: str) -> "HelperParent | None":
+    """The :class:`HelperParent` the live helper ``child`` of tool session
+    ``session_id`` started from, or None (v1.404.1). In memory; never raises."""
+    with _LIVE_LOCK:
+        call = _LIVE.get(str(session_id or ""), {}).get(str(child or ""))
+    return getattr(call, "parent", None)
+
+
 def asking(session_id: str) -> bool:
     """Is a helper of ``session_id`` parked on an ask of its own? (The
     session list's "waiting" dot reads it.) In memory; never raises."""
@@ -690,6 +698,11 @@ class HelperCall:
     #: run moved on, and sent on the row's frame when it changed.
     _plan: Any = None
     _plan_due: bool = False
+    #: v1.404.1: the :class:`HelperParent` this call started from — its
+    #: posture, Local only, trust and rules — so a grant made on ANOTHER card
+    #: of the session wakes this helper's card only where this helper itself
+    #: would have been handed that grant (``session_grants``).
+    parent: Any = None
     #: v1.390.0 (the Timeline): the provider + model the helper's run is
     #: served by (its run's own ``meta`` frame; the row of its session at the
     #: end) — "" until known. Held to the session's pair today (part 2,
@@ -1022,6 +1035,7 @@ def helper_call(parent: "HelperParent | None", call_id: str, name: str, args: An
     call = HelperCall(call_id=str(call_id or ""), agent=agent, task=task, emit=emit,
                       session_id=parent.session_id)
     armed = replace(parent, call=call)
+    call.parent = armed
     token = HELPER_PARENT.set(armed)
     call.say()
     try:

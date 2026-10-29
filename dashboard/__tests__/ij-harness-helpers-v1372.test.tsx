@@ -243,6 +243,10 @@ describe("a helper is ONE row while the turn runs, fed by the turn's own stream"
     expect(helperRow("h2")).toHaveTextContent("Waiting for your OK");
     // An agent run's wider answer is named for the run, never the chat.
     expect(within(ask).queryByText(/for this chat/i)).toBeNull();
+    // v1.404.1 (one approval per coding session): a helper's wider answer is
+    // the SESSION's — the daemon keeps it for every helper — and says so.
+    expect(within(ask).getByRole("button", { name: /Allow for this session/ })).toBeInTheDocument();
+    expect(within(ask).queryByText(/for this run/i)).toBeNull();
     fireEvent.click(within(ask).getByRole("button", { name: /Allow once/ }));
     await waitFor(() =>
       expect(api.calls).toContainEqual({ method: "POST", path: "/chat/approvals/apr_1", body: { decision: "once" } }),

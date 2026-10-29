@@ -71,6 +71,7 @@ from ..chat_stream import stream_chat_turn
 from ..schemas import ChatArchiveBody, ChatBody, ChatMessageBody
 from ...core.ids import utcnow
 from ...core.turns import TURNS
+from ...harness import session_grants as _session_grants
 from ...harness import sessions as S
 
 log = logging.getLogger(__name__)
@@ -1403,19 +1404,18 @@ async def _apply_session_changes(engine: Any, thread_id: str, watch: _ReplyWatch
             "approved_at": utcnow().isoformat(),
         }
     if watch.granted:
+        # v1.404.1 review: read and written under ONE lock
+        # (S.add_granted_tools) — a helper's grant saved between a separate
+        # read and write used to be overwritten.
         try:
-            row = await asyncio.to_thread(S.get_row, engine, thread_id)
+            await asyncio.to_thread(S.add_granted_tools, engine, thread_id, list(watch.granted))
         except Exception:  # noqa: BLE001 — "never raises" (Phase 4 review): a
             # busy database here used to escape into recorded_turn and end
             # the live turn mid-stream. The grant stays pending (the next
             # frame tries again); an approved plan above is still written.
-            log.warning("reading build session %s failed", thread_id, exc_info=True)
+            log.warning("saving a grant on build session %s failed", thread_id, exc_info=True)
         else:
-            have = list(_setup_of(row).get("granted_tools") or []) if row is not None else []
-            merged = have + [g for g in watch.granted if g not in have]
             watch.granted = []
-            if merged != have:
-                setup["granted_tools"] = merged
     if not setup:
         return
     try:
@@ -2937,7 +2937,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             model=str(setup.get("model") or ""),
             reasoning=str(setup.get("reasoning") or ""),
             approval_mode=str(setup.get("approval_mode") or ""),
-            granted_tools=list(setup.get("granted_tools") or []),
+            # v1.404.1: what any card of the session granted — its helpers'
+            # too — and running a command as one approval (session_grants).
+            granted_tools=sorted(_session_grants.widen(
+                {*(setup.get("granted_tools") or []), *_session_grants.granted(thread_id)}
+            )),
             workspace_dir=folder,
             project_id=project.id if project is not None else "",
             thread_id=thread_id,

@@ -137,6 +137,10 @@ class Model:
         return RouteResult(self._resp(move), provider or self.provider, model or self.model)
 
 
+# v1.404.1: a command grant covers every command kind
+# (harness/session_grants.COMMAND_FAMILY), so "shell" arrives as all three.
+COMMAND_GRANT = ["process_start", "process_write", "shell"]
+
 def wire(app, model: Model) -> Model:
     app.state.platform.router.stream = model.stream
     app.state.platform.router.complete = model.complete
@@ -247,7 +251,7 @@ async def test_two_helpers_run_for_a_build_turn_and_inherit_the_session(app, wor
         assert (k.provider, k.model) == CLAUDE
         assert Path(k.workspace_path) == work
         assert k.approval_mode == "approve_for_me"  # yolo is never handed down
-        assert json.loads(k.allow_tools_json) == ["shell"]
+        assert json.loads(k.allow_tools_json) == COMMAND_GRANT
         assert k.status is SessionStatus.COMPLETED
     assert sorted(k.agent_type.value for k in kids) == ["builder", "researcher"]
     rows = _helper_frames(frames)
@@ -670,7 +674,7 @@ async def test_run_in_background_starts_the_helper_through_spawn_agent_with_the_
     (kid,) = _helper_children(app)
     assert (kid.provider, kid.model) == who and Path(kid.workspace_path) == work
     assert kid.agent_type.value == "researcher" and kid.approval_mode == "approve_for_me"
-    assert json.loads(kid.allow_tools_json) == ["shell"]
+    assert json.loads(kid.allow_tools_json) == COMMAND_GRANT
     assert all((c["provider"], c["model"]) == who for c in model.calls)
     with session_scope(app.state.platform.engine) as db:
         rows = [(r.tool, r.called_as) for r in db.exec(select(ToolInvocation)).all()
@@ -787,7 +791,7 @@ async def test_the_post_lane_hands_its_helper_the_same_inheritance(app, work, mo
     (kid,) = _helper_children(app)
     assert (kid.provider, kid.model) == CLAUDE and Path(kid.workspace_path) == work
     assert kid.origin == H.HELPER_ORIGIN and kid.approval_mode == "approve_for_me"
-    assert json.loads(kid.allow_tools_json) == ["shell"]
+    assert json.loads(kid.allow_tools_json) == COMMAND_GRANT
 
 
 def test_off_a_harness_turn_nothing_is_armed_for_a_helper(work):
@@ -930,5 +934,5 @@ def test_a_route_that_named_no_model_hands_down_the_providers_own_default(app, w
                                          grants=["shell", "not_a_tool"], overrides={},
                                          trust_state={"low": False, "tainted": True, "reason": "read a page"})
     assert (parent.provider, parent.model) == ("claude-cli", "claude-default-x")
-    assert parent.folder == str(work) and parent.allow_tools == ("shell",)
+    assert parent.folder == str(work) and parent.allow_tools == tuple(COMMAND_GRANT)
     assert parent.trust() == ("low", "read a page")  # a turn tainted earlier hands its helper low trust

@@ -3885,6 +3885,42 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A grant in a coding session is the SESSION's, not one helper's**
+  (v1.404.1, a USER BUG: "it keeps asking for approval. it should be one
+  approval per command. It stalled out 4 times" — the live record showed four
+  helper runs of ONE coding session each parked on its own card for running
+  a command, one for 11 hours, each answered "Allow for this run", which was
+  kept only on that helper's row). `harness/session_grants.py` is the one
+  place: `note(thread, names)` keeps a grant for the session in this process
+  (widened by `widen`: `COMMAND_FAMILY` = shell, process_start,
+  process_write — running a command is ONE approval), `persist` writes it to
+  `setup.granted_tools` through `sessions.add_granted_tools` (read and
+  written under `CONVERSATION_WRITE_LOCK`), and `release_helpers` answers the
+  session's OTHER live helpers' covered cards with "conversation" (actor
+  "grant"), each by its own approval id. Callers: the runtime's
+  `_pause_for_approval` "conversation" branch for a HELPER run
+  (`_build_helper_thread`: origin `job:build-helper` + the `build_session`
+  run option), and the stream lane's "conversation" branch for the session's
+  own card (`card_grants` only — a grant never ARMS). Readers:
+  `chat_turn.helper_parent_now` (helpers started later; the narrowing after
+  it still applies — a deny, Local only, a night task; `always_ask` hands
+  down nothing) and `start_build_turn`'s `granted_tools` (later replies). A
+  card answered ONCE EVERY TIME (`once_only`, a `cost_note`) is never woken —
+  and the runtime's within-run `_release_siblings` now skips them too (it
+  woke a once-only sibling by tool name: a `git push` is a `shell` call). The
+  helper card says "Allow for this session". NEVER SHARED: app (MCP) tools
+  (one `mcp_call` key covers every pack), quarantined tools, once-only and
+  priced cards; nothing goes to or from a helper under `always_ask`, Local
+  only, low trust or a folder rule that asks (`shareable`). A shell grant in
+  the POST lane and `helper_parent_now` arrives as all three command tools
+  (`test_harness_helpers_v1372` `COMMAND_GRANT`, moved on purpose). Pins:
+  `tests/test_session_grants_v14041.py` (25 mutations, 23 red; the two
+  survivors are redundant defences: the origin check in
+  `_build_helper_thread` (`shares(child_parent(...))` is False off the live
+  registry) and `shareable` inside `_covered` (`release_helpers` already
+  filters by it)); moved on purpose: `ij-harness-command-shell-v1381` and
+  `ij-harness-helpers-v1372` ("for this session").
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to

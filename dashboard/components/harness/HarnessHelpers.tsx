@@ -204,7 +204,10 @@ export function LiveHelperRow({
         {asking && helper.ask ? (
           <div data-testid="helper-ask">
             <ApprovalCard
-              scope="run"
+              // v1.404.1: a helper's wider answer is the SESSION's (the
+              // daemon keeps it for every helper and later reply, and wakes
+              // the other helpers waiting on the same kind of card).
+              scope="session"
               approval={{
                 id: helper.ask.id,
                 callId: "",

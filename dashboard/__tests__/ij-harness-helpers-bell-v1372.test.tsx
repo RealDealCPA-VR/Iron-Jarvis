@@ -144,6 +144,9 @@ describe("a Build session's helper asking in the bell", () => {
     expect(within(row).getByRole("button", { name: "Allow once" })).toBeTruthy();
     // ...and says whose ask it is in words.
     expect(row.textContent).toMatch(/A helper in your Build session/);
+    // v1.404.1: the wider answer is the coding SESSION's (every helper of it).
+    expect(within(row).getByRole("button", { name: "Allow for this session" })).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: "Allow for this run" })).toBeNull();
   });
 
   it("control: any other run's row has no Build link (an older daemon sends no key)", async () => {
@@ -151,5 +154,7 @@ describe("a Build session's helper asking in the bell", () => {
     const row = await openBellRow();
     expect(within(row).queryByTestId("bell-approval-build")).toBeNull();
     expect(row.querySelector('a[href="/sessions/session_helper1"]')).not.toBeNull();
+    // ...and its wider answer stays the run's.
+    expect(within(row).getByRole("button", { name: "Allow for this run" })).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.404.0 (2026-10-25).*
+holds itself to. Current as of v1.404.1 (2026-10-25).*
 
 ---
 
@@ -1941,6 +1941,31 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## One approval for a whole coding session (v1.404.1)
+
+In a coding session, helpers (and a team's workers) each run on their own.
+Before this release, approving one helper's command covered only that helper,
+so the next helper asked again, and a session could wait on several cards in
+a row for the same kind of command.
+
+- **"Allow for this session"** on any card of a coding session, from the
+  session itself or from any of its helpers, now covers the whole session: the
+  session, every helper it is running, and every helper it starts later. It is
+  saved with the session, so its later replies keep it.
+- **Helpers already waiting** on a card that the answer covers go on at once,
+  without a card of their own.
+- **Running a command is one approval.** Approving a command also covers a
+  command started in the background and typing into one.
+- **Some cards still ask every time**, whatever you allowed: a commit or push
+  on the session's branch, a project's or plugin's command lines, a call that
+  costs money, and anything leaving this PC in a Local only session. "Ask
+  before every action" still asks each time.
+- **Never shared with the whole session:** a connected app's tools (each app
+  is asked for on its own), a newly added tool that is still waiting for your
+  trust, and anything in a session set to "Ask before every action", in a
+  Local only session, or in a low-trust reply. There, each card covers only
+  the run that asked.
 
 ## The Session tab in a coding session (v1.404.0)
 

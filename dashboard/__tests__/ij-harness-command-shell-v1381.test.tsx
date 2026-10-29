@@ -118,6 +118,8 @@ describe("a shell step a project's or a plugin's slash command asked for", () =>
     render(<LiveHelperRow helper={helper} />);
     const ask = screen.getByTestId("helper-ask");
     expect(within(ask).queryByTestId("approval-command-once")).toBeNull();
-    expect(within(ask).getByText(/for this run/i)).toBeInTheDocument();
+    // v1.404.1 (moved on purpose): a helper's wider answer is the coding
+    // SESSION's (harness/session_grants), and the card says so.
+    expect(within(ask).getByText(/for this session/i)).toBeInTheDocument();
   });
 });

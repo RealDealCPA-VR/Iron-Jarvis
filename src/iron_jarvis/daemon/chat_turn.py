@@ -5830,6 +5830,17 @@ def helper_parent_now(
             for key in {name, tool.perm_key() if tool is not None else name}:
                 if rules.get(key) != "deny" and _base_mode(key) != "deny":
                     rules[key] = "ask"
+    # v1.404.1 (one approval per coding session): what the session was
+    # granted on ANY of its cards — a helper's too — reaches every helper it
+    # starts, and running a command is one approval (session_grants). The
+    # narrowing below still applies to all of it: a deny, Local only, a night
+    # task; "Ask before every action" hands down nothing (HelperParent.grants).
+    from ..harness import session_grants as _session_grants
+    from ..harness.helpers import build_thread_of as _build_thread_of
+
+    _thread = _build_thread_of(getattr(base, "session_id", ""))
+    if _thread:
+        grants = _session_grants.widen({*(grants or ()), *_session_grants.granted(_thread)})
     allow = []
     for name in sorted({str(g) for g in (grants or ()) if str(g).strip()}):
         if overrides.get(name) == "deny":

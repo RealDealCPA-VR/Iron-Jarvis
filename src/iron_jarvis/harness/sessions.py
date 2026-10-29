@@ -536,6 +536,31 @@ def update(engine: Any, thread_id: str, *, title: "str | None" = None,
         return row
 
 
+def add_granted_tools(engine: Any, thread_id: str, names: list[str]) -> list[str] | None:
+    """Add ``names`` to the session's ``setup.granted_tools`` (v1.404.1: a
+    grant made on a HELPER's card is the session's — ``session_grants``).
+    Read and written under the one conversation lock, so two answers landing
+    together both stay. Returns the saved list (None: no such session).
+    BLOCKING."""
+    from ..daemon.routes.chat import _clean_setup
+
+    add = [str(n) for n in names if str(n or "").strip()]
+    with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+        row = db.get(ChatThreadRecord, str(thread_id or ""))
+        if row is None or not is_build_thread(row):
+            return None
+        merged = _setup(row)
+        have = [str(t) for t in (merged.get("granted_tools") or []) if str(t or "").strip()]
+        new = have + [n for n in add if n not in have]
+        if new == have:
+            return have
+        merged["granted_tools"] = new
+        row.setup_json = _clean_setup(merged)
+        db.add(row)
+        db.commit()
+        return new
+
+
 def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None

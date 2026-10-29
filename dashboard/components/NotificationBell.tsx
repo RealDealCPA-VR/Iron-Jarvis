@@ -1685,10 +1685,17 @@ function AgentApprovalRow({
                 disabled={busy !== null}
                 // v1.358.0 (lane 8A): the tool in words (lib/toolWords via
                 // askPhrase), never its raw id.
-                title={`Let this run ${askPhrase(ask.tool)} for the rest of the run. Every waiting ask like this one clears at once.`}
+                // v1.404.1: a coding session's helper asks for the SESSION
+                // (harness/session_grants) — the answer covers every helper
+                // of it and is kept for its later replies.
+                title={
+                  ask.buildSession
+                    ? `Let this coding session ${askPhrase(ask.tool)} from now on, in every helper. Every waiting ask like this one in the session clears at once.`
+                    : `Let this run ${askPhrase(ask.tool)} for the rest of the run. Every waiting ask like this one clears at once.`
+                }
                 className="rounded-lg border border-accent/25 bg-accent/[0.06] px-3 py-1.5 text-[12px] text-accent-soft transition-colors hover:border-accent/40 disabled:opacity-50"
               >
-                {busy === "conversation" ? "Allowing…" : scopeLabel("run")}
+                {busy === "conversation" ? "Allowing…" : scopeLabel(ask.buildSession ? "session" : "run")}
               </button>
             )}
             {ask.canAlways && (

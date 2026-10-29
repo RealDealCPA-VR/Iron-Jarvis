@@ -5848,6 +5848,26 @@ async def chat_stream(
                             # armed_grant alone cannot say WHO granted.
                             armed_grant.update({tc.name, _perm_name})
                             card_grants.update({tc.name, _perm_name})
+                            if _tool_session.startswith("build:") and not (
+                                _trust_state.get("low") or _trust_state.get("tainted")
+                            ):
+                                # v1.404.1 (one approval per coding
+                                # session): the grant is the SESSION's —
+                                # kept for its helpers, running a command
+                                # is one approval (card_grants only: a
+                                # grant never ARMS), and every helper of the
+                                # session parked on a card it covers wakes.
+                                # By the EXACT tool name (never a key several
+                                # tools share), never from a low-trust turn.
+                                from ...harness import session_grants as _sg
+
+                                _sg_thread = _tool_session.split(":", 1)[1]
+                                card_grants.update(
+                                    _sg.note(_sg_thread, {tc.name}, d.platform.registry)
+                                )
+                                _sg.release_helpers(
+                                    _approvals(d), d.platform.registry, _sg_thread, {tc.name},
+                                )
                         elif _decision == "deny":
                             _plan["card_deny"] = (
                                 "you declined this call when asked"

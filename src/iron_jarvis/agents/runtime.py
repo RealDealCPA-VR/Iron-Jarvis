@@ -1316,6 +1316,22 @@ def _effective(messages, system_prompt: str, summary: str, covers: int):
     return [*head, *tail], f"{system_prompt}\n\n{summary}"
 
 
+def _build_helper_thread(session: Any) -> str:
+    """The coding session a HELPER run belongs to (its ``build_session`` run
+    option, set by ``harness/helpers.HelperParent.options``), "" for every
+    other run (v1.404.1: its grants are the session's). Never raises."""
+    try:
+        from ..harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN
+
+        if str(getattr(session, "origin", "") or "") != HELPER_ORIGIN:
+            return ""
+        options = json.loads(getattr(session, "options_json", None) or "{}")
+        thread = options.get(BUILD_SESSION_OPTION) if isinstance(options, dict) else None
+        return str(thread).strip() if isinstance(thread, str) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 class AgentRuntime:
     def __init__(self, platform) -> None:
         self.p = platform
@@ -2915,6 +2931,19 @@ class AgentRuntime:
         calls = list(batch or [tc])
         names = {c.name for c in calls}
         count = len(calls)
+        # v1.404.1: a helper that was ALREADY RUNNING when another card of its
+        # coding session granted this kind of call (a sibling's, the session's
+        # own) is covered by that grant — no card — unless this ask is a spend
+        # or answered once every time, or this helper's own rules would not
+        # have been handed it (harness/session_grants.covers).
+        _sg_thread = _build_helper_thread(session)
+        if _sg_thread and spend is None and tc.name != PLAN_APPROVAL_TOOL:
+            from ..harness import session_grants as _sg
+
+            if _sg.covers(self.p.registry, _sg_thread, session.id, names):
+                session_allow.update(names)
+                self._run_grants.setdefault(session.id, set()).update(names)
+                return "", set()
         # WAITING, NOT REFUSING (v1.247.0): an attended run waits for its
         # person; an unattended door keeps SESSION_APPROVAL_TIMEOUT_S.
         timeout = _ask_timeout_for(getattr(session, "origin", None) or "")
@@ -3142,6 +3171,35 @@ class AgentRuntime:
             # THIS session for the SAME permission gets the same answer now;
             # each wakes, pops itself, publishes its own `approval.resolved`.
             self._release_siblings(approvals, session.id, perm)
+            # ONE APPROVAL PER CODING SESSION (v1.404.1, a USER BUG: four
+            # helpers of one coding session each parked on their own card for
+            # running a command, one for 11 hours). A helper's grant is the
+            # SESSION's: kept for the helpers it starts later, saved for its
+            # later replies, and every other helper parked on a card it
+            # covers is woken. Running a command is one kind of approval
+            # (harness/session_grants.COMMAND_FAMILY), so this run's own set
+            # takes the family too.
+            thread = _build_helper_thread(session)
+            if thread:
+                from ..harness import session_grants as _sg
+                from ..harness.helpers import child_parent as _child_parent
+
+                # Review: by EXACT tool names (never `perm`, a key several
+                # tools may share — every app tool is `mcp_call`), and only
+                # from a helper whose own rules let it share.
+                if _sg.shares(_child_parent(f"build:{thread}", session.id)):
+                    shared = {n for n in names if _sg.shareable(self.p.registry, n)}
+                    wide = _sg.note(thread, shared, self.p.registry)
+                    if wide:
+                        session_allow.update(wide)
+                        self._run_grants.setdefault(session.id, set()).update(wide)
+                        try:
+                            await asyncio.to_thread(_sg.persist, self.p.engine, thread, shared)
+                        except Exception:  # noqa: BLE001 — the live grant above still holds
+                            pass
+                        _sg.release_helpers(
+                            approvals, self.p.registry, thread, wide, skip_session=session.id
+                        )
             return "", set()
         if decision == "always":
             # ALWAYS (v1.299.0): this call runs as "once", AND the EXACT call
@@ -3244,16 +3302,34 @@ class AgentRuntime:
         if pending is None or release is None:
             return 0
         names: set[str] = set()
+        once: set[str] = set()
         for entry in pending(session_id):
             name = str(entry.get("tool") or "")
             if not name:
                 continue
             tool = self.p.registry.get(name)
             if (tool.perm_key() if tool is not None else name) == perm:
-                names.add(name)
+                # v1.404.1: an ask answered once EVERY time (a commit or push,
+                # a project command's lines, a priced call) is never woken by
+                # a wider answer on another card.
+                if entry.get("once_only") is True or entry.get("cost_note"):
+                    once.add(name)
+                else:
+                    names.add(name)
         if not names:
             return 0
-        return int(release(session_id, names, "conversation"))
+        if not (names & once):
+            return int(release(session_id, names, "conversation"))
+        # A name that ALSO has a once-only ask pending: answer the plain asks
+        # one by one, by their own ids.
+        n = 0
+        for entry in pending(session_id):
+            if str(entry.get("tool") or "") in names and not (
+                entry.get("once_only") is True or entry.get("cost_note")
+            ):
+                if approvals.resolve(str(entry.get("approval_id") or ""), "conversation", actor="grant"):
+                    n += 1
+        return n
 
     async def _enter_waiting(self, run, session_id: str) -> None:
         """First pause of a run flips it RUNNING -> WAITING (v1.227.0, A4)."""
