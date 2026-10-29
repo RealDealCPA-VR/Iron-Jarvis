@@ -86,11 +86,16 @@ describe("one name, one place", () => {
 });
 
 describe("the surfaces say it", () => {
-  it("the switch reads 'Chat | Code' (on the chat page; Build has none)", () => {
+  // v1.409.0 (moved ON PURPOSE): Build has its own switch now, Code |
+  // Terminal (the real Claude Code / Codex in a window), through the SAME
+  // component as the chat page's.
+  it("the switch reads 'Chat | Code' on the chat page, and 'Code | Terminal' on Build", () => {
     const surface = read("components", "chat", "ChatCodeSurface.tsx");
     expect(surface).toContain('{ value: "chat", label: CHAT_VIEW_NAME,');
     expect(surface).toContain('{ value: "code", label: CODE_VIEW_NAME,');
-    expect(read("app", "terminals", "page.tsx")).not.toContain("build-view-switch");
+    const build = read("app", "terminals", "page.tsx");
+    expect(build).toContain('{ value: "code", label: BUILD_CODE_VIEW_NAME,');
+    expect(build).toContain('{ value: "terminal", label: BUILD_TERMINAL_VIEW_NAME,');
   });
 
   it("the bell's layer-edit row has no engine-room word", () => {

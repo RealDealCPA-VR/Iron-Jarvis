@@ -92,6 +92,8 @@ import {
 // page its fix lives on (dependency-free).
 import { STATUS_HREF, loopWords } from "@/lib/loopWords";
 import { EVERYTHING_TAB_EVENT } from "@/lib/surfaces";
+// v1.409.0: Build's Code view (a waiting Claude Code / Codex approval).
+import { announceBuildCodeLink, buildCodeHref, toolLabel } from "@/lib/buildApp";
 
 /** v1.355.0 (G32): what a failed pack does NOT take down, said on its row. */
 export const PACK_STILL_WORKS = "Chat and your other tools keep working.";
@@ -1373,12 +1375,25 @@ export interface ChatWaitingAsk {
   /** v1.369.0: the row is a Build session's (`surface: "build"`), not a
    *  chat's: it reads as the session and opens it in Build. */
   build?: boolean;
+  /** v1.409.0: the row is a session of Build's Code view (`surface:
+   *  "build_app"`): the real Claude Code or Codex is waiting on an approval
+   *  nobody is looking at. `threadId` is that session's id; `tool` the
+   *  coding tool's name. It opens Build's Code view on that session. */
+  app?: { tool: string };
 }
 
 /** Parse one pending row of kind "chat" (null = not a chat row). */
 export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  // v1.409.0: a Build Code view session's waiting approval (any kind).
+  if (r.surface === "build_app") {
+    const id = typeof r.id === "string" ? r.id : "";
+    if (!id) return null;
+    const pick = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+    const session = pick(r.app_session) || pick(r.session_id) || pick(r.thread_id);
+    return { id, threadId: session, app: { tool: toolLabel(pick(r.harness) || pick(r.tool)) } };
+  }
   if (r.kind !== "chat") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
@@ -1389,12 +1404,14 @@ export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
 /** Where a waiting chat opens: that chat, else the chat page. A Build
  *  session (v1.369.0) opens in Build, on that session. */
 export function chatAskHref(ask: ChatWaitingAsk): string {
+  if (ask.app) return buildCodeHref(ask.threadId || null);
   if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : CODE_VIEW_LINK;
   return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
 }
 
 /** The waiting row's words: a chat's, or (v1.369.0) a Build session's. */
 export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: string } {
+  if (ask.app) return { title: `${ask.app.tool} is waiting for your OK`, open: "Open it in Build" };
   return ask.build
     ? { title: "A coding session is waiting for your OK", open: "Open the session" }
     : { title: "A chat is waiting for your OK", open: "Open the chat" };
@@ -1405,7 +1422,7 @@ export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: str
 function ChatWaitingRow({ ask, onOpen }: { ask: ChatWaitingAsk; onOpen: () => void }) {
   const words = chatAskRowWords(ask);
   return (
-    <li data-testid="bell-chat-waiting" data-surface={ask.build ? "build" : "chat"}>
+    <li data-testid="bell-chat-waiting" data-surface={ask.app ? "build_app" : ask.build ? "build" : "chat"}>
       <Link
         href={chatAskHref(ask)}
         onClick={onOpen}
@@ -1459,6 +1476,8 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (r.kind === "chat") return null;
+  // v1.409.0: a Build Code view session's row is read by parseChatAsk.
+  if (r.surface === "build_app") return null;
   const id = typeof r.id === "string" ? r.id : "";
   if (!id) return null;
   return {
@@ -2018,7 +2037,7 @@ export function NotificationBell() {
     const out: ChatWaitingAsk[] = [];
     for (const raw of agentAsksApi.data?.approvals ?? []) {
       const ask = parseChatAsk(raw);
-      if (ask && !(!ask.build && shownHere(ask))) out.push(ask);
+      if (ask && !(!ask.build && !ask.app && shownHere(ask))) out.push(ask);
     }
     return out;
     // `chatHere` is the registry's version: a page that opens or leaves a
@@ -2353,8 +2372,10 @@ export function NotificationBell() {
       // v1.369.0 review: a Build session parked on the user lists as a chat
       // row (`surface: "build"`) but is said as the SESSION it is — its row
       // already does; the ping read "1 chat waiting for your OK" for it.
-      const plainChats = chatAsks.filter((c) => !c.build);
+      const plainChats = chatAsks.filter((c) => !c.build && !c.app);
       const buildAsks = chatAsks.filter((c) => c.build);
+      // v1.409.0: Build's Code view (the real Claude Code / Codex), by name.
+      const appAsks = chatAsks.filter((c) => c.app);
       const newIsBuild = !!named.chat && buildAsks.some((c) => !seenAsks.has(`c:${c.id}`));
       if (plainChats.length)
         parts.push(
@@ -2366,6 +2387,7 @@ export function NotificationBell() {
           `${buildAsks.length} coding session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
             (named.chat && newIsBuild ? `: ${named.chat}` : ""),
         );
+      for (const a of appAsks) parts.push(chatAskRowWords(a).title);
       // v1.353.0 (G52): each waiting pane by its CLI's name.
       for (const pane of paneAsks) parts.push(paneWaitingTitle(pane));
       // v1.355.0 (G32): the failing tasks in the rows' words (failingLoopsPing).
@@ -2502,6 +2524,7 @@ export function NotificationBell() {
             // waiting chat's `/chat?thread=`, the Code view with no session
             // named) pressed while that page is open switches its view —
             // behind Code, a chat row changed only the address.
+            if (announceBuildCodeLink(href)) return;
             if (!announceBuildSessionLink(href)) announceChatViewLink(href);
           }}
         >
@@ -2781,9 +2804,11 @@ export function NotificationBell() {
                     : waiting.length > 0
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
-                        ? chatAsks[0].build
-                          ? "Open the session"
-                          : "Open the chat"
+                        ? chatAsks[0].app
+                          ? chatAskRowWords(chatAsks[0]).open
+                          : chatAsks[0].build
+                            ? "Open the session"
+                            : "Open the chat"
                         : agentAsks.length === 0 && paneAsks.length > 0
                           ? "Open Build"
                           : "Open the Agents page"}{" "}

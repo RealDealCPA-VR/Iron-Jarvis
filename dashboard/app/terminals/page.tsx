@@ -13,9 +13,10 @@
 // a terminal (`?focus=<id>`) stays here. xterm is dynamically imported (no
 // SSR).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import {
+  Code2,
   Loader2,
   MessageSquare,
   PanelLeftOpen,
@@ -61,6 +62,24 @@ import {
 } from "@/components/terminal/PaneState";
 import { BUILD_TERMINAL_EVENT, addressMove, codeHrefForOldBuildSearch, sessionOfEvent } from "@/lib/buildLinks";
 import { CODING_SESSION, CODING_SESSIONS_LIST, CODING_SESSIONS_PLACE } from "@/lib/buildWords";
+// v1.409.0: Build's Code | Terminal switch (the chat page's own switch,
+// shared) and its Code view — the real Claude Code / Codex in a window.
+import { ViewSwitch } from "@/components/ViewSwitch";
+import {
+  BUILD_CODE_EVENT,
+  BUILD_CODE_VIEW_NAME,
+  BUILD_TERMINAL_VIEW_NAME,
+  OPEN_IN_CODE_VIEW,
+  cachedBuildView,
+  codeSessionFromSearch,
+  decodeCodeSession,
+  keepBuildView,
+  rememberedBuildView,
+  buildViewFromSearch,
+  writeBuildViewToAddress,
+  type BuildView,
+} from "@/lib/buildApp";
+import { codeViewOfferFor, codeViewOfferWords } from "@/lib/buildCodeOffer";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -90,6 +109,27 @@ const PaneChat = dynamic(
     ),
   },
 );
+
+// v1.409.0: the Code view (browser only; loaded when it is first shown, so
+// the terminals never pay for it).
+const BuildCodeView = dynamic(
+  () => import("@/components/buildCode/BuildCodeView").then((m) => m.BuildCodeView),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="grid h-48 place-items-center text-zinc-600">
+        <Loader2 size={18} className="animate-spin" />
+      </div>
+    ),
+  },
+);
+
+/** v1.409.0: the switch in Build's header centre — Code first, then the
+ *  terminals (the user's order: "</> Code | Terminal"). */
+const BUILD_VIEWS: { value: BuildView; label: string; icon: ReactNode }[] = [
+  { value: "code", label: BUILD_CODE_VIEW_NAME, icon: <Code2 size={13} aria-hidden /> },
+  { value: "terminal", label: BUILD_TERMINAL_VIEW_NAME, icon: <SquareTerminal size={13} aria-hidden /> },
+];
 
 // What a pane is SHOWING: the live terminal (default) or the pane chat.
 // Persisted per pane id under `ij.pane.view.<paneId>` — only ever written on
@@ -162,6 +202,62 @@ export default function TerminalsPage() {
     if (!to) return;
     setMovedTo(to);
     addressMove.replace(to);
+  }, []);
+
+  // ---- v1.409.0: Code | Terminal ------------------------------------------
+  // The first frame: what this window last showed (module state — null on a
+  // fresh load, exactly as the server renders it), else Terminal. Right
+  // after: the address (`?view=code`, `&code=<id>`; a `?focus=` link is a
+  // terminal link), else the saved choice (`ij.build.view`).
+  const [buildView, setBuildView] = useState<BuildView>(() => cachedBuildView() ?? "terminal");
+  const [codeLink, setCodeLink] = useState<{ id: string | null; seq: number }>({ id: null, seq: 0 });
+  const [offerNote, setOfferNote] = useState<string | null>(null);
+  const chooseView = useCallback((next: BuildView) => {
+    setBuildView(next);
+    keepBuildView(next);
+    writeBuildViewToAddress(next);
+  }, []);
+  useEffect(() => {
+    let fromAddress: BuildView | null = null;
+    let linked: string | null = null;
+    try {
+      fromAddress = buildViewFromSearch(window.location.search);
+      linked = codeSessionFromSearch(window.location.search);
+    } catch {
+      /* no address: the remembered choice */
+    }
+    const next = fromAddress ?? rememberedBuildView() ?? "terminal";
+    setBuildView(next);
+    keepBuildView(next);
+    if (linked) setCodeLink({ id: linked, seq: 1 });
+    // A remembered Code view puts itself in the address (a reload keeps it).
+    if (next === "code" && fromAddress !== "code") writeBuildViewToAddress("code");
+  }, []);
+  // A link to a Code view session pressed while Build is open (the bell):
+  // Next keeps this page, so the link announces itself (lib/buildApp).
+  // A link to a terminal shows the Terminal view.
+  useEffect(() => {
+    const onCode = (e: Event) => {
+      const id = sessionOfEvent(e);
+      if (!id) return;
+      setCodeLink((cur) => ({ id, seq: cur.seq + 1 }));
+      chooseView("code");
+    };
+    const onTerminal = () => chooseView("terminal");
+    window.addEventListener(BUILD_CODE_EVENT, onCode);
+    window.addEventListener(BUILD_TERMINAL_EVENT, onTerminal);
+    return () => {
+      window.removeEventListener(BUILD_CODE_EVENT, onCode);
+      window.removeEventListener(BUILD_TERMINAL_EVENT, onTerminal);
+    };
+  }, [chooseView]);
+  /** Open in terminal landed (the Code view's menu): show that terminal —
+   *  the page's own terminal link (it reads the list again and focuses it). */
+  const showOpenedTerminal = useCallback((terminalId: string) => {
+    window.dispatchEvent(new CustomEvent(BUILD_TERMINAL_EVENT, { detail: { id: terminalId } }));
+  }, []);
+  const noteCodeSession = useCallback((id: string | null) => {
+    writeBuildViewToAddress("code", id);
   }, []);
 
   // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of
@@ -597,6 +693,37 @@ export default function TerminalsPage() {
   }, [activeCwd, rememberFolder]);
   const newFolder = selectedPath ?? activeCwd ?? lastFolder;
 
+  // v1.409.0: the terminal in front ran Claude Code or Codex, which has
+  // exited: offer to carry the conversation on in the Code view.
+  const codeOffer = useMemo(() => {
+    if (!activeId) return null;
+    return codeViewOfferFor(
+      terminals.find((t) => t.id === activeId),
+      paneActivity.get(activeId),
+      paneOverrides[activeId]?.cli,
+    );
+  }, [activeId, terminals, paneActivity, paneOverrides]);
+  useEffect(() => setOfferNote(null), [activeId]);
+  const openInCodeView = useCallback(
+    async (paneId: string) => {
+      setOfferNote(null);
+      try {
+        const raw = await post<unknown>(`/build/app/from-terminal/${encodeURIComponent(paneId)}`);
+        const made = decodeCodeSession(raw);
+        if (!made) {
+          setOfferNote("The conversation could not be opened in the Code view.");
+          return;
+        }
+        setCodeLink((cur) => ({ id: made.id, seq: cur.seq + 1 }));
+        chooseView("code");
+        writeBuildViewToAddress("code", made.id);
+      } catch (e) {
+        setOfferNote(e instanceof Error && e.message ? e.message : "The conversation could not be opened in the Code view.");
+      }
+    },
+    [chooseView],
+  );
+
   /** Rename a pane from the rail (v1.219.0).
    *
    *  The same two steps the pane header already does, in the same order and for
@@ -907,11 +1034,26 @@ export default function TerminalsPage() {
       <Reveal>
         <PageHeader
           title="Build"
-          // v1.406.0 (part 1): the terminals only; the coding sessions are
+          // v1.409.0: the switch in the header's empty centre — Code (the
+          // real Claude Code / Codex in a window) | Terminal (today's page).
+          center={
+            <ViewSwitch
+              views={BUILD_VIEWS}
+              value={buildView}
+              onChange={chooseView}
+              label="Code or terminal"
+              prefix="build-view"
+            />
+          }
+          // v1.406.0 (part 1): the terminals; the coding sessions are
           // behind the chat page's Chat | Code switch.
-          subtitle={`Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. ${CODING_SESSIONS_LIST}, where Jarvis writes the code, are in ${CODING_SESSIONS_PLACE}.`}
+          subtitle={
+            buildView === "code"
+              ? "Claude Code or Codex, running for real with their own tools, settings and saved conversations. Iron Jarvis shows what they do and asks you whenever they ask."
+              : `Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. ${CODING_SESSIONS_LIST}, where Jarvis writes the code, are in ${CODING_SESSIONS_PLACE}.`
+          }
           actions={
-                <>
+                buildView === "code" ? undefined : <>
                   {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
                       borderless select that fills on hover, like the rail's own
                       footer, not a boxed field under an uppercase caption.
@@ -959,6 +1101,23 @@ export default function TerminalsPage() {
         />
       </Reveal>
 
+      {buildView === "code" ? (
+        <Reveal>
+          <div id="build-view-panel-code" role="tabpanel" aria-labelledby="build-view-tab-code">
+            <BuildCodeView
+              initialSession={codeLink.id}
+              linkSeq={codeLink.seq}
+              startFolder={newFolder}
+              onSessionChange={noteCodeSession}
+              onOpenedTerminal={showOpenedTerminal}
+            />
+          </div>
+        </Reveal>
+      ) : (
+      // The terminals, exactly as before (no wrapper element: the Terminal
+      // view's markup is today's page).
+      <>
+
       {offline && (
         <Reveal>
           <OfflineHint detail="Terminals and the directory tree both need it running." />
@@ -975,6 +1134,28 @@ export default function TerminalsPage() {
           >
             {error}
           </p>
+        </Reveal>
+      )}
+
+      {codeOffer && (
+        <Reveal>
+          <div data-testid="build-code-offer" className="flex flex-wrap items-center gap-2 text-[13px] text-zinc-400">
+            <span>{codeViewOfferWords(codeOffer)}</span>
+            <button
+              type="button"
+              data-testid="build-open-in-code"
+              onClick={() => void openInCodeView(codeOffer.paneId)}
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              <Code2 size={13} aria-hidden="true" />
+              {OPEN_IN_CODE_VIEW}
+            </button>
+            {offerNote ? (
+              <span role="alert" data-testid="build-code-offer-note" className="text-tone-danger">
+                {offerNote}
+              </span>
+            ) : null}
+          </div>
         </Reveal>
       )}
 
@@ -1527,6 +1708,8 @@ export default function TerminalsPage() {
           </div>
         </div>
       </Reveal>
+      </>
+      )}
     </PageShell>
   );
 }

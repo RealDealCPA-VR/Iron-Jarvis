@@ -45,6 +45,7 @@ import {
 import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import { CHAT_VIEW_NAME, CODE_VIEW_NAME } from "@/lib/buildWords";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
+import { ViewSwitch } from "@/components/ViewSwitch";
 
 // The Code view: browser only, loaded when it is first shown (it brings the
 // whole IJ harness and xterm with it; the chat never pays for that).
@@ -169,43 +170,10 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
     >
       <div data-testid="chat-view-switch-row" className="mb-2 flex h-9 shrink-0 items-center justify-center">
         {/* THE SWITCH: Build's old view switch, its look kept — plain text
-            tabs in one quiet box, the open one in ink. */}
-        <div
-          role="tablist"
-          aria-label="Chat or code"
-          data-testid="chat-view-switch"
-          className="flex items-center gap-1 rounded-lg bg-white/[0.04] p-0.5"
-        >
-          {VIEWS.map((v) => {
-            const selected = view === v.value;
-            return (
-              <button
-                key={v.value}
-                type="button"
-                role="tab"
-                id={`chat-view-tab-${v.value}`}
-                aria-selected={selected}
-                aria-controls={`chat-view-panel-${v.value}`}
-                tabIndex={selected ? 0 : -1}
-                data-testid={`chat-view-${v.value}`}
-                onClick={() => choose(v.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-                  e.preventDefault();
-                  const next: ChatSurfaceView = v.value === "chat" ? "code" : "chat";
-                  choose(next);
-                  document.querySelector<HTMLButtonElement>(`[data-testid="chat-view-${next}"]`)?.focus();
-                }}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-                  selected ? "bg-white/[0.08] font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
-                }`}
-              >
-                {v.icon}
-                {v.label}
-              </button>
-            );
-          })}
-        </div>
+            tabs in one quiet box, the open one in ink. v1.409.0: lifted into
+            components/ViewSwitch, which Build's Code | Terminal switch shares
+            (one component, so the two can never drift). */}
+        <ViewSwitch views={VIEWS} value={view} onChange={choose} label="Chat or code" prefix="chat-view" />
       </div>
       <div
         id="chat-view-panel-chat"

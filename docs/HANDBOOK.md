@@ -2017,6 +2017,56 @@ run, through four tools (brain search, read, save, change) that always go to
 the profile's primary — so an agent never needs to know whether your brain is
 Notion or a folder.
 
+## Build: the Code view (v1.409.0)
+
+Build's header now has a switch in its middle: **Code | Terminal**. It is the
+same switch as the chat page's Chat | Code, in the same place on the page.
+
+- **Terminal** is Build as you know it: your live terminals, the folder
+  tree, Shell and New terminal. It is what Build opens on.
+- **Code** runs the real **Claude Code** or **Codex** in a window instead of
+  a terminal. The coding tool does everything itself, exactly as it would in
+  a terminal: its own tools, its own settings, your CLAUDE.md / AGENTS.md,
+  its MCP servers, its slash commands and its permission rules. Iron Jarvis
+  starts it, draws what it does, and passes on your messages and your
+  answers. (This is different from **Chat › Code**, where Iron Jarvis does
+  the work and the model only thinks.)
+- **The list** on the left holds your sessions, grouped by folder. Each row
+  says which tool it runs (Claude Code or Codex) and which account it runs
+  on. A session the tool saved on this PC by itself can be listed too ("saved
+  by Claude Code").
+- **New session**: pick the tool by name (one that is not installed or is
+  signed out is greyed, with the reason), the folder, the account and the
+  mode, then Start.
+- **The conversation** reads like a chat: your messages, the tool's replies,
+  each step it took (open a step to see what went in and what came out), an
+  edit's changes with Open in VS Code / Cursor, its plan as a checklist, and
+  how many tokens each reply used.
+- **When the tool asks**, its question takes the message box's place: Allow
+  once, Allow for this session (only when the tool itself offers one), or
+  Deny; a question with choices lists them A, B, C and has a box for
+  something else. Esc denies. Enter allows an ordinary request, but never
+  while the session runs in Full access and never a request the tool asks
+  every time: those take a click. Your draft is kept underneath.
+- **The chips under the box**: the tool and its model, the effort, the mode
+  and the account. The modes are the tool's own (Ask first, Auto edits, Plan
+  for Claude Code, and Full access). **Full access** lets the tool do
+  anything without asking, so it takes two presses. `/` lists the tool's own
+  commands; `@` lists the folder's files. **Stop** interrupts the tool.
+- **A reply keeps going when you leave.** Closing the page or switching to
+  Terminal does not stop it; opening the session again picks the reply up
+  where it is. If it is waiting for your OK while nobody is looking, the bell
+  says "Claude Code is waiting for your OK" and opens the session.
+- **Open in terminal** (the ⋯ beside a session) opens the same conversation
+  in a Build terminal (`claude --resume` / `codex resume`), and Build shows
+  that terminal. The other way works too: a terminal where Claude Code or
+  Codex has finished offers **Open in Code view**, which carries that
+  conversation on here. Both tools keep their own saved sessions, so
+  `claude --resume` and `codex resume` keep working wherever you started.
+- **The address** is `/terminals?view=code`, with `&code=<id>` for one
+  session. Build remembers the view you last chose.
+- **Next**: Pi, then OpenCode, as coding tools for the Code view.
+
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron
