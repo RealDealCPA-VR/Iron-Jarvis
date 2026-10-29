@@ -4178,7 +4178,18 @@ does not need a bump, stop and bump it.
   (the state table on real recorded lines — the Timeline fixture's saved
   line, the team seams' finish — plus the harness screen),
   `next-step-chat-v1406.test.tsx`, `closing-offer-twin-v1406.test.ts`,
-  `tests/test_closing_offer_twin_v1406.py` (21 mutations, all red). OPEN: the
+  `tests/test_closing_offer_twin_v1406.py` (21 mutations, all red). REVIEW:
+  the daemon's `user_owns` was written for the NUDGE (a miss there only lets
+  the model carry on), and it reads "git push --force", "transfer the
+  funds", "rm -rf …", "wipe the logs", "run the deploy script", "cancel the
+  subscription" as plain work — on the box that was ONE press of "Yes, do
+  it". `nextStep.asksFirst` (ASKS_FIRST_ANYWHERE / ASKS_FIRST_VERB, over the
+  offer's last sentence, dashboard only — the daemon's reading and its nudge
+  are unchanged) turns those into the user's call (named, fill); a false hit
+  costs one press. Also: "Yes, do it" pressed mid-upload puts its words in
+  the box first (the queued send reads the box; the file went out alone),
+  and the coding box is not drawn while `view.running` / `view.planRun` (an
+  approved plan's act turn about to start). OPEN: the
   chat's own Continue on a cut-off reply and RunResultCard's Keep going stay
   where they were (not in the box); a failed chat turn shows no box (its
   Retry line is the one place); an older reply's offer is never read.

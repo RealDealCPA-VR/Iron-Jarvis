@@ -282,6 +282,55 @@ describe("the table: a reply's record → the recap and its buttons", () => {
     expect(fill.actions[0]).toMatchObject({ label: "Email the summary to Dana…", text: "Yes, email the summary to Dana." });
   });
 
+  // Review (v1.406.0 part 4): the daemon's `user_owns` list was written for
+  // the closing NUDGE (a miss there only means the model may carry on), so it
+  // reads many outward / destructive / money offers as plain "work". On the
+  // box a "work" offer is ONE press that sends "Yes, go ahead." — consent in
+  // the user's own words. Those offers must only be NAMED here too.
+  it("an offer the daemon reads as plain work but that pushes, deletes, pays or sends NEVER sends", () => {
+    for (const content of [
+      "Want me to git push --force?",
+      "Should I run the tests and then push?",
+      "Want me to transfer the funds?",
+      "Want me to wire the money to the vendor?",
+      "Want me to charge the card?",
+      "Want me to rm -rf the build folder?",
+      "Want me to clear the cache and wipe the logs?",
+      "Want me to empty the trash?",
+      "Want me to go ahead and run the deploy script?",
+      "Want me to tag v2 and publish the release?",
+      "Want me to run the migration on staging?",
+      "Shall I cancel the subscription?",
+      "Want me to place the order?",
+      "Want me to sign the contract?",
+      "Want me to revoke the token?",
+      "Want me to text her?",
+      "Want me to reset the database?",
+      "Want me to overwrite the file?",
+      "Want me to run git reset --hard?",
+      "Want me to file the return with the IRS?",
+    ]) {
+      const step = codeNextStep(codeReplyFacts(line({ content })), null)!;
+      expect(step.actions.some((a) => a.how === "send"), content).toBe(false);
+      expect(step.recap, content).toMatch(/your call/);
+      const chat = chatNextStep(chatReplyFacts({ content }))!;
+      expect(chat.actions.map((a) => a.how), content).toEqual(["fill"]);
+    }
+    // Ordinary work keeps its one press.
+    for (const content of [
+      "Want me to also add tests?",
+      "I can also add logging if you want.",
+      "Shall I refactor the parser next?",
+      "Want me to fix the text alignment too?",
+    ]) {
+      const chat = chatNextStep(chatReplyFacts({ content }))!;
+      expect(chat.actions.map((a) => [a.kind, a.how]), content).toEqual([["do_offer", "send"]]);
+    }
+    // A commit offer the daemon calls work still opens the Commit press.
+    const commit = codeNextStep(codeReplyFacts(line({ content: "Want me to commit and push the fix?" })), GIT_DIRTY)!;
+    expect(commit.actions.map((a) => a.kind)).toEqual(["commit"]);
+  });
+
   it("the branch facts: only a live branch read by the Branch view", () => {
     const g = { branch: "ij/x", base: "main", prUrl: "", removed: false, merged: false };
     expect(gitFacts(g, { uncommitted: 1, ahead: 0 })).toEqual({ branch: "ij/x", base: "main", prUrl: "", uncommitted: 1, ahead: 0 });
@@ -459,6 +508,86 @@ describe("a coding session's next-step box", () => {
     expect(screen.queryByTestId("next-step-box")).toBeNull();
     fireEvent.change(box(), { target: { value: "" } });
     expect(screen.getByTestId("next-step-box")).toBeInTheDocument();
+  });
+
+  // Review (v1.406.0 part 4): the guards the first cut left unpinned.
+  it("is not drawn on an OLDER reply while the newest question is still being answered (another window's turn)", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      running: true,
+      messages: [q("t1"), reply({ content: "Want me to also add tests?", documents: ["a.py"] }), q("t2", "now the receipt")],
+    });
+    renderSession();
+    await screen.findByText("now the receipt");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("next-step-box")).toBeNull();
+  });
+
+  it("is not drawn while the daemon carries the session on by itself (a plan run, a hidden continuation)", async () => {
+    // An approved plan's act turn: the daemon wrote a HIDDEN question and is
+    // answering it; this window has not followed it yet. The plan reply's
+    // own "go ahead?" must not offer a second "Yes, do it" over it.
+    api.gets["/build/sessions/s1"] = view({
+      running: true,
+      turn_id: "t2",
+      messages: [
+        q("t1", "plan the cart fix"),
+        reply({ content: "Here is the plan.\n\nShall I go ahead with it?", documents: [] }),
+        { role: "user", content: "Carry out the plan.", turnId: "t2", continuation: true },
+      ],
+    });
+    fetchMock.mockImplementation(async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    }));
+    renderSession();
+    await screen.findByText("Shall I go ahead with it?", { exact: false });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("next-step-box")).toBeNull();
+    cleanup();
+    // The plan was approved and the daemon is about to start its act turn
+    // (`plan_run`): nothing to press yet.
+    api.gets["/build/sessions/s1"] = view({
+      plan_run: true,
+      messages: [q("t1", "plan the cart fix"), reply({ content: "Here is the plan.\n\nShall I go ahead with it?", documents: [] })],
+    });
+    renderSession();
+    await screen.findByText("Shall I go ahead with it?", { exact: false });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("next-step-box")).toBeNull();
+  });
+
+  it("is not drawn in an archived session", async () => {
+    api.gets["/build/sessions/s1"] = view({
+      archived: true,
+      messages: [q("t1"), reply({ stepLimit: { limit: 60, safety: false }, documents: ["cart.py"] })],
+    });
+    renderSession();
+    await screen.findByTestId("harness-step-limit");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("next-step-box")).toBeNull();
+    expect(screen.queryByTestId("harness-keep-going")).toBeNull();
+  });
+
+  it("a Commit press is made ONCE: going to another tab and back does not draft it again", async () => {
+    const git = { branch: "ij/cart-3f2a", base: "main", base_commit: "abc", worktree: "C:\\w", checkout: "C:\\c", repo: "C:\\r" };
+    api.gets["/build/sessions/s1"] = view({ git, messages: [q("t1"), reply({ documents: ["cart.py"] })] });
+    api.gets["/build/sessions/s1/git"] = { exists: true, ahead: 0, behind: 0, uncommitted: 2, remote: "origin", pushed: false };
+    api.gets["/build/sessions/s1/git/diff"] = { files: [] };
+    api.posts["/build/sessions/s1/git/draft"] = { drafted: true, message: "Fix the cart total", note: "" };
+    renderSession();
+    const next = await screen.findByTestId("next-step-box");
+    await waitFor(() => expect(within(next).getByRole("button", { name: "Commit" })).toBeInTheDocument());
+    fireEvent.click(within(next).getByRole("button", { name: "Commit" }));
+    await screen.findByLabelText("Commit message");
+    const drafts = () => api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions/s1/git/draft").length;
+    expect(drafts()).toBe(1);
+    fireEvent.click(screen.getByTestId("harness-pane-tab-plan"));
+    await waitFor(() => expect(screen.queryByLabelText("Commit message")).toBeNull());
+    fireEvent.click(screen.getByTestId("harness-pane-tab-changes"));
+    await screen.findByTestId("pane-changes");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(drafts()).toBe(1);
+    expect(screen.queryByLabelText("Commit message")).toBeNull();
   });
 
   it("Commit opens the Branch view's own Commit press (its draft), and commits nothing itself", async () => {

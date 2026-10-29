@@ -12290,6 +12290,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                               // Exactly the same as typing it and pressing
                               // Send: the page's own send (its guards, its
                               // cards and the lane's rules all apply).
+                              // Review: a send pressed mid-upload is queued
+                              // and fires with the BOX's words (v1.275.0),
+                              // so the words go in the box first — else the
+                              // file went out alone.
+                              if (uploadingRef.current) composer.setText(a.text);
                               send(a.text);
                             } else {
                               inputFromVoiceRef.current = false;

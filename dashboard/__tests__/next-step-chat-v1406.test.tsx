@@ -32,6 +32,8 @@ const H = vi.hoisted(() => {
     getResponses: {} as Record<string, unknown>,
     streamBodies: [] as Record<string, unknown>[],
     dones: [] as Record<string, unknown>[],
+    /** Review: an upload the test holds until it says so. */
+    uploadGate: null as Promise<void> | null,
   };
 });
 
@@ -47,6 +49,7 @@ vi.mock("@/lib/api", () => ({
   },
   post: async (path: string, body: Record<string, unknown>) => {
     H.posts.push({ path, body });
+    if (path === "/documents/upload" && H.uploadGate) await H.uploadGate;
     return H.postResponses[path] ?? {};
   },
   put: async (path: string) => {
@@ -93,11 +96,24 @@ function sse(done: Record<string, unknown>): Response {
   return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
 
+/** Review: a turn that fails (the lane's error frame). */
+function sseError(detail: string): Response {
+  const text = `event: error\ndata: ${JSON.stringify({ detail })}\n\n`;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(new TextEncoder().encode(text));
+      c.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+}
+
 beforeEach(() => {
   H.posts.length = 0;
   H.streamBodies.length = 0;
   H.dones.length = 0;
   H.postResponses = {};
+  H.uploadGate = null;
   H.getResponses = {
     "/models": { models: [] },
     "/chat/personas": { personas: [] },
@@ -117,7 +133,9 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).startsWith("http://d/chat/stream")) {
         H.streamBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
-        return sse(H.dones.shift() ?? { reply: "ok" });
+        const done = H.dones.shift() ?? { reply: "ok" };
+        if (typeof done.__error === "string") return sseError(done.__error);
+        return sse(done);
       }
       return new Response("{}", { status: 404 });
     }),
@@ -180,6 +198,47 @@ describe("the chat's next-step box", () => {
     expect(H.streamBodies.length).toBe(1);
     fireEvent.change(box, { target: { value: "" } });
     expect(await screen.findByTestId("next-step-box")).toBeInTheDocument();
+  });
+
+  // Review (v1.406.0 part 4): a send pressed while a file is still going up is
+  // QUEUED and fires with the BOX's words (v1.275.0) — the press's words were
+  // never in the box, so "Yes, do it" mid-upload sent the file alone.
+  it("Yes, do it pressed while a file is going up keeps its words (they go out with the file)", async () => {
+    H.postResponses["/documents/upload"] = { name: "notes.pdf", path: "C:\\up\\notes.pdf" };
+    H.postResponses["/documents/workfolder"] = { folder: "", files: [], note: "" };
+    render(<ChatPage />);
+    await ask("draft a budget", "Here is the draft. I can also add a summary table if you want.");
+    const next = await screen.findByTestId("next-step-box");
+    let release: () => void = () => {};
+    H.uploadGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["abc"], "notes.pdf", { type: "application/pdf" })] } });
+    await waitFor(() => expect(H.posts.some((p) => p.path === "/documents/upload")).toBe(true));
+    H.dones.push({ reply: "Added the table.", route: { provider: "mock", model: "mock" } });
+    fireEvent.click(within(next).getByRole("button", { name: "Yes, do it" }));
+    release();
+    await waitFor(() => expect(H.streamBodies.length).toBe(2), { timeout: 10_000 });
+    expect(lastUser(H.streamBodies[1])).toBe(YES_TEXT);
+  });
+
+  // Review (v1.406.0 part 4): a failed turn's line (Retry) is the next step —
+  // the earlier reply's offer must not come back beside it. (The failed
+  // question stays in the thread today, so the page's `failedTurn` guard is a
+  // second lock; this pins the behaviour either way.)
+  it("is not drawn beside a failed turn's line (the earlier reply's offer stays retired)", async () => {
+    render(<ChatPage />);
+    const box = await ask("draft a budget", "Here is the draft. I can also add a summary table if you want.");
+    await screen.findByTestId("next-step-box");
+    H.dones.push({ __error: "The model could not answer." });
+    fireEvent.change(box, { target: { value: "and a chart" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(H.streamBodies.length).toBe(2));
+    await screen.findByText(/could not answer/);
+    fireEvent.change(box, { target: { value: "" } });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("next-step-box")).toBeNull();
   });
 
   it("the model's follow-up suggestions render inside the same box", async () => {

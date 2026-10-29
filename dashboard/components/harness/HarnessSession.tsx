@@ -2743,7 +2743,11 @@ export function HarnessSession({
               questions" is on) render inside it — a press puts the words in
               the box; nothing is sent. */}
           {(() => {
-            if (busy || view.archived || !newestReply) return null;
+            // Review: nor while the daemon carries the session on by itself
+            // (an approved plan's act turn about to start, or a turn this
+            // window has not followed yet behind a hidden continuation):
+            // the reply above is not where things stand.
+            if (busy || view.archived || view.running || view.planRun || !newestReply) return null;
             const step = codeNextStep(codeReplyFacts(newestReply), gitFacts(view.git, branchStatus));
             const chips = nextSteps.length ? (
               <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
