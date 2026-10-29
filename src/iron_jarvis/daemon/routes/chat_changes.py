@@ -436,6 +436,10 @@ def _one_change(home: str | Path, entry: dict[str, Any]) -> dict[str, Any]:
     if before_text is None or after_text is None:
         out["binary"] = True
         out["diff"] = BINARY_NOTE
+        # v1.405.0 review: a binary file has no lines, so its SIZE now is
+        # what tells a later look it changed again (the review pane's
+        # Reviewed mark hashes it).
+        out["size"] = len(now or b"")
         return out
     if (
         before_text.count("\n") > LINE_CAP or after_text.count("\n") > LINE_CAP

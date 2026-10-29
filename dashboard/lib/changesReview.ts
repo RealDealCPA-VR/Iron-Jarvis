@@ -3,7 +3,11 @@
  * ChangesReview): every changed file's diff inline, a Reviewed mark per file.
  *
  * The pure half:
- *  - `diffHash`: a short hash of one file's change (its status and diff text);
+ *  - `diffHash`: a short hash of one file's change — its status, its counts,
+ *    whether the diff was cut, a binary file's size, and the diff text (v1.405.0
+ *    review: the text alone missed a change past the 200 KB cut, which only
+ *    the counts see, and every change to a binary file, whose text is always
+ *    "binary file");
  *  - the REVIEWED marks, remembered per session in localStorage as
  *    `path + hash` pairs — so a file whose diff changes again (the session
  *    edited it once more, an Undo) is unreviewed by itself, while the
@@ -26,9 +30,22 @@ export const REVIEW_ROWS_PER_FILE = 400;
 /** From this many files on, a file's rows are drawn only near the screen. */
 export const LAZY_FROM_FILES = 8;
 
-/** FNV-1a (32 bit) over the change's status and diff text, as 8 hex digits. */
-export function diffHash(change: Pick<FileChange, "status" | "diff">): string {
-  const text = `${change.status}\n${change.diff ?? ""}`;
+/** What a Reviewed mark hashes: every field that says the change is new. */
+export type HashedChange = Pick<FileChange, "status" | "diff"> &
+  Partial<Pick<FileChange, "added" | "removed" | "truncated" | "binary" | "size">>;
+
+/** FNV-1a (32 bit) over the change's status, counts, cut flag, a binary
+ *  file's size and the diff text, as 8 hex digits. */
+export function diffHash(change: HashedChange): string {
+  const size = change.binary ? String(change.size ?? "") : "";
+  const text = [
+    change.status,
+    change.added ?? "",
+    change.removed ?? "",
+    change.truncated ? "cut" : "",
+    change.binary ? `binary ${size}` : "",
+    change.diff ?? "",
+  ].join("\n");
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -38,7 +55,7 @@ export function diffHash(change: Pick<FileChange, "status" | "diff">): string {
 }
 
 /** The mark of one file in its current state. */
-export function markOf(change: Pick<FileChange, "path" | "status" | "diff">): string {
+export function markOf(change: HashedChange & Pick<FileChange, "path">): string {
   return `${change.path}\u0000${diffHash(change)}`;
 }
 

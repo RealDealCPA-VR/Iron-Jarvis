@@ -1993,7 +1993,13 @@ or Linux the app cannot tell which editors are installed, so choose one there
 to see the buttons. A press opens the editor through its own link; if the
 file is gone, outside the folders Iron Jarvis may read, or on a network share,
 the button says so in one line beside it. The chat page shows none of these
-buttons.
+buttons, and neither does a session whose folder is on a network share. VS
+Code shows its own confirmation dialog the first time a link from Iron Jarvis
+opens it (asking whether to allow it); that question is VS Code's, and Iron
+Jarvis cannot answer it for you. A workspace file (`.code-workspace`) is never
+opened this way, because the editor would load that workspace's settings and
+tasks, and a shortcut (a link) that leads into a network share is refused
+before anything follows it.
 
 ## The Session tab in a coding session (v1.404.0)
 

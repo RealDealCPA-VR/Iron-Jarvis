@@ -7,8 +7,10 @@
  *  - each file's header: what happened, the path, its counts, the honesty
  *    words, Open in <editor>, Undo ("This session" only, through the
  *    handler the session passes — never a second undo path) and Reviewed;
- *  - each hunk offers "Open at line N" (N = its first line in the NEW file);
- *    a deleted file opens nothing;
+ *  - each hunk offers "Open at line N" (N = the line of its first CHANGE in
+ *    the NEW file — v1.405.0 review, moved on purpose: it was the hunk
+ *    header's start, up to three context lines ABOVE the change); a deleted
+ *    file opens nothing;
  *  - Reviewed marks persist per session and clear by themselves when the
  *    file's diff changes; Collapse reviewed / Expand all;
  *  - a file shows at most REVIEW_ROWS_PER_FILE rows until "Show all N lines";
@@ -17,7 +19,16 @@
  *    session, with the right path and line; the chat page shows nothing new;
  *  - a reviewer's `path:line` mentions open that place — never a URL, never
  *    `..` out of the folder;
- *  - no editor detected = no button anywhere; the options are read ONCE.
+ *  - no editor detected = no button anywhere; the options are read AGAIN on
+ *    every coding-session mount (v1.405.0 review, moved on purpose: a read
+ *    kept for the window's life named the wrong editor after the setting
+ *    changed), and every press names the editor it opens;
+ *  - a session folder on a network share shows no press at all;
+ *  - the Reviewed hash covers the counts, the cut flag and a binary size;
+ *  - a press's accessible name starts with its words; a Reviewed box names
+ *    its file;
+ *  - a settled file step still opens, read from what the REAL daemon saves
+ *    (fixtures/editor-step-inputs-v1405.json, from chat_turn.step_detail).
  *
  * The editor is NEVER launched here: the context's `open` is a spy, and the
  * provider's POST goes to the mocked api.
@@ -64,7 +75,10 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
   FilesPanel: () => <div data-testid="files-panel" />,
 }));
 
-import { ChangesReview, firstNewLine } from "@/components/harness/ChangesReview";
+import { ChangesReview, firstNewLine, hunkChangeLines } from "@/components/harness/ChangesReview";
+import { parseUnified } from "@/components/chat/DiffView";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { LinkedRefs, SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { SettledHelperRow } from "@/components/harness/HarnessHelpers";
@@ -184,13 +198,28 @@ describe("one scrolling review", () => {
     expect(reviewSummary([CART, NEW], 1)).toBe("2 files changed +4 −1 · 1 of 2 reviewed");
   });
 
-  it("each hunk offers Open at line N — the hunk's first line in the NEW file", () => {
+  it("each hunk offers Open at line N — the line of its first CHANGE in the NEW file", () => {
+    // Moved on purpose (v1.405.0 review): the hunk headers say +3 and +41,
+    // but those are CONTEXT lines; the changes start at new lines 4 and 42.
     const ed = opener();
     withEditor(<ChangesReview changes={[CART]} sessionId="s1" />, ed);
     const hunks = screen.getAllByTestId("review-hunk-open-0");
-    expect(hunks.map((b) => b.textContent)).toEqual(["Open at line 3", "Open at line 41"]);
+    expect(hunks.map((b) => b.textContent)).toEqual(["Open at line 4", "Open at line 42"]);
     fireEvent.click(hunks[1]);
-    expect(ed.opened).toEqual([[CART.path, 41, null]]);
+    expect(ed.opened).toEqual([[CART.path, 42, null]]);
+  });
+
+  it("reads a hunk's first change from the rows: an addition's own line, a removal's place", () => {
+    const lines = (diff: string) => [...hunkChangeLines(parseUnified(diff)).values()];
+    // An addition after three context lines: its own new number.
+    expect(lines("@@ -10,3 +10,4 @@\n a\n b\n c\n+d\n")).toEqual([13]);
+    // A removal after two context lines: the new line it sits before.
+    expect(lines("@@ -10,4 +10,3 @@\n a\n b\n-c\n d\n")).toEqual([12]);
+    // A change on the hunk's first row: the header's own start.
+    expect(lines("@@ -1,2 +1,2 @@\n-x\n+y\n z\n")).toEqual([1]);
+    // A new file.
+    expect(lines(NEW.diff)).toEqual([1]);
+    expect(firstNewLine(CART)).toBe(4);
   });
 
   it("the header's Open in VS Code opens at the first changed line; a deleted file opens nothing", () => {
@@ -199,7 +228,7 @@ describe("one scrolling review", () => {
     const open = screen.getByTestId("review-open-0");
     expect(open).toHaveTextContent("Open in VS Code");
     fireEvent.click(open);
-    expect(ed.opened).toEqual([[CART.path, 3, null]]);
+    expect(ed.opened).toEqual([[CART.path, 4, null]]);
     expect(screen.queryByTestId("review-open-1")).toBeNull();
     expect(screen.queryByTestId("review-hunk-open-1")).toBeNull();
     expect(firstNewLine(GONE)).toBeNull();
@@ -618,6 +647,26 @@ describe("a reviewer's finding", () => {
     expect(findEditorRefs("README:3 and notes:4")).toEqual([]); // no folder, no source extension
     expect(findEditorRefs("http://example.com/a.py:12")).toEqual([]);
   });
+
+  // v1.405.0 review: [the text, the refs it holds as written]. Never a guess,
+  // never PART of a path.
+  const REF_TABLE: [string, string[]][] = [
+    ["Needs Node.js:18 or later.", []], // a product, not a file
+    ["Upgrade to Next.js:15 first.", []],
+    ["Released 2024/10/30:12 and again.", []], // a date
+    ["See github.com/acme/shop/blob/main/a.py#L4 for it.", []], // a web address with no scheme
+    ["Also www.example.org/docs/app.py:3 maybe.", []],
+    ["Broken in `my project/app.py:12` today.", []], // a path with a space, in backticks
+    ['Broken in "my project/app.py:12" today.', []], // the same in quotes
+    ["Look at C:\\work\\my project\\app.py:12 now.", []], // the tail of a path with a space
+    ["See src/app.py:12, then lib/x.ts:3.", ["src/app.py:12", "lib/x.ts:3"]],
+    ["Fix `src/app.py:12` and `app.js:4`.", ["src/app.py:12", "app.js:4"]],
+    ["App.js:7 renders twice.", ["App.js:7"]], // a capitalised FILE is still a file
+    ["my project/app.py:12", ["project/app.py:12"]], // plain words before a path are not part of it
+  ];
+  it.each(REF_TABLE)("%s", (text, want) => {
+    expect(findEditorRefs(text).map((r) => r.text)).toEqual(want);
+  });
 });
 
 /* ------------------------------------------------------------- the paths */
@@ -656,7 +705,7 @@ describe("resolveInFolder", () => {
 /* --------------------------------------------------------- the options */
 
 describe("the editor options", () => {
-  it("are read ONCE per page visit, and a session with no editor shows no press", async () => {
+  it("are read AGAIN on every coding-session mount, and a session with no editor shows no press", async () => {
     api.gets["/editor/options"] = {
       editors: [
         { id: "vscode", label: "VS Code", installed: false },
@@ -681,9 +730,61 @@ describe("the editor options", () => {
       </SessionEditorProvider>,
     );
     await act(async () => {});
-    expect(api.calls.filter((c) => c === "/editor/options")).toHaveLength(1);
+    // Moved on purpose (v1.405.0 review): read again on the second mount.
+    expect(api.calls.filter((c) => c === "/editor/options")).toHaveLength(2);
     expect(screen.queryByTestId("review-open-0")).toBeNull();
     expect(screen.queryByTestId("review-hunk-open-0")).toBeNull();
+  });
+
+  it("a changed setting and an editor installed later show on the next mount, and the press names that editor", async () => {
+    api.gets["/editor/options"] = {
+      editors: [{ id: "vscode", label: "VS Code", installed: true }],
+      preferred: "vscode",
+      preferred_label: "VS Code",
+    };
+    const first = render(
+      <SessionEditorProvider folder={FOLDER}>
+        <ChangesReview changes={[CART]} sessionId="s1" />
+      </SessionEditorProvider>,
+    );
+    expect(await screen.findByTestId("review-open-0")).toHaveTextContent("Open in VS Code");
+    first.unmount();
+    // The user moved the setting to Cursor (or installed it) meanwhile.
+    api.gets["/editor/options"] = {
+      editors: [
+        { id: "vscode", label: "VS Code", installed: true },
+        { id: "cursor", label: "Cursor", installed: true },
+      ],
+      preferred: "cursor",
+      preferred_label: "Cursor",
+    };
+    render(
+      <SessionEditorProvider folder={FOLDER}>
+        <ChangesReview changes={[CART]} sessionId="s1" />
+      </SessionEditorProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("review-open-0")).toHaveTextContent("Open in Cursor"));
+    fireEvent.click(screen.getByTestId("review-open-0"));
+    await waitFor(() => expect(api.posts.some(([p]) => p === "/editor/open")).toBe(true));
+    const [, body] = api.posts.find(([p]) => p === "/editor/open") ?? [];
+    expect(body).toEqual({ path: CART.path, line: 4, editor: "cursor" });
+  });
+
+  it("a session folder on a network share shows no press anywhere (and asks nothing)", async () => {
+    api.gets["/editor/options"] = { editors: [], preferred: "vscode", preferred_label: "VS Code" };
+    const share = "\\\\fileserver\\team\\shop";
+    render(
+      <SessionEditorProvider folder={share}>
+        <ChangesReview changes={[{ ...CART, path: `${share}\\src\\cart.py` }]} sessionId="s1" />
+        <WorkLine steps={[READ_STEP]} />
+      </SessionEditorProvider>,
+    );
+    await act(async () => {});
+    openWork();
+    expect(screen.queryByTestId("review-open-0")).toBeNull();
+    expect(screen.queryByTestId("review-hunk-open-0")).toBeNull();
+    expect(screen.queryByTestId("step-open-in-editor")).toBeNull();
+    expect(api.calls).not.toContain("/editor/options");
   });
 
   it("name the editor a press opens, and the press asks the daemon with a path — never a URL", async () => {
@@ -702,7 +803,7 @@ describe("the editor options", () => {
     fireEvent.click(screen.getAllByTestId("review-hunk-open-0")[0]);
     await waitFor(() => expect(api.posts.some(([p]) => p === "/editor/open")).toBe(true));
     const [, body] = api.posts.find(([p]) => p === "/editor/open") ?? [];
-    expect(body).toEqual({ path: CART.path, line: 3 });
+    expect(body).toEqual({ path: CART.path, line: 4, editor: "cursor" });
     expect(JSON.stringify(body)).not.toMatch(/:\/\//);
   });
 
@@ -730,5 +831,92 @@ describe("the editor options", () => {
     expect(await readEditorOptions()).toBeNull();
     api.gets["/editor/options"] = { editors: [], preferred: "vscode" };
     expect((await readEditorOptions())?.preferredLabel).toBe("VS Code");
+    // An answer is not kept either: the next read is a new request.
+    api.gets["/editor/options"] = { editors: [], preferred: "cursor" };
+    expect((await readEditorOptions())?.preferredLabel).toBe("Cursor");
+  });
+});
+
+/* ---------------------------------------------- v1.405.0 review fixes */
+
+interface SavedStep {
+  name: string;
+  input: string;
+  path: string;
+  line: number | null;
+}
+/** What the REAL daemon saves for each file step (chat_turn.step_detail,
+ *  recorded by tests/test_code_editor_v1405.py). */
+const SAVED_STEPS: SavedStep[] = JSON.parse(
+  readFileSync(resolve(__dirname, "fixtures", "editor-step-inputs-v1405.json"), "utf8"),
+);
+
+describe("a settled step, from what the daemon really saves", () => {
+  it("covers every file tool that saves a long input", () => {
+    expect(SAVED_STEPS.map((s) => s.name)).toEqual(["write_file", "edit_file", "multi_edit", "notebook_edit", "read_file"]);
+    for (const s of SAVED_STEPS) expect(s.input.length).toBeLessThanOrEqual(300);
+  });
+
+  it.each(SAVED_STEPS.map((s) => [s.name, s] as const))("%s keeps its file (and a read its line)", (_n, s) => {
+    expect(stepEditorTarget(s.name, null, s.input)).toEqual({ path: s.path, line: s.line });
+  });
+
+  it("offers Open in VS Code on a settled write after a reload", () => {
+    const ed = opener();
+    const write = SAVED_STEPS.find((s) => s.name === "write_file")!;
+    withEditor(<WorkLine steps={[{ name: write.name, ok: true, ms: 3, detail: { input: write.input, output: "ok" } }]} />, ed);
+    openWork();
+    fireEvent.click(screen.getByTestId("step-open-in-editor"));
+    expect(ed.opened).toEqual([[`${FOLDER}\\src\\shop\\cart.py`, null, null]]);
+  });
+});
+
+describe("the Reviewed hash", () => {
+  it("changes when the counts, the cut flag or a binary file's size change", () => {
+    const cut: FileChange = { ...CART, truncated: true, added: 5000, removed: 3 };
+    // A change past the 200 KB cut: the diff text is the same, the counts are not.
+    expect(diffHash({ ...cut, added: 5001 })).not.toBe(diffHash(cut));
+    expect(diffHash({ ...CART, truncated: true })).not.toBe(diffHash(CART));
+    expect(diffHash({ ...LOGO, size: 2048 })).not.toBe(diffHash({ ...LOGO, size: 1024 }));
+    expect(diffHash({ ...LOGO, size: 1024 })).toBe(diffHash({ ...LOGO, size: 1024 }));
+  });
+
+  it("a reviewed binary file opens again when its size changes", () => {
+    const { unmount } = withEditor(<ChangesReview changes={[{ ...LOGO, size: 1024 }]} sessionId="s1" />);
+    fireEvent.click(screen.getByTestId("review-mark-0"));
+    expect(screen.getByTestId("review-file-0")).toHaveAttribute("data-reviewed", "true");
+    unmount();
+    withEditor(<ChangesReview changes={[{ ...LOGO, size: 4096 }]} sessionId="s1" />);
+    expect(screen.getByTestId("review-file-0")).toHaveAttribute("data-reviewed", "false");
+  });
+
+  it("the changes decoder keeps a binary file's size", async () => {
+    const { decodeChanges } = await import("@/components/chat/ChangedFiles");
+    const [row] = decodeChanges({ changes: [{ path: "C:\\x\\a.png", status: "modified", diff: "binary file", binary: true, size: 77 }] });
+    expect(row.size).toBe(77);
+    const [plain] = decodeChanges({ changes: [{ path: "C:\\x\\a.py", status: "modified", diff: "" }] });
+    expect("size" in plain).toBe(false);
+  });
+});
+
+describe("names a screen reader hears", () => {
+  it("a press's name starts with its own words", () => {
+    withEditor(<ChangesReview changes={[CART]} sessionId="s1" />);
+    expect(screen.getByRole("button", { name: /^Open at line 4, / })).toBe(screen.getAllByTestId("review-hunk-open-0")[0]);
+    expect(screen.getByTestId("review-open-0")).toHaveAccessibleName("Open in VS Code, open cart.py at line 4 in VS Code");
+    expect(screen.getAllByTestId("review-hunk-open-0")[1]).toHaveAccessibleName(
+      "Open at line 42, open cart.py at line 42 in VS Code",
+    );
+  });
+
+  it("a finding's press says the place it names first", () => {
+    withEditor(<LinkedRefs text="See src/cart.py:12 now." />);
+    expect(screen.getByTestId("editor-ref")).toHaveAccessibleName("src/cart.py:12, open src/cart.py at line 12 in VS Code");
+  });
+
+  it("every Reviewed box names its file", () => {
+    withEditor(<ChangesReview changes={[CART, NEW]} sessionId="s1" />);
+    expect(screen.getByRole("checkbox", { name: "Reviewed: src/cart.py" })).toBe(screen.getByTestId("review-mark-0"));
+    expect(screen.getByRole("checkbox", { name: "Reviewed: src/new.py" })).toBe(screen.getByTestId("review-mark-1"));
   });
 });

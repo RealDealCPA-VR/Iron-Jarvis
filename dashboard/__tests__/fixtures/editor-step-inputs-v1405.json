@@ -1,0 +1,32 @@
+[
+  {
+    "name": "write_file",
+    "input": "{\"path\": \"src/shop/cart.py\", \"content\": \"    total = total + item_0.price * item_0.qty\\n    total = total + item_1.price * item_1.qty\\n    total = total + item_2.price * item_2.qty\\n    total = total + item_3.price * item_3.qty\\n    total = total + item_4.price * item_4.qty\\n    total = total + item",
+    "path": "src/shop/cart.py",
+    "line": null
+  },
+  {
+    "name": "edit_file",
+    "input": "{\"path\": \"src/shop/cart.py\", \"new\": \"    sum = sum + item_0.price * item_0.qty\\n    sum = sum + item_1.price * item_1.qty\\n    sum = sum + item_2.price * item_2.qty\\n    sum = sum + item_3.price * item_3.qty\\n    sum = sum + item_4.price * item_4.qty\\n    sum = sum + item_5.price * item_5.qty\\n    s",
+    "path": "src/shop/cart.py",
+    "line": null
+  },
+  {
+    "name": "multi_edit",
+    "input": "{\"path\": \"src/shop/tax.py\", \"edits\": [{\"new\": \"x\", \"old\": \"    total = total + item_0.price * item_0.qty\\n    total = total + item_1.price * item_1.qty\\n    total = total + item_2.price * item_2.qty\\n    total = total + item_3.price * item_3.qty\\n    total = total + item_4.price * item_4.qty\\n    to",
+    "path": "src/shop/tax.py",
+    "line": null
+  },
+  {
+    "name": "notebook_edit",
+    "input": "{\"path\": \"notebooks/report.ipynb\", \"cell_index\": 3, \"cell_type\": \"code\", \"edit_mode\": \"replace\", \"new_source\": \"    total = total + item_0.price * item_0.qty\\n    total = total + item_1.price * item_1.qty\\n    total = total + item_2.price * item_2.qty\\n    total = total + item_3.price * item_3.qty\\n",
+    "path": "notebooks/report.ipynb",
+    "line": null
+  },
+  {
+    "name": "read_file",
+    "input": "{\"limit\": 20, \"offset\": 40, \"path\": \"src/shop/cart.py\"}",
+    "path": "src/shop/cart.py",
+    "line": 40
+  }
+]

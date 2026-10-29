@@ -465,3 +465,221 @@ def test_changing_the_setting_changes_the_pick_live(client, launched, source):
     bad = client.put("/settings", json={"values": {"code_editor": "notepad"}})
     assert bad.status_code >= 400
     assert client.get("/editor/options").json()["setting"] == "cursor"
+
+
+# ------------------------------------------------------ review fixes (v1.405.0)
+
+
+def _symlink_or_skip(target: str, link: Path, *, folder: bool = False) -> None:
+    try:
+        os.symlink(target, str(link), target_is_directory=folder)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover — no symlink right
+        pytest.skip(f"this PC cannot make symlinks: {exc}")
+
+
+def _spy_resolvers(monkeypatch) -> list[str]:
+    """Every way the old check reached a link's TARGET: the file policy (which
+    resolves), ``Path.resolve``, ``os.path.realpath``, ``Path.is_file`` /
+    ``is_dir`` (which follow links)."""
+    from iron_jarvis.core import fs_policy
+
+    touched: list[str] = []
+    monkeypatch.setattr(fs_policy, "fs_read_ok", lambda p: touched.append(f"fs_read_ok {p}") or (True, ""))
+    monkeypatch.setattr(fs_policy, "is_protected_path", lambda p: touched.append(f"protected {p}") or False)
+    monkeypatch.setattr(Path, "resolve", lambda self, strict=False: touched.append(f"resolve {self}") or self)
+    monkeypatch.setattr(os.path, "realpath", lambda p, *a, **k: touched.append(f"realpath {p}") or p)
+    monkeypatch.setattr(Path, "is_file", lambda self: touched.append(f"is_file {self}") or True)
+    monkeypatch.setattr(Path, "is_dir", lambda self: touched.append(f"is_dir {self}") or False)
+    return touched
+
+
+@pytest.mark.parametrize("shape", ["file link", "folder link on the way", "a chain of links"])
+def test_a_link_into_a_network_share_is_refused_before_anything_follows_it(tmp_path, monkeypatch, shape):
+    # TEST-NET-1 (192.0.2.1): nothing answers there, and nothing here may try.
+    share = r"\\192.0.2.1\share"
+    if shape == "file link":
+        path = tmp_path / "app.py"
+        _symlink_or_skip(share + r"\app.py", path)
+    elif shape == "folder link on the way":
+        _symlink_or_skip(share, tmp_path / "src", folder=True)
+        path = tmp_path / "src" / "app.py"
+    else:
+        _symlink_or_skip(share + r"\app.py", tmp_path / "far.py")
+        _symlink_or_skip(str(tmp_path / "far.py"), tmp_path / "near.py")
+        path = tmp_path / "near.py"
+    touched = _spy_resolvers(monkeypatch)
+    with pytest.raises(code_editor.EditorRefusal) as e:
+        code_editor.check_path(str(path))
+    assert (e.value.sentence, e.value.status) == (code_editor.NETWORK_PATH, 403)
+    assert touched == [], touched
+
+
+def test_a_long_path_unc_target_is_a_network_target_and_a_drive_is_not():
+    assert code_editor._network_target(r"\\?\UNC\host\share\a.py")
+    assert code_editor._network_target(r"\??\UNC\host\share")
+    assert code_editor._network_target(r"\\host\share")
+    assert code_editor._network_target(r"\\.\pipe\x")
+    assert code_editor._network_target(r"\\?\Volume{1234}\a.py")
+    assert not code_editor._network_target(r"\\?\C:\Users\me\a.py")
+    assert not code_editor._network_target(r"C:\Users\me\a.py")
+    assert not code_editor._network_target("sibling.py")
+
+
+def test_a_local_link_still_opens(tmp_path):
+    real = tmp_path / "real.py"
+    real.write_text("x = 1\n", encoding="utf-8")
+    _symlink_or_skip(str(real), tmp_path / "link.py")
+    _symlink_or_skip("real.py", tmp_path / "rel.py")
+    assert code_editor.check_path(str(tmp_path / "link.py")) == Path(os.path.normpath(str(tmp_path / "link.py")))
+    assert code_editor.check_path(str(tmp_path / "rel.py")) == Path(os.path.normpath(str(tmp_path / "rel.py")))
+
+
+def test_a_code_workspace_file_is_refused(tmp_path):
+    ws = tmp_path / "shop.code-workspace"
+    ws.write_text('{"folders": [], "tasks": {}}', encoding="utf-8")
+    for raw in (str(ws), str(tmp_path / "SHOP.Code-Workspace")):
+        with pytest.raises(code_editor.EditorRefusal) as e:
+            code_editor.check_path(raw)
+        assert (e.value.sentence, e.value.status) == (code_editor.WORKSPACE_FILE, 403)
+    # A link with an innocent name that leads to a workspace file.
+    _symlink_or_skip(str(ws), tmp_path / "notes.txt")
+    with pytest.raises(code_editor.EditorRefusal) as e:
+        code_editor.check_path(str(tmp_path / "notes.txt"))
+    assert e.value.sentence == code_editor.WORKSPACE_FILE
+
+
+def test_the_handbook_says_vscode_asks_the_first_time():
+    text = (Path(__file__).resolve().parents[1] / "docs" / "HANDBOOK.md").read_bytes().decode("utf-8")
+    part = text.split("## Reviewing a coding session's changes, and opening them in your editor", 1)[1]
+    part = part.split("\n## ", 1)[0].replace("\r\n", "\n")
+    assert "VS Code shows its own confirmation" in " ".join(part.split())
+
+
+# -------------------------- a settled step keeps its file (the saved detail)
+
+#: The fixture the dashboard reads (review-pane-v1405.test.tsx): what the REAL
+#: ``chat_turn.step_detail`` saves for each file step, and the file a press
+#: must open. Regenerate after an intended change with
+#: ``IJ_REGEN_EDITOR_STEPS=1 uv run pytest tests/test_code_editor_v1405.py``.
+STEP_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "dashboard" / "__tests__" / "fixtures" / "editor-step-inputs-v1405.json"
+)
+
+_LONG = "\n".join(f"    total = total + item_{i}.price * item_{i}.qty" for i in range(60))
+STEP_CASES = [
+    ("write_file", {"path": "src/shop/cart.py", "content": _LONG}, "src/shop/cart.py", None),
+    (
+        "edit_file",
+        {"path": "src/shop/cart.py", "old": _LONG[:900], "new": _LONG[:900].replace("total", "sum"), "replace_all": False},
+        "src/shop/cart.py",
+        None,
+    ),
+    (
+        "multi_edit",
+        {"path": "src/shop/tax.py", "edits": [{"old": _LONG[:500], "new": "x"}, {"new": _LONG[:400], "old": "y"}]},
+        "src/shop/tax.py",
+        None,
+    ),
+    (
+        "notebook_edit",
+        {"path": "notebooks/report.ipynb", "cell_index": 3, "edit_mode": "replace", "new_source": _LONG, "cell_type": "code"},
+        "notebooks/report.ipynb",
+        None,
+    ),
+    ("read_file", {"path": "src/shop/cart.py", "offset": 40, "limit": 20}, "src/shop/cart.py", 40),
+]
+
+
+def _step_inputs(tmp_path) -> list[dict]:
+    from iron_jarvis.daemon.chat_turn import STEP_DETAIL_INPUT_CHARS, redacted_args, step_detail
+
+    platform = create_app(str(tmp_path / "home")).state.platform
+    rows = []
+    for name, args, path, line in STEP_CASES:
+        assert platform.registry.get(name) is not None, f"anti-vacuity: {name} is a real tool"
+        detail = step_detail(name, redacted_args(platform.registry, name, args), "ok")
+        assert len(detail["input"]) <= STEP_DETAIL_INPUT_CHARS
+        rows.append({"name": name, "input": detail["input"], "path": path, "line": line})
+    return rows
+
+
+def test_a_settled_file_step_keeps_its_path_inside_the_saved_detail(tmp_path):
+    import json
+
+    from iron_jarvis.daemon.chat_turn import PATH_FIRST_TOOLS, STEP_DETAIL_INPUT_CHARS
+
+    rows = _step_inputs(tmp_path)
+    for row, (name, args, path, _line) in zip(rows, STEP_CASES, strict=True):
+        assert f'"path": {json.dumps(path)}' in row["input"], row
+        if name in PATH_FIRST_TOOLS:
+            # Anti-vacuity: sorted keys WOULD have cut the path off.
+            sorted_line = json.dumps(args, ensure_ascii=False, sort_keys=True)
+            assert '"path"' not in sorted_line[:STEP_DETAIL_INPUT_CHARS], name
+    if os.environ.get("IJ_REGEN_EDITOR_STEPS") == "1":
+        STEP_FIXTURE.write_bytes((json.dumps(rows, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    assert json.loads(STEP_FIXTURE.read_bytes().decode("utf-8")) == rows, (
+        "the fixture is stale: IJ_REGEN_EDITOR_STEPS=1 uv run pytest tests/test_code_editor_v1405.py"
+    )
+
+
+def test_every_other_tools_saved_detail_is_byte_identical():
+    import json
+
+    from iron_jarvis.daemon.chat_turn import STEP_DETAIL_INPUT_CHARS, prior_tool_result_entry, step_detail
+
+    for name, args in [
+        ("shell", {"command": "pytest -q", "cwd": "src", "timeout_s": 60}),
+        ("web_fetch", {"url": "https://example.com/a", "max_chars": 4000}),
+        ("apply_patch", {"patch": "*** Begin Patch\n*** Update File: a.py\n" + _LONG}),
+        ("glob", {"pattern": "**/*.py", "path": "src"}),
+        ("t", {"z": 1, "a": {"y": 2, "b": 3}, "path": "p"}),
+    ]:
+        want = json.dumps(args, default=str, ensure_ascii=False, sort_keys=True)
+        assert step_detail(name, args, "")["input"] == want[:STEP_DETAIL_INPUT_CHARS], name
+        assert prior_tool_result_entry(name, args, True, "")["args_summary"] == want[: len(
+            prior_tool_result_entry(name, args, True, "")["args_summary"]
+        )]
+    # A file tool's nested values keep their sorted keys; the escalation row
+    # reads the same line as the step (they never disagree).
+    args = {"path": "a.py", "edits": [{"old": "o", "new": "n", "replace_all": True}]}
+    line = step_detail("multi_edit", args, "")["input"]
+    assert line == '{"path": "a.py", "edits": [{"new": "n", "old": "o", "replace_all": true}]}'
+    assert prior_tool_result_entry("multi_edit", args, True, "")["args_summary"] == line
+
+
+# ---------------- a binary file says its size (the Reviewed mark hashes it)
+
+
+def test_a_binary_change_carries_its_size_in_both_changes_views(tmp_path):
+    import subprocess
+
+    from iron_jarvis.harness import branches
+    from iron_jarvis.platform import build_platform
+    from tests.test_chat_changes_v1328 import _client, _journal, _post, _since
+
+    # This session (POST /chat/changes): the size of the file NOW.
+    platform = build_platform(str(tmp_path / "home"))
+    ws = tmp_path / "work"
+    ws.mkdir()
+    (ws / "pic.bin").write_bytes(b"\x89PNG\x00\x01after!!")
+    since = _since()
+    _journal(platform, workspace=ws, path="pic.bin", prior=b"\x89PNG\x00\x01before", mode="raw")
+    (c,) = _post(_client(platform), since=since)["changes"]
+    assert (c["binary"], c["size"]) == (True, len(b"\x89PNG\x00\x01after!!"))
+
+    # Branch (a new binary file, and a committed binary change).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-c", "core.autocrlf=false", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], cwd=repo, check=True)
+    (repo / "logo.png").write_bytes(b"\x89PNG\x00" + b"a" * 10)
+    subprocess.run([*git, "add", "-A"], cwd=repo, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "one"], cwd=repo, check=True)
+    base = subprocess.run([*git, "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    (repo / "logo.png").write_bytes(b"\x89PNG\x00" + b"b" * 30)
+    subprocess.run([*git, "commit", "-q", "-am", "two"], cwd=repo, check=True)
+    (repo / "new.bin").write_bytes(b"\x00\x01\x02" * 4)
+    got = branches.branch_changes({"worktree": str(repo), "base_commit": base})
+    rows = {r["rel"]: r for r in got["changes"]}
+    assert (rows["logo.png"]["binary"], rows["logo.png"]["size"]) == (True, 35)
+    assert (rows["new.bin"]["binary"], rows["new.bin"]["size"]) == (True, 12)

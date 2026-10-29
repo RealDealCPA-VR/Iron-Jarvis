@@ -963,6 +963,14 @@ def _untracked(wt: Path) -> list[str]:
     return [p for p in _split_z(got.out) if p] if got.ok else []
 
 
+def _size_now(path: Path) -> int:
+    """A file's size on disk now; 0 when it is gone or unreadable."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
 def _new_file_change(wt: Path, rel: str) -> dict[str, Any]:
     path = wt / rel
     row: dict[str, Any] = {
@@ -979,7 +987,9 @@ def _new_file_change(wt: Path, rel: str) -> dict[str, Any]:
         row.update(note="could not be read")
         return row
     if b"\0" in data[:8192]:
-        row.update(binary=True, diff="binary file", removed=None)
+        # v1.405.0 review: its size, the one thing that tells a later look
+        # (the review pane's Reviewed mark) that it changed again.
+        row.update(binary=True, diff="binary file", removed=None, size=size)
         return row
     text = data.decode("utf-8", errors="replace").replace("\r\n", "\n")
     lines = text.split("\n")
@@ -1021,7 +1031,7 @@ def branch_changes(facts: dict[str, str]) -> dict[str, Any]:
             "status": status, "added": added, "removed": removed, "diff": diff,
         }
         if added is None and removed is None:
-            row.update(binary=True, diff="binary file")
+            row.update(binary=True, diff="binary file", size=_size_now(wt / rel))
         if code == "R" and old != new:
             row["note"] = f"renamed from {old}"
         if len(row["diff"]) > DIFF_CAP:

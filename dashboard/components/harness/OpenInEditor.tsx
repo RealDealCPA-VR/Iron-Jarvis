@@ -23,6 +23,7 @@ import { Loader2, SquareArrowOutUpRight } from "lucide-react";
 import {
   EditorContext,
   findEditorRefs,
+  folderOnShare,
   openInEditor,
   readEditorOptions,
   type EditorOpener,
@@ -66,6 +67,11 @@ export function OpenInEditorButton({
   const [error, setError] = useState<string | null>(null);
   if (!editor || !path) return null;
   const where = line && line > 1 ? ` at line ${line}` : "";
+  const tip = title ?? `Open ${pathBase(path)}${where} in ${editor.label}`;
+  // The accessible name STARTS with the words on the press (WCAG 2.5.3,
+  // label in name): "Open at line 12, open cart.py at line 12 in VS Code".
+  const visible = typeof words === "string" ? words : words == null ? `Open in ${editor.label}` : "";
+  const name = visible ? `${visible}, ${tip.charAt(0).toLowerCase()}${tip.slice(1)}` : tip;
   async function press() {
     if (!editor || busy) return;
     setBusy(true);
@@ -87,8 +93,8 @@ export function OpenInEditorButton({
         data-line={line ?? undefined}
         onClick={() => void press()}
         disabled={busy}
-        title={title ?? `Open ${pathBase(path)}${where} in ${editor.label}`}
-        aria-label={title ?? `Open ${pathBase(path)}${where} in ${editor.label}`}
+        title={tip}
+        aria-label={name}
         className={bare ? className : `${QUIET} ${className}`.trim()}
       >
         {icon ? (
@@ -179,13 +185,19 @@ export function LinkedRefs({ text }: { text: string }) {
 /**
  * What a coding session lends everything inside it (HarnessSession wraps its
  * conversation and its panes in this): the session's folder and the editor a
- * press opens, read ONCE per page visit (`GET /editor/options`). Until the
- * answer is in, or when this PC has no editor, the value is null and no press
+ * press opens, read AGAIN each time the session mounts (`GET
+ * /editor/options` — a changed setting or a newly installed editor shows on
+ * the next visit). Every press NAMES that editor (`editor` in the request),
+ * so the label and the editor that opens can never differ. Until the answer
+ * is in, when this PC has no editor, or when the folder is on a network share
+ * (the daemon refuses every network path), the value is null and no press
  * renders anywhere.
  */
 export function SessionEditorProvider({ folder, children }: { folder: string; children: ReactNode }) {
   const [opts, setOpts] = useState<EditorOptions | null>(null);
+  const onShare = folderOnShare(folder);
   useEffect(() => {
+    if (onShare) return;
     let live = true;
     void readEditorOptions().then((o) => {
       if (live) setOpts(o);
@@ -193,10 +205,15 @@ export function SessionEditorProvider({ folder, children }: { folder: string; ch
     return () => {
       live = false;
     };
-  }, []);
-  const value = useMemo<EditorOpener | null>(
-    () => (opts?.preferred ? { folder, label: opts.preferredLabel, open: openInEditor } : null),
-    [opts, folder],
-  );
+  }, [onShare]);
+  const value = useMemo<EditorOpener | null>(() => {
+    if (!opts?.preferred || onShare) return null;
+    const pick = opts.preferred;
+    return {
+      folder,
+      label: opts.preferredLabel,
+      open: (path, line, column) => openInEditor(path, line, column, pick),
+    };
+  }, [opts, folder, onShare]);
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
 }

@@ -12,7 +12,9 @@ import { expect, test, type APIRequestContext, type Page, type Route } from "@pl
  * is STUBBED too and only recorded: no editor is ever launched by this file.
  *
  *  - every file's diff is on screen in one scroll, with no press;
- *  - "Open at line N" asks to open the file at the hunk's first NEW line;
+ *  - "Open at line N" asks to open the file at the line of the hunk's first
+ *    CHANGE in the new file (v1.405.0 review: not the context line above
+ *    it), naming the editor it opens;
  *  - nothing inside the pane is wider than the pane, and the page never pans
  *    sideways — at 1280 × 800 (the panes beside the conversation) and
  *    390 × 844 (stacked under it);
@@ -191,14 +193,15 @@ for (const { width, height } of [
     // Every file's rows, with no press.
     for (const i of [0, 1, 2, 3, 4]) await expect(page.getByTestId(`review-rows-${i}`)).toBeAttached();
     await expect(page.getByTestId("review-changed-since-4")).toHaveText("changed since");
-    // A deleted file opens nothing; a hunk opens at its first NEW line.
+    // A deleted file opens nothing; a hunk opens at its first CHANGE (the
+    // hunk starts at 120 with one context line, so the change is at 121).
     await expect(page.getByTestId("review-open-3")).toHaveCount(0);
     const hunk = page.getByTestId("review-hunk-open-1").first();
     await hunk.scrollIntoViewIfNeeded();
-    await expect(hunk).toHaveText("Open at line 120");
+    await expect(hunk).toHaveText("Open at line 121");
     await hunk.click();
     await expect.poll(() => opened.length).toBe(1);
-    expect(opened[0]).toEqual({ path: join(work, "src", "components", "very", "deeply", "nested", "folder", "structure", "that", "goes", "on", "CartSummaryPanel.tsx"), line: 120 });
+    expect(opened[0]).toEqual({ path: join(work, "src", "components", "very", "deeply", "nested", "folder", "structure", "that", "goes", "on", "CartSummaryPanel.tsx"), line: 121, editor: "vscode" });
 
     // The page shows several files at once in the pane's scroll.
     await page.getByTestId("review-file-0").scrollIntoViewIfNeeded();
@@ -244,7 +247,7 @@ test("at 1280×800: a step and a reviewer's finding open in the editor at their 
   await expect(step).toBeVisible();
   await step.click();
   await expect.poll(() => opened.length).toBe(1);
-  expect(opened[0]).toEqual({ path: join(work, "src", "cart.py"), line: 2 });
+  expect(opened[0]).toEqual({ path: join(work, "src", "cart.py"), line: 2, editor: "vscode" });
   // The finding: the place it names opens; the web address stays text.
   await page.getByTestId("agent-run-toggle").first().click();
   const refs = page.getByTestId("editor-ref");
@@ -252,7 +255,7 @@ test("at 1280×800: a step and a reviewer's finding open in the editor at their 
   await expect(refs.first()).toHaveText("src/cart.py:1");
   await refs.first().click();
   await expect.poll(() => opened.length).toBe(2);
-  expect(opened[1]).toEqual({ path: join(work, "src", "cart.py"), line: 1 });
+  expect(opened[1]).toEqual({ path: join(work, "src", "cart.py"), line: 1, editor: "vscode" });
   expect(await pan(page)).toBeLessThanOrEqual(0);
   await shot(page, "review-pane-1280-step-and-finding");
 });

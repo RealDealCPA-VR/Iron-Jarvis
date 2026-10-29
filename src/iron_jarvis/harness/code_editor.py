@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -70,6 +71,11 @@ NETWORK_PATH = "Iron Jarvis opens files on this PC's own drives only, not on a n
 NOT_ALLOWED = "Iron Jarvis is not allowed to read that file, so it will not open it in your editor."
 MISSING = "That file is not on this PC any more."
 A_FOLDER = "That is a folder, not a file."
+WORKSPACE_FILE = (
+    "Iron Jarvis does not open workspace files (.code-workspace) in your editor: "
+    "your editor would load that workspace's settings and tasks."
+)
+UNREADABLE_LINK = "Iron Jarvis could not follow a shortcut in that path, so it will not open the file."
 BAD_LINE = "The line to open must be a whole number from 1 to 10,000,000."
 BAD_COLUMN = "The column to open must be a whole number from 1 to 100,000."
 UNKNOWN_EDITOR = "Iron Jarvis can open files in VS Code or Cursor only."
@@ -242,6 +248,103 @@ def _network_or_device(raw: str) -> bool:
     return s.startswith("\\\\")
 
 
+#: How many links (symlinks, junctions) a path may pass through before it is
+#: refused (Windows' own limit is 63; a loop would never end).
+MAX_LINK_HOPS = 40
+
+#: The editors open a ``*.code-workspace`` file as a WORKSPACE (its settings,
+#: its tasks), not as a file to read: refused (v1.405.0 review).
+WORKSPACE_SUFFIX = ".code-workspace"
+
+#: The long-path spellings a link target may carry (``\\?\`` and ``\??\``).
+_LONG_PREFIXES = ("\\\\?\\", "\\??\\")
+
+
+def _network_target(target: str) -> bool:
+    r"""A link's target names a network share or a device: ``\\host\x``,
+    ``UNC\host\x`` (also after a ``\\?\`` or ``\??\`` prefix), ``\\.\x``, or a
+    long-path spelling that is not a drive letter (``\\?\Volume{...}``)."""
+    s = str(target or "").replace("/", "\\")
+    for prefix in _LONG_PREFIXES:
+        if s.startswith(prefix):
+            rest = s[len(prefix):]
+            return rest.upper().startswith("UNC\\") or re.match(r"^[A-Za-z]:(\\|$)", rest) is None
+    return s.startswith("\\\\") or s.upper().startswith("UNC\\")
+
+
+def _strip_long(target: str) -> str:
+    r"""A LOCAL link target without its ``\\?\`` / ``\??\`` prefix."""
+    for prefix in _LONG_PREFIXES:
+        if target.startswith(prefix):
+            return target[len(prefix):]
+    return target
+
+
+def _is_link(path: str, st: os.stat_result) -> bool:
+    """A symlink or a junction (read from ``lstat``: never its target)."""
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)
+    try:
+        return bool(isjunction(path)) if isjunction else False
+    except OSError:
+        return False
+
+
+def _walk_links(path: str) -> str:
+    r"""Follow every link in *path* ONE HOP AT A TIME with ``lstat`` and
+    ``readlink`` — never ``resolve``/``realpath``, which would open a link's
+    target — and refuse a link that points at a network share or a device
+    BEFORE anything opens it (a symlink to ``\\host\share`` would otherwise be
+    resolved THROUGH the share by the file policy: an SMB connection, the
+    v1.379.0 lesson). Returns where the path really leads (the workspace
+    check reads its name); a part that does not exist ends the walk (the
+    caller then says MISSING). Raises :class:`EditorRefusal`."""
+    hops = 0
+    current = os.path.normpath(path)
+    while True:
+        drive, rest = os.path.splitdrive(current)
+        parts = [x for x in re.split(r"[\\/]+", rest) if x]
+        at = drive + os.sep if drive else os.sep
+        followed = False
+        for i, part in enumerate(parts):
+            nxt = os.path.join(at, part)
+            try:
+                st = os.lstat(nxt)
+            except OSError:
+                return current
+            if _is_link(nxt, st):
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise EditorRefusal(UNREADABLE_LINK, 403)
+                try:
+                    target = os.readlink(nxt)
+                except (OSError, ValueError):
+                    raise EditorRefusal(UNREADABLE_LINK, 403) from None
+                if _network_target(target):
+                    raise EditorRefusal(NETWORK_PATH, 403)
+                target = _strip_long(target)
+                drv, tail = os.path.splitdrive(target)
+                if drv:
+                    if not tail.startswith(("\\", "/")):
+                        # "C:foo" (relative to a drive's own folder): never followed.
+                        raise EditorRefusal(UNREADABLE_LINK, 403)
+                elif target.startswith(("\\", "/")):
+                    if os.name == "nt":
+                        # Rooted with no drive: which drive is a guess.
+                        raise EditorRefusal(UNREADABLE_LINK, 403)
+                else:
+                    target = os.path.join(at, target)
+                current = os.path.normpath(os.path.join(target, *parts[i + 1:]))
+                if _network_or_device(current):
+                    raise EditorRefusal(NETWORK_PATH, 403)
+                followed = True
+                break
+            at = nxt
+        if not followed:
+            return current
+
+
 def check_position(value: Any, *, column: bool = False) -> int | None:
     """A line or column: None when not given, else a whole number in range.
     Raises :class:`EditorRefusal` (a bool is not a number here)."""
@@ -279,6 +382,13 @@ def check_path(raw: Any) -> Path:
     norm = Path(os.path.normpath(text))
     if _network_or_device(str(norm)):
         raise EditorRefusal(NETWORK_PATH, 403)
+    # Every link on the way, one hop at a time, BEFORE the file policy (which
+    # resolves the path): a link into a network share is refused unopened.
+    leads_to = _walk_links(str(norm))
+    # A workspace file — by its own name or the name a link leads to (the
+    # walk returns the path itself when there is no link).
+    if Path(leads_to).name.lower().endswith(WORKSPACE_SUFFIX):
+        raise EditorRefusal(WORKSPACE_FILE, 403)
     if is_protected_path(str(norm)):
         raise EditorRefusal(NOT_ALLOWED, 403)
     ok, reason = fs_read_ok(str(norm))

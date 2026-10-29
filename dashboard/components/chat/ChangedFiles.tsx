@@ -44,6 +44,9 @@ export interface FileChange {
   diff: string;
   truncated?: boolean;
   binary?: boolean;
+  /** v1.405.0 review: a binary file's size on disk now (it has no lines;
+   *  the review pane's Reviewed mark hashes it). */
+  size?: number | null;
   /** The file changed again after the turn; null = cannot tell. */
   changed_since?: boolean | null;
   undone?: boolean;
@@ -92,6 +95,7 @@ export function decodeChanges(raw: unknown): FileChange[] {
       diff: typeof o.diff === "string" ? o.diff : "",
       truncated: o.truncated === true,
       binary: o.binary === true,
+      ...(num(o.size) != null ? { size: num(o.size) } : {}),
       changed_since: typeof o.changed_since === "boolean" ? o.changed_since : null,
       undone: o.undone === true,
       note: typeof o.note === "string" ? o.note : "",

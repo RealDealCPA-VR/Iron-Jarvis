@@ -6,8 +6,10 @@
  * WHICH file and line (`POST /editor/open {path, line?, column?}`), never a
  * URL. It holds the pure half:
  *
- *  - `readEditorOptions`: `GET /editor/options`, read ONCE per page visit
- *    (a failed read is forgotten, so the next mount asks again);
+ *  - `readEditorOptions`: `GET /editor/options`, read AGAIN on every
+ *    coding-session mount (v1.405.0 review: a read kept for the window's
+ *    life said "VS Code" after the setting moved to Cursor, and an editor
+ *    installed later never got a press); reads already in flight are shared;
  *  - `EditorContext`: what a coding session (components/harness/
  *    HarnessSession) lends everything inside it — its folder, the editor's
  *    name and `open(path, line)`. The chat page provides NONE, so a step row
@@ -81,35 +83,54 @@ export function decodeEditorOptions(raw: unknown): EditorOptions | null {
 
 let optionsRead: Promise<EditorOptions | null> | null = null;
 
-/** The options, read once per page visit. A failed read is forgotten (the
- *  next caller asks again); an answer — even "no editor" — is kept. */
+/** The options, read FRESH by every caller (a coding session reads them each
+ *  time it mounts, so a changed setting or a newly installed editor shows at
+ *  once). Only a read still in flight is shared; nothing is kept after it
+ *  settles. A failed read answers null. */
 export function readEditorOptions(): Promise<EditorOptions | null> {
   if (!optionsRead) {
     // Through a resolved promise: a `get` that throws (or a test's stand-in
     // that answers nothing) is a failed read, never a crash in an effect.
-    optionsRead = Promise.resolve()
+    const read: Promise<EditorOptions | null> = Promise.resolve()
       .then(() => get<unknown>("/editor/options"))
       .then((raw) => decodeEditorOptions(raw))
-      .catch(() => {
-        optionsRead = null;
-        return null;
+      .catch(() => null)
+      .finally(() => {
+        if (optionsRead === read) optionsRead = null;
       });
+    optionsRead = read;
   }
   return optionsRead;
 }
 
-/** Forget the read (tests; a new page visit starts empty anyway). */
+/** Forget a read in flight (tests). */
 export function forgetEditorOptions(): void {
   optionsRead = null;
 }
 
-/** Ask the daemon to open `path` at `line` in the preferred editor. Throws
- *  the daemon's own sentence (an ApiError) when it refuses. */
-export async function openInEditor(path: string, line?: number | null, column?: number | null): Promise<void> {
+/** Ask the daemon to open `path` at `line` in `editor` — the editor the
+ *  press NAMED (its label), so the daemon never opens another one when the
+ *  setting moved after the options were read. Throws the daemon's own
+ *  sentence (an ApiError) when it refuses. */
+export async function openInEditor(
+  path: string,
+  line?: number | null,
+  column?: number | null,
+  editor?: EditorId | null,
+): Promise<void> {
   const body: Record<string, unknown> = { path };
   if (typeof line === "number" && line >= 1) body.line = Math.floor(line);
   if (typeof column === "number" && column >= 1) body.column = Math.floor(column);
+  if (editor && IDS.has(editor)) body.editor = editor;
   await post<unknown>("/editor/open", body);
+}
+
+/** v1.405.0 review: a session folder on a network share (`\\host\share`,
+ *  `//host/share`) gets NO press — the daemon refuses every network path, so
+ *  each press would be dead and say the wrong thing. */
+export function folderOnShare(folder: string): boolean {
+  const f = (folder ?? "").trim();
+  return f.startsWith("\\\\") || f.startsWith("//");
 }
 
 /** The words for a press that failed: the daemon's sentence, else a plain
@@ -338,9 +359,50 @@ const SOURCE_EXT = new Set(
  * is one run of path characters — an optional drive, then segments — that
  * does not follow a letter, a dot, a slash or a colon (so the tail of a URL
  * or of a longer word is never a match).
+ *
+ * v1.405.0 review — never a guess, never a PART of a path:
+ *  - a product name is not a file (`Node.js:18` is Node 18);
+ *  - the last segment must hold a letter (`2024/10/30:12` is a date);
+ *  - a web address with no scheme is not a file (`github.com/x/a.py#L4`);
+ *  - a path with a SPACE matches nothing: inside backticks or quotes, a ref
+ *    that does not start the quoted span is the tail of a longer path
+ *    (`` `my project/app.py:12` ``), and in plain text a ref right after a
+ *    word that is itself a path (`C:\\work\\my project\\app.py:12`) is
+ *    the tail too. (Plain words before a path are not part of it: "see
+ *    src/app.py:12" links `src/app.py:12`.)
  */
 const REF_RE =
   /(?<![\w.\/\\:@~%-])((?:[A-Za-z]:[\\/])?(?:[\w.@+~-]+[\\/])*[\w.@+~-]+)(?::(\d{1,8})(?::(\d{1,6}))?|#L(\d{1,8})(?:C(\d{1,6}))?(?:-L?\d{1,8})?)(?![\w\/\\])/g;
+
+/** Product names spelled like a file ("Node.js 18" is written `Node.js:18`). */
+const PRODUCT_NAMES = new Set([
+  "Node.js", "Next.js", "Nuxt.js", "Vue.js", "Express.js", "Three.js", "D3.js", "Chart.js",
+  "Ember.js", "Backbone.js", "Angular.js", "Deno.js", "Bun.js", "Socket.io", "Nest.js", "Solid.js",
+]);
+
+/** A first segment that is a web host (`github.com`, `www.x.io`). */
+const WEB_HOST_RE =
+  /^(?:www\.[\w-]+(?:\.[\w-]+)*|(?:[\w-]+\.)+(?:com|org|net|io|dev|app|co|ai|gov|edu|me|so|sh|xyz|info|biz|us|uk|de|fr|ca|au|jp|cn|ru|in|nl|eu|ly|gg|tv|cloud|site|page|gitlab|github))$/i;
+
+/** True when the ref at `at` is the TAIL of a longer path with a space: it
+ *  sits inside a backtick / double-quoted span that started earlier on the
+ *  line with other words, or it follows (one space) a word that is a path. */
+function partOfLongerPath(text: string, at: number): boolean {
+  const lineStart = text.lastIndexOf("\n", at - 1) + 1;
+  const before = text.slice(lineStart, at);
+  for (const q of ["`", '"']) {
+    const count = before.split(q).length - 1;
+    if (count % 2 === 1) {
+      // Inside a quoted span: only a ref that STARTS it counts.
+      const open = before.lastIndexOf(q);
+      if (before.slice(open + 1).trim() !== "") return true;
+    }
+  }
+  if (!before.endsWith(" ") || before.endsWith("  ")) return false;
+  const prev = before.trimEnd().split(/\s+/).pop() ?? "";
+  if (!prev || /[,;.:)\]}>"'`!?]$/.test(prev)) return false;
+  return /[\\/]/.test(prev) || /^[A-Za-z]:/.test(prev);
+}
 
 export interface EditorRef {
   start: number;
@@ -368,7 +430,10 @@ export function findEditorRefs(text: string): EditorRef[] {
     const dot = path.lastIndexOf(".");
     const ext = dot > 0 ? path.slice(dot + 1).toLowerCase() : "";
     if (!hasSep && !SOURCE_EXT.has(ext)) continue;
-    if (hasSep && !/[\w]/.test(pathBase(path))) continue;
+    if (hasSep && !/[A-Za-z]/.test(pathBase(path))) continue;
+    if (!hasSep && PRODUCT_NAMES.has(path)) continue;
+    if (hasSep && !DRIVE_RE.test(path) && WEB_HOST_RE.test(path.split(/[\\/]/)[0])) continue;
+    if (partOfLongerPath(text, m.index)) continue;
     // Never part of a URL: the whitespace-delimited word around it.
     const before = text.lastIndexOf(" ", m.index);
     const wordStart = Math.max(before, text.lastIndexOf("\n", m.index), text.lastIndexOf("\t", m.index)) + 1;
