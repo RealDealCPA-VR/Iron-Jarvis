@@ -14,6 +14,11 @@
  *   approve_for_me  cards the engine's ask tier only. File edits and web
  *                   lookups are `allow` by default, so they go ahead. The
  *                   default, and what an unknown value falls back to;
+ *   accept_edits    (v1.406.0 part 2) approve_for_me, and a file edit inside
+ *                   the folder never cards (even under a folder's own rule);
+ *   auto            (v1.406.0 part 2) approve_for_me's cards, each decided by
+ *                   the daemon's rules (`core/auto_approve`) and then one quick
+ *                   model check that may only say allow — risky always asks;
  *   yolo            cards nothing but protected settings (`ALWAYS_CARD_TOOLS`).
  *                   A `deny` stays a deny in every level; no posture lifts it.
  *
@@ -39,7 +44,7 @@
  * summary pass what they know.
  */
 
-export type PermissionMode = "always_ask" | "approve_for_me" | "yolo";
+export type PermissionMode = "always_ask" | "approve_for_me" | "accept_edits" | "auto" | "yolo";
 
 /** The reading sentence while nothing limits reading: reading never asks
  *  (v1.352.0, G27). Also what a level says while the limit is not known (an
@@ -55,24 +60,51 @@ export interface PermissionLevel {
   description: string;
   /** `warn` = the level that runs things without asking, shown in amber. */
   tone: PermissionTone;
+  /** v1.406.0 part 2: the chip's shorter word when the menu's name is long
+   *  ("Ask before every action" reads "Ask every time" in the toolbar). */
+  chip?: string;
 }
 
 /** What each level does, before its reading sentence. */
-const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string; tone: PermissionTone }>> = {
+const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string; tone: PermissionTone; chip?: string }>> = {
   // v1.377.0 (Phase 6): the words name what v1.376.0's review made it card —
   // a click or a typed entry in a browser (a Build session's own browser,
   // and the browser add-on's acting tools).
+  // v1.406.0 part 2 (one switch, Claude Code's shape): renamed — the strictest
+  // level is "Ask before every action", and "Ask first" now names the default
+  // (it was "Ask when risky"). The wire values never change.
   always_ask: {
-    label: "Ask first",
+    label: "Ask before every action",
     does: "Asks before it edits files, uses the internet, runs commands, or clicks or types in a browser.",
     tone: "neutral",
+    chip: "Ask every time",
   },
   approve_for_me: {
-    label: "Ask when risky",
+    label: "Ask first",
     does: "Edits files and searches the web on its own, asks before running commands.",
     tone: "neutral",
   },
+  // v1.406.0 part 2 (core/auto_approve on the daemon).
+  accept_edits: {
+    label: "Accept edits",
+    does: "Edits files in this folder without asking, even where the folder's own rules would ask. Everything else is as Ask first.",
+    tone: "neutral",
+  },
+  auto: {
+    label: "Auto",
+    does: "Lets routine work through without asking: reading, edits in this folder, running the tests, and anything a quick check finds routine for what you asked. Always asks before anything that deletes, sends, pays or acts in your browser.",
+    tone: "neutral",
+  },
   yolo: { label: "Don't ask", does: "Runs commands and edits files without asking you first.", tone: "warn" },
+};
+
+/** v1.406.0 part 2: a coding session's PLAN mode, offered in the same picker
+ *  (it is the session's `mode`, not an approval level: picking it keeps the
+ *  level, and picking a level turns plan mode off). */
+export const PLAN_LEVEL: PermissionLevel = {
+  label: "Plan",
+  description: "Only reads and writes a plan for you to approve before it changes anything.",
+  tone: "neutral",
 };
 
 /** One level whose description carries `readsLine` (a `readsLevelLine`;
@@ -81,12 +113,14 @@ export function permissionLevel(mode: PermissionMode, readsLine: string = READS_
   const row = LEVEL_DOES[mode] ?? LEVEL_DOES.approve_for_me;
   const reads = (readsLine || "").trim() || READS_LINE;
   const description = row.tone === "warn" ? `${row.does} ${reads}. Use with care` : `${row.does} ${reads}`;
-  return { label: row.label, description, tone: row.tone };
+  return { label: row.label, description, tone: row.tone, ...(row.chip ? { chip: row.chip } : {}) };
 }
 
 export const PERMISSION_LEVELS: Readonly<Record<PermissionMode, PermissionLevel>> = {
   always_ask: permissionLevel("always_ask"),
   approve_for_me: permissionLevel("approve_for_me"),
+  accept_edits: permissionLevel("accept_edits"),
+  auto: permissionLevel("auto"),
   yolo: permissionLevel("yolo"),
 };
 
@@ -146,8 +180,9 @@ export function readsLevelLine(reads: ReadFacts | null | undefined): string {
   }
 }
 
-/** Strictest first, the order the menu lists them. */
-export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "yolo"];
+/** Strictest first, the order the menu lists them ("Don't ask" last, with its
+ *  warning). A coding session's picker puts Plan between Auto and Don't ask. */
+export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"];
 
 /** The level a conversation starts in, and what an unknown value means. */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "approve_for_me";

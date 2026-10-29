@@ -285,7 +285,7 @@ describe("where it works and what answers", () => {
     expect(sec.textContent).toContain("Opus 5.5");
     expect(sec.textContent).toContain("reasoning high");
     expect(screen.getByTestId("session-rail-account").textContent).toBe("Account Work · Max · 63% · 5-hour window");
-    expect(screen.getByTestId("session-rail-approvals").textContent).toBe("Ask first · plans first, for you to approve");
+    expect(screen.getByTestId("session-rail-approvals").textContent).toBe("Ask before every action · plans first, for you to approve");
     const team = screen.getByTestId("session-rail-team").textContent ?? "";
     expect(team).toContain("Team lead: Opus 5.5");
     expect(team).toContain("Workers: glm-5.3-flash");

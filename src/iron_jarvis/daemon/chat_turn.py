@@ -66,7 +66,7 @@ from ..core.db import session_scope
 from ..mcp.tools import packs_starting_note
 from ..core.events import EventType
 from ..core.fs_policy import fs_read_ok
-from ..core.models import AgentState, AgentType
+from ..core.models import AgentState, AgentType, PermissionMode
 from ..eval.pricing import UsageTally
 from ..core.grants import args_hash as _grant_hash
 from ..core.grants import grant_label as _grant_label
@@ -6500,7 +6500,14 @@ _ADVICE_RX = _re.compile(
 #:                   user said so up front. The DENY FLOOR IS NOT A MODE and
 #:                   no posture touches it: a base `deny` is refused in yolo
 #:                   exactly as everywhere else, engine-level.
-APPROVAL_MODES = ("always_ask", "approve_for_me", "yolo")
+#:   accept_edits    (v1.406.0 part 2) approve_for_me, except that a FILE EDIT
+#:                   whose every target is inside the turn's folder never cards;
+#:   auto            (v1.406.0 part 2) approve_for_me's cards, each decided by
+#:                   ``core/auto_approve``: its rules first (risky always
+#:                   asks), then ONE judgement on the turn's own model that may
+#:                   only say "allow" (anything else keeps the card).
+#: Neither eased posture ever cards MORE than approve_for_me.
+APPROVAL_MODES = ("always_ask", "approve_for_me", "accept_edits", "auto", "yolo")
 
 
 def normalize_approval_mode(raw: object) -> str:
@@ -9358,6 +9365,18 @@ async def run_chat_turn(
     # a deny before it reads the grant, but a grant list that names a denied
     # tool is a lie on the ledger). Full trust: identical to the old set.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
+    # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve): this lane
+    # cannot show a card, so under either posture it runs only what the RULES
+    # pass and refuses the rest in words — never the model judge (it must not
+    # approve something it then cannot show). MIRROR NOTE (lock-step): the
+    # stream lane keeps the same record and receipt.
+    from ..core import auto_approve as _auto
+
+    _auto_mode = normalize_approval_mode(getattr(body, "approval_mode", ""))
+    _auto_record = _auto.AutoRecord()
+    #: v1.406.0 part 2 follow-ups: what this turn may have changed (lock-step
+    #: with the stream lane's ``_auto_state["changed"]``).
+    _auto_changed: list[str] = []
     # CONVERSATION GRANTS (v1.312.0) — the page's "Allow for this
     # conversation" answers, honoured only for tools this turn ARMED (a grant
     # never arms; ``allowed_names`` below stays ``set(armed)``). In this lane
@@ -9754,6 +9773,55 @@ async def run_chat_turn(
             _spend = await _spend_checks_for(
                 d.platform.registry, calls, ctx, _gate_now
             )
+            # ACCEPT EDITS / AUTO (v1.406.0 part 2): a call the stream lane would
+            # card (its permission asks once this turn's arming is set aside)
+            # runs here only when the RULES pass it; otherwise it is refused in
+            # words through the registry's ledgered deny path. Never the judge.
+            _auto_refuse: dict[int, str] = {}
+            if _auto_mode in _auto.EASED_MODES and calls:
+                for _atc in calls:
+                    _auto_changed.extend(_auto.changes_of(_atc.name, _atc.arguments))
+                _auto_seen = tuple(_auto_changed)
+                _auto_base = {k: v for k, v in overrides.items() if v != "allow"}
+                _auto_cands: list[tuple[int, Any, Any]] = []
+                for _ai, _atc in enumerate(calls):
+                    if _refused[_ai] or _atc.name not in _gate_now:
+                        continue
+                    _t = d.platform.registry.get(_atc.name)
+                    _pk = _t.perm_key() if _t is not None else _atc.name
+                    if d.platform.permissions.mode_for(_pk, _auto_base) is not PermissionMode.ASK:
+                        continue
+                    _auto_cands.append((_ai, _atc, _t))
+                if _auto_cands:
+                    _auto_ws = getattr(ctx, "workspace", None)
+                    _auto_low = bool(_trust_state["low"])
+
+                    def _auto_rules():
+                        out = []
+                        for _i, _tc, _t in _auto_cands:
+                            _sc0 = _spend.get(id(_tc))
+                            out.append(_auto.classify(
+                                _tc.name, _tc.arguments, mode=_auto_mode, tool=_t, workspace=_auto_ws,
+                                forced="priced" if (_sc0 is not None and _sc0.ask) else "",
+                                low_trust=_auto_low, quarantined=_quarantined(d.platform, _tc.name),
+                                needs_a_person=bool(_finish is not None and _finish.needs_a_person(_tc)),
+                                changed=_auto_seen,
+                            ))
+                        return out
+
+                    from ..core.approvals import surface_for as _surface_for
+
+                    for (_i, _tc, _t), _v in zip(_auto_cands, await asyncio.to_thread(_auto_rules)):
+                        if _v.passes:
+                            _auto_record.add(_tc.name, _v.rule)
+                            _auto.note_auto_approved(
+                                getattr(d.platform, "event_bus", None), tool=_tc.name, rule=_v.rule,
+                                surface=_surface_for(_tool_session), mode=_auto_mode,
+                                thread_id=str(getattr(body, "thread_id", "") or ""),
+                                args_hash=_grant_hash(_tc.name, _tc.arguments),
+                            )
+                        else:
+                            _auto_refuse[_i] = _auto.post_lane_refusal(_v)
             _batched = [
                 not _refused[i] and _batchable_call(tc.name, tc.arguments)
                 for i, tc in enumerate(calls)
@@ -9796,6 +9864,10 @@ async def run_chat_turn(
                     # only — the stream lane cards the same verdict.
                     _low_kw = _low_trust_invoke_kwargs(_trust_state, tc.name)
                     _deny_kw = _low_kw or spend_not_asked_invoke_kwargs(_spend.get(id(tc)))
+                    if not _deny_kw and i in _auto_refuse:
+                        # v1.406.0 part 2: Accept edits / Auto keeps a card
+                        # for this call, and this lane cannot show one.
+                        _deny_kw = {"deny_reason": _auto_refuse[i], "deny_label": "needs your OK"}
                     if _helper_base is not None and tc.name in _HELPER_TOOLS and not _deny_kw:
                         # HELPER AGENTS (v1.372.0): the helper inherits the
                         # turn (``harness/helpers``). This lane draws no row
@@ -10432,6 +10504,9 @@ async def run_chat_turn(
             # output limit this turn): how often, and whether the turn went
             # on past it. MIRROR NOTE (lock-step): routes/chat.py.
             **cut_off_receipt(_cut_times, bool(_cut_end)),
+            # v1.406.0 part 2 (additive, LAST, only when Accept edits / Auto
+            # let a call through). MIRROR NOTE (lock-step): the stream lane.
+            **_auto.route_receipt(_auto_record),
         },
         "attached": len(body.attachments or []),
         # RESOURCES (v1.324.0): [{pack, uri, ok, note}] for what the user

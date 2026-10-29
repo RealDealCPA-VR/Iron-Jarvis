@@ -37,15 +37,41 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Shield, ShieldAlert, ShieldQuestion } from "lucide-react";
+import { Check, ChevronDown, FilePen, ListChecks, Shield, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import {
   PERMISSION_MODES,
+  PLAN_LEVEL,
   asPermissionMode,
   permissionLevel,
   permissionToneText,
   readsLevelLine,
+  type PermissionLevel,
   type PermissionMode,
 } from "@/lib/permissionLevels";
+
+/** v1.406.0 part 2: a menu row — one of the approval levels, or a coding
+ *  session's Plan mode (offered only when the caller passes `onPlanChange`). */
+type MenuKey = PermissionMode | "plan";
+
+/** The rows the menu lists, in order: the levels strictest first, with Plan
+ *  (when offered) just before "Don't ask", which stays last with its warning. */
+export function permissionMenuKeys(withPlan: boolean): MenuKey[] {
+  if (!withPlan) return [...PERMISSION_MODES];
+  const keys: MenuKey[] = PERMISSION_MODES.filter((m) => m !== "yolo");
+  keys.push("plan");
+  if (PERMISSION_MODES.includes("yolo")) keys.push("yolo");
+  return keys;
+}
+
+/** Each level's own shield, so the shield alone still says which is on. */
+function iconFor(key: MenuKey, warn: boolean) {
+  if (warn) return ShieldAlert;
+  if (key === "plan") return ListChecks;
+  if (key === "always_ask") return ShieldQuestion;
+  if (key === "accept_edits") return FilePen;
+  if (key === "auto") return ShieldCheck;
+  return Shield;
+}
 import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
 import { fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 
@@ -71,6 +97,13 @@ export interface PermissionChipProps {
    *  level's name. The shape itself follows the toolbar's `data-fit-ask`
    *  (CSS). */
   iconOnly?: boolean;
+  /** v1.406.0 part 2: a coding session's plan mode is ON. Only read when
+   *  `onPlanChange` is given. */
+  planMode?: boolean;
+  /** v1.406.0 part 2: offer Plan in the menu (a coding session). Picking
+   *  Plan calls it with true and keeps the level; picking a level while plan
+   *  mode is on calls it with false (then `onChange` if the level changed). */
+  onPlanChange?: (on: boolean) => void;
 }
 
 /**
@@ -195,11 +228,18 @@ export function PermissionChip({
   iconOnlyOnPhone = false,
   onOpenChange,
   iconOnly = false,
+  planMode = false,
+  onPlanChange,
 }: PermissionChipProps) {
   const current = asPermissionMode(value);
   // v1.360.0: the reading sentence follows the readable-folders setting.
   const readsLine = readsLevelLine(useReadFacts());
-  const level = permissionLevel(current, readsLine);
+  const withPlan = typeof onPlanChange === "function";
+  const planning = withPlan && planMode;
+  const keys = permissionMenuKeys(withPlan);
+  const rowFor = (key: MenuKey): PermissionLevel => (key === "plan" ? PLAN_LEVEL : permissionLevel(key, readsLine));
+  const shownKey: MenuKey = planning ? "plan" : current;
+  const level = rowFor(shownKey);
   const [open, setOpen] = useState(false);
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
@@ -244,7 +284,7 @@ export function PermissionChip({
     refreshReadFacts();
     sizeRef.current = undefined;
     layout();
-    setActive(Math.max(0, PERMISSION_MODES.indexOf(current)));
+    setActive(Math.max(0, keys.indexOf(shownKey)));
     setOpen(true);
   }
 
@@ -253,9 +293,14 @@ export function PermissionChip({
     if (refocus) chipRef.current?.focus();
   }
 
-  function pick(mode: PermissionMode) {
+  function pick(key: MenuKey) {
     close(true);
-    if (mode !== current) onChange(mode);
+    if (key === "plan") {
+      if (!planning) onPlanChange?.(true);
+      return;
+    }
+    if (planning) onPlanChange?.(false);
+    if (key !== current) onChange(key);
   }
 
   // A turn starting (or the composer locking) under an open menu closes it.
@@ -340,7 +385,7 @@ export function PermissionChip({
   }
 
   function onMenuKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    const n = PERMISSION_MODES.length;
+    const n = keys.length;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setActive((i) => (i + 1) % n);
@@ -355,7 +400,7 @@ export function PermissionChip({
       setActive(n - 1);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      pick(PERMISSION_MODES[active]);
+      pick(keys[active]);
     } else if (e.key === "Escape") {
       e.preventDefault();
       // Never let Esc reach the page: there it stops a turn or closes a panel.
@@ -374,7 +419,8 @@ export function PermissionChip({
   // phone, or a desktop toolbar out of room) still says which level is on —
   // "Ask first" and "Ask when risky" used to share one plain shield, and with
   // their words gone nothing told them apart (not even a hue).
-  const Icon = warn ? ShieldAlert : current === "always_ask" ? ShieldQuestion : Shield;
+  // v1.406.0 part 2: Accept edits, Auto and Plan each have their own too.
+  const Icon = iconFor(shownKey, warn);
   const chipTone = warn
     ? "text-tone-warn hover:bg-tone-warn/10"
     : "text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-200";
@@ -406,9 +452,9 @@ export function PermissionChip({
       }}
       className="z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl shadow-black/30 outline-none backdrop-blur-xl"
     >
-      {PERMISSION_MODES.map((mode, i) => {
-        const row = permissionLevel(mode, readsLine);
-        const checked = mode === current;
+      {keys.map((mode, i) => {
+        const row = rowFor(mode);
+        const checked = mode === shownKey;
         const on = i === active;
         const tone = permissionToneText(row.tone);
         return (
@@ -456,6 +502,7 @@ export function PermissionChip({
         type="button"
         data-testid="permission-chip"
         data-mode={current}
+        data-plan={planning ? "true" : undefined}
         data-tone={level.tone}
         disabled={disabled}
         onClick={() => (open ? close(false) : openMenu())}
@@ -470,7 +517,7 @@ export function PermissionChip({
         className={`inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-lg bg-transparent px-2.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40 ${chipTone}${phoneChip} ${fitIconChip("ask")}`}
       >
         <Icon size={14} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
-        <span className={`${phoneHide.trim()} ${fitWords("ask")}`.trim()}>{level.label}</span>
+        <span className={`${phoneHide.trim()} ${fitWords("ask")}`.trim()}>{level.chip ?? level.label}</span>
         <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide} ${fitWords("ask")}`} />
       </button>
       {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}

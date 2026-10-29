@@ -34,14 +34,17 @@ describe("the posture vocabulary", () => {
     // send a string the daemon coerces to the default, and the control
     // would silently stop doing anything.
     expect(levels).toContain(
-      'export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "yolo"];',
+      'export const PERMISSION_MODES: readonly PermissionMode[] = ["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"];',
     );
     // The page reads that table, never a second copy.
     expect(page).toContain('from "@/lib/permissionLevels"');
     expect(page).not.toContain("const APPROVAL_MODES = [");
     // Plain names for each level (v1.327.0 replaced the v1.188.0 labels).
+    // v1.406.0 part 2: five levels, renamed for the one switch.
+    expect(levels).toContain('label: "Ask before every action"');
     expect(levels).toContain('label: "Ask first"');
-    expect(levels).toContain('label: "Ask when risky"');
+    expect(levels).toContain('label: "Accept edits"');
+    expect(levels).toContain('label: "Auto"');
     expect(levels).toContain(`label: "Don't ask"`);
     // Unknown → the DEFAULT, never yolo (mirrors normalize_approval_mode).
     expect(levels).toContain('export const DEFAULT_PERMISSION_MODE: PermissionMode = "approve_for_me";');

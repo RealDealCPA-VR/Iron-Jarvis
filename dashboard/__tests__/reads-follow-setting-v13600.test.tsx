@@ -163,7 +163,7 @@ describe("the chat's approval chip follows the setting", () => {
     const menu = screen.getByTestId("permission-menu");
     await waitFor(() => {
       const rows = within(menu).getAllByTestId("permission-item");
-      expect(rows).toHaveLength(3);
+      expect(rows).toHaveLength(5);
       for (const r of rows) expect(r.textContent).toContain(CHOSEN_LINE);
     }, W);
     for (const r of within(menu).getAllByTestId("permission-item")) {
@@ -188,7 +188,7 @@ describe("the chat's approval chip follows the setting", () => {
     fireEvent.click(el);
     await waitFor(() => expect(H.calls).toEqual([READ_FACTS_PATH]), W);
     const rows = within(screen.getByTestId("permission-menu")).getAllByTestId("permission-item");
-    expect(rows[2].textContent).toContain(PERMISSION_LEVELS.yolo.description);
+    expect(rows[4].textContent).toContain(PERMISSION_LEVELS.yolo.description);
   });
 });
 

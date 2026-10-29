@@ -774,6 +774,18 @@ def compute(
         key=lambda e: _epoch((e.get("payload") or {}).get("at")) or _epoch(e.get("created_at")) or 0.0,
     )
     unattributed = 0
+    # v1.406.0 part 2: calls Accept edits / Auto let through with NO card
+    # (actor "auto", an answer with no ask — never an interruption), counted
+    # apart by the rule that passed them (or "model").
+    auto_by: Counter = Counter()
+    for ev in events:
+        p = ev.get("payload") or {}
+        if not isinstance(p, dict) or ev.get("type") != "interrupt.answered":
+            continue
+        if str(p.get("actor") or "") != "auto" or str(p.get("surface") or "") == "bench":
+            continue
+        if (_epoch(p.get("at")) or _epoch(ev.get("created_at")) or 0.0) >= cutoff:
+            auto_by[str(p.get("reason") or "auto")] += 1
     #: (review) the task each ask was put to, so its ANSWER lands on that
     #: same task even when it came after the person's next request (an
     #: escalated run's card answered late). None = the ask belonged to no
@@ -914,6 +926,8 @@ def compute(
             "median_wait_ms": sorted(waits)[len(waits) // 2] if waits else 0,
             "unattributed": unattributed,
         },
+        # v1.406.0 part 2 (additive): what Accept edits / Auto let through.
+        "auto_approved": {"total": sum(auto_by.values()), "by_reason": dict(sorted(auto_by.items()))},
         "nudges": {
             "human": total["human_nudges"],
             "nudge_lines": sum(t.nudges for t in tasks),

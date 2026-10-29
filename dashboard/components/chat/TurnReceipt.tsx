@@ -89,6 +89,9 @@ import {
 } from "@/lib/turnReads";
 import {
   approvedLine,
+  autoApprovedLine,
+  autoApprovedRow,
+  decodeAutoApproved,
   cutOffLine,
   cutOffTitle,
   decodeApproved,
@@ -231,6 +234,10 @@ export interface TurnRoute {
    *  whether the turn went on past it (daemon truth, LAST on the route, only
    *  when it happened; decoded by `lib/turnRecovery.decodeCutOff`). */
   cut_off?: { times?: number; recovered?: boolean } | null;
+  /** v1.406.0 part 2: the calls Accept edits / Auto let through with no card
+   *  (LAST on the route, only when it happened; decoded by
+   *  `lib/turnRecovery.decodeAutoApproved`). */
+  auto_approved?: { count?: number; calls?: { tool?: string; rule?: string; why?: string }[] } | null;
 }
 
 /** v1.369.0: a Build session reply's account, as the receipt says it ("on
@@ -822,6 +829,9 @@ export function TurnReceipt({
   const brainReceipt = decodeBrainReceipt(brain);
   const brainLine = receiptBrainLine(brainReceipt);
   const brainDetail = receiptBrainDetail(brainReceipt);
+  // v1.406.0 part 2: what the posture let through, said where the reply is.
+  const autoText = autoApprovedLine(rt?.auto_approved);
+  const autoRows = decodeAutoApproved(rt?.auto_approved)?.calls ?? [];
   if (
     !used.cache &&
     !used.cost &&
@@ -979,6 +989,15 @@ export function TurnReceipt({
     parts.push(
       <span key="adapted" className="text-zinc-500">
         {adaptedText}
+      </span>,
+    );
+  }
+  if (autoText) {
+    // v1.406.0 part 2: quiet like a refit; what and why is in the expanded
+    // receipt (`turn-auto-approved-row`).
+    parts.push(
+      <span key="auto-approved" data-testid="turn-auto-approved" className="text-zinc-500">
+        {autoText}
       </span>,
     );
   }
@@ -1333,6 +1352,27 @@ export function TurnReceipt({
                     className="min-w-0 break-words text-[12px] leading-5 text-zinc-400"
                   >
                     {approvedLine(a)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* v1.406.0 part 2: the calls Accept edits / Auto let through,
+              each with the rule (or the quick check) that passed it. */}
+          {autoRows.length > 0 && (
+            <div className="flex items-start gap-2">
+              <ShieldCheck size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                {autoRows.map((a, i) => (
+                  <div
+                    key={`${a.tool}-${i}`}
+                    data-testid="turn-auto-approved-row"
+                    data-rule={a.rule}
+                    title={a.tool}
+                    className="min-w-0 break-words text-[12px] leading-5 text-zinc-400"
+                  >
+                    {autoApprovedRow(a)}
                   </div>
                 ))}
               </div>

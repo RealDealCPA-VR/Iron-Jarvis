@@ -3036,6 +3036,11 @@ export function HarnessSession({
                 onChange={(mode) => void patchSetup({ approval_mode: asPermissionMode(mode) })}
                 iconOnlyOnPhone
                 iconOnly={harnessOn("ask")}
+                // v1.406.0 part 2: Plan is offered in the same picker (the
+                // session's `mode`; the Plan-first chip beside it drives the
+                // same setting).
+                planMode={view.mode === "plan"}
+                onPlanChange={(on) => void patchSetup({ mode: on ? "plan" : "act" })}
               />
               {(() => {
                 const planning = view.mode === "plan";

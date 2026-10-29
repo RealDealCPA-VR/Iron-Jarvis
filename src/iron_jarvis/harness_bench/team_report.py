@@ -875,7 +875,7 @@ def side_by_side(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any]],
         lines += ([compares, ""] if compares else [])
         lines += [f"**The answer:** {answer((t_config, t_records), alone)}", ""]
         # v1.402.0 (the autonomy metrics): how often each would have asked a
-        # person sitting there ("Ask when risky", as a fresh install asks).
+        # person sitting there ("Ask first", as a fresh install asks).
         asks = asks_line(t_s, next((s for c, _r, s in configs if alone is not None and c is alone[0]), None),
                          alone_label(t_config))
         lines += ([asks, ""] if asks else [])
@@ -905,7 +905,7 @@ def asks_line(team_s: Mapping[str, Any], alone_s: "Mapping[str, Any] | None", al
     words = f"**Would have asked you:** the team {per(team_s)}"
     if alone_s is not None:
         words += f"; {alone_name} alone {per(alone_s)}"
-    return words + " (\"Ask when risky\", as a fresh install asks; every card answered \"Allow once\")."
+    return words + " (\"Ask first\", as a fresh install asks; every card answered \"Allow once\")."
 
 
 def _differing_tasks(team: tuple[Mapping[str, Any], list[Mapping[str, Any]]],

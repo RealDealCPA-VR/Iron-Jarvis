@@ -192,7 +192,7 @@ describe("the permission chip is the composer's approval control", () => {
     await pick("always_ask");
     const c = await chip();
     expect(c.getAttribute("data-mode")).toBe("always_ask");
-    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask first");
+    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask before every action");
     expect(window.localStorage.getItem(KEY)).toBe("always_ask");
     const body = await send("tidy the folder");
     expect(body.approval_mode).toBe("always_ask");
@@ -277,7 +277,7 @@ describe("a phone", () => {
     render(<ChatPage />);
     const c = await chip();
     expect(classes(c)).toEqual(expect.arrayContaining(["max-sm:w-[30px]", "max-sm:px-0", "max-sm:justify-center"]));
-    const words = within(c).getByText("Ask when risky");
+    const words = within(c).getByText("Ask first");
     expect(classes(words)).toContain("max-sm:hidden");
     const svgs = Array.from(c.querySelectorAll("svg"));
     expect(svgs).toHaveLength(2);
@@ -285,7 +285,7 @@ describe("a phone", () => {
     expect(classes(svgs[0])).not.toContain("max-sm:hidden");
     expect(classes(svgs[1])).toContain("max-sm:hidden");
     // The level is still named for a screen reader and on hover.
-    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask when risky");
+    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask first");
     expect(c.title.length).toBeGreaterThan(0);
   });
 });

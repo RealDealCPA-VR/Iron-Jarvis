@@ -174,6 +174,9 @@ export type SSEEvent =
         /** v1.387.0: a reply cut off at the output limit this turn
          *  (`lib/turnRecovery.decodeCutOff` reads it). */
         cut_off?: { times?: number; recovered?: boolean } | null;
+        /** v1.406.0 part 2: the calls Accept edits / Auto let through with
+         *  no card (`lib/turnRecovery.decodeAutoApproved` reads it). */
+        auto_approved?: { count?: number; calls?: { tool?: string; rule?: string; why?: string }[] } | null;
       };
       tools_used?: string[];
       denied_tools?: string[];

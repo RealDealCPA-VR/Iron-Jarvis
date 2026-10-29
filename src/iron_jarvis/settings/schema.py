@@ -713,6 +713,8 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("device.theme", "Theme", "appearance", "string",
       "The theme on this device (a built-in Mark or one of your own).", tier="allow", store="device",
       aliases=("theme", "colors", "dark mode", "light mode")),
+    # v1.406.0 part 2: five levels (Ask before every action / Ask first /
+    # Accept edits / Auto / Don't ask) — the chip's words, pinned equal.
     # v1.352.0 (G24): the chat chip's OWN words for the three levels
     # (dashboard/lib/permissionLevels.ts PERMISSION_LEVELS), so Settings, the
     # composer's chip and an agent's setup name a level the same way — and
@@ -720,9 +722,12 @@ SETTINGS: tuple[SettingDef, ...] = (
     # label as well as a value). Pinned equal: tests/test_approval_words_v13520.py.
     S("device.approval_mode", "Approvals in chat", "permissions", "enum",
       "How chat asks before acting, on this device.",
-      options=(("always_ask", "Ask first"), ("approve_for_me", "Ask when risky"),
-               ("yolo", "Don't ask")),
-      tier="allow", floor_when=("yolo",), store="device", aliases=("approvals", "approval mode")),
+      options=(("always_ask", "Ask before every action"), ("approve_for_me", "Ask first"),
+               ("accept_edits", "Accept edits"), ("auto", "Auto"), ("yolo", "Don't ask")),
+      # v1.406.0 part 2: Auto lets calls through with no card, so turning it
+      # on from chat is ask-floor like Don't ask; Accept edits is allow.
+      tier="allow", floor_when=("yolo", "auto"), store="device",
+      aliases=("approvals", "approval mode", "permission mode")),
     S("device.chat_persona", "Chat persona", "appearance", "string",
       "The persona new chats start with on this device.", tier="allow", store="device"),
     S("device.auto_tools", "Auto tools in chat", "permissions", "bool",

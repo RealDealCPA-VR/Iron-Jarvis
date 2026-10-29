@@ -285,7 +285,11 @@ def test_unknown_modes_coerce_to_the_default_never_to_yolo():
     # to auto-approve, which would turn a version skew into a standing grant.
     for weird in ("full_auto", "trust", "auto-approve", None, 3):
         assert normalize_approval_mode(weird) == "approve_for_me", weird
-    assert set(APPROVAL_MODES) == {"always_ask", "approve_for_me", "yolo"}
+    # v1.406.0 part 2: Accept edits and Auto joined (core/auto_approve); an
+    # unknown name still degrades to the default, never to an eased posture.
+    assert set(APPROVAL_MODES) == {"always_ask", "approve_for_me", "accept_edits", "auto", "yolo"}
+    for weird in ("auto_pilot", "accept", "edits"):
+        assert normalize_approval_mode(weird) == "approve_for_me", weird
 
 
 def test_strict_set_covers_writes_and_web_and_derives_from_the_writers():

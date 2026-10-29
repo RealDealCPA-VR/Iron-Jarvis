@@ -415,8 +415,12 @@ class ChatApprovals:
 #: the user's phone; ``grant``: a grant the person made a moment earlier (a
 #: sibling woken by "Allow for this run", the sidebar's "allow everything"
 #: switch); ``timeout``: nobody answered in time (the night shift's card wait
-#: included); ``bench``: the benchmark answering because nobody is there.
-ACTORS = ("app", "phone", "grant", "timeout", "bench")
+#: included); ``bench``: the benchmark answering because nobody is there;
+#: ``auto`` (v1.406.0 part 2): a call the Accept edits / Auto posture let
+#: through with NO card (``core/auto_approve.note_auto_approved`` — an
+#: ``interrupt.answered`` with no ``interrupt.asked``, so it is never counted
+#: as an interruption).
+ACTORS = ("app", "phone", "grant", "timeout", "bench", "auto")
 #: What was asked: an approval ``card``, a ``question`` (the model's own
 #: ``ask_user``, an app's question), or a ``plan`` to approve.
 INTERRUPT_KINDS = ("card", "question", "plan")

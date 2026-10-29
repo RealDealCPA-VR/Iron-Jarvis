@@ -69,6 +69,7 @@ from pydantic import BaseModel, Field
 from .. import durable_turns as _durable
 from ..chat_stream import stream_chat_turn
 from ..schemas import ChatArchiveBody, ChatBody, ChatMessageBody
+from ...core import auto_approve as _auto_approve
 from ...core.ids import utcnow
 from ...core.turns import TURNS
 from ...harness import session_grants as _session_grants
@@ -2955,7 +2956,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             provider=account_provider or str(setup.get("provider") or ""),
             model=str(setup.get("model") or ""),
             reasoning=str(setup.get("reasoning") or ""),
-            approval_mode=str(setup.get("approval_mode") or ""),
+            # v1.406.0 part 2 follow-ups: a turn Iron Jarvis carries on BY
+            # ITSELF (restart resume, Resume when ready, an account move, an
+            # approved plan's act turn, the night) runs Accept edits / Auto as
+            # Ask first — nobody is watching it start (core/auto_approve).
+            approval_mode=_auto_approve.unwatched_mode(
+                str(setup.get("approval_mode") or ""),
+                started_by=started_by, continuation=continuation,
+            ),
             # v1.404.1: what any card of the session granted — its helpers'
             # too — and running a command as one approval (session_grants).
             granted_tools=sorted(_session_grants.widen(

@@ -271,7 +271,7 @@ def asks_words(s: Mapping[str, Any]) -> str:
     per = s.get("would_ask_per_task")
     tools = ", ".join(f"{t} {n}" for t, n in (s.get("would_ask_by_tool") or {}).items())
     words = (
-        f"Would have asked you {per:.1f} times per task (\"Ask when risky\", how a fresh install "
+        f"Would have asked you {per:.1f} times per task (\"Ask first\", how a fresh install "
         f"asks, every card answered \"Allow once\": one card per round for calls of one kind, no "
         f"grants; over {s['would_ask_runs']} run(s)"
         + (f"; most often for {tools}" if tools else "")
@@ -733,9 +733,9 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
         )
     # v1.402.0 (the autonomy metrics): how often each setup would have asked
     # a person sitting there — every call replayed through the real
-    # permission engine under "Ask when risky" (as a fresh install asks), no grants.
+    # permission engine under "Ask first" (as a fresh install asks), no grants.
     lines += ["", "## How often you would have been asked", "",
-              "Every tool call replayed through the real permission engine under \"Ask when risky\" "
+              "Every tool call replayed through the real permission engine under \"Ask first\" "
               "(how a fresh install asks), every card answered \"Allow once\" (no grants): one card "
               "per round for calls of one kind, as the app shows them; Codex reports no rounds, so "
               "each of its calls counts. The pass rate above is the share of tasks finished with no "
