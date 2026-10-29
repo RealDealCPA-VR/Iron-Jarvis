@@ -133,6 +133,13 @@ class CustomSourceStore:
             record = self._fetch(db, name)
             if record is None:
                 record = LTMSourceRecord(name=name)
+            elif (record.kind, record.endpoint_url, record.config_json) != (
+                kind, endpoint_url, config_json
+            ):
+                # v1.408.0 review: re-added under the same name with ANOTHER
+                # server: the tools the user confirmed were for the old one,
+                # and a same-named tool elsewhere may do something else.
+                record.roles_json = ""
             record.kind = kind
             record.path = path
             record.database_id = database_id

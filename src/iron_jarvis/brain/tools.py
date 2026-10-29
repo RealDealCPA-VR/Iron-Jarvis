@@ -187,17 +187,44 @@ def _plan_target(platform: Any, active: ActiveBrain, title: str) -> "dict[str, A
     return None
 
 
-def _verify(conn: Any, ref: str, content: str) -> "bool | None":
-    """True = read back and found; False = read back and NOT found; None = this
-    base cannot read a note back. Blocking."""
+def _read_back(conn: Any, ref: str, content: str, *, whole: bool = False) -> str:
+    """found | missing | failed (the read raised) | unsupported. Blocking.
+    ``whole`` (v1.408.0 review): the WHOLE text must be there, at word
+    boundaries — what ``already_saved`` needs, because it turns a FAILED
+    write into "saved": the 80-character probe called "Gate code: 1234"
+    saved over "Gate code: 12345", and a revised paragraph saved over the
+    old one it starts like, while the base had refused both."""
     try:
         text = conn.read(ref)
     except NoteOpUnsupported:
-        return None
+        return "unsupported"
     except Exception:  # noqa: BLE001 — could not read back: not confirmed
-        return None
+        return "failed"
+    if whole:
+        return "found" if _holds_whole(_flat(text), _flat(content)) else "missing"
     probe = _flat(content)[:80]
-    return bool(probe) and probe in _flat(text)
+    return "found" if probe and probe in _flat(text) else "missing"
+
+
+def _holds_whole(text: str, part: str) -> bool:
+    if not part:
+        return False
+    start = text.find(part)
+    while start != -1:
+        end = start + len(part)
+        before_ok = not (part[0].isalnum() and start > 0 and text[start - 1].isalnum())
+        after_ok = not (part[-1].isalnum() and end < len(text) and text[end].isalnum())
+        if before_ok and after_ok:
+            return True
+        start = text.find(part, start + 1)
+    return False
+
+
+def _verify(conn: Any, ref: str, content: str) -> "bool | None":
+    """True = read back and found; False = read back and NOT found; None = this
+    base cannot read a note back. Blocking."""
+    seen = _read_back(conn, ref, content)
+    return True if seen == "found" else False if seen == "missing" else None
 
 
 def _update_undo(conn: Any, ref: str, content: str, ctx: ToolContext, tool: str) -> "dict[str, Any]":
@@ -244,18 +271,30 @@ _UNREACHABLE_WORDS = (
     "timed out", "timeout", "did not answer", "could not connect", "connection",
     "unreachable", "name resolution", "getaddrinfo", "network", "folder not found",
     "isn't available right now", "is not available right now", "temporarily",
-    "503", "502", "504", "429",
+    "without answering",
 )
+#: A status code only as a WHOLE number (v1.408.0 review): "429" inside
+#: "page 4290" or an invoice number is not a rate limit.
+_UNREACHABLE_CODE_RX = re.compile(r"(?<!\d)(?:429|502|503|504)(?!\d)")
 
 
-def unreachable(exc: BaseException) -> bool:
+def unreachable(exc: BaseException, sent: "tuple[str, ...] | list[str]" = ()) -> bool:
     """Was the memory base simply NOT REACHED (keep the note, retry later),
     as opposed to reached and refusing (say why, never queue)? v1.406.0
     queued every failure as "unavailable" — measured on the user's real wiki
     server, a save its own rules refused (a missing ``type``) sat in the
-    Memory page's queue forever with Retry failing the same way each time."""
+    Memory page's queue forever with Retry failing the same way each time.
+
+    ``sent`` (v1.408.0 review): the values the call carried. A server's
+    refusal often ECHOES its input (a FastMCP validation error carries
+    ``input_value={...}``), so a word or number that is in what was SENT never
+    decides — a note about "the network" or "the 429 club" that the base
+    refused is a refusal, not an outage. The server's own words still count."""
     from ..ltm.base import NoteOpUnsupported
 
+    sent_low = " ".join(str(s or "") for s in [*sent, *getattr(exc, "sent", ())]).lower()
+    words = tuple(w for w in _UNREACHABLE_WORDS if w not in sent_low)
+    sent_codes = set(_UNREACHABLE_CODE_RX.findall(sent_low))
     seen = 0
     while exc is not None and seen < 4:
         if isinstance(exc, NoteOpUnsupported):
@@ -277,7 +316,9 @@ def unreachable(exc: BaseException) -> bool:
         if isinstance(exc, OSError) and not isinstance(exc, PermissionError):
             return True
         text = str(exc).lower()
-        if any(w in text for w in _UNREACHABLE_WORDS):
+        if any(w in text for w in words):
+            return True
+        if set(_UNREACHABLE_CODE_RX.findall(text)) - sent_codes:
             return True
         exc = exc.__cause__ or exc.__context__  # type: ignore[assignment]
         seen += 1
@@ -295,7 +336,9 @@ def already_saved(platform: Any, active: ActiveBrain, conn: Any, title: str, con
         return ""
     for h in hits or []:
         ref = str(h.get("ref") or "")
-        if ref and _same_title(str(h.get("title") or ""), title) and _verify(conn, ref, content):
+        if ref and _same_title(str(h.get("title") or ""), title) and (
+            _read_back(conn, ref, content, whole=True) == "found"
+        ):
             return ref
     return ""
 
@@ -326,12 +369,14 @@ def write_note(platform: Any, active: ActiveBrain, conn: Any, title: str, conten
                     "error": sentence}
     target = _plan_target(platform, active, title)
     action = "created"
+    trying = "updated" if target is not None else "created"
     try:
         if target is not None:
             try:
                 ref = _update(conn, str(target["ref"]), content, title)
                 action = "updated"
             except NoteOpUnsupported:
+                trying = "created"
                 ref = platform.ltm.append(title, content, active.base)
         else:
             ref = platform.ltm.append(title, content, active.base)
@@ -340,13 +385,23 @@ def write_note(platform: Any, active: ActiveBrain, conn: Any, title: str, conten
         # a Retry never adds the same text twice.
         landed = already_saved(platform, active, conn, title, content)
         if landed:
-            return {"ok": True, "kind": "saved", "action": action, "ref": landed,
+            return {"ok": True, "kind": "saved", "action": trying, "ref": landed,
                     "verified": True, "error": ""}
-        return {"ok": False, "kind": "unreachable" if unreachable(exc) else "refused",
+        return {"ok": False,
+                "kind": "unreachable" if unreachable(exc, sent=(title, content)) else "refused",
                 "action": "", "ref": "", "verified": False,
                 "error": str(exc)[:400] or exc.__class__.__name__}
     ref = str(ref or (target or {}).get("ref") or title)
-    verified = _verify(conn, ref, content)
+    seen = _read_back(conn, ref, content)
+    if seen in ("missing", "failed") and action == "created":
+        # v1.408.0 review: a create reply with no JSON ref is used by its first
+        # line ("Created page 'Lunch' at concepts/lunch.md"), which reads back
+        # as nothing — the note landed and was called not confirmed. Find it
+        # by its title before saying so.
+        found = already_saved(platform, active, conn, title, content)
+        if found:
+            ref, seen = found, "found"
+    verified = True if seen == "found" else False if seen == "missing" else None
     if verified is False:
         return {"ok": False, "kind": "unconfirmed", "action": action, "ref": ref, "verified": False,
                 "error": "the memory base said it saved the note, but reading it back did not find it"}

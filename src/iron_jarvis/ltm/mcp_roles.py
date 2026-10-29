@@ -57,7 +57,25 @@ _WRITE_WORDS = frozenset({
     "write", "update", "delete", "remove", "replace", "insert", "create", "set",
     "put", "patch", "upsert", "drop", "exec", "execute", "run", "sql", "mutate",
     "append", "save", "archive", "move", "rename", "trash", "add", "new",
+    # v1.408.0 review: verbs that change a note the first list missed
+    # (``edit_page`` could be confirmed as the reader).
+    "edit", "modify", "change", "clear", "purge", "reset", "merge", "overwrite",
+    "import", "upload", "sync", "publish", "restore", "unarchive",
+    "store", "ingest", "send", "duplicate",
 })
+
+
+def writes(tool: "dict[str, Any] | None", name: str = "") -> bool:
+    """Does this tool change anything, by its NAME's words or by what its MCP
+    annotations SAY (``readOnlyHint: false`` / ``destructiveHint: true``)? A
+    reader must answer False here."""
+    tool = tool if isinstance(tool, dict) else {}
+    if words(name or str(tool.get("name") or "")) & _WRITE_WORDS:
+        return True
+    ann = tool.get("annotations")
+    return isinstance(ann, dict) and (
+        ann.get("readOnlyHint") is False or ann.get("destructiveHint") is True
+    )
 _NOTE_NOUNS = frozenset({"note", "notes", "page", "pages", "doc", "docs", "document",
                          "entry", "memory", "section", "wiki", "file"})
 _VERBS: dict[str, tuple[str, ...]] = {
@@ -152,7 +170,7 @@ def propose(tools: list[dict[str, Any]]) -> dict[str, "dict[str, Any] | None"]:
             if not isinstance(t, dict):
                 continue
             w = words(str(t.get("name", "")))
-            if role in READ_ROLES and w & _WRITE_WORDS:
+            if role in READ_ROLES and writes(t):
                 continue
             if role == "create" and w & {"search", "find", "query", "read", "get"}:
                 continue
@@ -183,7 +201,7 @@ def problems(role: str, mapping: "dict[str, Any] | None", tools: list[dict[str, 
     if tool is None:
         return [f"The server has no tool called {mapping['tool']!r}."]
     out: list[str] = []
-    if role in READ_ROLES and words(mapping["tool"]) & _WRITE_WORDS:
+    if role in READ_ROLES and writes(tool, mapping["tool"]):
         out.append(f"{mapping['tool']} looks like it changes notes, so it is never used to {WORDS[role].lower()}.")
     args = mapping.get("args") or {}
     if not isinstance(args, dict):

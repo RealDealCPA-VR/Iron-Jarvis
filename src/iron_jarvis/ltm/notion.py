@@ -75,11 +75,13 @@ class NotionConnector(LTMConnector):
         was refused with a 400. True when a different name was found."""
         if self._title_checked:
             return False
-        self._title_checked = True
         try:
             data = self._json(self.http.get(f"{API_BASE}/databases/{self.database_id}", headers=headers))
         except Exception:  # noqa: BLE001 — the original refusal is the report
+            # v1.408.0 review: NOT remembered as checked — one dropped
+            # connection left the title column undiscoverable until restart.
             return False
+        self._title_checked = True
         for prop_name, spec in ((data or {}).get("properties") or {}).items():
             if isinstance(spec, dict) and spec.get("type") == "title":
                 if prop_name != self.title_property:

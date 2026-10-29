@@ -526,6 +526,13 @@ class McpBrainConnector(LTMConnector):
             # Refreshing is a bonus: a server that gained tools since boot
             # starts working without a restart.
             self._tools = fresh
+        # v1.408.0 review: a search tool the USER confirmed is what search
+        # calls, so it is what health judges — a confirmed tool the safe pick
+        # cannot use (a "term" parameter) read red on the listing and stopped
+        # the profile Check at "could not be reached".
+        confirmed = str(((self.roles or {}).get("search") or {}).get("tool") or "")
+        if confirmed and any(isinstance(t, dict) and t.get("name") == confirmed for t in fresh):
+            return {"available": True, "detail": "", "path": path, "tool": confirmed}
         tool = self._pick_search(tools=fresh)
         if tool is None:
             names = ", ".join(str(t.get("name", "?")) for t in fresh[:5]) or "none"
@@ -840,10 +847,35 @@ class McpBrainConnector(LTMConnector):
         return ref
 
     # -- confirmed roles (v1.408.0, ``mcp_roles``) ----------------------------
-    def tool_list(self) -> list[dict[str, Any]]:
-        """The server's tools (connecting once). Raises when unreachable."""
-        self._connect()
-        return list(self._tools or [])
+    def tool_list(self, *, timeout: float = 20.0) -> list[dict[str, Any]]:
+        """The server's CURRENT tools — what Set up tools shows and the PUT
+        validates against. Raises when unreachable.
+
+        v1.408.0 review: a FRESH ``tools/list`` (adopted into the cache only
+        when it has tools, the ``_relist`` rule), never the list cached at the
+        first connect — a tool the server gained since could not be chosen —
+        and BOUNDED on a throwaway thread like :meth:`health`: a wedged stdio
+        server's own request bound is two minutes, and both routes are sync."""
+        box: dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                if self._tools is None:
+                    self._connect()
+                else:
+                    self._relist(self._build_client())
+                box["tools"] = list(self._tools or [])
+            except BaseException as exc:  # noqa: BLE001 — handed to the caller
+                box["error"] = exc
+
+        worker = threading.Thread(target=run, name=f"ltm-tools-{self.name}", daemon=True)
+        worker.start()
+        worker.join(max(0.05, float(timeout)))
+        if "error" in box:
+            raise box["error"]
+        if "tools" not in box:
+            raise TimeoutError(f"{self.name}: the MCP server did not answer within {timeout:g} s")
+        return box["tools"]
 
     def setup_sentence(self, role: str) -> str:
         from .mcp_roles import WORDS
@@ -873,11 +905,30 @@ class McpBrainConnector(LTMConnector):
                 f"{self.name}: the tool {mapping.get('tool')!r} chosen to {role} notes "
                 "is not on the server any more; set up its tools again"
             )
-        res = _resolve_maybe_async(
-            client.call_tool(str(mapping["tool"]), build_args(mapping, tool, values))
-        )
+        # v1.408.0 review: a REQUIRED setting whose value is empty (a rename
+        # with no new name, "add to a note" with no heading) is refused here,
+        # in words, with nothing sent — build_args leaves an empty value out,
+        # and the server's own error said nothing the user could act on.
+        from .base import NoteOpUnsupported
+        from .mcp_roles import params
+
+        required = {p["name"] for p in params(tool) if p["required"]}
+        for param, src in (mapping.get("args") or {}).items():
+            if param in required and isinstance(src, str) and not str(values.get(src) or "").strip():
+                raise NoteOpUnsupported(
+                    f"{self.name}: {mapping['tool']} needs a value for {param!r} "
+                    f"(the note's {src}) and none was given, so nothing was sent"
+                )
+        args = build_args(mapping, tool, values)
+        res = _resolve_maybe_async(client.call_tool(str(mapping["tool"]), args))
         if (res or {}).get("isError"):
-            raise RuntimeError(f"{self.name}: {_content_text(res)[:300] or role + ' failed'}")
+            err = RuntimeError(f"{self.name}: {_content_text(res)[:300] or role + ' failed'}")
+            # What was SENT rides along: a refusal that echoes its input must
+            # not read as an outage (``brain.tools.unreachable``).
+            err.sent = tuple(  # type: ignore[attr-defined]
+                str(v) for v in args.values() if isinstance(v, (str, list))
+            )
+            raise err
         return res
 
 
