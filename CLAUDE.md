@@ -3885,6 +3885,81 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A BRAIN PROFILE names the durable memory base; ONE resolve rule; the
+  guide is trusted, every retrieved note is DATA; a save is "saved" only
+  when read back; a structural change asks every time** (v1.406.0; the user:
+  "Notion as my durable shared brain becomes a selectable system-level
+  behaviour, not a giant prompt every agent must remember"; design note
+  `docs/BRAIN-PROFILES.md`). `brain/`: `BrainProfileRecord` +
+  `BrainPendingWrite` (late models, `core.db._LATE_MODEL_MODULES`);
+  `profiles.resolve(platform, project_id)` is THE rule (`Project.brain_profile`
+  "" = follow `Config.brain_profile`, "off" = none, else an id; a stale id =
+  none; never raises). The app choice is schema row `brain_profile` (tier
+  ask — where Jarvis SAVES is a privacy call), controlled in its own Settings
+  section (`CONTROLLED_IN_SECTION`); a project's rides `PATCH /projects/{id}`
+  (an unknown id 400s). `brain/turn.build_turn_bounded` (off the loop, 8 s,
+  copies the context so Local only reaches its thread) builds ONE block for
+  BOTH chat lanes (`chat_turn.brain_turn`, gathered BESIDE
+  `_gather_grounding` and joined right BEFORE `before_attachments()` — the
+  `_Grounding` order pin is untouched) AND the agent runtime (after the
+  identity spine; not for a review-only helper or `skip_memory`): the rules,
+  the OPERATING GUIDE (a note in the primary, cached 10 min, promptguard-
+  scanned, followed as instructions), the profile's skills
+  (`guarded_instructions`), and the primary searched with the turn's question
+  — every hit scanned AND `wrap_untrusted`-fenced. Tools `brain_search` /
+  `brain_read` (READONLY, `returns_untrusted_content`), `brain_save`,
+  `brain_change` resolve the profile from `ctx.project_id`, else the
+  session row's project (the runtime's ToolContext carries none), registered
+  through `_LazyPlatform`, armed by `chat_turn.brain_armed` after every fill
+  pass (both lanes) and by the runtime only while a profile is USABLE (not
+  missing, not a remote base under Local only); `brain_save`/`brain_change`
+  are in `LOW_TRUST_DENY`. `brain_save`: about="code" refused while
+  `repo_routing` (the repo's own AGENTS.md/CLAUDE.md/docs), `save_to` never =
+  refused, ask = `spend_check` card; looks the note up by slugged title and
+  `update`s it (`LTMConnector.update/read/change` are optional, raise
+  `NoteOpUnsupported`), else appends; READS BACK (`_verify`): found = saved,
+  cannot read = "saved, not confirmed", read but missing = NOT saved and NOT
+  queued (it may have landed); a write that raised is a `BrainPendingWrite`
+  ("unsaved change", `GET /brain/pending`, Retry through the SAME
+  `write_note`, Discard). `brain_change` (archive/delete/rename/move):
+  `SpendCheck(ask=True, once_only=True, reason="memory")` EVERY call, every
+  posture; a folder base MOVES the note into its `.trash` (hidden from
+  search), never unlinks; `_note_path` refuses anything resolving outside the
+  folder. Receipt `brain` (null with no profile) is the LAST key of the POST
+  answer and the done frame, folded OUTSIDE the `if ran:` gate (an unsaved
+  save must be said). Dashboard: `lib/brainProfiles.ts`,
+  `components/settings/BrainProfiles.tsx`, `project/ProjectBrainSelect.tsx`,
+  `chat/ChatBrainLine.tsx`, `memory/BrainUnsaved.tsx`, TurnReceipt
+  `turn-brain` (collapsed, unsaved first in warn) / `turn-brain-detail`;
+  `lib/onceReason` "memory" (its own card line, never Enter-allowed). The
+  vocabulary canon retires "brain": sentences say "memory base"; "Brain
+  profile" is allowed ONLY as the feature's name (both vocabulary scans hold
+  one ALLOW entry). Also: `ltm_search` output is now fenced
+  (`returns_untrusted_content`). Off is byte-identical — the harness-off
+  golden moved only by the new `brain` key. Pins:
+  `tests/test_brain_profiles_v1406.py`, `tests/test_brain_profiles_review_v1406.py`,
+  `dashboard/__tests__/brain-*-v1406.test.tsx`. REVIEW (11 defects, each red
+  first): a run that CANNOT ask (a delegated child, an unattributed API run)
+  now REFUSES a call whose own `spend_check` says ask — it used to run an
+  allow-tier tool uncarded (generic: a git push in a delegated child too); a
+  dotted title ("Plan v1.2") reached another note (`with_suffix`) — ".md" is
+  APPENDED; a `\\host` ref is refused by spelling before any `exists()` /
+  `resolve()` (the v1.379.0 SMB lesson); the MCP pick ranks append before
+  update and note words first, never set/write/overwrite; the bounded build's
+  fallback uses a CACHED guide only; Notion reads page through its cursor and
+  writes in 2,000-char pieces; a base's own error text is scanned before it
+  reaches the prompt; the block never offers a writer the turn lacks
+  (`writers=` from both lanes + the runtime, `BrainTurn.without_tools()` for
+  text-only / coding-session turns); Undo of an update snapshots the REAL
+  path and exact bytes; an unsaved receipt entry carries `kept` (sent to the
+  Memory page only when it is listed there). A READ-ONLY agent type (nothing
+  in `runtime._BRAIN_WRITER_ROLES` on its roster — Reviewer, the Guide) gets
+  the readers only. OPEN: an MCP base's read/update/change tools are
+  picked by name words; Retry can add twice when an earlier attempt landed
+  and then raised; `DELETE /ltm/sources/{name}` still does not
+  deregister the live base and `/ltm/sources` reports a custom base's kind as
+  its name (older than this change).
+
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon
   builds the editor's URL, never a client** (v1.405.0; the user: "Live where

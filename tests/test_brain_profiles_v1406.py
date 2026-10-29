@@ -395,3 +395,36 @@ def test_the_post_lane_receipt_says_what_was_saved(tmp_path, monkeypatch):
     assert r.status_code == 200, r.text
     saved = r.json()["brain"]["saved"]
     assert saved and saved[0]["title"] == "Lunch" and saved[0]["verified"] is True
+
+
+def _run_tools(client, platform, agent_type):
+    seen: list = []
+    real_get = platform.providers.get
+
+    def spy_get(prov, m=None):
+        adapter = real_get(prov, m)
+        real = adapter.complete
+
+        async def spy(*, system, messages, tools):
+            seen.append({t.get("name") if isinstance(t, dict) else getattr(t, "name", "") for t in tools or []})
+            return await real(system=system, messages=messages, tools=tools)
+
+        adapter.complete = spy
+        return adapter
+
+    platform.providers.get = spy_get
+    r = client.post("/sessions", json={"task": "acme notes", "agent_type": agent_type, "wait": True})
+    assert r.status_code == 200, r.text
+    platform.providers.get = real_get
+    return set().union(*seen) if seen else set()
+
+
+def test_a_read_only_agent_type_is_never_handed_the_writers(tmp_path):
+    app, client, platform = _app(tmp_path)
+    p = _profile(client, guide_ref="")
+    _choose(client, p["id"])
+    reviewer = _run_tools(client, platform, "reviewer")
+    assert "brain_search" in reviewer
+    assert not {"brain_save", "brain_change"} & reviewer
+    builder = _run_tools(client, platform, "builder")
+    assert {"brain_save", "brain_change"} <= builder

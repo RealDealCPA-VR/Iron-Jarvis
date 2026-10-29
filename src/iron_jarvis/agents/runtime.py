@@ -1332,6 +1332,13 @@ def _build_helper_thread(session: Any) -> str:
         return ""
 
 
+#: v1.406.0 (Brain Profiles): an agent whose roster holds one of these may be
+#: handed ``brain_save`` / ``brain_change``; a roster of readers only is not.
+_BRAIN_WRITER_ROLES = frozenset({
+    "write_file", "write_document", "edit_file", "ltm_append", "memory_write",
+    "delegate", "spawn_agent",
+})
+
 class AgentRuntime:
     def __init__(self, platform) -> None:
         self.p = platform
@@ -2382,6 +2389,13 @@ class AgentRuntime:
                 # v1.406.0 review: a low-trust run is not shown the writers,
                 # so its rules must not tell it to save (``writers``).
                 _low = self._effective_trust(session) == TRUST_LOW
+                # A READ-ONLY agent type (Reviewer, the Guide: nothing on its
+                # roster writes or hands work out) is never handed the brain's
+                # writers either — the profile is consent to save, not a new
+                # role. Keyed on the roster's NAMES: a tool's reversibility
+                # defaults to irreversible, so it cannot tell a reader.
+                _own_writes = bool(_BRAIN_WRITER_ROLES & set(getattr(agent_def, "tools", None) or []))
+                _low = _low or not _own_writes
                 _brain_run = await asyncio.to_thread(
                     build_turn_bounded, self.p, session.project_id, session.task or "",
                     event_bus=getattr(self.p, "event_bus", None), session_id=session.id,
