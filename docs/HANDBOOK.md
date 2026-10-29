@@ -1885,6 +1885,18 @@ reads; it never writes, runs commands, or starts work on its own.
   seconds Iron Jarvis is ready, and that terminal joins the Build page by
   itself the moment its shell starts. (It used to hold the whole start, and
   on some updates the app restarted itself after 90 s because of it.)
+- **Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
+  responding"** (fixed in v1.407.1) → with PowerShell installed from the
+  Microsoft Store, each terminal used to make one start attempt that Windows
+  always refuses for a Store program (putting it in a group Iron Jarvis uses
+  to tidy up what a terminal leaves running), then try again; with two
+  terminals doing that at once, Windows sometimes never finished, and Iron
+  Jarvis stopped answering until the desktop app restarted it. Terminals now
+  skip the refused attempt for Store programs and start them one at a time.
+  Nothing you could see changes: Windows never allowed that group for these
+  terminals. If Iron Jarvis ever freezes again, it now writes where it is
+  stuck in its log (Settings › System › Open logs) before it is restarted:
+  look for a line starting "event loop frozen for".
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and
