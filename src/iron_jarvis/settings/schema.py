@@ -630,6 +630,20 @@ SETTINGS: tuple[SettingDef, ...] = (
       section="Backups", aliases=("backup folder",)),
     S("backup_mirror_media", "Copy media with backups", "system", "bool",
       "Include generated media in the backup copy.", tier="allow", section="Backups"),
+    # v1.405.0: THE UPDATE CHANNEL. The desktop shell reads it from
+    # config.toml at every update check (desktop/main.js updateChannelOf), so
+    # a change applies at the next check. Moving to Fresh WIDENS what reaches
+    # this PC (every release, the moment it is published), so from chat it
+    # asks every time; moving to Stable only narrows it, so it applies at once.
+    # The Updates page's own Stable / Fresh choice saves this same row.
+    S("update_channel", "Update channel", "system", "enum",
+      "Stable gets a release once it has been out for a day with every test passing, unless "
+      "you held it back. Fresh gets every release as soon as it is published. A PC on Stable "
+      "never goes back to an older version: it stays on its version until Stable passes it.",
+      options=(("fresh", "Fresh (every release)"), ("stable", "Stable (out for a day first)")),
+      tier="allow", floor_when=("fresh",), section="Updates",
+      aliases=("update channel", "stable channel", "fresh channel", "stable updates",
+               "release channel", "updates")),
     # v1.391.0 (long jobs, Phase 2, decision 1): the desktop app holds off
     # sleep while work runs. Read LIVE by the desktop through /system/activity
     # (no restart); never keeps the screen on.

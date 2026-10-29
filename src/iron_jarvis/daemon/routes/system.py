@@ -452,6 +452,41 @@ def register(app: FastAPI, d) -> None:
             }
         return update_status(repo)
 
+    # v1.405.0: "Keep this version off Stable" on the Updates page. Sync
+    # handlers on purpose (FastAPI's thread pool): `gh auth status` and the
+    # `gh workflow run` are blocking children, bounded by core/update_channel.
+    @app.get("/update/stable-hold")
+    def update_stable_hold_view(version: str = "") -> dict[str, Any]:
+        """Can the app ask GitHub to keep ``version`` off the Stable channel
+        (the GitHub CLI installed and signed in)? Always answers the command
+        and the Actions page for doing it by hand."""
+        from ...core import update_channel as U
+
+        try:
+            return U.hold_view(version)
+        except U.HoldRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message)
+
+    @app.post("/update/stable-hold")
+    def update_stable_hold(body: dict[str, Any]) -> Any:
+        """Run the Stable channel workflow with ``hold=<version>`` through the
+        user's own GitHub CLI. ``confirm: true`` is the second press. A
+        refusal is one sentence (``detail``); gh's own output, masked, rides
+        ``details``."""
+        from fastapi.responses import JSONResponse
+
+        from ...core import update_channel as U
+
+        try:
+            return U.request_hold(
+                str((body or {}).get("version") or ""), confirm=(body or {}).get("confirm") is True,
+            )
+        except U.HoldRefused as exc:
+            return JSONResponse(
+                status_code=exc.status,
+                content={"detail": exc.message, **({"details": exc.details} if exc.details else {})},
+            )
+
     @app.post("/update/apply")
     def update_apply(body: UpdateBody) -> dict[str, Any]:
         """Pull + rebuild this checkout. Returns the per-step log; restart required.

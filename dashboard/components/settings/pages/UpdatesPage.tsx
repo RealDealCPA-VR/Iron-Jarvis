@@ -28,6 +28,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageGrid } from "@/components/PageGrid";
+import { UpdateChannelChoice, type ChannelBridge } from "@/components/settings/UpdateChannelChoice";
 
 interface UpdateStatus {
   available: boolean;
@@ -79,6 +80,8 @@ type UpdateState = {
   version?: string | null;
   percent?: number;
   error?: string | null;
+  /** v1.405.0: the channel the next check reads ("fresh" | "stable"). */
+  channel?: string | null;
 };
 
 interface UpdateBridge {
@@ -86,6 +89,8 @@ interface UpdateBridge {
   check: () => Promise<UpdateState>;
   apply: () => Promise<unknown>;
   onState: (cb: (s: UpdateState) => void) => () => void;
+  /** v1.405.0: absent on a desktop shell older than the update channel. */
+  channels?: ChannelBridge["channels"];
 }
 
 function updateBridge(): UpdateBridge | undefined {
@@ -183,6 +188,20 @@ function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
           Updates download in the background and only install when you choose — a running
           session is never interrupted by surprise.
         </p>
+
+        {/* v1.405.0: Stable / Fresh — only with a shell that reads the
+            setting (an older one has no `channels` and would ignore it). */}
+        {bridge.channels && (
+          <div className="border-t border-white/[0.06] pt-4">
+            <UpdateChannelChoice
+              bridge={bridge as ChannelBridge}
+              current={state?.current ?? null}
+              onChecked={(s) => {
+                if (s && typeof s === "object") setState(s as UpdateState);
+              }}
+            />
+          </div>
+        )}
       </div>
     </Card>
   );

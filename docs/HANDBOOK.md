@@ -1942,6 +1942,61 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Stable or Fresh updates (v1.405.0)
+
+Iron Jarvis ships often, and now and then a release has a problem the next one
+fixes. So each PC can choose how soon it takes a release, in **Settings ›
+System › Updates** (the desktop app):
+
+- **Stable** gets a release once it has been out for a day with every test
+  passing, unless you held it back. Choose it on the PC you rely on every day.
+- **Fresh** gets every release as soon as it is published. This is how every
+  PC worked before, and it stays the default. Choose it on your other PC, so
+  it meets each release first.
+
+The page shows which version each channel offers right now and which version
+this PC runs. A change applies at the next update check (the page checks at
+once); no restart is needed. A PC never goes back to an older version: if it
+was on Fresh and runs a newer version than Stable offers, it stays on that
+version until Stable passes it, and the page says so. An update Fresh had
+already downloaded is dropped when you move to Stable, so it does not install
+when you quit.
+
+**How a release reaches Stable.** Every hour a small job on GitHub (the Stable
+channel workflow) looks at the releases and takes the newest one that:
+
+- has been published for at least a day,
+- has its installer and update files,
+- passed the full test run on GitHub, and
+- you have not held back.
+
+Stable only moves forward. If nothing qualifies, it stays where it is.
+
+**The day's wait is time only.** Iron Jarvis cannot see whether your other PC
+ran a version, how long for, or whether it worked. If a version misbehaves on
+your Fresh PC, hold it back: on the Updates page of that PC, press **Keep this
+version off Stable** twice. That asks GitHub, through the GitHub CLI (`gh`) on
+that PC when it is installed and signed in, to run the Stable channel
+workflow with that version held. Without `gh`, the page shows the exact
+command to run and a link to the workflow's page on GitHub, where **Run
+workflow** has three boxes:
+
+- **hold**: keep a version off Stable;
+- **unhold**: let a held version reach Stable again;
+- **promote**: put a version on Stable now, without the day's wait. It is
+  still refused for a version that is held, not published, failed its tests,
+  or is not newer than what Stable offers; the run says why.
+
+A version already on Stable cannot be held back: Stable never moves to an
+older version.
+
+Chat can switch a PC to Stable on its own; switching to Fresh from chat always
+asks first, because it lets every release reach the PC.
+
+For whoever ships Iron Jarvis: this release adds a workflow file, so its
+release tag must be pushed by hand (`git tag vX.Y.Z <sha> && git push origin
+vX.Y.Z`), as for any change under `.github/workflows/`.
+
 ## The Session tab in a coding session (v1.404.0)
 
 A coding session's right-hand pane has a seventh icon, **Session**, after
