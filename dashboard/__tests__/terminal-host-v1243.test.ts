@@ -566,6 +566,9 @@ describe("the pane and page wiring (source-pinned)", () => {
   it("the page ends a host only on close, and drops hosts for panes the daemon lost", () => {
     const close = page.slice(page.indexOf("const closeTerminal = useCallback"));
     expect(close.slice(0, 600)).toContain("disposePaneHost(id);");
-    expect(page).toContain("retainPaneHosts(alive.map((t) => t.id));");
+    // v1.406.0 (part 6): the kept set is the live panes PLUS the ones the
+    // daemon is still reopening after a restart (build-restoring-v1406).
+    expect(page).toContain("const keep = [...alive.map((t) => t.id), ...restoring];");
+    expect(page).toContain("retainPaneHosts(keep);");
   });
 });

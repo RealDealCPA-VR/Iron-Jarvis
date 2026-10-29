@@ -27,6 +27,17 @@ import { useDocumentVisible } from "./useDocumentVisible";
  *  window still learns about an outage — six times a minute less often. */
 export const HIDDEN_HEALTH_INTERVAL_MS = 30_000;
 
+/** v1.406.0 (part 6): how long after the page loads a /health that cannot
+ *  reach Iron Jarvis is read as "still starting" rather than an outage — the
+ *  desktop app's own start-up gate (STARTUP_TIMEOUT_MS in desktop/main.js).
+ *  Only before the FIRST answer: once Iron Jarvis has answered, a miss is an
+ *  outage at once, exactly as before. */
+export const STARTING_GRACE_MS = 90_000;
+
+/** While starting, /health is asked again this soon (not every 5 s), so the
+ *  page lands the moment Iron Jarvis answers. */
+export const STARTING_POLL_MS = 1_000;
+
 export interface DaemonState {
   /** True once a /health poll has succeeded; false when the daemon is offline. */
   online: boolean;
@@ -38,8 +49,14 @@ export interface DaemonState {
   requestError: boolean;
   /** Latest /health payload, or null before the first successful poll. */
   health: Health | null;
-  /** True until the first poll resolves (so we don't flash "offline" on load). */
+  /** True until the first poll resolves (so we don't flash "offline" on load).
+   *  v1.406.0 (part 6): also true while `starting` — every surface that waits
+   *  for `!checking` before saying "offline" stays quiet during a start. */
   checking: boolean;
+  /** v1.406.0 (part 6): Iron Jarvis has never answered this page yet and the
+   *  page is younger than STARTING_GRACE_MS — it is starting, not down. The
+   *  banner says "Starting Iron Jarvis…" instead of "isn't responding". */
+  starting: boolean;
   /** v1.226.0 (contract C7): +1 on every offline->online transition. `useApi`
    *  re-fetches on it ONLY while its last error was status 0, so a page whose
    *  one GET died during a daemon restart heals itself when the daemon is
@@ -65,6 +82,11 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   const [unauthorized, setUnauthorized] = useState(false);
   const [requestError, setRequestError] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [starting, setStarting] = useState(false);
+  // v1.406.0 (part 6): has /health EVER answered this page, and when it
+  // loaded — a miss before the first answer, inside the grace, is a start.
+  const everOnlineRef = useRef(false);
+  const loadedAtRef = useRef(Date.now());
   const [nonce, setNonce] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const firstRef = useRef(true);
@@ -121,6 +143,8 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
     // v1.226.0: one place marks "reachable" so the epoch bumps on the EDGE only
     // (a steady online daemon polls every 5s and must not re-fetch every page).
     const markOnline = () => {
+      everOnlineRef.current = true;
+      setStarting(false);
       setOnline(true);
       if (!onlineRef.current) {
         onlineRef.current = true;
@@ -132,6 +156,7 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
     // /health is still waiting on its 8 s timeout used to issue a SECOND request
     // onto the same (possibly busy) daemon; now the tick is skipped.
     let inFlight = false;
+    let startingTimer: number | undefined;
 
     const poll = async () => {
       if (inFlight) return;
@@ -139,6 +164,7 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
       const seq = ++seqRef.current;
       const latest = () => !cancelled && seq === seqRef.current;
       let confirm = false;
+      let stillStarting = false;
       try {
         // Opt-in 8s timeout so a FROZEN-but-connected daemon (a blocking tool call)
         // trips "offline" instead of hanging the poll forever with a false-green dot.
@@ -166,6 +192,15 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
             // anything. A healthy daemon answers the re-poll at once and nothing
             // renders; a dead one fails again and the second miss is honest.
             confirm = true;
+          } else if (
+            !everOnlineRef.current &&
+            Date.now() - loadedAtRef.current < STARTING_GRACE_MS
+          ) {
+            // v1.406.0 (part 6): never answered yet, page just loaded — Iron
+            // Jarvis is STARTING. `checking` stays true, so nothing says
+            // "offline"; the banner says "Starting Iron Jarvis…".
+            stillStarting = true;
+            setStarting(true);
           } else {
             onlineRef.current = false;
             setOnline(false);
@@ -177,12 +212,17 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
         }
       } finally {
         inFlight = false;
-        if (!cancelled && firstRef.current) {
+        if (!cancelled && firstRef.current && !stillStarting) {
           firstRef.current = false;
+          setStarting(false);
           setChecking(false);
         }
       }
       if (confirm && !cancelled) void poll();
+      if (stillStarting && !cancelled) {
+        window.clearTimeout(startingTimer);
+        startingTimer = window.setTimeout(() => void poll(), STARTING_POLL_MS);
+      }
     };
 
     const kicked = lastNonceRef.current !== nonce;
@@ -194,6 +234,7 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       clearInterval(id);
+      window.clearTimeout(startingTimer);
     };
   }, [nonce, visible]);
 
@@ -206,11 +247,12 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
       requestError,
       health,
       checking,
+      starting,
       epoch,
       refresh,
       provided: true,
     }),
-    [online, unauthorized, requestError, health, checking, epoch, refresh],
+    [online, unauthorized, requestError, health, checking, starting, epoch, refresh],
   );
 
   return (
@@ -230,6 +272,7 @@ export function useDaemon(): DaemonState {
       requestError: false,
       health: null,
       checking: true,
+      starting: false,
       epoch: 0,
       refresh: () => {},
       provided: false,

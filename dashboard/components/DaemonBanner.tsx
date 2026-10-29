@@ -18,6 +18,7 @@ import {
   OFFLINE_TITLE,
   PART_FAILED_TITLE,
   SIGNED_OUT_TITLE,
+  STARTING_TITLE,
 } from "@/lib/offlineWords";
 import {
   DESKTOP_NOT_ANSWERING_HINT,
@@ -126,7 +127,7 @@ function BackStoppedLine() {
  * for the current view; reappears on the next route load if still offline.
  */
 export function DaemonBanner() {
-  const { online, unauthorized, requestError, checking, refresh } = useDaemon();
+  const { online, unauthorized, requestError, checking, starting, refresh } = useDaemon();
   // Retry used to be `window.location.reload()`. Against a FROZEN daemon that
   // reloads into an identical banner with no sign anything happened — reported
   // as "hitting retry didn't seem to do anything". It now re-probes and SAYS it
@@ -305,6 +306,28 @@ export function DaemonBanner() {
             <CircleCheck size={15} className="shrink-0 text-tone-success" aria-hidden="true" />
             <span className="font-medium text-zinc-200">{BACK_TITLE}</span>
             <BackStoppedLine />
+          </div>
+        </m.div>
+      )}
+      {/* v1.406.0 (part 6): a START is not an outage. Before Iron Jarvis has
+          answered this page once (and only while the page is young —
+          lib/daemon STARTING_GRACE_MS) the banner says the splash's own calm
+          words, no warn tone, no Retry, nothing to dismiss. */}
+      {checking && starting && (
+        <m.div
+          key="daemon-starting"
+          role="status"
+          aria-live="polite"
+          data-testid="daemon-banner-starting"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: "auto", opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="overflow-hidden border-b hairline"
+        >
+          <div className="flex items-center gap-2.5 px-6 py-2 text-sm lg:px-10">
+            <RefreshCw size={14} className="shrink-0 animate-spin text-zinc-400" aria-hidden="true" />
+            <span className="text-zinc-300">{STARTING_TITLE}</span>
           </div>
         </m.div>
       )}

@@ -771,6 +771,52 @@ does not need a bump, stop and bump it.
   a plugin that delays the one step (the loop's seed read 0.3 s; the second
   call's request 0.7 s inside its own clock): old shapes CI's exact errors, new
   green.
+  v1.406.0 part 6: THE BOOT WATCH CAUGHT IT. The packaged logs (2026-10-26 ..
+  10-29, 11 starts after an update) hold FIVE hung starts: 10-27 18:06 and
+  18:15 (before the watch: user Quit/Retry), and 10-28 06:52, 10:39, 18:38
+  (the watch at 30/60 s, then main.js "restarting once by itself" at 90 s;
+  every restart ready in ~2 s). Every caught one: step
+  `rehydrate_terminals`, the boot thread in `rehydrate` waiting on the
+  restore pool, and EVERY `pane-restore_N` thread in `backend._spawn` ->
+  `CreateProcessW` (the user's panes are the WindowsApps `pwsh.EXE` App
+  Execution Alias under the bundled ConPTY). Windows never returned the call;
+  the event logs show no AppX activation at all in a hung start (a good start
+  logs Store license + AppModel container lines at the spawn), and 30 fresh
+  processes x 3 parallel first spawns did not reproduce it, so the cause
+  inside Windows is NOT known. The fix does not depend on it:
+  `terminals/manager.rehydrate` waits at most `RESTORE_WAIT_S` (8 s) — each
+  restore on its own DAEMON thread (never a ThreadPoolExecutor: its workers
+  are joined at interpreter exit, so a stuck spawn would hang shutdown too);
+  a restore finishing inside the bound registers exactly as before (snapshot
+  order, one snapshot); a later one registers itself
+  (`_finish_late_restore`: slot released, persisted; closed instead when
+  `kill_all` began — `_closing`); one still starting keeps its `_reserved`
+  slot and its snapshot entry AS READ (`_restoring`, appended by
+  `_index_text`, so the 30 s loop, a create or the shutdown snapshot can never
+  drop it). `GET /terminals` adds `restoring: [ids]` ONLY when non-empty
+  (byte-identical otherwise); the Build page keeps those ids out of
+  `prunePaneStorage`/`retainPaneHosts` and re-reads the list every 3 s (≤ 20
+  times) to add a late pane. SAME PART, SPEED: the first-spawn PTY verify
+  (`_PTY_VERIFY_SECONDS` 0.7) ends as soon as a PUSHING session (raw ConPTY)
+  has output — the host prints the moment the shell connects, and a raw
+  ConPTY cannot exist without its host (CreatePseudoConsole fails first); a
+  POLLED backend keeps the full wait. Measured interleaved on a scratch home
+  with two pwsh panes: `rehydrate_terminals` 0.81–1.89 s (median 0.88) ->
+  0.12–0.19 s (one cold 1.69), startup total median 3.49 -> 2.85 s;
+  spawn-to-healthy was dominated by noisy source-mode imports (6–17 s both).
+  DASHBOARD: `DaemonProvider` keeps `checking` true and sets `starting` while
+  /health has NEVER answered the page and the page is younger than
+  `STARTING_GRACE_MS` (90 s = the desktop gate), re-asking every
+  `STARTING_POLL_MS` (1 s); `DaemonBanner` then says `STARTING_TITLE`
+  ("Starting Iron Jarvis…", lib/offlineWords) with no warn tone. After a
+  first answer a miss is an outage exactly as before. Known: a page's own
+  data reads that fail during a start still show their status-0 error until
+  the epoch refetch; a pane whose CreateProcessW never returns stays missing
+  for that run (it is back next start). Pins:
+  `tests/test_boot_pane_restore_bound_v1406.py` (10 mutations red),
+  `dashboard/__tests__/{build-restoring,daemon-starting}-v1406.test.tsx`
+  (6 mutations red); moved on purpose: `pane-keys-v1280`,
+  `terminal-host-v1243` (the kept set is `keep`).
 - **A backup that never leaves the disk it protects is one failure from
   nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
   `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND

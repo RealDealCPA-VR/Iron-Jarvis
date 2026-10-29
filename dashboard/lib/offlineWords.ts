@@ -21,6 +21,12 @@ export const OFFLINE_WORDS = "Iron Jarvis isn't responding";
 /** The banner's and the in-page hint's headline. */
 export const OFFLINE_TITLE = `${OFFLINE_WORDS}.`;
 
+/** v1.406.0 (part 6): what the banner says while Iron Jarvis is STARTING —
+ *  it has not answered this page yet and the page has just loaded (lib/daemon
+ *  STARTING_GRACE_MS). A start is not an outage, so it says the splash's own
+ *  words, calmly, instead of OFFLINE_TITLE. */
+export const STARTING_TITLE = "Starting Iron Jarvis…";
+
 /** What was NOT affected (the audit's "what was not affected" row): nothing
  *  the user made is lost, and a cut-off job comes back as an offer (the
  *  boot reconcile + GET /sessions/interrupted, v1.249.0). */

@@ -123,6 +123,11 @@ const SHAPE_KEY = "ij.build.shape";
  *  user back through the folder tree to the project they were just in. */
 const BUILD_FOLDER_KEY = "ij.build.folder";
 
+/** v1.406.0 (part 6): how often, and how many times, Build re-reads the pane
+ *  list while the daemon is still reopening a pane after a restart. */
+const RESTORING_REREAD_MS = 3000;
+const RESTORING_REREADS = 20;
+
 /** The Build side panel's two tabs (v1.329.0: plain text tabs). */
 const BUILD_PANEL_TABS = [
   { value: "folders", label: "Folders" },
@@ -772,19 +777,27 @@ export default function TerminalsPage() {
         // every return to Build waited seconds for catalogs that only fill the
         // per-pane pickers and the Launch menu. The panes render the moment
         // the list is in; the catalogs (below) arrive when they arrive.
-        const terms = await get<{ terminals: TerminalInfo[] }>("/terminals");
+        const terms = await get<{ terminals: TerminalInfo[]; restoring?: string[] }>("/terminals");
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
+        // v1.406.0 (part 6): panes the daemon is still reopening after a
+        // restart (it stops waiting for a slow shell after a few seconds and
+        // opens it the moment it starts). They are the user's panes: their
+        // saved keys and hosts are kept, never pruned.
+        const restoring = Array.isArray(terms.restoring)
+          ? terms.restoring.filter((id): id is string => typeof id === "string")
+          : [];
+        const keep = [...alive.map((t) => t.id), ...restoring];
         // Terminals outlive this page (v1.243.0, components/terminal/paneHost):
         // a pane's xterm and socket stay open while you are elsewhere, so a
         // return is instant. This is where that ends for a pane the daemon no
         // longer offers — closed by an agent or another window, or a shell
         // that exited — so no socket stays open for a pane nobody can see.
-        retainPaneHosts(alive.map((t) => t.id));
+        retainPaneHosts(keep);
         // v1.280.0: the per-pane keys (view, thread, rect) of panes the daemon
         // no longer offers are removed — they were never removed before, and
         // grew for the life of the install. Only after a SUCCESSFUL answer.
-        prunePaneStorage(alive.map((t) => t.id));
+        prunePaneStorage(keep);
         setTerminals(alive);
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands
@@ -803,6 +816,32 @@ export default function TerminalsPage() {
           setFocusedId(alive[0]?.id ?? null);
         }
         setOffline(false);
+        setLoading(false); // the rail is drawn; a late pane below only joins it
+        // v1.406.0 (part 6): a pane still being reopened joins the rail when
+        // its shell starts. Re-read a few times, adding only panes this page
+        // does not hold (local adds and closes are never overwritten).
+        let waitingFor = restoring;
+        for (let i = 0; waitingFor.length > 0 && i < RESTORING_REREADS; i += 1) {
+          await new Promise((r) => window.setTimeout(r, RESTORING_REREAD_MS));
+          if (cancelled) return;
+          let again: { terminals: TerminalInfo[]; restoring?: string[] };
+          try {
+            again = await get<{ terminals: TerminalInfo[]; restoring?: string[] }>("/terminals");
+          } catch {
+            continue;
+          }
+          if (cancelled) return;
+          const opened = again.terminals.filter((t) => t.alive && waitingFor.includes(t.id));
+          if (opened.length) {
+            setTerminals((prev) => [
+              ...prev,
+              ...opened.filter((t) => !prev.some((p) => p.id === t.id)),
+            ]);
+          }
+          waitingFor = Array.isArray(again.restoring)
+            ? again.restoring.filter((id): id is string => typeof id === "string")
+            : [];
+        }
       } catch (e) {
         if (cancelled) return;
         if (e instanceof ApiError && e.status === 0) setOffline(true);
