@@ -326,6 +326,9 @@ function markUpdatePending(v) { calls.push(["markUpdatePending", v]); }
 function clearUpdatePending() { calls.push(["clearUpdatePending"]); }
 function shutdown(reason) { calls.push(["shutdown", String(reason)]); shuttingDown = true; }
 function sweepOrphanDaemons() { calls.push(["sweepOrphanDaemons"]); }
+// v1.405.0: a PC on Fresh — the channel guard drops nothing
+// (tests/test_stable_channel_v14050.py pins the Stable side).
+function dropPendingIfOffChannel() { return false; }
 function refreshTrayMenu() { calls.push(["refreshTrayMenu"]); }
 function friendlyUpdateError(m) { return m; }
 function _emitUpdateState(p) { calls.push(["updateState", p.status]); }

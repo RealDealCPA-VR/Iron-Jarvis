@@ -112,6 +112,9 @@ function clearUpdatePending() { calls.push(["clearUpdatePending"]); }
 // the crash supervisor — model that exactly.
 function shutdown() { calls.push(["shutdown"]); shuttingDown = true; }
 function sweepOrphanDaemons() { calls.push(["sweepOrphanDaemons"]); }
+// v1.405.0: a PC on Fresh — the channel guard drops nothing
+// (tests/test_stable_channel_v14050.py pins the Stable side).
+function dropPendingIfOffChannel() { return false; }
 function refreshTrayMenu() { calls.push(["refreshTrayMenu"]); }
 function friendlyUpdateError(m) { return m; }
 function _emitUpdateState(p) { calls.push(["updateState", p.status]); }

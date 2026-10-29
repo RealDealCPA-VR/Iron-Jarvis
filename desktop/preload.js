@@ -133,6 +133,9 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     getState: () => ipcRenderer.invoke("update:getState"),
     check: () => ipcRenderer.invoke("update:check"),
     apply: () => ipcRenderer.invoke("update:apply"),
+    // v1.405.0: the version each channel (Fresh / Stable) offers right now,
+    // plus this PC's channel and version. Null when refused.
+    channels: () => ipcRenderer.invoke("update:channels"),
     // Subscribe to live status; returns an unsubscribe fn.
     onState: (cb) => {
       const handler = (_e, state) => cb(state);

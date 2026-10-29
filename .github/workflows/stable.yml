@@ -1,0 +1,125 @@
+name: Stable channel
+
+# THE STABLE UPDATE CHANNEL (v1.405.0). 55 releases went out in 7 days, and a
+# few of them hurt the PC that installed them first (v1.400.9 broke the type
+# check, v1.401.0's installer failed until v1.401.1, the first start after an
+# update hung on 2026-10-27). An installed app can read one of two manifests:
+#
+#   updates         every published release (written by release.yml) — "Fresh"
+#   updates-stable  a release once it has been OUT FOR A DAY with its commit's
+#                   Tests run green and nobody held it back — "Stable"
+#
+# THIS workflow is the ONLY writer of updates-stable. Every hour it runs
+# scripts/promote_stable.py, which picks the newest release that qualifies and
+# writes its latest.yml (the Release job's own rewrite, imported) plus holds.txt,
+# promoted.json and README.md to the orphan branch. Stable never moves to an
+# older version. The wait is TIME only: nothing here can see whether another PC
+# ran a release; holding a version back is how the user says it is not ready.
+#
+# Run it by hand (Actions -> Stable channel -> Run workflow) to:
+#   hold     keep a version (X.Y.Z) off Stable
+#   unhold   let a held version reach Stable again
+#   promote  put a version on Stable NOW, skipping the day's wait — still refused
+#            for a held, unpublished, Tests-failed or not-newer version (the run
+#            ends red and says why).
+#
+# Neither release.yml nor tests.yml triggers on this branch (both run on master
+# and tags only; tests/test_stable_channel_v14050.py pins it), and a push made
+# with GITHUB_TOKEN starts no workflow anyway.
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      hold:
+        description: "Keep this version off Stable (X.Y.Z)"
+        type: string
+        default: ""
+      unhold:
+        description: "Let this held version reach Stable again (X.Y.Z)"
+        type: string
+        default: ""
+      promote:
+        description: "Put this version on Stable now, skipping the wait (X.Y.Z)"
+        type: string
+        default: ""
+
+# contents: write — the ONLY write: pushing updates-stable (and reading the
+# releases). actions: read — reading the Tests workflow's verdict on a
+# release's commit (GET .../actions/workflows/tests.yml/runs): a token's
+# unlisted scopes are none, and a Tests verdict that cannot be read must never
+# count as green, so without it Stable would never move.
+permissions:
+  contents: write
+  actions: read
+
+# ONE run at a time: an hourly run and a hand-started hold must never race on
+# the branch (the second waits, then reads what the first wrote). GitHub keeps
+# only ONE pending run per group: a run waiting behind another is replaced if a
+# newer one queues in that minute, so a hold started then may need starting
+# again — holds.txt on the branch shows whether it landed.
+concurrency:
+  group: stable-channel
+  cancel-in-progress: false
+
+jobs:
+  stable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Decide, then publish the Stable manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Inputs reach the script through the environment, never pasted
+          # into the script text (a typed input must not become shell code).
+          HOLD: ${{ inputs.hold }}
+          UNHOLD: ${{ inputs.unhold }}
+          PROMOTE: ${{ inputs.promote }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch origin updates-stable 2>/dev/null; then
+            git worktree add "$work/wt" FETCH_HEAD
+          else
+            git worktree add --detach "$work/wt"
+            git -C "$work/wt" checkout --orphan updates-stable
+            git -C "$work/wt" rm -rfq --cached . || true
+            find "$work/wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+          # stdlib-only script: --no-project skips installing the app here.
+          # Exit 3 = a requested promote was refused, 4 = the chosen release's
+          # latest.yml could not be used, 5 = the newest candidate's Tests
+          # result could not be read: the hold edits are still committed, then
+          # the run ends red with the reason in its log. Anything else (2 = a
+          # bad input) wrote nothing and ends here.
+          rc=0
+          uv run --no-project python scripts/promote_stable.py \
+            --dir "$work/wt" --repo "$GITHUB_REPOSITORY" \
+            --hold "${HOLD:-}" --unhold "${UNHOLD:-}" --promote "${PROMOTE:-}" \
+            --message-out "$work/message.txt" || rc=$?
+          case "$rc" in
+            0|3|4|5) ;;
+            *) exit "$rc" ;;
+          esac
+          git -C "$work/wt" add -A
+          if git -C "$work/wt" diff --cached --quiet; then
+            echo "updates-stable unchanged"
+          else
+            git -C "$work/wt" commit -q -F "$work/message.txt"
+            git -C "$work/wt" push origin HEAD:updates-stable
+          fi
+          exit "$rc"

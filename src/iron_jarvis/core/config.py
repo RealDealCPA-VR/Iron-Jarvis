@@ -542,6 +542,14 @@ class Config(BaseModel):
     #: desktop's keep-awake check reads both (desktop/main.js) — a change
     #: applies at the next check, no restart.
     keep_awake: bool = True
+    #: THE UPDATE CHANNEL (v1.405.0) — Settings › System › Updates. "fresh"
+    #: (the default, every release as it is published) or "stable" (a release
+    #: once it has been out for a day with its Tests run green, unless the
+    #: user held it back — the updates-stable branch, written only by
+    #: .github/workflows/stable.yml). The DESKTOP SHELL reads it from
+    #: config.toml at EVERY update check (desktop/main.js ``updateChannelOf``),
+    #: so a change applies at the next check; the daemon never acts on it.
+    update_channel: str = "fresh"
     # Where a chat with NO project keeps the files it was handed and the files
     # it makes (v1.244.0): one dated folder per conversation, so the work lands
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
@@ -942,6 +950,23 @@ class Config(BaseModel):
 
         default = "23:00" if info.field_name == "night_window_start" else "07:00"
         return clean_time(v) or default
+
+    @field_validator("update_channel", mode="before")
+    @classmethod
+    def _clean_update_channel(cls, v: Any) -> str:
+        # v1.405.0: TOLERANT, and the same reading of ONE value as the desktop
+        # shell's (desktop/main.js updateChannelSetting): " Stable " is
+        # stable; anything that is not stable is fresh — a hand edit never
+        # stops a boot. WHICH file: this value is layered like every field
+        # (~/.ironjarvis/config.toml under the state home's config.toml), and
+        # the shell's readUpdateChannel reads those same two files in that
+        # order. What can still differ: a home config.toml so torn that
+        # _read_toml drops the whole file (the shell still finds the line), and
+        # a hand edit of a file while the daemon runs (the shell reads the
+        # files at each check; the daemon reads them when it starts). The
+        # settings writer refuses any other value in words first (the schema
+        # row is an enum).
+        return "stable" if str(v or "").strip().lower() == "stable" else "fresh"
 
     @field_validator("browser_access")
     @classmethod

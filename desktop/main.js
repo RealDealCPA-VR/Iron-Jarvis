@@ -2590,7 +2590,25 @@ function installSpotlightIpc() {
   ipcMain.handle("update:getState", () => ({
     ..._updateState,
     current: _updateState.current || safeAppVersion(),
+    // v1.405.0: the channel the NEXT check reads (config.toml, read now).
+    channel: readUpdateChannel(updateChannelHome()),
   }));
+  // v1.405.0: which version each channel offers right now, for the Updates
+  // page's Stable / Fresh choice. Sender-checked like every privileged
+  // handler (it makes network requests on the user's PC). Never throws: a
+  // branch that cannot be read is null.
+  ipcMain.handle("update:channels", async (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    const versions = await readChannelVersions(fetch, UPDATE_CHANNELS_TIMEOUT_MS).catch(() => ({
+      fresh: null,
+      stable: null,
+    }));
+    return {
+      channel: readUpdateChannel(updateChannelHome()),
+      current: _updateState.current || safeAppVersion(),
+      ...versions,
+    };
+  });
   // Shell facts the dashboard must not guess (v1.229.0, audit D2): which
   // global hotkeys ARE registered right now, as the label a user presses
   // ("Ctrl+Alt+J") or null when every rung of the ladder was taken. Sender-
@@ -2639,14 +2657,16 @@ function installSpotlightIpc() {
     }
     _emitUpdateState({ status: "checking", error: null });
     try {
-      await checkForUpdatesWithFallback(au);
+      await runUpdateCheck(au);
     } catch (err) {
       // The updater's "error" event has normally already said this (v1.260.0:
       // onUpdaterError); this is the net for a rejection that emitted nothing.
       if (_updateState.status !== "error") {
         _emitUpdateState({
           status: "error",
-          error: friendlyUpdateError((err && err.message) || "check failed"),
+          error: (_updateSource === "stable" ? friendlyStableError : friendlyUpdateError)(
+            (err && err.message) || "check failed"
+          ),
         });
       }
     }
@@ -3715,8 +3735,13 @@ const UPDATE_RETRY_MS = 5 * 60 * 1000;
 // reads both.
 const UPDATE_MANIFEST_URL = "https://raw.githubusercontent.com/RealDealCPA-VR/Iron-Jarvis/updates";
 const UPDATE_GITHUB_FEED = { provider: "github", owner: "RealDealCPA-VR", repo: "Iron-Jarvis" };
+// v1.405.0: THE STABLE CHANNEL. A release reaches this branch only once it has
+// been out for a day with its commit's Tests run green and nobody held it back
+// (.github/workflows/stable.yml + scripts/promote_stable.py write it, nothing
+// else). Owner/repo pinned equal to UPDATE_MANIFEST_URL's by a test.
+const UPDATE_STABLE_MANIFEST_URL = "https://raw.githubusercontent.com/RealDealCPA-VR/Iron-Jarvis/updates-stable";
 let _autoUpdater = null;
-let _updateSource = "manifest"; // "manifest" | "feed" — which source the NEXT check reads
+let _updateSource = "manifest"; // "manifest" | "stable" | "feed" — which source the NEXT check reads
 let _updateRetryTimer = null;
 // True only while the manifest attempt of checkForUpdatesWithFallback is in
 // flight: electron-updater EMITS "error" before it rejects, and the feed attempt
@@ -3731,7 +3756,198 @@ let _updateState = {
   version: null,
   percent: 0,
   error: null,
+  channel: null, // "fresh" | "stable" — the channel the last check read (v1.405.0)
 };
+
+// --- Update channel: Fresh or Stable (v1.405.0) ----------------------------
+// "fresh" (the default) = every release as soon as it is published, read from
+// the `updates` branch with the GitHub feed as the fallback — byte for byte the
+// pre-v1.405.0 order. "stable" = the `updates-stable` branch ONLY: never the
+// releases feed, which names the NEWEST release and would skip the very wait
+// Stable exists for. The setting `update_channel` (settings/schema.py, the
+// Config field) is saved by the daemon's one settings writer into config.toml;
+// this shell reads it at EVERY update check (like lan_access at every spawn),
+// so a change applies at the next check with no restart.
+
+//: The settings key, pinned equal to settings/schema.py and the Config field.
+const UPDATE_CHANNEL_KEY = "update_channel";
+//: How long update:channels waits for each branch's manifest.
+const UPDATE_CHANNELS_TIMEOUT_MS = 8000;
+
+//: The value a config.toml SETS: "stable" only for a top-level
+//: `update_channel = "stable"` (tomli_w writes plain values before the first
+//: [table], so the scan stops there; a hand edit's case and spaces are
+//: forgiven, like the daemon's own validator), "fresh" for any other quoted
+//: value, null when the file does not set it at all.
+function updateChannelSetting(tomlText) {
+  const text = String(tomlText || "").replace(/^﻿/, "");
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) break;
+    const m = /^(?:update_channel|"update_channel"|'update_channel')\s*=\s*(["'])([^"']*)\1\s*(?:#.*)?$/.exec(line);
+    if (m) return m[2].trim().toLowerCase() === "stable" ? "stable" : "fresh";
+  }
+  return null;
+}
+
+//: One file's answer: anything not stable — no file, unreadable, "fresh", a
+//: typo — is "fresh": today's behaviour, never a surprise.
+function updateChannelOf(tomlText) {
+  return updateChannelSetting(tomlText) || "fresh";
+}
+
+//: ~/.ironjarvis/config.toml — the daemon layers it UNDER the state home's
+//: config.toml (core/config.global_config_path), so this shell does too.
+function globalConfigFile() {
+  try {
+    return path.join(require("os").homedir(), ".ironjarvis", "config.toml");
+  } catch {
+    return "";
+  }
+}
+
+//: The daemon home whose config.toml holds the setting: the packaged app's
+//: userData/.ironjarvis (IRONJARVIS_HOME is blanked for the packaged daemon),
+//: or the dev home resolve_home() picks for --root REPO_ROOT.
+function updateChannelHome() {
+  if (IS_PACKAGED) return path.join(userDataDir || "", ".ironjarvis");
+  return (process.env.IRONJARVIS_HOME || "").trim() || path.join(REPO_ROOT, ".ironjarvis");
+}
+
+//: The channel the daemon would read: the state home's config.toml, else
+//: ~/.ironjarvis/config.toml (the daemon's own layering), else fresh. Never
+//: throws. `globalFile` is for the node pins.
+function readUpdateChannel(homeDir, globalFile = globalConfigFile()) {
+  for (const file of [path.join(homeDir, "config.toml"), globalFile]) {
+    if (!file) continue;
+    let text = "";
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {
+      continue; /* no such file: the next layer */
+    }
+    const set = updateChannelSetting(text);
+    if (set) return set;
+  }
+  return "fresh";
+}
+
+//: The `version:` line of a latest.yml, or null.
+function manifestVersionOf(text) {
+  const m = /^version:\s*['"]?(\d+\.\d+\.\d+)['"]?\s*$/m.exec(String(text || ""));
+  return m ? m[1] : null;
+}
+
+//: Which version each channel offers right now, for the Updates page: both
+//: manifests read at once, each bounded by `timeoutMs`; a failure is null for
+//: that channel, never a throw. `fetchImpl` is the global fetch in the app.
+async function readChannelVersions(fetchImpl, timeoutMs) {
+  const one = async (base) => {
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      try {
+        if (ctrl) ctrl.abort();
+      } catch {
+        /* already done */
+      }
+    }, timeoutMs);
+    try {
+      const res = await fetchImpl(`${base}/latest.yml`, ctrl ? { signal: ctrl.signal } : {});
+      if (!res || !res.ok) return null;
+      return manifestVersionOf(await res.text());
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const [fresh, stable] = await Promise.all([one(UPDATE_MANIFEST_URL), one(UPDATE_STABLE_MANIFEST_URL)]);
+  return { fresh, stable };
+}
+
+// v1.405.0 review: WHERE each version was found ("manifest"/"feed" = Fresh,
+// "stable" = Stable), recorded at `update-available` — which fires BEFORE its
+// download starts — so a download can be judged against the channel the PC is
+// on when it LANDS, not the one it was on when it began. Once a version was
+// offered by Stable it stays "stable".
+const _foundOn = new Map();
+//: The download running now: { version, token } (the check result's
+//: cancellationToken), so a switch to Stable can stop a Fresh download.
+let _inFlight = null;
+//: After a dropped download, one check this long later fetches what Stable
+//: offers (electron-updater still holds the finished download's promise for a
+//: moment, so an immediate check would get that promise back).
+const UPDATE_DROP_RECHECK_MS = 15 * 1000;
+
+//: Pure: may a version found on `foundOn` be downloaded, offered or installed
+//: while the PC is on `channel`? Fresh takes anything; Stable only a version
+//: the Stable manifest offered — an unknown origin is not.
+function downloadFitsChannel(channel, foundOn) {
+  return channel !== "stable" || foundOn === "stable";
+}
+
+//: Remember where an offered version came from (the update-available event).
+function noteFoundOn(version, source) {
+  if (!version) return;
+  if (_foundOn.get(version) !== "stable") _foundOn.set(version, source === "stable" ? "stable" : source || "manifest");
+}
+
+//: After a check: the download it started (if any), with its token.
+function noteCheckResult(result) {
+  if (!result || !result.isUpdateAvailable || !result.downloadPromise || !result.updateInfo) return;
+  const rec = { version: result.updateInfo.version, token: result.cancellationToken || null };
+  _inFlight = rec;
+  Promise.resolve(result.downloadPromise)
+    .catch(() => {})
+    .finally(() => {
+      if (_inFlight === rec) _inFlight = null;
+    });
+}
+
+//: The PC's channel, applied to what is already under way: a Fresh download
+//: still running is cancelled (electron-updater emits "update-cancelled", not
+//: an error) and a Fresh download already waiting is forgotten. Runs before
+//: EVERY check, so a Stable check that fails still drops them.
+function enforceUpdateChannel(channel) {
+  if (_inFlight && !downloadFitsChannel(channel, _foundOn.get(_inFlight.version))) {
+    desktopLog("warn", `[update] this PC is on Stable now — stopping the v${_inFlight.version} download from Fresh`);
+    try {
+      if (_inFlight.token) _inFlight.token.cancel();
+    } catch {
+      /* already finished */
+    }
+    _inFlight = null;
+  }
+  dropPendingIfOffChannel();
+}
+
+//: True when a downloaded update is waiting that the PC's channel does not
+//: offer — and then it is forgotten (no tray item, no install on Quit).
+function dropPendingIfOffChannel() {
+  if (!pendingUpdateInfo) return false;
+  const channel = readUpdateChannel(updateChannelHome());
+  if (downloadFitsChannel(channel, _foundOn.get(pendingUpdateInfo.version))) return false;
+  forgetPendingUpdate(_autoUpdater);
+  return true;
+}
+
+//: The channel for the check about to run, recorded on _updateState (the page
+//: shows it) and applied to what is under way. Read from config.toml every time.
+function currentUpdateChannel() {
+  const channel = readUpdateChannel(updateChannelHome());
+  if (_updateState.channel !== channel) _emitUpdateState({ channel });
+  enforceUpdateChannel(channel);
+  return channel;
+}
+
+//: ONE check, for the timer and the Updates page alike: the channel read and
+//: applied, the check, and the download it started remembered.
+async function runUpdateCheck(au) {
+  const channel = currentUpdateChannel();
+  const result = await checkForUpdatesWithFallback(au, channel);
+  noteCheckResult(result);
+  return result;
+}
 
 function _emitUpdateState(patch) {
   _updateState = { ..._updateState, ...patch, current: _updateState.current || safeAppVersion() };
@@ -3820,6 +4036,8 @@ function respawnStoppedServices() {
 }
 
 async function applyPendingUpdate() {
+  // v1.405.0 review: every install path ends here — re-judged by the channel now.
+  if (dropPendingIfOffChannel()) return;
   if (!pendingUpdateInfo || !_autoUpdater || updateInstallInFlight) return;
   updateInstallInFlight = true;
   // R-02: check the download BEFORE anything is stopped — a missing or
@@ -4097,6 +4315,8 @@ function installKeepAwake() {
 }
 
 function requestUpdateInstall() {
+  // v1.405.0 review: the PC moved to Stable after a Fresh download landed.
+  if (dropPendingIfOffChannel()) return;
   if (!pendingUpdateInfo || updateInstallInFlight || updatePromptInFlight) return;
   updatePromptInFlight = true;
   probeDaemonActivity(ACTIVITY_PROBE_TIMEOUT_MS)
@@ -4244,6 +4464,20 @@ function friendlyUpdateError(msg) {
   return firstLine.length > 200 ? `${firstLine.slice(0, 197)}…` : firstLine;
 }
 
+// v1.405.0: the same words for a Stable check, except a missing latest.yml: on
+// the updates-stable branch that is not "a release still uploading" — it means
+// Stable has nothing to offer yet (the branch is written by the hourly Stable
+// workflow, which has not promoted a release so far).
+function friendlyStableError(msg) {
+  if (updateErrorKind(msg) === "publishing") {
+    return (
+      "The Stable channel has no version to offer yet. This PC stays on its version, " +
+      "and Iron Jarvis checks again on its own."
+    );
+  }
+  return friendlyUpdateError(msg);
+}
+
 // v1.260.0: one earlier re-check after a transient failure — never a storm.
 // Returns whether a retry was armed. `checkForUpdates` clears a pending one, so
 // a manual check never stacks a second timer behind it.
@@ -4271,28 +4505,42 @@ function clearUpdateRetry() {
 function onUpdaterError(msg) {
   desktopLog("error", "[update] error:", (msg || "").toString().split(/\r?\n/)[0]);
   if (_updateFallbackArmed) return false;
-  _emitUpdateState({ status: "error", error: friendlyUpdateError(msg) });
+  _emitUpdateState({
+    status: "error",
+    error: _updateSource === "stable" ? friendlyStableError(msg) : friendlyUpdateError(msg),
+  });
   scheduleUpdateRetry(msg);
   return true;
 }
 
 function _setUpdateSource(au, which) {
-  _updateSource = which === "feed" ? "feed" : "manifest";
+  _updateSource = which === "feed" ? "feed" : which === "stable" ? "stable" : "manifest";
   au.setFeedURL(
-    _updateSource === "feed" ? UPDATE_GITHUB_FEED : { provider: "generic", url: UPDATE_MANIFEST_URL }
+    _updateSource === "feed"
+      ? UPDATE_GITHUB_FEED
+      : _updateSource === "stable"
+        ? { provider: "generic", url: UPDATE_STABLE_MANIFEST_URL }
+        : { provider: "generic", url: UPDATE_MANIFEST_URL }
   );
 }
 
 // v1.260.0: the manifest first, the GitHub feed if the manifest fails, and the
 // manifest restored for the next check either way. Both call sites (the timer
 // and the Updates page's button) come through here.
-async function checkForUpdatesWithFallback(au) {
+// v1.405.0: `channel` "stable" reads the updates-stable manifest and NOTHING
+// else — a failed Stable check is reported (onUpdaterError: the transient words
+// and one early retry) and rethrown, never answered from the releases feed,
+// which names the newest release and would bypass the day's wait. Any other
+// channel value is Fresh: exactly the order above.
+async function checkForUpdatesWithFallback(au, channel) {
   clearUpdateRetry();
-  _setUpdateSource(au, "manifest");
-  _updateFallbackArmed = true;
+  const stable = String(channel || "").trim().toLowerCase() === "stable";
+  _setUpdateSource(au, stable ? "stable" : "manifest");
+  _updateFallbackArmed = !stable;
   try {
     return await au.checkForUpdates();
   } catch (err) {
+    if (stable) throw err;
     _updateFallbackArmed = false;
     desktopLog(
       "warn",
@@ -4337,9 +4585,29 @@ function initUpdater() {
   _setUpdateSource(autoUpdater, "manifest");
   autoUpdater.on("update-available", (info) => {
     console.log("[update] available:", info && info.version);
+    // v1.405.0 review: where it was found, before its download starts.
+    noteFoundOn(info && info.version, _updateSource);
     _emitUpdateState({ status: "available", version: (info && info.version) || null });
   });
   autoUpdater.on("update-downloaded", (info) => {
+    // v1.405.0 review: a download judged by the channel the PC is on NOW. A
+    // Fresh download that finishes after the switch to Stable (it was running,
+    // or electron-updater handed a Stable check the download already under
+    // way) is not offered and does not install on Quit — and, because it
+    // replaced the cached installer, nothing waiting before it is either.
+    const version = (info && info.version) || "";
+    if (!downloadFitsChannel(readUpdateChannel(updateChannelHome()), _foundOn.get(version))) {
+      desktopLog("warn", `[update] v${version} came from Fresh and this PC is on Stable — not offered`);
+      pendingUpdateInfo = { version };
+      forgetPendingUpdate(autoUpdater);
+      _emitUpdateState({ status: "idle", version: null, percent: 0 });
+      const t = setTimeout(() => checkForUpdates(), UPDATE_DROP_RECHECK_MS);
+      if (t && typeof t.unref === "function") t.unref();
+      return;
+    }
+    // v1.405.0: a download installs on Quit again (forgetPendingUpdate may
+    // have turned that off for a Fresh download Stable did not offer).
+    autoUpdater.autoInstallOnAppQuit = true;
     _emitUpdateState({ status: "downloaded", version: (info && info.version) || null, percent: 100 });
     // Surface a ready update PROMINENTLY but non-intrusively (the user chose
     // notify + one-click): a clickable OS notification + a top-of-tray
@@ -4377,9 +4645,36 @@ function checkForUpdates() {
   // checkForUpdates (not ...AndNotify): autoDownload fetches it, and our own
   // update-downloaded handler shows the clickable notification — we don't want
   // electron-updater's separate default notification competing with ours.
-  checkForUpdatesWithFallback(autoUpdater).catch((err) =>
+  // v1.405.0: the channel is read from config.toml at EVERY check.
+  runUpdateCheck(autoUpdater).catch((err) =>
     desktopLog("error", "[update] check failed:", ((err && err.message) || String(err)).split(/\r?\n/)[0])
   );
+}
+
+// v1.405.0: a downloaded update this PC's channel no longer offers (it was
+// fetched on Fresh, then the user chose Stable): no "Restart to update", and
+// it does not install on Quit. If Stable offers that version later, the next
+// check downloads it again (electron-updater reuses the cached file) and the
+// update-downloaded handler turns install-on-quit back on. Called before any
+// check (enforceUpdateChannel), when a download lands, and before an install
+// (requestUpdateInstall, applyPendingUpdate, the Quit path).
+function forgetPendingUpdate(au) {
+  desktopLog(
+    "warn",
+    `[update] the Stable channel does not offer v${pendingUpdateInfo && pendingUpdateInfo.version} — it will not install`
+  );
+  pendingUpdateInfo = null;
+  try {
+    au.autoInstallOnAppQuit = false;
+  } catch {
+    /* updater gone */
+  }
+  refreshTrayMenu();
+  try {
+    if (tray) tray.setToolTip("Iron Jarvis — running");
+  } catch {
+    /* tray may be gone */
+  }
 }
 
 // --- Application menu ----------------------------------------------------
@@ -5698,6 +5993,9 @@ if (!gotLock) {
         // whole readAndBumpUpdatePending -> handleStartupFailure recovery is
         // bypassed for every quit-installed update) and the orphan sweep that
         // frees resources/daemon's file locks before the installer extracts.
+        // v1.405.0 review: a Fresh download on a PC now on Stable is dropped
+        // here (install-on-quit off) before the updater's quit handler reads it.
+        dropPendingIfOffChannel();
         if (pendingUpdateInfo) {
           markUpdatePending(pendingUpdateInfo.version);
           sweepOrphanDaemons();

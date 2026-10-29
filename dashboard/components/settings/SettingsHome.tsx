@@ -147,7 +147,7 @@ const SUB_DEFS: Record<string, SubDef[]> = {
   system: [
     {
       id: "system-updates",
-      blurb: "What version you are on, what is new, and the restart-to-install switch.",
+      blurb: "What version you are on, Stable or Fresh updates, and the restart-to-install switch.",
       Comp: page(() => import("@/components/settings/pages/UpdatesPage")),
     },
     {
@@ -175,6 +175,14 @@ const SUBSECTIONS: Record<string, Sub[]> = Object.fromEntries(
     subs.map((sub) => ({ ...sub, label: settingsRowLabel(sub.id, sub.label ?? sub.id) })),
   ]),
 );
+
+/** v1.405.0 review: settings whose ONE control on this page lives in one of
+ *  its sections (the schema row still serves chat and the config tools). A
+ *  second, plain control beside it would disagree with it until a reload. A
+ *  search for its words, or `?focus=<key>`, opens that section instead. */
+export const CONTROLLED_IN_SECTION: Record<string, string> = {
+  update_channel: "system-updates",
+};
 
 function readSection(): { section: string; focus: string } {
   try {
@@ -255,6 +263,11 @@ export function SettingsHome() {
     if (!focusKey || defs.length === 0) return;
     const def = defs.find((d) => d.key === focusKey);
     if (!def) return;
+    const sub = CONTROLLED_IN_SECTION[def.key];
+    if (sub) {
+      goTo(def.group, sub);
+      return;
+    }
     setActive(def.group);
     const t = window.setTimeout(() => {
       document.getElementById(`setting-${def.key}`)?.scrollIntoView?.({ block: "center" });
@@ -321,11 +334,21 @@ export function SettingsHome() {
   if (legacy) return <LegacySettingsForm />;
 
   const q = query.trim();
-  const shown = q ? defs.filter((d) => matches(d, q)) : defs.filter((d) => d.group === active);
+  // v1.405.0 review: a setting with its own control in a section is not drawn
+  // twice; a search that finds it opens that section.
+  const rowDefs = defs.filter((d) => !(d.key in CONTROLLED_IN_SECTION));
+  const shown = q ? rowDefs.filter((d) => matches(d, q)) : rowDefs.filter((d) => d.group === active);
+  const viaControlled = q
+    ? defs.filter((d) => d.key in CONTROLLED_IN_SECTION && matches(d, q)).map((d) => CONTROLLED_IN_SECTION[d.key])
+    : [];
   const subsShown = q
     ? Object.values(SUBSECTIONS)
         .flat()
-        .filter((s) => [s.label, s.blurb, s.formerly ?? ""].join(" ").toLowerCase().includes(q.toLowerCase()))
+        .filter(
+          (s) =>
+            viaControlled.includes(s.id) ||
+            [s.label, s.blurb, s.formerly ?? ""].join(" ").toLowerCase().includes(q.toLowerCase()),
+        )
     : SUBSECTIONS[active] ?? [];
   const sections = Array.from(new Set(shown.map((d) => (q ? groups?.find((g) => g.id === d.group)?.label ?? d.group : d.section))));
   const group = groups?.find((g) => g.id === active);

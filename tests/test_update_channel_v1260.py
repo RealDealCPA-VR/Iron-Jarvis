@@ -312,10 +312,15 @@ def test_every_check_goes_through_the_fallback_and_the_manifest_is_the_first_sou
     init = src[src.index("function initUpdater()"):src.index("function checkForUpdates()")]
     assert 'autoUpdater.on("error", (err) => onUpdaterError(' in init
     assert '_setUpdateSource(autoUpdater, "manifest")' in init
-    timer_site = src[src.index("function checkForUpdates()"):src.index("function checkForUpdates()") + 600]
-    assert "checkForUpdatesWithFallback(autoUpdater)" in timer_site
+    # v1.405.0 (moved on purpose): both sites go through ONE runUpdateCheck,
+    # which hands the fallback the channel read at that check
+    # (tests/test_stable_channel_v14050.py).
+    timer_site = src[src.index("function checkForUpdates()"):src.index("function checkForUpdates()") + 900]
+    assert "runUpdateCheck(autoUpdater)" in timer_site
     button_site = src[src.index('ipcMain.handle("update:check"'):src.index('ipcMain.handle("update:apply"')]
-    assert "await checkForUpdatesWithFallback(au)" in button_site
+    assert "await runUpdateCheck(au)" in button_site
+    run_check = _lift("async function runUpdateCheck", "async function runUpdateCheck")
+    assert "await checkForUpdatesWithFallback(au, channel)" in run_check
     # No call site may reach the updater directly any more.
     direct = re.findall(r"\b(?:au|autoUpdater)\.checkForUpdates\(\)", src)
     inside = _lift("async function checkForUpdatesWithFallback", "async function checkForUpdatesWithFallback")
