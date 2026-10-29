@@ -137,7 +137,9 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       // and saves to it. Shown only by a daemon whose schema knows the
       // setting (an older one has no /brain to read).
       id: "memory-brain-profile",
-      label: "Brain profile",
+      // v1.408.0: renamed from "Brain profile". Settings search still finds it
+      // by those words through the schema key (brain_profile, CONTROLLED_IN_SECTION).
+      label: "Memory profile",
       blurb: "Your main memory base, and how Jarvis searches it and saves new knowledge to it.",
       Comp: named(() => import("@/components/settings/BrainProfiles"), "BrainProfiles"),
       requiresKey: "brain_profile",

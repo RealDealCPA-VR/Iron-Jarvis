@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The project page's "Brain profile" choice (v1.406.0), beside its model:
+ * The project page's "Memory profile" choice (v1.406.0), beside its model:
  * follow the app's profile (""), none in this project ("off"), or one profile.
  * The page saves the choice through its own `savePatch({brain_profile})`.
  *
@@ -51,7 +51,7 @@ export function ProjectBrainSelect({
         className="flex shrink-0 items-center gap-1.5 text-[12px] text-zinc-500"
       >
         <Library size={12} className="shrink-0" aria-hidden="true" />
-        Brain profile
+        Memory profile
       </label>
       <select
         id="project-brain-profile"

@@ -32,6 +32,7 @@ import { useFocusRef } from "@/lib/useFocusRef";
 import type { LtmResult, LtmSource } from "@/lib/types";
 import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
 import { ImportFromAI } from "./ImportFromAI";
+import { McpBaseRoles } from "./McpBaseRoles";
 
 /** Catalogue icon name -> component (the catalogue stays free of JSX imports). */
 const BASE_ICON = {
@@ -1378,8 +1379,10 @@ export function LongTerm() {
                     {customSources.map((s) => (
                       <li
                         key={s.name}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5"
+                        data-testid={`ltm-source-row-${s.name}`}
+                        className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5"
                       >
+                        <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-semibold text-zinc-100">{s.name}</span>
@@ -1404,6 +1407,11 @@ export function LongTerm() {
                           label="Remove"
                           title={`Remove memory base "${s.name}"`}
                         />
+                        </div>
+                        {/* v1.408.0: an MCP memory base's tools are matched to
+                            the note work Jarvis does; it writes to the server
+                            only through what the user confirms here. */}
+                        {s.kind === "mcp" && <McpBaseRoles name={s.name} />}
                       </li>
                     ))}
                   </ul>

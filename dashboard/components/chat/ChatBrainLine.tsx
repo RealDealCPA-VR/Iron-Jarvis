@@ -2,7 +2,7 @@
 
 /**
  * One quiet line in the chat's project drawer (v1.406.0): which brain profile
- * this project's chats use ("Brain profile: Notion (this project)"), with a
+ * this project's chats use ("Memory profile: Notion (this project)"), with a
  * link to the project page where it is chosen. Said only when a profile
  * applies; an older Iron Jarvis (404) or none at all says nothing.
  */
@@ -33,7 +33,7 @@ export function ChatBrainLine({ projectId }: { projectId: string }) {
   if (!brainApplies(effective)) return null;
   return (
     <p data-testid="chat-brain-line" className="mt-1 text-[12px] leading-relaxed text-zinc-500">
-      Brain profile: {effectiveWords(effective)}.{" "}
+      Memory profile: {effectiveWords(effective)}.{" "}
       <Link
         href={`/projects/${encodeURIComponent(projectId)}`}
         className="underline decoration-zinc-700 underline-offset-2 hover:text-zinc-300"
