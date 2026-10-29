@@ -4190,7 +4190,24 @@ does not need a bump, stop and bump it.
   receipt lists ≤ 20. Pins: `tests/test_auto_approve{,_lanes}_v14060.py`
   (each always-ask class through the real stream lane + `registry.invoke`,
   23 mutations red), dashboard `permission-chip-plan-v1406.test.tsx`,
-  `turn-receipt-auto-v1406.test.tsx`.
+  `turn-receipt-auto-v1406.test.tsx`. REVIEW (each a real hole): the finish
+  check's reading of a command is for "did the tests pass", NOT security —
+  under cmd.exe `^"` and `'` are not quoting, so `pytest -q ^"& calc ^"`
+  passed test_command and RAN calc (proved through `shell=True`).
+  `is_test_command` now also needs both shell readings, none of
+  `_UNSAFE_TEST_CHARS` (^ % ! ' ` $ CR NUL) or a backslash escape, no env
+  assignment (`VAR=`/set/export), no `_UNSAFE_TEST_OPTS` (`--basetemp` —
+  pytest WIPES it —, `--script-shell`, `-exec`/`-toolexec`, `--package`,
+  `uv run --with/--from/--index…`) and no path leaving the folder; such a
+  command is JUDGED, never refused. ASK `standing` = `core/trust.
+  LOW_TRUST_DENY` (settings, secrets, schedules, webhooks, dynamic tools,
+  `delegate_remote`…), ASK `custom_command` (`custom:*` — the judge never
+  sees the command), and a READONLY tool that reaches outside (`web_fetch`
+  set to ask) is judged, not passed. `patch_paths` splits like
+  `parse_patch` (not `splitlines`). Known, by design: a test run executes
+  project code the agent may have just written (conftest.py, package.json,
+  a `pytest.bat` cmd.exe finds in the folder first) — Auto's test pass is
+  as strong as that. `tests/test_auto_approve_review_v14060.py`.
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

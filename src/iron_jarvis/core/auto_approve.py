@@ -95,6 +95,11 @@ ASK_RULES: dict[str, str] = {
     "destructive": "it may delete or overwrite something",
     "outside_folder": "it edits a file outside this folder",
     "edits_only": "Accept edits lets only file edits through",
+    # v1.406.0 part 2 review: the low-trust deny list's members (settings,
+    # secrets, schedules, webhooks, dynamic tools, a task handed to another
+    # machine...) — work that outlives the turn or carries what it read away.
+    "standing": "it sets up or changes something that outlives this chat, or hands work to another machine",
+    "custom_command": "it runs a saved command",
 }
 
 #: The model judgement's name on a receipt and an event.
@@ -248,6 +253,45 @@ def _ask_floor_tools() -> frozenset[str]:
         return frozenset({"config_change_protected"})
 
 
+def _standing_tools() -> frozenset[str]:
+    """v1.406.0 part 2 review: the low-trust deny list (``core/trust``) — the
+    project's own list of what outlives a run or hands what it read away
+    (settings, secrets, schedules, webhooks, dynamic tools, ``delegate_remote``
+    ...). Auto always asks about them; the session's bookkeeping (``notebook``)
+    is passed before this is read."""
+    try:
+        from .trust import LOW_TRUST_DENY
+
+        return frozenset(LOW_TRUST_DENY)
+    except Exception:  # noqa: BLE001 — fail closed on the clearest ones
+        return frozenset({"delegate_remote", "webhook_add", "webhook_update", "config_change",
+                          "secret_set", "tool_create", "app_connect"})
+
+
+def _custom_command(name: str, tool: Any) -> bool:
+    """A saved custom command tool (``custom:*``): the judge would see only
+    its arguments, never the command it runs."""
+    if str(name or "").startswith("custom:"):
+        return True
+    try:
+        from ..tools.dynamic import CommandTool
+
+        return isinstance(tool, CommandTool)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _reaches_out(name: str, tool: Any) -> bool:
+    try:
+        from ..providers import egress
+
+        if name in egress.INTERNET_TOOLS:
+            return True
+        return bool(tool is not None and egress.reaches_outside(tool))
+    except Exception:  # noqa: BLE001 — cannot tell ⇒ reaches out (judged)
+        return True
+
+
 def _acts_for_you(name: str, tool: Any) -> bool:
     """A tool that acts in the user's REAL browser, desktop, a live terminal,
     a running program or a persistent interpreter: the deny floor's members
@@ -290,19 +334,103 @@ def command_sends(command: str) -> bool:
     return bool(_CMD_SENDS.search(str(command or "")))
 
 
+#: v1.406.0 part 2 review: characters the finish check's reading (a reading
+#: for "did the tests pass", not a security one) cannot be trusted with. Under
+#: cmd.exe a caret before a quote (``^"``) and a single quote are NOT quoting,
+#: so ``pytest -q ^"& calc ^"`` ran ``calc`` (proved through ``shell=True``);
+#: ``%`` / ``!`` / ``$`` expand variables; a backtick substitutes; ``\r`` and
+#: NUL split lines. A command holding one is judged, never passed by rule.
+_UNSAFE_TEST_CHARS = frozenset("^%!'`$\r\x00")
+#: A backslash that escapes a quote, a blank or a metacharacter (bash reads
+#: ``\'`` as a literal quote, so ``& calc`` after it is live). A path's
+#: backslash (``tests\test_a.py``) is followed by a word character.
+_BACKSLASH_ESCAPE = re.compile(r"\\[^\w\\.\-]")
+#: Options that make a "test run" delete a folder (pytest WIPES its
+#: basetemp), run another program as its shell, or fetch and run a package.
+_UNSAFE_TEST_OPTS = frozenset({
+    "--basetemp", "--script-shell", "-exec", "--exec", "--package", "--from",
+    "--env-file", "--node-options", "--registry", "--find-links",
+    "-toolexec", "--toolexec", "--userconfig", "--globalconfig",
+})
+_UNSAFE_TEST_OPT_PREFIXES = ("--with", "--index", "--extra-index", "--default-index")
+#: Package runners where ``-p`` names a package to fetch and run.
+_PACKAGE_RUNNERS = frozenset({"npx", "pnpx", "bunx", "dlx"})
+_ASSIGN_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _leaves_folder(word: str) -> bool:
+    """Does ``word`` (or the value after its ``=``, or a ``kind:path`` value)
+    name a path outside the folder: absolute, a home path or one with ``..``?"""
+    cands = [word]
+    if "=" in word:
+        cands.append(word.split("=", 1)[1])
+    for c in list(cands):
+        head, sep, tail = c.partition(":")
+        if sep and len(head) > 1:  # `html:C:\x` (never a drive letter, `a::b`)
+            cands.append(tail)
+    for c in cands:
+        if re.match(r"^[A-Za-z]:", c) or c.startswith(("/", "\\", "~")):
+            return True
+        if ".." in re.split(r"[\\/]", c):
+            return True
+    return False
+
+
+def _plain_test_words(text: str) -> bool:
+    """Every word of every segment, under BOTH shell readings, free of an
+    environment assignment, an unsafe option and a path outside the folder."""
+    from ..harness.finish import _segments, _words
+
+    for posix in (False, True):
+        for seg in _segments(text, posix=posix):
+            words = _words(seg)
+            if not words:
+                continue
+            first = words[0].lower()
+            if _ASSIGN_WORD.match(words[0]) or first in ("set", "export", "setx", "env") or first.startswith("$env:"):
+                return False
+            lowered = [w.lower() for w in words]
+            runner = any(re.split(r"[\\/]", w)[-1].removesuffix(".cmd").removesuffix(".exe") in _PACKAGE_RUNNERS
+                         for w in lowered)
+            for w in lowered:
+                opt = w.split("=", 1)[0]
+                if opt in _UNSAFE_TEST_OPTS or opt.startswith(_UNSAFE_TEST_OPT_PREFIXES):
+                    return False
+                if runner and opt == "-p":
+                    return False
+            if any(_leaves_folder(w) for w in words):
+                return False
+    return True
+
+
 def is_test_command(command: str, *, posix: "bool | None" = None) -> bool:
     """A recognised TEST run (the finish check's own rule): a chain of setup
     and built-in test segments joined by ``&&``, no pipe in a test segment,
-    nothing a folder's docs named, and no output redirected into a file."""
+    nothing a folder's docs named, and no output redirected into a file.
+
+    v1.406.0 part 2 review: AND the same under both shell readings (a
+    bash-written command runs in cmd.exe when Git's bash is missing), no
+    character either shell reads as quoting, expansion or a line break
+    (:data:`_UNSAFE_TEST_CHARS`), no environment assignment, no option that
+    deletes or fetches (``--basetemp``, ``--script-shell``, ``--with``...) and
+    no path outside the folder (``cd ..``, ``C:\\``, ``--junitxml=..\\x``).
+    Such a command is not refused — it is JUDGED, like any other command."""
     text = str(command or "")
     if not text.strip() or "\n" in text.strip():
         return False
     if ">" in _REDIRECT_DUP.sub("", text):
         return False
+    if any(ch in _UNSAFE_TEST_CHARS for ch in text) or _BACKSLASH_ESCAPE.search(text):
+        return False
     try:
         from ..harness.finish import builtin_only, status_is_tests
 
-        return bool(status_is_tests(text, posix=posix)) and bool(builtin_only(text, posix=posix))
+        # Both readings whatever ``posix`` says: a bash-written command runs
+        # in cmd.exe when Git's bash is not found (``sandbox/shell_tool``).
+        for px in (False, True):
+            if not (status_is_tests(text, posix=px) and builtin_only(text, posix=px)):
+                return False
+        return _plain_test_words(text)
     except Exception:  # noqa: BLE001 — cannot tell ⇒ not a known test
         return False
 
@@ -331,7 +459,11 @@ def patch_paths(patch: Any) -> "tuple[list[str], bool]":
     to, and whether it deletes or moves a file away."""
     paths: list[str] = []
     removes = False
-    for line in str(patch or "").splitlines():
+    # Split exactly as ``harness/patch.parse_patch`` does (v1.406.0 part 2
+    # review): ``str.splitlines`` also breaks at U+2028, \x1c and friends,
+    # so a header path holding one read here as a shorter path than the
+    # patch tool would write.
+    for line in str(patch or "").replace("\r\n", "\n").split("\n"):
         s = line.strip()
         for head in ("*** Add File:", "*** Update File:", "*** Move to:"):
             if s.startswith(head):
@@ -462,11 +594,20 @@ def _classify(name, args, *, mode, tool, workspace, forced, low_trust, quarantin
         return Verdict(JUDGE, JUDGE_RULE)
     if _acts_for_you(name, tool):
         return Verdict(ASK, "acts_for_you")
+    if _custom_command(name, tool):
+        return Verdict(ASK, "custom_command")
+    if name in _standing_tools():
+        return Verdict(ASK, "standing")
     if tokens & _DESTRUCTIVE_NAME:
         return Verdict(ASK, "destructive")
     if tokens & _SENDS_NAME:
         return Verdict(ASK, "sends")
     if _read_only(tool):
+        # v1.406.0 part 2 review: a read-only tool that reaches past this PC
+        # (web_fetch: its URL can carry what the turn read) is judged, never
+        # passed — the user who set it to ask wanted to see where it goes.
+        if _reaches_out(name, tool):
+            return Verdict(JUDGE, JUDGE_RULE)
         return Verdict(PASS, "read_only")
     if any(_ARG_DESTRUCTIVE.search(v) for v in _values(args)):
         return Verdict(ASK, "destructive")
