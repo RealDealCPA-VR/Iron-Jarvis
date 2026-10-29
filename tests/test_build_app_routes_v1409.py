@@ -613,3 +613,24 @@ async def test_terminal_rows_say_can_open_in_code_only_when_the_cli_exited(app, 
         assert rows["a"].get("can_open_in_code") is True
         for k in ("b", "c", "d"):
             assert "can_open_in_code" not in rows[k], k
+
+
+async def test_the_service_never_sends_a_session_allow_the_harness_did_not_offer(app, work):
+    """The service's own guard (the Claude driver refuses too): a driver that
+    would send anything is never handed an un-offered session-wide allow."""
+    row = store.create(app.state.platform.engine, harness="codex", folder=str(work))
+    svc = S.service_for(app.state.platform)
+    live = svc._live(row)
+    told = []
+
+    class _Driver:
+        async def answer(self, ask, decision, message, answers):
+            told.append(decision)
+            return decision
+
+    live.driver = _Driver()
+    live.asks["ask_x"] = S.Ask("ask_x", "approval", "shell", native=1, can_session=False)
+    with pytest.raises(S.Refused) as refused:
+        await svc.answer(row.id, "ask_x", "allow_session")
+    assert refused.value.status == 400 and told == []
+    assert (await svc.answer(row.id, "ask_x", "allow"))["decision"] == "allow" and told == ["allow"]
