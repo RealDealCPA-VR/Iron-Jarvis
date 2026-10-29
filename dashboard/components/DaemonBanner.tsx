@@ -40,6 +40,18 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
  *  stops saying "restarting" within this bound. */
 export const SHELL_POLL_MS = 3000;
 
+/** v1.406.0 (part 6 follow-up): does the desktop shell already KNOW the
+ *  service is down, so a "start" is really an outage? It stopped restarting
+ *  (capped / stalled), the install is damaged, or it is restarting after a
+ *  CRASH (`restarts` counts unexpected exits only; main.js resets it on a
+ *  boot, a tray Restart and the window's Restart). `restarting` alone is not
+ *  enough: main.js also reports it for a normal first spawn still inside its
+ *  start-up allowance. No shell (a browser tab) or no answer = not known. */
+export function shellKnowsDown(d: ShellDaemonState | null): boolean {
+  if (!d) return false;
+  return d.damaged || d.capped || d.stalled || (d.restarting && d.restarts > 0);
+}
+
 /** Said when the window's Restart was refused or found nothing to restart.
  *  main.js changes nothing on a refusal, so the tray item it names is still
  *  there; quitting and reopening is the way back that always exists. */
@@ -161,9 +173,17 @@ export function DaemonBanner() {
         : requestError
           ? "error"
           : null;
+  // v1.406.0 (part 6 follow-up): a START is calm ("Starting Iron Jarvis…")
+  // — but not over a service the DESKTOP already knows is down. While
+  // starting, the banner asks the shell (below), and a crash it is restarting
+  // from, a cap, a stall or a damaged install wins at once: the page is a
+  // pop-out or a reloaded window over a daemon that died, not a fresh start.
+  const startingNow = checking && starting === true;
+  const shellBad = startingNow && desktop && shellKnowsDown(daemonState);
+  const problem = shellBad ? "offline" : state;
   useEffect(() => {
-    if (state !== dismissed) setDismissed(null);
-  }, [state, dismissed]);
+    if (problem !== dismissed) setDismissed(null);
+  }, [problem, dismissed]);
 
   useEffect(() => {
     if (online) setRetrying(false);
@@ -177,7 +197,7 @@ export function DaemonBanner() {
   const wasOfflineRef = useRef(false);
   const [back, setBack] = useState(false);
   useEffect(() => {
-    if (state === "offline") {
+    if (problem === "offline") {
       wasOfflineRef.current = true;
       setBack(false);
       return;
@@ -186,7 +206,7 @@ export function DaemonBanner() {
       wasOfflineRef.current = false;
       setBack(true);
     }
-  }, [state, online, checking]);
+  }, [problem, online, checking]);
   useEffect(() => {
     if (!back) return;
     const t = window.setTimeout(() => setBack(false), BACK_LINGER_MS);
@@ -195,14 +215,16 @@ export function DaemonBanner() {
 
   // Gate on the dismissed-state too, or the X buttons do nothing (the useEffect
   // above re-shows the banner when a DIFFERENT problem appears by clearing dismiss).
-  const showOffline = state === "offline" && dismissed !== "offline";
+  const showOffline = problem === "offline" && dismissed !== "offline";
   const showAuth = state === "auth" && dismissed !== "auth";
   const showError = state === "error" && dismissed !== "error";
 
   // Read the shell only while the desktop banner is up — never while online.
   // A browser tab, an older shell with no getState, or a refused read (null)
   // all land on "unknown": the plain hint, never a button that might not work.
-  const watchShell = showOffline && desktop;
+  // v1.406.0 (part 6 follow-up): and while STARTING, so a crash the desktop
+  // already knows about replaces the calm line at once.
+  const watchShell = (showOffline || startingNow) && desktop;
   const readShell = useCallback(() => {
     const seq = ++readSeq.current;
     const getState = shellBridge()?.getState;
@@ -290,7 +312,7 @@ export function DaemonBanner() {
       {/* v1.354.0 (G31): one quiet line for a few seconds when Iron Jarvis
           answers again after an outage — no box, the theme's success tone on
           the icon only. A screen reader hears it (role=status, polite). */}
-      {back && !state && (
+      {back && !problem && (
         <m.div
           key="daemon-back"
           role="status"
@@ -313,7 +335,7 @@ export function DaemonBanner() {
           answered this page once (and only while the page is young —
           lib/daemon STARTING_GRACE_MS) the banner says the splash's own calm
           words, no warn tone, no Retry, nothing to dismiss. */}
-      {checking && starting && (
+      {startingNow && !shellBad && (
         <m.div
           key="daemon-starting"
           role="status"

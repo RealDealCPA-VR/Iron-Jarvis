@@ -127,6 +127,16 @@ const BUILD_FOLDER_KEY = "ij.build.folder";
  *  list while the daemon is still reopening a pane after a restart. */
 const RESTORING_REREAD_MS = 3000;
 const RESTORING_REREADS = 20;
+/** v1.406.0 (part 6 follow-up): after those first reads, keep looking, more
+ *  slowly, for as long as a pane is still reopening — and only while this
+ *  window is visible — so a late pane appears without a reload. */
+const RESTORING_SLOW_REREAD_MS = 15_000;
+
+/** "Reopening 2 terminals…" — said where Build would otherwise say it has
+ *  none, while the daemon is still reopening the user's panes. */
+function reopeningWords(n: number): string {
+  return `Reopening ${n} ${n === 1 ? "terminal" : "terminals"}…`;
+}
 
 /** The Build side panel's two tabs (v1.329.0: plain text tabs). */
 const BUILD_PANEL_TABS = [
@@ -147,6 +157,9 @@ function focusLinkInAddress(): boolean {
 
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
+  // v1.406.0 (part 6 follow-up): panes the daemon is still reopening after a
+  // restart (`GET /terminals` → `restoring`), kept current by the re-reads.
+  const [restoringIds, setRestoringIds] = useState<string[]>([]);
 
   // ---- what each pane's agent is doing (v1.217.0) --------------------------
   // A SMALL, SEPARATE poll. The terminal list is loaded once and then mutated
@@ -688,8 +701,15 @@ export default function TerminalsPage() {
   const activeId = useMemo(() => {
     const live = terminals.filter((t) => t.alive);
     if (focusedId && live.some((t) => t.id === focusedId)) return focusedId;
+    // v1.406.0 (part 6 follow-up): a `?focus=` link to a pane the daemon is
+    // still reopening WAITS for that pane (the stage says it is reopening)
+    // instead of showing the first one; once it is no longer restoring the
+    // usual fallback applies.
+    if (focusedId && restoringIds.includes(focusedId)) return null;
     return live[0]?.id ?? null;
-  }, [terminals, focusedId]);
+  }, [terminals, focusedId, restoringIds]);
+  const waitingForFocus =
+    !!focusedId && activeId === null && restoringIds.includes(focusedId);
 
   // v1.337.2: where "New terminal" opens — the folder picked in the tree,
   // else the pane in front's folder, else the folder this window last worked
@@ -799,6 +819,7 @@ export default function TerminalsPage() {
         // grew for the life of the install. Only after a SUCCESSFUL answer.
         prunePaneStorage(keep);
         setTerminals(alive);
+        setRestoringIds(restoring);
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands
         // right on the pane they came to watch. Read window.location to avoid a
@@ -812,18 +833,27 @@ export default function TerminalsPage() {
         const target = focusId ? alive.find((t) => t.id === focusId) : undefined;
         if (target) {
           setFocusedId(target.id);
+        } else if (focusId && restoring.includes(focusId)) {
+          // v1.406.0 (part 6 follow-up): the linked pane is still reopening —
+          // keep the link's target; `activeId` waits for it.
+          setFocusedId(focusId);
         } else {
           setFocusedId(alive[0]?.id ?? null);
         }
         setOffline(false);
         setLoading(false); // the rail is drawn; a late pane below only joins it
         // v1.406.0 (part 6): a pane still being reopened joins the rail when
-        // its shell starts. Re-read a few times, adding only panes this page
-        // does not hold (local adds and closes are never overwritten).
+        // its shell starts. Re-read, adding only panes this page does not
+        // hold (local adds and closes are never overwritten): every 3 s for
+        // the first minute, then every 15 s for as long as one is still
+        // reopening, skipping the read while the window is hidden.
         let waitingFor = restoring;
-        for (let i = 0; waitingFor.length > 0 && i < RESTORING_REREADS; i += 1) {
-          await new Promise((r) => window.setTimeout(r, RESTORING_REREAD_MS));
+        for (let i = 0; waitingFor.length > 0; i += 1) {
+          await new Promise((r) =>
+            window.setTimeout(r, i < RESTORING_REREADS ? RESTORING_REREAD_MS : RESTORING_SLOW_REREAD_MS),
+          );
           if (cancelled) return;
+          if (typeof document !== "undefined" && document.visibilityState === "hidden") continue;
           let again: { terminals: TerminalInfo[]; restoring?: string[] };
           try {
             again = await get<{ terminals: TerminalInfo[]; restoring?: string[] }>("/terminals");
@@ -841,6 +871,7 @@ export default function TerminalsPage() {
           waitingFor = Array.isArray(again.restoring)
             ? again.restoring.filter((id): id is string => typeof id === "string")
             : [];
+          setRestoringIds(waitingFor);
         }
       } catch (e) {
         if (cancelled) return;
@@ -1169,6 +1200,7 @@ export default function TerminalsPage() {
                 onRename={renamePane}
                 onNew={() => addTerminal(newFolder)}
                 busy={busy}
+                reopening={restoringIds.length}
               />
             </div>
           )}
@@ -1193,7 +1225,22 @@ export default function TerminalsPage() {
                     bg-black — black is the one neutral the themes do not remap,
                     so on Daylight it was a grey slab. The panes' own terminal
                     colours are untouched. */}
+                {/* v1.406.0 (part 6 follow-up): the panes are still being
+                    reopened after a restart (all of them, or the one a
+                    `?focus=` link asked for) — one quiet line, never the
+                    "No terminals yet" door. */}
+                {(waitingForFocus || (terminals.length === 0 && restoringIds.length > 0)) && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    data-testid="build-reopening"
+                    className="absolute inset-0 z-[3] grid place-items-center px-4 text-sm text-zinc-400"
+                  >
+                    {reopeningWords(waitingForFocus ? 1 : restoringIds.length)}
+                  </div>
+                )}
                 {terminals.length === 0 ? (
+                  restoringIds.length > 0 ? null : (
                   // v1.314.0 (UX wave 2): the biggest thing on a fresh Build
                   // page was this stage holding one grey line and no button.
                   // It now teaches and offers the SAME door as the header —
@@ -1210,6 +1257,7 @@ export default function TerminalsPage() {
                         : "A terminal is a command line on this PC. Open one here, or pick a project folder first to start in it."}
                     </Empty>
                   </div>
+                  )
                 ) : (
                   terminals.map((t) => {
                     // A pane with no cwd can't ground a chat — force terminal

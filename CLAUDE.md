@@ -825,6 +825,21 @@ does not need a bump, stop and bump it.
   `snapshot_if_changed` answers False). Pin:
   `test_a_late_pane_that_opens_just_before_shutdown_cannot_wipe_the_shutdown_snapshot`;
   Build's `retainPaneHosts` keeping a restoring id is pinned too.
+  FOLLOW-UPS: (1) while starting, `DaemonBanner` ASKS the desktop shell
+  (`watchShell` includes `startingNow`) and `shellKnowsDown` wins over the
+  calm line at once: capped, stalled, damaged, or `restarting && restarts > 0`
+  — NOT `restarting` alone, which main.js `serviceState` also reports for a
+  NORMAL first spawn inside its STARTUP_TIMEOUT_MS allowance (`restarts`
+  counts unexpected exits only; boot, the tray Restart and the window's
+  Restart reset it). (2) every pane still restoring: the Build stage and the
+  rail (`PaneRail reopening=`) say "Reopening N terminals…", never the empty
+  "No terminals yet" door; a `?focus=` link to a restoring pane keeps that
+  target and `activeId` answers null (the stage says "Reopening 1
+  terminal…") until it opens or stops restoring. (3) the re-reads go on past
+  the first minute every `RESTORING_SLOW_REREAD_MS` (15 s) while `restoring`
+  is non-empty, skipped while the window is hidden. Pins: the same two
+  dashboard files (11 more mutations red; the empty-door mock now renders its
+  title, with a control).
 - **A backup that never leaves the disk it protects is one failure from
   nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
   `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND

@@ -110,6 +110,89 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
+});
+
+/** The desktop shell's daemon state (main.js `serviceState`). */
+function shellWith(daemon: Record<string, unknown>) {
+  (window as unknown as { ironjarvis?: unknown }).ironjarvis = {
+    isDesktop: true,
+    shell: {
+      getState: () => ({
+        platform: "win32",
+        services: {
+          daemon: {
+            capped: false,
+            restarts: 0,
+            lastExit: null,
+            damaged: false,
+            restarting: false,
+            cappedCrashes: null,
+            cappedWindowMin: null,
+            stalled: false,
+            ...daemon,
+          },
+        },
+      }),
+    },
+  };
+}
+
+describe("the desktop's known-bad state wins over Starting… (v1.406.0 part 6 follow-up)", () => {
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ["capped", { capped: true, restarts: 10, lastExit: 1, cappedCrashes: 10, cappedWindowMin: 15 }, "capped"],
+    ["stalled", { stalled: true }, "stalled"],
+    ["damaged", { damaged: true }, "damaged"],
+    ["restarting after a crash", { restarting: true, restarts: 2, lastExit: 1 }, "restarting"],
+  ];
+  for (const [label, daemon, view] of cases) {
+    it(`${label}: the offline banner shows at once, not the calm line`, async () => {
+      shellWith(daemon);
+      renderApp();
+      await advance(50);
+      expect(screen.queryByTestId("daemon-banner-starting")).toBeNull();
+      const banner = screen.getByTestId("daemon-banner-offline");
+      expect(banner.dataset.shellState).toBe(view);
+    });
+  }
+
+  it("a normal first spawn the shell calls 'restarting' (no crash yet) stays calm", async () => {
+    shellWith({ restarting: true, restarts: 0 });
+    renderApp();
+    await advance(50);
+    expect(screen.getByTestId("daemon-banner-starting")).toBeTruthy();
+    expect(screen.queryByTestId("daemon-banner-offline")).toBeNull();
+  });
+
+  it("a desktop shell that is merely waiting stays calm, and the line goes when Iron Jarvis answers", async () => {
+    shellWith({});
+    renderApp();
+    await advance(50);
+    expect(screen.getByTestId("daemon-banner-starting")).toBeTruthy();
+    net.down = false;
+    await advance(1_500);
+    expect(screen.queryByTestId("daemon-banner-starting")).toBeNull();
+    expect(screen.queryByTestId("daemon-banner-offline")).toBeNull();
+  });
+
+  it("a crash the shell reports DURING the start replaces the calm line within one shell read", async () => {
+    let crashed = false;
+    (window as unknown as { ironjarvis?: unknown }).ironjarvis = {
+      isDesktop: true,
+      shell: {
+        getState: () => ({
+          services: { daemon: { capped: crashed, restarts: crashed ? 10 : 0, restarting: false, damaged: false, stalled: false } },
+        }),
+      },
+    };
+    renderApp();
+    await advance(50);
+    expect(screen.getByTestId("daemon-banner-starting")).toBeTruthy();
+    crashed = true;
+    await advance(3_100);
+    expect(screen.queryByTestId("daemon-banner-starting")).toBeNull();
+    expect(screen.getByTestId("daemon-banner-offline").dataset.shellState).toBe("capped");
+  });
 });
 
 describe("Iron Jarvis starting is said calmly (v1.406.0 part 6)", () => {
