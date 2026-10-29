@@ -255,13 +255,13 @@ describe("the bell", () => {
       ev("build.resumed", { thread_id: "bs_1", title: "Add a cart", reason: "restart", resumed_from: "t1" }, "build:bs_1"),
     )!;
     expect(item.title).toBe("A coding session carried on after Iron Jarvis restarted");
-    expect(item.href).toBe("/terminals?session=bs_1");
+    expect(item.href).toBe("/chat?view=code&session=bs_1");
     expect(item.body).toBe("Add a cart");
     expect(item.attention).toBeUndefined();
   });
 
   it("control: an account's Resume when ready keeps its own words", () => {
     const item = toActivity(ev("build.resumed", { account_name: "Work", title: "Fix the nav" }, "build:bs_1"))!;
-    expect(item.title).toBe("A Build session resumed on the Work account");
+    expect(item.title).toBe("A coding session resumed on the Work account");
   });
 });

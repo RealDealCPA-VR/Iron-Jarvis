@@ -1,18 +1,21 @@
 "use client";
 
-// Build (v1.369.0): two views behind one header switch.
-//  - TERMINALS: the rail of live xterm.js terminals (every terminal with its
-//    state, one in focus) and the folder / files panel on the right.
-//  - IJ HARNESS: coding sessions (components/harness/IjHarnessView) — sessions
-//    grouped by folder, the conversation in the middle, its plan / terminal /
-//    changes / browser / files beside it.
-// The free-form canvas is gone (IJ harness plan Phase 6); a window that had it
-// saved opens the IJ harness view. xterm is dynamically imported (no SSR).
+// Build — THE TERMINALS (v1.406.0 part 1, the user's decision 2026-10-29:
+// "the build will only be for terminal sessions using other harnesses"): the
+// rail of live xterm.js terminals (every terminal with its state, one in
+// focus) and the folder / files panel on the right.
+// The coding sessions (what was Build's second view, v1.369.0) moved to the
+// chat page's Chat | Code switch (components/chat/ChatCodeSurface). There is
+// no view switch here any more: a saved `ij.build.shape` of "harness" or
+// "canvas" opens the terminals, and an old link to a session or to Last
+// night (`/terminals?session=<id>`, `?night=<date>`) is sent on to
+// `/chat?view=code&…` (lib/buildLinks codeHrefForOldBuildSearch). A link to
+// a terminal (`?focus=<id>`) stays here. xterm is dynamically imported (no
+// SSR).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
-  Bot,
   Loader2,
   MessageSquare,
   PanelLeftOpen,
@@ -56,11 +59,8 @@ import {
   type PaneActivity,
   type PaneState,
 } from "@/components/terminal/PaneState";
-import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
-import { viewFromSaved, type BuildView } from "@/lib/buildSessions";
-import { BUILD_NIGHT_EVENT, BUILD_SESSION_EVENT, BUILD_TERMINAL_EVENT, sessionOfEvent } from "@/lib/buildLinks";
-import { CODING_VIEW_NAME } from "@/lib/buildWords";
-import { cachedShape, keepShape } from "@/lib/turnCache";
+import { BUILD_TERMINAL_EVENT, addressMove, codeHrefForOldBuildSearch, sessionOfEvent } from "@/lib/buildLinks";
+import { CODING_SESSION, CODING_SESSIONS_LIST, CODING_SESSIONS_PLACE } from "@/lib/buildWords";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -91,19 +91,6 @@ const PaneChat = dynamic(
   },
 );
 
-// The IJ harness view (v1.369.0): browser only, loaded when it is first shown.
-const IjHarnessView = dynamic(
-  () => import("@/components/harness/IjHarnessView").then((m) => m.IjHarnessView),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="grid h-48 place-items-center text-zinc-600">
-        <Loader2 size={18} className="animate-spin" />
-      </div>
-    ),
-  },
-);
-
 // What a pane is SHOWING: the live terminal (default) or the pane chat.
 // Persisted per pane id under `ij.pane.view.<paneId>` — only ever written on
 // an explicit toggle, so existing users' storage is byte-for-byte untouched.
@@ -111,10 +98,6 @@ type PaneView = "terminal" | "chat";
 
 const paneViewKey = (id: string) => `${PANE_VIEW_PREFIX}${id}`;
 
-/** Which view Build shows: "rail" (Terminals) or "harness" (IJ harness).
- *  v1.369.0: a saved "canvas" (the retired free-form layout) opens the IJ
- *  harness view (lib/buildSessions `viewFromSaved`). */
-const SHAPE_KEY = "ij.build.shape";
 
 
 /** The folder this window last worked in (v1.337.2): the last folder picked
@@ -129,17 +112,6 @@ const BUILD_PANEL_TABS = [
   { value: "files", label: "Files" },
 ] as const;
 
-/** True when this page was opened by a link to one terminal
- *  (`/terminals?focus=<id>`). Read once, at the first render; false on the
- *  server (no window). */
-function focusLinkInAddress(): boolean {
-  try {
-    return typeof window !== "undefined" && !!new URLSearchParams(window.location.search).get("focus");
-  } catch {
-    return false;
-  }
-}
-
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
 
@@ -153,121 +125,25 @@ export default function TerminalsPage() {
     "/terminals/activity",
     2500,
   );
-  // WHICH VIEW (v1.218.0 the rail; v1.369.0 the IJ harness). "rail" lists
-  // every terminal with its live state and ONE in focus; "harness" is the
-  // coding sessions. The free-form canvas was retired in v1.369.0 (the IJ
-  // harness took its place in the switch), so a saved "canvas" opens the
-  // harness. A link to a session (`?session=<id>`) opens the harness on it; a
-  // link to a terminal (`?focus=<id>`) opens the rail on it.
-  // v1.384.0: the view this WINDOW last showed (lib/turnCache) — a return to
-  // Build opens on it at its first render, instead of the rail and then
-  // (once the saved choice is read) the harness: "my work jumped" on every
-  // return. Module state, so a real reload starts from the default, exactly
-  // as the server renders it.
-  // v1.388.1: a link to a terminal (`?focus=<id>`) opens the Terminals view
-  // from the FIRST frame, whatever this window last showed — "Open the Build
-  // terminal" after Sign in landed on the IJ harness and hid the pane.
-  const [shape, setShape] = useState<BuildView>(() =>
-    focusLinkInAddress() ? "rail" : (cachedShape<BuildView>() ?? "rail"),
-  );
+  // v1.406.0 (part 1): Build is the terminals only. An OLD link to a
+  // coding session or to Last night (`/terminals?session=<id>`,
+  // `?night=<date>` — saved before the move, in a toast, in a bookmark) is
+  // sent on to the chat page's Code view on that session
+  // (lib/buildLinks codeHrefForOldBuildSearch), replacing this address so
+  // Back does not bounce. Nothing else here reads those parameters. (A plain
+  // location replace, not the router: this page never needed the router,
+  // and a rare old link may cost one full load.)
+  const [movedTo, setMovedTo] = useState<string | null>(null);
   useEffect(() => {
-    keepShape(shape);
-  }, [shape]);
-  const [linkSession, setLinkSession] = useState<string | null>(null);
-  // v1.399.0 (night shift N2): a link to Last night (`?night=<date>`, the
-  // bell's row and the tray notice) opens Coding sessions on that view. The
-  // count makes a second press of the same link open it again.
-  const [linkNight, setLinkNight] = useState<{ night: string; n: number } | null>(null);
-  useEffect(() => {
-    let params: URLSearchParams | null = null;
+    let to: string | null = null;
     try {
-      params = new URLSearchParams(window.location.search);
+      to = codeHrefForOldBuildSearch(window.location.search);
     } catch {
-      params = null;
+      to = null;
     }
-    const session = params?.get("session") ?? null;
-    if (session) {
-      setLinkSession(session);
-      setShape("harness");
-      return;
-    }
-    const night = params?.get("night") ?? null;
-    if (night) {
-      setLinkNight({ night, n: 1 });
-      setShape("harness");
-      return;
-    }
-    if (params?.get("focus")) {
-      setShape("rail"); // a terminal link: the rail, never the cached view
-      return;
-    }
-    try {
-      setShape(viewFromSaved(window.localStorage.getItem(SHAPE_KEY)));
-    } catch {
-      /* private mode / blocked storage — the default stands */
-    }
-  }, []);
-  const chooseShape = useCallback((next: BuildView) => {
-    setShape(next);
-    try {
-      window.localStorage.setItem(SHAPE_KEY, next);
-    } catch {
-      /* the choice still applies to this session */
-    }
-    if (next === "rail") {
-      // The session link belongs to the harness view; the rail's address is
-      // plain Build (the harness puts the session back when it opens). The
-      // link the page was opened with is spent too: coming back to the
-      // harness opens the session this window had open, not that old link
-      // (v1.369.0 review).
-      setLinkSession(null);
-      setLinkNight(null);
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("session");
-        url.searchParams.delete("night");
-        window.history.replaceState(window.history.state, "", url.toString());
-      } catch {
-        /* no history API */
-      }
-    }
-  }, []);
-
-  // A link to a session pressed while Build is already open (the bell): the
-  // same-page navigation keeps this page's state, so the session is
-  // announced instead (lib/buildLinks BUILD_SESSION_EVENT) — open the IJ
-  // harness on it (v1.369.0 review). A harness view already showing opens
-  // it itself.
-  useEffect(() => {
-    const onLink = (e: Event) => {
-      const id = sessionOfEvent(e);
-      if (!id) return;
-      setLinkSession(id);
-      setShape("harness");
-      try {
-        window.localStorage.setItem(SHAPE_KEY, "harness");
-      } catch {
-        /* the view still opens */
-      }
-    };
-    window.addEventListener(BUILD_SESSION_EVENT, onLink);
-    return () => window.removeEventListener(BUILD_SESSION_EVENT, onLink);
-  }, []);
-  // v1.399.0: the same for a link to Last night pressed while Build is open.
-  useEffect(() => {
-    const onNight = (e: Event) => {
-      const night = sessionOfEvent(e);
-      if (!night) return;
-      setLinkNight((cur) => ({ night, n: (cur?.n ?? 0) + 1 }));
-      setShape("harness");
-      try {
-        window.localStorage.setItem(SHAPE_KEY, "harness");
-      } catch {
-        /* the view still opens */
-      }
-    };
-    window.addEventListener(BUILD_NIGHT_EVENT, onNight);
-    return () => window.removeEventListener(BUILD_NIGHT_EVENT, onNight);
+    if (!to) return;
+    setMovedTo(to);
+    addressMove.replace(to);
   }, []);
 
   // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of
@@ -731,7 +607,6 @@ export default function TerminalsPage() {
     const onLink = (e: Event) => {
       const id = sessionOfEvent(e);
       if (!id) return;
-      setShape("rail");
       get<{ terminals: TerminalInfo[] }>("/terminals")
         .then((res) => {
           if (!alive) return;
@@ -749,16 +624,6 @@ export default function TerminalsPage() {
       window.removeEventListener(BUILD_TERMINAL_EVENT, onLink);
     };
   }, []);
-
-  /** From the IJ harness view's Terminals group: open that terminal in the
-   *  Terminals view, through the same focus the rail uses. */
-  const openInTerminals = useCallback(
-    (id: string) => {
-      bringToFront(id);
-      chooseShape("rail");
-    },
-    [bringToFront, chooseShape],
-  );
 
   // Re-attach to existing sessions + load the shell list on mount.
   useEffect(() => {
@@ -955,80 +820,27 @@ export default function TerminalsPage() {
     );
   };
 
-  /** What a Build session's terminal tab borrows: the live list, the page's
-   *  own add path, and the body above. */
-  const sessionTerminal: SessionTerminalApi = {
-    find: (id) => terminals.find((t) => t.id === id && t.alive !== false) ?? null,
-    open: (cwd) => addTerminal(cwd),
-    // The pane's × asks first in the tab itself (HarnessPanes), like the
-    // rail's own close dialog — never a native prompt.
-    render: (info, { parked, onClose }) =>
-      renderTerminalPane(info, { focused: !parked, parked, reserveViewToggle: false, onClose }),
-    close: (id) => closeTerminal(id),
-  };
+  if (movedTo) {
+    // An old session link on its way to Chat › Code: say so for the one
+    // frame it takes, never the terminals it did not ask for.
+    return (
+      <PageShell>
+        <p data-testid="build-moved" className="text-[13px] text-zinc-500">
+          Opening the {CODING_SESSION} in {CODING_SESSIONS_PLACE}…
+        </p>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell>
       <Reveal>
         <PageHeader
           title="Build"
-          // v1.369.0: the two views the switch beside it names.
-          subtitle={
-            shape === "harness"
-              ? `${CODING_VIEW_NAME} work in a folder and keep going when you leave. Start one, or open a terminal from the list.`
-              : "Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it."
-          }
-          // v1.370.2: the switch sits in the header's exact MIDDLE and does not
-          // move between the two views ("centered and fixed in both modes");
-          // the Terminals view's own controls take the right column.
-          center={
-            // THE SWITCH (v1.369.0): Terminals | Coding sessions (harness
-            // gaps, fix 4: the view's everyday name, lib/buildWords — the
-            // value "harness" and the test id stay). Plain text tabs like the
-            // side panel's, the open one in ink.
-            <div
-              role="tablist"
-              aria-label="Build view"
-              data-testid="build-view-switch"
-              className="flex items-center gap-1 rounded-lg bg-white/[0.04] p-0.5"
-            >
-              {(
-                [
-                  { value: "rail", label: "Terminals", icon: <SquareTerminal size={13} aria-hidden /> },
-                  { value: "harness", label: CODING_VIEW_NAME, icon: <Bot size={13} aria-hidden /> },
-                ] as const
-              ).map((v) => {
-                const selected = shape === v.value;
-                return (
-                  <button
-                    key={v.value}
-                    type="button"
-                    role="tab"
-                    aria-selected={selected}
-                    tabIndex={selected ? 0 : -1}
-                    data-testid={v.value === "rail" ? "build-view-terminals" : "build-view-harness"}
-                    onClick={() => chooseShape(v.value)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-                      e.preventDefault();
-                      const next = v.value === "rail" ? "harness" : "rail";
-                      chooseShape(next);
-                      const sel = next === "rail" ? "build-view-terminals" : "build-view-harness";
-                      document.querySelector<HTMLButtonElement>(`[data-testid="${sel}"]`)?.focus();
-                    }}
-                    className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-                      selected ? "bg-white/[0.08] font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-200"
-                    }`}
-                  >
-                    {v.icon}
-                    {v.label}
-                  </button>
-                );
-              })}
-            </div>
-          }
+          // v1.406.0 (part 1): the terminals only; the coding sessions are
+          // behind the chat page's Chat | Code switch.
+          subtitle={`Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. ${CODING_SESSIONS_LIST}, where Jarvis writes the code, are in ${CODING_SESSIONS_PLACE}.`}
           actions={
-            shape === "rail" ? (
                 <>
                   {/* v1.329.0 (calm chat wave 8): a quiet sentence-case label and a
                       borderless select that fills on hover, like the rail's own
@@ -1073,7 +885,6 @@ export default function TerminalsPage() {
                     New terminal
                   </button>
                 </>
-              ) : null
           }
         />
       </Reveal>
@@ -1097,18 +908,6 @@ export default function TerminalsPage() {
         </Reveal>
       )}
 
-      {shape === "harness" ? (
-        <Reveal>
-          <IjHarnessView
-            initialSession={linkSession}
-            nightLink={linkNight}
-            terminals={railPanes}
-            onOpenTerminal={openInTerminals}
-            defaultFolder={newFolder}
-            terminal={sessionTerminal}
-          />
-        </Reveal>
-      ) : (
       <Reveal>
         <div className="flex flex-col gap-5 lg:flex-row">
           {/* THE RAIL (v1.218.0) — Build's spine. Every pane in one column with
@@ -1641,7 +1440,6 @@ export default function TerminalsPage() {
           </div>
         </div>
       </Reveal>
-      )}
     </PageShell>
   );
 }

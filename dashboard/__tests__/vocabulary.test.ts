@@ -381,7 +381,10 @@ describe("the canon is a scan, not a list of strings (v1.357.0)", () => {
     expect(canon).toMatch(/\*\*task\*\*; one attempt at it is a \*\*run\*\*/);
     expect(canon).toContain("| **terminal** | pane |");
     expect(canon).toContain("| **Iron Jarvis** | daemon |");
-    // Harness gaps (fix 4): Build's coding-agent view.
-    expect(canon).toContain("| **Coding sessions**; one of them is a **coding session** | IJ harness, harness |");
+    // Harness gaps (fix 4): the coding-agent view; v1.406.0 (part 1, moved on
+    // purpose): it is the chat page's Code view, and "Build session" retired.
+    expect(canon).toContain(
+      "| the view is **Code**; its list is **Coding sessions**; one of them is a **coding session** | IJ harness, harness, Build session |",
+    );
   });
 });

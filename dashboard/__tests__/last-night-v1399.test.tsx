@@ -322,8 +322,11 @@ describe("Last night: where it opens", () => {
     await screen.findByTestId("last-night-task-night_fail");
   });
 
-  it("the bell's row opens Last night on that night, and a press on Build announces it", () => {
-    expect(lastNightHref("2026-10-26")).toBe("/terminals?night=2026-10-26");
+  // v1.406.0 (part 1, moved on purpose): Last night is in Chat › Code.
+  it("the bell's row opens Last night on that night, and a press on the chat page announces it", () => {
+    expect(lastNightHref("2026-10-26")).toBe("/chat?view=code&night=2026-10-26");
+    expect(nightOfHref("/chat?view=code&night=2026-10-26")).toBe("2026-10-26");
+    // An old link is still read (the Build page sends it on).
     expect(nightOfHref("/terminals?night=2026-10-26")).toBe("2026-10-26");
     expect(nightOfHref("/terminals?session=x")).toBeNull();
     const item = toActivity({
@@ -331,15 +334,15 @@ describe("Last night: where it opens", () => {
       payload: { night: "2026-10-26", title: "Last night: 1 done", body: "Done: Make add() add", counts: { done: 1 } },
     } as unknown as IJEvent)!;
     expect([item.href, item.title, item.body, item.attention, item.quiet]).toEqual([
-      "/terminals?night=2026-10-26", "Last night: 1 done", "Done: Make add() add", true, undefined,
+      "/chat?view=code&night=2026-10-26", "Last night: 1 done", "Done: Make add() add", true, undefined,
     ]);
     expect(toActivity({ id: "e2", type: "build.night_summary", ts: "", payload: {} } as unknown as IJEvent)).toBeNull();
-    window.history.replaceState(null, "", "/terminals");
+    window.history.replaceState(null, "", "/chat?view=code");
     const heard: string[] = [];
     const on = (e: Event) => heard.push((e as CustomEvent<{ id: string }>).detail.id);
     window.addEventListener(BUILD_NIGHT_EVENT, on);
     act(() => {
-      expect(announceBuildSessionLink("/terminals?night=2026-10-26")).toBe(true);
+      expect(announceBuildSessionLink("/chat?view=code&night=2026-10-26")).toBe(true);
     });
     window.removeEventListener(BUILD_NIGHT_EVENT, on);
     expect(heard).toEqual(["2026-10-26"]);

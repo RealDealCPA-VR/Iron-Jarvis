@@ -403,6 +403,6 @@ describe("the bell", () => {
     expect(row.title).toBe("TSI reached its limit; carried on with Spare (same group)");
     expect(row.attention).toBeUndefined();
     const plain = toActivity(ev("build.resumed", { thread_id: "s1", title: "Add a cart", account_name: "Work" }))!;
-    expect(plain.title).toBe("A Build session resumed on the Work account");
+    expect(plain.title).toBe("A coding session resumed on the Work account");
   });
 });

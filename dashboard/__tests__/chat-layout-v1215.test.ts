@@ -56,7 +56,9 @@ describe("the module fills the app", () => {
   it("the row is the height of the window, and stretches its columns", () => {
     expect(CODE).toContain('data-testid="chat-room"');
     // v1.314.0: minus the demo strip's published height (SimulatedBanner).
-    expect(CODE).toMatch(/md:h-\[calc\(100vh-4\.5rem-var\(--ij-strip-h,0px\)\)\]/);
+    // v1.406.0 (part 1, moved on purpose): and minus the Chat | Code switch
+    // row above it (`--ij-switch-h`, set by ChatCodeSurface).
+    expect(CODE).toMatch(/md:h-\[calc\(100vh-4\.5rem-var\(--ij-strip-h,0px\)-var\(--ij-switch-h,0px\)\)\]/);
     // `items-stretch`, not `items-start`: three columns can only take the
     // row's height if the row lets them.
     expect(CODE).toContain("md:items-stretch");

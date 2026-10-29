@@ -915,7 +915,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
           ? `A ${CODING_SESSION} carried on after Iron Jarvis restarted`
           : from
             ? buildMovedHeadline(from, name)
-            : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+            : `A coding session resumed${name ? ` on the ${name} account` : ""}`,
       body: waitingRow ? buildLimitWaitingBody(title, p.resets_at) : clipped,
       ...(limitRow && !waitingRow ? { attention: true } : {}),
       // v1.393.0 review: the two NEWS rows (it waits by itself; it carried
@@ -1361,7 +1361,7 @@ export function chatAskHref(ask: ChatWaitingAsk): string {
 /** The waiting row's words: a chat's, or (v1.369.0) a Build session's. */
 export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: string } {
   return ask.build
-    ? { title: "A Build session is waiting for your OK", open: "Open the session in Build" }
+    ? { title: "A coding session is waiting for your OK", open: "Open the session" }
     : { title: "A chat is waiting for your OK", open: "Open the chat" };
 }
 
@@ -1742,7 +1742,7 @@ function AgentApprovalRow({
               href={buildSessionHref(ask.buildSession)}
               className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
             >
-              Open the Build session →
+              Open the coding session →
             </Link>
           ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600 empty:hidden">
@@ -2328,7 +2328,7 @@ export function NotificationBell() {
         );
       if (buildAsks.length)
         parts.push(
-          `${buildAsks.length} Build session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
+          `${buildAsks.length} coding session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
             (named.chat && newIsBuild ? `: ${named.chat}` : ""),
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
@@ -2741,7 +2741,7 @@ export function NotificationBell() {
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
                         ? chatAsks[0].build
-                          ? "Open the session in Build"
+                          ? "Open the session"
                           : "Open the chat"
                         : agentAsks.length === 0 && paneAsks.length > 0
                           ? "Open Build"

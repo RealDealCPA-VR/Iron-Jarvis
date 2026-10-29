@@ -1,19 +1,14 @@
 /**
- * Build's switch: Terminals | IJ harness (v1.369.0, IJ harness plan Phase 6).
+ * Build: the terminals only (v1.406.0 part 1; it was Build's switch,
+ * Terminals | IJ harness, from v1.369.0 — these cases moved ON PURPOSE when
+ * the coding sessions moved to the chat page's Chat | Code switch).
  *
- * The free-form canvas is gone; the IJ harness view took its place in the
- * switch. These pin the switch itself, through the real page:
- *
- *   - Build opens on the Terminals view by default, and the switch remembers
- *     the view it was left on (`ij.build.shape`);
- *   - a saved "canvas" (an install that last used the retired canvas) opens
- *     the IJ harness, never a blank page;
- *   - a link to a session (`?session=<id>`) opens the harness on THAT
- *     session; a link to a terminal (`?focus=<id>`) opens the Terminals view;
- *   - the harness's Terminals group opens a terminal in the Terminals view,
- *     focused on it, and drops the session from the address;
- *   - the Terminals-only controls (Shell, New terminal) are not in the
- *     harness view's header;
+ *   - Build has no view switch and never draws the coding sessions, whatever
+ *     `ij.build.shape` saved ("harness", or the retired "canvas");
+ *   - an old link to a session or to Last night (`/terminals?session=<id>`,
+ *     `?night=<date>`) is sent on to Chat › Code; a link to a terminal
+ *     (`?focus=<id>`) stays on Build, on that terminal;
+ *   - a terminal link pressed while Build is open adds and shows it;
  *   - react-rnd left the dashboard with the canvas.
  */
 
@@ -81,9 +76,10 @@ vi.mock("@/components/motion", () => ({
   Reveal: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("@/components/PageHeader", () => ({
-  PageHeader: ({ title, actions, center }: { title: string; actions?: React.ReactNode; center?: React.ReactNode }) => (
+  PageHeader: ({ title, subtitle, actions, center }: { title: string; subtitle?: React.ReactNode; actions?: React.ReactNode; center?: React.ReactNode }) => (
     <div>
       <h1>{title}</h1>
+      <p data-testid="page-header-subtitle">{subtitle}</p>
       <div data-testid="page-header-center">{center}</div>
       <div data-testid="page-header-actions">{actions}</div>
     </div>
@@ -104,7 +100,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 }));
 
 import TerminalsPage from "@/app/terminals/page";
-import { announceBuildTerminalLink, terminalOfHref } from "@/lib/buildLinks";
+import { addressMove, announceBuildTerminalLink, terminalOfHref } from "@/lib/buildLinks";
 
 /* ---- fixtures -------------------------------------------------------------- */
 
@@ -152,158 +148,90 @@ afterEach(() => {
   at("/");
 });
 
-const saved = () => localStorage.getItem("ij.build.shape");
 
 /* --------------------------------------------------------------------------- */
 
-describe("the switch", () => {
-  it("opens on Terminals, switches to the IJ harness and back, and remembers each", async () => {
+// v1.406.0 (part 1, the user's decision 2026-10-29): Build is the TERMINALS
+// only — the coding sessions moved to the chat page's Chat | Code switch
+// (components/chat/ChatCodeSurface; pinned in chat-code-switch-v1406). These
+// cases replaced the v1.369.0 switch's, ON PURPOSE.
+describe("Build is the terminals only (v1.406.0)", () => {
+  it("has no view switch and never draws the coding sessions", async () => {
     render(<TerminalsPage />);
     await screen.findByTestId("terminal-pane-t1");
-    const terminals = screen.getByTestId("build-view-terminals");
-    const harness = screen.getByTestId("build-view-harness");
-    expect(terminals).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("build-view-switch")).toHaveAttribute("role", "tablist");
+    expect(screen.queryByTestId("build-view-switch")).toBeNull();
+    expect(screen.queryByTestId("build-view-harness")).toBeNull();
     expect(screen.queryByTestId("ij-harness-view")).toBeNull();
-
-    fireEvent.click(harness);
-    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
-    expect(harness).toHaveAttribute("aria-selected", "true");
-    expect(screen.queryByTestId("pane-rail")).toBeNull();
-    expect(saved()).toBe("harness");
-
-    fireEvent.click(screen.getByTestId("build-view-terminals"));
-    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
-    expect(saved()).toBe("rail");
-  });
-
-  it("the arrow keys move between the two views", async () => {
-    render(<TerminalsPage />);
-    await screen.findByTestId("terminal-pane-t1");
-    fireEvent.keyDown(screen.getByTestId("build-view-terminals"), { key: "ArrowRight" });
-    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
-    expect(document.activeElement).toBe(screen.getByTestId("build-view-harness"));
-  });
-
-  it("a saved IJ harness view opens again", async () => {
-    localStorage.setItem("ij.build.shape", "harness");
-    render(<TerminalsPage />);
-    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
-  });
-
-  it("an install that last used the retired canvas opens the IJ harness", async () => {
-    localStorage.setItem("ij.build.shape", "canvas");
-    render(<TerminalsPage />);
-    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
-    expect(screen.queryByTestId("shape-canvas")).toBeNull();
-  });
-
-  it("the switch sits in the header's centre slot in BOTH views (v1.370.2: centred and fixed)", async () => {
-    render(<TerminalsPage />);
-    await screen.findByTestId("terminal-pane-t1");
-    const centre = () => screen.getByTestId("page-header-center");
-    expect(centre()).toContainElement(screen.getByTestId("build-view-switch"));
-    // The Terminals view's controls take the RIGHT column, never the centre.
+    expect(screen.getByTestId("pane-rail")).toBeInTheDocument();
+    expect(screen.getByTestId("page-header-center")).toBeEmptyDOMElement();
+    // Its controls stay in the header's right column.
     expect(screen.getByTestId("page-header-actions")).toContainElement(screen.getByTestId("header-new-terminal"));
-    expect(centre()).not.toContainElement(screen.getByTestId("header-new-terminal"));
-    fireEvent.click(screen.getByTestId("build-view-harness"));
-    await screen.findByTestId("ij-harness-view");
-    expect(centre()).toContainElement(screen.getByTestId("build-view-switch"));
-    // The right column stays (empty) so the header keeps its shape: the
-    // switch does not slide right when the controls go.
-    expect(screen.getByTestId("page-header-actions")).toBeInTheDocument();
-    // The real header's grid (equal side columns) is pinned in
-    // page-header-centre-v1370-2; the true pixel check is in the e2e.
-  });
-
-  it("the Shell picker and New terminal belong to the Terminals view only", async () => {
-    render(<TerminalsPage />);
-    await screen.findByTestId("terminal-pane-t1");
     expect(screen.getByTestId("header-shell")).toBeInTheDocument();
-    expect(screen.getByTestId("header-new-terminal")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("build-view-harness"));
-    await screen.findByTestId("ij-harness-view");
-    expect(screen.queryByTestId("header-shell")).toBeNull();
-    expect(screen.queryByTestId("header-new-terminal")).toBeNull();
-  });
-});
-
-describe("links into Build", () => {
-  it("?session=<id> opens the IJ harness on that session, whatever view was saved", async () => {
-    localStorage.setItem("ij.build.shape", "rail");
-    at("/terminals?session=bs_42");
-    render(<TerminalsPage />);
-    const view = await screen.findByTestId("ij-harness-view");
-    expect(view).toHaveAttribute("data-initial", "bs_42");
-  });
-
-  it("?focus=<id> opens the Terminals view, whatever view was saved", async () => {
-    localStorage.setItem("ij.build.shape", "harness");
-    at("/terminals?focus=t2");
-    render(<TerminalsPage />);
-    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
-    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
-  });
-
-  // v1.388.1 (found by the v1.388.0 re-audit, lane E-J): the view this WINDOW
-  // last showed is kept in module state (lib/turnCache, v1.384.0), and the
-  // ?focus= branch returned without forcing the Terminals view — so once the
-  // IJ harness had been shown, every in-app terminal link (Sign in's "Open
-  // the Build terminal", the starter model, Microsoft 365's sign-in, the
-  // bell's "a terminal needs you") opened the harness and hid the pane. The
-  // test setup resets that cache, so the localStorage case above never saw it.
-  it("?focus=<id> opens the Terminals view after the IJ harness was shown in this window", async () => {
-    render(<TerminalsPage />);
-    await screen.findByTestId("terminal-pane-t1");
-    fireEvent.click(screen.getByTestId("build-view-harness"));
-    expect(await screen.findByTestId("ij-harness-view")).toBeInTheDocument();
-    cleanup(); // leave Build: a client-side navigation keeps module state
-    at("/terminals?focus=t2");
-    api.harnessRenders = 0;
-    render(<TerminalsPage />);
-    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
-    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
-    // From the first frame: the harness view never renders for a terminal
-    // link (render() flushes effects inside act(), so a one-frame flash would
-    // not show in the DOM — the count does).
     expect(api.harnessRenders).toBe(0);
   });
-});
 
-describe("a session link pressed while Build is open (v1.369.0 review)", () => {
-  it("from the Terminals view: the IJ harness opens on that session", async () => {
+  it("a saved IJ harness (or the retired canvas) view just opens the terminals", async () => {
+    for (const shape of ["harness", "canvas"]) {
+      localStorage.setItem("ij.build.shape", shape);
+      api.harnessRenders = 0;
+      render(<TerminalsPage />);
+      expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
+      expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+      expect(api.harnessRenders).toBe(0);
+      cleanup();
+    }
+  });
+
+  it("says where the coding sessions are now", async () => {
     render(<TerminalsPage />);
     await screen.findByTestId("terminal-pane-t1");
-    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
-    window.dispatchEvent(new CustomEvent("ij:open-build-session", { detail: { id: "bs_7" } }));
-    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "bs_7");
-    expect(saved()).toBe("harness");
+    expect(document.body.textContent).toContain("Coding sessions, where Jarvis writes the code, are in Chat › Code.");
   });
 });
 
-describe("a terminal from the IJ harness's Terminals group", () => {
-  it("opens in the Terminals view, focused on it, and the session leaves the address", async () => {
-    at("/terminals?session=bs_42");
-    render(<TerminalsPage />);
-    await screen.findByTestId("ij-harness-view");
-    fireEvent.click(await screen.findByTestId("stub-open-t2"));
-    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("rail-pane-t2").style.visibility).toBe("visible"));
-    expect(screen.getByTestId("rail-pane-t1").style.visibility).toBe("hidden");
-    expect(saved()).toBe("rail");
-    expect(window.location.search).not.toContain("session=");
+describe("old links into Build (v1.406.0)", () => {
+  let moved: string[] = [];
+  const realReplace = addressMove.replace;
+  beforeEach(() => {
+    moved = [];
+    addressMove.replace = (href: string) => {
+      moved.push(href);
+    };
+  });
+  afterEach(() => {
+    addressMove.replace = realReplace;
   });
 
-  it("back in the IJ harness, the link the page was opened with is spent (v1.369.0 review)", async () => {
-    // The harness then opens the session this window had open, not the old
-    // link: the user had moved to another session before going to a terminal.
+  it("?session=<id> is sent on to Chat › Code on that session", async () => {
     at("/terminals?session=bs_42");
     render(<TerminalsPage />);
-    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "bs_42");
-    fireEvent.click(await screen.findByTestId("stub-open-t2"));
-    await screen.findByTestId("pane-rail");
-    fireEvent.click(screen.getByTestId("build-view-harness"));
-    expect(await screen.findByTestId("ij-harness-view")).toHaveAttribute("data-initial", "");
+    expect(await screen.findByTestId("build-moved")).toHaveTextContent("Opening the coding session in Chat › Code");
+    expect(moved).toEqual(["/chat?view=code&session=bs_42"]);
+    expect(screen.queryByTestId("pane-rail")).toBeNull();
+  });
+
+  it("?night=<date> is sent on to Last night in Chat › Code", async () => {
+    at("/terminals?night=2026-10-26");
+    render(<TerminalsPage />);
+    await screen.findByTestId("build-moved");
+    expect(moved).toEqual(["/chat?view=code&night=2026-10-26"]);
+  });
+
+  it("?focus=<id> stays on Build, on that terminal", async () => {
+    at("/terminals?focus=t2");
+    render(<TerminalsPage />);
+    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("rail-pane-t2").style.visibility).toBe("visible"));
+    expect(moved).toEqual([]);
+  });
+
+  it("a session link announced while Build is open is not Build's any more", async () => {
+    render(<TerminalsPage />);
+    await screen.findByTestId("terminal-pane-t1");
+    window.dispatchEvent(new CustomEvent("ij:open-build-session", { detail: { id: "bs_7" } }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
+    expect(api.harnessRenders).toBe(0);
   });
 });
 
@@ -332,9 +260,8 @@ describe("the canvas is gone", () => {
 // and shows it in the Terminals view — not remembered as the saved view.
 describe("a terminal link pressed while Build is open (harness gaps, fix 2)", () => {
   it("adds the terminal started elsewhere and shows it in the Terminals view", async () => {
-    localStorage.setItem("ij.build.shape", "harness");
     render(<TerminalsPage />);
-    await screen.findByTestId("ij-harness-view");
+    await screen.findByTestId("terminal-pane-t1");
     // The Sign in press opened t9 meanwhile (the list was read before it).
     api.responses["/terminals"] = {
       terminals: [term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta"), term("t9", "C:\\Users\\me")],
@@ -344,10 +271,7 @@ describe("a terminal link pressed while Build is open (harness gaps, fix 2)", ()
     });
     expect(await screen.findByTestId("terminal-pane-t9")).toBeInTheDocument();
     expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
-    expect(screen.queryByTestId("ij-harness-view")).toBeNull();
-    expect(screen.getByTestId("build-view-terminals")).toHaveAttribute("aria-selected", "true");
-    // A detour, not a choice: the saved view is untouched.
-    expect(saved()).toBe("harness");
+    await waitFor(() => expect(screen.getByTestId("rail-pane-t9").style.visibility).toBe("visible"));
   });
 
   it("CONTROL: off Build the link is not announced (the navigation opens it)", () => {

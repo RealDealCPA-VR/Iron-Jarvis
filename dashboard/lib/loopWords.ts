@@ -86,7 +86,7 @@ const ROWS: Readonly<Record<string, Row>> = {
   },
   build_accounts: {
     label: "Resume when ready",
-    problem: "Build sessions waiting for an account to reset aren't being checked",
+    problem: "Coding sessions waiting for an account to reset aren't being checked",
     href: "/terminals",
   },
   // v1.391.0 (long jobs, Phase 2): the boot's pass that carries on a coding

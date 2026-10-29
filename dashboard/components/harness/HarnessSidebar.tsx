@@ -15,15 +15,15 @@
  *    (a folder that is a Jarvis project's root shows and renames the
  *    PROJECT's name — the daemon's one store). Each group's "+" starts a new
  *    session in that folder.
- *  - Terminals: the live Build terminals with the state dots the Terminals
- *    view draws (GET /terminals/activity, polled by the page). Pressing one
- *    opens it in the Terminals view, through the page's own focus path.
+ *  - Terminals: the live Build terminals with the state dots Build draws
+ *    (GET /terminals/activity, polled by CodeView). Pressing one opens it
+ *    in Build (v1.406.0: Build is the terminals; this list is in Chat › Code).
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
-import { CODING_VIEW_NAME } from "@/lib/buildWords";
+import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
@@ -280,7 +280,7 @@ function FolderGroup({
           <>
             <input
               ref={inputRef}
-              aria-label={folder.isProject ? "Project name" : "Folder name in Build"}
+              aria-label={folder.isProject ? "Project name" : "Folder name in your coding sessions"}
               data-testid="harness-folder-rename-input"
               value={renaming}
               onChange={(e) => setRenaming(e.target.value)}
@@ -308,11 +308,11 @@ function FolderGroup({
             <button
               type="button"
               data-testid="harness-folder-rename"
-              aria-label={folder.isProject ? `Rename the project ${folder.name}` : `Rename ${folder.name} in Build`}
+              aria-label={folder.isProject ? `Rename the project ${folder.name}` : `Rename ${folder.name} in your coding sessions`}
               title={
                 folder.isProject
                   ? "Rename the project (the folder on disk keeps its name)"
-                  : "Rename how this folder shows in Build (the folder on disk keeps its name)"
+                  : "Rename how this folder shows in your coding sessions (the folder on disk keeps its name)"
               }
               onClick={() => setRenaming(folder.name)}
               className={`${GHOST} [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/head:opacity-100 focus-visible:opacity-100`}
@@ -441,7 +441,7 @@ export function HarnessSidebar({
 
   return (
     // Harness gaps (fix 4): the view's everyday name (lib/buildWords).
-    <nav aria-label={CODING_VIEW_NAME} data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
+    <nav aria-label={CODING_SESSIONS_LIST} data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
       {creating ? (
         <NewSessionForm
           defaultFolder={startWithNoFolder ? "" : defaultFolder}
@@ -581,7 +581,7 @@ export function HarnessSidebar({
                 type="button"
                 data-testid={`harness-terminal-row-${t.id}`}
                 onClick={() => onOpenTerminal(t.id)}
-                title={t.cwd ? `${t.label} · ${t.cwd} · open in the Terminals view` : `${t.label} · open in the Terminals view`}
+                title={t.cwd ? `${t.label} · ${t.cwd} · open in Build` : `${t.label} · open in Build`}
                 className={`${ROW} text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100`}
               >
                 <PaneDot state={t.state} />

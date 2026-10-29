@@ -299,7 +299,7 @@ describe("the browser pane", () => {
     const paired = await screen.findByTestId("preview-browser");
     expect(paired).toHaveTextContent("Microsoft Edge 153");
     // v1.376.0 review: what is TRUE in a Build session — it does not use it.
-    expect(paired).toHaveTextContent("A Build session does not use it");
+    expect(paired).toHaveTextContent("A coding session does not use it");
     expect(paired).not.toHaveTextContent("browse the web");
   });
 });

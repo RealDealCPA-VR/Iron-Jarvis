@@ -288,12 +288,12 @@ def test_the_desktop_opens_a_helpers_ask_in_its_build_session(tmp_path):
     plain = {k: v for k, v in helper.items() if k != "build_session"}
     out = _run(plan, tmp_path, "plan1372", json.dumps({"steps": [{"approvals": [helper, plain], "now": 0}]}))["out"]
     first, second = out[0]["notify"]
-    assert first["href"] == "/terminals?session=bs%209"
+    assert first["href"] == "/chat?view=code&session=bs%209"
     assert first["body"].endswith("click to open the session.")
     assert "href" not in second and second["body"].endswith("click to open the run.")
     click = _CLICK_HARNESS.replace("__LIFTED__", _lift("function showAskNotification", "function showAskNotification"))
     loaded = _run(click, tmp_path, "click1372", json.dumps([first]))["loaded"]
-    assert loaded == ["http://127.0.0.1:8788/terminals?session=bs%209"]
+    assert loaded == ["http://127.0.0.1:8788/chat?view=code&session=bs%209"]
 
 
 def test_a_custom_helper_keeps_only_the_part_of_its_own_roster_the_turn_holds():

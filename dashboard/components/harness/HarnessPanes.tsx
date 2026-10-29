@@ -280,7 +280,7 @@ function SessionTerminal({
         <p className="text-[13px] text-zinc-400">
           {view.noFolder && !view.folder
             ? "This session's folder is made with your first message; a terminal can open there after that."
-            : `A terminal in ${view.noFolder ? "this session's own folder" : view.folderName}, beside the session. It is a normal Build terminal: it shows in the Terminals view too.`}
+            : `A terminal in ${view.noFolder ? "this session's own folder" : view.folderName}, beside the session. It is a normal Build terminal: it shows in Build too.`}
         </p>
         <button
           type="button"

@@ -93,11 +93,11 @@ describe("nav catalogue — the friction phrases resolve", () => {
     ["packs", "/tools"],
     // v1.357.0 (G76): "pane" left the screen; the word still finds Build.
     ["pane", "/terminals"],
-    // Harness gaps (fix 4): Build's view is "Coding sessions" now; its old
-    // name and the new one both find Build.
-    ["IJ harness", "/terminals"],
-    ["harness", "/terminals"],
-    ["coding session", "/terminals"],
+    // Harness gaps (fix 4) and v1.406.0 (part 1, moved on purpose): the
+    // coding sessions are the chat page's Code view; their words find Chat.
+    ["IJ harness", "/chat"],
+    ["harness", "/chat"],
+    ["coding session", "/chat"],
     // Billing anxiety, phrased two ways.
     ["tokens", "/usage"],
     ["cost", "/usage"],

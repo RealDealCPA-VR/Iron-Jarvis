@@ -7,6 +7,7 @@ import {
   AppWindow,
   ChevronsLeft,
   ChevronsRight,
+  Code2,
   FolderKanban,
   HelpCircle,
   MessageSquare,
@@ -24,6 +25,8 @@ import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
 import { RunningNow } from "@/components/RunningNow";
 import SidebarChats from "@/components/chat/SidebarChats";
+import { useChatSurfaceView } from "@/lib/chatSurface";
+import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 
 /**
  * THE CALM SIDEBAR (calm UI redesign S7, AUDIT §4.2, wireframe sidebar.md).
@@ -32,18 +35,21 @@ import SidebarChats from "@/components/chat/SidebarChats";
  * phone:
  *
  *   ( + New chat )                     the sidebar's one primary action
- *   Build · Projects · Everything · Settings      four items, never more
+ *   Chat · Build · Projects · Everything · Settings     five items, never more
  *   (your pins, up to three)           added on Everything; none by default
  *   CHATS                              on the chat surface: Chat's own thread
  *                                      list (portaled in, the drawer too);
- *                                      elsewhere the same grouped list
+ *                                      CODING SESSIONS in its Code view;
+ *                                      elsewhere the same grouped chat list
  *                                      (SidebarChats: projects, dots, ages)
  *   PROJECTS
  *   ● Ready · v1.x  (orb)  Help ▾       status, version, Running now, Help (Q17)
  *
- * It replaces v1.318.0's Simple hubs and the Advanced menu (Q2): with four
- * items, Everything and the palette, nothing needs hiding. The four come from
- * the surface manifest (lib/surfaces.ts), never a copy here.
+ * It replaces v1.318.0's Simple hubs and the Advanced menu (Q2): with these
+ * items, Everything and the palette, nothing needs hiding. They come from the
+ * surface manifest (lib/surfaces.ts), never a copy here. v1.406.0 (part 1 +
+ * 5): Chat is a row (its Code switch holds the coding sessions), Build is the
+ * terminals; every automation and admin page is on Everything and in Ctrl K.
  */
 
 const COLLAPSE_KEY = "ij_sidebar_collapsed";
@@ -382,6 +388,14 @@ export function SidebarBody({
   const pins = usePins();
   const onChat = CHAT_PATHS.includes(pathname);
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  // v1.406.0 (part 1): the Chat row is lit on the chat page (home is a chat),
+  // in either of its views.
+  const rowActive = (href: string) => (href === "/chat" ? onChat : isActive(href));
+  // v1.406.0: on the chat page's Code view the list space holds the CODING
+  // SESSIONS (components/harness/CodeView portals its list into the same
+  // slot), so its heading says so — never "Chats" over sessions.
+  const surfaceView = useChatSurfaceView();
+  const codeList = onChat && surfaceView === "code";
 
   // On the chat surface the CHATS space is the chat page's OWN thread rail
   // (search, the row options, the project scope, the archive), portaled in:
@@ -438,20 +452,31 @@ export function SidebarBody({
       </div>
       <nav aria-label="Main" className="shrink-0 space-y-0.5 px-2 pt-2" data-testid="sidebar-nav">
         {four.map((s) => (
-          <NavRow key={s.href} s={s} active={isActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} />
+          <NavRow key={s.href} s={s} active={rowActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} />
         ))}
         {pinned.length > 0 && (
           <div className="mt-1 space-y-0.5 border-t border-white/[0.05] pt-1" data-testid="sidebar-pins">
             {pinned.map((s) => (
-              <NavRow key={s.href} s={s} active={isActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} pinned />
+              <NavRow key={s.href} s={s} active={rowActive(s.href)} collapsed={collapsed} popout={popout} onNavigate={onNavigate} pinned />
             ))}
           </div>
         )}
       </nav>
       {!collapsed && (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2" data-testid="sidebar-lists">
-          <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-            <MessageSquare size={11} aria-hidden /> Chats
+          <div
+            data-testid="sidebar-list-heading"
+            className="flex items-center gap-1.5 px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500"
+          >
+            {codeList ? (
+              <>
+                <Code2 size={11} aria-hidden /> {CODING_SESSIONS_LIST}
+              </>
+            ) : (
+              <>
+                <MessageSquare size={11} aria-hidden /> Chats
+              </>
+            )}
           </div>
           {onChat ? (
             // v1.329.0 (calm chat W5 G3): the phone drawer scrolls as ONE

@@ -47,17 +47,17 @@ function ev(type: string, payload: Record<string, unknown>, session_id: string |
 
 describe("the one rule", () => {
   it("a build:<id> session id opens Build on that session; any other its run page", () => {
-    expect(buildSessionHref("bs 1")).toBe("/terminals?session=bs%201");
+    expect(buildSessionHref("bs 1")).toBe("/chat?view=code&session=bs%201");
     expect(buildThreadOf("build:bs_1")).toBe("bs_1");
     expect(buildThreadOf("build:")).toBeNull();
     expect(buildThreadOf("sess_1")).toBeNull();
     expect(isBuildSessionId("build:bs_1")).toBe(true);
-    expect(sessionLinkFor("build:bs_1")).toBe("/terminals?session=bs_1");
+    expect(sessionLinkFor("build:bs_1")).toBe("/chat?view=code&session=bs_1");
     expect(sessionLinkFor("sess_1")).toBe("/sessions/sess_1");
   });
 
   it("missionLinks routes a Build session's row to Build too", () => {
-    expect(sessionHref({ id: "build:bs_1" })).toBe("/terminals?session=bs_1");
+    expect(sessionHref({ id: "build:bs_1" })).toBe("/chat?view=code&session=bs_1");
     expect(sessionHref({ id: "sess_1" })).toBe("/sessions/sess_1");
   });
 });
@@ -66,10 +66,10 @@ describe("the bell", () => {
   it("a Build session waiting for an OK reads as the session and opens it in Build", () => {
     const ask = parseChatAsk({ id: "chat:bs_1", kind: "chat", thread_id: "bs_1", surface: "build" })!;
     expect(ask.build).toBe(true);
-    expect(chatAskHref(ask)).toBe("/terminals?session=bs_1");
+    expect(chatAskHref(ask)).toBe("/chat?view=code&session=bs_1");
     expect(chatAskRowWords(ask)).toEqual({
-      title: "A Build session is waiting for your OK",
-      open: "Open the session in Build",
+      title: "A coding session is waiting for your OK",
+      open: "Open the session",
     });
     // A chat's row keeps its words and its address.
     const chat = parseChatAsk({ id: "chat:c1", kind: "chat", thread_id: "c1" })!;
@@ -80,10 +80,10 @@ describe("the bell", () => {
 
   it("a trust or context row of a Build session links to Build, never /sessions/build:…", () => {
     expect(toActivity(ev("trust.lowered", { session_id: "build:bs_1", reason: "flagged" }))!.href).toBe(
-      "/terminals?session=bs_1",
+      "/chat?view=code&session=bs_1",
     );
     expect(toActivity(ev("context.blocked", { count: 1, source: "a page" }, "build:bs_1"))!.href).toBe(
-      "/terminals?session=bs_1",
+      "/chat?view=code&session=bs_1",
     );
   });
 
@@ -92,7 +92,7 @@ describe("the bell", () => {
       ev("build.account_limit", { thread_id: "bs_1", title: "Fix the nav", account_name: "Work", kind: "usage" }, "build:bs_1"),
     )!;
     expect(item).toMatchObject({
-      href: "/terminals?session=bs_1",
+      href: "/chat?view=code&session=bs_1",
       title: "The Work account reached its limit",
       body: "Fix the nav",
       attention: true,
@@ -105,14 +105,14 @@ describe("the bell", () => {
 
   it("a resume is good news, said once, and does not count on the badge", () => {
     const item = toActivity(ev("build.resumed", { account_name: "Work", title: "Fix the nav" }, "build:bs_1"))!;
-    expect(item.href).toBe("/terminals?session=bs_1");
-    expect(item.title).toBe("A Build session resumed on the Work account");
+    expect(item.href).toBe("/chat?view=code&session=bs_1");
+    expect(item.title).toBe("A coding session resumed on the Work account");
     expect(item.attention).toBeUndefined();
   });
 
   it("the headline's other kinds", () => {
     expect(buildLimitHeadline("missing", "Work")).toBe("The Work account was removed");
-    expect(buildLimitHeadline("disabled", "")).toBe("A Build session's account is turned off");
+    expect(buildLimitHeadline("disabled", "")).toBe("A coding session's account is turned off");
     expect(buildLimitHeadline("busy", "Work")).toBe("The Work account is busy right now");
   });
 });
@@ -120,8 +120,8 @@ describe("the bell", () => {
 describe("Activity", () => {
   it("a safety finding in a Build session opens the session in Build", () => {
     expect(findingLink("ironjarvis", "build:bs_1")).toEqual({
-      href: "/terminals?session=bs_1",
-      label: "Open the Build session",
+      href: "/chat?view=code&session=bs_1",
+      label: "Open the coding session",
     });
     expect(findingLink("ironjarvis", "chat:t1")).toEqual({ href: "/chat", label: "Open Chat" });
   });
@@ -172,14 +172,16 @@ describe("a session link pressed while Build is already open (v1.369.0 review)",
     expect(sessionOfHref(null)).toBeNull();
   });
 
-  it("announces only on Build, with the session's id", () => {
+  // v1.406.0 (part 1, moved on purpose): the sessions are the chat page's
+  // Code view, so a link is announced on the CHAT page, never on Build.
+  it("announces only on the chat page, with the session's id", () => {
     const seen: (string | null)[] = [];
     const on = (e: Event) => seen.push(sessionOfEvent(e));
     window.addEventListener(BUILD_SESSION_EVENT, on);
     try {
-      window.history.replaceState(null, "", "/chat");
+      window.history.replaceState(null, "", "/terminals");
       expect(announceBuildSessionLink(buildSessionHref("bs_1"))).toBe(false);
-      window.history.replaceState(null, "", "/terminals?session=bs_0");
+      window.history.replaceState(null, "", "/chat?view=code&session=bs_0");
       expect(announceBuildSessionLink("/terminals?focus=t1")).toBe(false);
       expect(announceBuildSessionLink(buildSessionHref("bs_1"))).toBe(true);
     } finally {

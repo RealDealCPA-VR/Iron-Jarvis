@@ -543,7 +543,11 @@ describe("the pane and page wiring (source-pinned)", () => {
     expect(page).toContain("parked={o.parked}");
     expect(page).toContain("parked: activeId !== t.id,");
     // The session's terminal parks while its tab is not the one on screen.
-    expect(page).toContain("renderTerminalPane(info, { focused: !parked, parked,");
+    // v1.406.0 (part 1, moved on purpose): the coding sessions are the chat
+    // page's Code view, which draws that tab's terminal itself.
+    const code = read("components", "harness", "CodeView.tsx");
+    expect(code).toContain("focused={!parked}");
+    expect(code).toContain("parked={parked}");
     expect(page).not.toMatch(/<Rnd\b|shape === "canvas"/);
   });
 

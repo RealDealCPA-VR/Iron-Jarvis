@@ -364,7 +364,7 @@ describe("(4) the 'N pending' ping names ONE new ask in its row's words", () => 
       },
     });
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
-    expect(pings()[0][1]).toBe("1 Build session waiting for your OK: it wants to save a file");
+    expect(pings()[0][1]).toBe("1 coding session waiting for your OK: it wants to save a file");
   });
 
   it("several at once keep their counts alone", async () => {

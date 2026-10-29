@@ -200,8 +200,8 @@ describe("the sidebar: hovering Build says what it is", () => {
     const build = screen.getByTestId("sidebar-nav-terminals");
     const blurb = NAV_ENTRIES.find((e) => e.href === "/terminals")!.blurb;
     expect(build.getAttribute("title")).toBe(blurb);
-    // Moved on purpose (harness gaps, fix 4): Build's line names BOTH views.
-    expect(blurb).toMatch(/Terminals for your own coding tools, and coding sessions/);
+    // Moved on purpose (v1.406.0 part 1): Build is the terminals only.
+    expect(blurb).toMatch(/Terminals for your own coding tools — Claude Code, Codex or any command line/);
     expect(screen.getByTestId("sidebar-nav-everything").getAttribute("title")).toBe(surfaceFor("/everything")!.blurb);
     fireEvent.click(screen.getByLabelText("Collapse the sidebar"));
     expect(screen.getByTestId("sidebar-nav-terminals").getAttribute("title")).toBe("Build");

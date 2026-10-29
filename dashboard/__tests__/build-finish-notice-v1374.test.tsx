@@ -3,7 +3,7 @@
  * under the one-notice rules (v1.360.0 / v1.361.0).
  *
  * `build.turn_finished` is a bell row that rings and counts on the badge
- * ("Your Build session finished", the fixture's words — the daemon and the
+ * ("Your coding session finished", the fixture's words — the daemon and the
  * desktop app's tray watcher read the same fixture). ONE notice:
  *
  *  - a window is open and the user is elsewhere in the app → the bell pings;
@@ -141,7 +141,7 @@ describe("the row: the fixture's words, opening Build on that session", () => {
     expect(item.attention).toBe(true);
     expect([item.title, item.body, item.href]).toEqual([c.title, c.body, c.href]);
     expect(item.build).toBe("bs_long");
-    expect(toActivity(C("build-turn-failed").event)!.title).toBe("Your Build session could not finish");
+    expect(toActivity(C("build-turn-failed").event)!.title).toBe("Your coding session could not finish");
     expect(buildTookWords(59)).toBe("took 59 s");
     expect(buildTookWords(3600)).toBe("took 60 min");
   });

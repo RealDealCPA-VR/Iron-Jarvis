@@ -7,7 +7,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * IJ harness plan Phase 6 — the screen's done-when, in a real browser against
  * the scratch daemon (port 8807, a FRESH home whose model is the demo model):
  *
- *  1. open Build and switch to the IJ harness view;
+ *  1. open the chat page and switch to Code (v1.406.0; it was Build's IJ
+ *     harness view);
  *  2. start a session in a scratch folder;
  *  3. see a reply with a change and Undo it (the demo model's one scripted
  *     step writes RESULT.md; Undo removes it from disk);
@@ -86,14 +87,15 @@ test.afterAll(() => {
 });
 
 async function openHarness(page: Page) {
-  await page.goto("/terminals");
-  const tab = page.getByTestId("build-view-harness");
+  // v1.406.0 (part 1): the coding sessions are the chat page's Code view.
+  await page.goto("/chat");
+  const tab = page.getByTestId("chat-view-code");
   await expect(tab).toBeVisible({ timeout: 90_000 });
   await tab.click();
   await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
 }
 
-test("Build → IJ harness → a session → a reply with a change, and Undo", async ({ page }) => {
+test("Chat › Code → a session → a reply with a change, and Undo", async ({ page }) => {
   await openHarness(page);
   await page.getByTestId("harness-new-session").click();
   await page.getByTestId("harness-new-folder").fill(work);
@@ -176,12 +178,13 @@ test("a terminal from the left pane, and back", async ({ page }) => {
   await expect(page.getByTestId("pane-terminal")).toBeVisible();
   if (process.env.IJ_E2E_SHOTS) await page.screenshot({ path: join(process.env.IJ_E2E_SHOTS, "ij-harness-terminal-tab.png") });
   await row.click();
-  // The Terminals view, focused on THAT terminal.
-  await expect(page.getByTestId("pane-rail")).toBeVisible();
+  // Build (v1.406.0: the terminals only), focused on THAT terminal.
+  await expect(page).toHaveURL(new RegExp(`/terminals\\?focus=${termId}`));
+  await expect(page.getByTestId("pane-rail")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId(`rail-row-${termId}`)).toHaveAttribute("data-active", "true");
   await expect(page.getByTestId(`rail-pane-${termId}`)).toHaveCSS("visibility", "visible");
-  // …and back to the same session.
-  await page.getByTestId("build-view-harness").click();
+  // …and back to the same session (Chat › Code remembers it).
+  await page.goto("/chat?view=code");
   await expect(page.getByTestId("harness-session")).toHaveAttribute("data-session", sessionId);
   // Close the shell the test opened (it holds the scratch folder open).
   await page.request.delete(`${DAEMON}/terminals/${termId}`);
@@ -666,10 +669,9 @@ test.describe("390 px — Build never pans sideways", () => {
     test.skip(!sessionId, "needs the session from the first test");
     await modelMenuAccounts(page, true);
   });
-  test("the Terminals view fits the width", async ({ page }) => {
+  test("Build (the terminals) fits the width", async ({ page }) => {
     await page.goto("/terminals");
-    await expect(page.getByTestId("build-view-terminals")).toBeVisible({ timeout: 90_000 });
-    await page.getByTestId("build-view-terminals").click();
+    await expect(page.getByTestId("header-new-terminal")).toBeVisible({ timeout: 90_000 });
     await page.waitForTimeout(800);
     const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(pan).toBeLessThanOrEqual(0);
@@ -684,49 +686,9 @@ test.describe("1280 px — the model menu with accounts", () => {
   });
 });
 
-// v1.370.2 — the user: "this thing at the top should be centered and fixed
-// in both modes". The Terminals | IJ harness switch sits in the header's
-// exact middle, and it does not move when the view changes (it used to sit
-// in the right-hand actions: Shell and New terminal pushed it left in
-// Terminals, and it slid to the right edge in the IJ harness).
-for (const size of [
-  { width: 1280, height: 800 },
-  { width: 1024, height: 768 },
-]) {
-  test.describe(`${size.width} px — the Build switch is centred and fixed`, () => {
-    test.use({ viewport: size });
-    test("the switch's centre is the header's centre, in both views", async ({ page }) => {
-      await page.goto("/terminals");
-      await expect(page.getByTestId("build-view-terminals")).toBeVisible({ timeout: 90_000 });
-      const where = () =>
-        page.evaluate(() => {
-          const r = (id: string) => document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
-          const sw = r("build-view-switch");
-          const head = r("page-header-centred");
-          const actions = r("page-header-actions");
-          return { sw: sw.left + sw.width / 2, head: head.left + head.width / 2, top: sw.top, actionsH: actions.height };
-        });
-      await page.getByTestId("build-view-terminals").click();
-      await expect(page.getByTestId("header-new-terminal")).toBeVisible();
-      await page.waitForTimeout(500);
-      const rail = await where();
-      await page.getByTestId("build-view-harness").click();
-      await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByTestId("header-new-terminal")).toHaveCount(0);
-      await page.waitForTimeout(500);
-      const harness = await where();
-      expect(Math.abs(rail.sw - rail.head)).toBeLessThanOrEqual(1.5);
-      expect(Math.abs(harness.sw - harness.head)).toBeLessThanOrEqual(1.5);
-      // Fixed: the same place in both views, across and down.
-      expect(Math.abs(rail.sw - harness.sw)).toBeLessThanOrEqual(1);
-      expect(Math.abs(rail.top - harness.top)).toBeLessThanOrEqual(1);
-      // The Terminals controls fit beside it on ONE line (a wrap would make
-      // the header taller in one view than the other).
-      expect(rail.actionsH).toBeLessThanOrEqual(40);
-      expect(Math.abs(rail.actionsH - harness.actionsH)).toBeLessThanOrEqual(1);
-    });
-  });
-}
+// v1.370.2's "the Build switch is centred and fixed" moved ON PURPOSE in
+// v1.406.0 (part 1): Build has no switch; the chat page's Chat | Code switch
+// is pinned the same way in chat-code-switch.spec.ts.
 
 // v1.373.0 (part 2, Phase 2) on the demo model: a skill of the folder's own
 // harness layer picked with "/" and a file picked with "@" ride a real turn

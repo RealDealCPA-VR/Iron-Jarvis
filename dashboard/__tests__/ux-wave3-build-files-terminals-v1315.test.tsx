@@ -263,8 +263,9 @@ describe("Build: one collapse control, projects first, a phone-sized rail", () =
     }
     // Anti-vacuity: the rail's own buttons are all still there.
     expect(within(rail).getByRole("button", { name: /New terminal/ })).toBeInTheDocument();
-    // v1.369.0: the view switch replaced the rail's Canvas door.
-    expect(screen.getByTestId("build-view-harness")).toBeInTheDocument();
+    // v1.369.0: the view switch replaced the rail's Canvas door; v1.406.0
+    // (part 1, moved on purpose): Build is the terminals only — no switch.
+    expect(screen.queryByTestId("build-view-harness")).toBeNull();
   });
 
   it("anti-vacuity: the stage keeps its 480 px minimum at every width", async () => {

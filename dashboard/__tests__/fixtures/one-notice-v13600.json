@@ -279,9 +279,9 @@
       "pings": true,
       "attention": true,
       "phone": false,
-      "title": "Your Build session finished",
+      "title": "Your coding session finished",
       "body": "Fix the nav bar · took 3 min 12 s",
-      "href": "/terminals?session=bs_long"
+      "href": "/chat?view=code&session=bs_long"
     },
     {
       "case": "build-turn-failed",
@@ -301,9 +301,9 @@
       "pings": true,
       "attention": true,
       "phone": false,
-      "title": "Your Build session could not finish",
+      "title": "Your coding session could not finish",
       "body": "Move the tests · took 2 min",
-      "href": "/terminals?session=bs_err"
+      "href": "/chat?view=code&session=bs_err"
     },
     {
       "case": "build-turn-stalled",
@@ -326,7 +326,7 @@
       "phone": false,
       "title": "Your coding session has stopped making progress",
       "body": "Port the parser · No progress for 10 minutes — waiting on this step: running a command (pytest)",
-      "href": "/terminals?session=bs_stuck"
+      "href": "/chat?view=code&session=bs_stuck"
     },
     {
       "case": "build-limit-waiting",
@@ -350,7 +350,7 @@
       "phone": false,
       "title": "The Work Max account reached its limit",
       "body": "Port the parser · it carries on by itself",
-      "href": "/terminals?session=bs_lim"
+      "href": "/chat?view=code&session=bs_lim"
     },
     {
       "case": "build-moved-within-group",
@@ -375,7 +375,7 @@
       "phone": false,
       "title": "Work Max reached its limit; carried on with Spare (same group)",
       "body": "Port the parser",
-      "href": "/terminals?session=bs_lim"
+      "href": "/chat?view=code&session=bs_lim"
     },
     {
       "case": "night-summary",
@@ -403,7 +403,7 @@
       "phone": true,
       "title": "Last night: 1 failed, 1 needs you, 1 done",
       "body": "Failed: Fix the parser · Needs you: Write the release notes · Done: Make add() add",
-      "href": "/terminals?night=2026-10-26"
+      "href": "/chat?view=code&night=2026-10-26"
     }
   ]
 }

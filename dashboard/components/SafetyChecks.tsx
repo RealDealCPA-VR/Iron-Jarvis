@@ -121,7 +121,7 @@ export function findingLink(
   // v1.369.0: a Build session's calls run under "build:<id>" — it opens in
   // Build, on that session (there is no /sessions page for it).
   const build = buildThreadOf(sessionId);
-  if (build) return { href: buildSessionHref(build), label: "Open the Build session" };
+  if (build) return { href: buildSessionHref(build), label: "Open the coding session" };
   return null;
 }
 
