@@ -44,14 +44,10 @@ from tests.test_ci_fix_v1406 import (  # noqa: F401 — the fixtures
 
 pytestmark = pytest.mark.skipif(__import__("shutil").which("git") is None, reason="git is not installed")
 
-#: The fake ``gh`` answers the URL, number and head repository the test sets.
-_FAKE_GH_MORE = FAKE_GH.replace(
-    'print(json.dumps({"url": "https://github.com/acme/proj/pull/7", "number": 7,',
-    'print(json.dumps({"url": st.get("url", "https://github.com/acme/proj/pull/7"), "number": st.get("number", 7),'
-    ' "headRepository": st.get("head_repo", {"name": "proj"}),'
-    ' "headRepositoryOwner": st.get("head_owner", {"login": "acme"}),',
-)
-assert _FAKE_GH_MORE != FAKE_GH
+#: The fake ``gh`` answers the URL, number and head repository the test sets
+#: (v1.406.0 part 3 follow-ups: the shared FAKE_GH does it for every test).
+_FAKE_GH_MORE = FAKE_GH
+assert '"headRepositoryOwner": st.get("head_owner"' in _FAKE_GH_MORE
 
 
 def _more(fake_gh) -> None:

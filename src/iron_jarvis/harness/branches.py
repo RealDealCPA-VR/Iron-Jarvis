@@ -1230,11 +1230,15 @@ def commit(facts: dict[str, str], message: str, *, screen: Any = None, timeout: 
 # --------------------------------------------------------------------------- #
 
 
-def push(facts: dict[str, str]) -> dict[str, Any]:
+def push(facts: dict[str, str], *, on_spawn: Any = None) -> dict[str, Any]:
     """``git push -u <remote> ij/<name>:ij/<name>`` — NEVER ``--force`` in any
     form (the arguments are fixed here; nothing the user or a model typed is
     passed). A credential window the user's git opens is allowed; the call is
-    bounded by :data:`PUSH_S` and says so when it runs out."""
+    bounded by :data:`PUSH_S` and says so when it runs out.
+
+    v1.406.0 part 3 follow-ups: ``on_spawn(proc)`` (``procs.run``'s seam,
+    as :func:`commit` takes it) publishes the push's process so Emergency stop
+    can end it and its pre-push hook; ``None`` = exactly as before."""
     wt = _live(facts)
     branch = facts.get("branch", "")
     if not branch.startswith(BRANCH_PREFIX):
@@ -1242,7 +1246,12 @@ def push(facts: dict[str, str]) -> dict[str, Any]:
     remote = pick_remote(wt, branch)
     if not remote:
         raise GitRefused(NO_REMOTE, 409)
-    got = _g(["push", "-u", remote, f"{branch}:{branch}"], wt, timeout=PUSH_S)
+    args = ["push", "-u", remote, f"{branch}:{branch}"]
+    if on_spawn is None:
+        got = _g(args, wt, timeout=PUSH_S)
+    else:
+        got = run_git(["-c", "core.quotepath=off", *args], Path(wt), timeout=PUSH_S, env=git_env(),
+                      identity=False, encoding="utf-8", on_spawn=on_spawn, breakaway_ok=False)
     details = _masked((got.err or "") + ("\n" + got.out if got.out.strip() else ""))
     if got.timed_out:
         raise GitRefused(

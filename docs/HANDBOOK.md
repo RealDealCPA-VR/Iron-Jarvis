@@ -1959,9 +1959,14 @@ the bell):
 2. **A check failed.** As soon as the session is free (never while a reply of
    yours is running), Iron Jarvis reads the failed check's log on GitHub and
    starts a reply in the session by itself: "Checks failed on this session's
-   pull request: …". It runs on the session's own model and account, with the
-   session's approval setting, Local only and trust, exactly like a reply you
-   start. The log is shown to the model as data (secrets in it are masked).
+   pull request: …". It runs on the session's own model and account, with its
+   Local only and trust. Because nobody is watching and the log comes from
+   outside, the reply works the way a night task does, whatever the session's
+   approval setting: reading, editing and running commands in the session's
+   folder happen without asking; anything else (a web page, a browser step, an
+   app) asks you, and if nobody answers within the night shift's card wait it
+   is not done and the fix waits for you. The log is shown to the model as
+   data (secrets in it are masked).
 3. **The fix is reviewed.** When the reply ends having changed files, the
    reviewer reads the change. It can read the session's files but cannot
    change them, and it ends its report with its verdict. The setting **Who
@@ -1992,9 +1997,17 @@ What it never does:
   session's code, so its fix waits in the session's folder for you. The same
   happens when the fix reply went to low trust, or when neither Claude Code nor
   Codex is connected.
+- **Push what the reviewer could not judge.** The fix waits for you, and the
+  session says why, when: a step of the fix needed your OK and was not done;
+  a commit Iron Jarvis did not make sits between the failing checks and the
+  fix (it names the commit); the fix changes a file that is not text; or the
+  branch would push anywhere but the pull request's own repository on GitHub
+  (a folder on this PC, another host, an ssh shortcut name).
 - **Work under Emergency stop.** With Emergency stop on, nothing is read or
   started; a fix reply that is running is stopped, a review in flight is
-  stopped, and nothing is pushed.
+  stopped, and the commit (with the repository's own hooks) or the push in
+  progress is ended. If a push was cut off, Iron Jarvis reads the pull
+  request's branch back and says what really happened: pushed, or not.
 - **Change what the agent itself may do.** A commit or a push the session's
   own model tries in its shell still asks you every time, as before.
 

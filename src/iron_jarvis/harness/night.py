@@ -51,7 +51,7 @@ import json
 import logging
 import threading
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -818,6 +818,9 @@ class NightTurn:
     task_id: str
     card_wait_s: float
     engine: Any = None
+    #: v1.406.0 part 3 follow-ups: a turn with no night task (a fix of a pull
+    #: request's checks) hears each note here — ``on_note(kind, text)``.
+    on_note: Any = field(default=None, compare=False)
 
     def minutes(self) -> int:
         return max(1, int(round(self.card_wait_s / 60.0)))
@@ -829,6 +832,9 @@ class NightTurn:
     def note(self, kind: str, text: str) -> None:
         """Keep a note on the task — off the caller's loop when there is one
         (a thread of its own), never raising."""
+        if self.on_note is not None:
+            with contextlib.suppress(Exception):
+                self.on_note(kind, text)
         if self.engine is None:
             return
 

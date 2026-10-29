@@ -103,7 +103,19 @@ OFF_WORDS = ("Fixing a pull request's checks was turned off while the fix was re
 #: device (the night shift's rule).
 LOCAL_ONLY_NOTICE = "A Local only coding session: open Iron Jarvis on this PC to see it."
 
+#: v1.406.0 part 3 follow-ups: a step of the fix turn the night's guarded
+#: posture carded and nobody (or the user) let run.
+DECLINED_WORDS = (
+    "A step of the fix needed your OK and was not done ({steps}), so Iron Jarvis did not have the fix "
+    "reviewed or push it. The fix is in the session's folder: look at it, then finish it yourself."
+)
+#: How often the push step looks at the Emergency stop switch while it runs.
+STOP_POLL_S = 0.25
+
 _WAKE: dict[str, Any] = {}
+#: v1.406.0 part 3 follow-ups: the notes each fix turn's night wait wrote
+#: (``NightTurn.on_note``): a card nobody answered, declined.
+_DECLINED: dict[str, list[str]] = {}
 #: The reviews in flight, by session (each a task on the daemon's loop).
 _REVIEWS: dict[str, "asyncio.Task[Any]"] = {}
 #: ONE watch step at a time per session.
@@ -118,6 +130,16 @@ def wake_ci_loop() -> None:
     with contextlib.suppress(RuntimeError):
         if loop.is_running():
             loop.call_soon_threadsafe(event.set)
+
+
+def _note_for(turn_id: str) -> Any:
+    """The ``on_note`` a fix turn's night wait calls (any thread)."""
+
+    def on_note(kind: str, text: str) -> None:
+        if kind in ("declined", "unanswered"):
+            _DECLINED.setdefault(turn_id, []).append(str(text or "")[:300])
+
+    return on_note
 
 
 def _lock_for(thread_id: str) -> asyncio.Lock:
@@ -409,7 +431,7 @@ async def _tend(d: Any, thread_id: str, title: str, setup: dict[str, Any], out: 
         # A push of the branch the USER made: a new head, a new streak.
         await asyncio.to_thread(
             CI.save, engine, thread_id, seen_pushed_at=pushed_at, state=CI.WATCHING, rounds=0, base_sha="",
-            pushed_sha="", turn_id="", due_text="", due_note="", interval_s=CI.POLL_FIRST_S,
+            pushed_sha="", turn_id="", due_text="", due_note="", own_commits=[], interval_s=CI.POLL_FIRST_S,
             next_check_at=None, watch_since=CI.later(0), read_fails=0,
         )
         rec = await asyncio.to_thread(CI.get, engine, thread_id) or rec
@@ -461,7 +483,7 @@ async def _check(d: Any, thread_id: str, title: str, facts: dict[str, str], rec:
     if not failed:
         ours = bool(rec.get("pushed_sha")) and pr.head_sha.startswith(str(rec["pushed_sha"]))
         await asyncio.to_thread(CI.save, engine, thread_id, state=CI.PASSING, rounds=0, read_fails=0,
-                                failed=[], side_branch="", words=pr.words())
+                                failed=[], side_branch="", own_commits=[], words=pr.words())
         if ours:
             await _say(d, thread_id, title, CI.KIND_PASSING,
                        "The checks pass now with the reviewed fix Iron Jarvis pushed.", local_only=local_only)
@@ -537,7 +559,8 @@ async def _start_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
     await _say(d, thread_id, title, kind, words, round_=round_)
     try:
         lg = await start_build_turn(d, thread_id, text, turn_id, continuation=True,
-                                    started_by=N.BY_CI, model_note=note, low_trust=low_trust)
+                                    started_by=N.BY_CI, model_note=note, low_trust=low_trust,
+                                    on_night_note=_note_for(turn_id))
     except SessionBusy:
         # The user's own message won the race: the fix waits for it to end.
         await asyncio.to_thread(CI.save, engine, thread_id, state=CI.FIX_DUE, turn_id="", rounds=round_ - 1,
@@ -587,18 +610,35 @@ async def _after_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
     if at >= 0 and any(isinstance(m, dict) and m.get("role") == "user" for m in messages[at + 1:]):
         await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, USER_REPLY_WORDS, local_only=local_only)
         return
+    # v1.406.0 part 3 follow-ups: a step the guarded posture carded and that
+    # was not done (nobody answered within the night's card wait, or the user
+    # declined it) — the fix is not what was asked for: the user decides.
+    declined = _DECLINED.pop(turn_id, [])
+    denied = [str(t) for t in (line.get("deniedTools") or []) if str(t).strip()]
+    if declined or denied:
+        steps = "; ".join(dict.fromkeys(declined)) or ", ".join(dict.fromkeys(denied))
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, DECLINED_WORDS.format(steps=steps[:400]),
+                   local_only=local_only)
+        return
     wt = B._live(facts)
     base_sha = str(rec.get("base_sha") or "")
 
-    def read_change() -> tuple[str, str, str]:
+    def read_change() -> tuple[str, str, str, "list[str] | None"]:
         # ONE locked read: the diff the reviewer gets, the fingerprint the
-        # push must still match, and HEAD then.
+        # push must still match, HEAD then, and the files that are not text.
         return (CI.change_for_review(wt, base_sha), CI.change_fingerprint(wt, base_sha),
-                CI.ref_sha(wt, "HEAD"))
+                CI.ref_sha(wt, "HEAD"), CI.binary_changes(wt, base_sha))
 
-    change, fingerprint, head = await asyncio.to_thread(_git_locked, thread_id, read_change)
+    change, fingerprint, head, binaries = await asyncio.to_thread(_git_locked, thread_id, read_change)
     if not change.strip():
         await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, NO_CHANGE_WORDS, local_only=local_only)
+        return
+    if binaries is None or binaries:
+        # v1.406.0 part 3 follow-ups: the reviewer cannot read a file that is
+        # not text — such a fix is never pushed by itself.
+        files = ", ".join(binaries[:5]) if binaries else "git could not tell which files are text"
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, CI.BINARY_WORDS.format(files=files),
+                   local_only=local_only)
         return
     if local_only:
         await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, LOCAL_ONLY_WORDS, local_only=True)
@@ -667,7 +707,12 @@ async def _review_and_land(d: Any, thread_id: str, title: str, facts: dict[str, 
         # pull request's head first).
         if _emergency(d):
             with contextlib.suppress(BaseException):
-                await asyncio.shield(_end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED, EMERGENCY_WORDS))
+                cur = await asyncio.shield(asyncio.to_thread(CI.get, engine, thread_id)) or {}
+                # v1.406.0 part 3 follow-ups: a push step that was cut off
+                # wrote what REALLY happened (read back from the remote):
+                # never overwritten with "stopped".
+                if cur.get("state") == CI.REVIEWING:
+                    await asyncio.shield(_end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED, EMERGENCY_WORDS))
         raise
     finally:
         if _REVIEWS.get(thread_id) is asyncio.current_task():
@@ -690,7 +735,6 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
     still match ``job``'s fingerprint and HEAD right before the commit and
     the same fingerprint right after it — and only while the session is still
     there, not archived, not Local only, with the setting still on."""
-    from ...core.ids import utcnow
     from .build import _STARTING
     from .build_git import _GIT_ACTING
 
@@ -701,6 +745,11 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
     side = str(rec.get("side_branch") or "")
     base_sha = str(rec.get("base_sha") or "")
     config = getattr(d.platform, "config", None)
+    # v1.406.0 part 3 follow-ups: Emergency stop's hold on the commit (its
+    # hooks) and the push — and whether the push itself had begun.
+    kill = CI.Kill()
+    box: dict[str, Any] = {"pushing": False}
+    own = [str(x) for x in rec.get("own_commits") or []]
 
     def run() -> dict[str, Any]:
         from ...agents.orchestrator import emergency_stop_on
@@ -720,31 +769,121 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
             raise B.GitRefused(CI.CHANGED_SINCE_REVIEW, 409)
         on = CI.head_branch(wt)
         on_side = bool(side) and on == side
-        committed = CI.commit_fix(facts, side if on_side else facts["branch"], _commit_message(rec))
+        if emergency_stop_on(config) or kill.stop:
+            raise B.GitRefused(EMERGENCY_WORDS, 409)
+        committed = CI.commit_fix(facts, side if on_side else facts["branch"], _commit_message(rec),
+                                  on_spawn=kill.on_spawn)
+        if committed:
+            own.append(CI.ref_sha(wt, "HEAD"))
         if CI.changed_since_review(wt, base_sha, reviewed):
             raise B.GitRefused(CI.CHANGED_SINCE_REVIEW + " (The commit was made and kept, not pushed.)", 409)
         if on_side:
             CI.land_side(facts, side)
+        # v1.406.0 part 3 follow-ups: ONLY Iron Jarvis's own screened commits
+        # between the failing head and what is pushed — any other commit (the
+        # fix turn's model, a hook, the user) waits for the user, named.
+        foreign = CI.foreign_commits(wt, base_sha, own, f"refs/heads/{facts['branch']}")
+        if foreign is None or foreign:
+            raise CI.AskUser(CI.FOREIGN_COMMITS_WORDS.format(
+                commits=", ".join(foreign[:5]) if foreign else "git could not list them"), 409)
+        # …and nothing that is not text (the reviewer could not read it).
+        binaries = CI.binary_changes(wt, base_sha)
+        if binaries is None or binaries:
+            raise CI.AskUser(CI.BINARY_WORDS.format(
+                files=", ".join(binaries[:5]) if binaries else "git could not tell which files are text"), 409)
         pr = CI.read_pr(facts)
         if base_sha and pr.head_sha and pr.head_sha != base_sha:
             raise B.GitRefused("The pull request changed while the fix was reviewed, so nothing was pushed; "
                                "the fix is committed on the session's branch.", 409)
-        if emergency_stop_on(config):
+        if emergency_stop_on(config) or kill.stop:
             raise B.GitRefused(EMERGENCY_WORDS, 409)
-        done = CI.push_fix(facts, pr)
+        box["pushing"] = True
+        done = CI.push_fix(facts, pr, on_spawn=kill.on_spawn)
         done["committed"] = committed
         return done
 
     _STARTING.add(thread_id)
     _GIT_ACTING.add(thread_id)
     try:
-        done = await asyncio.to_thread(_git_locked, thread_id, run)
-    except B.GitRefused as exc:
-        await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, str(exc))
-        return
+        push_job = asyncio.ensure_future(asyncio.to_thread(_git_locked, thread_id, run))
+        try:
+            while True:
+                finished, _ = await asyncio.wait({push_job}, timeout=STOP_POLL_S)
+                if finished:
+                    break
+                if _emergency(d) and not kill.stop:
+                    await asyncio.to_thread(kill.kill)
+        except asyncio.CancelledError:
+            # Emergency stop's ``stop_all`` (or a shutdown): the commit, its
+            # hooks and the push end NOW; then what really happened is read
+            # back and written — never "stopped" over a push that went out.
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(asyncio.to_thread(kill.kill))
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(push_job)
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(_settle_push(d, thread_id, title, facts, rec, push_job, box, kill, own))
+            raise
     finally:
         _GIT_ACTING.discard(thread_id)
         _STARTING.discard(thread_id)
+    await _settle_push(d, thread_id, title, facts, rec, push_job, box, kill, own)
+
+
+async def _settle_push(d: Any, thread_id: str, title: str, facts: dict[str, str], rec: dict[str, Any],
+                       job: "asyncio.Future[Any]", box: dict[str, Any], kill: Any, own: "list[str]") -> None:
+    """What the push step REALLY did, written once: pushed (its own answer,
+    or — a push that was cut off or failed — the remote's ref read back
+    equal to the fix's commit), waiting for the user, stopped, or given up."""
+    exc = job.exception() if job.done() and not job.cancelled() else None
+    done = job.result() if job.done() and not job.cancelled() and exc is None else None
+    if done is not None:
+        await _record_pushed(d, thread_id, title, facts, rec, str(done.get("sha") or ""),
+                             str(done.get("remote") or ""))
+        return
+    if isinstance(exc, CI.AskUser):
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, str(exc))
+        return
+    if box.get("pushing"):
+        # The push had begun: the remote says whether it went out.
+        def read_back() -> "tuple[str | None, str]":
+            wt = B._live(facts)
+            return CI.remote_branch_sha(wt, facts), CI.ref_sha(wt, f"refs/heads/{facts['branch']}")
+
+        try:
+            remote, tip = await asyncio.to_thread(read_back)
+        except Exception:  # noqa: BLE001 — unreadable is said as unreadable
+            remote, tip = None, ""
+        base = str(rec.get("base_sha") or "")
+        if remote and tip and remote == tip and tip != base:
+            await _record_pushed(d, thread_id, title, facts, rec, tip, "", late=True)
+            return
+        if remote is None:
+            await _end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED,
+                       "The push was cut off and Iron Jarvis could not read the remote afterwards, so it cannot "
+                       "say whether the fix went out. Look at the pull request; the fix is committed on the "
+                       "session's branch.")
+            return
+        stopped_by = "Emergency stop stopped the push" if kill.stop else "The push did not go through"
+        await _end(d, thread_id, title, CI.STOPPED if kill.stop else CI.GAVE_UP,
+                   CI.KIND_STOPPED if kill.stop else CI.KIND_GAVE_UP,
+                   f"{stopped_by}: the pull request's branch still has commit {remote[:12] or 'none'}, and the "
+                   "fix is committed on the session's branch, not pushed.")
+        return
+    if kill.stop or (isinstance(exc, B.GitRefused) and str(exc) == EMERGENCY_WORDS):
+        await _end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED, EMERGENCY_WORDS)
+        return
+    if exc is not None and not isinstance(exc, B.GitRefused):
+        log.warning("the push step of %s failed", thread_id, exc_info=exc)
+    words = str(exc) if isinstance(exc, B.GitRefused) else "The push step failed, so nothing was pushed."
+    await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, words)
+
+
+async def _record_pushed(d: Any, thread_id: str, title: str, facts: dict[str, str], rec: dict[str, Any],
+                         sha: str, remote: str, *, late: bool = False) -> None:
+    from ...core.ids import utcnow
+
+    engine = d.platform.engine
     pushed_at = utcnow().isoformat()
 
     def record() -> None:
@@ -752,16 +891,18 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
         from .build import _setup_of
 
         fresh = (B.facts_of(_setup_of(row)) if row is not None else None) or facts
-        S.update(engine, thread_id, setup={B.SETUP_KEY: {**fresh, "remote": done.get("remote") or fresh.get(
+        S.update(engine, thread_id, setup={B.SETUP_KEY: {**fresh, "remote": remote or fresh.get(
             "remote", ""), "pushed_at": pushed_at}})
 
     await asyncio.to_thread(record)
-    sha = str(done.get("sha") or "")
     words = (f"Pushed the reviewed fix to {facts['branch']} (commit {sha[:12]}). Watching the pull request's "
              "checks again.")
+    if late:
+        words = (f"The push was cut off, but it had already gone out: the reviewed fix is on {facts['branch']} "
+                 f"(commit {sha[:12]}). Watching the pull request's checks again.")
     await asyncio.to_thread(
         CI.save, engine, thread_id, state=CI.WATCHING, pushed_sha=sha, seen_pushed_at=pushed_at, side_branch="",
-        base_sha="", interval_s=CI.POLL_FIRST_S, next_check_at=CI.later(CI.POLL_FIRST_S),
+        base_sha="", own_commits=[], interval_s=CI.POLL_FIRST_S, next_check_at=CI.later(CI.POLL_FIRST_S),
         watch_since=CI.later(0), read_fails=0, words=words,
     )
     await _say(d, thread_id, title, CI.KIND_PUSHED, words, round_=int(rec.get("rounds") or 0))
@@ -783,12 +924,14 @@ async def _keep_on_side(d: Any, thread_id: str, title: str, facts: dict[str, str
     known_side = str(rec.get("side_branch") or "")
     base_sha = str(rec.get("base_sha") or "")
 
+    own = [str(x) for x in rec.get("own_commits") or []]
+
     def run() -> str:
         wt = B._live(facts)
         on = CI.head_branch(wt)
         if on == facts["branch"]:
             if base_sha and CI.ref_sha(wt, f"refs/heads/{facts['branch']}") != base_sha:
-                raise B.GitRefused(
+                raise CI.AskUser(
                     "Commits were made on the pull request's branch during the fix, so Iron Jarvis left them "
                     "where they are; nothing was pushed.", 409)
             side = CI.side_name(facts, wt)
@@ -798,13 +941,17 @@ async def _keep_on_side(d: Any, thread_id: str, title: str, facts: dict[str, str
         else:
             raise B.GitRefused("The session's worktree is on another branch now, so the fix was left as it "
                                "is; nothing was pushed.", 409)
-        CI.commit_fix(facts, side, _commit_message(rec) + "\n\nNot approved yet: kept off the pull request.")
+        if CI.commit_fix(facts, side, _commit_message(rec) + "\n\nNot approved yet: kept off the pull request."):
+            own.append(CI.ref_sha(wt, "HEAD"))
         return side
 
     _STARTING.add(thread_id)
     _GIT_ACTING.add(thread_id)
     try:
         side = await asyncio.to_thread(_git_locked, thread_id, run)
+    except CI.AskUser as exc:
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, str(exc))
+        return
     except B.GitRefused as exc:
         await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, str(exc))
         return
@@ -824,7 +971,7 @@ async def _keep_on_side(d: Any, thread_id: str, title: str, facts: dict[str, str
                           session_id=S.session_id_for(thread_id), flagged=flagged)
     words = (f"The fix is kept on the side branch {side} and was not pushed to the pull request. Working on "
              f"what {label} found next (round {rounds + 1} of {CI.MAX_ROUNDS}).")
-    await asyncio.to_thread(CI.save, engine, thread_id, state=CI.FIX_DUE, side_branch=side,
+    await asyncio.to_thread(CI.save, engine, thread_id, state=CI.FIX_DUE, side_branch=side, own_commits=own,
                             due_text=CI.revise_text(), due_note=note, due_low_trust=flagged[0] if flagged else "",
                             turn_id="", words=words)
     await _say(d, thread_id, title, CI.KIND_SIDE, words, round_=rounds)

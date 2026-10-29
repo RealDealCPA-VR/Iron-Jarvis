@@ -4223,17 +4223,46 @@ does not need a bump, stop and bump it.
   reviewer's report fed to the next round) that promptguard flags starts the
   fix turn at LOW trust (`fix_note(flagged=)`, `CiWatchRecord.due_low_trust`)
   → its fix waits for the user. A USER message after the fix turn's reply →
-  `USER_REPLY_WORDS`, asking. STILL OPEN (decisions, not fixed): the fix turn
-  runs under the SESSION's own posture (a yolo session's unattended fix turn
-  reads an attacker-influenceable log with web and shell uncarded; the night
-  shift's guarded posture is not applied, and a card in an Ask-first session
-  parks the watch in FIXING until answered); a push address that is not a
-  GitHub URL (a local path, another host) is not compared; history BETWEEN
-  the failing head and the fix (commits made in the fix turn) is pushed with
-  only the final tree reviewed and only Iron Jarvis's own commit screened;
-  the commit's hooks are not killed by Emergency stop (the night commit's
-  `on_spawn` is not used); binary changes reach the reviewer as "Binary files
-  differ".
+  `USER_REPLY_WORDS`, asking. FOLLOW-UPS (the five items the review left
+  open, each closed the SAFE way — asking, never a push; 11 pins in
+  `tests/test_ci_fix_followups_v1406.py`, all red on 2ca30be8, 13 mutations,
+  all red): (1) THE FIX TURN'S POSTURE is the night shift's guarded one
+  whatever the session's (yolo and Auto included): `start_build_turn(
+  started_by="ci")` applies `night.posture_setup` for THAT turn only
+  (nothing stored; "Ask before everything" keeps its stricter posture and no
+  command grant) and arms a `NightTurn(task_id="", on_note=)` — the night
+  allow-list (`RUNS_UNASKED`) runs unasked, everything else is carded,
+  bounded by `night_card_wait_minutes` and then declined; `ci_watch.
+  _note_for(turn_id)` hears each decline (`NightTurn.on_note`, a new field)
+  and a declined or denied step (`deniedTools`) puts the watch in asking,
+  naming it (`DECLINED_WORDS`). (2) ONLY IRON JARVIS'S OWN COMMITS between
+  the failing head and what is pushed: `CiWatchRecord.own_commits_json` keeps
+  every screened commit of the streak (the side-branch rounds too);
+  `foreign_commits` after the land → any other commit (or a list git could
+  not read) is `CI.AskUser` → asking, each named (`FOREIGN_COMMITS_WORDS`).
+  (3) THE PUSH ADDRESS (`push_address_refusal`, in `push_fix`): the URL git
+  REALLY pushes to (`resolved_push_url` = `git remote get-url --push`,
+  `insteadOf`/`pushInsteadOf` applied — measured; THE SEAM the bare-remote
+  tests replace) must be a GitHub URL on the PR's own host EXACTLY (an ssh
+  alias such as `github-work`, a look-alike host, a local folder, another
+  host refused) of the PR's `headRepositoryOwner/headRepository` (missing =
+  `PUSH_ADDRESS_UNKNOWN`) → else asking. (4) HOOKS AND CANCEL: `CI.Kill` is
+  the push step's hold — `commit_fix(on_spawn=)` (bounded `COMMIT_S`) and
+  `branches.push(on_spawn=)` (new kwarg; `None` = exactly as before) publish
+  their child, the async supervisor (`STOP_POLL_S` 0.25) kills it the moment
+  Emergency stop is on, and a cancel (`stop_all`) kills, waits for the
+  thread, then `_settle_push` writes what REALLY happened: a push that had
+  begun is READ BACK (`remote_branch_sha` = `git ls-remote <push url>
+  refs/heads/<branch>`) — equal to the fix's tip → recorded as pushed ("had
+  already gone out"), else "stopped the push: the PR's branch still has
+  commit X … not pushed", unreadable → said so; the outer cancel handler
+  writes "stopped" ONLY while the record still says reviewing (never over
+  the truth). (5) BINARIES: `binary_changes` (`git diff --numstat` "-",
+  a new file holding a NUL; None = git could not say) — any → asking before
+  the review (`BINARY_WORDS`), re-checked before the push. OPEN: a fix turn
+  cut off by a restart is carried on under a new turn id by the resume pass
+  without the guarded posture (its record then stops the watch); the read-back
+  trusts the remote's ref name (a remote that rewrites refs is not modelled).
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

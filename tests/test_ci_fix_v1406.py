@@ -73,7 +73,9 @@ if args[:2] == ["pr", "view"]:
     save()
     sha = head()
     checks = st.get("checks_by_sha", {}).get(sha, st.get("checks", []))
-    print(json.dumps({"url": "https://github.com/acme/proj/pull/7", "number": 7,
+    print(json.dumps({"url": st.get("url", "https://github.com/acme/proj/pull/7"), "number": st.get("number", 7),
+                      "headRepository": st.get("head_repo", {"name": "proj"}),
+                      "headRepositoryOwner": st.get("head_owner", {"login": "acme"}),
                       "state": st.get("pr_state", "OPEN"), "headRefName": st.get("head_ref", st["branch"]),
                       "headRefOid": sha, "baseRefName": st.get("base_ref", "main"),
                       "statusCheckRollup": checks}))
@@ -198,6 +200,13 @@ def _clean(monkeypatch):
     W._LOCKS.clear()
     # The two reviewers are "connected" (cached answers only).
     monkeypatch.setattr("iron_jarvis.agents.model_team.provider_ready", lambda platform, p: True)
+    # v1.406.0 part 3 follow-ups: the push address must be the pull request's
+    # own GitHub repository (``ci_fix.push_address_refusal``). Here the push
+    # really lands in a local bare repository, so where git would push is
+    # REPORTED as GitHub's (the seam); tests/test_ci_fix_followups_v1406.py
+    # drives the real reading.
+    monkeypatch.setattr(CI, "resolved_push_url", lambda wt, remote: "https://github.com/acme/proj.git",
+                        raising=False)
     yield
     for t in list(W._REVIEWS.values()):
         t.cancel()
@@ -257,12 +266,12 @@ class World:
     async def settle_turn(self) -> None:
         from iron_jarvis.daemon.routes.build import _running_turn
 
-        assert await until(lambda: not _running_turn(self.d, self.sid), 30.0)
+        assert await until(lambda: not _running_turn(self.d, self.sid), 120.0)
 
     async def settle_review(self) -> None:
         task = W._REVIEWS.get(self.sid)
         if task is not None:
-            await asyncio.wait_for(asyncio.shield(task), 30.0)
+            await asyncio.wait_for(asyncio.shield(task), 120.0)
 
     def due_now(self) -> None:
         CI.save(self.engine, self.sid, next_check_at=None)

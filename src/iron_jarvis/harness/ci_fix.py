@@ -181,6 +181,10 @@ class CiWatchRecord(SQLModel, table=True):
     #: report) held something the scan flagged, so its fix is never pushed
     #: by itself.
     due_low_trust: str = ""
+    #: v1.406.0 part 3 follow-ups: the commits Iron Jarvis ITSELF made of this
+    #: streak's fix (full SHAs, JSON) — the only commits that may sit between
+    #: the failing head and what is pushed (:func:`foreign_commits`).
+    own_commits_json: str = ""
     #: The commit Iron Jarvis pushed (its checks decide "passing now").
     pushed_sha: str = ""
     #: The session's ``pushed_at`` as Iron Jarvis last saw it: a different one
@@ -217,6 +221,10 @@ def _view(row: "CiWatchRecord | None") -> "dict[str, Any] | None":
         out["failed"] = [str(x) for x in json.loads(row.failed_json or "[]") if str(x)]
     except (TypeError, ValueError):
         out["failed"] = []
+    try:
+        out["own_commits"] = [str(x) for x in json.loads(row.own_commits_json or "[]") if str(x)]
+    except (TypeError, ValueError):
+        out["own_commits"] = []
     for k in ("next_check_at", "watch_since", "created_at", "updated_at"):
         v = out.get(k)
         out[k] = v.isoformat() if isinstance(v, datetime) else None
@@ -245,7 +253,7 @@ def ensure(engine: Any, thread_id: str, facts: dict[str, str]) -> dict[str, Any]
         for k, v in {
             "pr_url": url, "pr_number": str(facts.get("pr_number") or ""),
             "branch": str(facts.get("branch") or ""), "state": WATCHING, "rounds": 0, "base_sha": "",
-            "failed_json": "", "side_branch": "", "turn_id": "", "due_text": "", "due_note": "", "due_low_trust": "",
+            "failed_json": "", "side_branch": "", "turn_id": "", "due_text": "", "due_note": "", "due_low_trust": "", "own_commits_json": "",
             "pushed_sha": "", "seen_pushed_at": str(facts.get("pushed_at") or ""), "reviewer": "",
             "words": "", "interval_s": POLL_FIRST_S, "next_check_at": None, "watch_since": _naive(now),
             "read_fails": 0, "updated_at": now,
@@ -270,6 +278,8 @@ def save(engine: Any, thread_id: str, *, expect_state: "str | None" = None, **ch
         for k, v in changes.items():
             if k == "failed":
                 row.failed_json = json.dumps([str(x) for x in (v or [])][:50])
+            elif k == "own_commits":
+                row.own_commits_json = json.dumps([str(x) for x in (v or [])][-50:])
             elif k in _FIELDS:
                 setattr(row, k, _naive(v) if isinstance(v, datetime) else v)
         row.updated_at = utcnow()
@@ -779,14 +789,24 @@ def side_name(facts: dict[str, str], wt: Path) -> str:
     raise B.GitRefused("Too many side branches of this session already exist.", 409)
 
 
-def commit_fix(facts: dict[str, str], branch: str, message: str) -> "dict[str, Any] | None":
+#: How long Iron Jarvis's own commit (its hooks) may run.
+COMMIT_S = 120.0
+
+
+def commit_fix(facts: dict[str, str], branch: str, message: str, *,
+               on_spawn: Any = None) -> "dict[str, Any] | None":
     """Commit the worktree's changes on ``branch`` (the night shift's
     SCREENED commit: a secret, a huge file or a dependency folder is left out
-    and named). None when there was nothing to commit. BLOCKING."""
+    and named). None when there was nothing to commit. BLOCKING.
+
+    v1.406.0 part 3 follow-ups: the night commit's ``on_spawn`` seam — the
+    commit's process (and the repository's hooks it runs) is published to
+    :class:`Kill`, so Emergency stop ends it; bounded by :data:`COMMIT_S`."""
     from . import night_commit as NC
 
     try:
-        return B.commit({**facts, "branch": branch}, message, screen=NC.screen, recheck=NC.check_commit)
+        return B.commit({**facts, "branch": branch}, message, screen=NC.screen, recheck=NC.check_commit,
+                        timeout=COMMIT_S, on_spawn=on_spawn)
     except B.GitRefused as exc:
         if str(exc) == B.NOTHING_TO_COMMIT:
             return None
@@ -835,6 +855,175 @@ PUSH_OTHER_REPO = (
 )
 
 
+class AskUser(B.GitRefused):
+    """A push Iron Jarvis will not make BY ITSELF — the fix waits for the user
+    (the watch rests ``asking``), never "gave up"."""
+
+
+#: v1.406.0 part 3 follow-ups: the push address must BE the pull request's
+#: own head repository on GitHub.
+PUSH_ADDRESS_WORDS = (
+    "The branch pushes to {where}, not to the GitHub repository the pull request's branch lives in "
+    "({repo}), so Iron Jarvis did not push the fix by itself. The fix is committed on the session's "
+    "branch: look at it, then push it yourself."
+)
+PUSH_ADDRESS_UNKNOWN = (
+    "GitHub did not say which repository the pull request's branch lives in, so Iron Jarvis could not "
+    "check where the push would go and did not push the fix by itself. The fix is committed on the "
+    "session's branch: look at it, then push it yourself."
+)
+
+
+def resolved_push_url(wt: Path, remote: str) -> str:
+    """Where ``git push <remote>`` really goes: ``git remote get-url --push``
+    (``url.*.insteadOf`` / ``pushInsteadOf`` applied — measured). THE SEAM a
+    test whose pushes land in a local bare repository replaces. "" when git
+    could not say."""
+    got = B._g(["remote", "get-url", "--push", remote], wt, reads=True)
+    return got.out.strip() if got.ok else ""
+
+
+def _host_of_url(url: str) -> str:
+    gh = B.github_repo(url)
+    return gh[0].lower() if gh else ""
+
+
+_SCHEME_HOST_RX = re.compile(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/:]+)", re.I)
+_SCP_HOST_RX = re.compile(r"^[^@/]+@([^:/]+):")
+
+
+def _where(url: str) -> str:
+    """The push address in words: a host, or "a folder on this PC"."""
+    if not url:
+        return "an address git could not name"
+    m = _SCHEME_HOST_RX.match(url) or _SCP_HOST_RX.match(url)
+    if m and not url.lower().startswith("file:"):
+        return m.group(1)
+    return "a folder on this PC"
+
+
+def push_address_refusal(facts: dict[str, str], pr: PrChecks, wt: Path) -> str:
+    """Why the push ADDRESS may not take the fix by itself, or "": the
+    branch's push URL must be a GitHub URL — on the pull request's own host
+    (``github.com``, exactly: an ssh alias or a look-alike host is not
+    resolved here) — of the repository its head lives in. A local path,
+    another host or another repository waits for the user. Pure but git."""
+    if not (pr.head_owner and pr.head_repo):
+        return PUSH_ADDRESS_UNKNOWN
+    repo = f"{pr.head_owner}/{pr.head_repo}"
+    branch = str(facts.get("branch") or "")
+    remote = B.pick_remote(wt, branch)
+    url = resolved_push_url(wt, remote) if remote else ""
+    want_host = _host_of_url(str(facts.get("pr_url") or "")) or "github.com"
+    gh = B.github_repo(url)
+    if gh is None or gh[0].lower() != want_host:
+        return PUSH_ADDRESS_WORDS.format(where=_where(url), repo=repo)
+    if (gh[1].lower(), gh[2].lower()) != (pr.head_owner.lower(), pr.head_repo.lower()):
+        return PUSH_ADDRESS_WORDS.format(where=f"{gh[1]}/{gh[2]}", repo=repo)
+    return ""
+
+
+FOREIGN_COMMITS_WORDS = (
+    "Commits Iron Jarvis did not make sit between the failing checks and the fix ({commits}), so it did "
+    "not push them by itself. Look at them, then push the branch yourself."
+)
+
+
+def foreign_commits(wt: Path, base_sha: str, own: "list[str]", tip: str = "HEAD") -> "list[str] | None":
+    """The commits between ``base_sha`` and ``tip`` that are NOT Iron
+    Jarvis's own (``own``, full SHAs), as ``<short> <subject>``; None when git
+    could not list them (never "none"). BLOCKING."""
+    if not base_sha:
+        return None
+    got = B._g(["log", "--format=%H%x09%s", f"{base_sha}..{tip}"], wt, reads=True)
+    if not got.ok:
+        return None
+    mine = {str(s).strip().lower() for s in own if str(s).strip()}
+    out: list[str] = []
+    for line in (got.out or "").splitlines():
+        sha, _, subject = line.partition("\t")
+        if sha.strip() and sha.strip().lower() not in mine:
+            out.append(f"{sha.strip()[:12]} \u201c{subject.strip()[:80]}\u201d")
+    return out
+
+
+BINARY_WORDS = (
+    "The fix changes a file that is not text ({files}): the reviewer could not read it, so Iron Jarvis "
+    "did not push the fix by itself. Look at it, then commit and push it yourself."
+)
+
+
+def binary_changes(wt: Path, base_sha: str) -> "list[str] | None":
+    """Files the fix changed since ``base_sha`` that are NOT text — a binary
+    the reviewer cannot read (``git diff --numstat`` reports ``-``; a new file
+    holding a NUL byte). None when git could not say. BLOCKING."""
+    if not base_sha:
+        return None
+    num = B._g(["diff", "--numstat", "-z", "--no-renames", base_sha], wt, reads=True)
+    new = B._g(["ls-files", "--others", "--exclude-standard", "-z"], wt, reads=True)
+    if not num.ok or not new.ok:
+        return None
+    out: list[str] = []
+    for entry in (num.out or "").split("\0"):
+        parts = entry.split("\t")
+        if len(parts) >= 3 and parts[0] == "-" and parts[1] == "-":
+            out.append(parts[2])
+    for rel in (n for n in (new.out or "").split("\0") if n.strip()):
+        try:
+            with open(wt / rel, "rb") as fh:
+                head = fh.read(8000)
+        except OSError:
+            continue
+        if b"\0" in head:
+            out.append(rel)
+    return sorted(dict.fromkeys(out))
+
+
+def remote_branch_sha(wt: Path, facts: dict[str, str]) -> "str | None":
+    """The branch's sha ON THE REMOTE the push goes to, read back
+    (``git ls-remote <push url> refs/heads/<branch>``) — what a cancelled
+    push really did. "" = the remote has no such branch; None = it could not
+    be read. BLOCKING."""
+    branch = str(facts.get("branch") or "")
+    remote = B.pick_remote(wt, branch)
+    got = B._g(["remote", "get-url", "--push", remote], wt, reads=True) if remote else None
+    url = got.out.strip() if got is not None and got.ok else ""
+    if not url:
+        return None
+    ls = B._g(["ls-remote", url, f"refs/heads/{branch}"], wt, timeout=B.PUSH_S, reads=True)
+    if not ls.ok:
+        return None
+    return (ls.out.split() or [""])[0]
+
+
+class Kill:
+    """Emergency stop's hold on the push step's git children (the commit,
+    its hooks, the push): ``on_spawn`` publishes each, :meth:`kill` ends the
+    one running and refuses every later one. Thread-safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.stop = False
+        self.proc: Any = None
+
+    def on_spawn(self, proc: Any) -> bool:
+        with self._lock:
+            self.proc = proc
+            return bool(self.stop)
+
+    def kill(self) -> None:
+        from ..core import procs
+
+        with self._lock:
+            self.stop = True
+            proc = self.proc
+        if proc is not None:
+            try:
+                procs.kill_tree(proc)
+            except Exception:  # noqa: BLE001
+                log.debug("ending the push step's git child failed", exc_info=True)
+
+
 def push_refusal(facts: dict[str, str], pr: PrChecks, wt: Path) -> str:
     """Why the reviewed fix may NOT be pushed, in words, or "" when it may.
     The ONE gate of the feature's only push: the session's own ``ij/``
@@ -881,22 +1070,28 @@ def push_refusal(facts: dict[str, str], pr: PrChecks, wt: Path) -> str:
     return ""
 
 
-def push_fix(facts: dict[str, str], pr: PrChecks) -> dict[str, Any]:
+def push_fix(facts: dict[str, str], pr: PrChecks, *, on_spawn: Any = None) -> dict[str, Any]:
     """Push the reviewed fix to the pull request's own branch —
     ``branches.push`` (``git push -u <remote> <branch>:<branch>``: a fixed
     refspec, never ``--force``; a remote that moved refuses it). Refused in
-    words by :func:`push_refusal`. BLOCKING."""
+    words by :func:`push_refusal`; an address that is not the pull request's
+    own GitHub repository waits for the user (:func:`push_address_refusal`,
+    :class:`AskUser`). BLOCKING."""
     wt = B._live(facts)
     why = push_refusal(facts, pr, wt)
     if why:
         raise B.GitRefused(why, 409)
-    done = B.push(facts)
+    why = push_address_refusal(facts, pr, wt)
+    if why:
+        raise AskUser(why, 409)
+    done = B.push(facts, on_spawn=on_spawn)
     done["sha"] = ref_sha(wt, f"refs/heads/{facts['branch']}")
     return done
 
 
 __all__ = [
-    "ASKING", "CHANGED_SINCE_REVIEW", "CLOSED", "CiWatchRecord", "FIXING", "FIX_DUE", "GAVE_UP", "MAX_ROUNDS", "NEWS_KINDS",
+    "ASKING", "AskUser", "Kill", "binary_changes", "foreign_commits", "push_address_refusal",
+    "remote_branch_sha", "resolved_push_url", "CHANGED_SINCE_REVIEW", "CLOSED", "CiWatchRecord", "FIXING", "FIX_DUE", "GAVE_UP", "MAX_ROUNDS", "NEWS_KINDS",
     "PASSING", "POLL_FIRST_S", "POLL_MAX_S", "PrChecks", "REVIEWERS", "REVIEWER_SETTINGS", "REVIEWING",
     "SETTLED", "STATES", "STOPPED", "WATCHING", "WATCH_MAX_S", "change_fingerprint", "change_for_review",
     "changed_since_review", "commit_fix",
