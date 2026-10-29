@@ -23,6 +23,7 @@ Pinned here:
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -548,6 +549,59 @@ def test_a_code_workspace_file_is_refused(tmp_path):
     assert e.value.sentence == code_editor.WORKSPACE_FILE
 
 
+def test_a_workspace_file_is_refused_by_the_name_the_url_carries(tmp_path):
+    """v1.405.0 part B review: the editor reads the URL's OWN name, which is
+    the path as the user spelled it. A link NAMED ``*.code-workspace`` (its
+    target innocently named) used to pass, because only the name the walk
+    LEADS TO was checked; and Windows opens ``x.code-workspace.`` (trailing
+    dot or space dropped) and ``x.code-workspace::$DATA`` (the file's own data
+    stream) as the workspace file itself."""
+    real = tmp_path / "real.json"
+    real.write_text('{"folders": [], "tasks": {}}', encoding="utf-8")
+    ws = tmp_path / "shop.code-workspace"
+    ws.write_text('{"folders": [], "tasks": {}}', encoding="utf-8")
+    for raw in (
+        str(ws) + ".",
+        str(ws) + " .",
+        str(ws) + "::$DATA",
+        str(tmp_path / "SHOP.CODE-WORKSPACE") + ":$DATA",
+    ):
+        with pytest.raises(code_editor.EditorRefusal) as e:
+            code_editor.check_path(raw)
+        assert (e.value.sentence, e.value.status) == (code_editor.WORKSPACE_FILE, 403), raw
+    _symlink_or_skip(str(real), tmp_path / "evil.code-workspace")
+    with pytest.raises(code_editor.EditorRefusal) as e:
+        code_editor.check_path(str(tmp_path / "evil.code-workspace"))
+    assert (e.value.sentence, e.value.status) == (code_editor.WORKSPACE_FILE, 403)
+    # An ordinary file with a dot in its stem still opens.
+    plain = tmp_path / "notes.code-workspace.md"
+    plain.write_text("x = 1", encoding="utf-8")
+    assert code_editor.check_path(str(plain)) == Path(os.path.normpath(str(plain)))
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 names are a Windows thing")
+def test_a_workspace_file_named_by_its_short_83_name_is_refused(tmp_path):
+    """v1.405.0 part B review: ``SHOP~1.COD`` is the same file as
+    ``shop.code-workspace``; its long name is read back before the check."""
+    import ctypes
+
+    ws = tmp_path / "shop.code-workspace"
+    ws.write_text('{"folders": [], "tasks": {}}', encoding="utf-8")
+    buf = ctypes.create_unicode_buffer(1024)
+    got = ctypes.windll.kernel32.GetShortPathNameW(str(ws), buf, 1024)
+    short = buf.value if got else ""
+    if not short or Path(short).name.lower() == ws.name.lower():
+        pytest.skip("this volume makes no 8.3 names")
+    with pytest.raises(code_editor.EditorRefusal) as e:
+        code_editor.check_path(short)
+    assert (e.value.sentence, e.value.status) == (code_editor.WORKSPACE_FILE, 403)
+    # A short name of an ordinary file still opens.
+    src = tmp_path / "a_long_source_name.py"
+    src.write_text("x = 1", encoding="utf-8")
+    got = ctypes.windll.kernel32.GetShortPathNameW(str(src), buf, 1024)
+    assert code_editor.check_path(buf.value) == Path(os.path.normpath(buf.value))
+
+
 def test_the_handbook_says_vscode_asks_the_first_time():
     text = (Path(__file__).resolve().parents[1] / "docs" / "HANDBOOK.md").read_bytes().decode("utf-8")
     part = text.split("## Reviewing a coding session's changes, and opening them in your editor", 1)[1]
@@ -626,6 +680,7 @@ def test_every_other_tools_saved_detail_is_byte_identical():
     import json
 
     from iron_jarvis.daemon.chat_turn import STEP_DETAIL_INPUT_CHARS, prior_tool_result_entry, step_detail
+    from iron_jarvis.daemon.schemas import PRIOR_RESULT_ARGS_CHARS
 
     for name, args in [
         ("shell", {"command": "pytest -q", "cwd": "src", "timeout_s": 60}),
@@ -636,9 +691,9 @@ def test_every_other_tools_saved_detail_is_byte_identical():
     ]:
         want = json.dumps(args, default=str, ensure_ascii=False, sort_keys=True)
         assert step_detail(name, args, "")["input"] == want[:STEP_DETAIL_INPUT_CHARS], name
-        assert prior_tool_result_entry(name, args, True, "")["args_summary"] == want[: len(
-            prior_tool_result_entry(name, args, True, "")["args_summary"]
-        )]
+        # v1.405.0 part B review: the WHOLE escalation row, cut at its own cap
+        # (a prefix-of-itself compare passed for an empty row).
+        assert prior_tool_result_entry(name, args, True, "")["args_summary"] == want[:PRIOR_RESULT_ARGS_CHARS], name
     # A file tool's nested values keep their sorted keys; the escalation row
     # reads the same line as the step (they never disagree).
     args = {"path": "a.py", "edits": [{"old": "o", "new": "n", "replace_all": True}]}

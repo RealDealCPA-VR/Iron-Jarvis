@@ -3912,6 +3912,11 @@ does not need a bump, stop and bump it.
   rooted-no-drive target or more than `MAX_LINK_HOPS` 40 (`UNREADABLE_LINK`);
   a `*.code-workspace` (by its own name or the name a link leads to) is
   refused (`WORKSPACE_FILE` — the editor would load its settings and tasks);
+  `_workspace_name` reads a name the way Windows opens it (a `:stream`
+  suffix and trailing dots/spaces dropped) and the check runs on the path's
+  OWN name, the link's destination AND its 8.3 long name (`_long_name`,
+  `GetLongPathNameW`, after the walk) — a link NAMED `x.code-workspace`
+  passed the first review round (second review);
   then `editor_url`:
   `<scheme>://file/<path>:<line>:<col>` — forward slashes, `quote(safe="/:")`
   (space, `#`, `%`, `?`, non-ASCII encoded; the drive colon kept), ALWAYS a

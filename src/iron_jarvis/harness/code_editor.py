@@ -345,6 +345,36 @@ def _walk_links(path: str) -> str:
             return current
 
 
+def _workspace_name(name: str) -> bool:
+    """A file name Windows opens as a ``*.code-workspace`` file (v1.405.0 part
+    B review): case-blind, with a data-stream suffix (``x.code-workspace::$DATA``
+    is the file's own data) and the trailing dots and spaces Windows drops
+    (``x.code-workspace.``) taken off first."""
+    win32 = name.split(":", 1)[0].rstrip(". ")
+    return win32.lower().endswith(WORKSPACE_SUFFIX)
+
+
+def _long_name(path: str) -> str:
+    """The file's LONG name on Windows (``SHOP~1.COD`` is ``shop.code-workspace``
+    on a volume that makes 8.3 names), or "" (not Windows, not found, any
+    error). Called only after the network check and the link walk, so it
+    never opens a share."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes  # noqa: PLC0415 — Windows only
+
+        size = ctypes.windll.kernel32.GetLongPathNameW(path, None, 0)
+        if not size or size > 32_768:
+            return ""
+        buf = ctypes.create_unicode_buffer(size)
+        if not ctypes.windll.kernel32.GetLongPathNameW(path, buf, size):
+            return ""
+        return Path(buf.value).name
+    except Exception:  # noqa: BLE001 — never raises
+        return ""
+
+
 def check_position(value: Any, *, column: bool = False) -> int | None:
     """A line or column: None when not given, else a whole number in range.
     Raises :class:`EditorRefusal` (a bool is not a number here)."""
@@ -385,9 +415,10 @@ def check_path(raw: Any) -> Path:
     # Every link on the way, one hop at a time, BEFORE the file policy (which
     # resolves the path): a link into a network share is refused unopened.
     leads_to = _walk_links(str(norm))
-    # A workspace file — by its own name or the name a link leads to (the
-    # walk returns the path itself when there is no link).
-    if Path(leads_to).name.lower().endswith(WORKSPACE_SUFFIX):
+    # A workspace file — by its OWN name (the one the URL carries: a link
+    # NAMED ``x.code-workspace`` is read by that name) and by the name a link
+    # leads to (the walk returns the path itself when there is no link).
+    if any(_workspace_name(n) for n in (norm.name, Path(leads_to).name, _long_name(str(norm)))):
         raise EditorRefusal(WORKSPACE_FILE, 403)
     if is_protected_path(str(norm)):
         raise EditorRefusal(NOT_ALLOWED, 403)
