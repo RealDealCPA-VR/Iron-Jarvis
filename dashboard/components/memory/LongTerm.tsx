@@ -33,6 +33,7 @@ import type { LtmResult, LtmSource } from "@/lib/types";
 import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
 import { ImportFromAI } from "./ImportFromAI";
 import { McpBaseRoles } from "./McpBaseRoles";
+import { memoryBaseKindWords, memoryServerWhere } from "@/lib/memoryBaseKinds";
 
 /** Catalogue icon name -> component (the catalogue stays free of JSX imports). */
 const BASE_ICON = {
@@ -1396,7 +1397,7 @@ export function LongTerm() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-semibold text-zinc-100">{s.name}</span>
-                            <Badge value={s.kind} tone={sourceTone(s.kind)} />
+                            <Badge value={memoryBaseKindWords(s.kind)} keepCase tone={sourceTone(s.kind)} />
                           </div>
                           <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
                             {s.kind === "notion"
@@ -1405,6 +1406,8 @@ export function LongTerm() {
                                 ? `${s.username ? s.username + "@" : ""}${s.host || "—"}:${s.path || ""}`
                                 : s.kind === "http_rag"
                                   ? String(s.endpoint_url || "—")
+                                  : s.kind === "mcp"
+                                  ? memoryServerWhere(s.endpoint_url)
                                   : DRIVE_KINDS.includes(s.kind as Kind)
                                     ? s.path
                                       ? String(s.path)

@@ -142,6 +142,16 @@ describe("D1: the badge comes from the listing; the tools are read when the edit
     expect(rolesGets()).toEqual([]);
   });
 
+  it("a memory server's row says its kind in words and where it is (never a raw kind or a dash)", async () => {
+    H.gets["/ltm/sources"] = S.listing_confirmed.body;
+    render(<LongTerm />);
+    const row = await screen.findByTestId(`ltm-source-row-${BASE}`, {}, W);
+    expect(within(row).getByText("memory server")).toBeTruthy();
+    expect(within(row).queryByText("mcp")).toBeNull();
+    expect(within(row).getByText("http://wiki.invalid/mcp")).toBeTruthy();
+    expect(within(screen.getByTestId("ltm-source-row-notes")).getByText("folder")).toBeTruthy();
+  });
+
   it("every press of Set up tools reads the server's tools again", async () => {
     await openEditor(S.roles_unconfirmed, false);
     expect(rolesGets()).toEqual([ROLES]);

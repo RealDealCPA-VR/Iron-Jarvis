@@ -3991,7 +3991,19 @@ does not need a bump, stop and bump it.
   is **Memory profile** (vocabulary canon; both ALLOW entries removed; ids,
   `brain_profile` and `brain_*` unchanged; "brain profile" stays a search
   alias). Dashboard: `components/memory/McpBaseRoles.tsx` (Set up tools),
-  Check / Try a test save on each profile. NOT DONE: Notion's hosted MCP
+  Check / Try a test save on each profile. REVIEW (9 defects, each red
+  first): `unreachable(exc, sent=)` ignores any word/code that appears in
+  what was SENT (a FastMCP refusal echoes the note in `input_value=`, so a
+  note saying "connection" was queued forever; codes match whole numbers
+  only); `already_saved` needs the WHOLE text at word boundaries (an 80-char
+  prefix made a refused correction "saved"); a prose create reply is
+  looked up by title; `health()` honours a confirmed search tool;
+  `tool_list` reads a FRESH list on a throwaway thread, 20 s bound; an
+  empty required value is refused before sending; re-adding a base for
+  another server clears `roles_json`; Notion's schema read is remembered
+  only once it succeeds; `mcp_roles.writes()` (edit/modify/…/store +
+  `readOnlyHint: false` / `destructiveHint`) keeps a writer from reading.
+  NOT DONE: Notion's hosted MCP
   (OAuth) cannot be a memory base; the REST connector searches titles in one
   database. Pins: `tests/test_memory_profile_fixes_v1408.py` (14 mutations
   red), `dashboard/__tests__/memory-profile-v1408.test.tsx`.
