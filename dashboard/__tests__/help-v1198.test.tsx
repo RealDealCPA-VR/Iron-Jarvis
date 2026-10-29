@@ -177,8 +177,8 @@ describe("Help page heroes + core loop (v1.198.0)", () => {
     // v1.316.0: the Projects/Build blurbs say it in plain words (no "context
     // spine", no "Live terminals"); the links and titles are unchanged.
     expect(heroCard(/A home for each piece of work/)).toHaveAttribute("href", "/projects");
-    // Moved on purpose (harness gaps, fix 4): Build's line names both views.
-    expect(heroCard(/Terminals for your own coding tools, and coding sessions/)).toHaveAttribute("href", "/terminals");
+    // Moved on purpose (v1.406.0 part 1): Build is the terminals only.
+    expect(heroCard(/Terminals for your own coding tools — Claude Code, Codex or any command line/)).toHaveAttribute("href", "/terminals");
     expect(heroCard(/Generate images, video, music and speech/)).toHaveAttribute(
       "href",
       "/creative",
@@ -186,7 +186,7 @@ describe("Help page heroes + core loop (v1.198.0)", () => {
 
     // Titles ride on the same cards (Build is the nav's name for /terminals).
     expect(
-      within(heroCard(/Terminals for your own coding tools, and coding sessions/)).getByText("Build"),
+      within(heroCard(/Terminals for your own coding tools — Claude Code, Codex or any command line/)).getByText("Build"),
     ).toBeInTheDocument();
     expect(
       within(heroCard(/A home for each piece of work/)).getByText("Projects"),

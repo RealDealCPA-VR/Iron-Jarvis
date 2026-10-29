@@ -31,6 +31,9 @@
  */
 
 import { agentsPath } from "./mission";
+// v1.406.0 review: the coding sessions' loops open the chat page's Code view
+// (where the sessions, Tonight and Last night live now), never Build.
+import { CODE_VIEW_HREF } from "./chatSurface";
 
 /** Everything › Status: the page that lists every failing task by name. */
 export const STATUS_HREF = "/everything#status";
@@ -86,22 +89,22 @@ const ROWS: Readonly<Record<string, Row>> = {
   },
   build_accounts: {
     label: "Resume when ready",
-    problem: "Build sessions waiting for an account to reset aren't being checked",
-    href: "/terminals",
+    problem: "Coding sessions waiting for an account to reset aren't being checked",
+    href: CODE_VIEW_HREF,
   },
   // v1.391.0 (long jobs, Phase 2): the boot's pass that carries on a coding
   // session's reply a restart cut off while it worked.
   build_resume: {
     label: "Carry on after a restart",
     problem: "Coding sessions cut off by a restart weren't carried on",
-    href: "/terminals",
+    href: CODE_VIEW_HREF,
   },
   // v1.398.0 (night shift N1): the loop that starts the Tonight list's
   // coding tasks inside the night window and settles them when they end.
   night_shift: {
     label: "Night shift",
     problem: "Tonight's coding tasks aren't being started or checked",
-    href: "/terminals",
+    href: CODE_VIEW_HREF,
   },
   // v1.406.0 part 3: the loop that watches a coding session's pull request
   // and fixes a failing check (reviewed before it is pushed).

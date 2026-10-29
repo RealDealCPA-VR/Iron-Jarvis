@@ -262,9 +262,9 @@ def test_this_pc_never_repeats_the_bell_and_a_subscribed_phone_hears_it_in_the_b
     n2.add_channel("this-pc", DesktopChannel({"type": "desktop"}))
     n2.on_event(_event())
     assert sent == []
-    assert phone2.sent == ["Your Build session finished — Fix the nav bar · took 3 min 12 s"]
+    assert phone2.sent == ["Your coding session finished — Fix the nav bar · took 3 min 12 s"]
     failed = dict(_event(), payload={**_event()["payload"], "outcome": "failed", "seconds": 120})
-    assert format_event(failed) == "Your Build session could not finish — Fix the nav bar · took 2 min"
+    assert format_event(failed) == "Your coding session could not finish — Fix the nav bar · took 2 min"
 
 
 @requires_node
@@ -275,11 +275,11 @@ def test_in_the_tray_the_desktop_app_says_it_once_and_never_after_the_bell(tmp_p
     case = next(c for c in _cases() if c["case"] == "build-turn-finished")
     entries = [case["event"]]
     res = _node(_PLAN, tmp_path, {"steps": [{"entries": entries}, {"entries": entries}]})
-    assert res["out"] == [["Your Build session finished"], []]
+    assert res["out"] == [["Your coding session finished"], []]
     res = _node(_PLAN, tmp_path, {"steps": [{"entries": entries, "windowOpen": True}, {"entries": entries}]})
     assert res["out"] == [[], []]
     notice = _node(_NOTICES, tmp_path, {"cases": [case]})["out"][0]
-    assert notice["href"] == "/terminals?session=bs_long" and notice["body"] == "Fix the nav bar · took 3 min 12 s"
+    assert notice["href"] == "/chat?view=code&session=bs_long" and notice["body"] == "Fix the nav bar · took 3 min 12 s"
 
 
 def test_the_event_is_typed_and_its_words_match_the_fixture():

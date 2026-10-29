@@ -1,18 +1,24 @@
 "use client";
 
 /**
- * Build's IJ HARNESS view (v1.369.0, plan Phase 6) — the screen for the
- * Phase 4 session backend: the left pane (New session, sessions grouped by
- * folder, the live Terminals), the session in the middle (HarnessSession) and
- * its panes on the right (HarnessPanes).
+ * The IJ HARNESS view (v1.369.0, plan Phase 6) — the screen for the Phase 4
+ * session backend: the left pane (New session, sessions grouped by folder,
+ * the live Terminals), the session in the middle (HarnessSession) and its
+ * panes on the right (HarnessPanes). v1.406.0 (part 1): it is the chat
+ * page's CODE view (components/harness/CodeView, lib/chatSurface); Build
+ * keeps only the terminals.
  *
- * The open session lives in the URL (`/terminals?session=<id>` — the stable
- * address the bell, the desktop toast and the Activity rows open) and in this
- * window's memory, so Build comes back to it. The list is polled only while
- * the window is visible (no event fires when a session changes).
+ * The open session lives in the URL (`/chat?view=code&session=<id>` — the
+ * stable address the bell, the desktop toast and the Activity rows open,
+ * lib/buildLinks) and in this window's memory, so the view comes back to
+ * it. The list is polled only while the window is visible (no event fires
+ * when a session changes). v1.406.0: the list itself goes into the app
+ * sidebar's slot when one is given (`listSlot`) — where the chat page's own
+ * list goes in the Chat view — else it is this view's left pane.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MessageSquarePlus } from "lucide-react";
 import { HarnessSidebar, type StartExtra } from "@/components/harness/HarnessSidebar";
 import { HarnessSession } from "@/components/harness/HarnessSession";
@@ -76,6 +82,8 @@ export function IjHarnessView({
   onOpenTerminal,
   defaultFolder,
   terminal,
+  listSlot = null,
+  onListNavigate,
 }: {
   /** `?session=<id>` the page was opened with. */
   initialSession: string | null;
@@ -89,6 +97,11 @@ export function IjHarnessView({
   /** Where a new session starts when nothing else is picked. */
   defaultFolder: string | null;
   terminal: SessionTerminalApi;
+  /** v1.406.0: the app sidebar's slot (lib/sidebarSlot) — the session list
+   *  is portaled there while one is given, else drawn in the view. */
+  listSlot?: HTMLElement | null;
+  /** A row in the slotted list was followed (the phone drawer closes). */
+  onListNavigate?: () => void;
 }) {
   // v1.384.0: a RETURN to Build paints the list and the session this window
   // had open at once (lib/turnCache — this window's own memory of them),
@@ -145,7 +158,7 @@ export function IjHarnessView({
     } catch (e) {
       setListError(
         e && typeof e === "object" && "status" in e && (e as { status?: number }).status === 404
-          ? "This version of Iron Jarvis has no Build sessions yet."
+          ? "This version of Iron Jarvis has no coding sessions yet."
           : e instanceof Error
             ? e.message
             : String(e),
@@ -256,38 +269,56 @@ export function IjHarnessView({
     }
   }
 
+  const sidebar = (
+    <HarnessSidebar
+      folders={folders}
+      listError={listError}
+      selectedId={middle === "session" ? selected : null}
+      onSelect={(id) => {
+        setMiddle("session");
+        setSelected(id);
+        if (listSlot) onListNavigate?.();
+      }}
+      tonightOpen={tonight}
+      onTonight={() => {
+        setMiddle("tonight");
+        if (listSlot) onListNavigate?.();
+      }}
+      lastNightOpen={lastNight}
+      onLastNight={() => {
+        setMiddle("night");
+        if (listSlot) onListNavigate?.();
+      }}
+      onStart={start}
+      onRename={rename}
+      defaultFolder={sessionFolder ?? defaultFolder}
+      startWithNoFolder={frontHasNoFolder}
+      terminals={terminals}
+      onOpenTerminal={onOpenTerminal}
+      newRequest={newRequest}
+      searchRequest={searchRequest}
+      workRoot={workRoot}
+    />
+  );
+
   return (
     <div
       data-testid="ij-harness-view"
-      className="flex flex-col gap-4 xl:h-[calc(100vh-12rem-var(--ij-strip-h,0px))] xl:min-h-[480px] xl:flex-row"
+      className="flex flex-col gap-4 xl:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))] xl:min-h-[480px] xl:flex-row"
     >
       {/* v1.379.0: below xl the left pane is capped, and it SCROLLS — New
           session with its folder list open is taller than the cap and was
           drawn over the session below it at phone width (measured, 390 px). */}
-      <aside className="flex max-h-[22rem] w-full shrink-0 flex-col overflow-y-auto xl:max-h-none xl:w-56 xl:overflow-visible 2xl:w-64">
-        <HarnessSidebar
-          folders={folders}
-          listError={listError}
-          selectedId={middle === "session" ? selected : null}
-          onSelect={(id) => {
-            setMiddle("session");
-            setSelected(id);
-          }}
-          tonightOpen={tonight}
-          onTonight={() => setMiddle("tonight")}
-          lastNightOpen={lastNight}
-          onLastNight={() => setMiddle("night")}
-          onStart={start}
-          onRename={rename}
-          defaultFolder={sessionFolder ?? defaultFolder}
-          startWithNoFolder={frontHasNoFolder}
-          terminals={terminals}
-          onOpenTerminal={onOpenTerminal}
-          newRequest={newRequest}
-          searchRequest={searchRequest}
-          workRoot={workRoot}
-        />
-      </aside>
+      {listSlot ? (
+        createPortal(sidebar, listSlot)
+      ) : (
+        <aside
+          data-testid="harness-list-aside"
+          className="flex max-h-[22rem] w-full shrink-0 flex-col overflow-y-auto xl:max-h-none xl:w-56 xl:overflow-visible 2xl:w-64"
+        >
+          {sidebar}
+        </aside>
+      )}
       <div className="min-w-0 flex-1 xl:min-h-0">
         {tonight ? (
           <div className="h-full overflow-y-auto">
@@ -337,7 +368,7 @@ export function IjHarnessView({
               <p className="text-[14px] font-medium text-zinc-200">Start a session to build in a folder</p>
               <p className="text-[13px] text-zinc-500">
                 A session works in one folder (or in a folder of its own, when you start it with no folder)
-                with the coding tools, keeps going when you leave Build, and shows its plan, its terminal and
+                with the coding tools, keeps going when you leave, and shows its plan, its terminal and
                 what it changed beside the conversation.
               </p>
             </div>

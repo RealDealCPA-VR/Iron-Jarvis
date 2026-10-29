@@ -64,7 +64,13 @@ describe("the demo strip publishes its height", () => {
   });
 
   it.each([
-    ["app/chat/page.tsx", "md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))]"],
+    // v1.406.0 (part 1, moved on purpose): the chat also subtracts the
+    // Chat | Code switch row above it, and so does the Code view.
+    ["app/chat/page.tsx", "md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))]"],
+    [
+      "components/harness/IjHarnessView.tsx",
+      "xl:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))]",
+    ],
     // v1.329.0 (calm chat wave 8, J4): the mission page's two text tabs now
     // sit ABOVE Your team's panel (the old left rail sat beside it), so the
     // panel takes 2rem more off the window; it still subtracts the strip.

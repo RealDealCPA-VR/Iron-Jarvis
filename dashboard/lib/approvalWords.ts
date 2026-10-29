@@ -117,7 +117,7 @@ export function runSubject(origin: string | null | undefined): string {
   if (value === "job:mission") return "Your objective";
   if (value === "job:mission-member") return "A teammate on your objective";
   // v1.372.0: a helper agent a Build session started (harness/helpers).
-  if (value === "job:build-helper") return "A helper in your Build session";
+  if (value === "job:build-helper") return "A helper in your coding session";
   const i = value.indexOf(":");
   if (i > 0) {
     const kind = value.slice(0, i).trim();

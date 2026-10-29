@@ -19,6 +19,12 @@
  *
  * The scanners (vocabulary.test.ts, the two Python scans) carry "harness" as
  * a retired word now.
+ *
+ * v1.406.0 (part 1, cases MOVED ON PURPOSE): the coding sessions moved to the
+ * chat page's Chat | Code switch. The view is "Code" (CODING_VIEW_NAME), its
+ * list "Coding sessions" (CODING_SESSIONS_LIST); the switch lives in
+ * components/chat/ChatCodeSurface; Build's line is the terminals only and the
+ * old names find Chat.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,7 +32,16 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { BUILD_BLURB, CODING_SESSION, CODING_SESSION_LABEL, CODING_VIEW_NAME } from "@/lib/buildWords";
+import {
+  BUILD_BLURB,
+  CHAT_BLURB,
+  CHAT_VIEW_NAME,
+  CODE_VIEW_NAME,
+  CODING_SESSION,
+  CODING_SESSIONS_LIST,
+  CODING_SESSION_LABEL,
+  CODING_VIEW_NAME,
+} from "@/lib/buildWords";
 import { NAV_ENTRIES } from "@/lib/nav";
 import { ContextMeter } from "@/components/harness/ContextMeter";
 import { COMPACTION_OFFER_BUTTON } from "@/lib/chatControlWords";
@@ -36,16 +51,21 @@ const DASH = process.cwd();
 const read = (...p: string[]) => readFileSync(join(DASH, ...p), "utf8").replace(/\r\n/g, "\n");
 
 describe("one name, one place", () => {
-  it("the user's name: Coding sessions; one of them is a coding session", () => {
-    expect(CODING_VIEW_NAME).toBe("Coding sessions");
+  it("the user's names: Chat | Code; the list is Coding sessions; one of them a coding session", () => {
+    expect(CHAT_VIEW_NAME).toBe("Chat");
+    expect(CODE_VIEW_NAME).toBe("Code");
+    expect(CODING_VIEW_NAME).toBe(CODE_VIEW_NAME);
+    expect(CODING_SESSIONS_LIST).toBe("Coding sessions");
     expect(CODING_SESSION_LABEL).toBe("Coding session");
     expect(CODING_SESSION).toBe("coding session");
   });
 
   it("every surface that names the view READS the constant (none spells it)", () => {
     const readers: [string[], string][] = [
-      [["app", "terminals", "page.tsx"], "CODING_VIEW_NAME"],
-      [["components", "harness", "HarnessSidebar.tsx"], "CODING_VIEW_NAME"],
+      [["app", "terminals", "page.tsx"], "CODING_SESSIONS_LIST"],
+      [["components", "chat", "ChatCodeSurface.tsx"], "CODE_VIEW_NAME"],
+      [["components", "harness", "HarnessSidebar.tsx"], "CODING_SESSIONS_LIST"],
+      [["components", "AppSidebar.tsx"], "CODING_SESSIONS_LIST"],
       [["components", "NotificationBell.tsx"], "CODING_SESSION"],
       [["lib", "runningNow.ts"], "CODING_SESSION_LABEL"],
       [["lib", "nav.ts"], "BUILD_BLURB"],
@@ -66,10 +86,11 @@ describe("one name, one place", () => {
 });
 
 describe("the surfaces say it", () => {
-  it("the view switch reads 'Terminals | Coding sessions'", () => {
-    const page = read("app", "terminals", "page.tsx");
-    expect(page).toContain('{ value: "harness", label: CODING_VIEW_NAME,');
-    expect(page).toContain('{ value: "rail", label: "Terminals",');
+  it("the switch reads 'Chat | Code' (on the chat page; Build has none)", () => {
+    const surface = read("components", "chat", "ChatCodeSurface.tsx");
+    expect(surface).toContain('{ value: "chat", label: CHAT_VIEW_NAME,');
+    expect(surface).toContain('{ value: "code", label: CODE_VIEW_NAME,');
+    expect(read("app", "terminals", "page.tsx")).not.toContain("build-view-switch");
   });
 
   it("the bell's layer-edit row has no engine-room word", () => {
@@ -99,11 +120,18 @@ describe("the surfaces say it", () => {
     expect(COMPACTION_OFFER_BUTTON).toBe("Summarize");
   });
 
-  it("Build's one line names both views, and the old names still find Build", () => {
+  it("Build's one line is the terminals; the coding sessions' old names find Chat", () => {
     const build = NAV_ENTRIES.find((e) => e.href === "/terminals")!;
     expect(build.blurb).toBe(BUILD_BLURB);
-    expect(BUILD_BLURB).toMatch(/^Terminals for your own coding tools, and coding sessions /);
-    for (const alias of ["IJ harness", "harness", "coding session", "pane"]) expect(build.aliases).toContain(alias);
+    expect(BUILD_BLURB).toMatch(/^Terminals for your own coding tools /);
+    expect(BUILD_BLURB).not.toMatch(/coding session/i);
+    expect(build.aliases).toContain("pane");
+    const chat = NAV_ENTRIES.find((e) => e.href === "/chat")!;
+    expect(chat.blurb).toBe(CHAT_BLURB);
+    for (const alias of ["IJ harness", "harness", "coding session"]) {
+      expect(chat.aliases).toContain(alias);
+      expect(build.aliases).not.toContain(alias);
+    }
   });
 
   it("Help has an entry for the view, and its Build card uses the same line", () => {

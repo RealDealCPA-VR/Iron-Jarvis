@@ -82,7 +82,10 @@ describe("components/harness keeps the calm rules", () => {
   });
 
   it("the full-height view subtracts the demo strip", () => {
-    expect(read("IjHarnessView.tsx")).toMatch(/h-\[calc\(100vh-[^\]]*-var\(--ij-strip-h,0px\)\)\]/);
+    // v1.406.0 (part 1, moved on purpose): and the Chat | Code switch row.
+    expect(read("IjHarnessView.tsx")).toMatch(
+      /h-\[calc\(100vh-[^\]]*-var\(--ij-strip-h,0px\)-var\(--ij-switch-h,0px\)\)\]/,
+    );
   });
 
   it("a reply is drawn through the one markdown renderer", () => {

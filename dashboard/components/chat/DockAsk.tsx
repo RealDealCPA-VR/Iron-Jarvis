@@ -221,6 +221,10 @@ export function DockAsk({
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !bodyHasFocus()) return;
       if (document.querySelector('[aria-modal="true"]')) return;
+      // v1.406.0 (part 1): a card in a view that is NOT on screen (the chat
+      // kept behind the Code view, `inert`) never answers a key — Enter in
+      // the Code view must not press a hidden chat's Allow.
+      if (wrapRef.current?.closest("[inert]")) return;
       const action = dockKeyAction(e, null, false);
       if (action && press(action)) e.preventDefault();
     };

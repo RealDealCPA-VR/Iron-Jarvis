@@ -36,6 +36,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { EVERYTHING_TAB_EVENT, SURFACES } from "@/lib/surfaces";
+import { announceChatViewLink } from "@/lib/chatSurface";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
@@ -1178,6 +1179,9 @@ export function CommandPalette() {
       if (row.href === "/everything#status") {
         window.dispatchEvent(new CustomEvent(EVERYTHING_TAB_EVENT, { detail: "status" }));
       }
+      // v1.406.0 (part 1): the same trap for the chat page's Code view
+      // (`/chat?view=code` changes only the query when Chat is open).
+      announceChatViewLink(row.href);
     }
   }
 

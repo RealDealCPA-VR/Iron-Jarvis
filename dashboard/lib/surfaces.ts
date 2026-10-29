@@ -1,13 +1,15 @@
-import { LayoutGrid, Store } from "lucide-react";
+import { Code2, LayoutGrid, Store } from "lucide-react";
 import { NAV_ENTRIES, NON_RAIL_ENTRIES, type NavEntry } from "@/lib/nav";
+import { CODE_VIEW_HREF } from "@/lib/chatSurface";
+import { CODE_BLURB, CODING_VIEW_NAME } from "@/lib/buildWords";
 
 /**
  * THE SURFACE MANIFEST (calm UI redesign S6, AUDIT §4.2-4.3).
  *
  * Every place in the app, once, with where it lives in the calm shell:
  *
- *   - the SIDEBAR's four items (Build, Projects, Everything, Settings) — the
- *     brief's cap; "New chat" is an action and the chat list is not counted;
+ *   - the SIDEBAR's items (Chat, Build, Projects, Everything, Settings —
+ *     v1.406.0); "New chat" is an action and the chat list is not counted;
  *   - the EVERYTHING page, which lists every other surface in four columns
  *     (Work, Automations, Knowledge, System) plus the places that become
  *     Settings sections — so any surface is two clicks from home (T2);
@@ -29,8 +31,33 @@ export interface Surface extends NavEntry {
   advanced?: boolean;
 }
 
-/** The sidebar's four items, in order (T1: at most four). */
-export const SIDEBAR_HREFS = ["/terminals", "/projects", "/everything", "/settings"] as const;
+/** The sidebar's items, in order. v1.406.0 (part 1 + 5, the user's decision
+ *  2026-10-29): Chat (with its Chat | Code switch — the coding sessions live
+ *  there now), Build (the terminals only), Projects, Everything, Settings.
+ *  The brief's T1 cap was four; Chat is the fifth because the Code view is
+ *  reached through it. Every automation and admin page (agents, goals,
+ *  workflows, schedules, rules, watchers, fleet, the session board,
+ *  self-development …) is NOT here: it is on Everything and in Ctrl K
+ *  (SIDEBAR_EXCLUDED pins the list). */
+export const SIDEBAR_HREFS = ["/chat", "/terminals", "/projects", "/everything", "/settings"] as const;
+
+/** v1.406.0 (part 5): the automation and admin rooms that must never be
+ *  sidebar items (they stay on Everything and in Ctrl K). */
+export const SIDEBAR_EXCLUDED: readonly string[] = [
+  "/agents",
+  "/autonomy",
+  "/workflows",
+  "/schedules",
+  "/reflex",
+  "/sentinels",
+  "/webhooks",
+  "/fleet",
+  "/kanban",
+  "/sessions",
+  "/activity",
+  "/self-dev",
+  "/usage",
+];
 
 /** Everything's columns, in order. `setup` holds the places that are
  *  Settings sections in the calm shell (Connections, Apps & tools, …). */
@@ -47,6 +74,7 @@ const GROUP_OF: Readonly<Record<string, SurfaceGroup>> = {
   "/": "primary",
   "/chat": "primary",
   "/terminals": "primary",
+  [CODE_VIEW_HREF]: "primary",
   "/projects": "primary",
   "/everything": "primary",
   "/settings": "primary",
@@ -90,6 +118,26 @@ const EXTRA_ENTRIES: NavEntry[] = [
     icon: LayoutGrid,
     aliases: ["all pages", "all tools", "modules", "directory of pages", "more", "apps", "everything else"],
     blurb: "Every part of Iron Jarvis on one page, grouped, each with one line about what it is for.",
+  },
+  {
+    // v1.406.0 (part 1): the chat page's Code view — the coding sessions,
+    // moved out of Build. Not a route of its own (it is `/chat?view=code`),
+    // so it is a palette row and never an Everything entry ("primary").
+    href: CODE_VIEW_HREF,
+    label: CODING_VIEW_NAME,
+    icon: Code2,
+    aliases: [
+      "code",
+      "coding",
+      "coding session",
+      "coding sessions",
+      "sessions in a folder",
+      "write code",
+      "IJ harness",
+      "harness",
+      "build session",
+    ],
+    blurb: CODE_BLURB,
   },
   {
     // v1.315.0 left the Directory off the palette; the manifest closes that.
@@ -140,7 +188,7 @@ export function surfaceFor(href: string): Surface | undefined {
 export const EVERYTHING_TAB_EVENT = "ij:everything-tab";
 
 // ── Pins (AUDIT Q11) ─────────────────────────────────────────────────────────
-// Up to three Everything entries the user pins under the sidebar's four items.
+// Up to three Everything entries the user pins under the sidebar's items.
 // None by default (the four-item cap is measured on a fresh profile). Kept in
 // this browser only: a pin is a per-person convenience, not shared state.
 

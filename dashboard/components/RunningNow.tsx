@@ -39,6 +39,7 @@ import {
   type RunningSessionRow,
 } from "@/lib/runningNow";
 import { announceBuildSessionLink } from "@/lib/buildLinks";
+import { announceChatViewLink } from "@/lib/chatSurface";
 
 /** The frames that start or end a run (the run half of the orb's
  *  MOOD_EVENT_TYPES). Any NEW one re-reads the list. */
@@ -129,6 +130,9 @@ export function RunningNow({
                       // Next keeps the page on a query-only change, so the
                       // session is announced (lib/buildLinks).
                       if (it.kind === "build") announceBuildSessionLink(it.href);
+                      // v1.406.0 review: a chat pressed while the chat page
+                      // shows its Code view brings the Chat view forward.
+                      else if (it.kind === "chat") announceChatViewLink(it.href);
                       onNavigate?.();
                     }}
                     data-testid="running-row"

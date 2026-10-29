@@ -76,7 +76,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/terminals",
     title: "Build",
     icon: SquareTerminal,
-    // Harness gaps (fix 4): both of Build's views in one plain line — the
+    // v1.406.0 (part 1): the terminals only, in one plain line — the
     // same words as Ctrl K and Everything (lib/buildWords).
     desc: BUILD_BLURB,
   },
@@ -246,7 +246,8 @@ const GLOSSARY: GlossaryTerm[] = [
   {
     // Harness gaps (fix 4): Build's second view had no Help entry at all.
     term: CODING_VIEW_NAME,
-    def: `Build's other view: tell Jarvis what to build or change in a folder, and it writes, runs and checks the code there — one conversation per ${CODING_SESSION}, which keeps working when you leave and can be rewound.`,
+    // v1.406.0 (part 1): it is the chat page's Code switch now.
+    def: `The chat page's other view (the Chat | Code switch at its top): tell Jarvis what to build or change in a folder, and it writes, runs and checks the code there — one conversation per ${CODING_SESSION}, which keeps working when you leave and can be rewound.`,
   },
 ];
 

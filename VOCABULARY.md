@@ -22,7 +22,7 @@ PR that ships it.
 | An MCP server (a connection that adds tools) | **extension** | plug-in, pack, tool pack, MCP pack |
 | The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
 | One shell or CLI window on the Build page | **terminal** | pane |
-| Build's other view, where Jarvis writes, runs and checks code in a folder, one conversation per session | **Coding sessions**; one of them is a **coding session** | IJ harness, harness |
+| The chat page's other view (v1.406.0: the switch at its top reads **Chat \| Code**), where Jarvis writes, runs and checks code in a folder, one conversation per session | the view is **Code**; its list is **Coding sessions**; one of them is a **coding session** | IJ harness, harness, Build session |
 | A coding session's reply drawn on one time axis, the tab beside Plan (v1.390.0): the model you talk to, each step it took, each helper with its model | **Timeline**; its pieces are **steps**, **model calls** and **helpers** (the run log's words) | trace, span, waterfall, orchestrator, LLM call, round (never shown) |
 | The agents that take pieces of a coding session's or an objective's work, each on its OWN model (Settings › Model team, v1.394.0) | **model team**; one of them is a **team member** (a custom agent with one or more **roles**: read, code, review, test); the button that builds one from what is connected is **Make a starter team** | — |
 | How a team member's pieces of work for one role went, and the one sentence that says why it was given a piece (v1.395.0) | its **record** for that role ("good (4 of 5 passed)", "no record yet"); the sentence is the **why** line ("Why: local: good record for reading") | routing decision, dispatch reason |
@@ -193,6 +193,20 @@ The wire is unchanged: the `harness/` package, `ij.build.shape` value
 `"harness"`, test ids and routes. "Build session" (a session in Build) is not
 retired yet; it is still written in the bell, the desktop notices and the
 daemon's sentences, and a later wave folds it into "coding session".
+
+### Coding sessions → Chat › Code (v1.406.0)
+
+The user's decision (2026-10-29): Build keeps only the terminals, and the
+coding sessions moved to the CHAT page, behind a switch at its top that
+reads **Chat | Code**. The view is **Code** (`CODE_VIEW_NAME`), the list of
+sessions is still **Coding sessions** (`CODING_SESSIONS_LIST`), one is still
+**a coding session**, and where they live is written **Chat › Code**
+(`CODING_SESSIONS_PLACE`). The notices that said "Build session" in the bell,
+the desktop app and the daemon ("Your Build session finished", "A Build
+session is waiting for your OK", "Open the Build session") now say "coding
+session"; "Build session" survives only in code comments and the daemon's own
+internal sentences. "IJ harness", "harness" and "coding session" are search
+aliases on **Chat** now, and Ctrl K has a row for **Code** itself.
 
 ## Reserved
 

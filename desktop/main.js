@@ -3164,8 +3164,8 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const isChat = ask.kind === "chat";
     // v1.369.0 (IJ harness Phase 6): a Build session parked on the user lists
     // as a chat row with `surface: "build"`. It reads as the session and its
-    // click opens Build on it (/terminals?session=<id>) — a session never
-    // shows in Chat.
+    // click opens it (v1.406.0: /chat?view=code&session=<id>, Chat › Code) —
+    // a session never shows in the Chat view.
     const isBuild = isChat && ask.surface === "build";
     const hasTool = typeof ask.tool === "string" && ask.tool !== "";
     // v1.358.0 (lane 8E): the card's words, then WHICH task is asking —
@@ -3176,7 +3176,7 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const sessionId = !isChat && typeof ask.session_id === "string" ? ask.session_id : "";
     const threadId = isChat && typeof ask.thread_id === "string" ? ask.thread_id : "";
     // v1.372.0: a Build session's HELPER agent names the session it works
-    // for (`build_session`); its click opens Build on THAT session, where
+    // for (`build_session`); its click opens THAT session (Chat › Code), where
     // the helper's row carries this same question — like the bell's row.
     const helperOf =
       !isChat && typeof ask.build_session === "string" ? ask.build_session.trim() : "";
@@ -3191,7 +3191,7 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
       : isChat
         ? { chat: true, threadId }
         : helperOf
-          ? { href: `/terminals?session=${encodeURIComponent(helperOf)}` }
+          ? { href: `/chat?view=code&session=${encodeURIComponent(helperOf)}` }
           : {};
     if (!prev) {
       if (windowOpen) {
@@ -3202,7 +3202,7 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           sessionId,
           ...target,
           title: isBuild
-            ? "A Build session is waiting for your OK"
+            ? "A coding session is waiting for your OK"
             : isChat
               ? "A chat is waiting for your OK"
               : "Jarvis is waiting for you",
@@ -3223,7 +3223,7 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           sessionId,
           ...target,
           title: isBuild
-            ? "A Build session is still waiting for your OK"
+            ? "A coding session is still waiting for your OK"
             : isChat
               ? "A chat is still waiting for your OK"
               : "Still waiting for you",
@@ -3313,8 +3313,8 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // in for its step; and the daemon keeps "This PC" quiet for exactly these.
 // v1.374.0 (IJ harness part 2, Phase 3): and a Build turn that ran longer
 // than a minute and ended (`build.turn_finished`), said once from the tray in
-// the bell's words ("Your Build session finished"); the click opens Build on
-// that session.
+// the bell's words ("Your coding session finished"); the click opens
+// that session (v1.406.0: Chat › Code).
 // v1.392.0 (long jobs, Phase 3): and a Build reply that made no progress for
 // ten minutes (`build.turn_stalled`, once per stall episode), said in the
 // bell's words ("Your coding session has stopped making progress").
@@ -3423,7 +3423,7 @@ function runOutcomeNotice(entry) {
       ts: runOutcomeTsMs(entry.ts),
       title,
       body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
-      href: `/terminals?night=${encodeURIComponent(night)}`,
+      href: `/chat?view=code&night=${encodeURIComponent(night)}`,
     };
   }
   if (entry.type === "build.ci_done") {
@@ -3461,7 +3461,7 @@ function runOutcomeNotice(entry) {
       ts: runOutcomeTsMs(entry.ts),
       title: "Your coding session has stopped making progress",
       body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
-      href: `/terminals?session=${encodeURIComponent(thread)}`,
+      href: `/chat?view=code&session=${encodeURIComponent(thread)}`,
     };
   }
   if (entry.type === "build.turn_finished") {
@@ -3478,9 +3478,9 @@ function runOutcomeNotice(entry) {
     return {
       id,
       ts: runOutcomeTsMs(entry.ts),
-      title: p.outcome === "failed" ? "Your Build session could not finish" : "Your Build session finished",
+      title: p.outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished",
       body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
-      href: `/terminals?session=${encodeURIComponent(thread)}`,
+      href: `/chat?view=code&session=${encodeURIComponent(thread)}`,
     };
   }
   if (entry.type === "workflow.completed") {
@@ -3618,9 +3618,10 @@ function showAskNotification(item) {
       showMainWindow();
       if (!mainWin || mainWin.isDestroyed()) return;
       if (item.chat && item.build) {
-        // v1.369.0: a waiting BUILD SESSION opens Build on that session.
-        const q = item.threadId ? `?session=${encodeURIComponent(item.threadId)}` : "";
-        mainWin.loadURL(`${DASHBOARD_URL}/terminals${q}`);
+        // v1.369.0: a waiting CODING SESSION opens on that session —
+        // v1.406.0 (part 1): in the chat page's Code view.
+        const q = item.threadId ? `&session=${encodeURIComponent(item.threadId)}` : "";
+        mainWin.loadURL(`${DASHBOARD_URL}/chat?view=code${q}`);
       } else if (item.chat) {
         // v1.351.0 (G05): a waiting CHAT opens that chat, where its card is.
         const q = item.threadId ? `?thread=${encodeURIComponent(item.threadId)}` : "";

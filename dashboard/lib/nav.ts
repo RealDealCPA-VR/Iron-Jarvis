@@ -35,7 +35,7 @@ import {
   SquareKanban,
   type LucideIcon,
 } from "lucide-react";
-import { BUILD_BLURB } from "@/lib/buildWords";
+import { BUILD_BLURB, CHAT_BLURB } from "@/lib/buildWords";
 
 /**
  * The navigation catalogue — the SINGLE source of truth for "what pages exist".
@@ -92,8 +92,25 @@ export const NAV: NavSectionDef[] = [
         icon: MessageSquare,
         // "projects" points here on purpose: the Projects module now lives
         // inside chat, so someone hunting for their project lands right.
-        aliases: ["talk", "ask", "message", "projects", "assistant", "conversation"],
-        blurb: "Talk to Iron Jarvis — quick answers, or real multi-step work.",
+        // v1.406.0 (part 1): the coding sessions live behind this page's
+        // Chat | Code switch now, so their words find it (Ctrl K also has a
+        // row for the Code view itself, lib/surfaces). "IJ harness" and
+        // "harness" were their old words and stay searchable forever
+        // (VOCABULARY.md's rename rule).
+        aliases: [
+          "talk",
+          "ask",
+          "message",
+          "projects",
+          "assistant",
+          "conversation",
+          "code",
+          "coding session",
+          "coding sessions",
+          "IJ harness",
+          "harness",
+        ],
+        blurb: CHAT_BLURB,
       },
       {
         href: "/terminals",
@@ -102,21 +119,16 @@ export const NAV: NavSectionDef[] = [
         // Nobody types "Build" when they want a shell — they type "terminal".
         // v1.357.0 (G76): "pane" is retired from the screen (VOCABULARY.md),
         // so it stays here: a word the app taught keeps finding the page.
-        // Harness gaps (fix 4): Build's second view is named in
-        // lib/buildWords; "IJ harness" and "harness" were its old words and
-        // stay searchable forever (VOCABULARY.md's rename rule).
+        // v1.406.0 (part 1): Build is the terminals only — the coding
+        // sessions moved to Chat's Code view (their aliases moved with them).
         aliases: [
           "terminal",
+          "terminals",
           "shell",
           "command line",
           "console",
-          "code",
           "cli",
           "pane",
-          "coding session",
-          "coding sessions",
-          "IJ harness",
-          "harness",
         ],
         blurb: BUILD_BLURB,
       },

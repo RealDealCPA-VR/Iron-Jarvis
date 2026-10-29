@@ -148,7 +148,7 @@ describe("lib/runningNow: a coding session's reply is a row", () => {
     expect(item.line).toBe(`${CODING_SESSION_LABEL} · 12 min`);
     expect(item.line).toBe("Coding session · 12 min");
     expect(item.detail).toBe("Add a cart page");
-    expect(item.href).toBe("/terminals?session=s-cart");
+    expect(item.href).toBe("/chat?view=code&session=s-cart");
   });
 
   it("a chat's reply is not listed twice (the chat list has it); one with no session is left out", () => {
@@ -184,7 +184,7 @@ describe("Running now lists a running coding session", () => {
     wrap(<RunningNow />);
     const row = await screen.findByText(/^Coding session · 12 min$/, {}, W);
     const link = row.closest("a")!;
-    expect(link.getAttribute("href")).toBe("/terminals?session=s-cart");
+    expect(link.getAttribute("href")).toBe("/chat?view=code&session=s-cart");
     expect(link.getAttribute("data-kind")).toBe("build");
     expect(within(link).getByText("Add a cart page")).toBeTruthy();
     expect(screen.queryByTestId("running-now-empty")).toBeNull();
@@ -193,7 +193,7 @@ describe("Running now lists a running coding session", () => {
 
   it("pressed while Build is already open, the row announces the session (Next keeps the page on a query change)", async () => {
     seed({ replies: [BUILD] });
-    window.history.replaceState(null, "", "/terminals");
+    window.history.replaceState(null, "", "/chat");
     const heard: string[] = [];
     const on = (e: Event) => heard.push(String((e as CustomEvent<{ id: string }>).detail?.id));
     window.addEventListener(BUILD_SESSION_EVENT, on);

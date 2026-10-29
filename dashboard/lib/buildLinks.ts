@@ -1,85 +1,127 @@
 /**
- * WHERE A BUILD SESSION OPENS (v1.369.0, IJ harness Phase 6).
+ * WHERE A CODING SESSION OPENS (v1.369.0, IJ harness Phase 6; moved v1.406.0).
  *
- * An IJ harness session's tool calls, findings and events carry the session
- * id `build:<thread id>` (daemon harness/sessions `session_id_for`). Before
- * this file every row that held one linked `/sessions/build:<id>` — an Agents
- * run page that does not exist for it (a dead link), and the waiting-for-you
- * row of a Build session read "A chat" and opened `/chat?thread=`, where a
- * session never shows. One rule now: a Build session opens in Build, on THAT
- * session (`/terminals?session=<id>`, the stable address Build reads).
+ * A coding session's tool calls, findings and events carry the session id
+ * `build:<thread id>` (daemon harness/sessions `session_id_for`). Before
+ * v1.369.0 every row that held one linked `/sessions/build:<id>` — an Agents
+ * run page that does not exist for it (a dead link). One rule since: a coding
+ * session opens on THAT session. v1.406.0 (part 1): the sessions live in the
+ * chat page's Code view (lib/chatSurface), so the address is
+ * `/chat?view=code&session=<id>`. The old `/terminals?session=<id>` still
+ * works (the Build page redirects it here) and is still READ by the parsers
+ * below, so a link saved before the move keeps opening its session.
  *
- * IMPORT-FREE on purpose: the bell is on every page, and ~71 test files mock
- * lib/api wholesale — a helper living beside an api import would vanish under
- * them (lib/missionLinks's rule). (lib/buildWords is import-free too, so its
- * words may be read here.)
+ * IMPORT-FREE of lib/api on purpose: the bell is on every page, and ~71 test
+ * files mock lib/api wholesale — a helper living beside an api import would
+ * vanish under them (lib/missionLinks's rule). (lib/buildWords and
+ * lib/chatSurface are free of it too, so they may be read here.)
  */
 
 import { CODING_SESSION } from "./buildWords";
+import { CODE_VIEW_HREF, isChatPagePath } from "./chatSurface";
 
 /** The process / tool session id prefix of a Build session's calls. */
 export const BUILD_SESSION_PREFIX = "build:";
 
-/** Where a Build session opens: Build, on THAT session. */
+/** The Code view with no session named (a waiting coding session whose
+ *  thread is not known). */
+export const CODE_VIEW_LINK = CODE_VIEW_HREF;
+
+/** Where a coding session opens: the chat page's Code view, on THAT session. */
 export function buildSessionHref(threadId: string): string {
-  return `/terminals?session=${encodeURIComponent(threadId)}`;
+  return `${CODE_VIEW_HREF}&session=${encodeURIComponent(threadId)}`;
 }
 
-/** v1.369.0 review: a link to a session clicked while Build is ALREADY open
- *  (the bell's rows are on every page). Next keeps the page's state on a
- *  same-page navigation that only changes the query, so the page never
- *  re-reads `?session=` — the address changed and the screen did not. The
- *  link's click announces the session with this window event; Build (the
- *  page, and the IJ harness view when it is showing) opens it. */
-export const BUILD_SESSION_EVENT = "ij:open-build-session";
-
-/** The session a Build link names (`/terminals?session=<id>`), else null. */
-export function sessionOfHref(href: string | null | undefined): string | null {
-  const h = typeof href === "string" ? href.trim() : "";
-  const q = h.indexOf("?");
-  if (q < 0 || h.slice(0, q).replace(/\/+$/, "") !== "/terminals") return null;
+/** The new address for an old Build link (`/terminals?session=…` or
+ *  `?night=…`), keeping the session / night; null when the address is not
+ *  one of those (a terminal link `?focus=` stays on Build). */
+export function codeHrefForOldBuildSearch(search: string | null | undefined): string | null {
+  let q: URLSearchParams;
   try {
-    const id = new URLSearchParams(h.slice(q + 1)).get("session");
-    return id && id.trim() ? id.trim() : null;
+    q = new URLSearchParams(search ?? "");
   } catch {
     return null;
   }
+  const session = (q.get("session") ?? "").trim();
+  if (session) return buildSessionHref(session);
+  const night = (q.get("night") ?? "").trim();
+  if (night) return lastNightHref(night);
+  return null;
+}
+
+/** How the Build page sends an old link on (one object, so a test can stand
+ *  in for the browser's navigation, which jsdom does not do). */
+export const addressMove = {
+  replace(href: string): void {
+    try {
+      window.location.replace(href);
+    } catch {
+      /* no navigation here (a test): the page still says where it went */
+    }
+  },
+};
+
+/** v1.369.0 review: a link to a session clicked while the page that shows
+ *  sessions is ALREADY open (the bell's rows are on every page). Next keeps
+ *  the page's state on a same-page navigation that only changes the query,
+ *  so the page never re-reads `?session=` — the address changed and the
+ *  screen did not. The link's click announces the session with this window
+ *  event; the chat page (v1.406.0: its Code view) opens it. */
+export const BUILD_SESSION_EVENT = "ij:open-build-session";
+
+/** True for a link's path that shows coding sessions: the chat page, or the
+ *  old Build address (redirected). */
+function sessionPagePath(path: string): boolean {
+  const p = path.replace(/\/+$/, "") || "/";
+  return p === "/terminals" || isChatPagePath(p);
+}
+
+function sessionLinkParam(href: string | null | undefined, key: string): string | null {
+  const h = typeof href === "string" ? href.trim() : "";
+  const q = h.indexOf("?");
+  if (q < 0 || !sessionPagePath(h.slice(0, q))) return null;
+  try {
+    const v = new URLSearchParams(h.slice(q + 1).split("#")[0]).get(key);
+    return v && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The session a link names (`/chat?view=code&session=<id>`, or the old
+ *  `/terminals?session=<id>`), else null. */
+export function sessionOfHref(href: string | null | undefined): string | null {
+  return sessionLinkParam(href, "session");
 }
 
 /** v1.399.0 (night shift N2): where a night's LAST NIGHT summary opens —
- *  Coding sessions › Last night, on that night (`/terminals?night=<date>`,
- *  the date the night window opened). The bell's row and the desktop app's
- *  tray notice open it. */
+ *  the Code view's Last night, on that night (v1.406.0:
+ *  `/chat?view=code&night=<date>`, the date the night window opened). The
+ *  bell's row and the desktop app's tray notice open it. */
 export function lastNightHref(night: string): string {
-  return `/terminals?night=${encodeURIComponent(night)}`;
+  return `${CODE_VIEW_HREF}&night=${encodeURIComponent(night)}`;
 }
 
 /** v1.399.0: the same-page trap as a session link (BUILD_SESSION_EVENT): a
- *  link to Last night pressed while Build is open announces the night. */
+ *  link to Last night pressed while the chat page is open announces it. */
 export const BUILD_NIGHT_EVENT = "ij:open-last-night";
 
-/** The night a Last night link names (`/terminals?night=<date>`), else null. */
+/** The night a Last night link names (`…?view=code&night=<date>`, or the
+ *  old `/terminals?night=<date>`), else null. */
 export function nightOfHref(href: string | null | undefined): string | null {
-  const h = typeof href === "string" ? href.trim() : "";
-  const q = h.indexOf("?");
-  if (q < 0 || h.slice(0, q).replace(/\/+$/, "") !== "/terminals") return null;
-  try {
-    const night = new URLSearchParams(h.slice(q + 1)).get("night");
-    return night && night.trim() ? night.trim() : null;
-  } catch {
-    return null;
-  }
+  return sessionLinkParam(href, "night");
 }
 
-/** Tell an open Build page that a link to one of its sessions was pressed.
- *  Only on Build (anywhere else the navigation itself opens it). Answers
- *  whether it was announced. v1.399.0: a link to Last night too. */
+/** Tell an open chat page that a link to one of its coding sessions (or to
+ *  Last night) was pressed. Only on the chat page (anywhere else the
+ *  navigation itself opens it, and the Build page redirects an old link).
+ *  Answers whether it was announced. */
 export function announceBuildSessionLink(href: string | null | undefined): boolean {
   if (typeof window === "undefined") return false;
   const id = sessionOfHref(href);
   const night = id ? null : nightOfHref(href);
   if (!id && !night) return false;
-  if (window.location.pathname.replace(/\/+$/, "") !== "/terminals") return false;
+  if (!isChatPagePath(window.location.pathname)) return false;
   if (night) {
     window.dispatchEvent(new CustomEvent(BUILD_NIGHT_EVENT, { detail: { id: night } }));
     return true;
@@ -152,9 +194,9 @@ export function sessionLinkFor(sessionId: string): string {
  *  that must sign in again, was removed, or is turned off. */
 export function buildLimitHeadline(kind: unknown, accountName: unknown): string {
   const name = typeof accountName === "string" && accountName.trim() ? accountName.trim() : "";
-  const who = name ? `The ${name} account` : "A Build session's account";
+  const who = name ? `The ${name} account` : "A coding session's account";
   if (kind === "signin") return `${who} needs to sign in again`;
-  if (kind === "missing") return name ? `The ${name} account was removed` : "A Build session's account was removed";
+  if (kind === "missing") return name ? `The ${name} account was removed` : "A coding session's account was removed";
   if (kind === "disabled") return `${who} is turned off`;
   if (kind === "busy") return `${who} is busy right now`;
   return `${who} reached its limit`;
@@ -203,7 +245,7 @@ export function buildTookWords(seconds: unknown): string {
 /** The bell's headline for `build.turn_finished` (v1.374.0): a Build turn
  *  that ran longer than a minute ended. */
 export function buildFinishedHeadline(outcome: unknown): string {
-  return outcome === "failed" ? "Your Build session could not finish" : "Your Build session finished";
+  return outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished";
 }
 
 /** Its line under the headline: the session's title and how long it took

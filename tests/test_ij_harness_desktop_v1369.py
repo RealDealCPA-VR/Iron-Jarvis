@@ -39,7 +39,7 @@ def test_a_waiting_build_session_is_said_as_the_session(tmp_path):
     out = _plan([{"approvals": [BUILD], "now": 0}, {"approvals": [BUILD], "now": 25_000}], tmp_path)
     first = out[0]["notify"]
     assert len(first) == 1
-    assert first[0]["title"] == "A Build session is waiting for your OK"
+    assert first[0]["title"] == "A coding session is waiting for your OK"
     assert first[0]["body"].endswith("click to open the session.")
     assert "chat" not in first[0]["title"].lower()
     assert first[0]["build"] is True and first[0]["threadId"] == "bs_7"
@@ -50,7 +50,7 @@ def test_a_waiting_build_session_is_said_as_the_session(tmp_path):
 def test_its_reminder_says_the_session_too(tmp_path):
     out = _plan([{"approvals": [BUILD], "now": 0}, {"approvals": [BUILD], "now": _HOUR + 1}], tmp_path)
     later = out[1]["notify"][0]
-    assert later["title"] == "A Build session is still waiting for your OK"
+    assert later["title"] == "A coding session is still waiting for your OK"
     assert later["body"].endswith("waiting 1 hour — click to open the session.")
 
 
@@ -69,7 +69,7 @@ def test_a_plain_chat_row_keeps_its_own_words(tmp_path):
 
 
 @requires_node
-def test_the_toast_click_opens_build_on_that_session(tmp_path):
+def test_the_toast_click_opens_that_session_in_chat_code(tmp_path):
     loaded = _click(
         [
             {"title": "t", "body": "b", "chat": True, "build": True, "threadId": "bs 7", "sessionId": ""},
@@ -79,7 +79,7 @@ def test_the_toast_click_opens_build_on_that_session(tmp_path):
         tmp_path,
     )
     assert loaded == [
-        "http://127.0.0.1:8788/terminals?session=bs%207",
-        "http://127.0.0.1:8788/terminals",
+        "http://127.0.0.1:8788/chat?view=code&session=bs%207",
+        "http://127.0.0.1:8788/chat?view=code",
         "http://127.0.0.1:8788/chat?thread=th1",
     ]

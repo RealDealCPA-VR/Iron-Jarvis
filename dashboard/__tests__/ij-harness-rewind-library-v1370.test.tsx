@@ -390,7 +390,7 @@ describe("the bell", () => {
       payload: { id: "lib_1", kind: "lesson", folder_name: "shop", thread_id: "s1", summary: "Tests run with pytest." },
     } as never);
     expect(row).not.toBeNull();
-    expect(row!.href).toBe("/terminals?session=s1");
+    expect(row!.href).toBe("/chat?view=code&session=s1");
     expect(row!.title).toBe("A lesson is suggested for shop");
     expect(row!.body).toBe("Tests run with pytest.");
     expect((row as { attention?: boolean }).attention).toBeUndefined();

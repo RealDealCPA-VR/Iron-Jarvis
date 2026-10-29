@@ -67,13 +67,14 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("the four items", () => {
-  it("a fresh profile shows exactly Build, Projects, Everything and Settings", async () => {
+  it("a fresh profile shows exactly Chat, Build, Projects, Everything and Settings", async () => {
     render(<AppSidebar />);
     const navEl = screen.getByTestId("sidebar-nav");
     const labels = within(navEl)
       .getAllByRole("link")
       .map((a) => a.textContent);
-    expect(labels).toEqual(["Build", "Projects", "Everything", "Settings"]);
+    // v1.406.0 (part 1 + 5, moved on purpose): Chat leads (its Code switch).
+    expect(labels).toEqual(["Chat", "Build", "Projects", "Everything", "Settings"]);
     expect(within(navEl).queryByTestId("sidebar-pins")).toBeNull();
   });
 
@@ -179,7 +180,7 @@ describe("the footer", () => {
 });
 
 describe("the phone drawer and the title bar", () => {
-  it("the drawer opens on ij:toggle-nav with the same four items and the theme row", async () => {
+  it("the drawer opens on ij:toggle-nav with the same items and the theme row", async () => {
     render(<NavDrawer />);
     await act(async () => {
       window.dispatchEvent(new CustomEvent("ij:toggle-nav"));
@@ -188,7 +189,8 @@ describe("the phone drawer and the title bar", () => {
     const labels = within(within(drawer).getByTestId("sidebar-nav"))
       .getAllByRole("link")
       .map((a) => a.textContent);
-    expect(labels).toEqual(["Build", "Projects", "Everything", "Settings"]);
+    // v1.406.0 (part 1 + 5, moved on purpose): Chat leads (its Code switch).
+    expect(labels).toEqual(["Chat", "Build", "Projects", "Everything", "Settings"]);
     expect(within(drawer).getByRole("group", { name: /theme/i })).toBeTruthy();
   });
 

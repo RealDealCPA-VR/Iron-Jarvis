@@ -148,7 +148,7 @@ describe("sessions grouped by folder", () => {
     // A plain folder says it renames how the folder shows in Build.
     expect(
       within(screen.getAllByTestId("harness-folder-group")[1]).getByTestId("harness-folder-rename"),
-    ).toHaveAttribute("aria-label", "Rename tools in Build");
+    ).toHaveAttribute("aria-label", "Rename tools in your coding sessions");
   });
 
   it("each group's + starts a session in that folder", async () => {
@@ -290,6 +290,6 @@ describe("the view", () => {
   it("an Iron Jarvis without Build sessions says so", async () => {
     delete api.gets["/build/sessions"];
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={null} terminal={terminal} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("This version of Iron Jarvis has no Build sessions yet.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("This version of Iron Jarvis has no coding sessions yet.");
   });
 });

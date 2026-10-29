@@ -310,7 +310,7 @@ export function BrowserPreview({
         <p data-testid="preview-browser" className="flex items-center gap-1.5 border-t hairline pt-2 text-[12px] text-zinc-500">
           <Globe size={12} aria-hidden className="shrink-0" />
           <span className="min-w-0">
-            Your browser{browser.name ? ` (${browser.name})` : ""} is paired with Iron Jarvis. A Build session does
+            Your browser{browser.name ? ` (${browser.name})` : ""} is paired with Iron Jarvis. A coding session does
             not use it: the agent opens your dev server in its own browser.
           </span>
         </p>

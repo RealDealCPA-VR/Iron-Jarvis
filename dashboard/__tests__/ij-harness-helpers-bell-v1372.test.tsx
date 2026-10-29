@@ -6,7 +6,7 @@
 // `build_session` (the Build session's thread id, from the helper's run
 // options). The bell row's links used to open `/sessions/<helper>` — a page
 // the user never asked for — while the helper's row, with this same question
-// on it, is in Build. Now the row says "Open the Build session" and opens
+// on it, is in Build. Now the row says "Open the coding session" and opens
 // `/terminals?session=<id>`; every other run's row is unchanged.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -138,12 +138,12 @@ describe("a Build session's helper asking in the bell", () => {
     H.api["/chat/approvals/pending"] = { approvals: [{ ...ASK, build_session: "bs_42" }] };
     const row = await openBellRow();
     const link = within(row).getByTestId("bell-approval-build");
-    expect(link.textContent).toMatch(/open the build session/i);
-    expect(link.getAttribute("href")).toBe("/terminals?session=bs_42");
+    expect(link.textContent).toMatch(/open the coding session/i);
+    expect(link.getAttribute("href")).toBe("/chat?view=code&session=bs_42");
     // It is still answered from here.
     expect(within(row).getByRole("button", { name: "Allow once" })).toBeTruthy();
     // ...and says whose ask it is in words.
-    expect(row.textContent).toMatch(/A helper in your Build session/);
+    expect(row.textContent).toMatch(/A helper in your coding session/);
     // v1.404.1: the wider answer is the coding SESSION's (every helper of it).
     expect(within(row).getByRole("button", { name: "Allow for this session" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Allow for this run" })).toBeNull();

@@ -48,8 +48,8 @@ test.afterAll(() => {
 });
 
 async function openTonight(page: Page) {
-  await page.goto("/terminals");
-  const tab = page.getByTestId("build-view-harness");
+  await page.goto("/chat"); // v1.406.0: Chat › Code
+  const tab = page.getByTestId("chat-view-code");
   await expect(tab).toBeVisible({ timeout: 90_000 });
   await tab.click();
   await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });

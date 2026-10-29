@@ -4519,6 +4519,91 @@ does not need a bump, stop and bump it.
   are unseen by `setup_touched`. `tests/test_auto_approve_followups_v14060.py`
   (18 mutations red).
 
+- **The coding sessions are the CHAT page's Code view; Build is the
+  terminals; the sidebar is five rooms** (v1.406.0 part 1 + 5; the user's
+  decision 2026-10-29: "the chat will contain the box at the top for chat vs
+  coding and the build will only be for terminal sessions using other
+  harnesses"). SWITCH: `components/chat/ChatCodeSurface.tsx` is the default
+  export of `app/chat/page.tsx` (the 14k-line chat is the inner
+  `ChatConversation({surfaceHidden})`; a page.tsx may export nothing else).
+  One row of its own (`chat-view-switch-row`, h-9 + mb-2 =
+  `SWITCH_ROW_HEIGHT` 2.75rem published as `--ij-switch-h`, which the chat
+  room AND IjHarnessView subtract beside `--ij-strip-h`) holds Build's old
+  switch look, `role="tablist"` "Chat or code", tabs `chat-view-chat` /
+  `chat-view-code`, arrow keys. CHAT stays MOUNTED behind Code (`hidden` +
+  `inert`, so a draft and a running reply are untouched) and while hidden
+  gives up the sidebar slot (`chatSlot = surfaceHidden ? null : …`);
+  `DockAsk`'s window key handler ignores a card under `[inert]` (Enter in
+  Code must never press a hidden chat's Allow). CODE
+  (`components/harness/CodeView.tsx`, dynamic, browser only) MOUNTS when
+  shown and UNMOUNTS on Chat — Build's old behaviour; a running reply
+  survives through `lib/turnCache`, a session's terminal through `paneHost`.
+  CodeView lends what Build lent: `/terminals` + the activity poll for the
+  list's Terminals group (a row opens `/terminals?focus=<id>`), a
+  `SessionTerminalApi` drawing the same TerminalPane, `ij.build.folder` as
+  the default folder; IjHarnessView portals its HarnessSidebar into the
+  sidebar slot when given `listSlot` (the drawer's `closeChatSlot` on a
+  pick). ADDRESS: `lib/chatSurface.ts` — `/chat?view=code`, `&session=<id>`,
+  `&night=<date>` (`/` reads the same query); the address wins, then this
+  WINDOW's memory (module state for the first frame + sessionStorage
+  `ij.chat.view`, written only for Code), then Chat; any chat link param
+  (`CHAT_LINK_PARAMS`: thread, ask, new, skill, persona, model, about,
+  project) means Chat. `lib/buildLinks.buildSessionHref` / `lastNightHref`
+  are THE producers (bell, Running now, Safety checks, Time travel,
+  missionLinks); desktop/main.js spells the same address (ask watcher, the
+  run-outcome tray notices, the toast click); `sessionOfHref` /
+  `nightOfHref` still READ `/terminals?…`; the Build page sends an old
+  `?session=` / `?night=` on with `addressMove.replace` (a plain location
+  replace — the page has no router, and ~30 Build tests mock no
+  next/navigation) and draws `build-moved` meanwhile. Same-page links:
+  `announceBuildSessionLink` fires on CHAT paths now (never Build),
+  `announceChatViewLink` (Ctrl K's "Code" row, `CHAT_VIEW_EVENT`),
+  `NEW_CHAT_EVENT` brings Chat to the front. BUILD has no switch; a saved
+  `ij.build.shape` of anything opens Terminals. WORDS (`lib/buildWords`):
+  `CHAT_VIEW_NAME`/`CODE_VIEW_NAME` "Chat"/"Code", `CODING_VIEW_NAME` =
+  "Code", `CODING_SESSIONS_LIST` "Coding sessions" (the sidebar heading in
+  Code — `useChatSurfaceView` — and the list's name), `CODING_SESSIONS_PLACE`
+  "Chat › Code", `BUILD_BLURB` the terminals only, `CHAT_BLURB`,
+  `CODE_BLURB`; "Your coding session finished", "A coding session is
+  waiting for your OK" etc. replace "Build session" in the bell, main.js and
+  `notifier.build_finished_title` (the one-notice fixture holds them
+  equal); the coding aliases moved from Build to Chat in `lib/nav`; Ctrl K
+  has a "Code" row (`lib/surfaces` EXTRA entry, `primary`, never on
+  Everything). SIDEBAR (part 5): `SIDEBAR_HREFS` = Chat, Build, Projects,
+  Everything, Settings (the T1 cap is five now); `SIDEBAR_EXCLUDED` names
+  the automation/admin rooms that must stay off it (each still on
+  Everything, in Ctrl K and by address). Pins:
+  `dashboard/__tests__/{chat-code-switch,chat-code-reply-survives,sidebar-rooms}-v1406.test.tsx`,
+  e2e `dashboard/e2e/chat-code-switch.spec.ts` (1280 × 800, 390 × 844);
+  moved on purpose: `ij-harness-switch-v1369` (now "Build is the terminals
+  only"), `harness-gaps-names-v1389`, `ij-harness-links-v1369`,
+  `last-night-v1399`, `harness-gaps-running-v1389`, `nav.test`,
+  `sidebar-v1321`, `everything-v1321`, `everything-tiers-v13530`,
+  `help-v1198`, `chat-layout-v1215`, `ux-wave2-coordinator-v1314`,
+  `ij-harness-calm-v1369`, `terminal-render-v1248`,
+  `ux-wave3-build-files-terminals-v1315`, `ij-harness-sidebar-v1369`,
+  `ij-harness-helpers-bell-v1372`, `ij-harness-rewind-library-v1370`,
+  `build-resume-v1391`, `no-notice-lost-v13610`, `ij-harness-panes-v1369`,
+  `limits-without-a-press-v1393`, `build-finish-notice-v1374`, the e2e
+  openers (`ij-harness*`, `tonight-try-on`, `calm-ui` T1/T2), and Python
+  `test_ij_harness_desktop_v1369`, `test_harness_helpers_review_v1372`,
+  `test_build_turn_finished_v1374` + `one-notice-v13600.json`.
+  REVIEW (each pinned red-first in `chat-code-review-v1406.test.tsx`, the
+  e2e "back to Chat" step): the sidebar's Chat row in Code switches to Chat
+  (`chatSurface.announceChatView("chat")` from NavRow — a same-page
+  navigation alone did nothing); `ij:open-switcher` (Switch model, Choose a
+  model) brings Chat forward (its menu is the chat composer's and opened
+  invisibly); the bell's capture handler and Running now's chat rows call
+  `announceChatViewLink` when the link is not a coding session (a waiting
+  chat behind Code changed only the address); a coding-session row with no
+  thread, and the `build_accounts` / `build_resume` / `night_shift` loop
+  rows, open `CODE_VIEW_LINK`, never `/terminals`; the HIDDEN chat ignores
+  a page-wide file drop (still `preventDefault`, so the browser never opens
+  the file — it attached files dropped on a coding session to the hidden
+  chat) and stops its microphone and hands-free Voice Chat on the hide edge
+  (Voice Chat SENDS what it hears). A window-level listener the chat page
+  registers must ask `surfaceHiddenRef` before acting.
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to
@@ -10353,23 +10438,30 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
-- **Build (`app/terminals/page.tsx`) has TWO views** (v1.369.0; the
-  free-form react-rnd CANVAS of v1.218.0 is gone, and a saved
-  `ij.build.shape = "canvas"` opens the IJ harness): **Terminals** =
-  `components/terminal/PaneRail.tsx` (every live pane in a column with its
-  state, one focused beside it) and **IJ harness** = `components/harness/*`
-  (Build sessions: left pane of folder groups + a Terminals group, the
-  session's conversation built from the chat page's own pieces, the right
-  panes Plan / Terminal / Changes / Browser / Files). `?session=<id>` opens a
-  session, `?focus=<id>` a terminal; the bell's Build links go through
-  `lib/buildLinks.BUILD_SESSION_EVENT` because Next keeps page state on a
-  query-only change. In the rail every pane still RENDERS — same box, all
+- **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.406.0
+  part 1; it had two views from v1.369.0, and the free-form react-rnd
+  CANVAS of v1.218.0 is long gone — a saved `ij.build.shape` of "harness"
+  or "canvas" now just opens Terminals): `components/terminal/PaneRail.tsx`
+  (every live pane in a column with its state, one focused beside it);
+  `?focus=<id>` opens a terminal (`BUILD_TERMINAL_EVENT` for a same-page
+  link), and an old `?session=` / `?night=` is `router.replace`d to the Code
+  view (`lib/buildLinks.codeHrefForOldBuildSearch`). **The coding sessions**
+  (`components/harness/*`, IjHarnessView: folder groups + a Terminals group,
+  the conversation built from the chat page's own pieces, the right panes)
+  are the CHAT page's **Code** view: `components/chat/ChatCodeSurface.tsx`
+  (the Chat | Code switch, default export of `app/chat/page.tsx`) +
+  `components/harness/CodeView.tsx` (lends the terminal list / terminal tab
+  Build used to lend); address `/chat?view=code&session=<id>` /
+  `&night=<date>` (`lib/chatSurface`, `lib/buildLinks.buildSessionHref`);
+  same-page links go through `BUILD_SESSION_EVENT` / `BUILD_NIGHT_EVENT` /
+  `CHAT_VIEW_EVENT` because Next keeps page state on a query-only change.
+  In the rail every pane still RENDERS — same box, all
   mounted, `visibility` toggled — because the v1.190.0 rule stands: a
   terminal whose holder has no size wraps its replay into a buffer no later
   fit can re-wrap, so a hidden pane must keep a real box. Never
   `display:none`, never an unmount. The rail needs a fallback focus
   (`activeId`). The TerminalPane component itself CAN unmount (leaving Build,
-  the view switch) — since v1.243.0 its xterm and socket live in
+  Chat | Code on the chat page) — since v1.243.0 its xterm and socket live in
   `components/terminal/paneHost.ts` and are parked, not destroyed (see the
   hard rule).
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`

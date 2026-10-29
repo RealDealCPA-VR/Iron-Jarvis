@@ -228,6 +228,7 @@ import { connectOffer, nowConnected, type ConnectedNow } from "@/lib/connectedEl
 import { ConnectedElsewhere } from "@/components/chat/ConnectedElsewhere";
 import { getDeviceId } from "@/lib/device";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
+import { ChatCodeSurface } from "@/components/chat/ChatCodeSurface";
 import {
   applySettled,
   decodeSuggestion,
@@ -3661,7 +3662,12 @@ function LiveReply({
 }
 
 
-export default function ChatPage() {
+/** The chat itself (everything above is its parts). v1.406.0 (part 1): the
+ *  page's default export wraps it in the Chat | Code switch
+ *  (components/chat/ChatCodeSurface); `surfaceHidden` is true while the Code
+ *  view is in front — the chat stays mounted (its draft, its running reply)
+ *  but gives the sidebar's list slot to the coding sessions. */
+function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // WHO that session runs on (v1.284.0): the roster target it was OPENED with
@@ -4162,7 +4168,16 @@ export default function ChatPage() {
   // the conversation list — this page's own thread rail, portaled in (layout
   // only: same state, same rename / pin / move / delete). No slot (a phone, a
   // test, a pop-out) keeps the rail where it always was.
-  const chatSlot = useChatSlot();
+  // v1.406.0 (part 1): while the page shows its CODE view this chat is kept
+  // behind it (components/chat/ChatCodeSurface) and gives the slot up — the
+  // sidebar then holds the coding sessions, never a hidden chat list.
+  const chatSlotLive = useChatSlot();
+  const chatSlot = surfaceHidden ? null : chatSlotLive;
+  // v1.406.0 review: read by the window-level handlers registered once (the
+  // page-wide file drop): behind the Code view they must not act on this
+  // hidden chat.
+  const surfaceHiddenRef = useRef(surfaceHidden);
+  surfaceHiddenRef.current = surfaceHidden;
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
   // Pinned threads (per-device view preference) + inline rename state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -6673,6 +6688,11 @@ export default function ChatPage() {
     const onDragEnter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
+      // v1.406.0 review: behind the Code view the chat is hidden — a file
+      // dropped on a coding session (or anywhere on that view) is not an
+      // attachment of this chat. Still prevented, so the browser never
+      // navigates away to the dropped file.
+      if (surfaceHiddenRef.current) return;
       depth += 1;
       setDragging(true);
     };
@@ -6690,6 +6710,7 @@ export default function ChatPage() {
       e.preventDefault();
       depth = 0;
       setDragging(false);
+      if (surfaceHiddenRef.current) return;
       const files = e.dataTransfer?.files;
       if (files && files.length) void addFilesRef.current(Array.from(files));
     };
@@ -7718,6 +7739,17 @@ export default function ChatPage() {
       dictation.start();
     }
   }
+
+  // v1.406.0 review: behind the Code view the chat's microphone stops — the
+  // dictation and hands-free Voice Chat (which SENDS what it hears on a
+  // pause). Kept listening, words said about the code went into this hidden
+  // box, and Voice Chat sent them to the chat unseen.
+  useEffect(() => {
+    if (!surfaceHidden) return;
+    if (voiceMode) setVoiceMode(false);
+    if (dictation.listening) dictation.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the hide edge only
+  }, [surfaceHidden]);
 
   /** Hands-free Voice Chat on/off. Entering turns spoken replies on (that's
    *  the point); leaving stops the mic but keeps the TTS preference. */
@@ -11631,7 +11663,7 @@ export default function ChatPage() {
             height there instead. */}
         <div
           data-testid="chat-room"
-          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
+          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem-var(--ij-strip-h,0px)-var(--ij-switch-h,0px))] md:min-h-[28rem] md:flex-row md:items-stretch"
         >
           {/* Threads: in the app sidebar on a wide screen (redesign S7) and
               in the phone nav drawer while it is open (v1.329.0, calm chat W4
@@ -14391,4 +14423,14 @@ export default function ChatPage() {
       )}
     </PageShell>
   );
+}
+
+/**
+ * THE CHAT PAGE (`/` and `/chat`). v1.406.0 (part 1): one switch at its top
+ * reads Chat | Code — the chat (above, unchanged) and the coding sessions
+ * (components/harness/CodeView, what was Build's second view). The address
+ * carries the view (`/chat?view=code&session=<id>`, lib/chatSurface).
+ */
+export default function ChatPage() {
+  return <ChatCodeSurface renderChat={(hidden) => <ChatConversation surfaceHidden={hidden} />} />;
 }

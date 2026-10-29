@@ -116,10 +116,11 @@ is the product and everything else is found when you need it. Nothing was
 taken away — every feature moved to a place you can reach in two clicks or by
 searching.
 
-- **The sidebar.** New chat; **Build** (the terminals), **Projects**,
-  **Everything**, **Settings**; then **Chats** (by day — on the chat screen
-  this is the chat's own list, with search, rename, pin, move and delete) and
-  **Projects**. At the bottom: whether Iron Jarvis is running and its version
+- **The sidebar.** New chat; **Chat** (with its Chat | Code switch, since
+  v1.406.0), **Build** (the terminals), **Projects**, **Everything**,
+  **Settings**; then **Chats** (by day — on the chat screen this is the
+  chat's own list, with search, rename, pin, move and delete; in its Code
+  view, the coding sessions) and **Projects**. At the bottom: whether Iron Jarvis is running and its version
   (press it for Status), and **Help** (the guides, *Ask the Guide*, and
   what's new). Collapse it to icons with the arrows at the top. On a phone it
   is the ☰ menu.
@@ -770,9 +771,11 @@ with the request typed in.
   "approval timed out" receipt).
 
 ### Terminals, Creative, and the rest
-Build: live terminals with AI assist per terminal, and **Coding sessions**,
-where Jarvis works as a coding agent in one of your folders (v1.369.0; called
-the IJ harness before v1.389.0); a Creative gallery for
+Build: live terminals with AI assist per terminal, for your own coding tools
+(Claude Code, Codex, any command line). **Coding sessions**, where Jarvis
+works as a coding agent in one of your folders (v1.369.0; called the IJ
+harness before v1.389.0), are on the chat page behind its **Chat | Code**
+switch since v1.406.0; a Creative gallery for
 generated media (Pixio); Skills (yours + auto-suggested from successful
 sessions, approval-gated); Connections (providers/health); Usage (token
 costs); Activity (the full undo-capable action ledger); the **/you** page
@@ -805,8 +808,8 @@ seam); Train (teach it your writing voice, suggest-only).
   page no longer closes your terminals. Each pane's terminal and its link to
   the shell stay open in the background, so coming back is instant — exactly
   the screen you left, with no replay, no redraw and no stray characters.
-  Switching between the Terminals and Coding sessions views keeps every terminal
-  the same way. A Claude or Codex
+  Switching between Chat and Code on the chat page keeps a coding session's
+  terminal the same way. A Claude or Codex
   you left working keeps working: a pane nobody is watching is still read, so
   the program never stalls waiting for you to come back. A reload or a daemon
   restart still replays the pane's history, and the answers the terminal
@@ -2170,6 +2173,45 @@ first, as Don't ask does.
 - A coding-session reply Iron Jarvis carries on by itself (after a restart,
   when an account's limit resets, on another account, the work of a plan you
   approved, the night shift) runs as Ask first: nobody is watching it start.
+
+## Chat | Code: coding sessions moved to the chat page, Build is the terminals (v1.406.0)
+
+The chat page now has one switch at the top, in the middle: **Chat | Code**.
+
+- **Chat** is the chat, exactly as before.
+- **Code** is the coding sessions: the screen that was Build's second view
+  ("Coding sessions"). Your sessions are grouped by folder, the conversation
+  sits in the middle, and its plan, timeline, terminal, changes, browser,
+  files and session tabs sit beside it. Nothing about a session changed;
+  only where it lives.
+- **The switch stays put.** It sits on its own row above both views, so it
+  never moves when you switch. Switching never loses your work: a chat you
+  were typing or a reply that was still coming is exactly where you left it
+  when you come back, and a coding reply keeps going while you look at Chat.
+- **The sidebar shows the right list.** In Chat its list is your chats; in
+  Code it is your coding sessions (with New session, Tonight and Last night
+  at the top). On a phone the ☰ menu holds the same list.
+- **The address says which.** A coding session opens at
+  `/chat?view=code&session=<id>`, and Last night at `/chat?view=code&night=<date>`.
+  The bell, Running now, Safety checks, Activity, the desktop app's
+  notices and the night shift all open those. An old link that named Build
+  (`/terminals?session=…`) still works: Build sends it on to the session.
+  Each window remembers the view it last showed (a new window starts on
+  Chat).
+- **Build is the terminals only**: live terminals for your own coding tools
+  (Claude Code, Codex, any command line). It has no view switch any more; a
+  link to a terminal (`/terminals?focus=<id>`) opens it there, and a coding
+  session's own Terminal tab is still a normal Build terminal.
+- **Fewer rooms in the sidebar.** The sidebar is **Chat**, **Build**,
+  **Projects**, **Everything** and **Settings**. The automation and admin
+  pages — Agents, Autonomy (goals), Workflows, Schedules, Reflexes,
+  Sentinels, Webhooks, Fleet, Sessions and the Session board, Activity,
+  Usage and Self-development — are on **Everything** and in **Ctrl K**, as
+  every page is; nothing was removed and every page still opens by its
+  address.
+- **New words.** A notice about a coding session says "coding session"
+  ("Your coding session finished", "A coding session is waiting for your
+  OK"), never "Build session". **Ctrl K** has a row for **Code** itself.
 
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 

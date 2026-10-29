@@ -47,11 +47,13 @@ import {
   buildLimitWaitingBody,
   buildMovedHeadline,
   buildSessionHref,
+  CODE_VIEW_LINK,
   buildThreadOf,
   lastNightHref,
   sessionLinkFor,
 } from "@/lib/buildLinks";
 import { CODING_SESSION } from "@/lib/buildWords";
+import { announceChatViewLink } from "@/lib/chatSurface";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
 import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
@@ -911,7 +913,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: thread ? buildSessionHref(thread) : "/terminals",
+      href: thread ? buildSessionHref(thread) : CODE_VIEW_LINK,
       icon: limitRow ? AlertTriangle : CheckCircle2,
       title: limitRow
         ? buildLimitHeadline(p.kind, name)
@@ -919,7 +921,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
           ? `A ${CODING_SESSION} carried on after Iron Jarvis restarted`
           : from
             ? buildMovedHeadline(from, name)
-            : `A Build session resumed${name ? ` on the ${name} account` : ""}`,
+            : `A coding session resumed${name ? ` on the ${name} account` : ""}`,
       body: waitingRow ? buildLimitWaitingBody(title, p.resets_at) : clipped,
       ...(limitRow && !waitingRow ? { attention: true } : {}),
       // v1.393.0 review: the two NEWS rows (it waits by itself; it carried
@@ -1043,7 +1045,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: thread ? buildSessionHref(thread) : "/terminals",
+      href: thread ? buildSessionHref(thread) : CODE_VIEW_LINK,
       icon: Lightbulb,
       title: lesson
         ? `A lesson is suggested${folder ? ` for ${folder}` : ""}`
@@ -1387,14 +1389,14 @@ export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
 /** Where a waiting chat opens: that chat, else the chat page. A Build
  *  session (v1.369.0) opens in Build, on that session. */
 export function chatAskHref(ask: ChatWaitingAsk): string {
-  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : "/terminals";
+  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : CODE_VIEW_LINK;
   return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
 }
 
 /** The waiting row's words: a chat's, or (v1.369.0) a Build session's. */
 export function chatAskRowWords(ask: ChatWaitingAsk): { title: string; open: string } {
   return ask.build
-    ? { title: "A Build session is waiting for your OK", open: "Open the session in Build" }
+    ? { title: "A coding session is waiting for your OK", open: "Open the session" }
     : { title: "A chat is waiting for your OK", open: "Open the chat" };
 }
 
@@ -1775,7 +1777,7 @@ function AgentApprovalRow({
               href={buildSessionHref(ask.buildSession)}
               className="mt-1 inline-block text-[12px] text-accent-soft transition-colors hover:text-accent"
             >
-              Open the Build session →
+              Open the coding session →
             </Link>
           ) : null}
           <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600 empty:hidden">
@@ -2361,7 +2363,7 @@ export function NotificationBell() {
         );
       if (buildAsks.length)
         parts.push(
-          `${buildAsks.length} Build session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
+          `${buildAsks.length} coding session${buildAsks.length === 1 ? "" : "s"} waiting for your OK` +
             (named.chat && newIsBuild ? `: ${named.chat}` : ""),
         );
       // v1.353.0 (G52): each waiting pane by its CLI's name.
@@ -2494,7 +2496,13 @@ export function NotificationBell() {
           // navigation alone changes only the address — lib/buildLinks).
           onClickCapture={(e) => {
             const a = (e.target as HTMLElement | null)?.closest?.("a");
-            if (a) announceBuildSessionLink(a.getAttribute("href"));
+            if (!a) return;
+            const href = a.getAttribute("href");
+            // v1.406.0 review: any other link to the chat page's views (a
+            // waiting chat's `/chat?thread=`, the Code view with no session
+            // named) pressed while that page is open switches its view —
+            // behind Code, a chat row changed only the address.
+            if (!announceBuildSessionLink(href)) announceChatViewLink(href);
           }}
         >
           <div className="card-surface overflow-hidden">
@@ -2774,7 +2782,7 @@ export function NotificationBell() {
                       ? "Open the Workflows page"
                       : agentAsks.length === 0 && chatAsks.length > 0
                         ? chatAsks[0].build
-                          ? "Open the session in Build"
+                          ? "Open the session"
                           : "Open the chat"
                         : agentAsks.length === 0 && paneAsks.length > 0
                           ? "Open Build"

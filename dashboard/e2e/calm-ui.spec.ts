@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { SIDEBAR_HREFS, SURFACES, type Surface } from "../lib/surfaces";
 import { RELOCATED } from "../lib/relocated";
+import { CODE_VIEW_HREF } from "../lib/chatSurface";
 
 /**
  * The brief's browser acceptance tests (calm UI redesign S12):
@@ -26,9 +27,12 @@ function landing(href: string): string {
 }
 
 async function expectLanded(page: Page, s: Surface) {
-  const want = landing(s.href);
-  await page.waitForURL((u) => u.pathname === want, { timeout: 60_000 });
+  // v1.406.0 (part 1): a surface may be a VIEW of a page (`/chat?view=code`):
+  // the path and that query must both be there.
+  const [path, query] = landing(s.href).split("?");
+  await page.waitForURL((u) => u.pathname === path && (!query || u.search.includes(query)), { timeout: 60_000 });
   await expect(page.getByText("This page could not be found")).toHaveCount(0);
+  if (s.href === CODE_VIEW_HREF) await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
 }
 
 /** The palette is loaded after hydration (components/Overlays.tsx); on a
@@ -66,14 +70,16 @@ test("T3 — a fresh profile opens to chat with no blocking modal, and the mock 
   await expect(page.getByText(/This is the demo model/).first()).toBeVisible({ timeout: 90_000 });
 });
 
-test("T1 — home is a chat: ≤ 4 sidebar items, no dashboard or grid, the composer focused", async ({ page }) => {
+// v1.406.0 (part 1 + 5, moved on purpose): five items — Chat joined (its
+// Chat | Code switch holds the coding sessions).
+test("T1 — home is a chat: ≤ 5 sidebar items, no dashboard or grid, the composer focused", async ({ page }) => {
   await page.goto("/?new=1");
   const box = composer(page);
   await expect(box).toBeVisible({ timeout: 90_000 });
   await expect(box).toBeFocused();
   const items = page.getByTestId("sidebar-nav").locator('a[data-testid^="sidebar-nav-"]:not([data-pinned])');
-  expect(await items.count()).toBeLessThanOrEqual(4);
-  await expect(items).toHaveText(["Build", "Projects", "Everything", "Settings"]);
+  expect(await items.count()).toBeLessThanOrEqual(5);
+  await expect(items).toHaveText(["Chat", "Build", "Projects", "Everything", "Settings"]);
   await expect(page.getByTestId("app-desk")).toHaveCount(0);
   await expect(page.locator('[data-testid^="group-"]')).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Overview" })).toHaveCount(0);
@@ -91,12 +97,21 @@ test.describe("T2 — every surface: the palette, and ≤ 2 clicks from home", (
       await expect(row).toBeVisible();
       await row.click();
       await expectLanded(page, s);
+      // v1.406.0: the window remembers Code (sessionStorage), so home would
+      // open on it next; go back to Chat so the count starts from the chat.
+      if (s.href === CODE_VIEW_HREF) await page.getByTestId("chat-view-chat").click();
 
       // Within two clicks from home.
       await openHome(page);
       let clicks = 0;
       if (s.href === "/" || s.href === "/chat") {
         // The home IS the chat surface: zero clicks.
+      } else if (s.href === CODE_VIEW_HREF) {
+        // v1.406.0: the sidebar's Chat, then the page's Code switch.
+        await page.getByTestId("sidebar-nav-chat").click();
+        await page.waitForURL((u) => u.pathname === "/chat", { timeout: 60_000 });
+        await page.getByTestId("chat-view-code").click();
+        clicks = 2;
       } else if ((SIDEBAR_HREFS as readonly string[]).includes(s.href)) {
         await page.getByTestId(`sidebar-nav-${s.href.slice(1)}`).click();
         clicks = 1;

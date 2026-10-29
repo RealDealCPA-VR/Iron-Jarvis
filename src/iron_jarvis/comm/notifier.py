@@ -306,9 +306,9 @@ def build_ask_words(payload: dict) -> str:
 def build_finished_title(payload: dict) -> str:
     """The bell's headline for ``build.turn_finished`` (v1.374.0)."""
     return (
-        "Your Build session could not finish"
+        "Your coding session could not finish"
         if _text(payload.get("outcome")) == "failed"
-        else "Your Build session finished"
+        else "Your coding session finished"
     )
 
 
@@ -557,7 +557,7 @@ def bell_pings(event: Any) -> bool:
     * ``session.completed`` of a mission's root run, unless stopped;
     * ``workflow.completed`` that FAILED;
     * ``build.turn_finished`` (v1.374.0): a Build turn that ran longer than a
-      minute and ended — the bell's "Your Build session finished" row (it
+      minute and ended — the bell's "Your coding session finished" row (it
       rings unless the user is LOOKING at that session in a window, a rule
       only the window can apply);
     * ``build.account_limit`` and ``build.resumed`` (v1.369.0; v1.393.0
