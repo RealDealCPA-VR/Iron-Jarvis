@@ -1871,6 +1871,14 @@ reads; it never writes, runs commands, or starts work on its own.
   The per-process logs (tray → Open logs folder) stamp every line with a
   time and say `killed pid=… reason=quit|update|watchdog|restart` when the
   app itself stopped a process, so a crash and a kill no longer look alike.
+- **"Starting Iron Jarvis…"** (v1.406.0) → a page that loads while Iron
+  Jarvis is still starting (a browser tab, a window opened during a restart)
+  says this, calmly, until Iron Jarvis first answers; only after a minute and
+  a half with no answer does it say **isn't responding**. A start also no
+  longer waits for a Build terminal whose shell is slow to open: after a few
+  seconds Iron Jarvis is ready, and that terminal joins the Build page by
+  itself the moment its shell starts. (It used to hold the whole start, and
+  on some updates the app restarted itself after 90 s because of it.)
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and

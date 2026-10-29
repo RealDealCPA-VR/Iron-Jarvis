@@ -26,9 +26,14 @@ function src(rel: string): string {
 describe("the Build page calls the prune after a successful pane load (v1.280.0)", () => {
   it("prunes against the live ids, right where the hosts are retained, and its keys are the writers' keys", () => {
     const page = src("app/terminals/page.tsx");
-    const retain = page.indexOf("retainPaneHosts(alive.map((t) => t.id));");
-    const prune = page.indexOf("prunePaneStorage(alive.map((t) => t.id));");
-    expect(retain).toBeGreaterThan(-1);
+    // v1.406.0 (part 6): the kept set is the live ids PLUS the panes the
+    // daemon is still reopening after a restart (`restoring`), so a slow
+    // shell's saved keys survive it (pinned in build-restoring-v1406).
+    const keep = page.indexOf("const keep = [...alive.map((t) => t.id), ...restoring];");
+    const retain = page.indexOf("retainPaneHosts(keep);");
+    const prune = page.indexOf("prunePaneStorage(keep);");
+    expect(keep).toBeGreaterThan(-1);
+    expect(retain).toBeGreaterThan(keep);
     expect(prune).toBeGreaterThan(retain);
     // The prune reads the live list the same `get("/terminals")` answered —
     // no other call site, so a failed fetch can never prune.

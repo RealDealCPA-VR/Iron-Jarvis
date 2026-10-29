@@ -237,6 +237,7 @@ export function PaneRail({
   busy = false,
   footer,
   now,
+  reopening = 0,
 }: {
   panes: RailPane[];
   focusedId: string | null;
@@ -250,6 +251,9 @@ export function PaneRail({
   footer?: React.ReactNode;
   /** "Now" for the ages (tests pass a fixed clock). */
   now?: number;
+  /** v1.406.0 (part 6 follow-up): panes the daemon is still reopening after
+   *  a restart. With no pane yet, the empty line says so instead. */
+  reopening?: number;
 }) {
   const clock = now ?? Date.now();
   const blocked = panes.filter((p) => p.state === "blocked");
@@ -408,7 +412,11 @@ export function PaneRail({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-        {panes.length === 0 ? (
+        {panes.length === 0 && reopening > 0 ? (
+          <p data-testid="rail-reopening" className="px-2.5 py-3 text-meta text-zinc-500">
+            Reopening {reopening} {reopening === 1 ? "terminal" : "terminals"}…
+          </p>
+        ) : panes.length === 0 ? (
           // A helper paragraph, so the 12px `meta` step in zinc-500 (v1.313.0;
           // it was 11.5px zinc-600, under AA). Dense rail rows keep their size.
           <p className="px-2.5 py-3 text-meta text-zinc-500">

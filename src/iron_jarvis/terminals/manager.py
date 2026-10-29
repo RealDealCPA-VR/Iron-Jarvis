@@ -37,6 +37,17 @@ MAX_DEAD_RETAINED = 10
 #: homes. A snapshot with homes never asks Iron-Proxy at all.
 RESTORE_ACCOUNTS_BUDGET_S = 2.0
 
+#: v1.406.0 (part 6): the LONGEST a boot waits for its panes to come back.
+#: Measured on the user's PC: a normal restore of two or three panes takes
+#: 0.85-3.3 s, and on 5 of 11 first starts after an update (2026-10-27/28)
+#: every pane's ``CreateProcessW`` (the WindowsApps ``pwsh.EXE`` alias under
+#: ConPTY) never returned — the lifespan waited on it until the desktop killed
+#: the daemon at 90 s. Past this bound the boot goes on; a pane still starting
+#: is registered the moment its shell starts (``_finish_late_restore``), stays
+#: in the snapshot meanwhile, and ``restoring_ids`` lists it so the Build page
+#: does not prune its saved keys.
+RESTORE_WAIT_S = 8.0
+
 #: A PTY shell that's going to die (e.g. a frozen build whose ConPTY has no
 #: OpenConsole.exe host) dies within a fraction of a second; give it this long
 #: to reveal itself before trusting it. Only paid ONCE per daemon run (the
@@ -277,6 +288,23 @@ class TerminalManager:
         #: create() calls that passed the cap check and have not yet registered
         #: (or put their id in `_pending_panes`) -- counted by the cap (v1.303.3).
         self._reserved = 0
+        #: v1.406.0 (part 6): snapshot entries whose restore the boot stopped
+        #: waiting for (``RESTORE_WAIT_S``), by pane id, in snapshot order.
+        #: Each still holds its ``_reserved`` slot; the snapshot keeps the
+        #: entry as it was read, so quitting before the shell starts loses
+        #: nothing. Guarded by ``_lock``.
+        self._restoring: dict[str, dict[str, Any]] = {}
+        #: Set by ``kill_all``: a restore that finishes after shutdown began
+        #: is closed instead of registered.
+        self._closing = False
+        #: v1.406.0 part 6 review: ONE snapshot writes at a time, and once
+        #: ``kill_all`` began only its own (inline) snapshot writes. A late
+        #: restore registers its pane and then persists; a shutdown landing
+        #: between the two killed every pane, and the late thread's snapshot,
+        #: taken after the kill, found no live pane and wrote an EMPTY index
+        #: over the shutdown snapshot — every pane lost on the next boot.
+        #: Taken BEFORE ``_lock`` (never the other way round).
+        self._snapshot_lock = threading.RLock()
         # --- pane capability tokens (v1.238.0) -------------------------------
         # The manager owns the store because it owns the only two facts a pane
         # token is made of: the pane id (minted here, before the spawn) and the
@@ -601,11 +629,25 @@ class TerminalManager:
             return session
 
         # First spawn of the daemon's life: verify the shell STAYS alive.
+        #
+        # v1.406.0 (part 6): ...unless the console has already SPOKEN. The
+        # wait exists for a PTY with no console host (the frozen build that
+        # dropped OpenConsole.exe, v1.190.0): its shell dies silently. The raw
+        # ConPTY (a pushing backend) cannot even be created without its host
+        # (CreatePseudoConsole fails -> ConPtyUnavailable above), and the host
+        # prints its first bytes the moment the shell connects — so output on
+        # a pushing session IS the proof, and waiting out the full 0.7 s cost
+        # every boot that restored panes ~0.7 of its ~0.9 s rehydrate step.
+        # A backend that is POLLED (pywinpty, pipe) records nothing until
+        # read, and keeps the full wait exactly as before.
+        pushing = session.pushes_output
         deadline = time.monotonic() + _PTY_VERIFY_SECONDS
         while time.monotonic() < deadline:
             if not session.alive:
                 break
-            time.sleep(0.04)
+            if pushing and session.output_seq > 0:
+                break
+            time.sleep(0.02 if pushing else 0.04)
         if session.alive:
             self._pty_ok = True
             return session
@@ -701,10 +743,16 @@ class TerminalManager:
         # the history; a crash still has the per-pane files. A restore
         # prefers the inline copy: it is written only here (or by an older
         # app), always after the files, so it is never the older one.
-        try:
-            self.snapshot(inline=True)
-        except Exception:  # noqa: BLE001 — persistence never blocks a shutdown
-            log.debug("shutdown terminal snapshot failed", exc_info=True)
+        with self._snapshot_lock:
+            with self._lock:
+                # A pane whose boot restore is still starting is closed when
+                # (if) its shell starts; its snapshot entry is kept below as
+                # read.
+                self._closing = True
+            try:
+                self.snapshot(inline=True)
+            except Exception:  # noqa: BLE001 — persistence never blocks a shutdown
+                log.debug("shutdown terminal snapshot failed", exc_info=True)
         with self._lock:
             items = list(self._sessions.values())
         for session in items:
@@ -887,7 +935,27 @@ class TerminalManager:
                 entries.append(self._entry(s, inline))
             except Exception:  # pragma: no cover - skip an odd session, keep the rest
                 continue
+        # v1.406.0 (part 6): a pane the boot stopped waiting for is still the
+        # user's pane. Its entry is written back exactly as it was read (its
+        # scrollback file is kept: `_write_index` never prunes while a slot is
+        # reserved), so a snapshot taken before its shell starts — the 30 s
+        # loop, a create, the shutdown — cannot drop it.
+        with self._lock:
+            held = {e.get("id") for e in entries}
+            pending = [
+                dict(e)
+                for rid, e in getattr(self, "_restoring", {}).items()
+                if rid not in held
+            ]
+        entries.extend(pending)
         return entries, json.dumps({"terminals": entries})
+
+    def restoring_ids(self) -> list[str]:
+        """Ids of panes a boot restore is still starting (v1.406.0 part 6).
+        `GET /terminals` reports them so the Build page keeps their saved
+        view, thread and layout keys while their shells start."""
+        with self._lock:
+            return list(getattr(self, "_restoring", {}))
 
     def snapshot(self, *, inline: bool = False) -> None:
         """Persist all LIVE sessions under ``state_path`` (atomic writes; no-op
@@ -896,10 +964,13 @@ class TerminalManager:
         index, as every snapshot did before v1.333.0 (see :meth:`kill_all`)."""
         if not self.state_path:
             return
-        sessions = self._live_for_snapshot()
-        self._write_scrollbacks(sessions)
-        entries, text = self._index_text(sessions, inline)
-        self._write_index(entries, text)
+        with self._snapshot_lock:
+            if self._closing and not inline:
+                return  # the shutdown snapshot is the last word (see __init__)
+            sessions = self._live_for_snapshot()
+            self._write_scrollbacks(sessions)
+            entries, text = self._index_text(sessions, inline)
+            self._write_index(entries, text)
 
     def snapshot_if_changed(self) -> bool:
         """Write only what changed since the last write (v1.245.0; per pane
@@ -910,13 +981,16 @@ class TerminalManager:
         when it wrote. BLOCKING (file writes): call it off the loop."""
         if not self.state_path:
             return False
-        sessions = self._live_for_snapshot()
-        wrote = self._write_scrollbacks(sessions) > 0
-        entries, text = self._index_text(sessions)
-        if text != getattr(self, "_last_index", None):
-            self._write_index(entries, text)
-            wrote = True
-        return wrote
+        with self._snapshot_lock:
+            if self._closing:
+                return False  # the shutdown snapshot is the last word
+            sessions = self._live_for_snapshot()
+            wrote = self._write_scrollbacks(sessions) > 0
+            entries, text = self._index_text(sessions)
+            if text != getattr(self, "_last_index", None):
+                self._write_index(entries, text)
+                wrote = True
+            return wrote
 
     def _saved_scrollback(self, entry: Mapping[str, Any], rid: str) -> bytes:
         """A snapshot entry's scrollback: inline (an index written before
@@ -1186,20 +1260,48 @@ class TerminalManager:
 
         restored = 0
         on_accounts = False
-        self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
-        try:
-            if len(batch) == 1:
-                _restore_at(0)  # nothing to overlap: no pool, no extra thread
-            elif batch:
-                from concurrent.futures import ThreadPoolExecutor
+        # THE BOOT WAITS AT MOST `RESTORE_WAIT_S` (v1.406.0, part 6). Each
+        # restore runs on its own DAEMON thread — never a ThreadPoolExecutor,
+        # whose workers the interpreter joins at exit, so a spawn stuck inside
+        # Windows would also hang the daemon's own shutdown. A restore that
+        # finishes inside the bound is registered below exactly as before (in
+        # snapshot order, one snapshot); one that finishes later registers
+        # itself; one that never finishes keeps its slot and its entry.
+        finished = [False] * len(batch)
+        waiting = {"on": True}
 
-                with ThreadPoolExecutor(
-                    max_workers=min(len(batch), 8), thread_name_prefix="pane-restore"
-                ) as pool:
-                    list(pool.map(_restore_at, range(len(batch))))
+        def _run(i: int) -> None:
+            try:
+                _restore_at(i)
+            finally:
+                with self._lock:
+                    if waiting["on"]:
+                        finished[i] = True
+                        return
+                self._finish_late_restore(slots[i], batch[i])
+
+        self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
+        late: list[int] = []
+        try:
+            threads = [
+                threading.Thread(target=_run, args=(i,), name=f"pane-restore_{i}", daemon=True)
+                for i in range(len(batch))
+            ]
+            for t in threads:
+                t.start()
+            wait_until = time.monotonic() + RESTORE_WAIT_S
+            for t in threads:
+                t.join(max(0.0, wait_until - time.monotonic()))
             # Registered AFTER the join, in snapshot order, under one lock hold.
             with self._lock:
-                for session in slots:
+                waiting["on"] = False
+                for i, session in enumerate(slots):
+                    if not finished[i]:
+                        late.append(i)
+                        rid = batch[i].get("id")
+                        if rid:
+                            self._restoring[str(rid)] = batch[i]
+                        continue
                     if session is None:
                         continue
                     self._sessions[session.id] = session
@@ -1211,7 +1313,16 @@ class TerminalManager:
         finally:
             self._restore_deadline = None
             with self._lock:
-                self._reserved -= len(batch)
+                # A restore still starting keeps its slot until it finishes.
+                self._reserved -= len(batch) - len(late)
+        if late:
+            log.warning(
+                "%d of %d terminal panes had not started after %g s; boot goes on "
+                "and each opens the moment its shell starts",
+                len(late),
+                len(batch),
+                RESTORE_WAIT_S,
+            )
         if len(entries) > len(batch):
             log.warning(
                 "restored %d of %d terminal panes: the session cap (%d) was reached",
@@ -1224,3 +1335,32 @@ class TerminalManager:
         if on_accounts:
             self._verify_accounts_later()
         return restored
+
+    def _finish_late_restore(
+        self, session: TerminalSession | None, entry: Mapping[str, Any]
+    ) -> None:
+        """A boot restore that finished after the boot stopped waiting
+        (v1.406.0, part 6): register it (or close it, when shutdown began),
+        release its slot, and persist. Runs on the restore's own thread;
+        never raises."""
+        rid = str(entry.get("id") or "")
+        close_it = False
+        with self._lock:
+            self._restoring.pop(rid, None)
+            self._reserved -= 1
+            if session is not None:
+                if self._closing:
+                    close_it = True
+                else:
+                    self._sessions[session.id] = session
+        if close_it and session is not None:
+            try:
+                session.kill()
+            except Exception:  # noqa: BLE001 — shutdown: nothing to report to
+                pass
+            return
+        log.info(
+            "a terminal pane %s after the boot stopped waiting for it",
+            "opened" if session is not None else "could not be reopened",
+        )
+        self._persist()

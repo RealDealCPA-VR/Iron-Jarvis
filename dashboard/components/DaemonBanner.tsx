@@ -18,6 +18,7 @@ import {
   OFFLINE_TITLE,
   PART_FAILED_TITLE,
   SIGNED_OUT_TITLE,
+  STARTING_TITLE,
 } from "@/lib/offlineWords";
 import {
   DESKTOP_NOT_ANSWERING_HINT,
@@ -38,6 +39,18 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
  *  and only while offline and visible: once the ladder gives up, the banner
  *  stops saying "restarting" within this bound. */
 export const SHELL_POLL_MS = 3000;
+
+/** v1.406.0 (part 6 follow-up): does the desktop shell already KNOW the
+ *  service is down, so a "start" is really an outage? It stopped restarting
+ *  (capped / stalled), the install is damaged, or it is restarting after a
+ *  CRASH (`restarts` counts unexpected exits only; main.js resets it on a
+ *  boot, a tray Restart and the window's Restart). `restarting` alone is not
+ *  enough: main.js also reports it for a normal first spawn still inside its
+ *  start-up allowance. No shell (a browser tab) or no answer = not known. */
+export function shellKnowsDown(d: ShellDaemonState | null): boolean {
+  if (!d) return false;
+  return d.damaged || d.capped || d.stalled || (d.restarting && d.restarts > 0);
+}
 
 /** Said when the window's Restart was refused or found nothing to restart.
  *  main.js changes nothing on a refusal, so the tray item it names is still
@@ -126,7 +139,7 @@ function BackStoppedLine() {
  * for the current view; reappears on the next route load if still offline.
  */
 export function DaemonBanner() {
-  const { online, unauthorized, requestError, checking, refresh } = useDaemon();
+  const { online, unauthorized, requestError, checking, starting, refresh } = useDaemon();
   // Retry used to be `window.location.reload()`. Against a FROZEN daemon that
   // reloads into an identical banner with no sign anything happened — reported
   // as "hitting retry didn't seem to do anything". It now re-probes and SAYS it
@@ -160,9 +173,17 @@ export function DaemonBanner() {
         : requestError
           ? "error"
           : null;
+  // v1.406.0 (part 6 follow-up): a START is calm ("Starting Iron Jarvis…")
+  // — but not over a service the DESKTOP already knows is down. While
+  // starting, the banner asks the shell (below), and a crash it is restarting
+  // from, a cap, a stall or a damaged install wins at once: the page is a
+  // pop-out or a reloaded window over a daemon that died, not a fresh start.
+  const startingNow = checking && starting === true;
+  const shellBad = startingNow && desktop && shellKnowsDown(daemonState);
+  const problem = shellBad ? "offline" : state;
   useEffect(() => {
-    if (state !== dismissed) setDismissed(null);
-  }, [state, dismissed]);
+    if (problem !== dismissed) setDismissed(null);
+  }, [problem, dismissed]);
 
   useEffect(() => {
     if (online) setRetrying(false);
@@ -176,7 +197,7 @@ export function DaemonBanner() {
   const wasOfflineRef = useRef(false);
   const [back, setBack] = useState(false);
   useEffect(() => {
-    if (state === "offline") {
+    if (problem === "offline") {
       wasOfflineRef.current = true;
       setBack(false);
       return;
@@ -185,7 +206,7 @@ export function DaemonBanner() {
       wasOfflineRef.current = false;
       setBack(true);
     }
-  }, [state, online, checking]);
+  }, [problem, online, checking]);
   useEffect(() => {
     if (!back) return;
     const t = window.setTimeout(() => setBack(false), BACK_LINGER_MS);
@@ -194,14 +215,16 @@ export function DaemonBanner() {
 
   // Gate on the dismissed-state too, or the X buttons do nothing (the useEffect
   // above re-shows the banner when a DIFFERENT problem appears by clearing dismiss).
-  const showOffline = state === "offline" && dismissed !== "offline";
+  const showOffline = problem === "offline" && dismissed !== "offline";
   const showAuth = state === "auth" && dismissed !== "auth";
   const showError = state === "error" && dismissed !== "error";
 
   // Read the shell only while the desktop banner is up — never while online.
   // A browser tab, an older shell with no getState, or a refused read (null)
   // all land on "unknown": the plain hint, never a button that might not work.
-  const watchShell = showOffline && desktop;
+  // v1.406.0 (part 6 follow-up): and while STARTING, so a crash the desktop
+  // already knows about replaces the calm line at once.
+  const watchShell = (showOffline || startingNow) && desktop;
   const readShell = useCallback(() => {
     const seq = ++readSeq.current;
     const getState = shellBridge()?.getState;
@@ -289,7 +312,7 @@ export function DaemonBanner() {
       {/* v1.354.0 (G31): one quiet line for a few seconds when Iron Jarvis
           answers again after an outage — no box, the theme's success tone on
           the icon only. A screen reader hears it (role=status, polite). */}
-      {back && !state && (
+      {back && !problem && (
         <m.div
           key="daemon-back"
           role="status"
@@ -305,6 +328,28 @@ export function DaemonBanner() {
             <CircleCheck size={15} className="shrink-0 text-tone-success" aria-hidden="true" />
             <span className="font-medium text-zinc-200">{BACK_TITLE}</span>
             <BackStoppedLine />
+          </div>
+        </m.div>
+      )}
+      {/* v1.406.0 (part 6): a START is not an outage. Before Iron Jarvis has
+          answered this page once (and only while the page is young —
+          lib/daemon STARTING_GRACE_MS) the banner says the splash's own calm
+          words, no warn tone, no Retry, nothing to dismiss. */}
+      {startingNow && !shellBad && (
+        <m.div
+          key="daemon-starting"
+          role="status"
+          aria-live="polite"
+          data-testid="daemon-banner-starting"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: "auto", opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="overflow-hidden border-b hairline"
+        >
+          <div className="flex items-center gap-2.5 px-6 py-2 text-sm lg:px-10">
+            <RefreshCw size={14} className="shrink-0 animate-spin text-zinc-400" aria-hidden="true" />
+            <span className="text-zinc-300">{STARTING_TITLE}</span>
           </div>
         </m.div>
       )}

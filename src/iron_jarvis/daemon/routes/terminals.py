@@ -409,9 +409,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/terminals")
     def list_terminals() -> dict[str, Any]:
-        return {
-            "terminals": [pane_row(d.platform, i) for i in d.platform.terminals.list()]
-        }
+        terminals = d.platform.terminals
+        out: dict[str, Any] = {"terminals": [pane_row(d.platform, i) for i in terminals.list()]}
+        # v1.406.0 (part 6): panes a boot restore is still starting (the boot
+        # waits at most RESTORE_WAIT_S for them). Listed only when there are
+        # any, so every other answer is byte-identical; the Build page keeps
+        # their saved keys instead of pruning them.
+        restoring = getattr(terminals, "restoring_ids", None)
+        ids = restoring() if callable(restoring) else []
+        if ids:
+            out["restoring"] = ids
+        return out
 
     @app.get("/terminals/shells")
     def terminal_shells() -> dict[str, Any]:
