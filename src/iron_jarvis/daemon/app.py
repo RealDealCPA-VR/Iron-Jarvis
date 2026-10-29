@@ -3530,6 +3530,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import editor as _editor_routes
 
     _editor_routes.register(app, d)
+    # Brain Profiles (v1.406.0, brain/): which memory base is the durable
+    # brain, app-wide and per project, and the saves that are still waiting.
+    from .routes import brain as _brain_routes
+
+    _brain_routes.register(app, d)
     # Night shift (v1.398.0, N1): Coding sessions › Tonight — the queue of
     # coding tasks that start by themselves in the night window, each on its
     # own branch (harness/night; the loop is started in the lifespan).

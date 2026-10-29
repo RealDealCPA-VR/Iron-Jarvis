@@ -5085,6 +5085,58 @@ _REMEMBERED_PREFIX = "remembered preference: "
 _REMEMBERED_MAX_CHARS = 240
 
 
+async def brain_turn(d, pid: "str | None", recall_query: str):
+    """THE BRAIN PROFILE for this turn (v1.406.0): the block (rules, trusted
+    guide + skills, the primary's notes for this message as DATA) and the
+    receipt seed — off the loop, bounded (``brain.turn.build_turn_bounded``).
+    No profile → an empty BrainTurn: no block, no tools, ``brain: null``.
+    Both lanes await it BESIDE ``_gather_grounding`` and add its block right
+    BEFORE the grounding join, before the planner. MIRROR NOTE (lock-step):
+    routes/chat.py calls the same helper at the same seam. Never raises."""
+    from ..brain.turn import BrainTurn, build_turn_bounded
+
+    try:
+        return await asyncio.to_thread(
+            build_turn_bounded, d.platform, pid, recall_query or "",
+            event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
+        )
+    except Exception:  # noqa: BLE001 — no brain beats a crashed turn
+        log.warning("brain turn failed", exc_info=True)
+        return BrainTurn()
+
+
+def brain_armed(d, brain: Any, armed: "list[str]") -> "list[str]":
+    """The brain tools a turn with a usable profile adds to its armed set
+    (v1.406.0), after every fill pass. The profile IS the consent; the
+    low-trust filter that runs after this still removes the writers, and
+    each tool's own spend_check still cards a save the profile wants asked
+    and EVERY structural change. MIRROR NOTE (lock-step). Never raises."""
+    try:
+        if brain is None or not getattr(brain, "usable", False):
+            return []
+        from ..brain.turn import BRAIN_TOOLS
+
+        reg = d.platform.registry
+        return [t for t in BRAIN_TOOLS if t not in armed and reg.get(t) is not None]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def brain_fold(brain: Any, name: str, result: Any) -> None:
+    """One brain tool call's fact into the turn's ``brain`` receipt — for a
+    FAILED save too (an unsaved change must be said), so callers fold it
+    OUTSIDE the ``if ran:`` gate. MIRROR NOTE (lock-step). Never raises."""
+    try:
+        receipt = getattr(brain, "receipt", None)
+        if receipt is None:
+            return
+        from ..brain.tools import brain_fact_from_result, fold_fact
+
+        fold_fact(receipt, brain_fact_from_result(name, result))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def remembered_from_result(name: str, result: Any) -> str:
     """The preference sentence a successful ``remember_preference`` call kept,
     or ``""`` (v1.282.0). Reads the tool's ``data["text"]`` first and the
@@ -8665,9 +8717,17 @@ async def run_chat_turn(
     # and the "/" skill (which stay this lane's own). Keyed off the turn's
     # composed recall query (X.3). MIRROR NOTE (lock-step): routes/chat.py
     # POST /chat/stream calls the same helper at the same seam.
-    _grounding = await _gather_grounding(
-        d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+    # BRAIN PROFILE (v1.406.0): built BESIDE the grounding (both off the
+    # loop), its block joined right BEFORE the grounding — rules and the
+    # trusted guide first, then retrieved memory. MIRROR NOTE (lock-step):
+    # routes/chat.py does the same at the same seam.
+    _grounding, _brain = await asyncio.gather(
+        _gather_grounding(
+            d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+        ),
+        brain_turn(d, pid, recall_query),
     )
+    system += _brain.block
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block, before the planner).
     # MIRROR NOTE (lock-step): routes/chat.py joins the same object.
@@ -9030,6 +9090,9 @@ async def run_chat_turn(
                 "changes": [f"tool_cap:{_selection.ceiling}"],
             }
         armed += [t for t in conn_tools if t not in armed]
+        # BRAIN PROFILE (v1.406.0): the brain tools, before the low-trust
+        # filter below. MIRROR NOTE (lock-step): routes/chat.py.
+        armed += brain_armed(d, _brain, armed)
         # LOW TRUST (v1.298.0): the kept-away tools leave the armed set
         # BEFORE it becomes specs and grants — a tool the model is not shown
         # is one it cannot be talked into. Recorded once for the receipt.
@@ -9905,6 +9968,9 @@ async def run_chat_turn(
                         # message names the count — only the message, never a
                         # frame. MIRROR NOTE (lock-step): routes/chat.py.
                         content = with_second_failure_note(content, _failed_calls[_call_key])
+                    # BRAIN (v1.406.0): a save's fact — saved OR kept unsaved —
+                    # outside the `if ran:` gate. MIRROR NOTE (lock-step).
+                    brain_fold(_brain, tc.name, result)
                     # tools_used counts ONLY tools that actually executed — a
                     # denied or failed call is not honestly reported as run.
                     if ran:
@@ -10468,6 +10534,10 @@ async def run_chat_turn(
         # MIRROR NOTE (lock-step): the stream done-frame carries the
         # identical key.
         "refit": refit_receipt(_refit_note),
+        # BRAIN (v1.406.0): {name, base, searched, guide, saved, unsaved,
+        # changed} | null — ALWAYS present, LAST. MIRROR NOTE (lock-step): the
+        # stream done-frame carries the identical key.
+        "brain": getattr(_brain, "receipt", None),
     }
     # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop actually
     # started a workflow run — absent otherwise (including failed calls), so

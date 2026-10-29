@@ -252,6 +252,7 @@ _LATE_MODEL_MODULES = (
     "..harness.attempt_spend",  # AttemptSpendRecord — an attempt's metered spend (v1.397.0)
     "..harness.night",        # NightTaskRecord — a coding task queued for the night (v1.398.0)
     "..harness.night_morning",  # NightSummaryRecord — one night's Last night summary (v1.399.0)
+    "..brain.models",         # BrainProfileRecord + BrainPendingWrite — the durable brain (v1.406.0)
 )
 
 

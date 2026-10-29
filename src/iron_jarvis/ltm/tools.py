@@ -42,6 +42,9 @@ def _local_only_refusal(source: str, done: str) -> str:
 class LTMSearchTool(Tool):
     """Search long-term memory connectors (Obsidian / brain / Notion)."""
 
+    #: v1.406.0: a memory base's notes are DATA, never instructions — the
+    #: chat lanes and the runtime fence and scan this output like recall's.
+    returns_untrusted_content = True
     name = "ltm_search"
     reversibility = Reversibility.READONLY  # a search has no side effect
     description = (

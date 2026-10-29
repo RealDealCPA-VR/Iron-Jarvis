@@ -101,6 +101,11 @@ class Project(SQLModel, table=True):
     #: so a NULL and a corrupt blob both read as "no team". Additive column
     #: (auto-reconciled by ``core.db._reconcile_additive_columns``).
     team_json: str = ""
+    #: THE PROJECT'S BRAIN PROFILE (v1.406.0): "" (or NULL on an older row) =
+    #: follow the app's choice (``Config.brain_profile``), ``"off"`` = no
+    #: primary brain in this project, else a ``BrainProfileRecord`` id. Read
+    #: only through ``brain.profiles.resolve`` (the ONE rule). Additive column.
+    brain_profile: str = ""
 
 
 class ProjectKnowledge(SQLModel, table=True):

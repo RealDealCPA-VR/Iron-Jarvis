@@ -1529,6 +1529,14 @@ def build_platform(
 
     for tool in media_tools(_LazyPlatform(_config_tools_platform)):
         registry.register(tool)
+    # BRAIN PROFILES (v1.406.0): brain_search / brain_read / brain_save /
+    # brain_change — the normalized tools over the active Brain Profile's
+    # primary memory base. They read the platform lazily (ltm, engine,
+    # config), so they register here with the other platform-reading tools.
+    from .brain.tools import brain_tools
+
+    for tool in brain_tools(_LazyPlatform(_config_tools_platform)):
+        registry.register(tool)
 
     # Memory Fabric: ONE federated recall over every store (files, notes, memory
     # graph, project knowledge, lessons, past sessions), sharing the same

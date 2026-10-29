@@ -86,6 +86,37 @@ class LTMConnector(ABC):
     def append(self, title: str, content: str) -> str:
         """Create/append a note; return a ref (path/id) to the stored item."""
 
+    # -- optional note operations (v1.406.0, Brain Profiles) ----------------
+    # A base that cannot do one of these raises :class:`NoteOpUnsupported`
+    # with a sentence that names the base, so the brain tools can say so
+    # instead of guessing. They are NOT abstract: every existing connector
+    # (and every test double) keeps working untouched.
+    def read(self, ref: str) -> str:
+        """The full text of one note (by the ``ref`` a search hit carried)."""
+        raise NoteOpUnsupported(f"{self.name}: this memory base cannot read a note back")
+
+    def update(self, ref: str, content: str) -> str:
+        """ADD ``content`` to an EXISTING note; return its ref. Never replaces
+        what the note already says."""
+        raise NoteOpUnsupported(
+            f"{self.name}: this memory base cannot add to an existing note"
+        )
+
+    def change(self, action: str, ref: str, to: str = "") -> str:
+        """A structural change: ``archive`` | ``delete`` | ``rename`` | ``move``.
+        Callers ask the user first (``brain_change`` cards every call)."""
+        raise NoteOpUnsupported(
+            f"{self.name}: this memory base cannot {action} a note from Iron Jarvis"
+        )
+
+
+class NoteOpUnsupported(RuntimeError):
+    """A memory base that has no way to do a note operation (v1.406.0)."""
+
+
+#: Structural actions ``change`` understands (v1.406.0).
+CHANGE_ACTIONS = ("archive", "delete", "rename", "move")
+
 
 class MarkdownDirConnector(LTMConnector):
     """Shared offline implementation: a folder of ``.md`` files as an LTM store.
@@ -147,7 +178,11 @@ class MarkdownDirConnector(LTMConnector):
         if not self.dir.exists():
             return []
         pattern = "**/*.md" if self.recursive else "*.md"
-        return sorted(p for p in self.dir.glob(pattern) if p.is_file())
+        # A note moved to the folder's trash (v1.406.0 ``change``) is gone.
+        return sorted(
+            p for p in self.dir.glob(pattern)
+            if p.is_file() and ".trash" not in p.relative_to(self.dir).parts
+        )
 
     @staticmethod
     def _read(path: Path) -> str:
@@ -251,3 +286,111 @@ class MarkdownDirConnector(LTMConnector):
                 pass
             raise
         return str(path)
+
+    # -- note operations (v1.406.0) ----------------------------------------
+    def _note_path(self, ref: str) -> Path:
+        """``ref`` (an absolute path a search hit carried, a path inside the
+        folder, or a title) as a ``.md`` file INSIDE this folder — anything
+        that resolves outside it is refused, never read or written."""
+        raw = str(ref or "").strip()
+        if not raw:
+            raise LTMWriteRefused(f"{self.name}: no note was named")
+        base = self.dir.resolve()
+        cand = Path(raw)
+        if not cand.is_absolute():
+            cand = self.dir / raw
+        if cand.suffix.lower() != ".md":
+            by_title = self.dir / f"{slugify(raw)}.md"
+            cand = cand.with_suffix(".md") if cand.with_suffix(".md").exists() else by_title
+        try:
+            resolved = cand.resolve()
+            resolved.relative_to(base)
+        except (OSError, ValueError) as exc:
+            raise LTMWriteRefused(
+                f"{self.name}: {raw} is not a note inside {self.dir}"
+            ) from exc
+        return resolved
+
+    def read(self, ref: str) -> str:
+        if self.missing:
+            raise LTMWriteRefused(f"cannot read: {self.health()['detail']}")
+        path = self._note_path(ref)
+        if not path.is_file():
+            raise LTMWriteRefused(f"{self.name}: no note at {path.name}")
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise LTMWriteRefused(f"{self.name}: {path.name} could not be read ({exc})") from exc
+
+    def update(self, ref: str, content: str) -> str:
+        if self.missing:
+            raise LTMWriteRefused(f"cannot add to a note: {self.health()['detail']}")
+        path = self._note_path(ref)
+        if not path.is_file():
+            raise LTMWriteRefused(f"{self.name}: no note at {path.name} to add to")
+        try:
+            existing = path.read_text(encoding="utf-8").rstrip()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise LTMWriteRefused(
+                f"cannot add to {path}: its existing contents could not be read "
+                f"({exc}) — nothing was written"
+            ) from exc
+        _atomic_write(path, f"{existing}\n\n{content.rstrip()}\n")
+        return str(path)
+
+    def change(self, action: str, ref: str, to: str = "") -> str:
+        """Archive/delete MOVE the note into the folder's ``.trash`` (Obsidian's
+        own trash folder) — never an unlink (the v1.256.0 rule); rename/move
+        stay inside this folder."""
+        action = str(action or "").strip().lower()
+        if action not in CHANGE_ACTIONS:
+            raise LTMWriteRefused(f"{self.name}: unknown change {action!r}")
+        if self.missing:
+            raise LTMWriteRefused(f"cannot change a note: {self.health()['detail']}")
+        path = self._note_path(ref)
+        if not path.is_file():
+            raise LTMWriteRefused(f"{self.name}: no note at {path.name}")
+        import os
+        import time as _time
+
+        base = self.dir.resolve()
+        if action in ("archive", "delete"):
+            trash = base / ".trash"
+            trash.mkdir(exist_ok=True)
+            dest = trash / path.name
+            if dest.exists():
+                dest = trash / f"{path.stem}-{_time.strftime('%Y%m%d-%H%M%S')}{path.suffix}"
+        else:
+            target = str(to or "").strip()
+            if not target:
+                raise LTMWriteRefused(f"{self.name}: {action} needs a new name or folder")
+            if action == "rename":
+                dest = path.with_name(f"{slugify(target)}.md")
+            else:
+                dest = (base / target / path.name)
+            try:
+                dest.resolve().relative_to(base)
+            except (OSError, ValueError) as exc:
+                raise LTMWriteRefused(f"{self.name}: {target} is outside {self.dir}") from exc
+            if dest.exists():
+                raise LTMWriteRefused(f"{self.name}: {dest.name} already exists there")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(path, dest)
+        return str(dest)
+
+
+def _atomic_write(path: Path, body: str) -> None:
+    import os
+    import tempfile
+
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

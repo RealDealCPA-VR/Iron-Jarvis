@@ -169,6 +169,16 @@ ACCOUNT_GROUPS_MAX = 20
 ACCOUNT_GROUP_SIZE_MAX = 20
 
 
+def _brain_profile_shape(value: Any) -> None:
+    """A Brain Profile id or "" (v1.406.0). Whether the id still exists is
+    the brain routes' business; ``brain.profiles.resolve`` reads a stale id
+    as no profile."""
+    import re as _re
+
+    if not isinstance(value, str) or (value and not _re.fullmatch(r"bp_[A-Za-z0-9_-]{1,64}", value)):
+        raise ValueError("must be a brain profile from Settings › Memory & you")
+
+
 def _account_groups_shape(v: Any) -> None:
     """THE shape of ``account_groups`` (v1.393.0), refused in words before
     anything is saved: ``{name: [account ids]}``, a name of 1–40 characters,
@@ -577,6 +587,18 @@ SETTINGS: tuple[SettingDef, ...] = (
       "plan's limits. It waits while that account is at or near its limit. Nothing is kept until "
       "you accept it.",
       tier="allow", aliases=("build library", "build lessons", "learn from build")),
+    # v1.406.0 (brain/): which Brain Profile chat and agent runs use, app-wide.
+    # Its own control in Settings › Memory & you (CONTROLLED_IN_SECTION); a
+    # project may choose its own (Project.brain_profile). Choosing where
+    # Jarvis SAVES what it learns (a cloud brain, a work vs personal one) is a
+    # privacy decision, so from chat it asks first.
+    S("brain_profile", "Brain profile", "memory", "string",
+      "Which memory base is your durable brain, and how Jarvis treats it: searched before it "
+      "answers, where new knowledge is saved, and the operating guide it follows. Empty = no "
+      "primary brain (memory is still used as before).",
+      tier="ask", check=_brain_profile_shape,
+      aliases=("brain", "durable brain", "primary brain", "memory profile", "notion brain",
+               "second brain", "operating guide")),
     S("chat_folder_rules", "Follow a project folder's own instructions in chat", "memory", "bool",
       "When a chat is in a project that has a folder, it reads the instruction files kept in "
       "that folder (AGENTS.md, CLAUDE.md and their .local versions) and follows them.",

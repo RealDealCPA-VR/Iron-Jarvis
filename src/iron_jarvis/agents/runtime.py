@@ -2368,6 +2368,36 @@ class AgentRuntime:
                 system_prompt += "\n\n" + _profile
         except Exception:  # noqa: BLE001 — identity must never break a run
             pass
+        # BRAIN PROFILE (v1.406.0): the same block both chat lanes add (rules,
+        # the trusted operating guide + skills, the primary's notes for the
+        # task as DATA) and the brain tools, so an agent honours the user's
+        # durable brain without knowing what backs it. Off for a read-only
+        # reviewer and under skip_memory; under low trust the writers are not
+        # shown (the overrides would refuse them anyway). Bounded, off the
+        # loop, never raises into the run.
+        if not skip_memory and not _review_only:
+            try:
+                from ..brain.turn import BRAIN_TOOLS, build_turn_bounded
+
+                _brain_run = await asyncio.to_thread(
+                    build_turn_bounded, self.p, session.project_id, session.task or "",
+                    event_bus=getattr(self.p, "event_bus", None), session_id=session.id,
+                )
+                system_prompt += _brain_run.block
+                if _brain_run.usable:
+                    _have = {s.get("name") for s in tool_specs if isinstance(s, dict)}
+                    _low = self._effective_trust(session) == TRUST_LOW
+                    _add = [
+                        t for t in BRAIN_TOOLS
+                        if t not in _have and self.p.registry.get(t) is not None
+                        and not (_low and t in ("brain_save", "brain_change"))
+                    ]
+                    if _add:
+                        tool_specs = list(tool_specs) + self.p.registry.specs(_add)
+            except Exception:  # noqa: BLE001 — the brain must never break a run
+                logging.getLogger("iron_jarvis.agents.runtime").warning(
+                    "brain block for run failed", exc_info=True
+                )
         # MEMORY AWARENESS (v1.141.0): every agent type sees a compact index
         # of WHAT memory exists (bases + graph size + recent note TITLES —
         # never content) so it reaches for `recall` instead of assuming

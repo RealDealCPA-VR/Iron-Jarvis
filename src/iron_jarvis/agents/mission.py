@@ -209,6 +209,7 @@ _TOOL_WORDS: dict[str, tuple[str, str]] = {
     "web_extract": ("read a web page", "could not read a web page"),
     "recall": ("checked memory for “{q}”", "checked memory without a result"),
     "ltm_search": ("searched the knowledge base for “{q}”", "searched the knowledge base without a result"),
+    "brain_search": ("searched your brain for “{q}”", "searched your brain without a result"),
     "memory_search": ("searched notes for “{q}”", "searched notes without a result"),
     "shell": ("ran a command", "ran a command that failed"),
     "consult": ("asked {a} for advice", "could not reach {a} for advice"),
@@ -250,6 +251,10 @@ ASK_WORDS: dict[str, str] = {
     "web_search": "search the web",
     # v1.357.0 (G84): a saved web service (integrations/tools.RestCallTool).
     "rest_call": "call one of your saved web services",
+    # v1.406.0 (Brain Profiles): a save the profile wants asked, and every
+    # structural change to a note.
+    "brain_save": "save a note to your brain",
+    "brain_change": "change a note in your brain",
     # v1.358.0 (integrate, G41): the chat's refusal footnote read "Jarvis
     # couldn't use app connect" / "use generate media". The card's words
     # (lib/toolWords WORDS, pinned equal by test_receipt_seams_v13520).
@@ -364,6 +369,11 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "recall_lessons": ("checked its lessons", "lesson check"),
     "ltm_search": ("searched your knowledge base", "knowledge base search"),
     "ltm_append": ("added to your knowledge base", "knowledge base note"),
+    # v1.406.0 (Brain Profiles).
+    "brain_search": ("searched your brain", "brain search"),
+    "brain_read": ("read a note from your brain", "brain note"),
+    "brain_save": ("saved a note to your brain", "brain note"),
+    "brain_change": ("changed a note in your brain", "brain change"),
     "file_search": ("searched your drives", "drive search"),
     "browse": ("opened a web page", "web page visit"),
     "web_extract": ("read part of a web page", "web page read"),

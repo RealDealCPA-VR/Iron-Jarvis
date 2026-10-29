@@ -742,6 +742,9 @@ class ProjectPatch(BaseModel):
     #: LTM source names this project reads from (v1.110.0). [] = every base,
     #: which is the default; naming bases NARROWS recall to them.
     memory_sources: list[str] | None = None
+    #: The project's Brain Profile (v1.406.0): "" = follow the app's choice,
+    #: "off" = no primary brain here, else a profile id (checked to exist).
+    brain_profile: str | None = None
 
 
 class ProjectKnowledgeBody(BaseModel):

@@ -13,7 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .base import LTMConnector
+import re
+
+from .base import CHANGE_ACTIONS, LTMConnector, NoteOpUnsupported
+
+_PAGE_ID_RX = re.compile(r"([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
 
 NOTION_VERSION = "2022-06-28"
 API_BASE = "https://api.notion.com/v1"
@@ -117,3 +121,65 @@ class NotionConnector(LTMConnector):
                     rt.get("plain_text", "") for rt in prop.get("title", [])
                 ).strip()
         return str(page.get("id", ""))
+
+    # -- note operations (v1.406.0, Brain Profiles) -------------------------
+    @staticmethod
+    def page_id(ref: str) -> str:
+        """The page id inside a Notion ref (an id, or a notion.so link)."""
+        found = _PAGE_ID_RX.findall(str(ref or ""))
+        if not found:
+            raise NoteOpUnsupported(f"notion: {ref!r} does not name a Notion page")
+        return found[-1].replace("-", "")
+
+    def _need_headers(self) -> dict[str, str]:
+        headers = self._headers()
+        if headers is None:
+            raise RuntimeError("Notion token not configured; set the Notion token secret.")
+        return headers
+
+    def _patch(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        patch = getattr(self.http, "patch", None)
+        if not callable(patch):
+            raise NoteOpUnsupported("notion: this connection cannot change pages")
+        return self._json(patch(url, json=body, headers=headers))
+
+    def read(self, ref: str) -> str:
+        headers = self._need_headers()
+        pid = self.page_id(ref)
+        data = self._json(self.http.get(f"{API_BASE}/blocks/{pid}/children?page_size=100", headers=headers))
+        lines: list[str] = []
+        for block in data.get("results", []) or []:
+            kind = block.get("type", "")
+            inner = block.get(kind) if isinstance(block.get(kind), dict) else {}
+            text = "".join(rt.get("plain_text", "") or (rt.get("text") or {}).get("content", "")
+                           for rt in (inner or {}).get("rich_text", []) or [])
+            if text:
+                lines.append(text)
+        return "\n\n".join(lines)
+
+    def update(self, ref: str, content: str) -> str:
+        headers = self._need_headers()
+        pid = self.page_id(ref)
+        body = {"children": [{
+            "object": "block", "type": "paragraph",
+            "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]},
+        }]}
+        self._patch(f"{API_BASE}/blocks/{pid}/children", body, headers)
+        return ref
+
+    def change(self, action: str, ref: str, to: str = "") -> str:
+        action = str(action or "").strip().lower()
+        if action not in CHANGE_ACTIONS:
+            raise NoteOpUnsupported(f"notion: unknown change {action!r}")
+        headers = self._need_headers()
+        pid = self.page_id(ref)
+        if action in ("archive", "delete"):
+            # Notion's own archive: the page goes to its trash, restorable.
+            self._patch(f"{API_BASE}/pages/{pid}", {"archived": True}, headers)
+            return ref
+        if action == "rename" and str(to or "").strip():
+            self._patch(f"{API_BASE}/pages/{pid}", {"properties": {
+                self.title_property: {"title": [{"text": {"content": str(to).strip()}}]}
+            }}, headers)
+            return ref
+        raise NoteOpUnsupported(f"notion: Iron Jarvis cannot {action} a page — do it in Notion")

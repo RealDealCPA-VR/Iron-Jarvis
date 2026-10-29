@@ -568,6 +568,9 @@ with the request typed in.
   `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
   other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
   Long-term memory** that opens it.
+- **Brain Profiles** (v1.406.0): choose which memory base is your durable
+  brain and how Jarvis searches, saves to and trusts it — see "Your durable
+  brain: Brain Profiles" below.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
 - **Preferences you approve** (v1.305.0; the idea comes from
@@ -1941,6 +1944,65 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Your durable brain: Brain Profiles (v1.406.0)
+
+If you keep your long-term memory somewhere specific — Notion with an
+operating guide, an Obsidian vault, Iron Jarvis's own memory, a folder in a
+repository — you can now tell Iron Jarvis that this is your **durable brain**,
+instead of pasting a long "always check my Notion first…" prompt into every
+chat. A **Brain Profile** says which memory base it is and how Jarvis treats it.
+
+Set one up in **Settings › Memory & you › Brain profile**:
+
+- **Primary memory base** — any base you have added under Memory › Long-term
+  (Iron Jarvis memory is always there).
+- **Search it before answering** (on by default). Jarvis searches the brain
+  with your message before it answers, and can search again or open a whole
+  note while it works.
+- **Save new knowledge to** — the brain, **Ask me each time** (every save
+  shows a card first), or **Nowhere** (the brain is read-only).
+- **Update an existing note instead of adding a duplicate** (on by default).
+  A save looks for a note with the same title and adds to it.
+- **When memory and the conversation disagree** — ask you, go with the
+  newest thing you said, or go with the brain.
+- **Operating guide** — the title or link of a note in that base. It is read
+  at the start of every chat and agent run and **followed as instructions**.
+  Everything else that comes from memory is treated as information, never as
+  instructions (it is checked for planted commands and fenced as data).
+- **Skills to load at the start** — skills Jarvis follows whenever the
+  profile applies.
+- **Send knowledge about code to the repository** (on by default). What is
+  true about a code base goes into that repository's own files (AGENTS.md,
+  CLAUDE.md, docs/), not into your personal brain.
+
+Choose the profile for the whole app in the same section, and override it
+per project on the project's page (**Same as the app**, **None in this
+project**, or another profile) — a client project can use the client's
+brain while everything else uses yours. A chat in a project shows which
+brain applies in its project panel.
+
+What you can rely on:
+
+- **A save is reported only when it happened.** After every save Jarvis
+  reads the note back; the reply's receipt says **Saved to <base>: <title>**
+  (or "not confirmed" when that base cannot be read back).
+- **Nothing is lost when the brain is down.** If the base cannot be reached
+  (an unplugged drive, Notion offline), the note is kept as an **unsaved
+  change**: the receipt says **Not saved yet** in amber, and the Memory page
+  lists it with **Retry** and **Discard**.
+- **Structural changes always ask.** Archiving, deleting, renaming or moving
+  a note shows a card with **Allow once** every time, whatever your approval
+  setting. In a folder base a delete moves the note to the folder's `.trash`.
+- **Local only is respected.** In a Local only chat a brain outside this PC
+  is neither searched nor written.
+- **Runs from a message on your phone** (low trust) can search the brain but
+  never write to it.
+
+The same rules reach both chat lanes, a Build terminal's chat and every agent
+run, through four tools (brain search, read, save, change) that always go to
+the profile's base — so an agent never needs to know whether your brain is
+Notion or a folder.
 
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 

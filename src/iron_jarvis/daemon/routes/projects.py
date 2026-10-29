@@ -311,6 +311,20 @@ def register(app: FastAPI, d) -> None:
                         ),
                     )
                 project.memory_sources = _json.dumps(names)
+            if body.brain_profile is not None:
+                # v1.406.0: "" follows the app, "off" turns it off here, an id
+                # must name a profile that exists (a typo would silently bind
+                # the project to no brain at all).
+                choice = body.brain_profile.strip()
+                if choice not in ("", "off"):
+                    from ...brain.models import BrainProfileRecord
+
+                    if db.get(BrainProfileRecord, choice) is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="That brain profile no longer exists. Choose another one.",
+                        )
+                project.brain_profile = choice
             db.add(project)
             db.commit()
             db.refresh(project)

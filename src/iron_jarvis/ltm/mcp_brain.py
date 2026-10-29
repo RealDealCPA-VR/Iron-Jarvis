@@ -672,3 +672,90 @@ class McpBrainConnector(LTMConnector):
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'append failed'}")
         return text.strip()[:200] or title
+
+    # -- note operations (v1.406.0, Brain Profiles) -------------------------
+    # Picked from the server's OWN tool list by the words in each tool's
+    # name, never by description alone: a read must never be a tool with a
+    # write-like word, an update must name add/append/update, and a change
+    # must name its own verb (archive_page for archive). A server without
+    # such a tool raises NoteOpUnsupported and nothing is called.
+    def _pick_op(self, verbs: "tuple[str, ...]", *, refuse: "frozenset[str]" = frozenset()) -> "dict[str, Any] | None":
+        self._connect()
+        for attempt in (0, 1):
+            for t in self._tools or []:
+                if not isinstance(t, dict):
+                    continue
+                words = _name_words(str(t.get("name", "")))
+                if words & refuse:
+                    continue
+                if any(v in words for v in verbs) and self._ref_key(t):
+                    return t
+            if attempt == 0:
+                try:
+                    self._relist(self._build_client())
+                except Exception:  # noqa: BLE001 — the caller's own error is the report
+                    return None
+        return None
+
+    @staticmethod
+    def _ref_key(tool: dict[str, Any]) -> "str | None":
+        keys = McpBrainConnector._schema_keys(tool)
+        for k in ("ref", "id", "page_id", "pageId", "note_id", "path", "slug", "url", "uri", "title", "name"):
+            if k in keys:
+                return k
+        return None
+
+    def _call_op(self, tool: dict[str, Any], args: dict[str, Any], what: str) -> str:
+        client = self._connect()
+        res = _resolve_maybe_async(client.call_tool(str(tool.get("name")), args))
+        text = _content_text(res)
+        if (res or {}).get("isError"):
+            raise RuntimeError(f"{self.name}: {text[:300] or what + ' failed'}")
+        return text
+
+    def read(self, ref: str) -> str:
+        from .base import NoteOpUnsupported
+
+        tool = self._pick_op(("read", "get", "fetch", "open", "view"), refuse=_WRITE_WORDS)
+        if tool is None:
+            raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that reads one note")
+        return self._call_op(tool, {str(self._ref_key(tool)): ref}, "read")
+
+    def update(self, ref: str, content: str) -> str:
+        from .base import NoteOpUnsupported
+
+        tool = self._pick_op(
+            ("append", "update", "add"),
+            refuse=frozenset({"delete", "remove", "archive", "replace", "drop", "trash"}),
+        )
+        if tool is None:
+            raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that adds to a note")
+        keys = self._schema_keys(tool)
+        args: dict[str, Any] = {str(self._ref_key(tool)): ref}
+        content_key = next((c for c in _CONTENT_KEYS if c in keys and c not in args), None)
+        if content_key is None:
+            raise NoteOpUnsupported(f"{self.name}: {tool.get('name')} takes no text to add")
+        args[content_key] = content
+        self._call_op(tool, args, "update")
+        return ref
+
+    def change(self, action: str, ref: str, to: str = "") -> str:
+        from .base import CHANGE_ACTIONS, NoteOpUnsupported
+
+        action = str(action or "").strip().lower()
+        if action not in CHANGE_ACTIONS:
+            raise NoteOpUnsupported(f"{self.name}: unknown change {action!r}")
+        verbs = {"archive": ("archive", "trash"), "delete": ("delete", "remove", "trash"),
+                 "rename": ("rename",), "move": ("move",)}[action]
+        tool = self._pick_op(verbs)
+        if tool is None:
+            raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that can {action} a note")
+        args: dict[str, Any] = {str(self._ref_key(tool)): ref}
+        if action in ("rename", "move"):
+            keys = self._schema_keys(tool)
+            dest = next((k for k in ("to", "new_title", "new_name", "destination", "new_path", "target") if k in keys), None)
+            if dest is None or not str(to or "").strip():
+                raise NoteOpUnsupported(f"{self.name}: {tool.get('name')} needs a destination it cannot be given")
+            args[dest] = to
+        self._call_op(tool, args, action)
+        return ref

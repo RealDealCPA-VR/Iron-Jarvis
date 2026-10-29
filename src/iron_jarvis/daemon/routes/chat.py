@@ -3655,14 +3655,22 @@ async def chat_stream(
     # the serial chain lengthened. MIRROR NOTE (lock-step): chat_turn.
     # v1.312.0: raced against Stop (`_prep_step`) — a wedged remote memory
     # base no longer holds a stopped turn.
+    # BRAIN PROFILE (v1.406.0): built BESIDE the grounding, raced against
+    # Stop with it; its block joins right BEFORE the grounding. MIRROR NOTE
+    # (lock-step): chat_turn.run_chat_turn does the same at the same seam.
     async def _ground():
-        return await _gather_grounding(
-            d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+        return await asyncio.gather(
+            _gather_grounding(
+                d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
+            ),
+            _chat_turn.brain_turn(d, pid, recall_query),
         )
 
-    _grounding = await _prep_step(_ground())
-    if _grounding is _PREP_STOPPED or await _stop():
+    _ground_out = await _prep_step(_ground())
+    if _ground_out is _PREP_STOPPED or await _stop():
         return
+    _grounding, _brain = _ground_out
+    system += _brain.block
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block). MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn joins the same object.
@@ -4065,6 +4073,9 @@ async def chat_stream(
                 "changes": [f"tool_cap:{_selection.ceiling}"],
             }
         armed += [t for t in conn_tools if t not in armed]
+        # BRAIN PROFILE (v1.406.0): the brain tools, before the low-trust
+        # filter. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        armed += _chat_turn.brain_armed(d, _brain, armed)
         # ARMED BY SURFACE (v1.262.0): a caller that IS a browser surface hands
         # the whole `browser_*` family in `arm_family`. Sorted by each tool's
         # OWN `min_access`, never by a list written here: the read tier joins
@@ -6222,6 +6233,10 @@ async def chat_stream(
                             # NOTE (lock-step): chat_turn.py notes a call that
                             # ran (that lane never cards).
                             connect_offered.append(offered_app(tc.name, tc.arguments))
+                        # BRAIN (v1.406.0): a save's fact — saved OR kept
+                        # unsaved — outside the `if ran:` gate. MIRROR NOTE
+                        # (lock-step): chat_turn.py.
+                        _chat_turn.brain_fold(_brain, tc.name, result)
                         if ran:
                             # v1.401.0: the finish check's TEAM REVIEW is the
                             # harness's own call — never the reply's work, and
@@ -6903,6 +6918,9 @@ async def chat_stream(
             # older messages left out to retry a too-long refusal. MIRROR
             # NOTE (lock-step): chat_turn.py's response carries it too.
             "refit": _chat_turn.refit_receipt(_refit_note),
+            # BRAIN (v1.406.0): the Brain Profile receipt | null — ALWAYS
+            # present, LAST. MIRROR NOTE (lock-step): chat_turn.py's response.
+            "brain": getattr(_brain, "receipt", None),
         }
         # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop
         # actually started a workflow run — absent otherwise (including

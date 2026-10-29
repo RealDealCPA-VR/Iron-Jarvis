@@ -153,6 +153,14 @@ def default_permissions() -> dict[str, str]:
         "history_search": "allow",
         "ltm_search": "allow",
         "ltm_append": "allow",
+        # Brain Profiles (v1.406.0): the normalized tools over the profile's
+        # primary memory base. Reads and saves sit beside ltm_search /
+        # ltm_append; a save the profile wants asked, and EVERY structural
+        # change, cards through the tool's own spend_check (Allow once).
+        "brain_search": "allow",
+        "brain_read": "allow",
+        "brain_save": "allow",
+        "brain_change": "ask",
         # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.
         # It writes NOTHING — it queues a row the user must approve before a
         # single note changes — so it sits strictly below ltm_append, which the
@@ -565,6 +573,10 @@ class Config(BaseModel):
     #: Project folder instructions (AGENTS.md / CLAUDE.md) in every chat
     #: turn (v1.326.0). On by default.
     chat_folder_rules: bool = True
+    #: BRAIN PROFILE (v1.406.0): the app-wide Brain Profile id ("" = none). A
+    #: project may override it (``Project.brain_profile``); read only through
+    #: ``brain.profiles.resolve``. A stale id reads as none.
+    brain_profile: str = ""
     #: MEDIA IN CHAT (v1.346.0). Which service makes images/video/audio for
     #: ``generate_media``: "auto" = the only connected one (two connected =
     #: the user is asked to pick), else a provider id (pixio, openai_images).
