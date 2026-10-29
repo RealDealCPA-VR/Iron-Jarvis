@@ -194,7 +194,9 @@ describe("a session link pressed while Build is already open (v1.369.0 review)",
     const src = readFileSync(join(process.cwd(), "components", "NotificationBell.tsx"), "utf8").replace(/\r\n/g, "\n");
     const open = src.indexOf("{open && (");
     expect(open).toBeGreaterThan(-1);
-    const head = src.slice(open, open + 900);
-    expect(head).toMatch(/onClickCapture=\{\(e\) => \{[\s\S]*closest\?\.\("a"\)[\s\S]*announceBuildSessionLink\(a\.getAttribute\("href"\)\)/);
+    // v1.406.0 review (moved on purpose): the handler reads the href once and
+    // also announces a chat-page view link (chat-code-review-v1406).
+    const head = src.slice(open, open + 1500);
+    expect(head).toMatch(/onClickCapture=\{\(e\) => \{[\s\S]*closest\?\.\("a"\)[\s\S]*const href = a\.getAttribute\("href"\)[\s\S]*announceBuildSessionLink\(href\)/);
   });
 });

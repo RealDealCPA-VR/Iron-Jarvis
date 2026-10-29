@@ -47,11 +47,13 @@ import {
   buildLimitWaitingBody,
   buildMovedHeadline,
   buildSessionHref,
+  CODE_VIEW_LINK,
   buildThreadOf,
   lastNightHref,
   sessionLinkFor,
 } from "@/lib/buildLinks";
 import { CODING_SESSION } from "@/lib/buildWords";
+import { announceChatViewLink } from "@/lib/chatSurface";
 import { lookingAt, noteWatched, wasWatched } from "@/lib/buildWatching";
 import { CHAT_ASKS_CHANGED_EVENT, chatHereVersion, shownHere, subscribeChatHere } from "@/lib/chatAway";
 // v1.351.0 (G04): what happened while the window was closed (dependency-free).
@@ -907,7 +909,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: thread ? buildSessionHref(thread) : "/terminals",
+      href: thread ? buildSessionHref(thread) : CODE_VIEW_LINK,
       icon: limitRow ? AlertTriangle : CheckCircle2,
       title: limitRow
         ? buildLimitHeadline(p.kind, name)
@@ -1010,7 +1012,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: thread ? buildSessionHref(thread) : "/terminals",
+      href: thread ? buildSessionHref(thread) : CODE_VIEW_LINK,
       icon: Lightbulb,
       title: lesson
         ? `A lesson is suggested${folder ? ` for ${folder}` : ""}`
@@ -1354,7 +1356,7 @@ export function parseChatAsk(raw: unknown): ChatWaitingAsk | null {
 /** Where a waiting chat opens: that chat, else the chat page. A Build
  *  session (v1.369.0) opens in Build, on that session. */
 export function chatAskHref(ask: ChatWaitingAsk): string {
-  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : "/terminals";
+  if (ask.build) return ask.threadId ? buildSessionHref(ask.threadId) : CODE_VIEW_LINK;
   return ask.threadId ? `/chat?thread=${encodeURIComponent(ask.threadId)}` : "/chat";
 }
 
@@ -2461,7 +2463,13 @@ export function NotificationBell() {
           // navigation alone changes only the address — lib/buildLinks).
           onClickCapture={(e) => {
             const a = (e.target as HTMLElement | null)?.closest?.("a");
-            if (a) announceBuildSessionLink(a.getAttribute("href"));
+            if (!a) return;
+            const href = a.getAttribute("href");
+            // v1.406.0 review: any other link to the chat page's views (a
+            // waiting chat's `/chat?thread=`, the Code view with no session
+            // named) pressed while that page is open switches its view —
+            // behind Code, a chat row changed only the address.
+            if (!announceBuildSessionLink(href)) announceChatViewLink(href);
           }}
         >
           <div className="card-surface overflow-hidden">

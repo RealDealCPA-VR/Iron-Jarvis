@@ -4197,6 +4197,21 @@ does not need a bump, stop and bump it.
   openers (`ij-harness*`, `tonight-try-on`, `calm-ui` T1/T2), and Python
   `test_ij_harness_desktop_v1369`, `test_harness_helpers_review_v1372`,
   `test_build_turn_finished_v1374` + `one-notice-v13600.json`.
+  REVIEW (each pinned red-first in `chat-code-review-v1406.test.tsx`, the
+  e2e "back to Chat" step): the sidebar's Chat row in Code switches to Chat
+  (`chatSurface.announceChatView("chat")` from NavRow — a same-page
+  navigation alone did nothing); `ij:open-switcher` (Switch model, Choose a
+  model) brings Chat forward (its menu is the chat composer's and opened
+  invisibly); the bell's capture handler and Running now's chat rows call
+  `announceChatViewLink` when the link is not a coding session (a waiting
+  chat behind Code changed only the address); a coding-session row with no
+  thread, and the `build_accounts` / `build_resume` / `night_shift` loop
+  rows, open `CODE_VIEW_LINK`, never `/terminals`; the HIDDEN chat ignores
+  a page-wide file drop (still `preventDefault`, so the browser never opens
+  the file — it attached files dropped on a coding session to the hidden
+  chat) and stops its microphone and hands-free Voice Chat on the hide edge
+  (Voice Chat SENDS what it hears). A window-level listener the chat page
+  registers must ask `surfaceHiddenRef` before acting.
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

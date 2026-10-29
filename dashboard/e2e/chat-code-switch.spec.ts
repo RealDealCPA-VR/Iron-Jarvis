@@ -128,3 +128,44 @@ test.describe("1280 px — the sidebar shows the right list per view", () => {
     await expect(page.getByTestId("harness-sidebar")).toHaveCount(0);
   });
 });
+
+// v1.406.0 review: the sidebar's Chat row while Code is in front switches to
+// Chat (it did nothing: a same-page navigation keeps the page), and a chat
+// that was read at its bottom is at its bottom again after a trip to Code.
+test.describe("1280 px — back to Chat", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+  test("the sidebar's Chat row switches to Chat; the transcript keeps its place", async ({ page }) => {
+    await page.goto("/chat?new=1");
+    const box = page.getByRole("textbox", { name: "Message" });
+    await expect(box).toBeVisible({ timeout: 90_000 });
+    for (let i = 1; i <= 6; i++) {
+      await box.fill(`Question number ${i}: say something long enough to fill the screen.`);
+      await box.press("Enter");
+      await expect(page.getByText(/This is the demo model/)).toHaveCount(i, { timeout: 90_000 });
+      // The turn has ENDED (Enter during a turn is a steer note, not a send).
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0, { timeout: 60_000 });
+    }
+    const scroller = page.getByTestId("chat-card").locator("div.overflow-y-auto").first();
+    const atBottom = () =>
+      scroller.evaluate((el) => ({ gap: el.scrollHeight - el.clientHeight - el.scrollTop, tall: el.scrollHeight > el.clientHeight + 40 }));
+    // Read at its bottom (put there by hand: what the page pins it to after
+    // a turn is not this test's question), then settled.
+    await scroller.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(800);
+    const before = await atBottom();
+    expect(before.gap).toBeLessThanOrEqual(40);
+    await page.getByTestId("chat-view-code").click();
+    await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
+    await page.getByTestId("app-sidebar").getByTestId("sidebar-nav-chat").click();
+    await expect(page.getByTestId("chat-view-chat")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("ij-harness-view")).toHaveCount(0);
+    await expect(page).not.toHaveURL(/view=code/);
+    await expect(box).toBeVisible();
+    // The transcript really scrolls (else this step proves nothing) and is
+    // at its bottom again.
+    expect(before.tall).toBe(true);
+    await expect.poll(async () => (await atBottom()).gap, { timeout: 10_000 }).toBeLessThanOrEqual(40);
+  });
+});

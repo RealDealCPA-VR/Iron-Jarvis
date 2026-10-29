@@ -180,6 +180,19 @@ export function announceChatViewLink(href: string | null | undefined): boolean {
   return true;
 }
 
+/** v1.406.0 review: ask an open chat page for `view` outright — the
+ *  sidebar's Chat row (`/chat`, an address that names no view) pressed while
+ *  the Code view is in front. Without it Next kept the page on the
+ *  same-page navigation and Code stayed in front: the row did nothing. (From
+ *  home, `/` → `/chat` remounts the page: the surface's own `choose` has set
+ *  the window's memory by then.) Answers whether it was announced. */
+export function announceChatView(view: ChatSurfaceView): boolean {
+  if (typeof window === "undefined") return false;
+  if (!isChatPagePath(window.location.pathname)) return false;
+  window.dispatchEvent(new CustomEvent(CHAT_VIEW_EVENT, { detail: { view } }));
+  return true;
+}
+
 /** The view a CHAT_VIEW_EVENT carries, else null. */
 export function viewOfEvent(e: Event): ChatSurfaceView | null {
   const d = (e as CustomEvent<{ view?: unknown }>).detail;

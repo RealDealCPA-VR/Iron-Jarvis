@@ -25,7 +25,7 @@ import { Button } from "@/components/ui";
 import { MoodOrb } from "@/components/MoodOrb";
 import { RunningNow } from "@/components/RunningNow";
 import SidebarChats from "@/components/chat/SidebarChats";
-import { useChatSurfaceView } from "@/lib/chatSurface";
+import { announceChatView, useChatSurfaceView } from "@/lib/chatSurface";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 
 /**
@@ -143,6 +143,10 @@ function NavRow({
         data-pinned={pinned ? "true" : undefined}
         onClick={() => {
           recordOpen(s.href);
+          // v1.406.0 review: the Chat row while the chat page shows its Code
+          // view switches to Chat (the navigation alone changed only the
+          // address — Next keeps the page).
+          if (s.href === "/chat") announceChatView("chat");
           onNavigate?.();
         }}
         // v1.353.0 (G66): hovering a row says what the place is for (its

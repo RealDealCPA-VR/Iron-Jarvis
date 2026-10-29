@@ -57,6 +57,10 @@ const CodeView = dynamic(() => import("@/components/harness/CodeView").then((m) 
   ),
 });
 
+/** components/ModelMenuBridge OPEN_SWITCHER_EVENT, spelled here: importing
+ *  the bridge would pull the whole app sidebar into this module. */
+const OPEN_SWITCHER_EVENT = "ij:open-switcher";
+
 /** The switch's own row: h-9 plus its mb-2 (what the views below subtract). */
 export const SWITCH_ROW_HEIGHT = "2.75rem";
 
@@ -137,15 +141,22 @@ export function ChatCodeSurface({ renderChat }: { renderChat: (hidden: boolean) 
     };
     // The sidebar's New chat starts a chat — in the Chat view.
     const onNewChat = () => choose("chat");
+    // v1.406.0 review: "Switch model" (Ctrl K) and "Choose a model" (the demo
+    // strip) open the CHAT composer's model menu (ModelMenuBridge). Behind
+    // the Code view that menu opened invisibly — the press did nothing the
+    // user could see — so the chat comes to the front with it.
+    const onSwitcher = () => choose("chat");
     window.addEventListener(BUILD_SESSION_EVENT, onSession);
     window.addEventListener(BUILD_NIGHT_EVENT, onNight);
     window.addEventListener(CHAT_VIEW_EVENT, onView);
     window.addEventListener(NEW_CHAT_EVENT, onNewChat);
+    window.addEventListener(OPEN_SWITCHER_EVENT, onSwitcher);
     return () => {
       window.removeEventListener(BUILD_SESSION_EVENT, onSession);
       window.removeEventListener(BUILD_NIGHT_EVENT, onNight);
       window.removeEventListener(CHAT_VIEW_EVENT, onView);
       window.removeEventListener(NEW_CHAT_EVENT, onNewChat);
+      window.removeEventListener(OPEN_SWITCHER_EVENT, onSwitcher);
     };
   }, [choose]);
 

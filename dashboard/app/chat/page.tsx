@@ -4165,6 +4165,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // sidebar then holds the coding sessions, never a hidden chat list.
   const chatSlotLive = useChatSlot();
   const chatSlot = surfaceHidden ? null : chatSlotLive;
+  // v1.406.0 review: read by the window-level handlers registered once (the
+  // page-wide file drop): behind the Code view they must not act on this
+  // hidden chat.
+  const surfaceHiddenRef = useRef(surfaceHidden);
+  surfaceHiddenRef.current = surfaceHidden;
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
   // Pinned threads (per-device view preference) + inline rename state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -6675,6 +6680,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     const onDragEnter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
+      // v1.406.0 review: behind the Code view the chat is hidden — a file
+      // dropped on a coding session (or anywhere on that view) is not an
+      // attachment of this chat. Still prevented, so the browser never
+      // navigates away to the dropped file.
+      if (surfaceHiddenRef.current) return;
       depth += 1;
       setDragging(true);
     };
@@ -6692,6 +6702,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       e.preventDefault();
       depth = 0;
       setDragging(false);
+      if (surfaceHiddenRef.current) return;
       const files = e.dataTransfer?.files;
       if (files && files.length) void addFilesRef.current(Array.from(files));
     };
@@ -7720,6 +7731,17 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       dictation.start();
     }
   }
+
+  // v1.406.0 review: behind the Code view the chat's microphone stops — the
+  // dictation and hands-free Voice Chat (which SENDS what it hears on a
+  // pause). Kept listening, words said about the code went into this hidden
+  // box, and Voice Chat sent them to the chat unseen.
+  useEffect(() => {
+    if (!surfaceHidden) return;
+    if (voiceMode) setVoiceMode(false);
+    if (dictation.listening) dictation.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- on the hide edge only
+  }, [surfaceHidden]);
 
   /** Hands-free Voice Chat on/off. Entering turns spoken replies on (that's
    *  the point); leaving stops the mic but keeps the TTS preference. */
