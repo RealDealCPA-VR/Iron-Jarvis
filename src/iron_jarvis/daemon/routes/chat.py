@@ -1472,8 +1472,8 @@ def register(app: FastAPI, d) -> None:
         )
         # v1.409.0: a Code-view session (Build) waiting on an approval with
         # nobody following its turn — the same row shape, NAMES ONLY,
-        # ``surface: "build_app"`` + ``app_session`` (opened at
-        # /terminals?view=code&app=<id>).
+        # ``surface: "build_app"`` + ``app_session`` + ``harness`` (opened at
+        # /terminals?view=code&code=<id>).
         from ...hosted.service import waiting_rows as _app_waiting
 
         chat_rows = chat_rows + _app_waiting(d.platform)

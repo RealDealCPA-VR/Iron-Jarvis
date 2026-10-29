@@ -152,8 +152,15 @@ def test_every_golden_scenario_ends_once_and_uses_only_contract_types():
 # --------------------------------------------------------------------------- #
 def test_text_is_masked_before_it_is_cut():
     key = "sk-ant-api03-" + "A" * 60
-    cut = E.clip(f"use {key} now", 30)
-    assert "AAAA" not in cut and "sk-ant-api03-AAA" not in cut
+    cut = E.clip("x" * 10 + " " + key, 20)
+    # Cut first, the mask no longer knows "sk-ant-a" for a key: a piece leaks.
+    assert "sk-ant-a" not in cut and "AAAA" not in cut
+
+
+def test_the_session_table_is_a_late_model_the_reconciler_sees():
+    from iron_jarvis.core import db
+
+    assert "..hosted.models" in db._LATE_MODEL_MODULES
 
 
 def test_the_log_merges_deltas_and_drops_the_oldest_lines_saying_so(tmp_path, monkeypatch):
@@ -212,5 +219,5 @@ def test_codex_plan_and_mode_table():
 def test_the_dashboard_link_names_the_code_view():
     src = Path(S.__file__).read_text(encoding="utf-8")
     route = (Path(S.__file__).parents[1] / "daemon" / "routes" / "build_app.py").read_text(encoding="utf-8")
-    assert "view=code&app=" in route and "view=app" not in route
+    assert "view=code&code=" in route and "view=app" not in route and "&app=" not in route
     assert "ACP" not in src and "ACP" not in route

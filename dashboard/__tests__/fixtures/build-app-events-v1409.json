@@ -153,6 +153,7 @@
     "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
     "detail": "List files in current directory",
     "can_session": false,
+    "once_only": true,
     "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
     "turn": "turn-1"
    },

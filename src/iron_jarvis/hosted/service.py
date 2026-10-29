@@ -312,6 +312,7 @@ class HostedService:
                 "models": self._models(h),
                 "efforts": list(EFFORTS[h]),
                 "accounts": accounts,
+                "commands": self.commands_for(h),
             })
         return out
 
@@ -438,13 +439,26 @@ class HostedService:
             "events": events,
             "events_total": total,
             "dropped": dropped,
-            "running": bool(live and live.turn and live.turn.running),
+            # The running turn's id (rejoin with GET …/turns/{id}/stream — its
+            # replay starts with the turn's `user` event), else null.
+            "running": live.turn.id if live and live.turn and live.turn.running else None,
             "turn_id": live.turn.id if live and live.turn and live.turn.running else None,
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
-        if live and live.driver and live.driver.commands:
-            out["commands"] = list(live.driver.commands)
+        out["commands"] = self.commands_for(row.harness, live)
         return out
+
+    def commands_for(self, harness: str, live: "LiveSession | None" = None) -> list[dict[str, str]]:
+        """The harness's own `/` commands: what its running process said, else
+        what it said last in this process (never a start just to ask)."""
+        from .claude import LAST_COMMANDS
+
+        rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        return [{"name": c["name"], "description": c.get("description", "")} for c in rows]
+
+    async def commands(self, sid: str) -> list[dict[str, str]]:
+        row = await self._row(sid)
+        return self.commands_for(row.harness, self.live.get(sid))
 
     async def patch(self, sid: str, body: dict[str, Any]) -> dict[str, Any]:
         row = await self._row(sid)
@@ -838,6 +852,7 @@ class HostedService:
                 "project_id": None,
                 "surface": "build_app",
                 "app_session": live.sid,
+                "harness": live.harness,
             })
         return rows
 
@@ -934,20 +949,10 @@ class HostedService:
     def _pane_facts(self, pane: Any) -> tuple[str, str, str]:
         """BLOCKING: ``(harness, session id, title)`` of a terminal whose
         Claude Code / Codex has EXITED, else :class:`Refused`."""
-        from ..daemon.routes.terminals import _claude_ui_visible
-        from ..terminals.handoff import at_shell_prompt
-
-        cli = str(getattr(pane, "agent_cli", None) or getattr(pane, "resume_cli", None) or "").lower()
-        if not cli:
-            try:
-                cli = str(pane.activity().cli or "").lower()
-            except Exception:  # noqa: BLE001
-                cli = ""
-        harness = {"claude": CLAUDE, "codex": CODEX}.get(cli)
+        harness = pane_harness(pane)
         if harness is None:
             raise Refused("This terminal is not running Claude Code or Codex.")
-        tail = pane.output_tail()
-        if not at_shell_prompt(tail, pane.shell) or _claude_ui_visible(tail):
+        if not pane_exited(pane):
             raise Refused(
                 f"{W.label(harness)} is still running in this terminal — exit it there first "
                 "(type /exit), then open it in the Code view."
@@ -1070,6 +1075,48 @@ class HostedService:
         if not carried.resumed:
             raise Refused(carried.note)
         return lease, f'Continued on "{lease.title}" — the conversation was copied there.'
+
+
+def pane_harness(pane: Any) -> str | None:
+    """The Code-view harness a Build terminal ran (Claude Code / Codex), else None."""
+    cli = str(getattr(pane, "agent_cli", None) or getattr(pane, "resume_cli", None) or "").lower()
+    if not cli:
+        try:
+            cli = str(pane.activity().cli or "").lower()
+        except Exception:  # noqa: BLE001
+            cli = ""
+    return {"claude": CLAUDE, "codex": CODEX}.get(cli)
+
+
+def pane_exited(pane: Any) -> bool:
+    """Is the terminal back at its SHELL prompt (the CLI has exited)? A row
+    Claude Code drew can end like a prompt, so its own screen furniture in the
+    last lines says it still runs (``routes/terminals._claude_ui_visible``)."""
+    from ..daemon.routes.terminals import _claude_ui_visible
+    from ..terminals.handoff import at_shell_prompt
+
+    try:
+        tail = pane.output_tail()
+        return bool(at_shell_prompt(tail, pane.shell)) and not _claude_ui_visible(tail)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def can_open_in_code(pane: Any) -> bool:
+    """A terminal row's ``can_open_in_code``: its Claude Code / Codex has
+    exited and a conversation can be named — Claude by the session id the
+    pane recorded; Codex records none, so its newest saved thread for the
+    folder is looked up (and refused in words) when the user presses it.
+    Reads the pane's cached tail only. Never raises."""
+    try:
+        harness = pane_harness(pane)
+        if harness is None or not getattr(pane, "alive", True):
+            return False
+        if harness == CLAUDE and not _SID_RX.match(str(getattr(pane, "claude_session_id", None) or "")):
+            return False
+        return pane_exited(pane)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def service_for(platform: Any) -> HostedService:

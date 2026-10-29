@@ -135,7 +135,25 @@ def pane_row(platform, info: dict[str, Any]) -> dict[str, Any]:
         info["accounts"] = with_live_state(
             getattr(platform, "iron_proxy", None), info["accounts"]
         )
+    _code_view_flag(platform, info, info)
     return info
+
+
+def _code_view_flag(platform, info: dict[str, Any], row: dict[str, Any]) -> None:
+    """v1.409.0: ``can_open_in_code: true`` on a row whose Claude Code / Codex
+    has exited and a conversation can be named (Build's Code view opens it).
+    Additive and ONLY when true: every other row is byte-identical. Cheap:
+    only a claude/codex pane's cached tail is read."""
+    if str(info.get("agent_cli") or info.get("resume_cli") or "").lower() not in ("claude", "codex"):
+        return
+    try:
+        from ...hosted.service import can_open_in_code
+
+        session = platform.terminals.get(info["id"])
+        if session is not None and can_open_in_code(session):
+            row["can_open_in_code"] = True
+    except Exception:  # noqa: BLE001 — a row never breaks over this
+        pass
 
 
 #: Held across "pick a free name" + "create the pane" (review nit): two
@@ -466,6 +484,7 @@ def register(app: FastAPI, d) -> None:
             # while it is there — the ContinueStrip's cue.
             if info.get("limit"):
                 row["limit"] = info["limit"]
+            _code_view_flag(d.platform, info, row)
             # v1.303.2: a pane "continue on the next account" opened — did
             # that account refuse the conversation it was handed (or is it
             # signed out)? The carried file is read here, on the threadpool

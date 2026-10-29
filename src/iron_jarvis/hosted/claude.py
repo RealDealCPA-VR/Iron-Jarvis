@@ -74,6 +74,10 @@ MODE_LABELS: dict[str, str] = {
     "full": "Full access",
 }
 
+#: The `/` list Claude Code last answered ``initialize`` with (this process):
+#: the harnesses listing shows it without starting anything.
+LAST_COMMANDS: dict[str, list[dict[str, str]]] = {}
+
 #: How long a control request (initialize, set_model …) may take.
 CONTROL_TIMEOUT_S = 30.0
 
@@ -303,6 +307,8 @@ class ClaudeDriver(Driver):
              "argument_hint": clip(c.get("argumentHint") or "", 80)}
             for c in (cmds or []) if isinstance(c, dict) and c.get("name")
         ][:300]
+        if self.commands:
+            LAST_COMMANDS[HARNESS] = list(self.commands)
 
     # -- the user's side --------------------------------------------------------
     async def send_user(self, text: str, files: list[str]) -> None:
@@ -427,6 +433,9 @@ class ClaudeDriver(Driver):
             detail=clip(req.get("description") or req.get("decision_reason") or "", DETAIL_CHARS),
             can_session=bool(sugg),
         )
+        if not sugg:
+            # No session-wide allow offered: the card answers this one call.
+            ev["once_only"] = True
         if akind == "command":
             ev["command"] = clip(inp.get("command") or "", 2000)
         path = inp.get("file_path") or inp.get("notebook_path")

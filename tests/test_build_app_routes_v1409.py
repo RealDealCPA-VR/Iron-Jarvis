@@ -166,7 +166,7 @@ async def test_a_claude_turn_asks_the_user_and_sends_only_the_users_answer(app, 
         task = await _turn(c, s["id"])
         first = (await wait_pending(c, s["id"]))[0]
         assert first["kind"] == "command" and first["command"].startswith("Get-ChildItem")
-        assert first["can_session"] is False
+        assert first["can_session"] is False and first["once_only"] is True
         r = await c.post(f"/build/app/sessions/{s['id']}/answer",
                          json={"request_id": first["request_id"], "decision": "allow_session"})
         assert r.status_code == 400, "no session-wide allow was offered for this one"
@@ -177,6 +177,7 @@ async def test_a_claude_turn_asks_the_user_and_sends_only_the_users_answer(app, 
         assert r.status_code == 404, "an answered ask is gone"
         second = await until(lambda: _next_pending(c, s["id"], first["request_id"]))
         assert second["kind"] == "edit" and second["can_session"] is True and "+hi" in second["diff"]
+        assert "once_only" not in second
         r = await c.post(f"/build/app/sessions/{s['id']}/answer",
                          json={"request_id": second["request_id"], "decision": "allow_session"})
         assert r.status_code == 200
@@ -191,7 +192,7 @@ async def test_a_claude_turn_asks_the_user_and_sends_only_the_users_answer(app, 
     assert responses[1]["updatedPermissions"] == [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]
     view = (await _view(app, s["id"]))
     assert view["session"]["harness_session_id"] == "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
-    assert view["running"] is False and view["pending"] == []
+    assert view["running"] is None and view["pending"] == []
     await stop_all(app)
 
 
@@ -242,7 +243,8 @@ async def test_ask_user_question_is_answered_in_claudes_own_shape(app, work, tmp
                          json={"request_id": q["request_id"], "decision": "allow"})
         assert r.status_code == 400 and "answer" in r.json()["detail"]
         r = await c.post(f"/build/app/sessions/{s['id']}/answer",
-                         json={"request_id": q["request_id"], "decision": "allow", "answers": ["Blue"]})
+                         json={"request_id": q["request_id"], "decision": "allow",
+                               "answers": {"Which colour do you prefer?": "Blue"}})
         assert r.status_code == 200
         await asyncio.wait_for(task, 30)
     got = [m["response"]["response"] for m in sent(log) if m.get("type") == "control_response"][0]
@@ -536,9 +538,78 @@ async def test_a_waiting_session_nobody_follows_is_on_the_bell_names_only(app, w
                 if r.get("surface") == "build_app"]
         assert rows == [{"id": f"build_app:{s['id']}", "kind": "chat", "thread_id": s["id"], "tool": "Write",
                          "requested_at": rows[0]["requested_at"], "mission_id": None, "project_id": None,
-                         "surface": "build_app", "app_session": s["id"]}]
+                         "surface": "build_app", "app_session": s["id"], "harness": "claude-code"}]
+        assert rows[0]["requested_at"]
         assert "deny.txt" not in json.dumps(rows), "never arguments"
         await c.post(f"/build/app/sessions/{s['id']}/answer", json={"request_id": ask["request_id"], "decision": "deny"})
         rows = (await c.get("/chat/approvals/pending")).json()["approvals"]
         assert not [r for r in rows if r.get("surface") == "build_app"]
     await stop_all(app)
+
+
+async def test_a_running_turn_is_named_and_its_rejoin_starts_with_the_question(app, work, tmp_path, monkeypatch):
+    use_fake(monkeypatch, "claude_deny", tmp_path / "fake.log")
+    async with client(app) as c:
+        s = await new_session(c, work)
+        task = await _turn(c, s["id"], text="make deny.txt", turn_id="named")
+        ask = (await wait_pending(c, s["id"]))[0]
+        assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["running"] == "named"
+        rejoin = asyncio.ensure_future(c.get(f"/build/app/sessions/{s['id']}/turns/named/stream"))
+        await asyncio.sleep(0.2)
+        await c.post(f"/build/app/sessions/{s['id']}/answer", json={"request_id": ask["request_id"], "decision": "deny"})
+        evs = frames((await asyncio.wait_for(rejoin, 30)).text)
+        assert evs[0] == {**evs[0], "type": "user", "text": "make deny.txt"}
+        await asyncio.wait_for(task, 30)
+    await stop_all(app)
+
+
+async def test_skipping_a_question_tells_claude_it_was_not_answered(app, work, tmp_path, monkeypatch):
+    log = tmp_path / "fake.log"
+    use_fake(monkeypatch, "claude_ask", log)
+    async with client(app) as c:
+        s = await new_session(c, work)
+        task = await _turn(c, s["id"])
+        q = (await wait_pending(c, s["id"]))[0]
+        await c.post(f"/build/app/sessions/{s['id']}/answer", json={"request_id": q["request_id"], "decision": "deny"})
+        await asyncio.wait_for(task, 30)
+    got = [m["response"]["response"] for m in sent(log) if m.get("type") == "control_response"][0]
+    assert got == {"behavior": "deny", "message": "The user chose not to answer."}
+    await stop_all(app)
+
+
+async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, work, tmp_path, monkeypatch):
+    from iron_jarvis.hosted import claude as CL
+
+    monkeypatch.setattr(CL, "LAST_COMMANDS", {})
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    async with client(app) as c:
+        s = await new_session(c, work)
+        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": []}
+        before = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
+        assert before["claude-code"]["commands"] == []
+        await c.post(f"/build/app/sessions/{s['id']}/turn", json={"text": "ready?", "turn_id": "t1"})
+        want = [{"name": "init", "description": "Set up a CLAUDE.md file"}]
+        assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want}
+        assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["commands"] == want
+        after = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
+        assert after["claude-code"]["commands"] == want and after["codex"]["commands"] == []
+        assert (await c.get("/build/app/sessions/nope/commands")).status_code == 404
+    await stop_all(app)
+
+
+async def test_terminal_rows_say_can_open_in_code_only_when_the_cli_exited(app, work, monkeypatch):
+    exited = _Pane(work, "Bye!\nPS C:\\work> ")
+    running = _Pane(work, "────────────────\n> fix it\n? for shortcuts")
+    no_sid = _Pane(work, "Bye!\nPS C:\\work> ", sid=None)
+    shell = _Pane(work, "PS C:\\work> ", cli=None)
+    panes = {"a": exited, "b": running, "c": no_sid, "d": shell}
+    infos = [{"id": k, "agent_cli": p.agent_cli, "state": "idle", "alive": True} for k, p in panes.items()]
+    monkeypatch.setattr(app.state.platform.terminals, "get", lambda pid: panes.get(pid))
+    monkeypatch.setattr(app.state.platform.terminals, "list", lambda: [dict(i) for i in infos])
+    async with client(app) as c:
+        listed = {r["id"]: r for r in (await c.get("/terminals")).json()["terminals"]}
+        active = {r["id"]: r for r in (await c.get("/terminals/activity")).json()["panes"]}
+    for rows in (listed, active):
+        assert rows["a"].get("can_open_in_code") is True
+        for k in ("b", "c", "d"):
+            assert "can_open_in_code" not in rows[k], k

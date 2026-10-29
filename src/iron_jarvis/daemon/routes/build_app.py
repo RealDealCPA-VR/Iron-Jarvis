@@ -5,7 +5,7 @@ from the dashboard (``iron_jarvis/hosted``; the contract is
 (``detail``) with its status.
 
 The route names keep ``/build/app/…`` (internal); the dashboard calls the view
-"Code" and links a session as ``/terminals?view=code&app=<id>``.
+"Code" and links a session as ``/terminals?view=code&code=<id>``.
 """
 
 from __future__ import annotations
@@ -155,6 +155,15 @@ def register(app: FastAPI, d: Any) -> None:
             yield replay
 
         return _follow_response(once())
+
+    @app.get("/build/app/sessions/{sid}/commands")
+    async def app_commands(sid: str) -> dict[str, Any]:
+        """The harness's own `/` commands (what its process said; never a
+        start just to ask)."""
+        try:
+            return {"commands": await svc().commands(sid)}
+        except S.Refused as r:
+            raise _http(r) from None
 
     @app.post("/build/app/sessions/{sid}/answer")
     async def app_answer(sid: str, body: AppAnswer) -> dict[str, Any]:

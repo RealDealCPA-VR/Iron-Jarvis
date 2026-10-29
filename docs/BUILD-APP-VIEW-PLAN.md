@@ -167,7 +167,7 @@ is written FROM THE REAL DAEMON PARSER fed recorded harness output
 - A Build terminal running claude/codex shows "Open in App view" when the
   CLI has exited and a session is recorded.
 - The bell: an App session waiting on an approval with nobody looking → the
-  same row/ping rules as a waiting chat (link `/terminals?view=code&app=<id>`).
+  same row/ping rules as a waiting chat (link `/terminals?view=code&code=<id>`).
 
 ## Not in this release
 
@@ -177,7 +177,7 @@ stay in Chat's Code view. Phone answers for App approvals — later.
 ## Changes from the user (2026-10-29), and what the daemon measured
 
 - The switch is **</> Code | Terminal** and a session links as
-  `/terminals?view=code&app=<id>`; the routes keep `/build/app/…` (internal).
+  `/terminals?view=code&code=<id>`; the routes keep `/build/app/…` (internal).
 - Sessions are the tool's OWN saved sessions on disk: never ephemeral, always
   under the account's home, so `claude --resume <id>` / `codex resume <id>`
   keep working on sessions started here. `GET /build/app/sessions?folder=…&disk=1`
