@@ -1894,7 +1894,8 @@ reads; it never writes, runs commands, or starts work on its own.
   skip the refused attempt for Store programs and start them one at a time.
   Nothing you could see changes: Windows never allowed that group for these
   terminals. If Iron Jarvis ever freezes again, it now writes where it is
-  stuck in its log (Settings › System › Open logs) before it is restarted.
+  stuck in its log (Settings › System › Open logs) before it is restarted:
+  look for a line starting "event loop frozen for".
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and

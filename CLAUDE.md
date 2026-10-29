@@ -10593,7 +10593,8 @@ does not need a bump, stop and bump it.
   second; stopped at shutdown) reports from its own thread at 20/45/75 s of
   a frozen loop where the loop thread and busy threads wait — the loop-lag
   line is written by the loop AFTER a stall ends, so a stall that never ended
-  left no trace. OPEN: the Windows-side cause is still not reproduced on
+  left no trace. A NEXT FREEZE NAMES ITS PLACE: read daemon.log for "event
+  loop frozen for". OPEN: the Windows-side cause is still not reproduced on
   demand; other spawns of Store programs (`core/procs`) keep their job
   attempt. Pins: `tests/test_app_alias_v14071.py` (15 mutations, 14 red; the
   survivor — handing a packaged spawn `self._job` — is equivalent, the job is
