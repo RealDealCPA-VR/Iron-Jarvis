@@ -230,7 +230,7 @@ def inherited_grants(parent: Session | None) -> tuple[list[str], str]:
     """
     if parent is None:
         return [], ""
-    mode = inherited_approval_mode(getattr(parent, "approval_mode", ""))
+    mode = inherited_approval_mode(getattr(parent, "approval_mode", ""), getattr(parent, "origin", None))
     if mode == "always_ask":
         return [], mode
     return _stored_allow_tools(parent), mode
@@ -1212,7 +1212,8 @@ class Orchestrator:
             # project never leaks in.
             project_id=project_id,
             allow_tools_json=_json.dumps(list(allow_tools or [])),
-            approval_mode=inherited_approval_mode(approval_mode),
+            # v1.406.0 part 2: Accept edits / Auto ride only an ATTENDED origin.
+            approval_mode=inherited_approval_mode(approval_mode, origin),
             # TX-01 provenance: WHO/WHAT started this (user_chat, autonomy,
             # schedule, comm, reflex, …). self_dev is inferable; everything else
             # is passed by the caller. Defaults None = unattributed (the audit
@@ -2700,8 +2701,8 @@ class Orchestrator:
             # …and so does the POSTURE (v1.232.0, A7), unless this turn
             # states one. Normalised at this door too: yolo never lands.
             approval_mode=(
-                inherited_approval_mode(approval_mode)
-                or getattr(prev, "approval_mode", "")
+                inherited_approval_mode(approval_mode, getattr(prev, "origin", None))
+                or inherited_approval_mode(getattr(prev, "approval_mode", ""), getattr(prev, "origin", None))
                 or ""
             ),
             # …and so does the ORIGIN — the PARENT's, never "continuation".

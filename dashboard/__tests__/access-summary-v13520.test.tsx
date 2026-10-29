@@ -246,7 +246,7 @@ describe("Settings › Permissions & ledger opens with what Jarvis can reach", (
     );
     expect(within(block).getByTestId("access-agent-browser").textContent).toContain("Off.");
     const level = within(block).getByTestId("access-level");
-    expect(level.textContent).toContain("Ask when risky");
+    expect(level.textContent).toContain("Ask first");
     expect(level.textContent).toContain(PERMISSION_LEVELS.approve_for_me.description);
     const grants = within(block).getByTestId("access-grants");
     await waitFor(() => expect(grants.textContent).toContain("2 approvals you gave stay in place"), W);

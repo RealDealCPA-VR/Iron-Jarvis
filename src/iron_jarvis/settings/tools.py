@@ -91,6 +91,12 @@ _RETIRED_OPTION_WORDS: dict[str, dict[str, str]] = {
         "auto-approve": "yolo",
         "auto approve": "yolo",
         "auto-approve (yolo)": "yolo",
+        # v1.406.0 part 2: the levels were renamed for the five-level switch
+        # ("Ask first" now names the default, which "Ask when risky" did).
+        "ask when risky": "approve_for_me",
+        "ask before everything": "always_ask",
+        "accept edits": "accept_edits",
+        "auto mode": "auto",
     },
 }
 

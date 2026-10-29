@@ -556,5 +556,5 @@ def test_the_reports_say_allow_once_and_one_card_per_round():
     from iron_jarvis.harness_bench.report import asks_words
 
     words = asks_words({"would_ask_runs": 2, "would_ask_per_task": 1.5, "would_ask_by_tool": {"shell": 3}})
-    assert "Allow once" in words and "one card per round" in words and "Ask when risky" in words
+    assert "Allow once" in words and "one card per round" in words and "Ask first" in words
     assert "approve-for-me" not in words

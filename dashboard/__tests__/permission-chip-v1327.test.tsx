@@ -81,7 +81,8 @@ describe("the levels table", () => {
     expect(src).not.toContain("const APPROVAL_MODES = [");
     expect(src).toMatch(/<PermissionChip\s+id="chat-approval-mode"/);
     expect(Object.keys(PERMISSION_LEVELS).sort()).toEqual([...PERMISSION_MODES].sort());
-    expect([...PERMISSION_MODES]).toEqual(["always_ask", "approve_for_me", "yolo"]);
+    // v1.406.0 part 2: five levels, strictest first, "Don't ask" last.
+    expect([...PERMISSION_MODES]).toEqual(["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"]);
   });
 
   it("covers exactly the daemon's approval vocabulary", () => {
@@ -92,13 +93,16 @@ describe("the levels table", () => {
     for (const mode of PERMISSION_MODES) {
       const row = PERMISSION_LEVELS[mode];
       expect(row.label.trim().length).toBeGreaterThan(0);
-      expect(row.label.length).toBeLessThanOrEqual(16);
+      // v1.406.0 part 2: the menu's name may be longer; the CHIP's word fits.
+      expect(row.label.length).toBeLessThanOrEqual(24);
+      expect((row.chip ?? row.label).length).toBeLessThanOrEqual(16);
       expect(row.description.trim().length).toBeGreaterThan(0);
       expect(row.description).not.toMatch(/\n/);
       // Plain words: no em-dash asides, no slang, no wire ids.
       expect(row.label + row.description).not.toMatch(/—|yolo|approve_for_me|always_ask/i);
     }
-    expect(PERMISSION_LEVELS.always_ask.label).toBe("Ask first");
+    expect(PERMISSION_LEVELS.always_ask.label).toBe("Ask before every action");
+    expect(PERMISSION_LEVELS.approve_for_me.label).toBe("Ask first");
   });
 
   it("marks the riskiest level, and only it, amber", () => {
@@ -117,8 +121,8 @@ describe("the levels table", () => {
 describe("the chip", () => {
   it("shows the current level's plain name as a quiet ghost", () => {
     const { chip } = setup("always_ask");
-    expect(chip.textContent).toBe("Ask first");
-    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask first");
+    expect(chip.textContent).toBe("Ask every time");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask before every action");
     expect(chip.getAttribute("title")).toBe(PERMISSION_LEVELS.always_ask.description);
     expect(chip.getAttribute("aria-haspopup")).toBe("menu");
     expect(chip.getAttribute("aria-expanded")).toBe("false");
@@ -244,6 +248,10 @@ describe("the menu", () => {
       within(menu).getAllByTestId("permission-item")[1].id,
     );
     fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(active()).toBe("accept_edits");
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(active()).toBe("auto");
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
     expect(active()).toBe("yolo");
     fireEvent.keyDown(menu, { key: "ArrowDown" });
     expect(active()).toBe("always_ask");
@@ -253,6 +261,8 @@ describe("the menu", () => {
     expect(active()).toBe("always_ask");
     fireEvent.keyDown(menu, { key: "End" });
     expect(active()).toBe("yolo");
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
     fireEvent.keyDown(menu, { key: "ArrowUp" });
     fireEvent.keyDown(menu, { key: "ArrowUp" });
     expect(active()).toBe("always_ask");

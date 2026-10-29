@@ -44,6 +44,7 @@ from ...core.approvals import InterruptNote as _InterruptNote
 from ...core.approvals import settled_actor as _settled_actor
 from ...core.approvals import surface_for as _interrupt_surface
 from ...core.grants import args_hash as _grant_hash
+from ...core import auto_approve as _auto
 from ...core.turns import CHAT_INFLIGHT, TURNS, thread_key
 from ...tools.reversible import reversible_flag as _reversible_flag
 from ...eval.pricing import UsageTally
@@ -4258,6 +4259,11 @@ async def chat_stream(
     # that begins full would make strict mode a no-op on exactly the
     # common case.
     card_grants: set[str] = set()
+    # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve): what this turn
+    # let through by posture (the receipt's list) and its one judge. MIRROR
+    # NOTE (lock-step): chat_turn.run_chat_turn keeps the same record (rules
+    # only — the POST lane never calls the judge).
+    _auto_state: dict[str, Any] = {"record": _auto.AutoRecord(), "judge": None}
     # STANDING GRANTS (v1.299.0): the scopes this turn's calls run under —
     # chat, plus the RESOLVED project when grounded. Read by the card
     # predicates (a covered call never cards), minted into by an "always"
@@ -5321,6 +5327,12 @@ async def chat_stream(
                         # v1.346.0: the spend check decides — free runs,
                         # priced asks, whatever a grant said.
                         _asks = bool(_sc.ask)
+                    if _asks and id(_c) in _auto_ok:
+                        # v1.406.0 part 2: Accept edits / Auto let this call
+                        # through (the pre-pass below — never a forced card,
+                        # which returned above). MIRROR NOTE: the per-call
+                        # branch reads `_auto_ok` the same way.
+                        _asks = False
                     return _cp if _asks else ""
 
                 def _night_asks(_name: str) -> bool:
@@ -5355,6 +5367,78 @@ async def chat_stream(
                     _cks = getattr(_harness, "checkers", None) if _harness is not None else None
                     return _cks is not None and _cks.needs_a_person(_c)
 
+                # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve). For
+                # each call the DEFAULT posture would card (`_would_card` with
+                # `_auto_ok` still empty), the RULES decide — off the loop (an
+                # edit's paths are resolved) — and under Auto a call they leave
+                # undecided gets ONE judgement on the turn's own model (inside
+                # this turn: its hold, account pin and Local only scope apply;
+                # billed below). A forced card (once-only, Local only, the night,
+                # a price) never reaches either. `_auto_ok`: id(call) -> rule.
+                _auto_ok: dict[int, str] = {}
+                if approval_mode in _auto.EASED_MODES and calls:
+                    _auto_cands: list[tuple[Any, str, bool, bool]] = []
+                    for _c in calls:
+                        if not _would_card(_c):
+                            continue
+                        _sc0 = _spend.get(id(_c))
+                        _forced = (
+                            "once_only" if (_c.name in _ONCE_ONLY or _spend_once(_c))
+                            else "local_only" if _ask_first(_c)
+                            else "night" if _night_asks(_c.name)
+                            else "priced" if (_sc0 is not None and _sc0.ask)
+                            else ""
+                        )
+                        _auto_cands.append((
+                            _c, _forced, bool(_finish_needs_a_person(_c)),
+                            bool(_quarantined(d.platform, _c.name)),
+                        ))
+                    if _auto_cands:
+                        _auto_ws = getattr(ctx, "workspace", None)
+                        _auto_low = bool(_trust_state["low"])
+
+                        def _auto_rules():
+                            return [
+                                _auto.classify(
+                                    _c.name, _c.arguments, mode=approval_mode,
+                                    tool=d.platform.registry.get(_c.name), workspace=_auto_ws,
+                                    forced=_f, low_trust=_auto_low, quarantined=_q,
+                                    needs_a_person=_np,
+                                )
+                                for _c, _f, _np, _q in _auto_cands
+                            ]
+
+                        _auto_verdicts = await asyncio.to_thread(_auto_rules)
+                        _judge_routes: list[Any] = []
+                        for (_c, _f, _np, _q), _v in zip(_auto_cands, _auto_verdicts):
+                            if _v.kind == _auto.PASS:
+                                _auto_ok[id(_c)] = _v.rule
+                            elif _v.kind == _auto.JUDGE and approval_mode == _auto.AUTO:
+                                if _auto_state["judge"] is None:
+                                    _auto_state["judge"] = _auto.AutoJudge(
+                                        router=d.platform.router,
+                                        provider=str(route_provider or provider_choice or ""),
+                                        model=str(route_model or model_choice or ""),
+                                        request=_auto.request_of(getattr(body, "messages", None)),
+                                        # Read at call time (a seam tests set).
+                                        timeout_s=_auto.JUDGE_TIMEOUT_S,
+                                        max_calls=_auto.MAX_JUDGEMENTS_PER_TURN,
+                                    )
+                                _auto_state["judge"].bill = _judge_routes.append
+                                if await _auto_state["judge"].judge(
+                                    _c.name, _redacted(_c), _grant_hash(_c.name, _c.arguments)
+                                ) == "allow":
+                                    _auto_ok[id(_c)] = _auto.JUDGE_RULE
+                        for _jr in _judge_routes:
+                            # Billed to the turn like any other model call.
+                            _ju = getattr(getattr(_jr, "response", None), "usage", None) or {}
+                            usage_in += int(_ju.get("input_tokens", 0) or 0)
+                            usage_out += int(_ju.get("output_tokens", 0) or 0)
+                            _tally.add(
+                                str(getattr(_jr, "provider", "") or route_provider),
+                                str(getattr(_jr, "model", "") or route_model), _ju,
+                            )
+                            completions += 1
                 _round_asks: dict[str, list] = {}
                 for _c in calls:
                     _cp = _would_card(_c)
@@ -5539,6 +5623,27 @@ async def chat_stream(
                                     "chat: %s runs without a card — its own check needs none (%s)",
                                     tc.name, _sc.cost_note,
                                 )
+                    # ACCEPT EDITS / AUTO (v1.406.0 part 2): the pre-pass let this
+                    # call through — no card, and THIS call's grant rides into
+                    # the registry (the v1.270.1 rule: a skipped card must still
+                    # carry its permission). Never a forced card. MIRROR NOTE:
+                    # `_would_card` reads `_auto_ok` the same way.
+                    _auto_rule = _auto_ok.get(id(tc), "")
+                    if (_needs_card and _auto_rule and not _unarmed and not _local_ask
+                            and not _once_only and not _night_card and not _spend_card):
+                        _needs_card = False
+                        _grant_extra = {tc.name, _perm_name}
+                        _auto_state["record"].add(tc.name, _auto_rule)
+                        _auto.note_auto_approved(
+                            getattr(d.platform, "event_bus", None), tool=tc.name, rule=_auto_rule,
+                            surface=_interrupt_surface(_tool_session, night=_night_turn),
+                            mode=approval_mode,
+                            thread_id=(
+                                _tool_session.split(":", 1)[1] if _tool_session.startswith("build:")
+                                else str(getattr(body, "thread_id", "") or "")
+                            ),
+                            turn_id=_step_turn, args_hash=_grant_hash(tc.name, tc.arguments),
+                        )
                     _plan["carded"] = _needs_card
                     if _needs_card:
                         if _card_key in _round_answers:
@@ -6822,6 +6927,10 @@ async def chat_stream(
                 # the output limit this turn). MIRROR NOTE (lock-step):
                 # chat_turn.run_chat_turn's route.
                 **_chat_turn.cut_off_receipt(_cut_times, bool(_cut_end)),
+                # v1.406.0 part 2 (additive, LAST, only when Accept edits /
+                # Auto let a call through). MIRROR NOTE (lock-step):
+                # chat_turn.run_chat_turn's route.
+                **_auto.route_receipt(_auto_state["record"]),
             },
             "tools_used": tools_used,
             # RESOURCES (v1.324.0): [{pack, uri, ok, note}] — ALWAYS present

@@ -329,7 +329,7 @@ Chat is where most work happens, and it is wired into everything:
 - **What an escalated run inherits from the chat** (v1.232.0): the armed
   tools (on every message, not just the first), a grant you answered on a
   card, the grounded folder, and the approval posture — except *Don't ask*,
-  which escalates as *Ask when risky*. See *Agents & jobs* for the
+  which escalates as *Ask first* (called *Ask when risky* before v1.406.0). See *Agents & jobs* for the
   rules, and the session's amber chips ("Waiting for you · shell",
   "Completed · needs you") now keep their own case.
 
@@ -424,11 +424,13 @@ into chat as `@guide …`, ready to send.
   after you answer, "Approved. The run continues · Open run" for a moment.)
 - **The approval posture rides an escalation** (v1.232.0): when a chat hands
   work to an agent session, the chat's approval dropdown goes with it.
-  *Ask when risky* lets the tools you armed in chat run without a pause and
-  asks once for anything else; *Ask first* asks once per run for
-  every ask-tier tool, armed or not (Allow for this run covers the rest of
-  the run). *Don't ask* is **never inherited**: a Don't ask chat's
-  escalated run behaves as *Ask when risky* — you consented to auto-approval
+  *Ask first* (called *Ask when risky* before v1.406.0) lets the tools you
+  armed in chat run without a pause and asks once for anything else; *Ask
+  before every action* (called *Ask first* before v1.406.0) asks once per run
+  for every ask-tier tool, armed or not (Allow for this run covers the rest of
+  the run). *Accept edits* and *Auto* ride along only to a run you are
+  watching (see *One switch* below). *Don't ask* is **never inherited**: a
+  Don't ask chat's escalated run behaves as *Ask first* — you consented to auto-approval
   one watched turn at a time, not for a background run making a batch of
   calls while you are elsewhere.
 
@@ -1941,6 +1943,67 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## One switch: Ask, Accept edits, Auto or Plan (v1.406.0)
+
+The permission chip in the chat box (in a chat and in a coding session) is
+now the ONE place you choose how much Jarvis asks. Its levels, strictest
+first:
+
+- **Ask before every action** (the chip says *Ask every time*): asks before
+  it edits files, uses the internet, runs commands, or clicks or types in a
+  browser. This is the level that was called *Ask first* before v1.406.0.
+- **Ask first**: the default. Edits files and searches the web on its own,
+  asks before running commands, an app's tools and anything risky. This is
+  the level that was called *Ask when risky*. Saved chats keep exactly what
+  they had; only the names moved.
+- **Accept edits**: as Ask first, and a file edit inside the chat's or the
+  session's folder never stops for a card, even where the folder's own rules
+  would ask. An edit outside the folder (or into a folder Iron Jarvis keeps
+  for itself) still asks.
+- **Auto**: lets routine work through and asks only about risky things. It
+  starts from what Ask first would ask about and, for each of those, first
+  applies fixed rules (no model call, no cost): reading, edits inside the
+  folder, running the project's tests (`pytest`, `npm test` and the like,
+  joined only by `&&`, with no output sent into a file), the session's own
+  step list, skills and notes, reading or stopping a program the session
+  started, and handing work to a helper all go ahead. Some things **always
+  ask**, and no rule or model can wave them through: a protected setting,
+  anything that asks once every time (a commit or push on a session's
+  branch, a project's or plugin's command lines, a plan to approve), anything
+  that costs money, anything that reaches outside this PC in a Local only
+  chat, a new tool in an app, a chat that read something it does not trust,
+  a command the folder itself wrote, anything that acts in your browser, on
+  your desktop, in a terminal or in a running program, an app's tool that may
+  change things, anything that may send, post or pay, and anything that may
+  delete or overwrite (`rm`, `del`, `git push`, `git reset`, `npm publish`,
+  `DROP TABLE` …). What the rules leave undecided (an ordinary command such
+  as `ls`, an app's read-only tool) gets ONE quick check by the same model
+  that is answering you, on the same account, under Local only when that is
+  on, and billed to the reply. It sees only your request and the call (never
+  a tool's output or a page) and may answer only "allow"; anything else — no
+  answer within a few seconds, an error, a garbled answer, the demo model —
+  keeps the card. Auto never asks about MORE than Ask first would.
+- **Plan** (coding sessions): the session only reads and writes a plan for
+  you to approve before it changes anything. Picking Plan keeps your level;
+  picking a level turns plan mode off. The *Plan first* chip beside it still
+  works and changes the same setting.
+- **Don't ask**: last, with its warning, exactly as before.
+
+Every call Accept edits or Auto lets through is still a real decision: it
+has its row in the ledger, the reply's receipt says "3 actions approved
+automatically" and, opened, lists each one and why ("it runs the project's
+tests", "a quick check said it is routine for what you asked"), and the
+hands-off numbers count it apart (it never counts as an interruption).
+
+**Where they apply.** A chat or a coding session you are watching, and the
+helpers and teammates it starts (a helper applies the rules only: what they
+leave undecided still asks you). A schedule, a goal, a workflow, a rule, a
+phone message, an assignment or anything else that runs with nobody there
+gets *Ask first* instead, like Don't ask. A chat sent through the API (no
+card can be shown there) runs only what the rules pass and says, in words,
+that the rest needs your OK on the chat page. Turning Auto on from chat asks
+first, as Don't ask does.
 
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 

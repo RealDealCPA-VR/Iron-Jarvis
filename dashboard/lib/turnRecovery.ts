@@ -184,3 +184,62 @@ export function cutOffTitle(raw: unknown): string | null {
   if (!c) return null;
   return c.recovered ? CUT_OFF_TITLE : CUT_OFF_END_TITLE;
 }
+
+/**
+ * v1.406.0 part 2 (Accept edits / Auto, the daemon's `core/auto_approve`):
+ * the calls this turn's posture let through with NO card. The route object
+ * carries `auto_approved: {count, calls: [{tool, rule, why}]}` (both lanes,
+ * LAST, only when it happened, at most 20 calls listed); this is its
+ * whitelist. `why` is the daemon's own words for the rule ("it runs the
+ * project's tests", "a quick check said it is routine for what you asked").
+ */
+export interface AutoApprovedCall {
+  tool: string;
+  rule: string;
+  why: string;
+}
+
+export interface TurnAutoApproved {
+  count: number;
+  calls: AutoApprovedCall[];
+}
+
+/** The route's `auto_approved` field's normal form, or null (absent, an
+ *  older daemon, a hand-edited thread). */
+export function decodeAutoApproved(raw: unknown): TurnAutoApproved | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as { count?: unknown; calls?: unknown };
+  const n = r.count;
+  if (typeof n !== "number" || !Number.isFinite(n) || n < 1) return null;
+  const calls: AutoApprovedCall[] = [];
+  if (Array.isArray(r.calls)) {
+    for (const row of r.calls) {
+      if (!row || typeof row !== "object") continue;
+      const c = row as { tool?: unknown; rule?: unknown; why?: unknown };
+      const tool = typeof c.tool === "string" ? c.tool.trim().slice(0, 200) : "";
+      if (!tool) continue;
+      calls.push({
+        tool,
+        rule: typeof c.rule === "string" ? c.rule.trim().slice(0, 40) : "",
+        why: typeof c.why === "string" ? c.why.trim().slice(0, 200) : "",
+      });
+      if (calls.length >= APPROVED_MAX) break;
+    }
+  }
+  return { count: Math.floor(n), calls };
+}
+
+/** The collapsed receipt's words: "3 actions approved automatically" (one:
+ *  "1 action approved automatically"), or null when none were. */
+export function autoApprovedLine(raw: unknown): string | null {
+  const a = decodeAutoApproved(raw);
+  if (!a) return null;
+  return `${a.count} action${a.count === 1 ? "" : "s"} approved automatically`;
+}
+
+/** One expanded row: "Approved automatically: run a command (it runs the
+ *  project's tests)". */
+export function autoApprovedRow(c: AutoApprovedCall): string {
+  const why = c.why ? ` (${c.why})` : "";
+  return `Approved automatically: ${askPhrase(c.tool)}${why}`;
+}

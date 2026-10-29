@@ -4128,6 +4128,70 @@ does not need a bump, stop and bump it.
   filters by it)); moved on purpose: `ij-harness-command-shell-v1381` and
   `ij-harness-helpers-v1372` ("for this session").
 
+- **ONE permission switch: Accept edits and Auto START from Ask first's cards
+  and only remove some; risky always asks; a model may only say allow**
+  (v1.406.0 part 2; the user, 2026-10-29: approvals were the main friction,
+  helpers stalled for hours; Claude Code's Ask / Accept edits / Plan / Auto).
+  `core/auto_approve.py` is THE module. Vocabulary: `chat_turn.APPROVAL_MODES`
+  = always_ask, approve_for_me, accept_edits, auto, yolo (old stored values
+  mean the same; an unknown one is approve_for_me). Words
+  (`lib/permissionLevels`, `settings/schema` `device.approval_mode`, pinned
+  equal): "Ask before every action" (always_ask; chip "Ask every time"),
+  "Ask first" (approve_for_me — was "Ask when risky"), "Accept edits",
+  "Auto", "Don't ask" last; retired words still map
+  (`settings/tools._RETIRED_OPTION_WORDS`); Auto from chat is ask-floor like
+  yolo. THE PRINCIPLE: a posture is consulted ONLY for a call the default
+  would card (stream lane: `_would_card` with `_auto_ok` empty, then the
+  per-call `_needs_card`); a forced card (once-only incl. the git guard /
+  command files / plan door, Local only `_ask_first`, the night allow-list, a
+  priced spend) never reaches it, a base deny never cards. RULES
+  (`classify`, off the loop — edit paths are resolved): PASS_RULES
+  read_only (built-in READONLY), edit_in_folder (write_file / edit_file /
+  multi_edit / notebook_edit / write_document `path`, apply_patch's V4A heads,
+  every target resolved inside the turn's folder and not a protected root),
+  bookkeeping (plan_update, skill_search/load, notebook), test_command (the
+  finish check's `status_is_tests` + `builtin_only`, no file redirect),
+  own_programs (process_read/stop), helpers (delegate, spawn_agent,
+  list_agents). ASK_RULES, checked FIRST: ask_floor (ALWAYS_CARD_TOOLS),
+  once_only / priced / local_only / night (forced), quarantined, low_trust,
+  folder_command (the finish/checker `needs_a_person`), acts_for_you (every
+  DENY_FLOOR_TOOLS member except shell/process_start, computer/desktop,
+  acting browser_*), app_change (an MCP tool not readOnlyHint), sends and
+  destructive (name tokens, `_CMD_DESTRUCTIVE` / `_CMD_SENDS` on commands, a
+  destructive word in a judged call's args), outside_folder, edits_only
+  (Accept edits passes nothing else). JUDGE (Auto only, stream lane only):
+  `AutoJudge` — `router.complete(pin=True)` on the turn's served pair, inside
+  the turn (its hold, account pin, Local only scope), `JUDGE_TIMEOUT_S` 6,
+  `MAX_JUDGEMENTS_PER_TURN` 12, cached per (tool, args_hash), prompt
+  `JUDGE_SYSTEM` + `judge_prompt` (request = `request_of(body.messages)`, the
+  person's newest words, and the REDACTED call, each fenced, fence markers
+  defanged, sorted keys), `parse_judgement` = the one word "allow" else ask;
+  a timeout, error, refusal, tool call in the answer, the demo model (before
+  AND after) ⇒ ask; billed into `_tally`/usage. A pass carries THIS call's
+  grant (`_grant_extra`, the v1.270.1 rule), `note_auto_approved` publishes
+  `interrupt.answered` actor `auto` (in `ACTORS`) + reason, NO
+  `interrupt.asked` (`eval/autonomy` counts `auto_approved` apart, never an
+  interruption), and the route gets `auto_approved {count, calls}` LAST
+  (`route_receipt`; TurnReceipt "N actions approved automatically" + rows,
+  `lib/turnRecovery.decodeAutoApproved`; the coding-session line keeps it in
+  `route`). POST lane (MIRROR NOTE): a call whose permission asks once the
+  arming allows are set aside runs only on a rule pass, else
+  `post_lane_refusal` through the deny path — never the judge. DOORS:
+  `runtime.inherited_approval_mode(raw, origin)` keeps accept_edits/auto only
+  for `ATTENDED_ORIGINS` (chat, job incl. job:build-helper and
+  job:mission-member, project, user); every other origin and no origin →
+  approve_for_me (create_session, continue_session, inherited_grants, the
+  runtime's own reads all pass the origin). The runtime (`_pause_needed`
+  `eased=`, `_auto_rule`) applies the RULES only and carries the grant from
+  `_pause_for_approval`. Plan: PermissionChip `planMode`/`onPlanChange` (the
+  harness passes them; the old Plan-first chip still drives the same `mode`).
+  OPEN: the runtime has no judge; a folder "ask" rule on an edit is overridden
+  in-folder by both eased postures (by design, said in the words); the
+  receipt lists ≤ 20. Pins: `tests/test_auto_approve{,_lanes}_v14060.py`
+  (each always-ask class through the real stream lane + `registry.invoke`,
+  23 mutations red), dashboard `permission-chip-plan-v1406.test.tsx`,
+  `turn-receipt-auto-v1406.test.tsx`.
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to

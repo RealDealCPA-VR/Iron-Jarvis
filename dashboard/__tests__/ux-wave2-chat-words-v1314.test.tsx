@@ -333,15 +333,17 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
     expect(chip).toBeTruthy();
     expect(chip.getAttribute("data-mode")).toBe("approve_for_me");
     // The level's name is real text on the chip (not sr-only) and in its name.
-    const words = within(chip).getByText("Ask when risky");
+    const words = within(chip).getByText("Ask first");
     expect(classes(words)).not.toContain("sr-only");
-    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask when risky");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask first");
     fireEvent.click(chip);
     const items = within(screen.getByTestId("permission-menu")).getAllByTestId("permission-item");
-    expect(items.map((i) => i.getAttribute("data-mode"))).toEqual(["always_ask", "approve_for_me", "yolo"]);
+    expect(items.map((i) => i.getAttribute("data-mode"))).toEqual(["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"]);
     expect(items.map((i) => i.querySelector("span.block")?.textContent)).toEqual([
+      "Ask before every action",
       "Ask first",
-      "Ask when risky",
+      "Accept edits",
+      "Auto",
       "Don't ask",
     ]);
   });

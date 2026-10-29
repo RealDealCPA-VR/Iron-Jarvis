@@ -313,17 +313,31 @@ ASKING_ORIGINS = (
 #: the one place that says so), and the Handbook tells the user.
 SESSION_APPROVAL_MODES = ("approve_for_me", "always_ask")
 
+#: v1.406.0 part 2 (core/auto_approve): the two EASED postures a session may
+#: carry ONLY while a person is watching it (an ``ATTENDED_ORIGINS`` run: a
+#: chat's escalation, a job, a coding session's helper, a mission teammate).
+#: Every other door — schedule, goal, workflow, reflex, phone, autonomy,
+#: assignment, an unattributed run — lands them as ``approve_for_me``, like
+#: ``yolo``: a rule or a model letting a call through with nobody there to see
+#: the receipt is not what the person chose when they picked Auto in a chat.
+ATTENDED_EASED_MODES = ("accept_edits", "auto")
 
-def inherited_approval_mode(raw: object) -> str:
+
+def inherited_approval_mode(raw: object, origin: object = None) -> str:
     """The posture a session inherits from a caller's ``approval_mode``.
 
     ``""``/None → ``""`` (nobody stated one; reads as the default),
-    ``always_ask`` → itself, anything else — the default, ``yolo``, an
-    unknown string from a newer client — → ``approve_for_me``. Never yolo.
+    ``always_ask`` → itself, ``accept_edits``/``auto`` → themselves for an
+    ATTENDED ``origin`` and ``approve_for_me`` for every other one (no origin
+    included — fail safe), anything else — the default, ``yolo``, an unknown
+    string from a newer client — → ``approve_for_me``. Never yolo.
     """
     mode = str(raw or "").strip().lower()
     if not mode:
         return ""
+    if mode in ATTENDED_EASED_MODES:
+        attended = str(origin or "").strip().startswith(ATTENDED_ORIGINS)
+        return mode if attended else "approve_for_me"
     return mode if mode in SESSION_APPROVAL_MODES else "approve_for_me"
 
 
@@ -2751,9 +2765,18 @@ class AgentRuntime:
         agent_def: AgentDefinition,
         session_allow: set[str],
         spend: "SpendCheck | None" = None,
+        *,
+        eased: bool = True,
     ) -> str:
         """The permission key an ask for ``tc`` would pause on, or "" when
         no pause is needed (v1.247.0).
+
+        ``eased`` (v1.406.0 part 2): under Accept edits / Auto a call the
+        RULES pass (``core/auto_approve``; the runtime has no model judge, so
+        a call they leave undecided keeps its pause) needs no pause. False
+        asks what the DEFAULT posture would say — ``_pause_for_approval``
+        uses it to tell a rule pass (which must carry the call's grant) from
+        a call that needed nothing.
 
         The gate ``_pause_for_approval`` has always applied, lifted out
         verbatim so a step can GROUP its asks (one approval per permission)
@@ -2793,7 +2816,7 @@ class AgentRuntime:
             # permission mode and no standing grant applies. Only an answer
             # the user gave to an earlier plan card ("for this conversation")
             # lifts it, read through the same posture as every other grant.
-            if inherited_approval_mode(getattr(session, "approval_mode", "")) == "always_ask":
+            if inherited_approval_mode(getattr(session, "approval_mode", ""), getattr(session, "origin", None)) == "always_ask":
                 plan_granted = self._run_grants.get(session.id, set())
             else:
                 plan_granted = session_allow
@@ -2826,7 +2849,9 @@ class AgentRuntime:
         # grant the user answered DURING THIS RUN skips the pause, so each
         # ask-tier tool asks once per run and the sibling release covers
         # its batch. ``yolo`` cannot reach here (``inherited_approval_mode``).
-        posture = inherited_approval_mode(getattr(session, "approval_mode", ""))
+        posture = inherited_approval_mode(
+            getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+        )
         if posture == "always_ask":
             granted = self._run_grants.get(session.id, set())
         else:
@@ -2840,7 +2865,38 @@ class AgentRuntime:
         # ASK, and the registry re-checks the same store at invoke.
         if self._grant_covers(session, tc):
             return ""
+        if eased and posture in ATTENDED_EASED_MODES and self._auto_rule(session, tc, agent_def):
+            return ""
         return perm
+
+    def _auto_rule(self, session: Session, tc, agent_def: AgentDefinition) -> str:
+        """The PASS rule Accept edits / Auto let ``tc`` through by, or "" —
+        the rules only (v1.406.0 part 2). Under Local only a tool that
+        reaches outside this PC, low trust, a quarantined tool and a spend
+        (decided before this is read) always keep their pause."""
+        from ..core import auto_approve as _auto
+
+        posture = inherited_approval_mode(
+            getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+        )
+        if posture not in ATTENDED_EASED_MODES:
+            return ""
+        forced = ""
+        try:
+            from ..providers import egress as _eg
+
+            if _eg.current_scope().on and _eg.asks_first(self.p.registry, tc.name):
+                forced = "local_only"
+        except Exception:  # noqa: BLE001 — cannot tell ⇒ keep the pause
+            forced = "local_only"
+        tool = self.p.registry.get(tc.name)
+        ws = getattr(session, "workspace_path", None) or None
+        verdict = _auto.classify(
+            tc.name, tc.arguments, mode=posture, tool=tool, workspace=ws, forced=forced,
+            low_trust=self._effective_trust(session) == TRUST_LOW,
+            quarantined=bool(getattr(tool, "quarantined", False)),
+        )
+        return verdict.rule if verdict.passes else ""
 
     async def _pause_for_approval(
         self,
@@ -2917,6 +2973,26 @@ class AgentRuntime:
                         session.id, tc.name, spend.cost_note,
                     )
                     return "", {tc.name, _pk}
+            # ACCEPT EDITS / AUTO (v1.406.0 part 2): the default posture WOULD
+            # pause here, so a rule let this call through — it carries THIS
+            # call's grant into the registry (the v1.270.1 rule), and the
+            # metrics hear of it (actor "auto").
+            _would = self._pause_needed(
+                session, tc, agent_def, session_allow, spend=spend, eased=False
+            )
+            _rule = self._auto_rule(session, tc, agent_def) if _would else ""
+            if _rule:
+                from ..core import auto_approve as _auto
+                from ..core.approvals import run_place as _run_place
+                from ..core.grants import args_hash as _ah
+
+                _surface, _thread = _run_place(session)
+                _auto.note_auto_approved(
+                    getattr(self.p, "event_bus", None), tool=tc.name, rule=_rule,
+                    surface=_surface, mode=str(getattr(session, "approval_mode", "") or ""),
+                    thread_id=_thread, session_id=session.id, args_hash=_ah(tc.name, tc.arguments),
+                )
+                return "", {tc.name, _would}
             return "", set()
         tool = self.p.registry.get(tc.name)
         safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments

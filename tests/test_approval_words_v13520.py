@@ -305,18 +305,29 @@ def test_settings_names_the_levels_exactly_as_the_chat_chip_does():
     ts = _read("dashboard/lib/permissionLevels.ts")
     chip = {
         key: re.search(rf"{key}: \{{\s*label: \"([^\"]+)\"", ts).group(1)  # type: ignore[union-attr]
-        for key in ("always_ask", "approve_for_me", "yolo")
+        for key in ("always_ask", "approve_for_me", "accept_edits", "auto", "yolo")
     }
-    assert chip == {"always_ask": "Ask first", "approve_for_me": "Ask when risky", "yolo": "Don't ask"}
+    # v1.406.0 part 2: five levels, renamed for the one switch.
+    assert chip == {
+        "always_ask": "Ask before every action", "approve_for_me": "Ask first",
+        "accept_edits": "Accept edits", "auto": "Auto", "yolo": "Don't ask",
+    }
     row = schema.get("device.approval_mode")
     assert dict(row.options) == chip
     # Order = the chip's menu: strictest first.
-    assert [v for v, _ in row.options] == ["always_ask", "approve_for_me", "yolo"]
+    assert [v for v, _ in row.options] == ["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"]
     # The chat's settings tools match a label as well as a value.
     assert _coerce(row, "Don't ask") == "yolo"
     assert _coerce(row, "ask when risky") == "approve_for_me"
     # The floor still keys on the VALUE.
     assert row.tier_for("yolo") == "ask-floor"
+    # v1.406.0 part 2: Auto lets calls through with no card, so turning it on
+    # from chat asks first too; Accept edits does not.
+    assert row.tier_for("auto") == "ask-floor"
+    assert row.tier_for("accept_edits") == "allow"
+    # "Ask first" now names the default; the old words keep their level.
+    assert _coerce(row, "Ask first") == "approve_for_me"
+    assert _coerce(row, "Ask before every action") == "always_ask"
 
 
 def test_agent_setup_reads_the_same_level_names():

@@ -278,7 +278,7 @@ describe("one card holds every control", () => {
     const chip = container.querySelector("#chat-approval-mode") as HTMLButtonElement;
     expect(t.contains(chip)).toBe(true);
     expect(chip.getAttribute("data-testid")).toBe("permission-chip");
-    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask when risky");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask first");
     expect(chip.getAttribute("data-mode")).toBe("approve_for_me");
     // Left group then right group: Send and the model sit after the web chip.
     const web = tb.getByRole("switch", { name: "Web research" });

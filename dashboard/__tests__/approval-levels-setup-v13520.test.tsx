@@ -85,7 +85,7 @@ vi.mock("framer-motion", async () => {
   };
 });
 
-import { PERMISSION_LEVELS, PERMISSION_MODES } from "@/lib/permissionLevels";
+import { PERMISSION_LEVELS } from "@/lib/permissionLevels";
 import { SetupCardHarness } from "./helpers/setupCardHarness";
 
 beforeEach(() => {
@@ -122,15 +122,18 @@ describe("an agent's setup names the levels as the chat chip does", () => {
     const options = Array.from(select.options);
     expect(options.map((o) => o.textContent)).toEqual([
       `As usual (${PERMISSION_LEVELS.approve_for_me.label})`,
-      ...PERMISSION_MODES.map((m) =>
+      // v1.406.0 part 2: an agent keeps its three postures — Accept edits and
+      // Auto are a watched chat's or coding session's (an agent's own run is
+      // landed as Ask first; runtime.inherited_approval_mode).
+      ...(["always_ask", "approve_for_me", "yolo"] as const).map((m) =>
         m === "yolo" ? `${PERMISSION_LEVELS.yolo.label} (chat only)` : PERMISSION_LEVELS[m].label,
       ),
     ]);
     // The chip's words, literally — the acceptance a new user reads.
     expect(options.map((o) => o.textContent)).toEqual([
-      "As usual (Ask when risky)",
+      "As usual (Ask first)",
+      "Ask before every action",
       "Ask first",
-      "Ask when risky",
       "Don't ask (chat only)",
     ]);
     // The posted VALUES are unchanged; "Don't ask" can never be picked.
