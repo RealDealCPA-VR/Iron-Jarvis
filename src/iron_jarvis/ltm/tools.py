@@ -227,7 +227,13 @@ class LTMAppendTool(Tool):
                 if prior is None:
                     return ToolResult(ok=False, error="undo: pre-image unavailable")
                 try:
-                    path.write_text(prior.decode("utf-8"), encoding="utf-8")
+                    if meta.get("exact"):
+                        # v1.406.0 review: a brain_save that ADDED to an
+                        # existing note keeps the note's exact bytes, so Undo
+                        # puts back its own line endings too.
+                        path.write_bytes(prior)
+                    else:
+                        path.write_text(prior.decode("utf-8"), encoding="utf-8")
                 except OSError as exc:
                     return ToolResult(
                         ok=False, error=f"undo: could not restore note: {exc}"

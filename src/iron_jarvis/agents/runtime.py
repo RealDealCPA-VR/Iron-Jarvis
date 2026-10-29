@@ -2379,14 +2379,17 @@ class AgentRuntime:
             try:
                 from ..brain.turn import BRAIN_TOOLS, build_turn_bounded
 
+                # v1.406.0 review: a low-trust run is not shown the writers,
+                # so its rules must not tell it to save (``writers``).
+                _low = self._effective_trust(session) == TRUST_LOW
                 _brain_run = await asyncio.to_thread(
                     build_turn_bounded, self.p, session.project_id, session.task or "",
                     event_bus=getattr(self.p, "event_bus", None), session_id=session.id,
+                    writers=not _low,
                 )
                 system_prompt += _brain_run.block
                 if _brain_run.usable:
                     _have = {s.get("name") for s in tool_specs if isinstance(s, dict)}
-                    _low = self._effective_trust(session) == TRUST_LOW
                     _add = [
                         t for t in BRAIN_TOOLS
                         if t not in _have and self.p.registry.get(t) is not None
@@ -2931,6 +2934,31 @@ class AgentRuntime:
             return "", set()
         perm = self._pause_needed(session, tc, agent_def, session_allow, spend=spend)
         if not perm:
+            if (
+                spend is not None
+                and spend.ask
+                and not str(getattr(session, "origin", None) or "").startswith(ASKING_ORIGINS)
+            ):
+                # v1.406.0 review: a call whose OWN check says "ask the user"
+                # (a brain save the profile wants asked, every brain_change, a
+                # priced generation, a commit on a Build branch) in a run that
+                # has nobody to ask — a delegated child (origin None), an
+                # unattributed API run. `_pause_needed` answers "" there (the
+                # instant headless rule), and an ALLOW-tier tool, or an
+                # ask-tier one the run's inherited grants name, then RAN with
+                # no card at all. The check's verdict is refused instead,
+                # through the same deny seam a declined card uses.
+                _t = self.p.registry.get(tc.name)
+                _pk = _t.perm_key() if _t is not None else tc.name
+                if self.p.permissions.mode_for(
+                    _pk, self._trust_overrides(session, agent_def)
+                ) is not PermissionMode.DENY:
+                    words = str(getattr(spend, "words", "") or "").strip() or tc.name
+                    return (
+                        f"{words}: this needs the user's OK every time, and this run has "
+                        "no way to ask, so it was not done. Ask the user to do it from chat.",
+                        set(),
+                    )
             if spend is not None and not spend.ask:
                 # FREE BY THE SERVICE'S OWN VERDICT (v1.346.0): no pause, but
                 # an ASK-tier call still needs its grant to pass the

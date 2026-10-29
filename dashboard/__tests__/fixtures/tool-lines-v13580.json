@@ -36,6 +36,18 @@
       "ok": "read the team's notes",
       "failed": "tried a team notes read and it failed"
     },
+    "brain_change": {
+      "ok": "changed a note in your memory base",
+      "failed": "tried a memory base change and it failed"
+    },
+    "brain_read": {
+      "ok": "read a note from your memory base",
+      "failed": "tried a memory base note and it failed"
+    },
+    "brain_save": {
+      "ok": "saved a note to your memory base",
+      "failed": "tried a memory base note and it failed"
+    },
     "browser_activate_tab": {
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"
@@ -573,6 +585,7 @@
   },
   "python_own_words": [
     "blackboard_post",
+    "brain_search",
     "browse",
     "consult",
     "docx_edit",

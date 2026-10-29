@@ -92,6 +92,10 @@ export interface BrainSavedNote {
 export interface BrainUnsavedNote {
   title: string;
   reason: string;
+  /** v1.406.0 review: true only when the daemon KEPT it as an unsaved change
+   *  (listed on the Memory page). A save the base answered for but could not
+   *  show back is not kept — a second copy could duplicate it. */
+  kept: boolean;
 }
 export interface BrainChange {
   action: string;
@@ -292,7 +296,7 @@ export function decodeBrainReceipt(raw: unknown): BrainReceipt | null {
     if (!x) continue;
     const title = line(x.title);
     if (!title) continue;
-    unsaved.push({ title, reason: line(x.reason, 300) });
+    unsaved.push({ title, reason: line(x.reason, 300), kept: x.kept === true });
     if (unsaved.length >= ROWS_MAX) break;
   }
   const changed: BrainChange[] = [];
@@ -356,7 +360,9 @@ export function receiptBrainLine(
     return {
       text: `Not saved yet: ${first.title}${more(brain.unsaved.length - 1)}${why ? `. ${why}` : ""}`,
       tone: "warn",
-      title: "Open Memory to try again or discard it.",
+      title: first.kept
+        ? "Open Memory to try again or discard it."
+        : `${brain.base} may have it already — check there before saving it again.`,
     };
   }
   if (brain.saved.length > 0) {

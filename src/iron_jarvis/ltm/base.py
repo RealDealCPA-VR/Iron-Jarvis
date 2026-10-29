@@ -295,13 +295,23 @@ class MarkdownDirConnector(LTMConnector):
         raw = str(ref or "").strip()
         if not raw:
             raise LTMWriteRefused(f"{self.name}: no note was named")
+        # v1.406.0 review: refused BEFORE anything touches the disk. A network
+        # or device spelling would be opened by the existence check and the
+        # resolve below — an SMB connection that hands the user's sign-in hash
+        # to whatever host a model (or a note) named.
+        _refuse_network_path(self.name, raw)
         base = self.dir.resolve()
         cand = Path(raw)
         if not cand.is_absolute():
             cand = self.dir / raw
+        if not _lexically_inside(cand, self.dir, base):
+            raise LTMWriteRefused(f"{self.name}: {raw} is not a note inside {self.dir}")
         if cand.suffix.lower() != ".md":
-            by_title = self.dir / f"{slugify(raw)}.md"
-            cand = cand.with_suffix(".md") if cand.with_suffix(".md").exists() else by_title
+            # ADD ".md", never ``with_suffix``: "Plan v1.2" is not "Plan v1" —
+            # a with_suffix turned the one into the other, so a read or a
+            # DELETE reached a different note than the card named.
+            named = Path(str(cand) + ".md")
+            cand = named if named.exists() else self.dir / f"{slugify(raw)}.md"
         try:
             resolved = cand.resolve()
             resolved.relative_to(base)
@@ -329,13 +339,18 @@ class MarkdownDirConnector(LTMConnector):
         if not path.is_file():
             raise LTMWriteRefused(f"{self.name}: no note at {path.name} to add to")
         try:
-            existing = path.read_text(encoding="utf-8").rstrip()
+            raw = path.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             raise LTMWriteRefused(
                 f"cannot add to {path}: its existing contents could not be read "
                 f"({exc}) — nothing was written"
             ) from exc
-        _atomic_write(path, f"{existing}\n\n{content.rstrip()}\n")
+        # v1.406.0 review: the note keeps its OWN line endings. A text-mode
+        # write turned every LF note in an Obsidian vault into CRLF on the
+        # first save that added to it.
+        nl = "\r\n" if "\r\n" in raw else "\n"
+        add = content.rstrip().replace("\r\n", "\n").replace("\n", nl)
+        _atomic_write(path, f"{raw.rstrip()}{nl}{nl}{add}{nl}", newline="")
         return str(path)
 
     def change(self, action: str, ref: str, to: str = "") -> str:
@@ -367,7 +382,10 @@ class MarkdownDirConnector(LTMConnector):
             if action == "rename":
                 dest = path.with_name(f"{slugify(target)}.md")
             else:
+                _refuse_network_path(self.name, target)
                 dest = (base / target / path.name)
+                if not _lexically_inside(dest, base):
+                    raise LTMWriteRefused(f"{self.name}: {target} is outside {self.dir}")
             try:
                 dest.resolve().relative_to(base)
             except (OSError, ValueError) as exc:
@@ -379,13 +397,40 @@ class MarkdownDirConnector(LTMConnector):
         return str(dest)
 
 
-def _atomic_write(path: Path, body: str) -> None:
+def _refuse_network_path(source: str, raw: str) -> None:
+    """Refuse a network or device spelling (a UNC share, a forward-slash
+    share, a long-path or device prefix) before it is looked up (v1.406.0
+    review). Pure string work: never touches the disk or the network."""
+    s = str(raw or "").strip().replace("/", "\\")
+    if s.startswith("\\\\"):
+        raise LTMWriteRefused(
+            f"{source}: {raw} is a network or device path, not a note in this memory base"
+        )
+
+
+def _lexically_inside(cand: Path, *roots: Path) -> bool:
+    """``cand`` sits inside one of ``roots`` by its SPELLING alone — ``..``
+    folded, made absolute, no filesystem call (v1.406.0 review). The resolve
+    that follows still catches a link that leads out."""
+    import os
+
+    here = Path(os.path.normpath(os.path.abspath(str(cand))))
+    for root in roots:
+        try:
+            here.relative_to(Path(os.path.normpath(os.path.abspath(str(root)))))
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _atomic_write(path: Path, body: str, *, newline: "str | None" = None) -> None:
     import os
     import tempfile
 
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(body)
         os.replace(tmp, path)
     except BaseException:

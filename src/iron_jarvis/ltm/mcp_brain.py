@@ -74,6 +74,12 @@ _WRITE_WORDS = frozenset({
     "put", "patch", "upsert", "drop", "exec", "execute", "run", "sql", "mutate",
     "append", "save",
 })
+#: Words that say a tool works on ONE note (v1.406.0 review): a note op
+#: prefers ``delete_page`` over ``delete_tag`` among tools with the same verb.
+_NOTE_NOUNS = frozenset({
+    "page", "pages", "note", "notes", "doc", "docs", "document", "documents",
+    "entry", "entries", "file", "files", "article", "articles", "memory", "memories",
+})
 #: Names that SAY search. Preferred over the bare ``query``/``find`` family,
 #: which is where database verbs live.
 _STRONG_SEARCH_RX = re.compile(r"search|recall|retrieve|lookup", re.IGNORECASE)
@@ -682,14 +688,27 @@ class McpBrainConnector(LTMConnector):
     def _pick_op(self, verbs: "tuple[str, ...]", *, refuse: "frozenset[str]" = frozenset()) -> "dict[str, Any] | None":
         self._connect()
         for attempt in (0, 1):
-            for t in self._tools or []:
+            # v1.406.0 review: ranked by the VERB's own order (``append``
+            # before ``update`` — an update tool may REPLACE the page; ``read``
+            # before ``get`` — ``get_index`` is not one note), then by whether
+            # the name says it works on a note (``delete_page`` before
+            # ``delete_tag``), then by the server's order. The first cut took
+            # the first tool in the server's list that had ANY of the verbs.
+            best: "tuple[tuple[int, int, int], dict[str, Any]] | None" = None
+            for i, t in enumerate(self._tools or []):
                 if not isinstance(t, dict):
                     continue
                 words = _name_words(str(t.get("name", "")))
-                if words & refuse:
+                if words & refuse or not self._ref_key(t):
                     continue
-                if any(v in words for v in verbs) and self._ref_key(t):
-                    return t
+                hit = next((n for n, v in enumerate(verbs) if v in words), None)
+                if hit is None:
+                    continue
+                rank = (hit, 0 if words & _NOTE_NOUNS else 1, i)
+                if best is None or rank < best[0]:
+                    best = (rank, t)
+            if best is not None:
+                return best[1]
             if attempt == 0:
                 try:
                     self._relist(self._build_client())
@@ -725,8 +744,11 @@ class McpBrainConnector(LTMConnector):
         from .base import NoteOpUnsupported
 
         tool = self._pick_op(
-            ("append", "update", "add"),
-            refuse=frozenset({"delete", "remove", "archive", "replace", "drop", "trash"}),
+            # v1.406.0 review: append/add first — an "update" tool may
+            # REPLACE the note; set/write/overwrite say they do.
+            ("append", "add", "update"),
+            refuse=frozenset({"delete", "remove", "archive", "replace", "drop", "trash",
+                              "overwrite", "set", "write"}),
         )
         if tool is None:
             raise NoteOpUnsupported(f"{self.name}: the MCP server has no tool that adds to a note")

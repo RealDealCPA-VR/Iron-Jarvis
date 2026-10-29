@@ -200,6 +200,29 @@ def _verify(conn: Any, ref: str, content: str) -> "bool | None":
     return bool(probe) and probe in _flat(text)
 
 
+def _update_undo(conn: Any, ref: str, content: str, ctx: ToolContext, tool: str) -> "dict[str, Any]":
+    """The inverse of ADDING ``content`` to the existing note ``ref`` on a
+    folder base: its prior bytes, at its real path, with the after-hash the
+    connector's ``update`` will leave. Blocking. An unreadable note is an
+    honest "cannot undo", never a fake inverse."""
+    from ..tools.undo import make_file_descriptor, sha256_bytes
+
+    try:
+        path = conn._note_path(ref)
+        prior = path.read_bytes()  # EXACT: the revert writes these bytes back
+        prior_text = prior.decode("utf-8").replace("\r\n", "\n")
+    except Exception:  # noqa: BLE001 — no pre-image: say it cannot be undone
+        return {"kind": "memory_external", "reversible": False, "tool": tool}
+    # The hashes are newline-invariant ("text" mode), so they are taken over
+    # the LF form of what update() leaves.
+    post_body = f"{prior_text.rstrip()}\n\n{content.rstrip()}\n"
+    return make_file_descriptor(
+        ctx.config.home, kind="memory_restore", path=str(path), mode="text",
+        prior_bytes=prior, pre_sha256=sha256_bytes(prior_text.encode("utf-8")),
+        post_sha256=sha256_bytes(post_body.encode("utf-8")), exact=True,
+    )
+
+
 def record_pending(platform: Any, active: ActiveBrain, title: str, content: str, error: str) -> str:
     from ..core.db import session_scope
     from .models import BrainPendingWrite
@@ -283,17 +306,21 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
         if conn is None or getattr(conn, "dir", None) is None:
             return {"kind": "memory_external", "reversible": False, "tool": self.name}
         target = await asyncio.to_thread(_plan_target, self.platform, active, str(args.get("title") or ""))
+        # The text exactly as execute writes it (stripped), or the predicted
+        # after-hash never matches and Undo refuses a change it made.
+        content = str(args.get("content") or "").strip()
         if target is not None:
-            # Snapshot the note it will ADD to, by the inherited descriptor
-            # rule: a title that slugs to that file is exactly the inherited
-            # case; otherwise point the inherited rule at the target's name.
-            from pathlib import Path
-
-            stem = Path(str(target["ref"])).stem
-            return await LTMAppendTool.capture_undo(
-                self, {**args, "title": stem, "source": active.base}, ctx
+            # Snapshot the note it will ADD to — by ITS OWN path (v1.406.0
+            # review). The first cut fed the target's stem back through the
+            # inherited slug rule, so "Acme Retainer.md" (every Obsidian note)
+            # was journalled as "acme-retainer.md" and Undo never restored the
+            # note the save had changed.
+            return await asyncio.to_thread(
+                _update_undo, conn, str(target["ref"]), content, ctx, self.name
             )
-        return await LTMAppendTool.capture_undo(self, {**args, "source": active.base}, ctx)
+        return await LTMAppendTool.capture_undo(
+            self, {**args, "content": content, "source": active.base}, ctx
+        )
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         active = await asyncio.to_thread(self._active, ctx)
@@ -432,7 +459,10 @@ def fold_fact(receipt: "dict[str, Any] | None", fact: "dict[str, Any] | None") -
     if kind == "saved":
         receipt["saved"].append({k: fact.get(k) for k in ("title", "ref", "action", "verified")})
     elif kind == "unsaved":
-        receipt["unsaved"].append({"title": fact.get("title", ""), "reason": fact.get("reason", "")})
+        # ``kept``: listed on the Memory page (an unsaved change with a row) —
+        # a save the base answered for but could not show back is not.
+        receipt["unsaved"].append({"title": fact.get("title", ""), "reason": fact.get("reason", ""),
+                                   "kept": bool(fact.get("pending_id"))})
     elif kind == "changed":
         receipt["changed"].append({"action": fact.get("action", ""), "ref": fact.get("ref", "")})
 

@@ -5085,20 +5085,25 @@ _REMEMBERED_PREFIX = "remembered preference: "
 _REMEMBERED_MAX_CHARS = 240
 
 
-async def brain_turn(d, pid: "str | None", recall_query: str):
+async def brain_turn(d, pid: "str | None", recall_query: str, *, writers: bool = True):
     """THE BRAIN PROFILE for this turn (v1.406.0): the block (rules, trusted
     guide + skills, the primary's notes for this message as DATA) and the
     receipt seed — off the loop, bounded (``brain.turn.build_turn_bounded``).
     No profile → an empty BrainTurn: no block, no tools, ``brain: null``.
     Both lanes await it BESIDE ``_gather_grounding`` and add its block right
     BEFORE the grounding join, before the planner. MIRROR NOTE (lock-step):
-    routes/chat.py calls the same helper at the same seam. Never raises."""
+    routes/chat.py calls the same helper at the same seam. Never raises.
+
+    ``writers`` (v1.406.0 review): False for a LOW-TRUST turn, whose writers
+    the low-trust filter removes — the rules then never say "save it with
+    brain_save" beside no such tool. MIRROR NOTE (lock-step)."""
     from ..brain.turn import BrainTurn, build_turn_bounded
 
     try:
         return await asyncio.to_thread(
             build_turn_bounded, d.platform, pid, recall_query or "",
             event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
+            writers=writers,
         )
     except Exception:  # noqa: BLE001 — no brain beats a crashed turn
         log.warning("brain turn failed", exc_info=True)
@@ -8725,7 +8730,7 @@ async def run_chat_turn(
         _gather_grounding(
             d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
         ),
-        brain_turn(d, pid, recall_query),
+        brain_turn(d, pid, recall_query, writers=normalize_trust(trust) != TRUST_LOW),
     )
     system += _brain.block
     # v1.326.0: this join also carries the project folder's AGENTS.md /
@@ -8774,6 +8779,12 @@ async def run_chat_turn(
         )
         system = _harness.system_without_exits(system, _ENV_EXIT_LINES)
         _grounding.harness = True
+    # BRAIN PROFILE (v1.406.0 review): a turn that will hold NO brain tool (a
+    # text-only model, a coding session) gets rules that name none — same
+    # guide, skills and notes. Before the planner. MIRROR NOTE (lock-step):
+    # routes/chat.py swaps at the same seam.
+    if (text_only_pick or _harness is not None) and _brain.block:
+        system = system.replace(_brain.block, _brain.without_tools(), 1)
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,

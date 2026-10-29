@@ -3663,7 +3663,7 @@ async def chat_stream(
             _gather_grounding(
                 d, body, pid=pid, resolved_proj=resolved_proj, recall_query=recall_query,
             ),
-            _chat_turn.brain_turn(d, pid, recall_query),
+            _chat_turn.brain_turn(d, pid, recall_query, writers=normalize_trust(trust) != TRUST_LOW),
         )
 
     _ground_out = await _prep_step(_ground())
@@ -3717,6 +3717,11 @@ async def chat_stream(
         )
         system = _harness.system_without_exits(system, _chat_turn._ENV_EXIT_LINES)
         _grounding.harness = True
+    # BRAIN PROFILE (v1.406.0 review): no brain tool in this turn (text-only
+    # model, coding session) → rules that name none. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn swaps at the same seam.
+    if (text_only_pick or harness is not None) and _brain.block:
+        system = system.replace(_brain.block, _brain.without_tools(), 1)
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
