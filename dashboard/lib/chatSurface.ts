@@ -162,6 +162,8 @@ export function writeViewToAddress(view: ChatSurfaceView): void {
       url.searchParams.delete("view");
       url.searchParams.delete("session");
       url.searchParams.delete("night");
+      // v1.406.0 part 7: the second column of a split (lib/codeSplit).
+      url.searchParams.delete("beside");
     }
     window.history.replaceState(window.history.state, "", url.toString());
   } catch {

@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
+import { Check, Columns2, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -30,6 +30,10 @@ import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
 import { noFolderLine, type BuildFolder } from "@/lib/buildSessions";
 import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+import { SESSION_DRAG_TYPE } from "@/lib/codeSplit";
+
+/** v1.406.0 part 7: the "Open beside" button's words. */
+export const OPEN_BESIDE_TITLE = "Open beside the session in front (Shift+Enter on a row; or drag the row to the right edge)";
 
 /** v1.375.0: what New session sends beside the folder. */
 export interface StartExtra {
@@ -220,13 +224,17 @@ function NewSessionForm({
 function FolderGroup({
   folder,
   selectedId,
+  besideId = null,
   onSelect,
+  onOpenBeside,
   onNew,
   onRename,
 }: {
   folder: BuildFolder;
   selectedId: string | null;
+  besideId?: string | null;
   onSelect: (id: string) => void;
+  onOpenBeside?: (id: string) => void;
   onNew: (folder: string) => void;
   onRename: (path: string, name: string) => Promise<string | null>;
 }) {
@@ -340,15 +348,44 @@ function FolderGroup({
       <ul className="space-y-0.5">
         {folder.sessions.map((s) => {
           const current = s.id === selectedId;
+          // v1.406.0 part 7: the session open in the OTHER column of a split.
+          const beside = !current && !!besideId && s.id === besideId;
           return (
-            <li key={s.id}>
+            <li key={s.id} className="group/row relative">
               <button
                 type="button"
                 data-testid={`harness-session-row-${s.id}`}
                 aria-current={current ? "true" : undefined}
+                data-beside={beside ? "true" : undefined}
                 title={s.branch ? `On its own branch, ${s.branch}` : undefined}
                 onClick={() => onSelect(s.id)}
-                className={`${ROW} ${current ? "bg-white/[0.07] text-zinc-100" : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"}`}
+                // v1.406.0 part 7: Shift+Enter on a row opens it beside; the
+                // row can be dragged to the view's right edge to do the same.
+                onKeyDown={(e) => {
+                  if (!onOpenBeside || e.key !== "Enter" || !e.shiftKey) return;
+                  e.preventDefault();
+                  onOpenBeside(s.id);
+                }}
+                draggable={onOpenBeside ? true : undefined}
+                onDragStart={
+                  onOpenBeside
+                    ? (e) => {
+                        try {
+                          e.dataTransfer.setData(SESSION_DRAG_TYPE, s.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        } catch {
+                          /* a browser that will not carry it: the button still opens beside */
+                        }
+                      }
+                    : undefined
+                }
+                className={`${ROW} ${onOpenBeside ? "pr-8" : ""} ${
+                  current
+                    ? "bg-white/[0.07] text-zinc-100"
+                    : beside
+                      ? "bg-white/[0.04] text-zinc-100"
+                      : "text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100"
+                }`}
               >
                 <SessionDot running={s.running} waiting={s.waiting} />
                 <span className="min-w-0 flex-1 truncate">{s.title}</span>
@@ -356,6 +393,18 @@ function FolderGroup({
                   {s.waiting ? "needs you" : s.running ? "working" : formatAge(s.updatedAt)}
                 </span>
               </button>
+              {onOpenBeside && !current && !beside ? (
+                <button
+                  type="button"
+                  data-testid={`harness-open-beside-${s.id}`}
+                  aria-label={`Open ${s.title} beside`}
+                  title={OPEN_BESIDE_TITLE}
+                  onClick={() => onOpenBeside(s.id)}
+                  className={`${GHOST} absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100`}
+                >
+                  <Columns2 size={13} aria-hidden />
+                </button>
+              ) : null}
             </li>
           );
         })}
@@ -368,7 +417,9 @@ export function HarnessSidebar({
   folders,
   listError,
   selectedId,
+  besideId = null,
   onSelect,
+  onOpenBeside,
   onStart,
   onRename,
   defaultFolder,
@@ -404,7 +455,12 @@ export function HarnessSidebar({
   folders: BuildFolder[] | null;
   listError: string | null;
   selectedId: string | null;
+  /** v1.406.0 part 7: the session open in the other column of a split. */
+  besideId?: string | null;
   onSelect: (id: string) => void;
+  /** v1.406.0 part 7: open a session BESIDE the one in front (absent: no
+   *  "Open beside" on the rows). */
+  onOpenBeside?: (id: string) => void;
   /** Start a session in `folder`; resolves to the daemon's refusal, or null.
    *  v1.375.0: `extra.branch` — New session's branch switch, when shown. */
   onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
@@ -544,7 +600,9 @@ export function HarnessSidebar({
               key={f.noFolder ? "\u0000no-folder" : f.path}
               folder={f}
               selectedId={selectedId}
+              besideId={besideId}
               onSelect={onSelect}
+              onOpenBeside={onOpenBeside}
               onNew={(path) => void startIn(path)}
               onRename={onRename}
             />

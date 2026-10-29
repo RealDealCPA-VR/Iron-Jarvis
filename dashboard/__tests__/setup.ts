@@ -10,8 +10,12 @@ import { __resetApiCache } from "@/lib/apiCache";
 // v1.384.0: Build's IJ harness keeps where the user was (the session, its
 // running reply, the scroll) as module state too — the same rule.
 import { resetTurnCache } from "@/lib/turnCache";
+// v1.406.0 part 7: the Code view's split (two sessions side by side) is this
+// window's module state too.
+import { __resetSplitMemory } from "@/lib/codeSplit";
 
 afterEach(() => {
   __resetApiCache();
   resetTurnCache();
+  __resetSplitMemory();
 });

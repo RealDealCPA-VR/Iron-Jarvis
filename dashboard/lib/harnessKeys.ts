@@ -31,6 +31,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { ownsKeys } from "@/lib/codeSplit";
 
 export type HarnessKeyAction = "new" | "stop" | "focus" | "model" | null;
 
@@ -152,13 +153,17 @@ export interface HarnessKeyHandlers {
 
 /** Wire the harness keys for the handlers given (each component handles its
  *  own: the view Ctrl+N, the session Esc / Ctrl+L / Ctrl+K). `state()` is
- *  read at the press (busy, asking). */
+ *  read at the press (busy, asking). v1.406.0 part 7: `owner()` is the
+ *  element the handlers belong to — with two sessions side by side
+ *  (lib/codeSplit) a press is a session's only when it belongs to that
+ *  session's column, so Esc never stops the other column's reply. */
 export function useHarnessKeys(
   handlers: HarnessKeyHandlers,
   state: () => { busy: boolean; asking: boolean },
+  owner?: () => Element | null,
 ): void {
-  const ref = useRef({ handlers, state });
-  ref.current = { handlers, state };
+  const ref = useRef({ handlers, state, owner });
+  ref.current = { handlers, state, owner };
   useEffect(() => {
     if (pointerWatchers++ === 0) document.addEventListener("pointerdown", onPointerDown, true);
     // What the page looked like BEFORE anyone handled the press (a menu that
@@ -167,8 +172,9 @@ export function useHarnessKeys(
     const contextOf = (e: KeyboardEvent): HarnessKeyContext => {
       const { busy, asking } = ref.current.state();
       const root = document.querySelector(HARNESS_ROOT_SELECTOR);
+      const own = ref.current.owner;
       return {
-        inside: pressIsInside(e.target),
+        inside: pressIsInside(e.target) && (!own || ownsKeys(own(), e.target)),
         busy,
         asking,
         popupOpen: popupOpenIn(root),

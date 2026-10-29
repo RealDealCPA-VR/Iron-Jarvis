@@ -1984,6 +1984,40 @@ The chat page now has one switch at the top, in the middle: **Chat | Code**.
   ("Your coding session finished", "A coding session is waiting for your
   OK"), never "Build session". **Ctrl K** has a row for **Code** itself.
 
+## Two coding sessions side by side (v1.406.0)
+
+In **Chat › Code** you can open a second coding session **beside** the first
+and watch or drive both at once.
+
+- **To open one beside:** point at a session in the list and press the
+  small two-column button on its row, or press **Shift+Enter** on the row, or
+  drag the row to the right edge of the screen and drop it there.
+- **Each column is a whole session**: its own message box, its own approval
+  cards and questions, its own Stop, plan and receipts. Both replies keep
+  coming at the same time. Each column has a small header with the session's
+  name and **×**, which closes that column and leaves the other session on
+  screen (the closed session keeps going; it is still in the list).
+- **The plan, timeline, terminal, changes, browser, files and session tabs
+  on the right belong to the column you are working in** — the one with the
+  coloured line on top, whose header says *on the right*; the line above
+  those tabs says "Views for" and the session's name. Click anywhere in the
+  other column (or type in its box) to see its own.
+- **Keys stay in their column.** Esc stops the reply of the column you are
+  in, Enter answers that column's card, Ctrl+L and Ctrl+K are that column's.
+  A key never presses the other column's Allow.
+- **At most two.** Opening a session that is already in one of the two
+  columns brings that column to the front; opening a third session from the
+  list puts it in the column you are working in.
+- **On a narrow window or a phone** (narrower than 1280 px, where a single
+  session already puts its tabs under the conversation) a split shows one
+  column with a tab for each session above it; the other session keeps
+  working out of sight.
+- **Kept like the rest:** the address says both
+  (`/chat?view=code&session=<one>&beside=<other>`), so a reload or a copied
+  link opens the same two, and each window remembers its own split. While
+  both sessions are on screen, neither's "finished" notice rings — you are
+  watching them.
+
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 
 A coding session's **Changes** tab is one scrolling review. Every file the

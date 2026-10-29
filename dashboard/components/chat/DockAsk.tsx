@@ -46,6 +46,7 @@ import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import { dockKeyAction, enterAllows, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
 import { choiceKey, findChoice } from "@/lib/letteredChoices";
+import { ownsKeys } from "@/lib/codeSplit";
 import {
   CLOUD_ASK_KEEP,
   CLOUD_ASK_SEND,
@@ -225,6 +226,10 @@ export function DockAsk({
       // kept behind the Code view, `inert`) never answers a key — Enter in
       // the Code view must not press a hidden chat's Allow.
       if (wrapRef.current?.closest("[inert]")) return;
+      // v1.406.0 part 7: two coding sessions side by side — a key answers the
+      // card of the column that has the focus only (lib/codeSplit); Enter
+      // must never press the OTHER column's Allow.
+      if (!ownsKeys(wrapRef.current, e.target)) return;
       const action = dockKeyAction(e, null, false);
       if (action && press(action)) e.preventDefault();
     };

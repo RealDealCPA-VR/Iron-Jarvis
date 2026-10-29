@@ -52,7 +52,11 @@ describe("the phone conversation box", () => {
   it("holds the composer, and the panes come after it", () => {
     const conv = src.indexOf('data-testid="harness-conversation"');
     const composer = src.indexOf('data-testid="harness-composer"');
-    const panes = src.indexOf("<HarnessPanes");
+    // v1.406.0 part 7 (moved on purpose): the panes are built once as
+    // `panesEl` (a split draws them in its shared pane column); the session's
+    // own aside that draws them still comes after the conversation.
+    expect(src.indexOf("const panesEl = (\n    <HarnessPanes")).toBeGreaterThan(-1);
+    const panes = src.indexOf("{panesEl}", conv);
     const close = src.indexOf("</section>", conv);
     expect(conv).toBeLessThan(composer);
     expect(composer).toBeLessThan(close);
