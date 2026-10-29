@@ -103,8 +103,8 @@ ARCHIVED_SENTENCE = "This session is archived. Bring it back before you continue
 #: while Emergency stop is on.
 UNATTENDED_REFUSAL = (
     "Emergency stop is on, so coding work that starts on its own (night tasks, Resume when ready, "
-    "a reply carried on after a restart) cannot start. Turn it off on the Autonomy page to let it "
-    "run again."
+    "a reply carried on after a restart, a fix of a pull request's failing checks) cannot start. "
+    "Turn it off on the Autonomy page to let it run again."
 )
 #: v1.381.0 review: a project's or a plugin's command whose shell lines could
 #: not be kept on the session is not started — its carry-on (and every later

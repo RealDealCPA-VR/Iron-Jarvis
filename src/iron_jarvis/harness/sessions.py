@@ -172,6 +172,11 @@ LINE_KEYS: tuple[str, ...] = (
     # reviewer's model labels, how many pieces went to the workers, and every
     # time the lead did a piece itself because no worker could take it.
     "team",
+    # v1.406.0 part 3 (daemon/routes/ci_watch): a line Iron Jarvis wrote
+    # about the session's pull request's checks ({kind, round}: checks failed,
+    # a fix started, the review's verdict, pushed, kept on a side branch,
+    # waiting for the user, stopped, gave up, passing) — its words in content.
+    "ci",
 )
 
 

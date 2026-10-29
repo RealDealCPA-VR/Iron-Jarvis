@@ -935,6 +935,9 @@ BY_PERSON = "person"
 BY_NIGHT = "night"
 BY_WAIT = "wait"
 BY_RESTART = "restart"
+#: v1.406.0 part 3: a fix of a pull request's failing checks
+#: (``daemon/routes/ci_watch``) — Emergency stop covers it like the rest.
+BY_CI = "ci"
 
 _UNATTENDED: dict[str, tuple[str, str]] = {}
 _UNATTENDED_LOCK = threading.Lock()
@@ -1081,7 +1084,7 @@ def last_reply_line(messages: list[dict[str, Any]], turn_ids: "set[str] | None" 
 
 
 __all__ = [
-    "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
+    "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_task", "flush_notes", "get_task",

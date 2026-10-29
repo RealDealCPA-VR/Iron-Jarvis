@@ -103,6 +103,13 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Tonight's coding tasks aren't being started or checked",
     href: "/terminals",
   },
+  // v1.406.0 part 3: the loop that watches a coding session's pull request
+  // and fixes a failing check (reviewed before it is pushed).
+  ci_watch: {
+    label: "Pull request checks",
+    problem: "Your pull requests' checks aren't being watched",
+    href: "/terminals",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

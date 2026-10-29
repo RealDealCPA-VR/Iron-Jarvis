@@ -1722,6 +1722,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _night_loop(_app.state.d, lambda ok, exc: _tick("night_shift", ok, exc))
         )
 
+        # A PULL REQUEST'S CHECKS (v1.406.0 part 3): a coding session that
+        # opened a pull request has its checks watched; a failure is fixed in
+        # that session, reviewed by a cloud reviewer, then pushed (routes/
+        # ci_watch). Each pass reports ITS OWN outcome on
+        # loop_health["ci_watch"]; no pull request costs one indexed read.
+        from .routes.ci_watch import ci_loop as _ci_loop
+
+        bg_tasks["ci_watch"] = asyncio.create_task(
+            _ci_loop(_app.state.d, lambda ok, exc: _tick("ci_watch", ok, exc))
+        )
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
@@ -1955,6 +1966,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(_build_resume, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
+            _ci_watch = bg_tasks.pop("ci_watch", None)
+            if _ci_watch is not None:
+                # v1.406.0 part 3: the pull-request watch stops BEFORE the
+                # turns are cut off (it would start a fix turn otherwise).
+                _ci_watch.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_ci_watch, return_exceptions=True), timeout=5.0
                     )
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
@@ -3536,6 +3558,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import night as _night_routes
 
     _night_routes.register(app, d)
+    # v1.406.0 part 3: where a coding session's pull-request watch stands
+    # (the watch itself is a lifespan loop: routes/ci_watch.ci_loop).
+    from .routes import ci_watch as _ci_watch_routes
+
+    _ci_watch_routes.register(app, d)
     # Share my profile with Build (v1.306.0): the per-CLI switches on the
     # Memory page's "What Jarvis knows about you" card.
     from .routes import profile_share as _profile_share_routes

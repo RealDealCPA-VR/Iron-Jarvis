@@ -1752,6 +1752,15 @@ class Orchestrator:
             stopped.extend(stop_unattended_turns(self.p.engine))
         except Exception:  # noqa: BLE001 — the rest of the stop still happened
             log.exception("Emergency stop could not stop the coding turns")
+        # v1.406.0 part 3: a REVIEW of a pull request's check fix in flight
+        # (its fix turn is stopped above, as a "ci" turn): cancelled, so the
+        # fix is neither committed nor pushed.
+        try:
+            from ..daemon.routes.ci_watch import stop_all as _stop_ci_reviews
+
+            stopped.extend(_stop_ci_reviews())
+        except Exception:  # noqa: BLE001 — the rest of the stop still happened
+            log.exception("Emergency stop could not stop the pull-request reviews")
         if stopped:
             log.warning("Emergency stop stopped %d unattended run(s)", len(stopped))
         return stopped

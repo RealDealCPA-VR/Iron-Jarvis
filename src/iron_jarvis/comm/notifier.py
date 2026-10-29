@@ -70,6 +70,11 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         # summary with a short line per task (never one per task). On this PC
         # the bell / the tray say it, so "This PC" stays quiet for it.
         EventType.BUILD_NIGHT_SUMMARY,
+        # v1.406.0 part 3: a pull request's check fix — ONLY its news (Iron
+        # Jarvis stopped fixing, or the checks pass after its reviewed push);
+        # every other step (``build.ci_step``) is a quiet bell row. On this PC
+        # the bell / the tray say it, so "This PC" stays quiet for it.
+        EventType.BUILD_CI_DONE,
     }
 )
 
@@ -473,6 +478,13 @@ def format_event(event: Any) -> str:
         return _build_finished_line(payload)
     if etype == EventType.BUILD_TURN_STALLED:
         return _build_stalled_line(payload)
+    if etype == EventType.BUILD_CI_DONE:
+        # v1.406.0 part 3: the daemon wrote the words (routes/ci_watch: the
+        # bell's row and the tray's notice say exactly these).
+        head = str(payload.get("title") or "").strip() or "Your pull request's checks"
+        body = str(payload.get("body") or "").strip()
+        body = body if len(body) <= 300 else body[:299] + "…"
+        return head + (f" — {body}" if body else "")
     if etype == EventType.BUILD_NIGHT_SUMMARY:
         # v1.399.0 (night shift N2): the night's ONE message — its title, a
         # short line per task, where to act (harness/night_morning).
@@ -558,6 +570,10 @@ def bell_pings(event: Any) -> bool:
       night summary — ONE row per night, counted on the badge (nobody was
       watching the night's work), the tray says it with no window open.
 
+    * ``build.ci_done`` (v1.406.0 part 3): Iron Jarvis stopped fixing a
+      pull request's failing checks, or they pass after the fix it pushed —
+      counted, said from the tray, one phone line.
+
     A run with no session id has no bell row. Never raises."""
     try:
         etype = _event_field(event, "type")
@@ -566,6 +582,11 @@ def bell_pings(event: Any) -> bool:
             return False
         if etype == EventType.BUILD_NIGHT_SUMMARY:
             return bool(_text(payload.get("night")))
+        if etype == EventType.BUILD_CI_DONE:
+            # v1.406.0 part 3: a pull request's check-fix NEWS (gave up, or
+            # passing after the reviewed push) rings; its quiet steps
+            # (``build.ci_step``) never do.
+            return bool(_text(payload.get("thread_id")) or _text(_event_field(event, "session_id")))
         if etype == EventType.WORKFLOW_COMPLETED:
             return _text(payload.get("status")) == "failed"
         if etype in (EventType.BUILD_ACCOUNT_LIMIT, EventType.BUILD_RESUMED):
@@ -790,7 +811,7 @@ class Notifier:
             # The phone and every other destination keep their one line.
             targets = self.without_desktop(targets)
         elif etype in (EventType.BUILD_TURN_FINISHED, EventType.BUILD_TURN_STALLED,
-                       EventType.BUILD_NIGHT_SUMMARY):
+                       EventType.BUILD_NIGHT_SUMMARY, EventType.BUILD_CI_DONE):
             # v1.374.0: a long Build turn that ended is said on this PC by the
             # bell (a window is open) or the desktop app's tray watcher (none
             # is) — never a second toast from "This PC". A destination that

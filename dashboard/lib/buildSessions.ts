@@ -457,6 +457,9 @@ const LINE_KEYS = [
   "attempts",
   // v1.403.0: a team turn's record (lib/sessionTeam decodeReplyTeam).
   "team",
+  // v1.406.0 part 3: a line Iron Jarvis wrote about the session's pull
+  // request's checks ({kind, round}; its words are the content).
+  "ci",
 ] as const;
 
 export function decodeMessage(raw: unknown): BuildMessage | null {

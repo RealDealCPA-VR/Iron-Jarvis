@@ -1942,6 +1942,70 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Jarvis fixes its own pull request's failing checks (v1.406.0)
+
+When a coding session on its own branch has opened a pull request, Iron
+Jarvis watches the pull request's checks on GitHub. When a check fails, the
+session fixes it by itself, a reviewer on Claude Code or Codex checks the
+fix, and only a fix the reviewer approves is pushed.
+
+What happens, step by step (each step is a line in the session and a row in
+the bell):
+
+1. **The checks are read.** While a check still runs, Iron Jarvis looks again
+   after a minute, then less often (up to every 10 minutes), and stops
+   watching after 6 hours if the checks never finish. When every check
+   passed, it rests until the branch is pushed again.
+2. **A check failed.** As soon as the session is free (never while a reply of
+   yours is running), Iron Jarvis reads the failed check's log on GitHub and
+   starts a reply in the session by itself: "Checks failed on this session's
+   pull request: …". It runs on the session's own model and account, with the
+   session's approval setting, Local only and trust, exactly like a reply you
+   start. The log is shown to the model as data (secrets in it are masked).
+3. **The fix is reviewed.** When the reply ends having changed files, the
+   reviewer reads the change. It can read the session's files but cannot
+   change them, and it ends its report with its verdict. The setting **Who
+   reviews a check fix** picks Claude Code or Codex; Automatic picks the one
+   that is connected and did not write the fix, when there is one.
+4. **Approved: pushed.** Iron Jarvis commits the fix (leaving out anything
+   that looks like a secret, a huge file or a dependency folder, and naming
+   it) and pushes it to the pull request's own branch, with no card. This is
+   the one push Iron Jarvis makes without asking: only after an approved
+   review, only to the branch of that pull request, never to its base branch,
+   never with force. It then watches the new checks; when they pass, you get
+   one notice: "Your pull request's checks pass now".
+5. **Not approved: a side branch.** The fix is committed to a new branch
+   beside the pull request's (`ij/<name>-ci-fix-1`) and is not pushed. The
+   session works on what the reviewer found and the reviewer looks again.
+   When it approves, the pull request's branch takes the fix (a fast-forward)
+   and it is pushed.
+6. **At most 3 rounds.** A round is one fix and one review. After 3 rounds
+   without passing checks or an approval, Iron Jarvis stops and tells you
+   ("Iron Jarvis stopped fixing your pull request's checks"); everything stays
+   on its branches for you. The count starts again when the checks pass or
+   when you push the branch yourself.
+
+What it never does:
+
+- **Merge.** Merging the pull request is always your Merge press.
+- **Push for a Local only session.** No cloud reviewer may read a Local only
+  session's code, so its fix waits in the session's folder for you. The same
+  happens when the fix reply went to low trust, or when neither Claude Code nor
+  Codex is connected.
+- **Work under Emergency stop.** With Emergency stop on, nothing is read or
+  started; a fix reply that is running is stopped, a review in flight is
+  stopped, and nothing is pushed.
+- **Change what the agent itself may do.** A commit or a push the session's
+  own model tries in its shell still asks you every time, as before.
+
+You get a desktop or phone notice only twice: when Iron Jarvis gives up, and
+when the checks pass after the fix it pushed. Every other step is a quiet row
+in the bell and a line in the session.
+
+To turn it off, switch off **Fix my pull requests' failing checks**
+(Settings, Agents & automation). Turning it back on from a chat always asks
+you first.
+
 ## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
 
 A coding session's **Changes** tab is one scrolling review. Every file the
