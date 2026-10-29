@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Settings › Memory & you › Brain profile (v1.406.0).
+ * Settings › Memory & you › Memory profile (v1.406.0; called "Brain
+ * profile" until v1.408.0 renamed it).
  *
  * ONE card: the app-wide choice, the profiles, and the form that makes or
  * edits one. The app-wide choice is the schema's `brain_profile` setting,
@@ -35,6 +36,7 @@ import {
   type OnConflict,
   type SaveTo,
 } from "@/lib/brainProfiles";
+import { ProfileCheck } from "./ProfileCheck";
 
 const msg = (e: unknown, fallback: string) => (e as { message?: string })?.message || fallback;
 
@@ -51,6 +53,8 @@ export function BrainProfiles() {
   const [formError, setFormError] = useState("");
   const [note, setNote] = useState("");
   const [globalError, setGlobalError] = useState("");
+  // v1.408.0: an older Iron Jarvis has no check routes (404): no buttons.
+  const [noCheck, setNoCheck] = useState(false);
 
   const load = useCallback(async () => {
     setLoadError("");
@@ -190,7 +194,7 @@ export function BrainProfiles() {
             onChange={(e) => void chooseGlobal(e.target.value)}
             className="field w-full max-w-sm"
           >
-            <option value="">No brain profile</option>
+            <option value="">No memory profile</option>
             {profiles.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -244,6 +248,7 @@ export function BrainProfiles() {
                       confirmLabel="Delete this profile?"
                       onConfirm={() => remove(p.id)}
                     />
+                    {!noCheck && <ProfileCheck id={p.id} onGone={() => setNoCheck(true)} />}
                   </li>
                 );
               })}

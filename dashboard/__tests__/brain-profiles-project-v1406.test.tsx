@@ -180,7 +180,7 @@ afterEach(() => cleanup());
 describe("the project page's Brain profile select", () => {
   it("shows the project's choice and saves a new one with savePatch", async () => {
     render(<ProjectWorkspacePage params={fakeParams("p1")} />);
-    const sel = (await screen.findByLabelText("Brain profile", {}, W)) as HTMLSelectElement;
+    const sel = (await screen.findByLabelText("Memory profile", {}, W)) as HTMLSelectElement;
     await waitFor(() => expect(sel.value).toBe("bp2"));
     expect(Array.from(sel.options).map((o) => o.textContent)).toEqual([
       "Same as the app (Notion)",
@@ -197,7 +197,7 @@ describe("the project page's Brain profile select", () => {
   it("following the app is the empty value", async () => {
     H.gets["/projects/p1"] = project("bp1");
     render(<ProjectWorkspacePage params={fakeParams("p1")} />);
-    const sel = (await screen.findByLabelText("Brain profile", {}, W)) as HTMLSelectElement;
+    const sel = (await screen.findByLabelText("Memory profile", {}, W)) as HTMLSelectElement;
     await waitFor(() => expect(sel.value).toBe("bp1"));
     fireEvent.change(sel, { target: { value: "" } });
     await waitFor(() => expect(H.patches).toEqual([{ path: "/projects/p1", body: { brain_profile: "" } }]));
@@ -206,7 +206,7 @@ describe("the project page's Brain profile select", () => {
   it("a project row from an older daemon (no key) follows the app", async () => {
     H.gets["/projects/p1"] = project();
     render(<ProjectWorkspacePage params={fakeParams("p1")} />);
-    const sel = (await screen.findByLabelText("Brain profile", {}, W)) as HTMLSelectElement;
+    const sel = (await screen.findByLabelText("Memory profile", {}, W)) as HTMLSelectElement;
     expect(sel.value).toBe("");
   });
 
@@ -218,6 +218,6 @@ describe("the project page's Brain profile select", () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(screen.queryByLabelText("Brain profile")).toBeNull();
+    expect(screen.queryByLabelText("Memory profile")).toBeNull();
   });
 });

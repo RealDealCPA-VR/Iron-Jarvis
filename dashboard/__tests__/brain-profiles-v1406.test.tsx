@@ -452,7 +452,7 @@ describe("Settings home: the Brain profile row", () => {
     window.history.replaceState({}, "", "/settings?section=memory");
     render(<SettingsHome />);
     const sub = await screen.findByTestId("settings-sub-memory-brain-profile", {}, W);
-    expect(within(sub).getByText("Brain profile")).toBeTruthy();
+    expect(within(sub).getByText("Memory profile")).toBeTruthy();
     expect(document.getElementById("setting-brain_profile")).toBeNull();
     fireEvent.click(within(sub).getByRole("button", { expanded: false }));
     expect(await within(sub).findByTestId("brain-profiles", {}, W)).toBeTruthy();
@@ -479,7 +479,7 @@ describe("the project page's select (component)", () => {
   it("offers the app's choice by name, none here, and each profile", async () => {
     const onChange = vi.fn();
     render(<ProjectBrainSelect value="" onChange={onChange} />);
-    const sel = (await screen.findByLabelText("Brain profile", {}, W)) as HTMLSelectElement;
+    const sel = (await screen.findByLabelText("Memory profile", {}, W)) as HTMLSelectElement;
     expect(Array.from(sel.options).map((o) => [o.value, o.textContent])).toEqual([
       ["", "Same as the app (Notion)"],
       ["off", "None in this project"],
@@ -493,7 +493,7 @@ describe("the project page's select (component)", () => {
   it("no app choice reads (none); a deleted profile still shows", async () => {
     H.gets["/brain"] = { ...STATE, selected: "" };
     render(<ProjectBrainSelect value="gone" onChange={() => {}} />);
-    const sel = (await screen.findByLabelText("Brain profile", {}, W)) as HTMLSelectElement;
+    const sel = (await screen.findByLabelText("Memory profile", {}, W)) as HTMLSelectElement;
     expect(sel.options[0].textContent).toBe("Same as the app (none)");
     expect(sel.value).toBe("gone");
   });
@@ -593,7 +593,7 @@ describe("the chat drawer's line", () => {
     H.gets["/brain/effective?project_id=p1"] = { profile: NOTION, source: "project" };
     render(<ChatBrainLine projectId="p1" />);
     const line = await screen.findByTestId("chat-brain-line", {}, W);
-    expect(line.textContent).toBe("Brain profile: Notion (this project). Change it");
+    expect(line.textContent).toBe("Memory profile: Notion (this project). Change it");
     expect(within(line).getByRole("link").getAttribute("href")).toBe("/projects/p1");
   });
 
