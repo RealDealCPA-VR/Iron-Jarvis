@@ -32,6 +32,7 @@ import { get } from "@/lib/api";
 import { Card } from "@/components/ui";
 import { MemorySurface } from "@/components/memory/MemorySurface";
 import { MemoryReview } from "@/components/memory/MemoryReview";
+import { BrainUnsaved } from "@/components/memory/BrainUnsaved";
 
 /** One row of `/ltm/sources` -> `bases[]`. `available` is deliberately
  *  THREE-valued: true (reachable), false (checked and it isn't), null/absent
@@ -196,6 +197,7 @@ export default function MemoryPage() {
           space-y-6 (not two mt-6 wrappers) because either child can render
           NOTHING — an absent card must cost no vertical space at all. */}
       <div className="mt-6 space-y-6">
+        <BrainUnsaved />
         <MemoryBaseHealth />
         <MemoryReview />
       </div>

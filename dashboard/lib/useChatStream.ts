@@ -60,6 +60,7 @@ import {
 } from "./mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "./turnReads";
 import { decodeApproved, decodeRefit, type ApprovedCall, type TurnRefit } from "./turnRecovery";
+import { decodeBrainReceipt, type BrainReceipt } from "./brainProfiles";
 import { stepTarget } from "./workTarget";
 import { capStepDetails, cleanStepDetail, type StepDetail } from "./stepDetail";
 import { onceReasonOf, type OnceReason } from "./onceReason";
@@ -248,6 +249,10 @@ export type SSEEvent =
        *  row (`decodePriorToolResults`); absent when the daemon sent none or
        *  every row was junk. */
       prior_tool_results?: PriorToolResult[];
+      /** v1.406.0: what the brain profile did this turn (searched first,
+       *  the guide, notes saved or not) — lib/brainProfiles. Absent when the
+       *  daemon sent null (no profile applied). */
+      brain?: BrainReceipt;
     }
   | {
       type: "error";
@@ -476,6 +481,9 @@ export interface ChatStreamResult {
    *  page passes it to the session the turn re-runs as, so the agent does
    *  not redo the reads the chat already made. */
   priorToolResults?: PriorToolResult[];
+  /** v1.406.0: the brain profile's receipt (the done frame's `brain`);
+   *  absent when no profile applied. */
+  brain?: BrainReceipt;
   /** v1.323.0: the turn's reasoning text ("" when the model sent none). */
   thinking: string;
   /** v1.323.0: how long the model thought, in ms — first thinking frame to
@@ -822,6 +830,12 @@ export function sseEventFrom(
       {
         const prior = decodePriorToolResults(data.prior_tool_results);
         if (prior.length) ev.prior_tool_results = prior;
+      }
+      // v1.406.0: the brain profile's receipt — whitelisted (lib/brainProfiles),
+      // or the receipt never hears of a note saved to the user's memory base.
+      {
+        const brain = decodeBrainReceipt(data.brain);
+        if (brain) ev.brain = brain;
       }
       return ev;
     }
@@ -1960,6 +1974,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                   ? { priorToolResults: ev.prior_tool_results }
                   : {}),
                 ...(ev.refused ? { refused: true } : {}),
+                ...(ev.brain ? { brain: ev.brain } : {}),
               };
               break;
             case "error":

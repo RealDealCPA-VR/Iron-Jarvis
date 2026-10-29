@@ -51,6 +51,7 @@ import { KnowledgePanel } from "@/components/project/KnowledgePanel";
 import { FilePickerModal } from "@/components/FilePickerModal";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
 import { ConfirmButton } from "@/components/ui";
+import { ProjectBrainSelect } from "@/components/project/ProjectBrainSelect";
 import type { ModelOption, Project, SessionView } from "@/lib/types";
 import {
   Card,
@@ -74,6 +75,8 @@ interface ProjectWorkspace extends Project {
   default_model?: string;
   /** JSON array of LTM source names; "" or "[]" = every base. */
   memory_sources?: string;
+  /** v1.406.0: "" follows the app's profile, "off" none here, else an id. */
+  brain_profile?: string;
 }
 interface ProjectDetail {
   project: ProjectWorkspace;
@@ -877,6 +880,15 @@ function ProjectWorkspaceInner({
                       ))}
                     </select>
                   </div>
+
+                  {/* v1.406.0: which memory base this project searches and
+                      saves to — follow the app, none here, or one profile.
+                      Renders nothing on an Iron Jarvis without profiles. */}
+                  <ProjectBrainSelect
+                    value={typeof project.brain_profile === "string" ? project.brain_profile : ""}
+                    disabled={savingField === "brain"}
+                    onChange={(v) => void savePatch({ brain_profile: v }, "brain")}
+                  />
 
                   {/* v1.315.0: the lifecycle — focus, Archive/Unarchive,
                       Delete — is its own right-aligned group (ml-auto), apart
