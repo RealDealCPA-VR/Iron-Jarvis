@@ -59,6 +59,7 @@ import {
   ChevronRight,
   FileText,
   Gauge,
+  Library,
   Loader2,
   MapPin,
   MessagesSquare,
@@ -96,6 +97,12 @@ import {
   type ApprovedCall,
   type TurnRefit,
 } from "@/lib/turnRecovery";
+import {
+  decodeBrainReceipt,
+  receiptBrainDetail,
+  receiptBrainLine,
+  type BrainReceipt,
+} from "@/lib/brainProfiles";
 
 /** The capability envelope's adaptation disclosure (v1.202.0): the daemon
  *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
@@ -467,6 +474,11 @@ export interface TurnReceiptProps {
   /** v1.355.0 (G64): the cards the user allowed this turn — listed in the
    *  expanded receipt ("You approved: save a file (once)"). */
   approved?: ApprovedCall[] | null;
+  /** v1.406.0: what the brain profile did this turn — a note saved to the
+   *  primary memory base (accent) or one that could not be saved yet (warn)
+   *  rides the collapsed line; the search, the guide and every note are in
+   *  the expanded receipt. Absent/null (no profile) says nothing. */
+  brain?: BrainReceipt | null;
 }
 
 /**
@@ -480,7 +492,7 @@ export interface TurnReceiptProps {
 export function receiptWantsAttention(
   p: Pick<
     TurnReceiptProps,
-    "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked" | "threadRefs" | "refit"
+    "route" | "adapted" | "deniedTools" | "remembered" | "trust" | "blocked" | "threadRefs" | "refit" | "brain"
   >,
 ): boolean {
   return (
@@ -495,7 +507,10 @@ export function receiptWantsAttention(
     blockedRows(p.blocked).length > 0 ||
     // v1.327.0: an earlier chat the user pointed to was left out — the
     // answer was written without it, so that is never behind a hover.
-    refWarningCount(p.threadRefs) > 0
+    refWarningCount(p.threadRefs) > 0 ||
+    // v1.406.0: a write to the user's memory base (or one that did not land)
+    // is never behind a hover.
+    receiptBrainLine(decodeBrainReceipt(p.brain)) !== null
   );
 }
 
@@ -736,6 +751,7 @@ export function TurnReceipt({
   threadRefs,
   refit,
   approved,
+  brain,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
   const [undoingPath, setUndoingPath] = useState<string | null>(null);
@@ -801,6 +817,11 @@ export function TurnReceipt({
   const cutText = cutOffLine(rt?.cut_off);
   const cutWhy = cutOffTitle(rt?.cut_off) ?? undefined;
   const approvedRows = decodeApproved(approved);
+  // v1.406.0: the brain profile's part — decoded here because a reopened
+  // chat hands back whatever the disk held.
+  const brainReceipt = decodeBrainReceipt(brain);
+  const brainLine = receiptBrainLine(brainReceipt);
+  const brainDetail = receiptBrainDetail(brainReceipt);
   if (
     !used.cache &&
     !used.cost &&
@@ -816,7 +837,9 @@ export function TurnReceipt({
     !refLines.read &&
     !refLines.notes.length &&
     !refitText &&
-    !approvedRows.length
+    !approvedRows.length &&
+    !brainLine &&
+    !brainDetail.length
   ) {
     return null;
   }
@@ -1026,6 +1049,22 @@ export function TurnReceipt({
       </span>,
     );
   }
+  if (brainLine) {
+    // v1.406.0: VISIBLE WITHOUT EXPANDING — a note saved to the user's memory
+    // base in the accent (like "Remembered: …"), one that did not save in the
+    // warn tone, before anything else is said about it.
+    parts.push(
+      <span
+        key="brain"
+        data-testid="turn-brain"
+        data-tone={brainLine.tone}
+        title={brainLine.title}
+        className={brainLine.tone === "warn" ? "text-tone-warn" : "text-accent-soft"}
+      >
+        {brainLine.text}
+      </span>,
+    );
+  }
   if (lowTrust) {
     // v1.298.0: a turn that ran under low trust says so on the line — amber,
     // because it is a restriction the user did not choose; the reason is the
@@ -1184,6 +1223,25 @@ export function TurnReceipt({
               <ScrollText size={12} className="mt-0.5 shrink-0 text-zinc-500" />
               <div data-testid="turn-folder-rules" className="min-w-0 text-[12px] leading-relaxed text-zinc-400">
                 {rulesText}
+              </div>
+            </div>
+          )}
+          {/* v1.406.0: the brain profile — searched first, the guide, every
+              note saved or not — in words a phone can read. */}
+          {brainDetail.length > 0 && (
+            <div className="flex items-start gap-2">
+              <Library size={12} className="mt-0.5 shrink-0 text-zinc-500" />
+              <div className="min-w-0 space-y-0.5 text-[12px] leading-relaxed">
+                {brainDetail.map((d) => (
+                  <div
+                    key={d.key}
+                    data-testid="turn-brain-detail"
+                    data-warn={d.warn ? "true" : "false"}
+                    className={`break-words ${d.warn ? "text-tone-warn" : "text-zinc-400"}`}
+                  >
+                    {d.text}
+                  </div>
+                ))}
               </div>
             </div>
           )}

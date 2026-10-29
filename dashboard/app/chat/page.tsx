@@ -176,6 +176,8 @@ import {
   type ResourceReceipt,
 } from "@/lib/mcpInteract";
 import { decodeFolderRules, decodeThreadRefs, type ThreadRefReceipt } from "@/lib/turnReads";
+import { decodeBrainReceipt, type BrainReceipt } from "@/lib/brainProfiles";
+import { ChatBrainLine } from "@/components/chat/ChatBrainLine";
 import {
   CHAT_REFS_FULL_NOTE,
   CHAT_REFS_MAX,
@@ -801,6 +803,10 @@ interface ChatMessage {
   /** v1.355.0 (G64): the cards the user allowed in this turn
    *  ([{tool, decision, count?}]) — the expanded receipt lists them. */
   approved?: ApprovedCall[];
+  /** v1.406.0: what the brain profile did this turn (searched first, the
+   *  guide, notes saved or not) — the receipt says it. Absent when no
+   *  profile applied and on older messages. */
+  brain?: BrainReceipt;
 }
 
 /** v1.325.0: a message written while a reply was running — sent after it. */
@@ -3272,6 +3278,7 @@ const MessageRow = memo(function MessageRow({
       trust: m.trust,
       threadRefs: m.threadRefs,
       refit: m.refit,
+      brain: m.brain,
     });
   return (
     <div className="group/msg" data-testid="reply">
@@ -3459,6 +3466,7 @@ const MessageRow = memo(function MessageRow({
             threadRefs={m.threadRefs}
             refit={m.refit}
             approved={m.approved}
+            brain={m.brain}
           />
         )}
       </div>
@@ -8529,6 +8537,9 @@ export default function ChatPage() {
         // again for the same reason. MIRROR NOTE: receiptPost carries both.
         const refit = decodeRefit(streamRes.refit);
         const approved = decodeApproved(streamRes.approved);
+        // v1.406.0: the brain profile's receipt. MIRROR NOTE: receiptPost
+        // carries it too, last.
+        const brain = decodeBrainReceipt(streamRes.brain);
         const receipt = {
           at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
           ...(route ? { route } : {}),
@@ -8572,6 +8583,8 @@ export default function ChatPage() {
           // and the approvals given.
           ...(refit ? { refit } : {}),
           ...(approved.length ? { approved } : {}),
+          // v1.406.0 (kept last, the receipt rule): the brain profile.
+          ...(brain ? { brain } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -8749,6 +8762,8 @@ export default function ChatPage() {
       // This lane never asks, so `approved` is [] here today; decoded anyway.
       const refitPost = decodeRefit((res as { refit?: unknown }).refit);
       const approvedPost = decodeApproved((res as { approved?: unknown }).approved);
+      // v1.406.0: MIRROR NOTE — the stream lane's `brain` above.
+      const brainPost = decodeBrainReceipt((res as { brain?: unknown }).brain);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -8787,6 +8802,7 @@ export default function ChatPage() {
         ...(threadRefsPost.length ? { threadRefs: threadRefsPost } : {}),
         ...(refitPost ? { refit: refitPost } : {}),
         ...(approvedPost.length ? { approved: approvedPost } : {}),
+        ...(brainPost ? { brain: brainPost } : {}),
       };
       const full: ChatMessage[] = [
         ...history,
@@ -14167,6 +14183,9 @@ export default function ChatPage() {
                         knowledge. Its chats and runs stay tagged to it.
                       </p>
                     ))}
+                  {/* v1.406.0: the memory base this project's chats search
+                      first and save to, when a brain profile applies. */}
+                  {activeProject && <ChatBrainLine projectId={activeProject.id} />}
                 </PanelSection>
                 {activeProject && (
                   <PanelTabs

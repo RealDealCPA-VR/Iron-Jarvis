@@ -262,6 +262,29 @@ const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
     text: "Job card",
     why: "an agent's job description (its role, v1.295.0 'a custom agent is an employee'), not a unit of work",
   },
+  // v1.406.0: "Brain profile" is the NAME of the feature (a profile saying
+  // which memory base is the main one and how Jarvis treats it), used like a
+  // proper noun. Plain prose around it still says "memory base".
+  {
+    file: "components/settings/SettingsHome.tsx",
+    text: "Brain profile",
+    why: "the Settings row's name for the v1.406.0 feature, a proper noun; its blurb says memory base",
+  },
+  {
+    file: "components/settings/BrainProfiles.tsx",
+    text: "No brain profile",
+    why: "the app-wide choice's empty option names the v1.406.0 feature; the hint beside it says memory base",
+  },
+  {
+    file: "components/project/ProjectBrainSelect.tsx",
+    text: "Brain profile",
+    why: "the project page's label for the v1.406.0 feature, the same name Settings uses",
+  },
+  {
+    file: "components/chat/ChatBrainLine.tsx",
+    text: "Brain profile:",
+    why: "the chat drawer names the v1.406.0 feature by the name Settings and the project page use",
+  },
 ];
 
 const allowed = (h: { file: string; text: string }) => ALLOW.some((a) => a.file === h.file && h.text.includes(a.text));

@@ -60,6 +60,9 @@ interface Sub {
   Comp: ComponentType;
   /** v1.354.0 (G67): the row's earlier name, still found by Settings search. */
   formerly?: string;
+  /** v1.406.0: drawn only when the schema declares this setting (an older
+   *  daemon that lacks it has nothing behind the row). */
+  requiresKey?: string;
 }
 
 /** A row as declared below: a row that holds a relocated page has NO label
@@ -129,6 +132,16 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       blurb: "Your writing, notes, wiki and past conversations, in one place.",
       Comp: page(() => import("@/components/settings/pages/TrainPage")),
     },
+    {
+      // v1.406.0: which memory base is the main one, and how Jarvis searches
+      // and saves to it. Shown only by a daemon whose schema knows the
+      // setting (an older one has no /brain to read).
+      id: "memory-brain-profile",
+      label: "Brain profile",
+      blurb: "Your main memory base, and how Jarvis searches it and saves new knowledge to it.",
+      Comp: named(() => import("@/components/settings/BrainProfiles"), "BrainProfiles"),
+      requiresKey: "brain_profile",
+    },
   ],
   permissions: [
     {
@@ -182,6 +195,7 @@ const SUBSECTIONS: Record<string, Sub[]> = Object.fromEntries(
  *  search for its words, or `?focus=<key>`, opens that section instead. */
 export const CONTROLLED_IN_SECTION: Record<string, string> = {
   update_channel: "system-updates",
+  brain_profile: "memory-brain-profile",
 };
 
 function readSection(): { section: string; focus: string } {
@@ -341,15 +355,18 @@ export function SettingsHome() {
   const viaControlled = q
     ? defs.filter((d) => d.key in CONTROLLED_IN_SECTION && matches(d, q)).map((d) => CONTROLLED_IN_SECTION[d.key])
     : [];
-  const subsShown = q
-    ? Object.values(SUBSECTIONS)
-        .flat()
-        .filter(
-          (s) =>
-            viaControlled.includes(s.id) ||
-            [s.label, s.blurb, s.formerly ?? ""].join(" ").toLowerCase().includes(q.toLowerCase()),
-        )
-    : SUBSECTIONS[active] ?? [];
+  const declared = (s: Sub) => !s.requiresKey || defs.some((d) => d.key === s.requiresKey);
+  const subsShown = (
+    q
+      ? Object.values(SUBSECTIONS)
+          .flat()
+          .filter(
+            (s) =>
+              viaControlled.includes(s.id) ||
+              [s.label, s.blurb, s.formerly ?? ""].join(" ").toLowerCase().includes(q.toLowerCase()),
+          )
+      : SUBSECTIONS[active] ?? []
+  ).filter(declared);
   const sections = Array.from(new Set(shown.map((d) => (q ? groups?.find((g) => g.id === d.group)?.label ?? d.group : d.section))));
   const group = groups?.find((g) => g.id === active);
 
