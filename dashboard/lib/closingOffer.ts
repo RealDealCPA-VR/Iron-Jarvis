@@ -42,6 +42,13 @@ export const PATTERNS: Readonly<Record<string, { source: string; flags: string }
   explainStart: { source: "^(?:explain|clarify|walk\\s+you\\s+through|go\\s+over|go\\s+through|elaborate|describe|answer|expand\\s+on|break\\s+(?:it|this|that)\\s+down|summari[sz]e)\\b", flags: "i" },
   declineAlt: { source: "^(?:not|no|wait|hold|leave|stop|pause|keep|let\\s+you|review|check|look|(?:would|do|did)\\s+you|you(?:'d|’d|\\s+would)?\\s+(?:rather|prefer|like)|are\\s+you|should\\s+i\\s+(?:wait|hold|leave|stop))\\b", flags: "i" },
   actionEnd: { source: "\\s+if\\s+(?:you|that|it)\\b|\\s+(?:—|–|-)\\s+|,|;|\\s+or\\s+|\\s+(?:too|as\\s+well)\\s*[.?!]*$|[.?!]+", flags: "i" },
+  clauseSplit: { source: "\\s*(?:[,;]|\\s[—–-]\\s|&&|\\band\\s+then\\b|\\bthen\\b|\\band\\b|\\bplus\\b)\\s*", flags: "i" },
+  clauseLead: { source: "^(?:(?:then|also|finally|just|afterwards|after\\s+that|go\\s+ahead\\s+and|i(?:'ll|’ll|\\s+will|\\s+can|\\s+could)|we(?:'ll|’ll|\\s+will|\\s+can)?)\\s+)+", flags: "i" },
+  clauseRun: { source: "^(?:run|re-?run|execute|kick\\s+off|trigger|fire\\s+off)\\s+(?:the\\s+|a\\s+|an\\s+|that\\s+|this\\s+|my\\s+|your\\s+|our\\s+)?", flags: "i" },
+  clauseCmd: { source: "^(?:git|gh|npm|pnpm|yarn|npx|uv|pip|twine|poetry|cargo|docker|kubectl|helm|terraform|heroku|vercel|netlify|fly|flyctl|aws|gcloud|az|firebase|sudo)\\s+", flags: "i" },
+  clauseOwns: { source: "^(?:(?:force[- ]?)?push(?:es|ed|ing)?(?!\\s+notifications?)\\b|deploy\\w*|releas(?:e|es|ing)\\b(?!\\s+notes?)|publish\\w*|ship(?:s|ping)?\\b|tag(?:s|ging)?\\s+(?:v?\\d|the\\s+release|a\\s+release|a\\s+new\\s+release|it\\b|this\\b|that\\b)|delet\\w*|wip(?:e|es|ing)\\b|eras(?:e|es|ing)\\b|purg\\w*|destroy\\w*|truncat\\w*|empt(?:y|ies|ying)\\b|reset(?:s|ting)?\\b|uninstall\\w*|discard\\w*|overwrit\\w*|rm\\b|rmdir\\b|del\\b|rd\\s+/s\\b|clean\\s+-\\w*[fdx]|text(?:ing)?\\s+(?:him|her|them|me|you|us|the\\s+(?:client|customer|team|user|group|owner))\\b|pay(?:s|ing)?\\b|charg(?:e|es|ing)\\b|refund\\w*|transfer\\w*|wir(?:e|es|ing)\\s+(?:the\\s+|a\\s+|an\\s+|some\\s+)?(?:money|funds|payments?|cash|transfers?|\\$)|plac(?:e|es|ing)\\s+(?:the\\s+|an?\\s+|your\\s+|my\\s+|this\\s+|that\\s+)?orders?\\b|(?:re)?order(?:s|ing)?\\s+(?:it|them|this|that|one|more|some|another|a|an)\\b|buy\\w*|purchas\\w*|subscrib\\w*|unsubscrib\\w*|cancel\\w*|sign(?:s|ing)?\\b|revok\\w*|rotat(?:e|es|ing)\\s+(?:\\S+\\s+){0,2}?(?:keys?|tokens?|secrets?|credentials?|passwords?)\\b|fil(?:e|es|ing)\\s+(?:the\\s+|a\\s+|an\\s+|my\\s+|your\\s+|this\\s+|that\\s+|it\\b)(?!\\s*(?:path|name|system|tree|list|handle)s?\\b))", flags: "i" },
+  stagingMigration: { source: "\\bmigrat\\w*\\b.*\\bstaging\\b|\\bstaging\\b.*\\bmigrat\\w*\\b", flags: "i" },
+  clauseNoun: { source: "^\\S+(?:[\\s-]+(?:up|in|out|on|off))?[\\s-]+(?:buttons?|pages?|screens?|forms?|flows?|states?|handlers?|logic|code|modals?|dialogs?|views?|components?|links?|routes?|endpoints?|functions?|methods?|menus?|icons?|fields?|options?|ui|tabs?|widgets?)\\b", flags: "i" },
 };
 export const OFFER_ACTION_MAX = 80;
 // closing-offer-patterns:end
@@ -117,7 +124,31 @@ function actions(sentence: string): string[] {
   return out;
 }
 
-const owned = (a: string): boolean => rx("userOwns").test(a) || rx("production").test(a);
+/** Each clause of an offered action, its lead words and a `run …` /
+ *  command-line wrapper taken off — the daemon's `_clauses` (v1.407.2). */
+function clauses(action: string): string[] {
+  const out: string[] = [];
+  for (const part of String(action ?? "").split(rx("clauseSplit"))) {
+    const c = (part ?? "").trim().replace(rx("clauseLead"), "").replace(rx("actionFiller"), "").trim();
+    if (!c) continue;
+    out.push(c);
+    const inner = c.replace(rx("clauseRun"), "").replace(rx("clauseCmd"), "").trim();
+    if (inner && inner !== c) out.push(inner);
+  }
+  return out;
+}
+
+/** Is this offered ACTION the user's to decide — any clause of it? The
+ *  daemon's `_owned` (v1.407.2: the knowledge the next-step box used to keep
+ *  in its own `asksFirst` list lives in the daemon now). */
+const owned = (a: string): boolean =>
+  rx("userOwns").test(a) ||
+  rx("production").test(a) ||
+  clauses(a).some(
+    (c) =>
+      !rx("clauseNoun").test(c) &&
+      (rx("userOwns").test(c) || rx("clauseOwns").test(c) || rx("stagingMigration").test(c)),
+  );
 
 /** What the reply's ending offers: "work", "user" (the user's to decide) or
  *  "" — the daemon's `offer_kind`. */

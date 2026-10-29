@@ -4639,6 +4639,63 @@ does not need a bump, stop and bump it.
   where they were (not in the box); a failed chat turn shows no box (its
   Retry line is the one place); an older reply's offer is never read.
 
+- **Ask first asks before an edit of Git's and Jarvis's own files; a closing
+  offer is the user's when ANY clause of it is** (v1.407.2; the user's
+  decision 2026-10-29, both found by v1.407.0's reviews; supersedes part 2's
+  OPEN note and part 4's `asksFirst`). FIX A: `core/auto_approve.
+  sensitive_kind(path, ws)` is THE one reading (`sensitive_path` = it, and
+  "outside / cannot tell ⇒ True" kept for the eased rule); families `git`
+  (`.git/**`, `.gitattributes|.gitconfig|.gitmodules`), `jarvis`
+  (`.ironjarvis/**`), `claude` (`.claude/**`), `rules` (review: the
+  user named "CLAUDE.md/AGENTS.md rules files" — `RULES_FILE_NAMES`
+  agents.md, claude.md, their .local.md, agents.override.md, .ironjarvis.md
+  as the LAST part, any depth, any case; this also widens the eased
+  postures' `sensitive_path`), `editor`, `ci`, `unknown`
+  (an 8.3-shaped part); the path AS WRITTEN is read only BELOW the folder for
+  an absolute path (`_written_parts`: a CI runner's `RUNNER~1` TEMP or a
+  checkout under `.claude/worktrees` must not guard every edit).
+  `guarded_edit(name, args, ws)` → `(kind, words)` for the file edit tools
+  (`EDIT_TOOLS` + `apply_patch` heads) inside the folder; outside is left to
+  `safe_path`. `tools/base.spend_checks_for(..., approval_mode=)` — the ONE
+  helper both chat lanes and the runtime call — adds it for an edit tool with
+  no check of its own (`guarded_edit_check`, off the loop): `SpendCheck(ask,
+  once_only, reason="guarded", dont_ask_skips, attended_only)`, words in
+  `cost_note` ("Write .git/config: it changes Git's own settings…"). So: the
+  stream lane cards it Allow-once-only in every posture past every grant
+  (Accept edits/Auto too — forced, never the judge); the POST lane refuses it
+  via `spend_not_asked_invoke_kwargs` (ONCE tail); the runtime pauses an
+  ATTENDED origin (`ATTENDED_ORIGINS`) and refuses any other in words at the
+  top of `_pause_for_approval` (new `attended_only`; a schedule never parks it
+  for a phone answer); a night turn cards it and its card wait declines it;
+  YOLO drops it (`dont_ask_skips`; every lane passes its posture — MIRROR
+  NOTE). `"guarded"` is in `harness/stall.SAFETY_REASONS` (never the phone)
+  and `lib/onceReason` (Enter never allows; ApprovalCard
+  `approval-guarded-once`). OPEN: a shell command writing those paths, a
+  workspace that is ITSELF inside such a folder, and edits outside the folder
+  (refused by the tool) are not read. FIX B: `harness/closing_offer._owned`
+  reads each CLAUSE of an offered action (`_CLAUSE_SPLIT_RX` , ; — && and
+  then plus; `_CLAUSE_LEAD_RX`; a `run …` wrapper and a CLI prefix git/npm/gh…
+  stripped as a second reading) against `_USER_OWNS_RX`, `_CLAUSE_OWNS_RX`
+  (push/force-push, deploy, release, publish, ship, tag vN, delete, wipe,
+  erase, purge, truncate, empty, reset, overwrite, rm/del, `clean -f`, text
+  her, pay, charge, refund, transfer, wire money, place an order, buy,
+  subscribe, cancel, sign, revoke, rotate keys, file the …) and
+  `_STAGING_MIGRATION_RX` — a split clause whose verb is a NOUN in front of
+  a piece of the app (`_CLAUSE_NOUN_RX`: "the save and cancel buttons",
+  "sign up pages", "empty states", "sign-out code"; the noun follows the
+  verb with no article) is skipped (review); `user_owns`, `offer_kind`, `offered_action` all
+  call it, so the NUDGE and the box agree. The TS twin's `owned`/`clauses`
+  repeat it over GENERATED patterns (`scripts/gen_closing_offer_ts.py` NAMES
+  gained seven); `nextStep.asksFirst` is GONE (pinned). No v1.402.0/v1.406.0
+  table row flipped (the fixture diff was insertions only); words the box's
+  old list had and the daemon does not (clear, archive, revert, accept,
+  approve, book, `merge`/`commit`/`migration` anywhere) read as work again.
+  Pins: `tests/test_guarded_edits_v14072.py` (real stream/POST lanes,
+  harness turn, night turn, full runtime runs, real `write_file` on disk),
+  `tests/test_closing_offer_clauses_v14072.py`, the v1.407.2 rows of
+  `tests/test_closing_offer_v1402.py` (+ fixture `closing-offer-v1406.json`),
+  `dashboard/__tests__/{next-step-user-owned,guarded-edit-card}-v1407-2.test.ts(x)`.
+
 - **The coding sessions are the CHAT page's Code view; Build is the
   terminals; the sidebar is five rooms** (v1.407.0 part 1 + 5; the user's
   decision 2026-10-29: "the chat will contain the box at the top for chat vs

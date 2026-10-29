@@ -382,6 +382,13 @@ export function ApprovalCard({
           Archiving, deleting, renaming or moving a note in your memory base asks you every time,
           whatever your approval setting.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "guarded" ? (
+        // v1.407.2: an edit of Git's own files or of Iron Jarvis's or Claude
+        // Code's own rules (src/iron_jarvis/core/auto_approve.py guarded_edit).
+        <p data-testid="approval-guarded-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Edits to Git&apos;s own files and to Iron Jarvis&apos;s or Claude Code&apos;s own rules ask
+          you every time, unless approvals are set to Don&apos;t ask.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.

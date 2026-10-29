@@ -277,6 +277,150 @@
    "action": "remove the unused imports"
   },
   {
+   "text": "Want me to add tests for it?",
+   "sentence": "Want me to add tests for it?",
+   "kind": "work",
+   "action": "add tests for it"
+  },
+  {
+   "text": "Shall I refactor the parser?",
+   "sentence": "Shall I refactor the parser?",
+   "kind": "work",
+   "action": "refactor the parser"
+  },
+  {
+   "text": "Should I fix the other two files too?",
+   "sentence": "Should I fix the other two files too?",
+   "kind": "work",
+   "action": "fix the other two files"
+  },
+  {
+   "text": "Want me to add a delete button?",
+   "sentence": "Want me to add a delete button?",
+   "kind": "work",
+   "action": "add a delete button"
+  },
+  {
+   "text": "Want me to fix the push notification handler?",
+   "sentence": "Want me to fix the push notification handler?",
+   "kind": "work",
+   "action": "fix the push notification handler"
+  },
+  {
+   "text": "Shall I write tests for the reset endpoint?",
+   "sentence": "Shall I write tests for the reset endpoint?",
+   "kind": "work",
+   "action": "write tests for the reset endpoint"
+  },
+  {
+   "text": "Want me to run the linter and fix what it finds?",
+   "sentence": "Want me to run the linter and fix what it finds?",
+   "kind": "work",
+   "action": "run the linter and fix what it finds"
+  },
+  {
+   "text": "Want me to wire up the new button?",
+   "sentence": "Want me to wire up the new button?",
+   "kind": "work",
+   "action": "wire up the new button"
+  },
+  {
+   "text": "Want me to order the imports alphabetically?",
+   "sentence": "Want me to order the imports alphabetically?",
+   "kind": "work",
+   "action": "order the imports alphabetically"
+  },
+  {
+   "text": "Want me to clean up the merge conflict markers?",
+   "sentence": "Want me to clean up the merge conflict markers?",
+   "kind": "work",
+   "action": "clean up the merge conflict markers"
+  },
+  {
+   "text": "Want me to add tests and then run them?",
+   "sentence": "Want me to add tests and then run them?",
+   "kind": "work",
+   "action": "add tests and then run them"
+  },
+  {
+   "text": "Shall I update the deploy docs?",
+   "sentence": "Shall I update the deploy docs?",
+   "kind": "work",
+   "action": "update the deploy docs"
+  },
+  {
+   "text": "Want me to add a --force flag?",
+   "sentence": "Want me to add a --force flag?",
+   "kind": "work",
+   "action": "add a --force flag"
+  },
+  {
+   "text": "Want me to fix the text alignment too?",
+   "sentence": "Want me to fix the text alignment too?",
+   "kind": "work",
+   "action": "fix the text alignment"
+  },
+  {
+   "text": "Want me to rename the file handle?",
+   "sentence": "Want me to rename the file handle?",
+   "kind": "work",
+   "action": "rename the file handle"
+  },
+  {
+   "text": "Want me to add a signature check?",
+   "sentence": "Want me to add a signature check?",
+   "kind": "work",
+   "action": "add a signature check"
+  },
+  {
+   "text": "Want me to update the file path in the config?",
+   "sentence": "Want me to update the file path in the config?",
+   "kind": "work",
+   "action": "update the file path in the config"
+  },
+  {
+   "text": "Shall I add a migration for the new column?",
+   "sentence": "Shall I add a migration for the new column?",
+   "kind": "work",
+   "action": "add a migration for the new column"
+  },
+  {
+   "text": "Want me to run the tests on staging?",
+   "sentence": "Want me to run the tests on staging?",
+   "kind": "work",
+   "action": "run the tests on staging"
+  },
+  {
+   "text": "Want me to wire up the save and cancel buttons?",
+   "sentence": "Want me to wire up the save and cancel buttons?",
+   "kind": "work",
+   "action": "wire up the save and cancel buttons"
+  },
+  {
+   "text": "Want me to build the login and sign up pages?",
+   "sentence": "Want me to build the login and sign up pages?",
+   "kind": "work",
+   "action": "build the login and sign up pages"
+  },
+  {
+   "text": "Want me to add the loading and empty states?",
+   "sentence": "Want me to add the loading and empty states?",
+   "kind": "work",
+   "action": "add the loading and empty states"
+  },
+  {
+   "text": "Want me to handle the payment and refund flows?",
+   "sentence": "Want me to handle the payment and refund flows?",
+   "kind": "work",
+   "action": "handle the payment and refund flows"
+  },
+  {
+   "text": "Want me to refactor the sign-in and sign-out code?",
+   "sentence": "Want me to refactor the sign-in and sign-out code?",
+   "kind": "work",
+   "action": "refactor the sign-in and sign-out code"
+  },
+  {
    "text": "Let me know if you'd like me to send this to the client.",
    "sentence": "Let me know if you'd like me to send this to the client.",
    "kind": "user",
@@ -425,6 +569,180 @@
    "sentence": "Would you like me to send it, or keep it as a draft?",
    "kind": "user",
    "action": "send it"
+  },
+  {
+   "text": "Want me to run the tests and then push?",
+   "sentence": "Want me to run the tests and then push?",
+   "kind": "user",
+   "action": "run the tests and then push"
+  },
+  {
+   "text": "Should I run the tests and then push?",
+   "sentence": "Should I run the tests and then push?",
+   "kind": "user",
+   "action": "run the tests and then push"
+  },
+  {
+   "text": "Want me to git push --force?",
+   "sentence": "Want me to git push --force?",
+   "kind": "user",
+   "action": "git push --force"
+  },
+  {
+   "text": "Want me to wipe the logs?",
+   "sentence": "Want me to wipe the logs?",
+   "kind": "user",
+   "action": "wipe the logs"
+  },
+  {
+   "text": "Want me to clear the cache and wipe the logs?",
+   "sentence": "Want me to clear the cache and wipe the logs?",
+   "kind": "user",
+   "action": "clear the cache and wipe the logs"
+  },
+  {
+   "text": "Shall I empty the trash?",
+   "sentence": "Shall I empty the trash?",
+   "kind": "user",
+   "action": "empty the trash"
+  },
+  {
+   "text": "Want me to rm -rf the build folder?",
+   "sentence": "Want me to rm -rf the build folder?",
+   "kind": "user",
+   "action": "rm -rf the build folder"
+  },
+  {
+   "text": "Shall I transfer the funds?",
+   "sentence": "Shall I transfer the funds?",
+   "kind": "user",
+   "action": "transfer the funds"
+  },
+  {
+   "text": "Want me to wire the money to the vendor?",
+   "sentence": "Want me to wire the money to the vendor?",
+   "kind": "user",
+   "action": "wire the money to the vendor"
+  },
+  {
+   "text": "Want me to charge the card?",
+   "sentence": "Want me to charge the card?",
+   "kind": "user",
+   "action": "charge the card"
+  },
+  {
+   "text": "Shall I place the order?",
+   "sentence": "Shall I place the order?",
+   "kind": "user",
+   "action": "place the order"
+  },
+  {
+   "text": "Shall I cancel the subscription?",
+   "sentence": "Shall I cancel the subscription?",
+   "kind": "user",
+   "action": "cancel the subscription"
+  },
+  {
+   "text": "Shall I sign the contract?",
+   "sentence": "Shall I sign the contract?",
+   "kind": "user",
+   "action": "sign the contract"
+  },
+  {
+   "text": "Want me to revoke the token?",
+   "sentence": "Want me to revoke the token?",
+   "kind": "user",
+   "action": "revoke the token"
+  },
+  {
+   "text": "Shall I reset the database?",
+   "sentence": "Shall I reset the database?",
+   "kind": "user",
+   "action": "reset the database"
+  },
+  {
+   "text": "Want me to run git reset --hard?",
+   "sentence": "Want me to run git reset --hard?",
+   "kind": "user",
+   "action": "run git reset --hard"
+  },
+  {
+   "text": "Want me to go ahead and run the deploy script?",
+   "sentence": "Want me to go ahead and run the deploy script?",
+   "kind": "user",
+   "action": "run the deploy script"
+  },
+  {
+   "text": "Shall I tag v2 and publish the release?",
+   "sentence": "Shall I tag v2 and publish the release?",
+   "kind": "user",
+   "action": "tag v2 and publish the release"
+  },
+  {
+   "text": "Want me to run the migration on staging?",
+   "sentence": "Want me to run the migration on staging?",
+   "kind": "user",
+   "action": "run the migration on staging"
+  },
+  {
+   "text": "Want me to text her?",
+   "sentence": "Want me to text her?",
+   "kind": "user",
+   "action": "text her"
+  },
+  {
+   "text": "Want me to overwrite the file?",
+   "sentence": "Want me to overwrite the file?",
+   "kind": "user",
+   "action": "overwrite the file"
+  },
+  {
+   "text": "Want me to file the return with the IRS?",
+   "sentence": "Want me to file the return with the IRS?",
+   "kind": "user",
+   "action": "file the return with the IRS"
+  },
+  {
+   "text": "Shall I add the tests, then commit and push?",
+   "sentence": "Shall I add the tests, then commit and push?",
+   "kind": "user",
+   "action": "add the tests"
+  },
+  {
+   "text": "Want me to fix it and then deploy to staging?",
+   "sentence": "Want me to fix it and then deploy to staging?",
+   "kind": "user",
+   "action": "fix it and then deploy to staging"
+  },
+  {
+   "text": "Want me to npm publish it?",
+   "sentence": "Want me to npm publish it?",
+   "kind": "user",
+   "action": "npm publish it"
+  },
+  {
+   "text": "I can rotate the API keys if you'd like.",
+   "sentence": "I can rotate the API keys if you'd like.",
+   "kind": "user",
+   "action": "rotate the API keys"
+  },
+  {
+   "text": "Shall I message the team?",
+   "sentence": "Shall I message the team?",
+   "kind": "user",
+   "action": "message the team"
+  },
+  {
+   "text": "Want me to fix the build and cancel the subscription?",
+   "sentence": "Want me to fix the build and cancel the subscription?",
+   "kind": "user",
+   "action": "fix the build and cancel the subscription"
+  },
+  {
+   "text": "Want me to add the export and then empty the trash?",
+   "sentence": "Want me to add the export and then empty the trash?",
+   "kind": "user",
+   "action": "add the export and then empty the trash"
   },
   {
    "text": "Which colour should the button be?",

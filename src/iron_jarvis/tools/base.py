@@ -6,6 +6,7 @@ inside a ``ToolContext`` scoped to a session's isolated workspace (§15).
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -87,6 +88,15 @@ class SpendCheck:
     cost_note: str = ""
     once_only: bool = False
     reason: str = ""
+    #: v1.407.2 (Ask first's guard for Git's and Iron Jarvis's own files —
+    #: ``core/auto_approve.guarded_edit``): "Don't ask" (``yolo``) drops this
+    #: verdict, so the call runs exactly as it did before (the user chose that
+    #: posture). A spend and the git guard keep False: they card even there.
+    dont_ask_skips: bool = False
+    #: v1.407.2: only an ATTENDED run (``runtime.ATTENDED_ORIGINS``) may be
+    #: asked; an unattended door (a schedule, a goal, a rule, the phone…)
+    #: refuses the call in words instead of parking it for a phone answer.
+    attended_only: bool = False
 
 
 @dataclass
@@ -290,8 +300,38 @@ class Tool(ABC):
         ...
 
 
+def guarded_edit_check(name: str, args: Any, workspace: Any) -> "SpendCheck | None":
+    """Ask first's guard for Git's and Iron Jarvis's own files (v1.407.2):
+    a FILE EDIT of ``.git/**``, ``.ironjarvis/**``, ``.claude/**`` (and the
+    rest of ``core/auto_approve``'s sensitive families) inside the folder is
+    asked about ONCE, every time — Allow once and Deny only, no grant covers
+    it, "Don't ask" leaves it alone, an unattended run refuses it. None for
+    every other call. Blocking (resolves the path): call off the event loop."""
+    from ..core import auto_approve as _auto
+
+    hit = _auto.guarded_edit(name, args, workspace)
+    if hit is None:
+        return None
+    _kind, words = hit
+    return SpendCheck(
+        ask=True, words=words, once_only=True, reason=_auto.GUARD_REASON,
+        dont_ask_skips=True, attended_only=True,
+    )
+
+
+#: The tools the guard reads (the file edit tools — ``core/auto_approve``).
+GUARDED_EDIT_TOOLS: frozenset[str] = frozenset(
+    {"write_file", "edit_file", "multi_edit", "notebook_edit", "write_document", "apply_patch"}
+)
+
+
 async def spend_checks_for(
-    registry: Any, calls: Any, ctx: "ToolContext", names: "set[str] | None" = None
+    registry: Any,
+    calls: Any,
+    ctx: "ToolContext",
+    names: "set[str] | None" = None,
+    *,
+    approval_mode: str = "",
 ) -> "dict[int, SpendCheck]":
     """ONE spend check per call of a round (v1.346.0), keyed by ``id(call)``
     — the call OBJECT, because an adapter may send "" for every call id.
@@ -300,8 +340,14 @@ async def spend_checks_for(
     raises is "no opinion" (the ordinary verdict decides, never a crashed
     turn). ``names`` narrows to the armed set — an unarmed call is refused by
     the registry and must not be quoted. The ONE helper both chat lanes and
-    the agent runtime call, so the three gates cannot drift."""
+    the agent runtime call, so the three gates cannot drift.
+
+    v1.407.2: a FILE EDIT with no check of its own gets Ask first's guard
+    (:func:`guarded_edit_check`, off the loop). ``approval_mode`` is the
+    turn's posture: under ``yolo`` ("Don't ask") a verdict marked
+    ``dont_ask_skips`` is dropped, so that call runs exactly as before."""
     out: dict[int, SpendCheck] = {}
+    dont_ask = str(approval_mode or "").strip().lower() == "yolo"
     for tc in calls or []:
         name = str(getattr(tc, "name", "") or "")
         if names is not None and name not in names:
@@ -311,13 +357,23 @@ async def spend_checks_for(
         except Exception:  # noqa: BLE001 — a double without get
             tool = None
         fn = getattr(tool, "spend_check", None) if tool is not None else None
-        if fn is None:
-            continue
         args = getattr(tc, "arguments", None)
-        try:
-            verdict = await fn(args if isinstance(args, dict) else {}, ctx)
-        except Exception:  # noqa: BLE001 — no opinion, never a stopped turn
-            verdict = None
+        verdict = None
+        if fn is not None:
+            try:
+                verdict = await fn(args if isinstance(args, dict) else {}, ctx)
+            except Exception:  # noqa: BLE001 — no opinion, never a stopped turn
+                verdict = None
+        if verdict is None and name in GUARDED_EDIT_TOOLS and not dont_ask:
+            try:
+                verdict = await asyncio.to_thread(
+                    guarded_edit_check, name, args if isinstance(args, dict) else {},
+                    getattr(ctx, "workspace", None),
+                )
+            except Exception:  # noqa: BLE001 — the guard never stops a turn
+                verdict = None
+        if verdict is not None and dont_ask and getattr(verdict, "dont_ask_skips", False):
+            continue
         if verdict is not None:
             out[id(tc)] = verdict
     return out

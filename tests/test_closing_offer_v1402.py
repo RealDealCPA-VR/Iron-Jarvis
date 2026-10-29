@@ -90,6 +90,34 @@ OFFERS = [
     "Want me to add a POST endpoint for it?",
     "Want me to send a test request to the dev server?",
     "Want me to remove the unused imports?",
+    # v1.407.2: the clause-by-clause reading leaves ordinary work as work —
+    # an outward word as a NOUN, or a verb that is code work.
+    "Want me to add tests for it?",
+    "Shall I refactor the parser?",
+    "Should I fix the other two files too?",
+    "Want me to add a delete button?",
+    "Want me to fix the push notification handler?",
+    "Shall I write tests for the reset endpoint?",
+    "Want me to run the linter and fix what it finds?",
+    "Want me to wire up the new button?",
+    "Want me to order the imports alphabetically?",
+    "Want me to clean up the merge conflict markers?",
+    "Want me to add tests and then run them?",
+    "Shall I update the deploy docs?",
+    "Want me to add a --force flag?",
+    "Want me to fix the text alignment too?",
+    "Want me to rename the file handle?",
+    "Want me to add a signature check?",
+    "Want me to update the file path in the config?",
+    "Shall I add a migration for the new column?",
+    "Want me to run the tests on staging?",
+    # v1.407.2 review: a SPLIT clause whose verb is a noun in front of a piece
+    # of the app ("the save and cancel buttons") is still work.
+    "Want me to wire up the save and cancel buttons?",
+    "Want me to build the login and sign up pages?",
+    "Want me to add the loading and empty states?",
+    "Want me to handle the payment and refund flows?",
+    "Want me to refactor the sign-in and sign-out code?",
 ]
 
 #: Review (v1.402.0): an offer whose action is the USER'S decision — it reaches
@@ -122,6 +150,40 @@ USER_OWNED = [
     "I can send it to the team if you'd like.",
     "Should I run the migration against the production database?",
     "Would you like me to send it, or keep it as a draft?",
+    # v1.407.2 (the user's decision 2026-10-29): read CLAUSE by clause — an
+    # outward or irreversible step anywhere in the offered action is the
+    # user's call (the next-step box's own list moved into the daemon).
+    "Want me to run the tests and then push?",
+    "Should I run the tests and then push?",
+    "Want me to git push --force?",
+    "Want me to wipe the logs?",
+    "Want me to clear the cache and wipe the logs?",
+    "Shall I empty the trash?",
+    "Want me to rm -rf the build folder?",
+    "Shall I transfer the funds?",
+    "Want me to wire the money to the vendor?",
+    "Want me to charge the card?",
+    "Shall I place the order?",
+    "Shall I cancel the subscription?",
+    "Shall I sign the contract?",
+    "Want me to revoke the token?",
+    "Shall I reset the database?",
+    "Want me to run git reset --hard?",
+    "Want me to go ahead and run the deploy script?",
+    "Shall I tag v2 and publish the release?",
+    "Want me to run the migration on staging?",
+    "Want me to text her?",
+    "Want me to overwrite the file?",
+    "Want me to file the return with the IRS?",
+    "Shall I add the tests, then commit and push?",
+    "Want me to fix it and then deploy to staging?",
+    "Want me to npm publish it?",
+    "I can rotate the API keys if you'd like.",
+    "Shall I message the team?",
+    # v1.407.2 review: the noun reading ("cancel buttons") never swallows a
+    # real outward step after "and" — its noun follows an article.
+    "Want me to fix the build and cancel the subscription?",
+    "Want me to add the export and then empty the trash?",
 ]
 
 NOT_OFFERS = [

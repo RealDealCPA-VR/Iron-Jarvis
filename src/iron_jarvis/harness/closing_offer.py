@@ -221,6 +221,111 @@ _PRODUCTION_RX = re.compile(
     r"\b(?:production|prod|live\s+(?:site|server|database|db|environment|system))\b",
     re.IGNORECASE,
 )
+#: v1.407.2 (the user's decision 2026-10-29): an offered action is read CLAUSE
+#: by clause — "run the tests and then push", "tag v2 and publish the
+#: release", "clear the cache and wipe the logs" — so an outward or
+#: irreversible step after the first verb is still the user's call. The
+#: next-step box (`dashboard/lib/nextStep.ts`) used to patch this with a list
+#: of its own; that knowledge lives HERE now and reaches the box through the
+#: generated twin (`dashboard/lib/closingOffer.ts`).
+_CLAUSE_SPLIT_RX = re.compile(
+    r"\s*(?:[,;]|\s[—–-]\s|&&|\band\s+then\b|\bthen\b|\band\b|\bplus\b)\s*",
+    re.IGNORECASE,
+)
+#: Words in front of a clause's verb ("then I'll", "also", "go ahead and").
+_CLAUSE_LEAD_RX = re.compile(
+    r"^(?:(?:then|also|finally|just|afterwards|after\s+that|go\s+ahead\s+and|"
+    r"i(?:'ll|’ll|\s+will|\s+can|\s+could)|we(?:'ll|’ll|\s+will|\s+can)?)\s+)+",
+    re.IGNORECASE,
+)
+#: "run …" / "execute …": the thing run is what is done ("run the deploy
+#: script", "run git reset --hard", "run the migration on staging").
+_CLAUSE_RUN_RX = re.compile(
+    r"^(?:run|re-?run|execute|kick\s+off|trigger|fire\s+off)\s+"
+    r"(?:the\s+|a\s+|an\s+|that\s+|this\s+|my\s+|your\s+|our\s+)?",
+    re.IGNORECASE,
+)
+#: A command-line tool in front of its verb ("git push --force", "npm
+#: publish", "gh release create").
+_CLAUSE_CMD_RX = re.compile(
+    r"^(?:git|gh|npm|pnpm|yarn|npx|uv|pip|twine|poetry|cargo|docker|kubectl|helm|terraform|"
+    r"heroku|vercel|netlify|fly|flyctl|aws|gcloud|az|firebase|sudo)\s+",
+    re.IGNORECASE,
+)
+#: A clause whose VERB is the user's to decide — beside `_USER_OWNS_RX`:
+#: history (push, tag, reset), release, delete / wipe / empty / reset, send
+#: (text), money (pay, charge, transfer, wire, order, subscribe, cancel),
+#: signing, revoking. Read at the clause's start only, so "add a delete
+#: button" and "fix the push notification handler" stay work.
+_CLAUSE_OWNS_RX = re.compile(
+    r"^(?:"
+    r"(?:force[- ]?)?push(?:es|ed|ing)?(?!\s+notifications?)\b|"
+    r"deploy\w*|releas(?:e|es|ing)\b(?!\s+notes?)|publish\w*|ship(?:s|ping)?\b|"
+    r"tag(?:s|ging)?\s+(?:v?\d|the\s+release|a\s+release|a\s+new\s+release|it\b|this\b|that\b)|"
+    r"delet\w*|wip(?:e|es|ing)\b|eras(?:e|es|ing)\b|purg\w*|destroy\w*|truncat\w*|"
+    r"empt(?:y|ies|ying)\b|reset(?:s|ting)?\b|uninstall\w*|discard\w*|overwrit\w*|"
+    r"rm\b|rmdir\b|del\b|rd\s+/s\b|clean\s+-\w*[fdx]|"
+    r"text(?:ing)?\s+(?:him|her|them|me|you|us|the\s+(?:client|customer|team|user|group|owner))\b|"
+    r"pay(?:s|ing)?\b|charg(?:e|es|ing)\b|refund\w*|transfer\w*|"
+    r"wir(?:e|es|ing)\s+(?:the\s+|a\s+|an\s+|some\s+)?(?:money|funds|payments?|cash|transfers?|\$)|"
+    r"plac(?:e|es|ing)\s+(?:the\s+|an?\s+|your\s+|my\s+|this\s+|that\s+)?orders?\b|"
+    r"(?:re)?order(?:s|ing)?\s+(?:it|them|this|that|one|more|some|another|a|an)\b|"
+    r"buy\w*|purchas\w*|subscrib\w*|unsubscrib\w*|cancel\w*|"
+    r"sign(?:s|ing)?\b|revok\w*|"
+    r"rotat(?:e|es|ing)\s+(?:\S+\s+){0,2}?(?:keys?|tokens?|secrets?|credentials?|passwords?)\b|"
+    r"fil(?:e|es|ing)\s+(?:the\s+|a\s+|an\s+|my\s+|your\s+|this\s+|that\s+|it\b)(?!\s*(?:path|name|system|tree|list|handle)s?\b)"
+    r")",
+    re.IGNORECASE,
+)
+#: A migration aimed at STAGING (anywhere in a clause): a shared database the
+#: user decides about, like production.
+_STAGING_MIGRATION_RX = re.compile(
+    r"\bmigrat\w*\b.*\bstaging\b|\bstaging\b.*\bmigrat\w*\b",
+    re.IGNORECASE,
+)
+
+
+#: A split clause whose verb is used as a NOUN in front of a piece of the app
+#: ("wire up the save and CANCEL BUTTONS", "build the login and SIGN UP
+#: pages", "add the loading and EMPTY STATES", "refactor the sign-in and
+#: SIGN-OUT code"): ordinary work, never the user's call (review, v1.407.2).
+#: The noun follows the verb directly — "cancel the subscription" is not one.
+_CLAUSE_NOUN_RX = re.compile(
+    r"^\S+(?:[\s-]+(?:up|in|out|on|off))?[\s-]+"
+    r"(?:buttons?|pages?|screens?|forms?|flows?|states?|handlers?|logic|code|modals?|dialogs?|"
+    r"views?|components?|links?|routes?|endpoints?|functions?|methods?|menus?|icons?|fields?|"
+    r"options?|ui|tabs?|widgets?)\b",
+    re.IGNORECASE,
+)
+
+
+def _clauses(action: str) -> list[str]:
+    """Each clause of an offered action, its lead words and a ``run …`` /
+    command-line wrapper taken off (v1.407.2)."""
+    out: list[str] = []
+    for part in _CLAUSE_SPLIT_RX.split(str(action or "")):
+        c = _ACTION_FILLER_RX.sub("", _CLAUSE_LEAD_RX.sub("", part.strip())).strip()
+        if not c:
+            continue
+        out.append(c)
+        inner = _CLAUSE_CMD_RX.sub("", _CLAUSE_RUN_RX.sub("", c)).strip()
+        if inner and inner != c:
+            out.append(inner)
+    return out
+
+
+def _owned(action: str) -> bool:
+    """Is this offered ACTION the user's to decide — any clause of it
+    (v1.407.2)? The ONE reading ``user_owns``, ``offer_kind`` and
+    ``offered_action`` share; the dashboard twin repeats it
+    (``lib/closingOffer.ts`` ``owned``)."""
+    if _USER_OWNS_RX.match(action) or _PRODUCTION_RX.search(action):
+        return True
+    return any(
+        not _CLAUSE_NOUN_RX.match(c)
+        and (_USER_OWNS_RX.match(c) or _CLAUSE_OWNS_RX.match(c) or _STAGING_MIGRATION_RX.search(c))
+        for c in _clauses(action)
+    )
 #: An offer to EXPLAIN, read where the action starts ("Shall I explain …").
 _EXPLAIN_START_RX = re.compile(
     r"^(?:explain|clarify|walk\s+you\s+through|go\s+over|go\s+through|elaborate|describe|answer|"
@@ -305,7 +410,7 @@ def user_owns(sentence: str) -> bool:
     commit, push, merge, deploy, pay, delete, remove files …)? See the module
     docstring. Never raises."""
     try:
-        return any(_USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a) for a in _actions(str(sentence or "")))
+        return any(_owned(a) for a in _actions(str(sentence or "")))
     except Exception:  # noqa: BLE001 — a reading never breaks a turn
         return True
 
@@ -332,7 +437,7 @@ def offer_kind(text: str) -> str:
     if any(_EXPLAIN_START_RX.match(a) for a in actions):
         return ""
     # The USER'S decision (review, v1.402.0): the reply keeps its question.
-    if any(_USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a) for a in actions):
+    if any(_owned(a) for a in actions):
         return "user"
     # A CHOICE between alternatives is a decision question, not an offer —
     # unless the alternative only declines or waits.
@@ -369,7 +474,7 @@ def offered_action(text: str) -> str:
             return ""
         actions = _actions(last_sentence(text))
         if kind == "user":
-            actions = [a for a in actions if _USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a)] or actions
+            actions = [a for a in actions if _owned(a)] or actions
         for a in actions:
             words = _ACTION_END_RX.split(a, maxsplit=1)[0].strip()
             if words:

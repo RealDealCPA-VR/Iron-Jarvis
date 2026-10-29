@@ -2225,6 +2225,29 @@ first, as Don't ask does.
   when an account's limit resets, on another account, the work of a plan you
   approved, the night shift) runs as Ask first: nobody is watching it start.
 
+**Edits to Git's own files and Jarvis's own rules ask under Ask first too
+(v1.407.2).** File edits run on their own under Ask first, but an edit of a
+file that steers Git, your editor, CI or Iron Jarvis itself — the same list
+as above: anything under `.git` (its settings and hooks, which Git can run as
+programs), `.ironjarvis` (this folder's own permission rules and harness),
+`.claude` (Claude Code's settings and commands), the coding agents' own
+instructions files (`AGENTS.md`, `CLAUDE.md`, their `.local.md` versions,
+`AGENTS.override.md` and `.ironjarvis.md`, in any folder), `.vscode/tasks.json` and
+`.vscode/settings.json`, `.github/workflows`, `.gitattributes`,
+`.gitconfig`, `.gitmodules` — now stops for a card under **Ask first** and
+**Ask before every action**, in a chat, a coding session and the helpers it
+starts. The card says why in plain words ("it changes Git's own settings",
+"it changes Iron Jarvis's own safety rules for this folder") and offers
+**Allow once** and Deny only: it asks every time, no "for this chat" answer
+or standing grant covers it, and Enter never allows it (click Allow once).
+A chat sent through the API (no card) refuses it and says so; a schedule, a
+goal, a rule, the phone or anything else running with nobody there refuses
+it with a sentence instead of waiting for an answer; a night-shift task's
+card waits the night's card wait and is then declined, like any other card
+at night. Under **Don't ask** it runs without a card, as everything does —
+you chose that level. Not covered yet: a shell command that writes into
+those files (`echo … > .git/config`) follows the command's own card.
+
 ## Chat | Code: coding sessions moved to the chat page, Build is the terminals (v1.407.0)
 
 The chat page now has one switch at the top, in the middle: **Chat | Code**.
@@ -2295,6 +2318,17 @@ quiet style as the lines around it.
   the existing Commit / Create PR form), and nothing happens until you press
   Send. A button never skips an approval card, a grant or an "Allow once"
   rule: it is the same as typing or pressing that thing yourself.
+  Since v1.407.2 every PART of the offer is read: "run the tests and then
+  push", "git push --force", "rm -rf the build folder", "wipe the logs",
+  "empty the trash", "transfer the funds", "charge the card", "place the
+  order", "cancel the subscription", "sign the contract", "revoke the token",
+  "reset the database", "run the deploy script", "tag v2 and publish the
+  release", "run the migration on staging" are all yours to decide. The same
+  reading decides whether Jarvis, at the end of a coding reply, carries on by
+  itself with something it offered: it never does for these — it keeps the
+  question for you. Words that only name a piece of the app ("the save and
+  cancel buttons", "the sign up pages", "the empty states") stay ordinary
+  work.
 - **It gets out of the way.** The line and buttons step aside as soon as
   you type, and the box is gone while a reply runs. It is never saved as a
   message: reopening a conversation shows it again under the newest reply
