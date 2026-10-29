@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.408.0 (2026-10-29).*
+holds itself to. Current as of v1.408.1 (2026-10-29).*
 
 ---
 
@@ -2226,7 +2226,7 @@ first, as Don't ask does.
   approved, the night shift) runs as Ask first: nobody is watching it start.
 
 **Edits to Git's own files and Jarvis's own rules ask under Ask first too
-(v1.407.2).** File edits run on their own under Ask first, but an edit of a
+(v1.408.1).** File edits run on their own under Ask first, but an edit of a
 file that steers Git, your editor, CI or Iron Jarvis itself — the same list
 as above: anything under `.git` (its settings and hooks, which Git can run as
 programs), `.ironjarvis` (this folder's own permission rules and harness),
@@ -2318,7 +2318,7 @@ quiet style as the lines around it.
   the existing Commit / Create PR form), and nothing happens until you press
   Send. A button never skips an approval card, a grant or an "Allow once"
   rule: it is the same as typing or pressing that thing yourself.
-  Since v1.407.2 every PART of the offer is read: "run the tests and then
+  Since v1.408.1 every PART of the offer is read: "run the tests and then
   push", "git push --force", "rm -rf the build folder", "wipe the logs",
   "empty the trash", "transfer the funds", "charge the card", "place the
   order", "cancel the subscription", "sign the contract", "revoke the token",

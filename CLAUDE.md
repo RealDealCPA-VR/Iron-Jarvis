@@ -4640,7 +4640,7 @@ does not need a bump, stop and bump it.
   Retry line is the one place); an older reply's offer is never read.
 
 - **Ask first asks before an edit of Git's and Jarvis's own files; a closing
-  offer is the user's when ANY clause of it is** (v1.407.2; the user's
+  offer is the user's when ANY clause of it is** (v1.408.1, built as v1.407.2; the user's
   decision 2026-10-29, both found by v1.407.0's reviews; supersedes part 2's
   OPEN note and part 4's `asksFirst`). FIX A: `core/auto_approve.
   sensitive_kind(path, ws)` is THE one reading (`sensitive_path` = it, and
