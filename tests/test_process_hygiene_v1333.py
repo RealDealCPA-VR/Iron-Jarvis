@@ -652,6 +652,7 @@ ALLOWED_RAW_SPAWNS: dict[str, str] = {
     "daemon/cli.py": "terminal commands (dev serve, rollback's git probe), not the daemon",
     "daemon/routes/agents.py": "macOS/Linux 'open' launcher: the app it opens must outlive the call",
     "daemon/routes/documents.py": "macOS/Linux 'open' launcher: the app it opens must outlive the call",
+    "daemon/routes/editor.py": "v1.405.0 Open in VS Code/Cursor: the OS URL handler; the editor must outlive the call",
     "providers/claude_models.py": "model-catalog handshake: Popen + bounded tree kill since v1.300.0; not Lane P's file",
     "repl/session.py": "the REPL namespace: a long-lived child with its own kill path (Lane D's file)",
     "tools/builtins.py": "dead ShellTool, shadowed by sandbox/shell_tool (v1.175.0); not Lane P's file",
