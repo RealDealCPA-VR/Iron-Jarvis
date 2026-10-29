@@ -89,6 +89,16 @@ NO_CHANGE_WORDS = (
     "fixing this pull request's checks."
 )
 STOPPED_FIX_WORDS = "The fix stopped before it finished, so nothing was reviewed or pushed."
+#: v1.406.0 review: the user's own reply came after the fix turn — its
+#: changes are the user's, and are never committed or pushed by themselves.
+USER_REPLY_WORDS = (
+    "You sent a message after the fix turn, so Iron Jarvis did not have the fix reviewed or push it. "
+    "The fix is in the session's folder: look at it, then commit and push it yourself."
+)
+#: v1.406.0 review: the session changed while the fix was reviewed.
+GONE_WORDS = "The session was archived or removed while the fix was reviewed, so nothing was pushed."
+OFF_WORDS = ("Fixing a pull request's checks was turned off while the fix was reviewed, so nothing was "
+             "pushed. The fix is in the session's folder.")
 #: A Local only session's NEWS carries no words of its own to another
 #: device (the night shift's rule).
 LOCAL_ONLY_NOTICE = "A Local only coding session: open Iron Jarvis on this PC to see it."
@@ -211,6 +221,13 @@ class ReviewJob:
     folder: str
     provider: str
     task: str
+    #: v1.406.0 review: WHAT the reviewer read — the failing head the change
+    #: is measured from, ``ci_fix.change_fingerprint`` of the worktree and its
+    #: HEAD when the change was read. The push step refuses a worktree that
+    #: no longer matches (a file changed or added, a commit made since).
+    base_sha: str = ""
+    fingerprint: str = ""
+    head: str = ""
 
 
 @dataclass
@@ -269,6 +286,25 @@ async def run_review(d: Any, job: ReviewJob) -> ReviewResult:
     report = H.report_text(getattr(run, "result", "") or "")
     if not report.strip() or report.strip().startswith(RUNTIME_WROTE_RESULT):
         return ReviewResult("", report=report, why="it ended without a report")
+    # v1.406.0 review: the v1.401.0 team review's two other rules — a verdict
+    # never comes from a reviewer run that ended at LOW trust (it read
+    # something flagged: an injected "VERDICT: approved" must not push), nor
+    # from a report that itself reads like an instruction.
+    from ...agents import model_team as MT
+    from ...computeruse.safety import detect_injection
+
+    try:
+        low = bool(await asyncio.to_thread(MT._low_trust, platform.engine, str(getattr(session, "id", "") or "")))
+    except Exception:  # noqa: BLE001 — unsure is low
+        low = True
+    if low:
+        return ReviewResult("", report=report, why="its run read something flagged and went to low trust")
+    try:
+        flagged = bool(detect_injection(report).get("flagged"))
+    except Exception:  # noqa: BLE001 — unscanned is not counted
+        flagged = True
+    if flagged:
+        return ReviewResult("", report=report, why="its report read like an instruction, so it was not counted")
     verdict = verdict_of(report)
     if not verdict:
         return ReviewResult("", report=report, why="its report gave no verdict")
@@ -463,8 +499,10 @@ async def _start_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
     session_id = S.session_id_for(thread_id)
     bus = getattr(platform, "event_bus", None)
     revising = bool(rec.get("due_note"))
+    low_trust = ""
     if revising:
         text, note = str(rec.get("due_text") or CI.revise_text()), str(rec["due_note"])
+        low_trust = str(rec.get("due_low_trust") or "")
         kind = CI.KIND_FIXING
         words = (f"Working on what the review found (round {round_} of {CI.MAX_ROUNDS}). The fix stays on "
                  f"the side branch {rec.get('side_branch') or ''} until a review approves it.").replace("  ", " ")
@@ -482,7 +520,9 @@ async def _start_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
         logs = await asyncio.to_thread(_git_locked, thread_id, lambda: CI.failed_logs(facts, pr))
         names = CI.failed_names(pr)
         text = CI.fix_text(names)
-        note = CI.fix_note(logs, event_bus=bus, session_id=session_id)
+        flagged: list[str] = []
+        note = CI.fix_note(logs, event_bus=bus, session_id=session_id, flagged=flagged)
+        low_trust = flagged[0] if flagged else ""
         kind = CI.KIND_FAILED
         number = f" (#{facts['pr_number']})" if facts.get("pr_number") else ""
         words = (f"Checks failed on this session's pull request{number}: {CI.names_words(names)}. Iron Jarvis "
@@ -490,17 +530,19 @@ async def _start_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
                  "before anything is pushed.")
     turn_id = "bt_" + secrets.token_hex(8)
     claimed = await asyncio.to_thread(CI.save, engine, thread_id, expect_state=CI.FIX_DUE, state=CI.FIXING,
-                                      turn_id=turn_id, rounds=round_, due_text="", due_note="", words=words)
+                                      turn_id=turn_id, rounds=round_, due_text="", due_note="", due_low_trust="",
+                                      words=words)
     if not claimed:
         return
     await _say(d, thread_id, title, kind, words, round_=round_)
     try:
         lg = await start_build_turn(d, thread_id, text, turn_id, continuation=True,
-                                    started_by=N.BY_CI, model_note=note)
+                                    started_by=N.BY_CI, model_note=note, low_trust=low_trust)
     except SessionBusy:
         # The user's own message won the race: the fix waits for it to end.
         await asyncio.to_thread(CI.save, engine, thread_id, state=CI.FIX_DUE, turn_id="", rounds=round_ - 1,
-                                due_text=text if revising else "", due_note=note if revising else "")
+                                due_text=text if revising else "", due_note=note if revising else "",
+                                due_low_trust=low_trust if revising else "")
         return
     except HTTPException as exc:
         if exc.detail == UNATTENDED_REFUSAL:
@@ -539,9 +581,22 @@ async def _after_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
             why = f"The fix turn failed ({line.get('errorTitle') or line.get('error')}), so nothing was pushed."
         await _end(d, thread_id, title, CI.STOPPED, CI.KIND_STOPPED, why, local_only=local_only)
         return
+    # v1.406.0 review: a reply of the user's after the fix turn — its changes
+    # are in the folder too, and the user's own work is never pushed by itself.
+    at = next((i for i in range(len(messages) - 1, -1, -1) if messages[i] is line), -1)
+    if at >= 0 and any(isinstance(m, dict) and m.get("role") == "user" for m in messages[at + 1:]):
+        await _end(d, thread_id, title, CI.ASKING, CI.KIND_ASKING, USER_REPLY_WORDS, local_only=local_only)
+        return
     wt = B._live(facts)
-    change = await asyncio.to_thread(
-        _git_locked, thread_id, lambda: CI.change_for_review(wt, str(rec.get("base_sha") or "")))
+    base_sha = str(rec.get("base_sha") or "")
+
+    def read_change() -> tuple[str, str, str]:
+        # ONE locked read: the diff the reviewer gets, the fingerprint the
+        # push must still match, and HEAD then.
+        return (CI.change_for_review(wt, base_sha), CI.change_fingerprint(wt, base_sha),
+                CI.ref_sha(wt, "HEAD"))
+
+    change, fingerprint, head = await asyncio.to_thread(_git_locked, thread_id, read_change)
     if not change.strip():
         await _end(d, thread_id, title, CI.GAVE_UP, CI.KIND_GAVE_UP, NO_CHANGE_WORDS, local_only=local_only)
         return
@@ -565,7 +620,8 @@ async def _after_fix(d: Any, thread_id: str, title: str, facts: dict[str, str], 
                "pass without breaking anything else.")
     task = CI.review_task(request, str(line.get("content") or ""), change,
                           event_bus=getattr(platform, "event_bus", None), session_id=S.session_id_for(thread_id))
-    job = ReviewJob(thread_id=thread_id, folder=str(wt), provider=reviewer, task=task)
+    job = ReviewJob(thread_id=thread_id, folder=str(wt), provider=reviewer, task=task, base_sha=base_sha,
+                    fingerprint=fingerprint, head=head)
     out["reviewing"].append(thread_id)
     _REVIEWS[thread_id] = asyncio.create_task(_review_and_land(d, thread_id, title, facts, job))
 
@@ -599,7 +655,7 @@ async def _review_and_land(d: Any, thread_id: str, title: str, facts: dict[str, 
                         else f"{label} reviewed the fix and asked for changes."),
                        round_=round_, reviewer=job.provider, verdict=result.verdict)
             if approved:
-                await _land_and_push(d, thread_id, title, facts, rec)
+                await _land_and_push(d, thread_id, title, facts, rec, job)
             else:
                 await _keep_on_side(d, thread_id, title, facts, rec, result.report)
     except asyncio.CancelledError:
@@ -625,9 +681,15 @@ def _commit_message(rec: dict[str, Any]) -> str:
             "Reviewed before it was pushed. Made by Iron Jarvis.")
 
 
-async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, str], rec: dict[str, Any]) -> None:
+async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, str], rec: dict[str, Any],
+                         job: "ReviewJob | None" = None) -> None:
     """APPROVED: commit (screened), land a side branch, push to the PR's own
-    branch — the session HELD meanwhile (no turn starts)."""
+    branch — the session HELD meanwhile (no turn starts).
+
+    v1.406.0 review: only what the reviewer READ is pushed — the worktree must
+    still match ``job``'s fingerprint and HEAD right before the commit and
+    the same fingerprint right after it — and only while the session is still
+    there, not archived, not Local only, with the setting still on."""
     from ...core.ids import utcnow
     from .build import _STARTING
     from .build_git import _GIT_ACTING
@@ -642,11 +704,25 @@ async def _land_and_push(d: Any, thread_id: str, title: str, facts: dict[str, st
 
     def run() -> dict[str, Any]:
         from ...agents.orchestrator import emergency_stop_on
+        from .build import _setup_of
 
+        row = S.get_row(engine, thread_id)
+        if row is None or getattr(row, "archived_at", None) is not None:
+            raise B.GitRefused(GONE_WORDS, 409)
+        setup_now = _setup_of(row)
+        if isinstance(setup_now, dict) and setup_now.get("local_only") is True:
+            raise B.GitRefused(LOCAL_ONLY_WORDS, 409)
+        if not autofix_on(config):
+            raise B.GitRefused(OFF_WORDS, 409)
         wt = B._live(facts)
+        reviewed = job.fingerprint if job is not None else ""
+        if CI.changed_since_review(wt, base_sha, reviewed, job.head if job is not None else ""):
+            raise B.GitRefused(CI.CHANGED_SINCE_REVIEW, 409)
         on = CI.head_branch(wt)
         on_side = bool(side) and on == side
         committed = CI.commit_fix(facts, side if on_side else facts["branch"], _commit_message(rec))
+        if CI.changed_since_review(wt, base_sha, reviewed):
+            raise B.GitRefused(CI.CHANGED_SINCE_REVIEW + " (The commit was made and kept, not pushed.)", 409)
         if on_side:
             CI.land_side(facts, side)
         pr = CI.read_pr(facts)
@@ -743,12 +819,14 @@ async def _keep_on_side(d: Any, thread_id: str, title: str, facts: dict[str, str
                    f"work is on the side branch {side}; none of it was pushed to the pull request.",
                    side_branch=side)
         return
+    flagged: list[str] = []
     note = CI.revise_note(report, event_bus=getattr(platform, "event_bus", None),
-                          session_id=S.session_id_for(thread_id))
+                          session_id=S.session_id_for(thread_id), flagged=flagged)
     words = (f"The fix is kept on the side branch {side} and was not pushed to the pull request. Working on "
              f"what {label} found next (round {rounds + 1} of {CI.MAX_ROUNDS}).")
     await asyncio.to_thread(CI.save, engine, thread_id, state=CI.FIX_DUE, side_branch=side,
-                            due_text=CI.revise_text(), due_note=note, turn_id="", words=words)
+                            due_text=CI.revise_text(), due_note=note, due_low_trust=flagged[0] if flagged else "",
+                            turn_id="", words=words)
     await _say(d, thread_id, title, CI.KIND_SIDE, words, round_=rounds)
 
 

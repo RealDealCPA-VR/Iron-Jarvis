@@ -4202,7 +4202,38 @@ does not need a bump, stop and bump it.
   side branch, the busy check, `started_by`), `dashboard/__tests__/
   ci-fix-bell-v1406.test.ts` (a step row quiet — its mutation red). The
   push step's own Emergency-stop re-read is defence in depth behind the
-  post-review check (no test can reach it alone).
+  post-review check (no test can reach it alone). REVIEW (15 pins red on the
+  first cut, `tests/test_ci_fix_review_v1406.py`): WHAT IS PUSHED IS WHAT WAS
+  READ — `ci_fix.change_fingerprint` (every file differing from the failing
+  head, by its BYTES, committed or not) and HEAD are taken in the same locked
+  read as the review's diff (`ReviewJob.fingerprint/head`) and must still match
+  right before AND right after the commit (`changed_since_review`;
+  `CHANGED_SINCE_REVIEW`): a program the fix turn left running, an editor, the
+  user's Commit press or a reply that ended during the review used to be
+  committed and pushed unreviewed. The verdict follows the v1.401.0 rules in
+  full: never from a reviewer run that ended at LOW trust (`MT._low_trust` of
+  its session) nor from a report `detect_injection` flags. `read_pr` reads
+  `gh pr view <pr_url>` (by branch it could answer a fork's PR of the same
+  head name) and `push_refusal` refuses an answer whose url/number is not the
+  session's, or whose `headRepository`/`headRepositoryOwner` is not the
+  repository the branch's remote names (fetch address, and the push address
+  when it is a GitHub one; `PUSH_OTHER_REPO`). The push step re-reads the
+  session: archived/removed (`GONE_WORDS`), Local only turned on, `ci_autofix`
+  turned off (`OFF_WORDS`) → nothing pushed. A failed check's log (or a
+  reviewer's report fed to the next round) that promptguard flags starts the
+  fix turn at LOW trust (`fix_note(flagged=)`, `CiWatchRecord.due_low_trust`)
+  → its fix waits for the user. A USER message after the fix turn's reply →
+  `USER_REPLY_WORDS`, asking. STILL OPEN (decisions, not fixed): the fix turn
+  runs under the SESSION's own posture (a yolo session's unattended fix turn
+  reads an attacker-influenceable log with web and shell uncarded; the night
+  shift's guarded posture is not applied, and a card in an Ask-first session
+  parks the watch in FIXING until answered); a push address that is not a
+  GitHub URL (a local path, another host) is not compared; history BETWEEN
+  the failing head and the fix (commits made in the fix turn) is pushed with
+  only the final tree reviewed and only Iron Jarvis's own commit screened;
+  the commit's hooks are not killed by Emergency stop (the night commit's
+  `on_spawn` is not used); binary changes reach the reviewer as "Binary files
+  differ".
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

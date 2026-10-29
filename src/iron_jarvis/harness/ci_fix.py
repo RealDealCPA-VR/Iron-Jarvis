@@ -176,6 +176,11 @@ class CiWatchRecord(SQLModel, table=True):
     #: The next fix turn's hidden question and the words only the model reads.
     due_text: str = ""
     due_note: str = ""
+    #: v1.406.0 review: why the next fix turn starts at LOW trust ("" = it
+    #: does not) — the words it reads (a failed check's log, a reviewer's
+    #: report) held something the scan flagged, so its fix is never pushed
+    #: by itself.
+    due_low_trust: str = ""
     #: The commit Iron Jarvis pushed (its checks decide "passing now").
     pushed_sha: str = ""
     #: The session's ``pushed_at`` as Iron Jarvis last saw it: a different one
@@ -240,7 +245,7 @@ def ensure(engine: Any, thread_id: str, facts: dict[str, str]) -> dict[str, Any]
         for k, v in {
             "pr_url": url, "pr_number": str(facts.get("pr_number") or ""),
             "branch": str(facts.get("branch") or ""), "state": WATCHING, "rounds": 0, "base_sha": "",
-            "failed_json": "", "side_branch": "", "turn_id": "", "due_text": "", "due_note": "",
+            "failed_json": "", "side_branch": "", "turn_id": "", "due_text": "", "due_note": "", "due_low_trust": "",
             "pushed_sha": "", "seen_pushed_at": str(facts.get("pushed_at") or ""), "reviewer": "",
             "words": "", "interval_s": POLL_FIRST_S, "next_check_at": None, "watch_since": _naive(now),
             "read_fails": 0, "updated_at": now,
@@ -344,6 +349,12 @@ class PrChecks:
     head_sha: str
     base_ref: str
     checks: list[Check] = field(default_factory=list)
+    #: v1.406.0 review: which pull request GitHub answered about, and the
+    #: repository its head lives in ("" when gh did not say).
+    url: str = ""
+    number: str = ""
+    head_owner: str = ""
+    head_repo: str = ""
 
     def count(self, state: str) -> int:
         return sum(1 for c in self.checks if c.state == state)
@@ -374,8 +385,13 @@ def read_pr(facts: dict[str, str]) -> PrChecks:
     :class:`~iron_jarvis.harness.branches.GitRefused` in words when it cannot
     be read. BLOCKING (one bounded ``gh`` call)."""
     wt = B._live(facts)
-    got = B._gh(["pr", "view", facts.get("branch", ""), "--json",
-                 "url,number,state,headRefName,headRefOid,baseRefName,statusCheckRollup"], wt)
+    # v1.406.0 review: by the pull request's OWN address when the session
+    # knows it — ``gh pr view <branch>`` picks whichever pull request of that
+    # head branch name gh finds (a fork's of the same name, a newer one).
+    target = str(facts.get("pr_url") or "") or facts.get("branch", "")
+    got = B._gh(["pr", "view", target, "--json",
+                 "url,number,state,headRefName,headRefOid,baseRefName,headRepository,"
+                 "headRepositoryOwner,statusCheckRollup"], wt)
     if got.timed_out:
         raise B.GitRefused(B._timed_out_words("Reading the pull request", B.GH_S), 504)
     if not got.ok:
@@ -392,10 +408,14 @@ def read_pr(facts: dict[str, str]) -> PrChecks:
         url = str(item.get("detailsUrl") or item.get("targetUrl") or "")
         m = _RUN_RX.search(url)
         checks.append(Check(name=_check_name(item), state=B._check_state(item), run_id=m.group(1) if m else ""))
+    repo = data.get("headRepository") if isinstance(data.get("headRepository"), dict) else {}
+    owner = data.get("headRepositoryOwner") if isinstance(data.get("headRepositoryOwner"), dict) else {}
     return PrChecks(
         state=str(data.get("state") or "").strip().lower(),
         head_ref=str(data.get("headRefName") or ""), head_sha=str(data.get("headRefOid") or ""),
         base_ref=str(data.get("baseRefName") or ""), checks=checks,
+        url=str(data.get("url") or ""), number=str(data.get("number") or ""),
+        head_owner=str(owner.get("login") or ""), head_repo=str(repo.get("name") or ""),
     )
 
 
@@ -501,19 +521,32 @@ def revise_text() -> str:
     return "Fix what the review of the check fix found."
 
 
-def fix_note(logs: str, *, event_bus: Any = None, session_id: str = "") -> str:
+#: v1.406.0 review: why a fix turn starts at LOW trust.
+FLAGGED_LOG_TRUST = "the failed check's log held something that looked like an instruction"
+FLAGGED_REPORT_TRUST = "the reviewer's report held something that looked like an instruction"
+
+
+def fix_note(logs: str, *, event_bus: Any = None, session_id: str = "",
+             flagged: "list[str] | None" = None) -> str:
     """The words only the fix turn's model reads: the rules, then the log —
     scanned (``promptguard``; a flagged piece is replaced and the session's
-    row says so) and fenced as untrusted data."""
+    row says so) and fenced as untrusted data. v1.406.0 review: a flagged
+    log appends :data:`FLAGGED_LOG_TRUST` to ``flagged`` — the fix turn then
+    starts at LOW trust and its fix is never pushed by itself (a log is
+    attacker-controllable in a public repository; the scan knows only the
+    shapes it knows)."""
     from ..computeruse.safety import wrap_untrusted
     from ..core.promptguard import scan_context
 
     scanned = scan_context(logs, source=LOG_SOURCE, cap=None)
     _publish_blocked(scanned, event_bus, session_id)
+    if scanned.blocked and flagged is not None:
+        flagged.append(FLAGGED_LOG_TRUST)
     return FIX_RULES + "\n\n" + wrap_untrusted(scanned.text)
 
 
-def revise_note(report: str, *, event_bus: Any = None, session_id: str = "") -> str:
+def revise_note(report: str, *, event_bus: Any = None, session_id: str = "",
+                flagged: "list[str] | None" = None) -> str:
     from ..computeruse.safety import wrap_untrusted
     from ..core.promptguard import scan_context
     from ..detections.redact import mask
@@ -523,6 +556,8 @@ def revise_note(report: str, *, event_bus: Any = None, session_id: str = "") -> 
         text = text[:MAX_REPORT_CHARS].rstrip() + "\n[… the rest of the report is left out]"
     scanned = scan_context(text, source=REPORT_SOURCE, cap=None)
     _publish_blocked(scanned, event_bus, session_id)
+    if scanned.blocked and flagged is not None:
+        flagged.append(FLAGGED_REPORT_TRUST)
     return REVISE_RULES + "\n\n" + wrap_untrusted(scanned.text)
 
 
@@ -636,6 +671,74 @@ def change_for_review(wt: Path, base_sha: str) -> str:
     return "\n\n".join(blocks)
 
 
+def _changed_paths(wt: Path, base_sha: str) -> "list[str] | None":
+    diff = B._g(["diff", "--name-only", "-z", "--no-renames", base_sha], wt, reads=True)
+    new = B._g(["ls-files", "--others", "--exclude-standard", "-z"], wt, reads=True)
+    if not diff.ok or not new.ok:
+        return None
+    names = {n for n in (diff.out or "").split("\0") if n.strip()}
+    names |= {n for n in (new.out or "").split("\0") if n.strip()}
+    return sorted(names)
+
+
+def change_fingerprint(wt: Path, base_sha: str) -> str:
+    """BLOCKING. A hash of WHAT the worktree holds that differs from
+    ``base_sha`` — every changed, deleted or new (not ignored) file, by its
+    BYTES — the same whether those changes are committed or not.
+
+    v1.406.0 review: the reviewer reads the change, then the push step
+    commits ``git add -A`` of the worktree minutes later. A program the fix
+    turn left running, an editor, or a reply of the user's can change files
+    in between, and that change was committed and pushed with no card and no
+    review. The fingerprint taken for the review must equal the one right
+    before and right after the commit (:func:`changed_since_review`). ""
+    when git could not say (never equal to a real one)."""
+    import hashlib
+    import os
+
+    if not base_sha:
+        return ""
+    names = _changed_paths(wt, base_sha)
+    if names is None:
+        return ""
+    h = hashlib.sha256()
+    for rel in names:
+        p = wt / rel
+        h.update(rel.encode("utf-8", "surrogateescape") + b"\0")
+        try:
+            if p.is_symlink():
+                h.update(b"link:" + os.readlink(p).encode("utf-8", "surrogateescape"))
+            elif p.is_file():
+                h.update(b"file:" + hashlib.sha256(p.read_bytes()).digest())
+            elif p.exists():
+                h.update(b"other")
+            else:
+                h.update(b"gone")
+        except OSError:
+            return ""
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+#: The push step's refusal when the worktree is not what was reviewed.
+CHANGED_SINCE_REVIEW = (
+    "The session's files changed after the review (a program still running, an edit, or a commit), "
+    "so Iron Jarvis did not push what the reviewer never read. Look at the changes, then commit and "
+    "push them yourself."
+)
+
+
+def changed_since_review(wt: Path, base_sha: str, reviewed: str, head: str = "") -> bool:
+    """True when the worktree no longer holds exactly what was reviewed
+    (``reviewed`` = :func:`change_fingerprint` then; ``head`` = HEAD then).
+    BLOCKING."""
+    if not reviewed:
+        return True
+    if head and B._ref_sha(wt, "HEAD") != head:
+        return True
+    return change_fingerprint(wt, base_sha) != reviewed
+
+
 def review_task(request: str, draft: str, change: str, *, event_bus: Any = None, session_id: str = "") -> str:
     """The reviewer's task: the v1.401.0 team review's brief (masked,
     the change promptguard-scanned) and the verdict line it must END with
@@ -727,6 +830,9 @@ def land_side(facts: dict[str, str], side: str) -> None:
 PUSH_NOT_OPEN = "The pull request is not open any more, so nothing was pushed."
 PUSH_NOT_THE_PR = "This session's branch is not the pull request's branch, so nothing was pushed."
 PUSH_THE_BASE = "Iron Jarvis never pushes to a pull request's base branch, so nothing was pushed."
+PUSH_OTHER_REPO = (
+    "The branch's remote is not the repository the pull request's branch lives in, so nothing was pushed."
+)
 
 
 def push_refusal(facts: dict[str, str], pr: PrChecks, wt: Path) -> str:
@@ -744,6 +850,32 @@ def push_refusal(facts: dict[str, str], pr: PrChecks, wt: Path) -> str:
         return PUSH_NOT_OPEN
     if pr.head_ref != branch:
         return PUSH_NOT_THE_PR
+    # v1.406.0 review: GitHub answered about THE pull request this session
+    # opened (its address / number), not another one of the same head name…
+    want_url = str(facts.get("pr_url") or "").strip().rstrip("/").lower()
+    if want_url and (not pr.url or pr.url.strip().rstrip("/").lower() != want_url):
+        return PUSH_NOT_THE_PR
+    want_no = str(facts.get("pr_number") or "").strip()
+    if want_no and pr.number and pr.number.strip() != want_no:
+        return PUSH_NOT_THE_PR
+    # …and its head lives in the repository the branch's remote names (a
+    # ``branch.<b>.remote`` pointing at another repository — an upstream, a
+    # second fork — would push the reviewed fix where the PR is not). The
+    # fetch address must be that GitHub repository; a push address that is a
+    # GitHub repository must be it too.
+    if pr.head_owner and pr.head_repo:
+        want = (pr.head_owner.lower(), pr.head_repo.lower())
+        remote = B.pick_remote(wt, branch)
+        if not remote:
+            return PUSH_OTHER_REPO
+        fetch = B._g(["remote", "get-url", remote], wt, reads=True)
+        gh = B.github_repo(fetch.out.strip() if fetch.ok else "")
+        if gh is None or (gh[1].lower(), gh[2].lower()) != want:
+            return PUSH_OTHER_REPO
+        push = B._g(["remote", "get-url", "--push", remote], wt, reads=True)
+        gh = B.github_repo(push.out.strip() if push.ok else "")
+        if gh is not None and (gh[1].lower(), gh[2].lower()) != want:
+            return PUSH_OTHER_REPO
     if head_branch(wt) != branch:
         return (f"The session's worktree is not on {branch}, so nothing was pushed.")
     return ""
@@ -764,9 +896,10 @@ def push_fix(facts: dict[str, str], pr: PrChecks) -> dict[str, Any]:
 
 
 __all__ = [
-    "ASKING", "CLOSED", "CiWatchRecord", "FIXING", "FIX_DUE", "GAVE_UP", "MAX_ROUNDS", "NEWS_KINDS",
+    "ASKING", "CHANGED_SINCE_REVIEW", "CLOSED", "CiWatchRecord", "FIXING", "FIX_DUE", "GAVE_UP", "MAX_ROUNDS", "NEWS_KINDS",
     "PASSING", "POLL_FIRST_S", "POLL_MAX_S", "PrChecks", "REVIEWERS", "REVIEWER_SETTINGS", "REVIEWING",
-    "SETTLED", "STATES", "STOPPED", "WATCHING", "WATCH_MAX_S", "change_for_review", "commit_fix",
+    "SETTLED", "STATES", "STOPPED", "WATCHING", "WATCH_MAX_S", "change_fingerprint", "change_for_review",
+    "changed_since_review", "commit_fix",
     "ensure", "failed_logs", "failed_names", "fix_note", "fix_text", "get", "land_side", "move_to_side",
     "pick_reviewer", "push_fix", "push_refusal", "read_pr", "review_task", "revise_note", "save",
 ]

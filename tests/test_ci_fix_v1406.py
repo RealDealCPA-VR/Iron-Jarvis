@@ -632,7 +632,9 @@ async def test_the_push_is_refused_to_the_base_another_branch_or_a_closed_pr(app
     facts = setup_of(app, w.sid)["git"]
 
     def pr(**over):
-        base = dict(state="open", head_ref=w.branch, head_sha=w.sha0, base_ref="main")
+        # v1.406.0 review: GitHub's answer names THE pull request (its url /
+        # number) — an answer about another one refuses the push.
+        base = dict(state="open", head_ref=w.branch, head_sha=w.sha0, base_ref="main", url=PR_URL, number="7")
         base.update(over)
         return CI.PrChecks(**base)
 
@@ -642,6 +644,10 @@ async def test_the_push_is_refused_to_the_base_another_branch_or_a_closed_pr(app
     assert CI.push_refusal({**facts, "base": w.branch}, pr(), w.wt) == CI.PUSH_THE_BASE
     assert CI.push_refusal(facts, pr(head_ref="ij/other"), w.wt) == CI.PUSH_NOT_THE_PR
     assert CI.push_refusal(facts, pr(state="merged"), w.wt) == CI.PUSH_NOT_OPEN
+    assert CI.push_refusal(facts, pr(url=""), w.wt) == CI.PUSH_NOT_THE_PR
+    assert CI.push_refusal(facts, pr(number="8"), w.wt) == CI.PUSH_NOT_THE_PR
+    assert CI.push_refusal(facts, pr(head_owner="acme", head_repo="proj"), w.wt) == ""
+    assert CI.push_refusal(facts, pr(head_owner="evil", head_repo="proj"), w.wt) == CI.PUSH_OTHER_REPO
     assert CI.push_refusal({**facts, "branch": "main"}, pr(head_ref="main"), w.wt) == B.NO_BRANCH
     git("switch", "-q", "-c", "ij/elsewhere", cwd=w.wt)
     assert "not on" in CI.push_refusal(facts, pr(), w.wt)
