@@ -1,0 +1,1052 @@
+{
+ "harness": "claude-code",
+ "source": "recorded live 2026-10-29, Claude Code 2.1.311, this PC, scratch folder (masked) — --resume of an earlier session",
+ "steps": [
+  {
+   "await": "control",
+   "subtype": "initialize"
+  },
+  {
+   "out": {
+    "type": "control_response",
+    "response": {
+     "subtype": "success",
+     "request_id": "init-1",
+     "response": {
+      "commands": [
+       {
+        "name": "init",
+        "description": "Set up a CLAUDE.md file",
+        "argumentHint": ""
+       }
+      ],
+      "models": []
+     },
+     "pending_permission_requests": [],
+     "pending_user_dialog_requests": []
+    }
+   },
+   "reply_to_control": "initialize"
+  },
+  {
+   "await": "user"
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\work\\demo",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "model": "claude-opus-5-5",
+    "permissionMode": "default",
+    "tools": [
+     "Task",
+     "AskUserQuestion",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "DesignSync",
+     "Edit",
+     "EnterPlanMode",
+     "EnterWorktree",
+     "ExitPlanMode",
+     "ExitWorktree",
+     "Glob",
+     "Grep",
+     "ListAgents",
+     "Monitor",
+     "NotebookEdit",
+     "PowerShell",
+     "PushNotification",
+     "Read",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write"
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "e9919ab3-2b05-45f4-b6b1-dc13c573489e"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJzg2JJWVNN1Mf2EQCR",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 814,
+       "cache_read_input_tokens": 39037,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 814
+       },
+       "output_tokens": 4,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "04d19e6a-8eff-4935-83b7-a3d9988df6c7",
+    "ttft_ms": 1161,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "0fecb30b-db02-4977-ba54-5f2e6bd3eed5",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "ready"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "1a99740b-4cdb-4742-8bf5-f3ac1567d5e3",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJzg2JJWVNN1Mf2EQCR",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "ready"
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 814,
+      "cache_read_input_tokens": 39037,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 814
+      },
+      "output_tokens": 4,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "0fee075f-72da-451e-a263-64498523fe21",
+    "timestamp": "2026-10-29T22:23:42.119Z",
+    "request_id": "req_masked"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "ac5e1203-30c1-4239-a32b-95a5f6725cff",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 814,
+      "cache_read_input_tokens": 39037,
+      "output_tokens": 4,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 39037,
+        "cache_creation_input_tokens": 814,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 814
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "df920012-bac9-4098-954e-66a2f798074a",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "4e817f2b-75ba-4143-89e0-c1f80a46fc73",
+    "api_message_id": "msg_011CgXJzg2JJWVNN1Mf2EQCR"
+   }
+  },
+  {
+   "out": {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+     "status": "allowed",
+     "resetsAt": 1793318400,
+     "rateLimitType": "five_hour",
+     "overageStatus": "rejected",
+     "overageDisabledReason": "out_of_credits",
+     "isUsingOverage": false,
+     "unifiedWindows": {
+      "five_hour": {
+       "utilization": 0.24,
+       "resetsAt": 1793318400,
+       "status": "allowed"
+      },
+      "seven_day": {
+       "utilization": 0.27,
+       "resetsAt": 1793502000,
+       "status": "allowed"
+      }
+     }
+    },
+    "uuid": "ca5d29f4-39d2-444e-bc7f-8961732f67e8",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "duration_api_ms": 6537,
+    "stop_reason": "end_turn",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "total_cost_usd": 0.3457616,
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 814,
+     "cache_read_input_tokens": 39037,
+     "output_tokens": 4,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 814,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "global",
+     "iterations": [
+      {
+       "input_tokens": 2,
+       "output_tokens": 4,
+       "cache_read_input_tokens": 39037,
+       "cache_creation_input_tokens": 814,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 814
+       },
+       "type": "message"
+      }
+     ],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 8,
+      "outputTokens": 247,
+      "thinkingTokens": 0,
+      "cacheReadInputTokens": 109908,
+      "cacheCreationInputTokens": 39851,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39851,
+      "webSearchRequests": 0,
+      "costUSD": 0.3457616,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "fast_mode_disabled_reason": "sdk_opt_in_required",
+    "subagent_stats": {
+     "spawned": 0,
+     "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+     },
+     "started_in_background": 0,
+     "max_depth": 0,
+     "spawned_by_subagents": 0,
+     "completed": 0,
+     "failed": 0,
+     "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+     },
+     "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+     },
+     "by_type": {}
+    },
+    "safety_stops": 0,
+    "is_error": false,
+    "num_turns": 1,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "ready",
+    "ttft_ms": 1392,
+    "type": "result",
+    "duration_ms": 1409,
+    "uuid": "39bfdab9-0746-408d-b1c4-4dd2aaa35084",
+    "ttft_stream_ms": 1391,
+    "time_to_request_ms": 232,
+    "time_to_request_phases_ms": {
+     "other": 9,
+     "system_prompt": 134,
+     "resume_other": 0,
+     "process_user_input": 3,
+     "input_attachments": 20,
+     "input_hooks": 2,
+     "transcript_persist": 5,
+     "tool_pool_refresh": 2,
+     "init_message": 9,
+     "engine_pickup": 0,
+     "message_prep": 1,
+     "model_config_wait": 1,
+     "autocompact": 1,
+     "query_setup": 1,
+     "model_gates": 0,
+     "tool_schema_build": 10,
+     "message_normalization": 6,
+     "client_creation": 3,
+     "request_build": 25
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 0,
+    "time_to_request_loop_lag_ms": 62,
+    "time_to_request_cpu_ms": 437,
+    "time_to_request_major_faults": 14506,
+    "input_attachments_detail": {
+     "slowest_producer": "changed_files",
+     "slowest_producer_ms": 14,
+     "cpu_ms": 31,
+     "major_faults": 1049,
+     "changed_files_reread": 1
+    },
+    "first_content_frame_ms": 1391,
+    "queued_turn_count": 0,
+    "result_index": 0,
+    "model_usage_since_last_result": {
+     "claude-opus-5-5": {
+      "inputTokens": 2,
+      "outputTokens": 4,
+      "cacheReadInputTokens": 39037,
+      "cacheCreationInputTokens": 814,
+      "webSearchRequests": 0,
+      "costUSD": 0.0144074,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 814,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  },
+  {
+   "await": "user"
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": null,
+    "permissionMode": "acceptEdits",
+    "uuid": "5f1a6315-84e5-46b7-ace9-0f6298764ce0",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": "<local-command-stdout>Set model to `haiku (claude-haiku-5-5)`</local-command-stdout>"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "dffd8681-bce8-49e8-98c2-26a646c9c09b",
+    "timestamp": "2026-10-29T22:23:42.143Z",
+    "isReplay": true
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\work\\demo",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "model": "claude-haiku-5-5",
+    "permissionMode": "acceptEdits",
+    "tools": [
+     "Task",
+     "AskUserQuestion",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "DesignSync",
+     "Edit",
+     "EnterPlanMode",
+     "EnterWorktree",
+     "ExitPlanMode",
+     "ExitWorktree",
+     "Glob",
+     "Grep",
+     "ListAgents",
+     "ListMcpResourcesTool",
+     "Monitor",
+     "NotebookEdit",
+     "PowerShell",
+     "PushNotification",
+     "Read",
+     "ReadMcpResourceDirTool",
+     "ReadMcpResourceTool",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write",
+     "mcp__claude_ai_Claude_Docs__batch",
+     "mcp__claude_ai_Claude_Docs__create",
+     "mcp__claude_ai_Claude_Docs__delete",
+     "mcp__claude_ai_Claude_Docs__export",
+     "mcp__claude_ai_Claude_Docs__guide",
+     "mcp__claude_ai_Claude_Docs__query",
+     "mcp__claude_ai_Claude_Docs__read",
+     "mcp__claude_ai_Claude_Docs__update",
+     "mcp__claude_ai_Google_Drive__copy_file",
+     "mcp__claude_ai_Google_Drive__create_file",
+     "mcp__claude_ai_Google_Drive__download_file_content",
+     "mcp__claude_ai_Google_Drive__get_file_metadata",
+     "mcp__claude_ai_Google_Drive__get_file_permissions",
+     "mcp__claude_ai_Google_Drive__list_recent_files",
+     "mcp__claude_ai_Google_Drive__read_file_content",
+     "mcp__claude_ai_Google_Drive__search_files",
+     "mcp__claude_ai_Google_Drive__share_file",
+     "mcp__claude_ai_Google_Drive__trash_file",
+     "mcp__claude_ai_Google_Drive__update_file",
+     "mcp__claude_ai_Microsoft_365__chat_message_search",
+     "mcp__claude_ai_Microsoft_365__find_meeting_availability",
+     "mcp__claude_ai_Microsoft_365__get_granted_scopes",
+     "mcp__claude_ai_Microsoft_365__get_me",
+     "mcp__claude_ai_Microsoft_365__outlook_batch_delete_messages",
+     "mcp__claude_ai_Microsoft_365__outlook_batch_modify_labels",
+     "mcp__claude_ai_Microsoft_365__outlook_calendar_search",
+     "mcp__claude_ai_Microsoft_365__outlook_create_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_create_event",
+     "mcp__claude_ai_Microsoft_365__outlook_create_filter",
+     "mcp__claude_ai_Microsoft_365__outlook_create_label",
+     "mcp__claude_ai_Microsoft_365__outlook_create_reply_all_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_create_reply_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_delete_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_delete_event",
+     "mcp__claude_ai_Microsoft_365__outlook_delete_filter",
+     "mcp__claude_ai_Microsoft_365__outlook_delete_label",
+     "mcp__claude_ai_Microsoft_365__outlook_email_search",
+     "mcp__claude_ai_Microsoft_365__outlook_find_available_time",
+     "mcp__claude_ai_Microsoft_365__outlook_forward_mail",
+     "mcp__claude_ai_Microsoft_365__outlook_modify_labels",
+     "mcp__claude_ai_Microsoft_365__outlook_modify_thread_labels",
+     "mcp__claude_ai_Microsoft_365__outlook_respond_to_event",
+     "mcp__claude_ai_Microsoft_365__outlook_send_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_send_mail",
+     "mcp__claude_ai_Microsoft_365__outlook_set_vacation",
+     "mcp__claude_ai_Microsoft_365__outlook_trash_thread",
+     "mcp__claude_ai_Microsoft_365__outlook_untrash_thread",
+     "mcp__claude_ai_Microsoft_365__outlook_update_draft",
+     "mcp__claude_ai_Microsoft_365__outlook_update_event",
+     "mcp__claude_ai_Microsoft_365__outlook_update_label",
+     "mcp__claude_ai_Microsoft_365__read_resource",
+     "mcp__claude_ai_Microsoft_365__search_people",
+     "mcp__claude_ai_Microsoft_365__sharepoint_copy_item",
+     "mcp__claude_ai_Microsoft_365__sharepoint_create_folder",
+     "mcp__claude_ai_Microsoft_365__sharepoint_delete_item",
+     "mcp__claude_ai_Microsoft_365__sharepoint_folder_search",
+     "mcp__claude_ai_Microsoft_365__sharepoint_move_item",
+     "mcp__claude_ai_Microsoft_365__sharepoint_rename_item",
+     "mcp__claude_ai_Microsoft_365__sharepoint_search",
+     "mcp__claude_ai_Microsoft_365__sharepoint_update_file",
+     "mcp__claude_ai_Microsoft_365__sharepoint_upload_file",
+     "mcp__claude_ai_Microsoft_365__teams_create_chat",
+     "mcp__claude_ai_Microsoft_365__teams_list_channel_messages",
+     "mcp__claude_ai_Microsoft_365__teams_list_channels",
+     "mcp__claude_ai_Microsoft_365__teams_list_chats",
+     "mcp__claude_ai_Microsoft_365__teams_list_teams",
+     "mcp__claude_ai_Microsoft_365__teams_reply_channel_message",
+     "mcp__claude_ai_Microsoft_365__teams_send_channel_message",
+     "mcp__claude_ai_Microsoft_365__teams_send_chat_message",
+     "mcp__claude_ai_Notion__notion-calendar-cancel-events",
+     "mcp__claude_ai_Notion__notion-calendar-create-events",
+     "mcp__claude_ai_Notion__notion-calendar-list-calendar-resources",
+     "mcp__claude_ai_Notion__notion-calendar-list-calendars",
+     "mcp__claude_ai_Notion__notion-calendar-list-contacts",
+     "mcp__claude_ai_Notion__notion-calendar-list-coworkers-events",
+     "mcp__claude_ai_Notion__notion-calendar-list-events",
+     "mcp__claude_ai_Notion__notion-calendar-update-events",
+     "mcp__claude_ai_Notion__notion-convert-page-to-skill",
+     "mcp__claude_ai_Notion__notion-create-attachment",
+     "mcp__claude_ai_Notion__notion-create-comment",
+     "mcp__claude_ai_Notion__notion-create-database",
+     "mcp__claude_ai_Notion__notion-create-file-upload",
+     "mcp__claude_ai_Notion__notion-create-folder",
+     "mcp__claude_ai_Notion__notion-create-pages",
+     "mcp__claude_ai_Notion__notion-create-suggested-edit",
+     "mcp__claude_ai_Notion__notion-create-view",
+     "mcp__claude_ai_Notion__notion-delete-comment",
+     "mcp__claude_ai_Notion__notion-delete-databases",
+     "mcp__claude_ai_Notion__notion-delete-pages",
+     "mcp__claude_ai_Notion__notion-download-attachment",
+     "mcp__claude_ai_Notion__notion-download-skill",
+     "mcp__claude_ai_Notion__notion-duplicate-page",
+     "mcp__claude_ai_Notion__notion-fetch",
+     "mcp__claude_ai_Notion__notion-get-async-task",
+     "mcp__claude_ai_Notion__notion-get-comments",
+     "mcp__claude_ai_Notion__notion-get-enabled-skills",
+     "mcp__claude_ai_Notion__notion-get-file-download-urls",
+     "mcp__claude_ai_Notion__notion-get-groups",
+     "mcp__claude_ai_Notion__notion-get-self",
+     "mcp__claude_ai_Notion__notion-get-session-status",
+     "mcp__claude_ai_Notion__notion-get-suggested-edit",
+     "mcp__claude_ai_Notion__notion-get-teams",
+     "mcp__claude_ai_Notion__notion-get-tool-access",
+     "mcp__claude_ai_Notion__notion-get-users",
+     "mcp__claude_ai_Notion__notion-get-version-changes",
+     "mcp__claude_ai_Notion__notion-list-favorite-pages",
+     "mcp__claude_ai_Notion__notion-list-page-backlinks",
+     "mcp__claude_ai_Notion__notion-list-private-pages",
+     "mcp__claude_ai_Notion__notion-list-recent-pages",
+     "mcp__claude_ai_Notion__notion-list-session-events",
+     "mcp__claude_ai_Notion__notion-list-shared-pages",
+     "mcp__claude_ai_Notion__notion-memory-search",
+     "mcp__claude_ai_Notion__notion-move-pages",
+     "mcp__claude_ai_Notion__notion-query-data-sources",
+     "mcp__claude_ai_Notion__notion-query-meeting-notes",
+     "mcp__claude_ai_Notion__notion-query-multiple-data-sources",
+     "mcp__claude_ai_Notion__notion-query-sessions",
+     "mcp__claude_ai_Notion__notion-read-session-event",
+     "mcp__claude_ai_Notion__notion-resolve-suggested-edit",
+     "mcp__claude_ai_Notion__notion-restore-pages",
+     "mcp__claude_ai_Notion__notion-search",
+     "mcp__claude_ai_Notion__notion-search-agents",
+     "mcp__claude_ai_Notion__notion-search-sessions",
+     "mcp__claude_ai_Notion__notion-send-message-to-session",
+     "mcp__claude_ai_Notion__notion-set-comment-reaction",
+     "mcp__claude_ai_Notion__notion-set-discussion-resolved",
+     "mcp__claude_ai_Notion__notion-spawn-session",
+     "mcp__claude_ai_Notion__notion-stop-session",
+     "mcp__claude_ai_Notion__notion-update-comment",
+     "mcp__claude_ai_Notion__notion-update-data-source",
+     "mcp__claude_ai_Notion__notion-update-enabled-skills",
+     "mcp__claude_ai_Notion__notion-update-folder",
+     "mcp__claude_ai_Notion__notion-update-page",
+     "mcp__claude_ai_Notion__notion-update-view",
+     "mcp__claude_ai_Notion__notion-upload-skill",
+     "mcp__claude_ai_Notion__notion-view-version",
+     "mcp__claude_ai_Notion__notion-wait-session",
+     "mcp__spark-worker__spark_ask",
+     "mcp__spark-worker__spark_digest_log",
+     "mcp__spark-worker__spark_draft",
+     "mcp__spark-worker__spark_extract",
+     "mcp__spark-worker__spark_locate",
+     "mcp__spark-worker__spark_map",
+     "mcp__spark-worker__spark_pi_cancel",
+     "mcp__spark-worker__spark_pi_discard",
+     "mcp__spark-worker__spark_pi_result",
+     "mcp__spark-worker__spark_pi_start",
+     "mcp__spark-worker__spark_pi_status",
+     "mcp__spark-worker__spark_pi_wait",
+     "mcp__spark-worker__spark_read",
+     "mcp__spark-worker__spark_review_diff",
+     "mcp__spark-worker__spark_status"
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "d2ef1090-f4dd-4726-bace-6c3e6f2a56d0"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-haiku-5-5",
+      "id": "msg_011CgXJzmmpbMPhoPx86fscr",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 25478,
+       "cache_read_input_tokens": 18028,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 25478
+       },
+       "output_tokens": 3,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": {
+       "cache_miss_reason": {
+        "type": "model_changed",
+        "cache_missed_input_tokens": 36803
+       }
+      },
+      "context_management": null
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "663c792f-31f7-4bff-966e-a64e078813f8",
+    "ttft_ms": 1178,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "b4b5c5d4-0a97-4147-80b5-b8a156ec1963",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "second"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "c788b7ea-8935-449e-bac9-504f316f6f71",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-haiku-5-5",
+     "id": "msg_011CgXJzmmpbMPhoPx86fscr",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "second"
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 25478,
+      "cache_read_input_tokens": 18028,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 25478
+      },
+      "output_tokens": 3,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": {
+      "cache_miss_reason": {
+       "type": "model_changed",
+       "cache_missed_input_tokens": 36803
+      }
+     },
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "6fd17f8f-d722-419a-96f3-a6e230cd98f6",
+    "timestamp": "2026-10-29T22:23:43.510Z",
+    "request_id": "req_masked"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "14a3d73d-a952-425a-86c9-228ba1bc9b7f",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 25478,
+      "cache_read_input_tokens": 18028,
+      "output_tokens": 3,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 18028,
+        "cache_creation_input_tokens": 25478,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 25478
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "6f649969-40ea-4258-bfdf-e4afd2b474a8",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "83a90aa7-af96-497f-86e4-5f0a363b9e82",
+    "api_message_id": "msg_011CgXJzmmpbMPhoPx86fscr"
+   }
+  },
+  {
+   "out": {
+    "duration_api_ms": 7734,
+    "stop_reason": "end_turn",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "total_cost_usd": 0.35103918,
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 25478,
+     "cache_read_input_tokens": 18028,
+     "output_tokens": 3,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 25478,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "global",
+     "iterations": [
+      {
+       "input_tokens": 2,
+       "output_tokens": 3,
+       "cache_read_input_tokens": 18028,
+       "cache_creation_input_tokens": 25478,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 25478
+       },
+       "type": "message"
+      }
+     ],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 8,
+      "outputTokens": 247,
+      "thinkingTokens": 0,
+      "cacheReadInputTokens": 109908,
+      "cacheCreationInputTokens": 39851,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39851,
+      "webSearchRequests": 0,
+      "costUSD": 0.3457616,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     },
+     "claude-haiku-5-5": {
+      "inputTokens": 2,
+      "outputTokens": 3,
+      "cacheReadInputTokens": 18028,
+      "cacheCreationInputTokens": 25478,
+      "webSearchRequests": 0,
+      "costUSD": 0.0052775800000000005,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 25478,
+      "canonicalModel": "claude-haiku-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "fast_mode_disabled_reason": "sdk_opt_in_required",
+    "subagent_stats": {
+     "spawned": 0,
+     "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+     },
+     "started_in_background": 0,
+     "max_depth": 0,
+     "spawned_by_subagents": 0,
+     "completed": 0,
+     "failed": 0,
+     "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+     },
+     "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+     },
+     "by_type": {}
+    },
+    "safety_stops": 0,
+    "is_error": false,
+    "num_turns": 1,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "second",
+    "ttft_ms": 1202,
+    "type": "result",
+    "duration_ms": 1222,
+    "uuid": "d4bd405f-cb50-4e5e-bf05-eb94b5d0c99f",
+    "ttft_stream_ms": 1202,
+    "time_to_request_ms": 26,
+    "time_to_request_phases_ms": {
+     "other": 4,
+     "system_prompt": 1,
+     "resume_other": 0,
+     "process_user_input": 0,
+     "input_attachments": 4,
+     "input_hooks": 1,
+     "transcript_persist": 2,
+     "tool_pool_refresh": 1,
+     "init_message": 1,
+     "engine_pickup": 1,
+     "message_prep": 0,
+     "model_config_wait": 0,
+     "autocompact": 1,
+     "query_setup": 0,
+     "model_gates": 1,
+     "tool_schema_build": 2,
+     "message_normalization": 2,
+     "client_creation": 1,
+     "request_build": 4
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 1,
+    "time_to_request_loop_lag_ms": 0,
+    "time_to_request_cpu_ms": 47,
+    "time_to_request_major_faults": 1522,
+    "input_attachments_detail": {
+     "slowest_producer": "deferred_tools_delta",
+     "slowest_producer_ms": 3,
+     "cpu_ms": 15,
+     "major_faults": 112,
+     "changed_files_reread": 0
+    },
+    "first_content_frame_ms": 1202,
+    "queued_turn_count": 0,
+    "result_index": 1,
+    "model_usage_since_last_result": {
+     "claude-haiku-5-5": {
+      "inputTokens": 2,
+      "outputTokens": 3,
+      "cacheReadInputTokens": 18028,
+      "cacheCreationInputTokens": 25478,
+      "webSearchRequests": 0,
+      "costUSD": 0.0052775800000000005,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 25478,
+      "canonicalModel": "claude-haiku-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  }
+ ]
+}

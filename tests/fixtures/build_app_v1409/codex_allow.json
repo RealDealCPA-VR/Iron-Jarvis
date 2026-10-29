@@ -1,0 +1,1288 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-10-29, codex-cli 0.157.0, this PC, scratch folder (masked) — untrusted + danger-full-access",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312807,
+      "updatedAt": 1793312807,
+      "recencyAt": 1793312807,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-26-47-01a189c5-dbad-7463-b568-0b39fd57450e.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "dangerFullAccess"
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312807,
+      "updatedAt": 1793312807,
+      "recencyAt": 1793312807,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-26-47-01a189c5-dbad-7463-b568-0b39fd57450e.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312807951
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312807981
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turn": {
+      "id": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312807,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312807981
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-e559-7c83-b65c-1632d504d833",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "List the files in this folder with a shell command, then create hello.txt containing the word hi. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312810330
+    },
+    "emittedAtMs": 1793312810330
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-e559-7c83-b65c-1632d504d833",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "List the files in this folder with a shell command, then create hello.txt containing the word hi. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312810330
+    },
+    "emittedAtMs": 1793312810332
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_00e548d3a0862cf0016ae3c82b4c388190b68d274ed1a1ce33",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312811664
+    },
+    "emittedAtMs": 1793312811664
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_00e548d3a0862cf0016ae3c82b4c388190b68d274ed1a1ce33",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312811664
+    },
+    "emittedAtMs": 1793312811665
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+      "text": "",
+      "phase": "commentary",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312811666
+    },
+    "emittedAtMs": 1793312811666
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": "I"
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": "’ll"
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " list"
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " the"
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " folder"
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": ","
+    },
+    "emittedAtMs": 1793312811674
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " then"
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " add"
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": "hello"
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": ".txt"
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+     "delta": "`."
+    },
+    "emittedAtMs": 1793312811730
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+      "text": "I’ll list the folder, then add `hello.txt`.",
+      "phase": "commentary",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312811755
+    },
+    "emittedAtMs": 1793312811757
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": [
+       "waitingOnApproval"
+      ]
+     }
+    },
+    "emittedAtMs": 1793312815239
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "commandExecution",
+      "id": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+      "pluginId": null,
+      "scriptPath": null,
+      "command": "\"C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\pwsh.exe\" -Command 'Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize'",
+      "cwd": "C:\\work\\demo",
+      "processId": null,
+      "source": "agent",
+      "status": "inProgress",
+      "commandActions": [
+       {
+        "type": "unknown",
+        "command": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize"
+       }
+      ],
+      "aggregatedOutput": null,
+      "exitCode": null,
+      "durationMs": null
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312815240
+    },
+    "emittedAtMs": 1793312815240
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/requestApproval",
+    "id": 0,
+    "params": {
+     "kind": "command",
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "startedAtMs": 1793312815239,
+     "environmentId": "local",
+     "command": "\"C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\pwsh.exe\" -Command 'Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize'",
+     "cwd": "C:\\work\\demo",
+     "commandActions": [
+      {
+       "type": "unknown",
+       "command": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize"
+      }
+     ],
+     "proposedExecpolicyAmendment": [
+      "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe",
+      "-Command",
+      "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize"
+     ],
+     "availableDecisions": [
+      "accept",
+      {
+       "acceptWithExecpolicyAmendment": {
+        "execpolicy_amendment": [
+         "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe",
+         "-Command",
+         "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize"
+        ]
+       }
+      },
+      "cancel"
+     ]
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0
+  },
+  {
+   "out": {
+    "method": "serverRequest/resolved",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "requestId": 0
+    },
+    "emittedAtMs": 1793312815240
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312815241
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "\r\n"
+    },
+    "emittedAtMs": 1793312816892
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "Mode  Length LastWriteTime         Name"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "\r\n"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "----  ------ -------------         ----"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "\r\n"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "-a---      7 10/29/2026 6:26:46 PM a.txt"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "\r\n"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/commandExecution/outputDelta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+     "delta": "\r\n"
+    },
+    "emittedAtMs": 1793312816905
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "commandExecution",
+      "id": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+      "pluginId": null,
+      "scriptPath": null,
+      "command": "\"C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\pwsh.exe\" -Command 'Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize'",
+      "cwd": "C:\\work\\demo",
+      "processId": "59631",
+      "source": "unifiedExecStartup",
+      "status": "completed",
+      "commandActions": [
+       {
+        "type": "unknown",
+        "command": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize"
+       }
+      ],
+      "aggregatedOutput": "\r\nMode  Length LastWriteTime         Name\r\n----  ------ -------------         ----\r\n-a---      7 10/29/2026 6:26:46 PM a.txt\r\n\r\n",
+      "exitCode": 0,
+      "durationMs": 746
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312816927
+    },
+    "emittedAtMs": 1793312816929
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 17421,
+       "inputTokens": 17278,
+       "cachedInputTokens": 11008,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 143,
+       "reasoningOutputTokens": 31
+      },
+      "last": {
+       "totalTokens": 17421,
+       "inputTokens": 17278,
+       "cachedInputTokens": 11008,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 143,
+       "reasoningOutputTokens": 31
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312816936
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 2,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312816936
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "fileChange",
+      "id": "exec-41928728-de4d-4f99-b61e-fa7ef75a7cdc",
+      "changes": [
+       {
+        "path": "C:\\work\\demo\\hello.txt",
+        "kind": {
+         "type": "add"
+        },
+        "diff": "hi\n"
+       }
+      ],
+      "status": "inProgress"
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312818452
+    },
+    "emittedAtMs": 1793312818452
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": [
+       "waitingOnApproval"
+      ]
+     }
+    },
+    "emittedAtMs": 1793312818453
+   }
+  },
+  {
+   "out": {
+    "method": "item/fileChange/requestApproval",
+    "id": 1,
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "exec-41928728-de4d-4f99-b61e-fa7ef75a7cdc",
+     "startedAtMs": 1793312818453,
+     "reason": null,
+     "grantRoot": null
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 1
+  },
+  {
+   "out": {
+    "method": "serverRequest/resolved",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "requestId": 1
+    },
+    "emittedAtMs": 1793312818453
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312818453
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "fileChange",
+      "id": "exec-41928728-de4d-4f99-b61e-fa7ef75a7cdc",
+      "changes": [
+       {
+        "path": "C:\\work\\demo\\hello.txt",
+        "kind": {
+         "type": "add"
+        },
+        "diff": "hi\n"
+       }
+      ],
+      "status": "completed"
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312818454
+    },
+    "emittedAtMs": 1793312818456
+   }
+  },
+  {
+   "out": {
+    "method": "turn/diff/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "diff": "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..45b983be36b73c0788dc9cbcb76cbb80fc7bb057\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hi\n"
+    },
+    "emittedAtMs": 1793312818456
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 35903,
+       "inputTokens": 35688,
+       "cachedInputTokens": 17920,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 215,
+       "reasoningOutputTokens": 31
+      },
+      "last": {
+       "totalTokens": 18482,
+       "inputTokens": 18410,
+       "cachedInputTokens": 6912,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 72,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312818502
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 3,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312818502
+   }
+  },
+  {
+   "out": {
+    "method": "turn/diff/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "diff": "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..45b983be36b73c0788dc9cbcb76cbb80fc7bb057\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hi\n"
+    },
+    "emittedAtMs": 1793312818502
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+      "text": "",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "startedAtMs": 1793312819415
+    },
+    "emittedAtMs": 1793312819415
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "Listed"
+    },
+    "emittedAtMs": 1793312819418
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793312819419
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "a"
+    },
+    "emittedAtMs": 1793312819419
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": ".txt"
+    },
+    "emittedAtMs": 1793312819419
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "`"
+    },
+    "emittedAtMs": 1793312819419
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " and"
+    },
+    "emittedAtMs": 1793312819419
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " created"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "hello"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": ".txt"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "`"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " containing"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "hi"
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "itemId": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+     "delta": "`."
+    },
+    "emittedAtMs": 1793312819486
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+      "text": "Listed `a.txt` and created `hello.txt` containing `hi`.",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "completedAtMs": 1793312819549
+    },
+    "emittedAtMs": 1793312819551
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 54428,
+       "inputTokens": 54194,
+       "cachedInputTokens": 36096,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 234,
+       "reasoningOutputTokens": 31
+      },
+      "last": {
+       "totalTokens": 18525,
+       "inputTokens": 18506,
+       "cachedInputTokens": 18176,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 19,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312819557
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 3,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312819557
+   }
+  },
+  {
+   "out": {
+    "method": "turn/diff/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+     "diff": "diff --git a/hello.txt b/hello.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..45b983be36b73c0788dc9cbcb76cbb80fc7bb057\n--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hi\n"
+    },
+    "emittedAtMs": 1793312819557
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793312821291
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turn": {
+      "id": "01a189c5-dc11-7853-a5cd-2f17bebd1be3",
+      "items": [
+       {
+        "type": "agentMessage",
+        "id": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+        "text": "Listed `a.txt` and created `hello.txt` containing `hi`.",
+        "phase": "final_answer",
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+       }
+      ],
+      "itemsView": "summary",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1793312807,
+      "completedAt": 1793312821,
+      "durationMs": 13321
+     }
+    },
+    "emittedAtMs": 1793312821291
+   }
+  }
+ ]
+}

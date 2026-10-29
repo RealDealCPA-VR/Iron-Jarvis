@@ -1,0 +1,932 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-10-29, codex-cli 0.157.0, this PC, scratch folder (masked) — on-request + workspace-write, declined",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "on-request",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312757116
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759382
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759384
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0d89af7783f9ad0b016ae3c7f861d481948e1a2c6d7ea210df",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312760733
+    },
+    "emittedAtMs": 1793312760734
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0d89af7783f9ad0b016ae3c7f861d481948e1a2c6d7ea210df",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312760734
+    },
+    "emittedAtMs": 1793312760736
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+      "text": "",
+      "phase": "commentary",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312760809
+    },
+    "emittedAtMs": 1793312760809
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": "I"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": "’ll"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": " create"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": " the"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": " requested"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": " file"
+    },
+    "emittedAtMs": 1793312760815
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+     "delta": "."
+    },
+    "emittedAtMs": 1793312760896
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+      "text": "I’ll create the requested file.",
+      "phase": "commentary",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312760982
+    },
+    "emittedAtMs": 1793312760984
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "fileChange",
+      "id": "exec-92f644d8-dc2b-4c1f-823c-4a89c1887d5b",
+      "changes": [
+       {
+        "path": "C:\\work\\demo\\deny.txt",
+        "kind": {
+         "type": "add"
+        },
+        "diff": "no\n"
+       }
+      ],
+      "status": "inProgress"
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312769501
+    },
+    "emittedAtMs": 1793312769945
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "active",
+      "activeFlags": [
+       "waitingOnApproval"
+      ]
+     }
+    },
+    "emittedAtMs": 1793312769973
+   }
+  },
+  {
+   "out": {
+    "method": "item/fileChange/requestApproval",
+    "id": 0,
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "exec-92f644d8-dc2b-4c1f-823c-4a89c1887d5b",
+     "startedAtMs": 1793312769973,
+     "reason": "command failed; retry without sandbox?",
+     "grantRoot": null
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0
+  },
+  {
+   "out": {
+    "method": "serverRequest/resolved",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "requestId": 0
+    },
+    "emittedAtMs": 1793312769974
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312769974
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "fileChange",
+      "id": "exec-92f644d8-dc2b-4c1f-823c-4a89c1887d5b",
+      "changes": [
+       {
+        "path": "C:\\work\\demo\\deny.txt",
+        "kind": {
+         "type": "add"
+        },
+        "diff": "no\n"
+       }
+      ],
+      "status": "declined"
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312769974
+    },
+    "emittedAtMs": 1793312769976
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 20239,
+       "inputTokens": 20159,
+       "cachedInputTokens": 11008,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 80,
+       "reasoningOutputTokens": 14
+      },
+      "last": {
+       "totalTokens": 20239,
+       "inputTokens": 20159,
+       "cachedInputTokens": 11008,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 80,
+       "reasoningOutputTokens": 14
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312769981
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 1,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312769981
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0d89af7783f9ad0b016ae3c80382d88194bfb30f6c1c84bb31",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312771877
+    },
+    "emittedAtMs": 1793312771877
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0d89af7783f9ad0b016ae3c80382d88194bfb30f6c1c84bb31",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312771877
+    },
+    "emittedAtMs": 1793312771879
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+      "text": "",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312771984
+    },
+    "emittedAtMs": 1793312771985
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "Could"
+    },
+    "emittedAtMs": 1793312771985
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "n"
+    },
+    "emittedAtMs": 1793312772118
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "’t"
+    },
+    "emittedAtMs": 1793312772118
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " create"
+    },
+    "emittedAtMs": 1793312772118
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " `"
+    },
+    "emittedAtMs": 1793312772118
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "deny"
+    },
+    "emittedAtMs": 1793312772119
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": ".txt"
+    },
+    "emittedAtMs": 1793312772120
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "`:"
+    },
+    "emittedAtMs": 1793312772120
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " the"
+    },
+    "emittedAtMs": 1793312772120
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " file"
+    },
+    "emittedAtMs": 1793312772120
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "-change"
+    },
+    "emittedAtMs": 1793312772120
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " request"
+    },
+    "emittedAtMs": 1793312772193
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " was"
+    },
+    "emittedAtMs": 1793312772193
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": " rejected"
+    },
+    "emittedAtMs": 1793312772193
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "itemId": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+     "delta": "."
+    },
+    "emittedAtMs": 1793312772193
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+      "text": "Couldn’t create `deny.txt`: the file-change request was rejected.",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312772231
+    },
+    "emittedAtMs": 1793312772232
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 41496,
+       "inputTokens": 41354,
+       "cachedInputTokens": 18944,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 142,
+       "reasoningOutputTokens": 55
+      },
+      "last": {
+       "totalTokens": 21257,
+       "inputTokens": 21195,
+       "cachedInputTokens": 7936,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 62,
+       "reasoningOutputTokens": 41
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312772261
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 2,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312772261
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793312774479
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [
+       {
+        "type": "agentMessage",
+        "id": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+        "text": "Couldn’t create `deny.txt`: the file-change request was rejected.",
+        "phase": "final_answer",
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+       }
+      ],
+      "itemsView": "summary",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": 1793312774,
+      "durationMs": 17346
+     }
+    },
+    "emittedAtMs": 1793312774479
+   }
+  }
+ ]
+}

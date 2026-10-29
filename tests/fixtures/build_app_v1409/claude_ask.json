@@ -1,0 +1,968 @@
+{
+ "harness": "claude-code",
+ "source": "recorded live 2026-10-29, Claude Code 2.1.311, this PC, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "control",
+   "subtype": "initialize"
+  },
+  {
+   "out": {
+    "type": "control_response",
+    "response": {
+     "subtype": "success",
+     "request_id": "init-1",
+     "response": {
+      "commands": [
+       {
+        "name": "init",
+        "description": "Set up a CLAUDE.md file",
+        "argumentHint": ""
+       }
+      ],
+      "models": []
+     },
+     "pending_permission_requests": [],
+     "pending_user_dialog_requests": []
+    }
+   },
+   "reply_to_control": "initialize"
+  },
+  {
+   "await": "user"
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\work\\demo",
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "model": "claude-opus-5-5",
+    "permissionMode": "default",
+    "tools": [
+     "Task",
+     "AskUserQuestion",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "DesignSync",
+     "Edit",
+     "EnterPlanMode",
+     "EnterWorktree",
+     "ExitPlanMode",
+     "ExitWorktree",
+     "Glob",
+     "Grep",
+     "ListAgents",
+     "Monitor",
+     "NotebookEdit",
+     "PowerShell",
+     "PushNotification",
+     "Read",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write"
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "uuid": "0e5bcfa4-ecb0-45ac-9b56-a54d11eab94a"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJv7nhLQoGRYz6dF9LM",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 14013,
+       "cache_read_input_tokens": 18028,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 14013
+       },
+       "output_tokens": 25,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "5d0c7b24-1cfd-411c-9c0a-dae3b8cfcc6c",
+    "ttft_ms": 941,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "tool_use",
+      "id": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+      "name": "AskUserQuestion",
+      "input": {},
+      "caller": {
+       "type": "direct"
+      }
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "70917b7f-ff04-46a1-a812-9165caf207be",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ""
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "4283de2a-3102-49a1-a956-29728f2fba0e",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"questions\": [{\"question\": \"Which"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "a79fbe95-b407-4358-a479-efa958de9159",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " colour do you prefer?"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "6d79e130-1183-4079-8e1d-ae57c78b36d8",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"header\": \"Colour"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "53a031c1-2c84-452a-bd32-6f7070087a6c",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"options\": [{\"label"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "2024d3e5-d2a3-4242-80d4-351b870b7a2b",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\": \"Red\", \"description\":"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "e682f8f8-2ad0-49db-be9c-2998b890b073",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " \"The colour red\"},"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "2f480d02-d0ed-4444-9a4f-db028743d155",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " {\"label\": \"Blue"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "50da264e-73de-4a42-88ec-6f2c7763a5d9",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"description\": \"The colour"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "e0fa21a3-5420-4ebf-9fed-7e7c9fdd5a04",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " blue\"}], \"multi"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "4077c143-b800-4db5-a915-d29a8a02b27e",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "Select\": false}]"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "d0b50d53-4f4b-4d5d-9b5f-3271d6b3f4b0",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "}"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "1b6f33ba-605e-4e47-abb7-6766c6ade172",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJv7nhLQoGRYz6dF9LM",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+       "name": "AskUserQuestion",
+       "input": {
+        "questions": [
+         {
+          "question": "Which colour do you prefer?",
+          "header": "Colour",
+          "options": [
+           {
+            "label": "Red",
+            "description": "The colour red"
+           },
+           {
+            "label": "Blue",
+            "description": "The colour blue"
+           }
+          ],
+          "multiSelect": false
+         }
+        ]
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 14013,
+      "cache_read_input_tokens": 18028,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 14013
+      },
+      "output_tokens": 25,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "uuid": "04729634-db4b-4b9d-8698-a358f775d93a",
+    "timestamp": "2026-10-29T22:22:41.068Z",
+    "request_id": "req_masked",
+    "wire_tool_inputs": {
+     "toolu_015i6Mu8n5F1yYuh8vNy5HQL": {
+      "questions": [
+       {
+        "question": "Which colour do you prefer?",
+        "header": "Colour",
+        "options": [
+         {
+          "label": "Red",
+          "description": "The colour red"
+         },
+         {
+          "label": "Blue",
+          "description": "The colour blue"
+         }
+        ],
+        "multiSelect": false
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "control_request",
+    "request_id": "b300c158-321f-48d7-8271-cfbd16c93ce2",
+    "request": {
+     "subtype": "can_use_tool",
+     "tool_name": "AskUserQuestion",
+     "display_name": "AskUserQuestion",
+     "input": {
+      "questions": [
+       {
+        "question": "Which colour do you prefer?",
+        "header": "Colour",
+        "options": [
+         {
+          "label": "Red",
+          "description": "The colour red"
+         },
+         {
+          "label": "Blue",
+          "description": "The colour blue"
+         }
+        ],
+        "multiSelect": false
+       }
+      ]
+     },
+     "tool_use_id": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+     "requires_user_interaction": true
+    }
+   }
+  },
+  {
+   "await": "response",
+   "request_id": "b300c158-321f-48d7-8271-cfbd16c93ce2"
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "5e19f7ad-ffd9-4916-a4fb-1b3fe2c1419b",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "content": "The user answered: \"Which colour do you prefer?\"=\"blue\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.",
+       "tool_use_id": "toolu_015i6Mu8n5F1yYuh8vNy5HQL"
+      }
+     ]
+    },
+    "parent_tool_use_id": null,
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "uuid": "d6943389-b1f8-4a0a-80b8-29d1fe09a6a4",
+    "timestamp": "2026-10-29T22:22:41.080Z",
+    "tool_use_result": {
+     "questions": [
+      {
+       "question": "Which colour do you prefer?",
+       "header": "Colour",
+       "options": [
+        {
+         "label": "Red",
+         "description": "The colour red"
+        },
+        {
+         "label": "Blue",
+         "description": "The colour blue"
+        }
+       ],
+       "multiSelect": false
+      }
+     ],
+     "answers": {
+      "Which colour do you prefer?": "blue"
+     }
+    },
+    "tool_result_meta": [
+     {
+      "id": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+      "permission_decision": {
+       "decision": "accept",
+       "source": "user_temporary"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 14013,
+      "cache_read_input_tokens": 18028,
+      "output_tokens": 131,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 131,
+        "cache_read_input_tokens": 18028,
+        "cache_creation_input_tokens": 14013,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 14013
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "e5b627bd-27e4-4084-8b16-7fa4a57d05c0",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "d63ef397-98b6-4f0a-89a7-844dfd556632",
+    "api_message_id": "msg_011CgXJv7nhLQoGRYz6dF9LM"
+   }
+  },
+  {
+   "out": {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+     "status": "allowed",
+     "resetsAt": 1793318400,
+     "rateLimitType": "five_hour",
+     "overageStatus": "rejected",
+     "overageDisabledReason": "out_of_credits",
+     "isUsingOverage": false,
+     "unifiedWindows": {
+      "five_hour": {
+       "utilization": 0.24,
+       "resetsAt": 1793318400,
+       "status": "allowed"
+      },
+      "seven_day": {
+       "utilization": 0.27,
+       "resetsAt": 1793502000,
+       "status": "allowed"
+      }
+     }
+    },
+    "uuid": "3404ff46-f562-4202-b438-991c9b10e93b",
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "uuid": "2cc4a936-66a5-4b14-ab86-8bb7e5735fcc"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJvFxpsRJZjrpR6pUUu",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 6924,
+       "cache_read_input_tokens": 32041,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 6924
+       },
+       "output_tokens": 5,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "7bb7b3d3-5d1b-456a-88ce-65b00b7b80b4",
+    "ttft_ms": 611,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "7b79f06d-ebb5-42c7-acf2-aaa6452b98e8",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "Blue"
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "c60c6caa-3e79-4629-939e-24dafd4710e3",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJvFxpsRJZjrpR6pUUu",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "Blue"
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 6924,
+      "cache_read_input_tokens": 32041,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 6924
+      },
+      "output_tokens": 5,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "uuid": "3d3f5bdb-4660-4af8-a783-40b252d4643c",
+    "timestamp": "2026-10-29T22:22:41.711Z",
+    "request_id": "req_masked"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "95692673-b890-409c-8bab-44c4894e54a1",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 6924,
+      "cache_read_input_tokens": 32041,
+      "output_tokens": 5,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 32041,
+        "cache_creation_input_tokens": 6924,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 6924
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "1d505d00-2018-4533-bc7e-c2314e72004d",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "parent_tool_use_id": null,
+    "uuid": "968fe2d1-56f5-4be7-b17a-694f7a01682a",
+    "api_message_id": "msg_011CgXJvFxpsRJZjrpR6pUUu"
+   }
+  },
+  {
+   "out": {
+    "duration_api_ms": 2557,
+    "stop_reason": "end_turn",
+    "session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "total_cost_usd": 0.1802458,
+    "usage": {
+     "input_tokens": 4,
+     "cache_creation_input_tokens": 20937,
+     "cache_read_input_tokens": 50069,
+     "output_tokens": 136,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 20937,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "global",
+     "iterations": [
+      {
+       "input_tokens": 2,
+       "output_tokens": 5,
+       "cache_read_input_tokens": 32041,
+       "cache_creation_input_tokens": 6924,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 6924
+       },
+       "type": "message"
+      }
+     ],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 4,
+      "outputTokens": 136,
+      "cacheReadInputTokens": 50069,
+      "cacheCreationInputTokens": 20937,
+      "webSearchRequests": 0,
+      "costUSD": 0.1802458,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 20937,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "fast_mode_disabled_reason": "sdk_opt_in_required",
+    "subagent_stats": {
+     "spawned": 0,
+     "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+     },
+     "started_in_background": 0,
+     "max_depth": 0,
+     "spawned_by_subagents": 0,
+     "completed": 0,
+     "failed": 0,
+     "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+     },
+     "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+     },
+     "by_type": {}
+    },
+    "safety_stops": 0,
+    "is_error": false,
+    "num_turns": 2,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "Blue",
+    "ttft_ms": 2214,
+    "type": "result",
+    "duration_ms": 2871,
+    "uuid": "dfe53e84-d84d-4b4f-8858-3d4cb9432265",
+    "ttft_stream_ms": 1243,
+    "time_to_request_ms": 305,
+    "time_to_request_phases_ms": {
+     "other": 17,
+     "system_prompt": 221,
+     "resume_other": 0,
+     "process_user_input": 3,
+     "input_attachments": 12,
+     "input_hooks": 3,
+     "transcript_persist": 9,
+     "tool_pool_refresh": 2,
+     "init_message": 9,
+     "engine_pickup": 1,
+     "message_prep": 0,
+     "model_config_wait": 1,
+     "autocompact": 3,
+     "query_setup": 0,
+     "model_gates": 1,
+     "tool_schema_build": 10,
+     "message_normalization": 2,
+     "client_creation": 3,
+     "request_build": 8
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 0,
+    "time_to_request_loop_lag_ms": 115,
+    "time_to_request_cpu_ms": 563,
+    "time_to_request_major_faults": 14078,
+    "input_attachments_detail": {
+     "slowest_producer": "queued_commands",
+     "slowest_producer_ms": 8,
+     "cpu_ms": 0,
+     "major_faults": 607
+    },
+    "first_content_frame_ms": 1243,
+    "queued_turn_count": 0,
+    "result_index": 0,
+    "model_usage_since_last_result": {
+     "claude-opus-5-5": {
+      "inputTokens": 4,
+      "outputTokens": 136,
+      "cacheReadInputTokens": 50069,
+      "cacheCreationInputTokens": 20937,
+      "webSearchRequests": 0,
+      "costUSD": 0.1802458,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 20937,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  }
+ ]
+}
