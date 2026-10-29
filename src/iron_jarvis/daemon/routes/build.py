@@ -4135,6 +4135,42 @@ def register(app: FastAPI, d: Any) -> None:
             raise HTTPException(status_code=404, detail="The agent's browser has no picture yet.")
         return Response(content=data, media_type="image/jpeg")
 
+    @app.get("/build/sessions/{thread_id}/programs")
+    def build_session_programs(thread_id: str) -> dict[str, Any]:
+        """v1.404.0 (the Session tab): the programs this session started in
+        the background (``process_start``), newest first, each ``{id,
+        command, running, left_running, stopped, exit_code, ran_s,
+        started_s}`` — the command masked and cut to one line, never its
+        output or a pid — and ``others``: how many of its commands left a
+        program running with no handle to it (``npm run dev &``; they end
+        with the session). A helper's own programs run under the helper's run
+        and are not here. In memory (a ``poll`` and a Job query per program,
+        never a process started). Sync: the threadpool runs it."""
+        from ...core import procs
+        from ...harness.process import program_rows
+
+        _session_or_404(thread_id)
+        session = S.session_id_for(thread_id)
+        return {"programs": program_rows(session), "others": procs.kept_running(session)}
+
+    @app.post("/build/sessions/{thread_id}/programs/{program_id}/stop")
+    def stop_build_session_program(thread_id: str, program_id: str) -> dict[str, Any]:
+        """v1.404.0: the user's Stop on the Session tab — that program and
+        everything it started (the ``process_stop`` tool's own stop). It stays
+        listed, as stopped, so the session's next read of it says so. 404 for
+        an unknown session or program. Sync (a tree kill blocks): the
+        threadpool runs it."""
+        from ...harness.process import CouldNotStop, stop_program
+
+        _session_or_404(thread_id)
+        try:
+            row = stop_program(S.session_id_for(thread_id), program_id)
+        except CouldNotStop as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        if row is None:
+            raise HTTPException(status_code=404, detail="That program is no longer listed for this session.")
+        return {"program": row}
+
     @app.patch("/build/sessions/{thread_id}")
     def patch_build_session(thread_id: str, body: BuildSessionPatch) -> dict[str, Any]:
         """PARTIAL: title, model / provider / reasoning, approval mode, mode

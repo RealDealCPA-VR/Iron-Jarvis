@@ -97,6 +97,8 @@ class ManagedProcess:
     #: The shell that started it (v1.386.0): "bash" (Git for Windows' bash,
     #: a bash-written command) or "" (the platform's own: cmd.exe / sh).
     shell: str = ""
+    #: The command as the Session tab shows it (v1.404.0), masked once.
+    shown: str = ""
 
     @property
     def total(self) -> int:
@@ -291,6 +293,131 @@ def end_session(session_id: str | None) -> list[int]:
 procs.add_end_hook(end_session)
 
 
+#: The Session tab shows a command at most this long (one line).
+SHOWN_COMMAND_CHARS = 200
+#: How long after its command ended a Job member still counts as "left
+#: running" (review: Windows' console host, conhost.exe, stays a member for
+#: some 10-40 ms after every command, and read as a program left behind).
+LEFT_GRACE_S = 1.0
+
+
+def _shown_command(command: str) -> str:
+    """One line, masked BEFORE the cut (a command line can carry a key — the
+    v1.349.0 rule: a cut must never leave half a secret readable): a key in a
+    known shape, and the word after a secret-named flag (``--api-key VALUE``,
+    ``--token VALUE`` — the MCP pack rule, ``mcp/secrets.split_args``). A
+    secret in no known shape (``-pS3cret``) is NOT caught."""
+    import shlex
+
+    from ..mcp.secrets import split_args
+    from ..providers.failure_words import mask_failure_text
+
+    text = str(command or "")
+    try:
+        # Quotes kept together (posix=False keeps them in the word), so
+        # `--token "abc def"` hides the whole value, not "abc".
+        raw = shlex.split(text, posix=False)
+    except ValueError:
+        raw = text.split()
+    words, _ = split_args([" ".join(w.split()) for w in raw])
+    line = mask_failure_text(" ".join(words))
+    return line if len(line) <= SHOWN_COMMAND_CHARS else line[: SHOWN_COMMAND_CHARS - 1].rstrip() + "…"
+
+
+def _left_running(mp: ManagedProcess) -> bool:
+    """The command itself has ended but something it STARTED still runs
+    (``start /b node server.js``, ``npm run dev &``): a live member of its
+    Job, else (no Job: not Windows, or none could be made) its output pipe
+    still held open by a child."""
+    if mp.stopped:
+        return False
+    if mp.ended_at is not None and time.monotonic() - mp.ended_at < LEFT_GRACE_S:
+        return False
+    job = procs._job_of(mp.proc)
+    if job is not None and not job.closed:
+        return bool(job.member_pids())
+    return not mp.eof
+
+
+def program_row(mp: ManagedProcess, now: float | None = None) -> dict[str, Any]:
+    """What the Session tab shows of one program (v1.404.0) — never its
+    output and never a pid. ``running``: the command or anything it started
+    still runs; ``left_running``: only what it started does (its own
+    ``exit_code`` is then known). ``ran_s``: how long it ran (to now while
+    anything of it runs); ``started_s``: how long ago it started."""
+    t = time.monotonic() if now is None else now
+    code = mp.returncode()
+    own = not mp.stopped and code is None
+    left = not own and _left_running(mp)
+    running = own or left
+    end = t if running else (mp.ended_at or t)
+    if not mp.shown:
+        mp.shown = _shown_command(mp.command)
+    return {
+        "id": mp.handle,
+        "command": mp.shown,
+        "running": running,
+        "left_running": left,
+        "stopped": bool(mp.stopped),
+        "exit_code": None if (own or mp.stopped) else code,
+        "ran_s": max(0, int(end - mp.started_at)),
+        "started_s": max(0, int(t - mp.started_at)),
+    }
+
+
+def program_rows(session_id: str) -> list[dict[str, Any]]:
+    """The programs ``session_id`` started with ``process_start`` (Claude
+    Code's ``Bash`` with ``run_in_background``, Codex's ``exec_command``),
+    newest first: the running ones and the finished ones the table still
+    keeps. In memory; never raises."""
+    try:
+        rows = sorted(TABLE.sessions(session_id), key=lambda mp: mp.started_at, reverse=True)
+        now = time.monotonic()
+        return [program_row(mp, now) for mp in rows]
+    except Exception:  # noqa: BLE001 — a status read never fails the screen
+        return []
+
+
+class CouldNotStop(Exception):
+    """The Stop could not reach what the program started (v1.404.0 review):
+    no Job holds it and its command had already ended, so the tree kill had
+    nothing to walk from. It is NOT marked stopped."""
+
+
+#: What the user is told when :class:`CouldNotStop`.
+COULD_NOT_STOP = (
+    "Iron Jarvis could not reach what this command started, so it may still be running. "
+    "Close it in the program itself, or end it in Task Manager."
+)
+
+
+def stop_program(session_id: str, handle: str) -> dict[str, Any] | None:
+    """The USER's Stop on the Session tab (v1.404.0): stop one program of
+    ``session_id`` and everything it started (the tool's own ``_stop``).
+    Unlike ``process_stop`` the program stays LISTED, as stopped, so the
+    session's next ``process_read`` says it was stopped instead of "no such
+    program". BLOCKING (a tree kill): call it off the event loop. ``None``
+    when the session has no program by that id."""
+    mp = TABLE.get(session_id, str(handle or "").strip())
+    if mp is None:
+        return None
+    if mp.running() or _left_running(mp):
+        job = procs._job_of(mp.proc)
+        held = job is not None and not job.closed
+        _stop(mp)
+        if not mp.stopped and not held and not mp.eof:
+            # No Job, the command already gone: nothing reached the child,
+            # which still holds the output open. Say so; claim no stop.
+            raise CouldNotStop(COULD_NOT_STOP)
+        if not mp.stopped:
+            # Its command had ended and what it started ran on: that is ended
+            # now (the Job's terminate reaches every member), and the stop is
+            # the user's.
+            mp.stopped = True
+            mp.ended_at = time.monotonic()
+    return program_row(mp)
+
+
 def _reader(mp: ManagedProcess) -> None:
     stream = getattr(mp.proc, "stdout", None)
     try:
@@ -304,6 +431,15 @@ def _reader(mp: ManagedProcess) -> None:
         pass
     finally:
         mp.eof = True
+        # v1.404.0: stamp when it ended NOW, not when someone next looks —
+        # an unread 10-second run read "ended after 30 min" on the Session
+        # tab. Bounded: a program that closed its output and lives on is
+        # left to the next look.
+        try:
+            mp.proc.wait(timeout=STOP_DRAIN_S)
+        except Exception:  # noqa: BLE001
+            pass
+        mp.returncode()
 
 
 def _status_line(mp: ManagedProcess) -> str:

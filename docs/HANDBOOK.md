@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.403.0 (2026-10-25).*
+holds itself to. Current as of v1.404.0 (2026-10-25).*
 
 ---
 
@@ -1941,6 +1941,51 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The Session tab in a coding session (v1.404.0)
+
+A coding session's right-hand pane has a seventh icon, **Session**, after
+Files. It shows the session at a glance:
+
+- **Where it works**: this computer, the folder (with **Open**), the branch
+  it works on (or that it works in the folder directly), whether the session
+  is Local only (nothing in it leaves this PC without asking you), and the
+  instruction files the newest reply followed, such as CLAUDE.md.
+- **What answers**: the model and its reasoning level, the account and how
+  much of its window is used, the approval level, plan mode, and the team
+  when the session has one.
+- **Context**: how full the conversation is for the model, from the newest
+  reply's own reading. Nothing is shown before the first reply. After
+  **Compact**, the old reading is out of date, so the tab says the earlier
+  turns are summarized until the next reply measures again.
+- **Last attachment**: the pictures and files you sent most recently, or the
+  files you picked with @, with the message's first words and when you sent
+  it (and the / skill, when one rode the same message). A message you are
+  sending right now counts at once. A picture or file opens in its own app
+  (never an .svg). Earlier uploads are listed under **Earlier uploads**, each
+  once.
+- **Changes**: how many files this session changed (read again every 15
+  seconds while a reply works), and **See changes**, which opens what this
+  session changed even when it works on its own branch.
+- **Background**: the helper agents working now, and the programs the
+  session started in the background (a dev server, say), each with how long
+  it has run. A command that ended but left what it started running (such as
+  `start /b node server.js`) says so and can be stopped too. **Stop** ends the
+  program and everything it started; it stays listed as stopped, and the
+  session reads that it was stopped. If Iron Jarvis cannot reach a program a
+  finished command left behind, Stop says so instead of claiming it. Programs
+  a command left running with a plain `&` are counted, not listed: they are
+  stopped when the session is archived or deleted, or when you quit Iron
+  Jarvis (a window such a command opened, like an editor, is left open and is
+  not counted). Programs a helper agent started belong to the helper's own run
+  and are not listed here. The list is read again every few seconds only while
+  something runs or the session is working, and only while the tab is shown.
+  If the list cannot be read, the tab says so.
+
+The tab reads only what the app already knows. A command line is cut to one
+line, and a key in a known shape, or the value after a flag such as
+`--api-key` or `--token` (quoted values whole), is hidden. A secret in no
+known shape (such as `-pS3cret`) can still show.
 
 ## A team for a coding session (v1.403.0)
 

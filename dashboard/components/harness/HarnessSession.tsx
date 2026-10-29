@@ -3172,6 +3172,10 @@ export function HarnessSession({
           timeline={timelineLive}
           models={catalog.models}
           account={currentAccount}
+          messages={shown}
+          modelWords={modelPart.text}
+          helpers={helpers}
+          busy={busy}
           undoFor={undoFor}
           onUndo={onUndo}
           onSessionChanged={() => void load()}

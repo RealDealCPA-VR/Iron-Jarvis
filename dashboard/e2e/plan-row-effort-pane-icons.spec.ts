@@ -49,8 +49,9 @@ const MODELS = [
   row("codex-cli", "gpt-6", { reasoning: BASE }),
   { provider: "mock", model: "mock-1", available: true, kind: "local", on_this_network: true },
 ];
-const TABS = ["plan", "timeline", "terminal", "changes", "browser", "files"] as const;
-const WORDS = ["Plan", "Timeline", "Terminal", "Changes", "Browser", "Files"];
+// v1.404.0: Session joined after Files.
+const TABS = ["plan", "timeline", "terminal", "changes", "browser", "files", "session"] as const;
+const WORDS = ["Plan", "Timeline", "Terminal", "Changes", "Browser", "Files", "Session"];
 
 async function stub(route: Route, body: unknown): Promise<void> {
   if (route.request().method() === "OPTIONS") {
@@ -192,7 +193,8 @@ for (const { width, height } of [
     }
     await shot(page, `tabs-rest-${width}`);
 
-    for (const t of ["plan", "files"] as const) {
+    // v1.404.0: and the rightmost, Session — the tip most likely to be cut.
+    for (const t of ["plan", "files", "session"] as const) {
       const box = (await page.getByTestId(`harness-pane-tab-${t}`).boundingBox())!;
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       // A passing pointer shows nothing: still faded just after it arrives.

@@ -568,6 +568,24 @@ def kept_jobs(session_id: str | None = None) -> int:
         return sum(1 for owner, _ in _KEPT if session_id is None or owner == session_id)
 
 
+def kept_running(session_id: str) -> int:
+    """How many of ``session_id``'s kept jobs still have a WINDOWLESS member
+    running (v1.404.0, the Session tab: a command that left a program running,
+    such as ``npm run dev &``) — exactly what :func:`end_session` will stop.
+    A window the user now has (an editor, a browser) is spared there and is
+    not counted here. Never raises."""
+    with _KEPT_LOCK:
+        mine = [job for owner, job in _KEPT if owner == session_id]
+    count = 0
+    for job in mine:
+        try:
+            if _windowless_members(job):
+                count += 1
+        except Exception:  # noqa: BLE001 — a status read never fails
+            pass
+    return count
+
+
 #: Callbacks run by :func:`end_session` (with the session id) and
 #: :func:`end_all` (with ``None`` = every session), v1.364.0. A module that
 #: keeps its OWN long-lived children per session (the IJ harness's

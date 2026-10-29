@@ -295,7 +295,8 @@ describe("the pane tabs: icons, the word on hover or focus", () => {
   it("each tab is an icon whose name is its word", () => {
     panes();
     const tabs = within(screen.getByTestId("harness-pane-tabs")).getAllByRole("tab");
-    expect(tabs).toHaveLength(6);
+    // v1.404.0: a seventh, Session (session-rail-v1404).
+    expect(tabs).toHaveLength(7);
     for (const t of PANE_TABS) {
       const tab = screen.getByRole("tab", { name: t.label });
       expect(tab.getAttribute("data-testid")).toBe(`harness-pane-tab-${t.value}`);

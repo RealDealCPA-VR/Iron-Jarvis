@@ -182,7 +182,8 @@ const BODY = FIXTURE.frames.filter(([e]) => e !== "done");
 
 describe("the Timeline tab sits beside Plan", () => {
   it("is the second tab, and opens the reply on one time axis", async () => {
-    expect(PANE_TABS.map((t) => t.label)).toEqual(["Plan", "Timeline", "Terminal", "Changes", "Browser", "Files"]);
+    // v1.404.0: Session joined after Files (session-rail-v1404).
+    expect(PANE_TABS.map((t) => t.label)).toEqual(["Plan", "Timeline", "Terminal", "Changes", "Browser", "Files", "Session"]);
     api.gets["/build/sessions/s1"] = view({
       messages: [FIXTURE.question, FIXTURE.line],
     });

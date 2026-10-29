@@ -20,7 +20,11 @@
  *  - files: `FilesPanel` (calm) on the session's folder;
  *  - timeline (v1.390.0): the reply on one time axis — the model you talk
  *    to, each step, each helper with its model (HarnessTimeline). Mounted
- *    only on its tab, so the running reply is read only while it is shown.
+ *    only on its tab, so the running reply is read only while it is shown;
+ *  - session (v1.404.0): one look at the session — where it works, what
+ *    answers it, how full the conversation is, the last attachment, what it
+ *    changed and what runs in the background (HarnessSessionRail). Mounted
+ *    only on its tab, so its reads run only while it is shown.
  *
  * The terminal tab, once opened, stays MOUNTED and is hidden with
  * `visibility` (never `display:none`, never an unmount — the Build terminal
@@ -28,13 +32,27 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ChartGantt, FileDiff, FolderOpen, Globe, ListChecks, Loader2, Plus, RefreshCw, SquareTerminal, type LucideIcon } from "lucide-react";
+import {
+  ChartGantt,
+  FileDiff,
+  FolderOpen,
+  Globe,
+  ListChecks,
+  Loader2,
+  Plus,
+  RefreshCw,
+  SquareMenu,
+  SquareTerminal,
+  type LucideIcon,
+} from "lucide-react";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
 import { BranchView } from "@/components/harness/HarnessBranch";
 import { HarnessTimeline, type LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
+import { SessionRail } from "@/components/harness/HarnessSessionRail";
+import type { HelperView } from "@/lib/buildHelpers";
 import type { CatalogRow } from "@/lib/answeredModel";
 import type { BuildAccount } from "@/lib/buildAccounts";
 import { ConfirmButton } from "@/components/ui";
@@ -47,6 +65,7 @@ import {
   planFromSession,
   readSessionTerminal,
   writeSessionTerminal,
+  type BuildMessage,
   type BuildSessionView,
 } from "@/lib/buildSessions";
 import type { TerminalInfo } from "@/lib/types";
@@ -64,7 +83,7 @@ export interface SessionTerminalApi {
   close: (id: string) => void;
 }
 
-export type PaneTab = "plan" | "timeline" | "terminal" | "changes" | "browser" | "files";
+export type PaneTab = "plan" | "timeline" | "terminal" | "changes" | "browser" | "files" | "session";
 
 /**
  * v1.401.2 (the user: the six words "seem a bit overwhelming … a small icon
@@ -83,6 +102,9 @@ export const PANE_TABS: readonly { value: PaneTab; label: string; icon: LucideIc
   { value: "changes", label: "Changes", icon: FileDiff },
   { value: "browser", label: "Browser", icon: Globe },
   { value: "files", label: "Files", icon: FolderOpen },
+  // v1.404.0 (the user: "add a sessions rail … next to the other icons"):
+  // the session at a glance, the last attachment included.
+  { value: "session", label: "Session", icon: SquareMenu },
 ];
 
 const TAB_KEY = "ij.build.pane";
@@ -342,9 +364,13 @@ function ChangesPane({
   onUndo,
   onSessionChanged,
   onSessionGone,
+  initialScope,
 }: {
   view: BuildSessionView;
   refreshKey: number;
+  /** v1.404.0: the Session tab's "See changes" opens "This session" — the
+   *  count it showed — even on a live branch. */
+  initialScope?: "session";
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   onSessionChanged?: () => void;
@@ -358,7 +384,7 @@ function ChangesPane({
   // view is one sentence and a merged branch's diff against its base is
   // empty, so those keep the old first view: what the session changed.)
   const [scope, setScope] = useState<"session" | "branch">(() =>
-    view.git && !view.git.removed && !view.git.merged ? "branch" : "session",
+    initialScope === "session" ? "session" : view.git && !view.git.removed && !view.git.merged ? "branch" : "session",
   );
   if (view.git && scope === "branch") {
     return (
@@ -478,9 +504,22 @@ export function HarnessPanes({
   timeline = null,
   models,
   account = null,
+  messages,
+  modelWords = "",
+  helpers = [],
+  busy = false,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
+  /** v1.404.0 (the Session tab): the conversation as shown — the question
+   *  being sent included, so its attachment is the last one at once. */
+  messages?: readonly BuildMessage[];
+  /** v1.404.0: the model as the box's chip names it. */
+  modelWords?: string;
+  /** v1.404.0: the running reply's helper agents. */
+  helpers?: readonly HelperView[];
+  /** v1.404.0: a reply is running. */
+  busy?: boolean;
   /** v1.390.0: the running reply's Timeline (HarnessSession folds it). */
   timeline?: LiveTimelineHandle | null;
   /** v1.390.0: the model list, for the Timeline's model names. */
@@ -520,6 +559,9 @@ export function HarnessPanes({
     if (hasPlan && !hadPlan.current && tab !== "plan") setPlanNew(true);
     hadPlan.current = hasPlan;
   }, [hasPlan, tab]);
+  // v1.404.0: the Changes view the Session tab's "See changes" asks for
+  // (null: the Changes tab's own first view).
+  const [changesScope, setChangesScope] = useState<"session" | null>(null);
   const choose = useCallback((t: PaneTab) => {
     setTab(t);
     if (t === "terminal") setTerminalOpened(true);
@@ -553,12 +595,16 @@ export function HarnessPanes({
               aria-selected={selected}
               aria-controls={`${baseId}-panel`}
               tabIndex={selected ? 0 : -1}
-              onClick={() => choose(t.value)}
+              onClick={() => {
+                setChangesScope(null);
+                choose(t.value);
+              }}
               onKeyDown={(e) => {
                 if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
                 e.preventDefault();
                 const i = PANE_TABS.findIndex((x) => x.value === t.value);
                 const next = PANE_TABS[(i + (e.key === "ArrowRight" ? 1 : -1) + PANE_TABS.length) % PANE_TABS.length];
+                setChangesScope(null);
                 choose(next.value);
                 document.getElementById(`${baseId}-tab-${next.value}`)?.focus();
               }}
@@ -606,6 +652,22 @@ export function HarnessPanes({
             onUndo={onUndo}
             onSessionChanged={onSessionChanged}
             onSessionGone={onSessionGone}
+            initialScope={changesScope ?? undefined}
+          />
+        ) : null}
+        {tab === "session" ? (
+          <SessionRail
+            view={view}
+            messages={messages ?? view.messages}
+            modelWords={modelWords}
+            account={account}
+            helpers={helpers}
+            busy={busy}
+            refreshKey={refreshKey}
+            onOpenChanges={() => {
+              setChangesScope("session");
+              choose("changes");
+            }}
           />
         ) : null}
         {tab === "browser" ? (

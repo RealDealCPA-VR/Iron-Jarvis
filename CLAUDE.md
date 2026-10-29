@@ -3885,6 +3885,58 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding session's SESSION tab reads what the app already knows; its one
+  new read is the session's background programs** (v1.404.0; the user, beside
+  a screenshot of Claude Code's session panel: "add a sessions rail … next to
+  the other icons … and have it display when selected information like the
+  last attachment"). `HarnessPanes.PANE_TABS` gains `session` (SquareMenu)
+  after Files; `components/harness/HarnessSessionRail.tsx` is mounted only on
+  its tab. Readings live in `lib/sessionRail.ts` (pure): `lastAttachment` =
+  the NEWEST user message (never a steer note or the daemon's `continuation`)
+  carrying `attachmentPaths` / `filePaths` (a `/` skill ALONE is not an
+  attachment — it buried the upload), read from the SHOWN conversation
+  HarnessSession passes (`messages={shown}`: the question being sent counts at
+  once); `earlierAttachments` lists older uploads each once; `openablePath` =
+  `openWayFor`'s rule (a local file, never an .svg) and the daemon's
+  `/documents/open` still decides. Context is `latestContext` (the daemon's
+  reading; nothing before the first reply), HIDDEN when a Compact summary is
+  newer (ContextMeter's rule), warning tone = `offersCompact`; the changes
+  count reuses `fetchTurnChangeSet` with the session's `build:<id>` journal,
+  re-read every `CHANGES_POLL_MS` while busy, and "See changes" opens the
+  Changes pane's "This session" scope (`initialScope`, cleared by any tab
+  press). DAEMON: `GET /build/sessions/{id}/programs` →
+  `harness/process.program_rows` (the session's `process_start` programs,
+  newest first, keys `{id, command, running, left_running, stopped,
+  exit_code, ran_s, started_s}` — never output, never a pid; the command
+  split quote-aware (`shlex.split(posix=False)`) and through
+  `mcp/secrets.split_args` (the value after `--api-key`/`--token`) then
+  `failure_words.mask_failure_text`, BEFORE the cut to one line of
+  `SHOWN_COMMAND_CHARS`, cached on `ManagedProcess.shown`) plus `others` =
+  `procs.kept_running` (kept jobs with a live WINDOWLESS member — exactly what
+  `end_session` stops; a window a command opened is spared and not counted).
+  `left_running`: the command ended but a member of its Job still runs
+  (`start /b node server.js`) — `running` stays true and Stop reaches it
+  (`_left_running`; the review found the first cut said "Ended (exit 0)" with
+  no Stop and the route did nothing). Members within `LEFT_GRACE_S` (1 s) of
+  the command's end do not count: conhost.exe stays a member for some 10-40 ms
+  after EVERY command (measured, 19 runs in 20). `POST …/programs/{pid}/stop`
+  → `stop_program` (the tool's own `_stop`, off the loop via the sync route)
+  and the program STAYS LISTED as stopped — `process_stop` removes it, but the
+  user's press must not, or the model's next `process_read` says "no
+  program". With NO Job and the command gone, a tree kill walks from a dead
+  pid: if the pipe is still held after `_stop`, it raises `CouldNotStop` → 409
+  in words, never a claimed stop (a Job's terminate is trusted). `_reader` stamps `ended_at` at EOF (bounded wait), so an unread
+  program's "ran for" is true. A helper's programs run under the helper's run
+  and are not listed. The tab re-reads programs every `PROGRAMS_POLL_MS` only
+  while something runs or the session works (`useVisibleInterval`); a read
+  that fails (not a 404) is SAID, never "nothing running"; a failed Stop keeps
+  its own error. Pins: `tests/test_session_rail_programs_v1404.py`,
+  `dashboard/__tests__/session-rail-v1404.test.tsx`, e2e
+  `dashboard/e2e/session-rail.spec.ts` (1280 × 800, 390 × 844: a real picture
+  loads, nothing wider than the pane); moved on purpose: the tab lists in
+  `ij-harness-panes-v1369`, `harness-timeline-live-v1390`,
+  `plan-row-effort-pane-icons-v1401-2` and its e2e.
+
 - **A CODING SESSION CAN HAVE A TEAM: the lead plans and checks and NEVER
   edits; workers do the code; the reviewer checks every change; a lead that
   had to do a piece itself SAYS SO** (v1.403.0; the user's decision after a

@@ -337,6 +337,8 @@ describe("the files pane", () => {
       "Changes",
       "Browser",
       "Files",
+      // v1.404.0 (moved on purpose): Session after Files (session-rail-v1404).
+      "Session",
     ]);
     fireEvent.keyDown(screen.getByTestId("harness-pane-tab-plan"), { key: "ArrowRight" });
     expect(screen.getByTestId("harness-pane-tab-timeline")).toHaveAttribute("aria-selected", "true");
