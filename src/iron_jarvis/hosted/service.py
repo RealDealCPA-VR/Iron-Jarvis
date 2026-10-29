@@ -708,9 +708,15 @@ class HostedService:
         return turn
 
     def _file_problems(self, files: list[str]) -> str:
+        """BLOCKING: an attached file must exist and pass the app's read policy."""
+        from ..core.fs_policy import fs_read_ok
+
         for f in files:
             if not os.path.isabs(f) or not os.path.isfile(f):
                 return f"Attached file not found: {clip(os.path.basename(f), 120)}"
+            ok, why = fs_read_ok(f)
+            if not ok:
+                return why or f"Iron Jarvis may not read {clip(os.path.basename(f), 120)}."
         return ""
 
     async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str]) -> None:
@@ -722,7 +728,7 @@ class HostedService:
             async with live.lock:
                 await self._ensure_running(live, row)
             if live.driver is None:
-                raise HarnessGone("the harness stopped")
+                raise HarnessGone("the coding tool stopped")
             await live.driver.send_user(text, files)
             if turn.running:
                 await turn.finished.wait()

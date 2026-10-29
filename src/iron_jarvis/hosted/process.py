@@ -153,14 +153,14 @@ class HarnessProcess:
     def write(self, obj: dict[str, Any]) -> None:
         proc = self.proc
         if proc is None or proc.stdin is None or self.stopped or proc.poll() is not None:
-            raise HarnessGone("the harness is not running")
+            raise HarnessGone("the coding tool is not running")
         data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
         with self._wlock:
             try:
                 proc.stdin.write(data)
                 proc.stdin.flush()
             except (BrokenPipeError, ConnectionResetError, OSError, ValueError) as exc:
-                raise HarnessGone(f"the harness stopped reading ({type(exc).__name__})") from exc
+                raise HarnessGone(f"the coding tool stopped reading its input ({type(exc).__name__})") from exc
 
     def stderr_text(self) -> str:
         return b"".join(self._stderr).decode("utf-8", errors="replace")[-2000:]
