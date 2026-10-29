@@ -480,6 +480,10 @@ class Config(BaseModel):
     #: skipped while that account is at or near its limit). Nothing is kept
     #: until the user accepts it.
     build_reflect: bool = True
+    #: v1.405.0: the code editor a coding session's "Open in …" presses open
+    #: (harness/code_editor): "auto" = VS Code when installed, else Cursor;
+    #: "vscode" / "cursor" = that one. Read live by GET /editor/options.
+    code_editor: str = "auto"
     #: OCR (v1.174.0) — scanned documents are transcribed by a VISION model
     #: (there is no tesseract in this app); off means a scan honestly reports
     #: "no text layer" instead of costing vision calls. `ocr_max_pages` bounds
@@ -883,6 +887,16 @@ class Config(BaseModel):
         if v not in ("low", "full"):
             raise ValueError("comm_trust must be low | full")
         return v
+
+    @field_validator("code_editor", mode="before")
+    @classmethod
+    def _clean_code_editor(cls, v: Any) -> str:
+        # v1.405.0: TOLERANT — an unknown value reads as "auto" (a hand-edited
+        # config.toml never stops a boot); the settings writer refuses it in
+        # words first (an enum's options).
+        from ..harness.code_editor import clean_setting
+
+        return clean_setting(v)
 
     @field_validator("readable_folders")
     @classmethod

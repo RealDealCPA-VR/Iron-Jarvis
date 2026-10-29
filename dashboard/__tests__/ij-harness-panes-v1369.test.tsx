@@ -243,7 +243,10 @@ describe("the changes pane", () => {
     };
     renderPanes(view());
     fireEvent.click(screen.getByTestId("harness-pane-tab-changes"));
-    expect(await screen.findByTestId("changed-files")).toBeInTheDocument();
+    // v1.405.0 (moved on purpose): the pane is ONE scrolling review — the
+    // file's diff shows without a press (it was a quiet "N files changed"
+    // line that opened a list and a dialog).
+    expect(await screen.findByTestId("changes-review")).toBeInTheDocument();
     const [, body] = api.posts.find(([p]) => p === "/chat/changes") ?? [];
     expect(body).toMatchObject({ session_id: "build:s1" });
   });

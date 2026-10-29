@@ -3525,6 +3525,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_attempts as _build_attempts_routes
 
     _build_attempts_routes.register(app, d)
+    # Open a file in VS Code / Cursor at a line (v1.405.0, harness/
+    # code_editor): the coding session's review pane, steps and findings.
+    from .routes import editor as _editor_routes
+
+    _editor_routes.register(app, d)
     # Night shift (v1.398.0, N1): Coding sessions › Tonight — the queue of
     # coding tasks that start by themselves in the night window, each on its
     # own branch (harness/night; the loop is started in the lifespan).

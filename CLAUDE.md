@@ -3885,6 +3885,81 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding session's Changes tab is ONE scrolling review, and every file,
+  hunk, step and finding opens in VS Code / Cursor at its line — the daemon
+  builds the editor's URL, never a client** (v1.405.0; the user: "Live where
+  the code is … Claude Code takes one press"). DAEMON: `harness/code_editor.py`
+  + `daemon/routes/editor.py` (registered after build_attempts). `GET
+  /editor/options` → `{editors: [{id, label, installed}], preferred,
+  preferred_label, setting, known, note}`; detection reads
+  `HKEY_CLASSES_ROOT\vscode|cursor` (a URL protocol whose open command's
+  program EXISTS — a stale key is not installed), cached `CACHE_S` 300, never
+  raises, `None` ("not known") off Windows or on an unexpected registry error;
+  `preferred`: "auto" = VS Code if installed else Cursor and never a guess
+  when nothing is known, a named editor stands unless KNOWN not installed.
+  `POST /editor/open {path, line?, column?, editor?}` (sync def: off the loop)
+  checks `check_position` (whole numbers, 1..10,000,000 / 1..100,000; a bool
+  is not a number), then `check_path`: a network share or device spelling
+  (`\\host`, `//host`, `\\?\`, `\\.\`) is refused BEFORE the file policy
+  (which resolves paths — an editor opening a model-written UNC path would
+  send a sign-in hash out, the v1.379.0 lesson), then absolute, the protected
+  roots (`NOT_ALLOWED`), the folder limits (the policy's own sentence), an
+  existing FILE (`MISSING` 404 / `A_FOLDER`); then `editor_url`:
+  `<scheme>://file/<path>:<line>:<col>` — forward slashes, `quote(safe="/:")`
+  (space, `#`, `%`, `?`, non-ASCII encoded; the drive colon kept), ALWAYS a
+  line and column (1 by default) so a name ending `:<digits>` is never a line;
+  launched by module-level `_launch_url` (the `_open_native` pattern — tests
+  spy it, nothing here ever opens a real editor). Every refusal is one plain
+  sentence (`EditorRefusal`). Setting `code_editor` (auto | vscode | cursor,
+  allow tier, a schema row after `build_auto_resume`; Config field tolerant:
+  an unknown value reads "auto"), read live. DASHBOARD: `lib/codeEditor.ts`
+  (`readEditorOptions` ONCE per page visit, a failed read forgotten;
+  `EditorContext` — `components/harness/OpenInEditor.SessionEditorProvider`
+  wraps `HarnessSession` and lends `{folder, label, open}` only when an
+  editor is preferred, so the CHAT PAGE and a PC with no editor render no
+  press anywhere; `resolveInFolder` (never a URL/scheme, a share, a device
+  path, `C:foo`, a `***` mask; a relative path joined to the folder and never
+  `..` out of it; an absolute path kept for a STEP, confined to the folder
+  for a FINDING); `stepEditorTarget` (read_file/write_file/edit_file/
+  multi_edit/apply_patch/notebook_edit from live args or the saved redacted
+  `detail.input` cut at 300 chars — a value whose closing quote was cut, or a
+  patch header whose newline was cut, opens nothing; a read's `offset` is the
+  line); `findEditorRefs` (a TIGHT `path:line`, `path:line:col`, `path#L12`
+  pattern: a separator or a source extension, never the tail of a word or a
+  URL)). `components/harness/ChangesReview.tsx` serves BOTH Changes views
+  (`HarnessPanes.SessionChanges` with the session's own `undoFor`/`onUndo` —
+  the receipt's undo, never a second path — and `hint`; `HarnessBranch`
+  with NO undo): every file's diff inline (no press, no dialog), a sticky
+  header (status, path, counts, changed since / undone / binary / note, Open
+  in <editor> at the first hunk's NEW line — none for a deleted file —, Undo,
+  Reviewed), "Open at line N" on each hunk (DiffView `hunkStart`'s newStart,
+  through `UnifiedRows`/`SplitRows`'s new `hunkAction`; DiffView itself draws
+  exactly as before), "N files changed +A −R · M of N reviewed", Collapse
+  reviewed / Expand all / Wide view (a `Modal`, side by side from `md`).
+  Reviewed marks: `lib/changesReview.ts`, localStorage
+  `ij.build.reviewed.<session>` = `path + NUL + diffHash` (FNV-1a over status +
+  diff), ≤ `MAX_MARKS` 1000 — a file whose diff changes is unreviewed by
+  itself; a reviewed file folds. Bounded: `REVIEW_ROWS_PER_FILE` 400 + "Show
+  all N lines" (to DiffView's `MAX_DIFF_ROWS`), and from `LAZY_FROM_FILES` 8
+  files a file's rows draw only near the screen (IntersectionObserver on the
+  nearest scroll box; none → everything draws). WorkLine's `ToolRow`/`StepRow`
+  wrap a file step in `work-row-with-open` + `StepOpenInEditor` (hover-shown,
+  always on touch) ONLY when the context exists; a running or failed step has
+  none. A helper's report (`SettledHelperRow`, the reviewer's findings among
+  them) renders through `LinkedRefs`. A wrapping flex header must not use
+  `flex-1` (basis 0) for the item that holds a path: the first cut squeezed
+  the path and the summary to nothing at 320 px — `grow basis-[14rem]`, and
+  the real-browser spec measures it. Moved on purpose:
+  `ij-harness-panes-v1369` (the pane shows `changes-review`, not the quiet
+  `changed-files` line). Pins: `tests/test_code_editor_v1405.py` (64; 13
+  mutations, all red), `dashboard/__tests__/review-pane-v1405.test.tsx` (37;
+  23 mutations, all red), e2e `dashboard/e2e/review-pane.spec.ts` (3: 1280 ×
+  800 and 390 × 844, a step and a finding; the editor routes stubbed in the
+  browser, never the scratch daemon's). OPEN: an editor
+  really opening was never driven (no test may launch one); the Branch view's
+  reviewed marks share the session's key; `notebook_edit` opens the notebook
+  file (no cell line).
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to

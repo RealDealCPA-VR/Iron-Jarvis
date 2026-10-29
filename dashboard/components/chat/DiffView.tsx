@@ -22,7 +22,7 @@
  * no longer keeps is SAID, never drawn as an empty diff.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { diffLines, textLines, type DiffLine } from "@/lib/diff";
@@ -42,6 +42,18 @@ export interface DiffRow {
 export const MAX_DIFF_ROWS = 3000;
 
 const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/** v1.405.0: a hunk header's first line numbers — `@@ -10,3 +12,4 @@` reads
+ *  `{oldStart: 10, newStart: 12}` (the review pane's "Open at line 12" is the
+ *  hunk's first line in the NEW file); null when `text` is not a header. */
+export function hunkStart(text: string): { oldStart: number; newStart: number } | null {
+  const h = HUNK_RE.exec(text ?? "");
+  return h ? { oldStart: Number(h[1]), newStart: Number(h[2]) } : null;
+}
+
+/** v1.405.0: something drawn at the end of a hunk's header row (the review
+ *  pane's "Open at line N"); absent = the plain header, as before. */
+export type HunkAction = (hunkText: string) => ReactNode;
 
 /** Read a unified diff (as `POST /chat/changes` writes it) into rows. The
  *  `---`/`+++` header pair is skipped; `\ No newline at end of file` is not a
@@ -167,18 +179,43 @@ export function statusWord(status: FileChange["status"]): string {
   return "edited";
 }
 
-function UnifiedRows({ rows }: { rows: DiffRow[] }) {
+/** A hunk's separator row: its header, and the caller's action (v1.405.0). */
+function HunkRow({ text, action }: { text: string; action?: HunkAction }) {
+  const extra = action ? action(text) : null;
+  if (!extra) {
+    return (
+      <div data-kind="hunk" className="border-y border-white/[0.06] px-3 py-1 text-zinc-600">
+        {text}
+      </div>
+    );
+  }
   return (
-    <div data-testid="diff-unified" className="md:hidden">
+    <div
+      data-kind="hunk"
+      className="flex min-w-0 items-center gap-2 border-y border-white/[0.06] px-3 py-1 text-zinc-600"
+    >
+      <span className="min-w-0 flex-1 truncate">{text}</span>
+      {extra}
+    </div>
+  );
+}
+
+/** One column (before and after interleaved). Hidden from `md` unless
+ *  `always` (v1.405.0: the review pane is narrow on any window). */
+export function UnifiedRows({
+  rows,
+  always = false,
+  hunkAction,
+}: {
+  rows: DiffRow[];
+  always?: boolean;
+  hunkAction?: HunkAction;
+}) {
+  return (
+    <div data-testid="diff-unified" className={always ? "" : "md:hidden"}>
       {rows.map((r, i) =>
         r.kind === "hunk" ? (
-          <div
-            key={i}
-            data-kind="hunk"
-            className="border-y border-white/[0.06] px-3 py-1 text-zinc-600"
-          >
-            {r.text}
-          </div>
+          <HunkRow key={i} text={r.text} action={hunkAction} />
         ) : (
           <div key={i} data-kind={r.kind} className={`flex ${lineTone(r.kind)}`}>
             <Num n={r.oldNo} />
@@ -212,18 +249,14 @@ function SplitCell({ row, side }: { row?: DiffRow; side: "left" | "right" }) {
   );
 }
 
-function SplitRows({ rows }: { rows: SplitRow[] }) {
+/** Side by side (before | after). Shown from `md` (v1.405.0: `hunkAction`
+ *  as in `UnifiedRows`). */
+export function SplitRows({ rows, hunkAction }: { rows: SplitRow[]; hunkAction?: HunkAction }) {
   return (
     <div data-testid="diff-split" className="hidden md:block">
       {rows.map((r, i) =>
         r.hunk !== undefined ? (
-          <div
-            key={i}
-            data-kind="hunk"
-            className="border-y border-white/[0.06] px-3 py-1 text-zinc-600"
-          >
-            {r.hunk}
-          </div>
+          <HunkRow key={i} text={r.hunk} action={hunkAction} />
         ) : (
           <div
             key={i}

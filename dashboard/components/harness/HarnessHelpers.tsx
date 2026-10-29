@@ -34,6 +34,11 @@
  * v1.403.0 (the coding-session team): in a TEAM turn a helper is named by its
  * part — "Worker glm-5.3-flash", "Reviewer Codex" (lib/sessionTeam
  * `helperTeamName`, the one rule) — so the row says whose duty the piece is.
+ *
+ * v1.405.0: a helper's REPORT (the reviewer's findings among them) makes every
+ * `path:line` it names a press that opens that place in VS Code / Cursor
+ * (components/harness/OpenInEditor `LinkedRefs`) — inside the session's folder
+ * only, never a URL; nothing changes outside a coding session.
  */
 
 import { Bot, X } from "lucide-react";
@@ -52,6 +57,7 @@ import {
 } from "@/lib/buildHelpers";
 import type { CatalogRow } from "@/lib/answeredModel";
 import { helperTeamName, type TeamRoster } from "@/lib/sessionTeam";
+import { LinkedRefs } from "@/components/harness/OpenInEditor";
 
 /** v1.394.0: the model the helper ran on, one quiet line ("" = not known). */
 function HelperModel({ provider, model, models }: { provider?: string; model?: string; models: readonly CatalogRow[] }) {
@@ -130,7 +136,8 @@ export function SettledHelperRow({
       <AgentRunSettled name={name} run={helperStamp(helper)} why={askedLine(helper.task) || null}>
         {helper.result ? (
           <p data-testid="helper-result" className="whitespace-pre-wrap text-[13px] leading-5 text-zinc-400">
-            {helper.result}
+            {/* v1.405.0: a finding's `path:line` opens that place in the editor. */}
+            <LinkedRefs text={helper.result} />
           </p>
         ) : null}
         {helper.work.length ? (

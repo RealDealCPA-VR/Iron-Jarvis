@@ -455,6 +455,13 @@ SETTINGS: tuple[SettingDef, ...] = (
       "itself; the card waits for you to press Resume when ready.",
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
+    # v1.405.0: the editor a coding session's "Open in …" presses open
+    # (harness/code_editor). Read live by GET /editor/options.
+    S("code_editor", "Code editor", "automation", "enum",
+      "The editor a coding session opens a file in, at the line you pressed. Automatic: "
+      "VS Code when it is installed, else Cursor.",
+      options=(("auto", "Automatic"), ("vscode", "VS Code"), ("cursor", "Cursor")),
+      tier="allow", aliases=("editor", "vs code", "vscode", "cursor", "open in editor")),
     # v1.398.0 (night shift N1, harness/night): the queue in Coding sessions ›
     # Tonight is the opt-in; these say WHEN and HOW MUCH. Review: WHEN and
     # HOW MUCH work runs with nobody watching is the user's to change — from

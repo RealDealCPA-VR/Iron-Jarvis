@@ -63,6 +63,12 @@
  * tool's id stays in the hover title. A FAILED app step offers one quiet
  * "Fix in Tools" link beneath it (the Tools page, where the pack's own
  * failure, last output and Retry live — the bell's pack_failed door).
+ *
+ * v1.405.0: inside a CODING SESSION only (lib/codeEditor's EditorContext), a
+ * finished step that worked on one file (read_file, write_file, edit_file,
+ * multi_edit, apply_patch, notebook_edit) has "Open in VS Code / Cursor" at
+ * the end of its line (on hover; always on a touch screen), a read at its
+ * `offset` line. On the chat page the rows are exactly as before.
  */
 
 import { memo, useId, useMemo, useState, type ReactNode } from "react";
@@ -118,6 +124,9 @@ import {
   type StepInputView,
 } from "@/lib/stepDetail";
 import type { ArgEntry } from "@/lib/approvalPreview";
+// v1.405.0: "Open in VS Code / Cursor" beside a coding step (a coding
+// session's EditorContext only; nothing on the chat page).
+import { StepOpenInEditor, useStepEditorPath } from "@/components/harness/OpenInEditor";
 
 /* ------------------------------------------------------------- vocabulary */
 
@@ -660,6 +669,7 @@ function ToolRow({ card }: { card: ToolCard }) {
   // (Read once per card change, not on every render: the live rows
   // re-render as frames arrive.)
   const stepDetail = useMemo(() => (running ? null : cleanStepDetail(card.detail)), [running, card.detail]);
+  const editorTarget = useStepEditorPath(card.name, card.args, stepDetail?.input ?? null);
   const kind = toolKind(card.name);
   const subject = rowSubject(kind, card.name, stepTarget(card.name, card.args));
   // The hover: a live FILE keeps its full path (it is on this screen only and
@@ -736,13 +746,31 @@ function ToolRow({ card }: { card: ToolCard }) {
     />
   );
   const fix = failed && kind === "app" ? <FixInTools name={card.name} /> : null;
-  if (!stepDetail && !fix) return row;
+  // v1.405.0: in a coding session, a finished step that worked on a file
+  // offers "Open in VS Code / Cursor" beside its row (nothing elsewhere).
+  const shownRow = withEditorPress(row, running || failed ? null : editorTarget);
+  if (!stepDetail && !fix) return shownRow;
   return (
     <>
-      {row}
+      {shownRow}
       {open && stepDetail ? <StepDetailPanel id={panelId} name={card.name} detail={stepDetail} /> : null}
       {fix}
     </>
+  );
+}
+
+/**
+ * v1.405.0: a step row with "Open in <editor>" at its end — only inside a
+ * coding session (lib/codeEditor's EditorContext) for a step that worked on a
+ * file. Anywhere else the row is returned exactly as it was.
+ */
+function withEditorPress(row: ReactNode, target: { path: string; line: number | null } | null): ReactNode {
+  if (!target) return row;
+  return (
+    <div data-testid="work-row-with-open" className="group/step flex min-w-0 items-center gap-2">
+      <div className="min-w-0 flex-1">{row}</div>
+      <StepOpenInEditor path={target.path} line={target.line} />
+    </div>
   );
 }
 
@@ -894,6 +922,7 @@ function StepRow({ step }: { step: ReceiptStep }) {
   const dur = secondsText(step.ms);
   // v1.349.0: the saved detail (workSteps already read it back safely).
   const stepDetail = step.detail ?? null;
+  const editorTarget = useStepEditorPath(step.name, null, stepDetail?.input ?? null);
   const row = (
     <WorkRow
       icon={ICON[p.kind]}
@@ -927,10 +956,12 @@ function StepRow({ step }: { step: ReceiptStep }) {
     />
   );
   const fix = failed && p.kind === "app" ? <FixInTools name={step.name} /> : null;
-  if (!stepDetail && !fix) return row;
+  // v1.405.0: "Open in VS Code / Cursor" in a coding session (see ToolRow).
+  const shownRow = withEditorPress(row, failed ? null : editorTarget);
+  if (!stepDetail && !fix) return shownRow;
   return (
     <>
-      {row}
+      {shownRow}
       {open && stepDetail ? <StepDetailPanel id={panelId} name={step.name} detail={stepDetail} /> : null}
       {fix}
     </>
