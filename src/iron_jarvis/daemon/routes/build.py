@@ -103,8 +103,8 @@ ARCHIVED_SENTENCE = "This session is archived. Bring it back before you continue
 #: while Emergency stop is on.
 UNATTENDED_REFUSAL = (
     "Emergency stop is on, so coding work that starts on its own (night tasks, Resume when ready, "
-    "a reply carried on after a restart) cannot start. Turn it off on the Autonomy page to let it "
-    "run again."
+    "a reply carried on after a restart, a fix of a pull request's failing checks) cannot start. "
+    "Turn it off on the Autonomy page to let it run again."
 )
 #: v1.381.0 review: a project's or a plugin's command whose shell lines could
 #: not be kept on the session is not started — its carry-on (and every later
@@ -2556,7 +2556,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            account_move: "dict[str, Any] | None" = None,
                            started_by: str = "person",
                            model_note: str = "",
-                           low_trust: str = "") -> Any:
+                           low_trust: str = "",
+                           on_night_note: Any = None) -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2834,6 +2835,24 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise HTTPException(status_code=409, detail=_night.TIME_USED_UP)
         if night_task is not None:
             setup = _night.posture_setup(setup, platform.config, night_task)
+        # v1.406.0 part 3 follow-ups: a FIX of a pull request's failing checks
+        # (``routes/ci_watch``) is Iron Jarvis starting work by itself while
+        # reading a log an attacker may influence — it runs under the NIGHT's
+        # guarded posture whatever the session's own (yolo and Auto included):
+        # the night allow-list runs unasked, everything else is carded and,
+        # with nobody there, declined after the night's card wait
+        # (``NightTurn`` below; ``on_night_note`` hears each decline, and the
+        # watch then waits for the user). A session set to "Ask before
+        # everything" keeps that stricter posture (more cards, each declined
+        # the same way) and no command grant.
+        ci_guard = started_by == _night.BY_CI and night_task is None
+        if ci_guard:
+            own_mode = str(setup.get("approval_mode") or "")
+            own_granted = list(setup.get("granted_tools") or [])
+            setup = _night.posture_setup(setup, platform.config, None)
+            if own_mode == "always_ask":
+                setup["approval_mode"] = "always_ask"
+                setup["granted_tools"] = own_granted
         # v1.391.0: a reply a restart cut off, carried on (the boot's pass).
         resume: "dict[str, Any] | None" = None
         if resume_turn:
@@ -3050,7 +3069,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 task_id=str(night_task["id"]), card_wait_s=_night.card_wait_seconds(platform.config),
                 engine=platform.engine,
             ))
-            if night_task is not None else None
+            if night_task is not None else
+            # v1.406.0 part 3 follow-ups: a check fix waits the night's card
+            # wait too, then declines (no night task: ``on_note`` hears it).
+            _night.set_turn(_night.NightTurn(
+                task_id="", card_wait_s=_night.card_wait_seconds(platform.config), engine=None,
+                on_note=on_night_note,
+            ))
+            if ci_guard else None
         )
         # v1.384.0: the reply's step limit — none by default (the safety
         # stop), else the user's number.

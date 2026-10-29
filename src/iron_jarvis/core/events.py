@@ -251,6 +251,21 @@ class EventType:
     # with a line per task; "This PC" stays quiet for it
     # (comm/notifier.bell_pings). No session id.
     BUILD_NIGHT_SUMMARY = "build.night_summary"
+    # v1.406.0 part 3 (a pull request's checks, watched and fixed —
+    # harness/ci_fix, daemon/routes/ci_watch): ONE STEP of the watch on a
+    # coding session's pull request — checks failed, a fix started, the
+    # review's verdict, the fix pushed, the fix kept on a side branch, the
+    # fix waiting for the user, the watch stopped: {thread_id, kind, title,
+    # body, round, session_title} (the daemon wrote the words; names of
+    # checks and branches only, never a path, a log or an id). A QUIET bell
+    # row (no ping, no badge, no phone). session_id = "build:<thread id>".
+    BUILD_CI_STEP = "build.ci_step"
+    # v1.406.0 part 3: the watch's NEWS — Iron Jarvis stopped fixing the
+    # pull request's checks (``kind: "gave_up"``), or the checks pass after
+    # the fix it pushed (``kind: "passing"``): the same payload. The bell
+    # rings it and counts it, the desktop app says it from the tray, the
+    # phone gets one line; "This PC" stays quiet (comm/notifier.bell_pings).
+    BUILD_CI_DONE = "build.ci_done"
     # The experience library proposed something for a project folder — a
     # lesson to keep, or an edit to the folder's harness files — that waits
     # for the user's Accept: {id, kind, folder_name, thread_id, summary}

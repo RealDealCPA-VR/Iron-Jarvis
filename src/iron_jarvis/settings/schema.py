@@ -465,6 +465,28 @@ SETTINGS: tuple[SettingDef, ...] = (
       "itself; the card waits for you to press Resume when ready.",
       tier="allow",
       aliases=("resume when ready", "auto resume", "account limit", "carry on after a limit")),
+    # v1.406.0 part 3 (daemon/routes/ci_watch): a coding session's pull
+    # request — its failing checks fixed by the session itself, a cloud
+    # reviewer's approval before Iron Jarvis pushes. Turning it ON from chat
+    # is carded every time (floor_when): a push with no card is the user's
+    # decision. Off applies at once.
+    S("ci_autofix", "Fix my pull requests' failing checks", "automation", "bool",
+      "When a coding session has opened a pull request, Iron Jarvis watches its checks. When one "
+      "fails, the session fixes it by itself (its own model, account and approval setting), Claude "
+      "Code or Codex reviews the fix, and only an approved fix is pushed to the pull request's own "
+      "branch, never its base and never with force. A fix the reviewer does not approve is kept on a "
+      "side branch and worked on again, at most 3 rounds; then Iron Jarvis stops and tells you. A Local "
+      "only session is never reviewed in the cloud, so its fix waits for you. Merging stays yours. "
+      "Off: the checks are only shown.",
+      tier="allow", floor_when=(True,),
+      aliases=("fix failing checks", "ci autofix", "auto fix ci", "fix ci", "pull request checks",
+               "watch my pull requests")),
+    S("ci_reviewer", "Who reviews a check fix", "automation", "enum",
+      "The cloud model that reviews a fix of a pull request's failing checks before Iron Jarvis "
+      "pushes it. Automatic: Claude Code or Codex, whichever is connected, the one that did not write "
+      "the fix first. Neither connected: the fix waits for you.",
+      options=(("auto", "Automatic"), ("claude-cli", "Claude Code"), ("codex-cli", "Codex")),
+      tier="ask", aliases=("ci reviewer", "check fix reviewer", "pull request reviewer")),
     # v1.405.0: the editor a coding session's "Open in …" presses open
     # (harness/code_editor). Read live by GET /editor/options.
     S("code_editor", "Code editor", "automation", "enum",

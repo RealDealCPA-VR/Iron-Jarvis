@@ -839,6 +839,21 @@ class Config(BaseModel):
     #: same durable wait, the same loop). Off: the limit card waits for the
     #: user's press, as before. Read live by ``routes/build``.
     build_auto_resume: bool = True
+    #: v1.406.0 part 3 (``daemon/routes/ci_watch``): a coding session that
+    #: opened a pull request has its CHECKS watched; a failed check is fixed
+    #: in that session by itself, reviewed by ``ci_reviewer`` (a cloud
+    #: reviewer, never a Local only session's), and only an APPROVED fix is
+    #: pushed — to the pull request's own ``ij/`` branch, never its base,
+    #: never with force; a fix not approved waits on a side branch. At most
+    #: ``harness/ci_fix.MAX_ROUNDS`` rounds per failing streak. Off: nothing
+    #: is watched (the Branch view still shows the checks). Read live; turning
+    #: it ON from chat asks first (the schema's ``floor_when``).
+    ci_autofix: bool = True
+    #: v1.406.0 part 3: who reviews a check fix before it is pushed —
+    #: "auto" (Claude Code or Codex, whichever is connected and is not the
+    #: session's own provider when there is one), "claude-cli" or "codex-cli".
+    #: None connected: the fix waits for the user, never pushed by itself.
+    ci_reviewer: str = "auto"
     #: v1.393.0 (decision 4): ACCOUNT GROUPS — ``{group name: [Iron-Proxy
     #: account ids]}``, made by the user on the Iron-Proxy card. A coding
     #: session whose account reaches its limit moves BY ITSELF only to another

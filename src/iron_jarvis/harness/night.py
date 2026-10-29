@@ -51,7 +51,7 @@ import json
 import logging
 import threading
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -818,6 +818,9 @@ class NightTurn:
     task_id: str
     card_wait_s: float
     engine: Any = None
+    #: v1.406.0 part 3 follow-ups: a turn with no night task (a fix of a pull
+    #: request's checks) hears each note here — ``on_note(kind, text)``.
+    on_note: Any = field(default=None, compare=False)
 
     def minutes(self) -> int:
         return max(1, int(round(self.card_wait_s / 60.0)))
@@ -829,6 +832,9 @@ class NightTurn:
     def note(self, kind: str, text: str) -> None:
         """Keep a note on the task — off the caller's loop when there is one
         (a thread of its own), never raising."""
+        if self.on_note is not None:
+            with contextlib.suppress(Exception):
+                self.on_note(kind, text)
         if self.engine is None:
             return
 
@@ -935,6 +941,9 @@ BY_PERSON = "person"
 BY_NIGHT = "night"
 BY_WAIT = "wait"
 BY_RESTART = "restart"
+#: v1.406.0 part 3: a fix of a pull request's failing checks
+#: (``daemon/routes/ci_watch``) — Emergency stop covers it like the rest.
+BY_CI = "ci"
 
 _UNATTENDED: dict[str, tuple[str, str]] = {}
 _UNATTENDED_LOCK = threading.Lock()
@@ -1081,7 +1090,7 @@ def last_reply_line(messages: list[dict[str, Any]], turn_ids: "set[str] | None" 
 
 
 __all__ = [
-    "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
+    "BY_CI", "BY_NIGHT", "BY_PERSON", "BY_RESTART", "BY_WAIT", "COMMAND_TOOLS", "DONE", "ENDED", "FAILED",
     "NEEDS_YOU", "NIGHT_TURN", "NightRefused", "NightTaskRecord", "NightTurn", "POSTURE", "QUEUED",
     "RUNNING", "RUNS_UNASKED", "STATES", "asks_at_night", "STOPPED", "add_note", "add_task", "ask_timeout", "call_words", "cancel_queued",
     "card_wait_seconds", "current", "edit_task", "finish_task", "flush_notes", "get_task",

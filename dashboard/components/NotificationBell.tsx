@@ -252,6 +252,10 @@ export const BELL_ACTIVITY_TYPES: readonly string[] = [
   // v1.399.0 (night shift N2): ONE night's Last night summary — one row per
   // night, counted, opening Coding sessions › Last night.
   "build.night_summary",
+  // v1.406.0 part 3: a coding session's pull request — each step of fixing
+  // its failing checks (quiet), and its news (stopped fixing / passing now).
+  "build.ci_step",
+  "build.ci_done",
 ];
 
 /** Every /events type the bell reads (v1.311.0, wave 3,
@@ -972,6 +976,35 @@ export function toActivity(e: IJEvent): ActivityItem | null {
       attention: true,
       build: thread,
     };
+  }
+  if (e.type === "build.ci_step" || e.type === "build.ci_done") {
+    // v1.406.0 part 3: the watch on a coding session's pull request. The
+    // daemon wrote the words (routes/ci_watch: the session's line, this row
+    // and the tray's notice say exactly these). Payload: {thread_id, kind,
+    // title, body, round, session_title}; session_id "build:<id>". A STEP
+    // (checks failed, a fix started, the review's verdict, pushed, kept on a
+    // side branch, waiting for you, stopped) is a quiet row; the NEWS
+    // (`build.ci_done`: stopped fixing, or the checks pass now) rings and
+    // counts on the badge.
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      "";
+    if (!thread) return null;
+    const news = e.type === "build.ci_done";
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : "Your pull request's checks";
+    const item: ActivityItem = {
+      id: e.id,
+      ts: e.ts,
+      href: buildSessionHref(thread),
+      icon: news ? (p.kind === "passing" ? CheckCircle2 : AlertTriangle) : GitBranch,
+      title,
+      body: clip(p.body),
+      build: thread,
+    };
+    if (news) item.attention = true;
+    else item.quiet = true;
+    return item;
   }
   if (e.type === "build.night_summary") {
     // v1.399.0 (night shift N2): a night's Last night summary is ready (its

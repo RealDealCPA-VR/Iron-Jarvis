@@ -4272,6 +4272,142 @@ does not need a bump, stop and bump it.
   filters by it)); moved on purpose: `ij-harness-command-shell-v1381` and
   `ij-harness-helpers-v1372` ("for this session").
 
+- **A coding session's PULL REQUEST is watched; a failed check is fixed BY
+  THE SESSION, reviewed by a CLOUD reviewer, and only an approved fix is
+  pushed — the ONE push without a card** (v1.406.0 part 3; the user's
+  decision of 2026-10-29). `harness/ci_fix.py` (`CiWatchRecord`, a late model
+  in `_LATE_MODEL_MODULES`; `read_pr` = `gh pr view <branch> --json
+  …headRefOid,baseRefName,statusCheckRollup`; `failed_logs` = `gh run view
+  <id> --log-failed`, the END of each run kept, MASKED before the cut, ≤ 3
+  runs / 20,000 chars; `fix_note` promptguard-scans and `wrap_untrusted`s it;
+  `change_for_review` = `git diff <failing head>` + new files, masked;
+  `review_task` = `finish.review_brief` + `VERDICT_ASK`; `pick_reviewer`;
+  `commit_fix` = the night shift's SCREENED commit; `move_to_side`,
+  `land_side` (`merge --ff-only`, never a reset), `push_refusal` +
+  `push_fix`) and `daemon/routes/ci_watch.py` (`ci_loop` =
+  `bg_tasks["ci_watch"]`, `_tick("ci_watch")`, `TICK_S` 20 + `wake_ci_loop`;
+  one pass at a time per platform, ONE step per session at a time — an
+  asyncio lock per thread; `GET /build/sessions/{id}/ci`). STATES watching →
+  fix_due → fixing → reviewing → (watching after a push | fix_due on a side
+  branch) and the rests passing / gave_up / asking / stopped / closed. A
+  check still running is read again after `POLL_FIRST_S` 60 s × 1.5 up to
+  `POLL_MAX_S` 600 s, never past `WATCH_MAX_S` 6 h; `READ_FAILS_MAX` 5 failed
+  reads stop the watch in words. Candidates: Build threads, not archived,
+  `setup.git.pr_url` set, not merged/removed. THE FIX TURN:
+  `start_build_turn(continuation=True, started_by=night.BY_CI, model_note=)`
+  — the session's own model, posture, account pin, hold, Local only and trust;
+  NEVER while the session is busy (`_STARTING`, `_COMPACTING`, a running
+  turn) and NOTHING is read from GitHub meanwhile; Emergency stop: nothing is
+  read or started (`_check`/`_start_fix`), `start_build_turn` refuses "ci"
+  (`UNATTENDED_REFUSAL` names it), a running fix turn is a listed unattended
+  turn (`night.stop_unattended_turns`), and `ci_watch.stop_all` (called from
+  `Orchestrator.stop_unattended`) cancels a review in flight, which rests
+  STOPPED; the push step re-reads the switch right before pushing. THE REVIEW:
+  `REVIEWER` (the seam; default `run_review`) = a `helpers.HelperParent(
+  review_only=True, own_model=True, tools=REVIEW_TOOLS)` reviewer session
+  (origin `HELPER_ORIGIN`, agent "check-fix reviewer"), `pinned`, bounded by
+  `finish.REVIEW_DEADLINE_S`, verdict from `team_record.verdict_of` (LAST line;
+  a runtime-written report judges nothing). `ci_reviewer` auto = claude-cli /
+  codex-cli connected (`model_team.provider_ready`, cached only) and NOT the
+  session's own vendor first. Local only, a low-trust fix turn, no reviewer
+  connected, or the user's reply started during the review → `asking` (the fix
+  stays in the folder, nothing pushed). APPROVED → screened commit, an
+  approved side branch fast-forwards the PR branch, `read_pr` again (the PR
+  head must still be the failing head), then `branches.push` — refused by
+  `push_refusal` unless the branch is the session's own `ij/` branch, the
+  open PR's `headRefName`, not `baseRefName` nor the session's base, and the
+  worktree's HEAD; the session is HELD (`_STARTING` + `_GIT_ACTING`) under
+  `build_git._locked`; `setup.git.pushed_at` recorded. NOT APPROVED → `git
+  switch -c ij/<name>-ci-fix-<n>` from the PR branch (its ref never moves; a
+  PR branch the fix committed on refuses), screened commit there, never
+  pushed; the next hidden turn gets the report (`revise_note`, masked,
+  scanned, fenced). `MAX_ROUNDS` 3 per failing STREAK (Iron Jarvis's own
+  pushes do not reset it; checks passing or the USER's push — a `pushed_at`
+  Iron Jarvis did not write — do). Merge is never automatic. VISIBLE: every
+  step is an assistant line with `ci: {kind, round}` (`sessions.LINE_KEYS` and
+  `lib/buildSessions` LINE_KEYS) and an event: `build.ci_step` (quiet bell
+  row) or `build.ci_done` (`gave_up` | `passing`: rings, counts, a default
+  alert = one phone line, `bell_pings`, main.js `RUN_OUTCOME_AUDIT_TYPES` +
+  `runOutcomeNotice`, "This PC" quiet; fixture cases `ci-gave-up`,
+  `ci-passing`; a Notifications page box, `test_notification_events_v14003`;
+  `ALERT_PAYLOADS` in `test_integrate_wave4_v13540`); a Local only session's
+  news carries no words. Settings
+  `ci_autofix` (default on; ON from chat is ask-floor, `floor_when=(True,)`)
+  and `ci_reviewer` (ask). OPEN: a fix turn a restart cut off is carried on
+  by the resume pass under a new turn id, so the watch stops ("stopped before
+  it finished") rather than reviewing it; the reviewer's account is its
+  provider's normal pick (account groups are not applied); a gh log is read
+  whole into memory before its tail is kept; human review comments are out
+  of scope; not driven against the real GitHub or in the packaged app. Pins:
+  `tests/test_ci_fix_v1406.py` (real git + a bare remote, a fake `gh` on
+  PATH, real build turns and one real review run; 15 mutations, all red:
+  'bad' or no verdict pushing, a verdict not on the last line, the base-branch
+  guard, a force push, Local only, Emergency stop ×4, both 3-round caps, the
+  side branch, the busy check, `started_by`), `dashboard/__tests__/
+  ci-fix-bell-v1406.test.ts` (a step row quiet — its mutation red). The
+  push step's own Emergency-stop re-read is defence in depth behind the
+  post-review check (no test can reach it alone). REVIEW (15 pins red on the
+  first cut, `tests/test_ci_fix_review_v1406.py`): WHAT IS PUSHED IS WHAT WAS
+  READ — `ci_fix.change_fingerprint` (every file differing from the failing
+  head, by its BYTES, committed or not) and HEAD are taken in the same locked
+  read as the review's diff (`ReviewJob.fingerprint/head`) and must still match
+  right before AND right after the commit (`changed_since_review`;
+  `CHANGED_SINCE_REVIEW`): a program the fix turn left running, an editor, the
+  user's Commit press or a reply that ended during the review used to be
+  committed and pushed unreviewed. The verdict follows the v1.401.0 rules in
+  full: never from a reviewer run that ended at LOW trust (`MT._low_trust` of
+  its session) nor from a report `detect_injection` flags. `read_pr` reads
+  `gh pr view <pr_url>` (by branch it could answer a fork's PR of the same
+  head name) and `push_refusal` refuses an answer whose url/number is not the
+  session's, or whose `headRepository`/`headRepositoryOwner` is not the
+  repository the branch's remote names (fetch address, and the push address
+  when it is a GitHub one; `PUSH_OTHER_REPO`). The push step re-reads the
+  session: archived/removed (`GONE_WORDS`), Local only turned on, `ci_autofix`
+  turned off (`OFF_WORDS`) → nothing pushed. A failed check's log (or a
+  reviewer's report fed to the next round) that promptguard flags starts the
+  fix turn at LOW trust (`fix_note(flagged=)`, `CiWatchRecord.due_low_trust`)
+  → its fix waits for the user. A USER message after the fix turn's reply →
+  `USER_REPLY_WORDS`, asking. FOLLOW-UPS (the five items the review left
+  open, each closed the SAFE way — asking, never a push; 11 pins in
+  `tests/test_ci_fix_followups_v1406.py`, all red on 2ca30be8, 13 mutations,
+  all red): (1) THE FIX TURN'S POSTURE is the night shift's guarded one
+  whatever the session's (yolo and Auto included): `start_build_turn(
+  started_by="ci")` applies `night.posture_setup` for THAT turn only
+  (nothing stored; "Ask before everything" keeps its stricter posture and no
+  command grant) and arms a `NightTurn(task_id="", on_note=)` — the night
+  allow-list (`RUNS_UNASKED`) runs unasked, everything else is carded,
+  bounded by `night_card_wait_minutes` and then declined; `ci_watch.
+  _note_for(turn_id)` hears each decline (`NightTurn.on_note`, a new field)
+  and a declined or denied step (`deniedTools`) puts the watch in asking,
+  naming it (`DECLINED_WORDS`). (2) ONLY IRON JARVIS'S OWN COMMITS between
+  the failing head and what is pushed: `CiWatchRecord.own_commits_json` keeps
+  every screened commit of the streak (the side-branch rounds too);
+  `foreign_commits` after the land → any other commit (or a list git could
+  not read) is `CI.AskUser` → asking, each named (`FOREIGN_COMMITS_WORDS`).
+  (3) THE PUSH ADDRESS (`push_address_refusal`, in `push_fix`): the URL git
+  REALLY pushes to (`resolved_push_url` = `git remote get-url --push`,
+  `insteadOf`/`pushInsteadOf` applied — measured; THE SEAM the bare-remote
+  tests replace) must be a GitHub URL on the PR's own host EXACTLY (an ssh
+  alias such as `github-work`, a look-alike host, a local folder, another
+  host refused) of the PR's `headRepositoryOwner/headRepository` (missing =
+  `PUSH_ADDRESS_UNKNOWN`) → else asking. (4) HOOKS AND CANCEL: `CI.Kill` is
+  the push step's hold — `commit_fix(on_spawn=)` (bounded `COMMIT_S`) and
+  `branches.push(on_spawn=)` (new kwarg; `None` = exactly as before) publish
+  their child, the async supervisor (`STOP_POLL_S` 0.25) kills it the moment
+  Emergency stop is on, and a cancel (`stop_all`) kills, waits for the
+  thread, then `_settle_push` writes what REALLY happened: a push that had
+  begun is READ BACK (`remote_branch_sha` = `git ls-remote <push url>
+  refs/heads/<branch>`) — equal to the fix's tip → recorded as pushed ("had
+  already gone out"), else "stopped the push: the PR's branch still has
+  commit X … not pushed", unreadable → said so; the outer cancel handler
+  writes "stopped" ONLY while the record still says reviewing (never over
+  the truth). (5) BINARIES: `binary_changes` (`git diff --numstat` "-",
+  a new file holding a NUL; None = git could not say) — any → asking before
+  the review (`BINARY_WORDS`), re-checked before the push. OPEN: a fix turn
+  cut off by a restart is carried on under a new turn id by the resume pass
+  without the guarded posture (its record then stops the watch); the read-back
+  trusts the remote's ref name (a remote that rewrites refs is not modelled).
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to

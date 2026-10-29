@@ -252,6 +252,12 @@ ALERT_PAYLOADS: dict[str, dict] = {
         "lines": ["• Failed: Fix the parser (ij/fix-the-parser-77aa): The model failed.",
                   "• Done: Make add() add (ij/make-add-add-1a2b): tests passed; 1 file changed."],
     },
+    # v1.406.0 part 3 (moved on purpose): a pull request's check-fix news.
+    EventType.BUILD_CI_DONE: {
+        "thread_id": "bs_ci", "kind": "passing", "title": "Your pull request's checks pass now",
+        "body": "Fix the parser · The checks pass now with the reviewed fix Iron Jarvis pushed.", "round": 0,
+        "session_title": "Fix the parser",
+    },
 }
 
 #: What the line must say for each (the bell's words for the same event).
@@ -268,6 +274,7 @@ ALERT_WORDS: dict[str, str] = {
     "goal.tripped": "Goal breaker tripped: Inbox zero — budget exhausted",
     "goal.iteration_refused": "Goal run refused: Inbox zero — paused",
     EventType.BUILD_NIGHT_SUMMARY: "Last night: 1 failed, 1 done\n• Failed: Fix the parser",
+    EventType.BUILD_CI_DONE: "Your pull request's checks pass now — Fix the parser · The checks pass now",
 }
 
 

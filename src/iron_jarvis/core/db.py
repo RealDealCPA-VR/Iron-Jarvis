@@ -253,6 +253,7 @@ _LATE_MODEL_MODULES = (
     "..harness.night",        # NightTaskRecord — a coding task queued for the night (v1.398.0)
     "..harness.night_morning",  # NightSummaryRecord — one night's Last night summary (v1.399.0)
     "..brain.models",         # BrainProfileRecord + BrainPendingWrite — the durable brain (v1.406.0)
+    "..harness.ci_fix",       # CiWatchRecord — a pull request's checks watched and fixed (v1.406.0)
 )
 
 

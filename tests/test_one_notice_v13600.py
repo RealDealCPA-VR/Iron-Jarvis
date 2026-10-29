@@ -541,8 +541,10 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
     # (moved on purpose): and a long Build turn that ended; v1.392.0 (moved
     # on purpose): and a Build reply that made no progress for ten minutes;
     # v1.399.0 (moved on purpose, night shift N2): and a night's summary.
+    # v1.406.0 part 3 (moved on purpose): and a pull request's check-fix news.
     assert (
         'const RUN_OUTCOME_AUDIT_TYPES =\n'
-        '  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary";'
+        '  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,'
+        'build.ci_done";'
         in src
     )

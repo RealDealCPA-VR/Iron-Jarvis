@@ -3322,8 +3322,11 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // (`build.night_summary`, ONE per night), in the words the daemon wrote for
 // the bell, the tray and the phone alike; the click opens Coding sessions ›
 // Last night.
+// v1.406.0 part 3: and a coding session's pull-request NEWS (`build.ci_done`:
+// Iron Jarvis stopped fixing its failing checks, or they pass now after the
+// reviewed fix it pushed), in the words the daemon wrote for the bell.
 const RUN_OUTCOME_AUDIT_TYPES =
-  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary";
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -3421,6 +3424,23 @@ function runOutcomeNotice(entry) {
       title,
       body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
       href: `/terminals?night=${encodeURIComponent(night)}`,
+    };
+  }
+  if (entry.type === "build.ci_done") {
+    // v1.406.0 part 3: the bell's row, word for word (the daemon wrote it:
+    // routes/ci_watch); the click opens the coding session.
+    const sid = typeof entry.session_id === "string" ? entry.session_id : "";
+    const thread =
+      (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      (sid.startsWith("build:") ? sid.slice("build:".length) : "");
+    if (!thread) return null;
+    const title = typeof p.title === "string" && p.title.trim() ? p.title.trim() : "Your pull request's checks";
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title,
+      body: runOutcomeClip(p.body) || RUN_OUTCOME_NO_DETAIL,
+      href: `/terminals?session=${encodeURIComponent(thread)}`,
     };
   }
   if (entry.type === "build.turn_stalled") {

@@ -219,6 +219,9 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   // a list without it and the summary silently stopped. This list must match
   // DEFAULT_ALERT_EVENTS exactly (tests/test_notification_events_v14003.py).
   { key: "build.night_summary", label: "The night shift's summary (one message a night)" },
+  // v1.406.0 part 3: a coding session's pull request — Iron Jarvis stopped
+  // fixing its failing checks, or they pass after the reviewed fix it pushed.
+  { key: "build.ci_done", label: "Your pull request's checks: fixed, or Iron Jarvis gave up" },
 ];
 
 /** What the user READS on the telegram two-way fields (v1.136.0). The server's
