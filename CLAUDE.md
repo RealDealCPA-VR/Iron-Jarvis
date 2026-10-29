@@ -3962,7 +3962,10 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/update-channel-v14050.test.tsx`,
   `dashboard/__tests__/settings-update-channel-v14050.test.tsx`; moved on
   purpose: `test_update_channel_v1260` (both call sites go through
-  `runUpdateCheck`).
+  `runUpdateCheck`); the install harnesses of `test_desktop_lifecycle_v1192`,
+  `test_desktop_reliability_v1226` and `_v1249` stub `dropPendingIfOffChannel`
+  (a PC on Fresh: nothing dropped) — a new harness that lifts an install path
+  needs the same stub.
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
