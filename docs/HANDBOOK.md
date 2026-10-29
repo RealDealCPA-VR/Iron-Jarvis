@@ -574,7 +574,7 @@ with the request typed in.
 - **Memory profiles** (v1.406.0; called Brain profiles until v1.408.0):
   choose where your durable memory lives and how Jarvis searches, saves to
   and trusts it — see "Your durable brain: Brain Profiles" and "Memory
-  profiles: set up an MCP memory base's tools, and check it" below.
+  profiles: set up a memory server's tools, and check it" below.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
 - **Preferences you approve** (v1.305.0; the idea comes from
@@ -1959,31 +1959,31 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Memory profiles: set up an MCP memory base's tools, and check it (v1.408.0)
+## Memory profiles: set up a memory server's tools, and check it (v1.408.0)
 
 Brain profiles are now called **Memory profiles** (Settings › Memory & you ›
 Memory profile); everything they do is unchanged. Four things got more
 dependable:
 
-- **An MCP memory base does only what you confirmed.** A memory server's tools
+- **A memory server does only what you confirmed.** A memory server's tools
   have names of its own, and guessing from the names went wrong on a real
   server: "save a note" picked a tool that needed a type and tags it was never
   given, and "add to a note" left out the section heading the server requires.
-  Now each MCP memory base has **Set up tools** on its row (Memory ›
+  Now each memory server has **Set up tools** on its row (Memory ›
   Long-term): for each job — find notes, read one, save a new one, add to one,
   archive, delete, rename, move — Jarvis suggests a tool and where each of its
   settings comes from (the note's title, its text, the search words…), and you
   can give a setting a fixed value (say, type "concept" and tags "inbox").
-  Until you press **Use these**, Jarvis can search and read that base but never
+  Until you press **Use these**, Jarvis can search and read it but never
   saves, adds to or changes a note there, and it says so instead of trying.
-- **A refusal is not an outage.** When a memory base answers "no" (its own
+- **A refusal is not an outage.** When it answers "no" (its own
   rules turned the note down), the reply says the base refused it and why. Only
   a base that could not be reached keeps the note as an unsaved change for
   Retry.
 - **No double notes.** If a save reached the base but the answer was lost on
   the way back, Jarvis checks before it saves again — in the same turn and when
   you press Retry — and finds the note already there.
-- **Removing a memory base takes effect at once**, not after a restart, and the
+- **Removing one from Long-term takes effect at once**, not after a restart, and the
   Long-term list shows each base's real kind.
 - **Notion databases with their own title column.** A Notion database whose
   title column is not called "Name" (it may be "Title", "Page" or a word in
