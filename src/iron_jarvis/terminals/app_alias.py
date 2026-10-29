@@ -1,24 +1,28 @@
-"""Start a Microsoft Store app's program directly, not through its alias.
+"""Store (packaged) programs in a terminal pane (v1.407.1).
 
 A Store install of PowerShell puts ``pwsh.exe`` in
 ``%LOCALAPPDATA%\\Microsoft\\WindowsApps`` as an *App Execution Alias*: a
-zero-byte reparse point (tag ``IO_REPARSE_TAG_APPEXECLINK``) that Windows
-resolves at ``CreateProcessW`` time by activating the package. On the user's
-PC that activation sometimes never returns (v1.407.1, a USER BUG: "Build gets
-stuck at attaching to sessions and then Iron Jarvis isn't responding"). The
-daemon log showed both restored panes parked in ``CreateProcessW``; the v1.406.0
-forensics showed no AppX activation event at all in a hung start, while a good
-start logs the Store license and AppModel container lines at the spawn. A stuck
-process creation inside the daemon then starves every later one, and the
-daemon stops answering until the desktop watchdog kills it.
+zero-byte reparse point (tag ``IO_REPARSE_TAG_APPEXECLINK``) naming the real
+program under ``C:\\Program Files\\WindowsApps\\<package>``. The USER BUG
+("Build gets stuck at attaching to sessions and then Iron Jarvis isn't
+responding"): restored panes parked in ``CreateProcessW`` and the daemon
+stopped answering until the desktop watchdog killed it.
 
-The alias's reparse data names the real program
-(``C:\\Program Files\\WindowsApps\\<package>\\pwsh.exe``), which starts
-directly with no activation step (measured on the user's PC: 0.7-1.8 s, the
-same ``[Environment]::ProcessPath`` the alias gives). :func:`resolve` reads it
-at EVERY spawn, never cached across spawns' callers: a package update changes
-the folder name, and the saved pane keeps the alias, so the next spawn reads
-the new target.
+What the review MEASURED (correcting the first cut's premise): starting the
+real program directly goes through the SAME package activation as the alias
+(AppModel events 8001/219/211/201, the same package identity), so resolving
+the alias alone does not avoid activation. Every caught hang was instead in
+the pane's FIRST spawn attempt, the one asking Windows to put the program in
+the daemon's job: Windows always refuses that for a packaged program
+(0x80070005, "Cannot add process to Desktop AppX container") and the backend
+retried without the job, so two activations per pane, two panes at once.
+``backend.ConPtyBackend.start`` therefore never asks for a job for a packaged
+program (:func:`is_packaged`) and starts packaged programs one at a time.
+
+:func:`resolve` / :func:`direct_argv` stay: the target is read at EVERY spawn
+(a package update changes the folder; the saved pane keeps the alias), only a
+desktop-type alias (app type "0") is resolved, and it saves reading the
+reparse point inside ``CreateProcessW``.
 
 Never raises. Anything that is not exactly a readable App Execution Alias
 whose target is an existing ``.exe`` returns the path unchanged, so the old
@@ -56,6 +60,11 @@ def parse_reparse_data(data: bytes) -> str | None:
         if len(parts) < 3:
             return None
         target = parts[2]
+        # The fourth string (when present) is the app type: "0" a desktop
+        # program, "1" a UWP app (e.g. MediaPlayer.exe -> SystemUWPLauncher),
+        # which must keep its activation and is never started directly.
+        if len(parts) > 3 and parts[3] not in ("", "0"):
+            return None
         return target or None
     except Exception:  # noqa: BLE001 — a malformed buffer is just "not an alias"
         return None
@@ -114,6 +123,19 @@ def is_app_alias(path: str) -> bool:
     except OSError:
         return False
     return getattr(st, "st_reparse_tag", 0) == APPEXECLINK_TAG
+
+
+def is_packaged(path: str) -> bool:
+    """True for a Store (packaged) program: an alias, or a path under a
+    ``WindowsApps`` folder. Windows refuses to put such a program into a job
+    the daemon made (it joins its own Desktop AppX container instead), so a
+    pane never asks for one (``ConPtyBackend.start``). Never raises."""
+    try:
+        if not path:
+            return False
+        return is_app_alias(path) or "\\windowsapps\\" in os.path.normcase(os.path.abspath(path))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def resolve(path: str) -> str:

@@ -922,6 +922,11 @@ def _env_block(api, env: dict):
     return api.ctypes.create_string_buffer(raw, len(raw) + 2)
 
 
+#: v1.407.1: Store (packaged) programs start one at a time in this process
+#: (two AppX activations into one container were in every caught hang).
+_PACKAGED_SPAWN = threading.Lock()
+
+
 class ConPtyBackend:
     """Windows ConPTY straight from kernel32 (v1.248.0): BYTES in and out, and
     a reader thread that PUSHES each chunk to the session.
@@ -1024,11 +1029,27 @@ class ConPtyBackend:
         self._in_write = in_write.value
         self._out_read = out_read.value
         from . import pane_jobs
+        from .app_alias import direct_argv, is_packaged
 
-        self._job = pane_jobs.create_job()
+        # v1.407.1 (a USER BUG: Build stuck, then "isn't responding"). A Store
+        # (packaged) program, e.g. WindowsApps\pwsh.exe, is NEVER asked to be
+        # born in the pane's job: Windows refuses to add it to its Desktop
+        # AppX container (0x80070005, measured — alias or direct) and the old
+        # code then retried without the job, so these panes never had a job
+        # anyway, and every hung start the boot watch caught was inside that
+        # refused first attempt (backend:start > _spawn with the job). Two
+        # such activations at once into one container were in every catch,
+        # so a packaged spawn also runs one at a time (`_PACKAGED_SPAWN`).
+        argv = direct_argv(list(argv))
+        packaged = is_packaged(argv[0]) if argv else False
+        self._job = None if packaged else pane_jobs.create_job()
         try:
             try:
-                self._spawn(api, argv, cwd, env, self._job)
+                if packaged:
+                    with _PACKAGED_SPAWN:
+                        self._spawn(api, argv, cwd, env, None)
+                else:
+                    self._spawn(api, argv, cwd, env, self._job)
             except ConPtyUnavailable:
                 raise
             except OSError:
@@ -1096,14 +1117,7 @@ class ConPtyBackend:
             si.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
             si.lpAttributeList = ctypes.cast(attrs, ctypes.c_void_p)
             pi = api.PROCESS_INFORMATION()
-            # v1.407.1: a Store app's alias (WindowsApps\pwsh.exe) is started as
-            # its real program; the alias's activation can hang CreateProcessW
-            # forever (terminals/app_alias.py). The saved argv keeps the alias.
-            from .app_alias import direct_argv
-
-            cmdline = ctypes.create_unicode_buffer(
-                subprocess.list2cmdline(direct_argv(list(argv)))
-            )
+            cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(argv)))
             block = _env_block(api, env) if env is not None else None
             flags = _EXTENDED_STARTUPINFO_PRESENT | _CREATE_UNICODE_ENVIRONMENT
             if self.below_normal:

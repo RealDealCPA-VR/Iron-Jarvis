@@ -10567,29 +10567,37 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
-- **A terminal never starts a Store app through its alias** (v1.407.1, a
-  USER BUG on v1.407.0: Build stuck at "Attaching to sessions…", then "Iron
-  Jarvis isn't responding", twice across restarts). The daemon log showed
-  both restored panes stuck in `CreateProcessW` on
-  `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE` (an App Execution Alias,
-  reparse tag 0x8000001B, whose package activation sometimes never returns —
-  the v1.407.0 part 6 forensics found NO AppX activation event in a hung
-  start); v1.407.0 stopped the BOOT waiting on them, but ~90 s later every
-  request stopped answering (even the 25 s audit polls) until the desktop
-  watchdog killed it. A stuck process creation is NOT contained by a bounded
-  wait. `terminals/app_alias.py` reads the alias's reparse data
-  (FSCTL_GET_REPARSE_POINT; the third UTF-16 string is the target) and
-  `direct_argv` hands every backend (`ConPtyBackend._spawn`, `WinPtyBackend`,
-  `PipeBackend`) the real `C:\Program Files\WindowsApps\<pkg>\pwsh.exe` —
-  measured here 0.6-1.8 s, the same `[Environment]::ProcessPath` the alias
-  gives. Resolved at EVERY spawn and never written back: the pane's saved
-  argv keeps the alias, so a package update (a new folder) is read again.
-  Anything not exactly a readable alias whose target is an existing `.exe`
-  keeps the old argv; never raises. OPEN: other spawns of a Store alias
-  (e.g. a Store `python.exe` through `core/procs`) still go through the
-  alias; the hang itself has never been reproduced on demand. Pins:
-  `tests/test_app_alias_v14071.py` (9 mutations, all red; one real ConPTY
-  spawn that succeeds only through the resolved path).
+- **A Store program is never asked into the pane job, and starts one at a
+  time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
+  v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
+  responding", across restarts). The panes run the Store pwsh
+  (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE`, an App Execution Alias,
+  reparse tag 0x8000001B). v1.407.0 stopped the BOOT waiting on stuck pane
+  restores, but ~90 s later NOTHING answered (even the 25 s audit polls) until
+  the desktop watchdog killed it: a stuck process creation is not contained
+  by a bounded wait. THE REVIEW CORRECTED THE FIRST CUT: starting the real
+  `C:\Program Files\WindowsApps\<pkg>\pwsh.exe` goes through the SAME package
+  activation as the alias (AppModel 8001/219/211/201, same identity); every
+  hang the boot watch caught was in `ConPtyBackend.start`'s FIRST `_spawn`,
+  the one with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, which Windows always refuses
+  for a packaged program (AppModel 212/208, 0x80070005 "Cannot add process to
+  Desktop AppX container") before the no-job retry — two activations per pane,
+  two panes at once, and these panes have had NO job since v1.333.0 anyway.
+  Now `start` resolves argv once (`terminals/app_alias.direct_argv`: reads the
+  alias's reparse data, desktop app type "0" only, target must be an existing
+  absolute `.exe`; the saved argv keeps the alias), never creates a job when
+  `is_packaged(argv[0])` (an alias, or a path under `\WindowsApps\`), and
+  holds `_PACKAGED_SPAWN` (one packaged spawn at a time); pywinpty and pipe
+  backends get `direct_argv` too. `daemon/boot_watch.LoopWatch` (armed in the
+  lifespan beside the v1.245.0 loop-lag task, which calls `beat()` each
+  second; stopped at shutdown) reports from its own thread at 20/45/75 s of
+  a frozen loop where the loop thread and busy threads wait — the loop-lag
+  line is written by the loop AFTER a stall ends, so a stall that never ended
+  left no trace. OPEN: the Windows-side cause is still not reproduced on
+  demand; other spawns of Store programs (`core/procs`) keep their job
+  attempt. Pins: `tests/test_app_alias_v14071.py` (15 mutations, 14 red; the
+  survivor — handing a packaged spawn `self._job` — is equivalent, the job is
+  `None` there), including real Store-pwsh and cmd ConPTY spawns.
 
 - **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.407.0
   part 1; it had two views from v1.369.0, and the free-form react-rnd

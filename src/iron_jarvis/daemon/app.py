@@ -1529,9 +1529,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # and a long enough freeze trips the desktop watchdog, which kills the
         # daemon and every shell with it. Nothing measured it, so a stall left
         # no trace. Sleep 1 s and log any overshoot past 250 ms.
+        # v1.407.1: a freeze that never ends is reported from ANOTHER thread
+        # (daemon/boot_watch.LoopWatch) before the desktop watchdog's kill.
+        from .boot_watch import LoopWatch
+
+        _loop_watch = LoopWatch().start()
+
         async def _loop_lag_loop() -> None:
             loop = asyncio.get_running_loop()
             while True:
+                _loop_watch.beat()
                 started = loop.time()
                 await asyncio.sleep(1.0)
                 lag = loop.time() - started - 1.0
@@ -2045,6 +2052,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     pass
             _dispatcher_stop.set()
             _curator_stop.set()
+            _loop_watch.stop()
             for task in bg_tasks.values():
                 task.cancel()
             # v1.311.0: a pack load still in flight is cancelled — nothing is
