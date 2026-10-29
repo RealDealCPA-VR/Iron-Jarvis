@@ -281,8 +281,11 @@ test("a faked account limit shows the card; Resume when ready waits, survives a 
     if (method !== "OPTIONS") calls.push(method);
     return withAccount(route);
   });
-  // The resumed turn the page rejoins by its name.
-  await page.route(`${DAEMON}/chat/turns/${RESUMED}/stream`, async (route) => {
+  // The resumed turn the page rejoins by its name. v1.406.0 part 7 review:
+  // the rejoin asks for TAGGED frames (`?ids=1`, v1.384.0), and a string
+  // route matches the whole URL, query included — this stub never answered,
+  // the real daemon 404'd the made-up turn, and no reply came.
+  await page.route(new RegExp(`/chat/turns/${RESUMED}/stream(\\?.*)?$`), async (route) => {
     const frames = [
       ["token", { text: "Picked up where it stopped and finished." }],
       ["done", { reply: "Picked up where it stopped and finished.", route: { provider: "claude-cli", model: "", account: { id: "work", name: "Work" } } }],
@@ -402,14 +405,17 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
   });
   await page.goto(`/terminals?session=${sessionId}`);
   await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
-  const chip = page.getByTitle("Switch model");
+  // v1.406.0 part 7 review: the chat page stays mounted (hidden) behind the
+  // Code view with its own "Switch model" chip — the session's is the one IN
+  // the session.
+  const chip = page.getByTestId("harness-session").getByTitle("Switch model");
   await expect(chip).toHaveText("Opus 4.8 · Work", { timeout: 30_000 });
   const inBox = async () =>
     page.evaluate(() => {
       const r = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
       const card = r(document.querySelector('[data-testid="harness-composer"]'));
       const send = r(document.querySelector('[data-testid="harness-send"]'));
-      const chipEl = r(document.querySelector('[title="Switch model"]'));
+      const chipEl = r(document.querySelector('[data-testid="harness-session"] [title="Switch model"]'));
       return card && send && chipEl
         ? { card: [card.left, card.right], send: [send.left, send.right], chip: [chipEl.left, chipEl.right] }
         : null;

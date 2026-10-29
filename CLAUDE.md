@@ -4243,6 +4243,23 @@ does not need a bump, stop and bump it.
   looked at, narrow tab looked at), e2e `dashboard/e2e/code-split.spec.ts`
   (1600 × 900, 1280 × 800, 390 × 844); 24 mutations, all red. Moved on
   purpose: `ij-harness-phone-unit-v1369` (the panes are `panesEl`).
+  REVIEW (each red first): (1) a card in the OTHER column took the caret
+  out of the box the user was typing in (DockAsk's "the composer had it"
+  matched ANY `[data-dock-composer]`), so the next letter picked its choice
+  and Enter its Allow — the grab and the give-back now ask `ownsKeys`
+  (`columnRef` keeps the column after the card goes). (2) The chat kept
+  behind Code still answered its WINDOW listeners (part 1): a file dropped on
+  a session's box was ALSO uploaded into the hidden chat (and made it a work
+  folder), and "Switch model" (`ij:open-switcher`, Ctrl K / the demo strip)
+  opened the hidden chat's menu portaled over Code — `surfaceHiddenRef`
+  gates both; the focused session's own menu opens instead (HarnessSession
+  listens, `ownsKeys`). (3) The narrow tabs name their panels
+  (`aria-controls` ⇄ `role="tabpanel"`). (4) e2e: the account-limit rejoin
+  stub matched `/stream` while the page asks `/stream?ids=1` (since
+  v1.384.0; a string route matches the query too) — not a product bug; the
+  model-menu e2e scopes "Switch model" to `harness-session` (the hidden
+  chat's chip stays in the DOM). Pins: `code-split-live-v1406` (+3),
+  `chat-code-hidden-window-v1406`.
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

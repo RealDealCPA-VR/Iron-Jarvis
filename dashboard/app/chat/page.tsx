@@ -4165,6 +4165,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // sidebar then holds the coding sessions, never a hidden chat list.
   const chatSlotLive = useChatSlot();
   const chatSlot = surfaceHidden ? null : chatSlotLive;
+  // v1.406.0 part 7 review: the page's WINDOW listeners (a file dropped
+  // anywhere, "Switch model" from Ctrl K or the demo strip) belong to the
+  // view on screen — a file dropped on a coding session's box was ALSO
+  // attached to this hidden chat (and made it a work folder), and "Switch
+  // model" opened this hidden chat's menu over the Code view.
+  const surfaceHiddenRef = useRef(surfaceHidden);
+  surfaceHiddenRef.current = surfaceHidden;
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
   // Pinned threads (per-device view preference) + inline rename state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -4599,6 +4606,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // ("Switch model" in Ctrl K, "Choose a model" on the demo strip) opens it.
   useEffect(() => {
     const onOpen = () => {
+      // The Code view on screen opens its own session's menu.
+      if (surfaceHiddenRef.current) return;
       setModelMenuOpen(true);
     };
     window.addEventListener("ij:open-switcher", onOpen);
@@ -6670,8 +6679,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // the browser never navigates away to the dropped file.
   useEffect(() => {
     let depth = 0; // dragenter/dragleave fire per element — track nesting
+    // v1.406.0 part 7 review: never while the Code view is on screen.
     const hasFiles = (e: DragEvent) =>
-      Array.from(e.dataTransfer?.types ?? []).includes("Files");
+      !surfaceHiddenRef.current && Array.from(e.dataTransfer?.types ?? []).includes("Files");
     const onDragEnter = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();

@@ -275,6 +275,103 @@ describe("the keys belong to the column with the focus", () => {
   }, 30_000);
 });
 
+describe("a card in the OTHER column never takes the caret (review)", () => {
+  it("typing in the left box when the right column asks: the caret stays, letters and Enter never answer the right card", async () => {
+    await openTwo();
+    const leftBox = screen.getByTestId("harness-column-left").querySelector<HTMLTextAreaElement>('[data-testid="harness-input"]')!;
+    leftBox.focus();
+    await waitFor(() => expect(screen.getByTestId("harness-column-left")).toHaveAttribute("data-focused", "true"));
+    await act(async () => {
+      streams.tr2.push("approval", { id: "apr_2", call_id: "c2", tool: "read_file", args: { path: "b.txt" } }, "0:1");
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(
+      () => expect(screen.getByTestId("harness-column-right").querySelector("[data-dock-primary]")).not.toBeNull(),
+      { timeout: 10_000 },
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+    });
+    // The caret is still in the left box, and the left column keeps the focus.
+    expect(document.activeElement).toBe(leftBox);
+    expect(screen.getByTestId("harness-column-left")).toHaveAttribute("data-focused", "true");
+    // What the user types next goes where they were typing.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    expect(answers()).toEqual([]);
+  }, 30_000);
+});
+
+describe("Switch model (Ctrl K, the demo strip) opens the FOCUSED column's menu (review)", () => {
+  it("only the column with the focus opens its model menu", async () => {
+    await openTwo();
+    const chip = (side: "left" | "right") =>
+      screen.getByTestId(`harness-column-${side}`).querySelector<HTMLButtonElement>('button[title="Switch model"]');
+    await waitFor(() => {
+      expect(chip("left")).not.toBeNull();
+      expect(chip("right")).not.toBeNull();
+    }, { timeout: 10_000 });
+    fireEvent.pointerDown(screen.getByTestId("harness-column-right").querySelector('[data-testid="harness-transcript"]')!);
+    await waitFor(() => expect(screen.getByTestId("harness-column-right")).toHaveAttribute("data-focused", "true"));
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    act(() => {
+      window.dispatchEvent(new Event("ij:open-switcher"));
+    });
+    await waitFor(() => expect(chip("right")).toHaveAttribute("aria-expanded", "true"));
+    expect(chip("left")).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelectorAll('[data-testid="model-menu"]').length).toBe(1);
+  }, 30_000);
+});
+
+describe("the window crossing the split width (review)", () => {
+  it("columns ⇄ tabs keeps both sessions mounted — the same elements, the replies still drawn", async () => {
+    let matches = true;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", (q: string) => ({
+      media: q,
+      get matches() {
+        return matches;
+      },
+      addEventListener: (_: string, f: () => void) => listeners.add(f),
+      removeEventListener: (_: string, f: () => void) => listeners.delete(f),
+    }));
+    await openTwo();
+    await act(async () => {
+      streams.tr1.push("token", { text: "left words" }, "0:1");
+      streams.tr2.push("token", { text: "right words" }, "0:1");
+      await new Promise((r) => setTimeout(r, 40));
+    });
+    const session = (side: "left" | "right") =>
+      screen.getByTestId(`harness-column-${side}`).querySelector('[data-testid="harness-session"]');
+    const before = { left: session("left"), right: session("right") };
+    expect(before.left).not.toBeNull();
+    const cross = async (wide: boolean) => {
+      matches = wide;
+      await act(async () => {
+        for (const f of listeners) f();
+        await new Promise((r) => setTimeout(r, 30));
+      });
+    };
+    await cross(false);
+    expect(screen.getByTestId("harness-columns")).toHaveAttribute("data-split", "tabs");
+    expect(session("left")).toBe(before.left);
+    expect(session("right")).toBe(before.right);
+    await cross(true);
+    expect(screen.getByTestId("harness-columns")).toHaveAttribute("data-split", "columns");
+    expect(session("left")).toBe(before.left);
+    expect(session("right")).toBe(before.right);
+    expect(live("left")).toContain("left words");
+    expect(live("right")).toContain("right words");
+    // One stream per session the whole time (no remount re-followed a turn).
+    const follows = (turn: string) =>
+      (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => String(c[0]).includes(`/chat/turns/${turn}/stream`)).length;
+    expect(follows("tr1")).toBe(1);
+    expect(follows("tr2")).toBe(1);
+  }, 30_000);
+});
+
 describe("both sessions on screen are looked at", () => {
   it("neither's finish pings while both show; closing one keeps the other's note", async () => {
     await openTwo();
@@ -305,6 +402,14 @@ describe("both sessions on screen are looked at", () => {
     await waitFor(() => expect(screen.getByTestId("harness-column-right").querySelector('[data-testid="harness-input"]')).not.toBeNull(), {
       timeout: 10_000,
     });
+    // Review: each tab names the panel it shows (a screen reader follows it).
+    for (const side of ["left", "right"] as const) {
+      const tab = screen.getByTestId(`harness-split-tab-${side}`);
+      const panel = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(panel).toBe(screen.getByTestId(`harness-column-${side}`));
+      expect(panel).toHaveAttribute("role", "tabpanel");
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
     // The address opened on its first session's tab.
     await waitFor(() => expect(lookingAt("s1")).toBe(true));
     expect(lookingAt("s2")).toBe(false);

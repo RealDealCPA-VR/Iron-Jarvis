@@ -509,10 +509,16 @@ export function IjHarnessView({
               const colProps = two
                 ? { [SPLIT_COLUMN_ATTR]: side, "data-focused": focused ? "true" : "false" }
                 : {};
+              // v1.406.0 part 7 review: a narrow window's columns are the
+              // tab strip's panels (each tab names the panel it shows).
+              const panelProps = tabs
+                ? { id: `harness-split-panel-${side}`, role: "tabpanel", "aria-labelledby": `harness-split-tab-${side}` }
+                : {};
               return (
                 <div
                   key={id}
                   {...colProps}
+                  {...panelProps}
                   data-testid={two ? `harness-column-${side}` : "harness-column"}
                   data-session-id={id}
                   hidden={hiddenTab}
@@ -718,7 +724,9 @@ function SplitTabs({
             <button
               type="button"
               role="tab"
+              id={`harness-split-tab-${side}`}
               aria-selected={selected}
+              aria-controls={`harness-split-panel-${side}`}
               tabIndex={selected ? 0 : -1}
               data-testid={`harness-split-tab-${side}`}
               onClick={() => onFocus(side)}

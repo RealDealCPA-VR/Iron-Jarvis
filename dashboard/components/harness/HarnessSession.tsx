@@ -22,6 +22,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { ownsKeys } from "@/lib/codeSplit";
 import {
   ArrowUp,
   CircleAlert,
@@ -2125,6 +2126,22 @@ export function HarnessSession({
     () => ({ busy, asking }),
     () => rootRef.current,
   );
+  // v1.406.0 part 7 review: "Switch model" (Ctrl K, the demo strip:
+  // `ij:open-switcher`, components/ModelMenuBridge — not imported, it brings
+  // the whole app sidebar with it) opens the
+  // model menu of the session on screen — the focused column's in a split —
+  // never the chat's kept behind the Code view.
+  const askingRef = useRef(asking);
+  askingRef.current = asking;
+  useEffect(() => {
+    if (!onScreen) return;
+    const onOpen = () => {
+      if (askingRef.current || !ownsKeys(rootRef.current, null)) return;
+      setModelMenuOpen(true);
+    };
+    window.addEventListener("ij:open-switcher", onOpen);
+    return () => window.removeEventListener("ij:open-switcher", onOpen);
+  }, [onScreen]);
   // v1.377.0: a Compact found running when the session opened — read the
   // session again until it ends (then the meter shows the summary).
   useVisibleInterval(() => void load(), COMPACT_REREAD_MS, elsewhereCompacting);
