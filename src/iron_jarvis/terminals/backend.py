@@ -179,8 +179,10 @@ class WinPtyBackend:
         import winpty  # lazy: only importable / needed on Windows
 
         # pywinpty dimensions are (rows, cols).
+        from .app_alias import direct_argv  # v1.407.1: never a Store alias
+
         self._proc = winpty.PtyProcess.spawn(
-            list(argv),
+            direct_argv(list(argv)),
             cwd=cwd or None,
             env=env,
             dimensions=(rows, cols),
@@ -600,8 +602,10 @@ class PipeBackend:
             from ..core.procs import priority_flags
 
             extra["creationflags"] = priority_flags(background=True)
+        from .app_alias import direct_argv  # v1.407.1: never a Store alias
+
         self._proc = subprocess.Popen(
-            list(argv),
+            direct_argv(list(argv)),
             cwd=cwd or None,
             env=env,
             stdin=subprocess.PIPE,
@@ -1092,7 +1096,14 @@ class ConPtyBackend:
             si.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
             si.lpAttributeList = ctypes.cast(attrs, ctypes.c_void_p)
             pi = api.PROCESS_INFORMATION()
-            cmdline = ctypes.create_unicode_buffer(subprocess.list2cmdline(list(argv)))
+            # v1.407.1: a Store app's alias (WindowsApps\pwsh.exe) is started as
+            # its real program; the alias's activation can hang CreateProcessW
+            # forever (terminals/app_alias.py). The saved argv keeps the alias.
+            from .app_alias import direct_argv
+
+            cmdline = ctypes.create_unicode_buffer(
+                subprocess.list2cmdline(direct_argv(list(argv)))
+            )
             block = _env_block(api, env) if env is not None else None
             flags = _EXTENDED_STARTUPINFO_PRESENT | _CREATE_UNICODE_ENVIRONMENT
             if self.below_normal:

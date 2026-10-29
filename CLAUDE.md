@@ -10567,6 +10567,30 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
+- **A terminal never starts a Store app through its alias** (v1.407.1, a
+  USER BUG on v1.407.0: Build stuck at "Attaching to sessions…", then "Iron
+  Jarvis isn't responding", twice across restarts). The daemon log showed
+  both restored panes stuck in `CreateProcessW` on
+  `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE` (an App Execution Alias,
+  reparse tag 0x8000001B, whose package activation sometimes never returns —
+  the v1.407.0 part 6 forensics found NO AppX activation event in a hung
+  start); v1.407.0 stopped the BOOT waiting on them, but ~90 s later every
+  request stopped answering (even the 25 s audit polls) until the desktop
+  watchdog killed it. A stuck process creation is NOT contained by a bounded
+  wait. `terminals/app_alias.py` reads the alias's reparse data
+  (FSCTL_GET_REPARSE_POINT; the third UTF-16 string is the target) and
+  `direct_argv` hands every backend (`ConPtyBackend._spawn`, `WinPtyBackend`,
+  `PipeBackend`) the real `C:\Program Files\WindowsApps\<pkg>\pwsh.exe` —
+  measured here 0.6-1.8 s, the same `[Environment]::ProcessPath` the alias
+  gives. Resolved at EVERY spawn and never written back: the pane's saved
+  argv keeps the alias, so a package update (a new folder) is read again.
+  Anything not exactly a readable alias whose target is an existing `.exe`
+  keeps the old argv; never raises. OPEN: other spawns of a Store alias
+  (e.g. a Store `python.exe` through `core/procs`) still go through the
+  alias; the hang itself has never been reproduced on demand. Pins:
+  `tests/test_app_alias_v14071.py` (9 mutations, all red; one real ConPTY
+  spawn that succeeds only through the resolved path).
+
 - **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.407.0
   part 1; it had two views from v1.369.0, and the free-form react-rnd
   CANVAS of v1.218.0 is long gone — a saved `ij.build.shape` of "harness"

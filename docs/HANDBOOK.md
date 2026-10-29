@@ -1884,6 +1884,13 @@ reads; it never writes, runs commands, or starts work on its own.
   seconds Iron Jarvis is ready, and that terminal joins the Build page by
   itself the moment its shell starts. (It used to hold the whole start, and
   on some updates the app restarted itself after 90 s because of it.)
+- **Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
+  responding"** (fixed in v1.407.1) → a PowerShell installed from the
+  Microsoft Store is started through a Store shortcut, and Windows sometimes
+  never finishes starting it; while it waited, Iron Jarvis stopped answering
+  until the desktop app restarted it. Build terminals now start the real
+  PowerShell program behind that shortcut directly. Your saved terminals
+  still remember the shortcut, so a PowerShell update keeps working.
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and
