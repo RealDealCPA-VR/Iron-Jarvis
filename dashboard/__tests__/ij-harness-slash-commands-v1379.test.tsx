@@ -470,7 +470,10 @@ describe("the “/” menu lists every command and skill with where it comes fro
     key("Escape");
     await waitFor(() => expect(screen.queryByTestId("harness-slash-menu")).toBeNull());
     expect(fetchMock).not.toHaveBeenCalled();
-  });
+    // v1.408.2: 94 key presses over 91 rows, each a full redraw. It took
+    // 2.7 s here and 15.5 s on the loaded Release runner (vitest's 15 s
+    // budget), so it gets its own bound: a hang detector, not a speed bar.
+  }, 60_000);
 });
 
 describe("Claude Code's built-in commands with an IJ harness equivalent", () => {
