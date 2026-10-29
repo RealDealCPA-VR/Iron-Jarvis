@@ -106,7 +106,7 @@ _REASONS = [
     ("tests red", lambda: _rel("1.404.0", 30), "failure", "Tests run ended “failure”"),
     ("tests missing", lambda: _rel("1.404.0", 30), "missing", "no Tests run was found"),
     ("tests running", lambda: _rel("1.404.0", 30), "running", "has not finished"),
-    ("tests not read", lambda: _rel("1.404.0", 30), None, "was not read"),
+    ("tests cancelled", lambda: _rel("1.404.0", 30), "cancelled", "Tests run ended “cancelled”"),
     ("draft", lambda: _rel("1.404.0", 30, draft=True, unpublished=True), "success", "not published yet"),
     # A release turned back into a draft keeps its old publish date.
     ("draft with a date", lambda: _rel("1.404.0", 30, draft=True), "success", "not published yet"),
@@ -138,6 +138,49 @@ def test_an_older_qualifying_release_is_taken_when_the_newer_one_does_not_qualif
     rels = [_rel("1.404.0", 30), _rel("1.403.0", 40)]
     d = mod.choose_stable(rels, [], {"1.404.0": "failure", "1.403.0": "success"}, NOW, "1.402.0")
     assert d.version == "1.403.0"
+
+
+def test_a_release_replaced_by_a_newer_patch_waits_for_that_one():
+    """The reviewer's probe: 1.388.0 out 24.4 h, its fix 1.388.1 out 19 h.
+    The fix replaced it, so nothing moves until the fix has been out a day."""
+    mod = _mod()
+    rels = [_rel("1.388.1", 19), _rel("1.388.0", 24.4), _rel("1.387.0", 60)]
+    green = {v: "success" for v in ("1.388.1", "1.388.0", "1.387.0")}
+    d = mod.choose_stable(rels, [], green, NOW, "1.386.0")
+    assert d.version != "1.388.0", d
+    assert any("v1.388.0: replaced by v1.388.1 — waiting for that one." == n for n in d.notes), d.notes
+    # 1.387.0 is another line (a newer MINOR does not replace it) and qualifies.
+    assert d.version == "1.387.0"
+    # A day later the fix itself goes on.
+    later = mod.choose_stable(rels, [], green, NOW + timedelta(hours=6), "1.387.0")
+    assert later.version == "1.388.1", later
+    # A newer patch that is only a DRAFT replaces nothing.
+    drafted = [_rel("1.388.1", 19, draft=True, unpublished=True), _rel("1.388.0", 30)]
+    assert mod.choose_stable(drafted, [], green, NOW, "1.387.0").version == "1.388.0"
+    # The newest replacement is the one named.
+    three = [_rel("1.388.2", 1), _rel("1.388.1", 19), _rel("1.388.0", 30)]
+    d = mod.choose_stable(three, [], green, NOW, "1.387.0")
+    assert any("v1.388.0: replaced by v1.388.2" in n for n in d.notes), d.notes
+    # And no Tests read is asked for a replaced release.
+    assert mod.tests_wanted(rels, [], NOW, "1.386.0") == ["1.387.0"]
+
+
+def test_promote_may_name_a_replaced_release_and_says_so():
+    mod = _mod()
+    rels = [_rel("1.388.1", 19), _rel("1.388.0", 30)]
+    d = mod.choose_stable(rels, [], {"1.388.0": "success"}, NOW, "1.387.0", promote="1.388.0")
+    assert d.version == "1.388.0" and "v1.388.1 had replaced it" in d.why, d
+
+
+def test_an_unread_verdict_on_the_newest_candidate_promotes_nothing_older():
+    mod = _mod()
+    rels = [_rel("1.405.0", 30), _rel("1.404.0", 40)]
+    d = mod.choose_stable(rels, [], {"1.404.0": "success"}, NOW, "1.403.0")
+    assert d.version is None and d.unread == "1.405.0", d
+    assert d.why.startswith("Nothing changed: the Tests result of v1.405.0 could not be read")
+    # A verdict that WAS read and is not green still lets an older one through.
+    d = mod.choose_stable(rels, [], {"1.405.0": "failure", "1.404.0": "success"}, NOW, "1.403.0")
+    assert d.version == "1.404.0" and not d.unread
 
 
 def test_stable_never_moves_backwards_or_sideways():
@@ -204,6 +247,16 @@ def test_tests_verdict_reads_the_newest_completed_run():
     assert v(runs) == "success", "the newest COMPLETED run decides; one still going does not"
     runs.append({"status": "completed", "conclusion": "failure", "created_at": "2026-10-29T04:00:00Z", "run_number": 4})
     assert v(runs) == "failure", "a later red run overrules an earlier green one"
+    # A cancelled or skipped run is no verdict: the green run before it stands.
+    green_then_cancelled = [
+        {"status": "completed", "conclusion": "success", "created_at": "2026-10-29T01:00:00Z"},
+        {"status": "completed", "conclusion": "cancelled", "created_at": "2026-10-29T02:00:00Z"},
+        {"status": "completed", "conclusion": "skipped", "created_at": "2026-10-29T03:00:00Z"},
+    ]
+    assert v(green_then_cancelled) == "success"
+    only_cancelled = [{"status": "completed", "conclusion": "cancelled", "created_at": "2026-10-29T01:00:00Z"}]
+    assert v(only_cancelled) == "cancelled", "never green"
+    assert v(only_cancelled + [{"status": "queued", "created_at": "2026-10-29T02:00:00Z"}]) == "running"
 
 
 def test_the_api_shape_is_read_honestly():
@@ -351,8 +404,10 @@ def test_a_manifest_naming_a_file_the_release_lacks_never_reaches_stable(tmp_pat
     bad = _MANIFEST.format(v="1.404.0").replace("Iron-Jarvis-Setup-1.404.0.exe", "Iron-Jarvis-Setup-9.exe")
     gh = FakeGitHub([_api("1.404.0", 30)], {"1.404.0": "success"}, {"1.404.0": bad})
     logs: list[str] = []
-    code, message = mod.run(tmp_path, REPO, gh, now=NOW, log=logs.append)
-    assert code == 0 and not (tmp_path / "latest.yml").exists()
+    code, message = mod.run(tmp_path, REPO, gh, now=NOW, hold="1.300.0", log=logs.append)
+    assert code == mod.EXIT_MANIFEST_REFUSED == 4, "the run ends red so the failure shows"
+    assert not (tmp_path / "latest.yml").exists() and not (tmp_path / "promoted.json").exists()
+    assert (tmp_path / "holds.txt").read_text(encoding="utf-8") == "1.300.0\n", "the hold still lands"
     assert any("could not be used" in line for line in logs), logs
 
 
@@ -404,8 +459,28 @@ def test_a_tests_read_that_fails_is_never_green(tmp_path):
 
     logs: list[str] = []
     code, _ = mod.run(tmp_path, REPO, Broken([_api("1.404.0", 30)], {}), now=NOW, log=logs.append)
-    assert code == 0 and not (tmp_path / "latest.yml").exists()
+    assert code == mod.EXIT_TESTS_UNREAD == 5 and not (tmp_path / "latest.yml").exists()
     assert any("could not read its Tests result" in line for line in logs)
+
+
+def test_an_unread_newest_candidate_stops_the_run_before_anything_older(tmp_path):
+    """Else a Stable PC downloads the older one now and the newer one an hour
+    later. The older release's Tests are not even read."""
+    mod = _mod()
+
+    class FlakyNewest(FakeGitHub):
+        def tests_runs(self, sha):
+            if sha == "sha-v1.405.0":
+                self.calls.append(("tests", sha))
+                raise RuntimeError("gh api failed: HTTP 502")
+            return super().tests_runs(sha)
+
+    gh = FlakyNewest([_api("1.405.0", 30), _api("1.404.0", 50)], {"1.404.0": "success"})
+    logs: list[str] = []
+    code, message = mod.run(tmp_path, REPO, gh, now=NOW, log=logs.append)
+    assert code == 5 and not (tmp_path / "latest.yml").exists(), logs
+    assert ("tests", "sha-v1.404.0") not in gh.calls
+    assert any("could not be read, so nothing older is put on Stable" in line for line in logs), logs
 
 
 def test_the_cli_runs_with_a_fake_github_and_writes_the_commit_message(tmp_path):
@@ -456,7 +531,10 @@ def test_the_stable_workflow_has_its_shape():
     assert "${{" not in run, "inputs reach the script through env, never pasted into shell text"
     env = next(s["env"] for s in job["steps"] if "run" in s)
     assert env["HOLD"] == "${{ inputs.hold }}" and env["PROMOTE"] == "${{ inputs.promote }}"
-    assert '"$rc" -ne 3' in run, "a refused promote still commits the hold, then ends red"
+    # Exits 3 (promote refused), 4 (manifest unusable), 5 (Tests unread)
+    # still commit the hold edits, then end red; anything else ends at once.
+    assert "0|3|4|5) ;;" in run and '*) exit "$rc" ;;' in run, run
+    assert run.rstrip().endswith('exit "$rc"')
 
 
 def test_neither_existing_workflow_triggers_on_the_stable_branch():
@@ -511,6 +589,8 @@ let checks = 0;
 function desktopLog(level, ...a) { logs.push(level + ": " + a.join(" ")); }
 function _emitUpdateState(patch) { states.push(patch); }
 function checkForUpdates() { checks += 1; }
+// Never the real ~/.ironjarvis/config.toml: the pins hand the file in.
+function globalConfigFile() { return ""; }
 const realSetTimeout = setTimeout;
 const realClearTimeout = clearTimeout;
 let captureTimers = true;
@@ -541,7 +621,8 @@ function makeUpdater(plan) {
   if (scenario === "parse") {
     emit(cases.map((t) => updateChannelOf(t)));
   } else if (scenario === "home") {
-    emit({ none: readUpdateChannel(cases.missing), stable: readUpdateChannel(cases.stable) });
+    emit({ none: readUpdateChannel(cases.missing), stable: readUpdateChannel(cases.stable),
+           layered: (cases.layers || []).map(([home, global]) => readUpdateChannel(home, global)) });
   } else if (scenario === "channels") {
     captureTimers = false;
     const asked = [];
@@ -559,8 +640,8 @@ function makeUpdater(plan) {
     const t0 = Date.now();
     const out = await readChannelVersions(fakeFetch, 150);
     emit({ out, asked, ms: Date.now() - t0 });
-  } else if (scenario === "pending") {
-    emit(cases.map(([src, v]) => dropsPendingUpdate(src, v)));
+  } else if (scenario === "fits") {
+    emit(cases.map(([channel, foundOn]) => downloadFitsChannel(channel, foundOn)));
   } else {
     const au = makeUpdater(cases.plan);
     let result = null, rejected = null;
@@ -584,8 +665,8 @@ def _harness() -> str:
     funcs = "\n".join(
         _fn(n, prefix)
         for prefix, n in (
-            ("", "updateChannelOf"), ("", "readUpdateChannel"), ("", "manifestVersionOf"),
-            ("async ", "readChannelVersions"), ("", "dropsPendingUpdate"),
+            ("", "updateChannelSetting"), ("", "updateChannelOf"), ("", "readUpdateChannel"),
+            ("", "manifestVersionOf"), ("async ", "readChannelVersions"), ("", "downloadFitsChannel"),
             ("", "updateErrorKind"), ("", "_updateErrorStatus"), ("", "friendlyUpdateError"),
             ("", "friendlyStableError"), ("", "scheduleUpdateRetry"), ("", "clearUpdateRetry"),
             ("", "onUpdaterError"), ("", "_setUpdateSource"), ("async ", "checkForUpdatesWithFallback"),
@@ -628,12 +709,45 @@ def test_the_file_the_daemons_writer_saves_is_the_file_the_shell_reads(tmp_path)
     assert re.search(r'^update_channel = "stable"$', (home / "config.toml").read_text(encoding="utf-8"), re.M)
     got = _node(_harness(), tmp_path, "home", "home",
                 _cases(tmp_path, {"missing": str(tmp_path / "nowhere"), "stable": str(home)}))
-    assert got == {"none": "fresh", "stable": "stable"}
+    assert (got["none"], got["stable"]) == ("fresh", "stable")
     r = client.put("/settings/values", json={"values": {"update_channel": "fresh"}})
     assert r.status_code == 200
     got = _node(_harness(), tmp_path, "home2", "home",
                 _cases(tmp_path, {"missing": str(tmp_path / "nowhere"), "stable": str(home)}, "c2.json"))
     assert got["stable"] == "fresh", "a change applies at the next read — no restart"
+
+
+@requires_node
+def test_the_shell_layers_the_files_the_way_the_daemon_does(tmp_path, monkeypatch):
+    """core/config._load_config layers ~/.ironjarvis/config.toml UNDER the
+    state home's config.toml; the shell reads the same two files, home first."""
+    import iron_jarvis.core.config as C
+
+    homes = {}
+    for name, text in (("empty", ""), ("fresh", 'update_channel = "fresh"\n'), ("none", None)):
+        d = tmp_path / name
+        d.mkdir()
+        if text is not None:
+            (d / "config.toml").write_text(text, encoding="utf-8")
+        homes[name] = str(d)
+    global_stable = tmp_path / "global.toml"
+    global_stable.write_text('update_channel = "stable"\n', encoding="utf-8")
+    layers = [
+        [homes["none"], str(global_stable)],   # no home file: the global layer decides
+        [homes["empty"], str(global_stable)],  # home file without the key: the global layer
+        [homes["fresh"], str(global_stable)],  # the home sets it: the home wins
+        [homes["none"], str(tmp_path / "nowhere.toml")],
+    ]
+    got = _node(_harness(), tmp_path, "layers", "home",
+                _cases(tmp_path, {"missing": homes["none"], "stable": homes["none"], "layers": layers}))
+    assert got["layered"] == ["stable", "stable", "fresh", "fresh"], got
+    # The daemon's own merge agrees on the same three files.
+    monkeypatch.setattr(C, "global_config_path", lambda: global_stable)
+    for (home, _g), want in zip(layers[:3], ["stable", "stable", "fresh"]):
+        root = Path(home) / "root"
+        root.mkdir(exist_ok=True)
+        monkeypatch.setenv("IRONJARVIS_HOME", home)
+        assert C._load_config(root).update_channel == want, home
 
 
 @requires_node
@@ -694,11 +808,235 @@ def test_update_channels_reads_both_versions_bounded_and_never_throws(tmp_path):
 
 
 @requires_node
-def test_a_fresh_download_does_not_install_once_the_pc_is_on_stable(tmp_path):
-    got = _node(_harness(), tmp_path, "p", "pending",
-                _cases(tmp_path, [["stable", "1.405.2"], ["stable", ""], ["stable", None],
-                                  ["manifest", "1.405.2"], ["feed", "1.405.2"]]))
-    assert got == [True, False, False, False, False]
+def test_a_download_fits_the_channel_only_when_that_channel_offered_it(tmp_path):
+    got = _node(_harness(), tmp_path, "fits", "fits",
+                _cases(tmp_path, [["stable", "stable"], ["stable", "manifest"], ["stable", "feed"],
+                                  ["stable", None], ["fresh", "manifest"], ["fresh", "stable"], ["fresh", None]]))
+    assert got == [True, False, False, False, True, True, True]
+
+
+# --- the SEQUENCE: the real initUpdater handlers on a stand-in updater ------
+
+_SEQ_HARNESS = """
+const fs = require("fs");
+const path = require("path");
+const EventEmitter = require("events");
+const realRequire = require;
+const HOME = process.argv[3];
+const scenario = process.argv[2];
+const out = { logs: [], states: [], shown: [], rechecks: [], cancelled: 0, retries: 0 };
+const fakeAU = new EventEmitter();
+fakeAU.plan = [];
+fakeAU.feed = null;
+fakeAU.setFeedURL = (o) => { fakeAU.feed = o.provider === "github" ? "github" : o.url; };
+fakeAU.checkForUpdates = async () => fakeAU.plan.shift()(fakeAU);
+function setChannel(ch) {
+  fs.writeFileSync(path.join(HOME, "config.toml"), ch ? `update_channel = "${ch}"\\n` : "");
+}
+function harness(require) {
+  const IS_PACKAGED = true;
+  let _updateState = { status: "idle", channel: null };
+  function _emitUpdateState(patch) { _updateState = { ..._updateState, ...patch }; out.states.push(patch); }
+  function desktopLog(level, ...a) { out.logs.push(level + ": " + a.join(" ")); }
+  function safeAppVersion() { return "1.404.0"; }
+  function updateChannelHome() { return HOME; }
+  function globalConfigFile() { return ""; }
+  function refreshTrayMenu() {}
+  const tray = null;
+  class Notification { constructor(o) { this.o = o; } on() {} show() { out.shown.push(this.o.title); } }
+  function requestUpdateInstall() {}
+  function checkForUpdates() { out.rechecks.push(1); }
+  const setTimeout = (fn, ms) => { out.timerMs = (out.timerMs || []).concat(ms); return { unref() {} }; };
+  const clearTimeout = () => {};
+  __DECLS__
+  __FUNCS__
+  const X = "1.405.2", Y = "1.405.0";
+  const pendingDownload = () => { let r; const p = new Promise((res) => { r = res; }); return { p, r }; };
+  const freshOffersX = (au) => {
+    au.emit("checking-for-update");
+    au.emit("update-available", { version: X });
+    const d = pendingDownload();
+    fakeAU.resolveX = d.r;
+    return { isUpdateAvailable: true, updateInfo: { version: X },
+             cancellationToken: { cancel() { out.cancelled += 1; } }, downloadPromise: d.p };
+  };
+  const stableHasNothing = (au) => {
+    au.emit("checking-for-update");
+    au.emit("update-not-available", { version: "1.404.0" });
+    return { isUpdateAvailable: false, updateInfo: { version: "1.404.0" } };
+  };
+  const stableOffersYButHandsBackX = (au) => {
+    // electron-updater 6.8.9 AppUpdater.downloadUpdate: a download already in
+    // progress is returned as it is — the Stable check's result names Y, the
+    // file that lands is X.
+    au.emit("checking-for-update");
+    au.emit("update-available", { version: Y });
+    return { isUpdateAvailable: true, updateInfo: { version: Y },
+             cancellationToken: { cancel() {} }, downloadPromise: new Promise(() => {}) };
+  };
+  const stableFails = (au) => {
+    au.emit("checking-for-update");
+    au.emit("error", new Error("Error: read ECONNRESET"));
+    throw new Error("Error: read ECONNRESET");
+  };
+  const report = () => ({ ...out, pending: pendingUpdateInfo, autoInstall: fakeAU.autoInstallOnAppQuit,
+                          lastStatus: _updateState.status, feed: fakeAU.feed });
+  return {
+    async run() {
+      initUpdater();
+      if (scenario === "A") {
+        // Fresh finds X and starts downloading it ...
+        setChannel("fresh");
+        fakeAU.plan.push(freshOffersX);
+        await runUpdateCheck(fakeAU);
+        fakeAU.emit("download-progress", { percent: 40 });
+        // ... the user picks Stable at 40% (the page saves, then checks) ...
+        setChannel("stable");
+        fakeAU.plan.push(stableHasNothing);
+        await runUpdateCheck(fakeAU);
+        // ... and X lands anyway.
+        fakeAU.emit("update-downloaded", { version: X });
+        fakeAU.resolveX();
+        return report();
+      }
+      if (scenario === "B") {
+        setChannel("fresh");
+        fakeAU.plan.push(freshOffersX);
+        await runUpdateCheck(fakeAU);
+        setChannel("stable");
+        fakeAU.plan.push(stableOffersYButHandsBackX);
+        await runUpdateCheck(fakeAU);
+        fakeAU.emit("update-downloaded", { version: X });   // not offered
+        const afterX = { pending: pendingUpdateInfo, autoInstall: fakeAU.autoInstallOnAppQuit, shown: out.shown.slice() };
+        fakeAU.emit("update-downloaded", { version: Y });   // Y was offered by Stable
+        return { ...report(), afterX };
+      }
+      if (scenario === "C") {
+        // X downloaded and waiting on Fresh; then Stable, and its check FAILS.
+        setChannel("fresh");
+        fakeAU.plan.push(freshOffersX);
+        await runUpdateCheck(fakeAU);
+        fakeAU.emit("update-downloaded", { version: X });
+        fakeAU.resolveX();
+        const before = { pending: pendingUpdateInfo, autoInstall: fakeAU.autoInstallOnAppQuit };
+        setChannel("stable");
+        fakeAU.plan.push(stableFails);
+        let threw = false;
+        try { await runUpdateCheck(fakeAU); } catch { threw = true; }
+        return { ...report(), before, threw };
+      }
+      if (scenario === "D") {
+        // Waiting on Fresh, then Stable with NO check before the install press
+        // or the quit: the install paths drop it themselves.
+        setChannel("fresh");
+        fakeAU.plan.push(freshOffersX);
+        await runUpdateCheck(fakeAU);
+        fakeAU.emit("update-downloaded", { version: X });
+        setChannel("stable");
+        const dropped = dropPendingIfOffChannel();
+        return { ...report(), dropped, again: dropPendingIfOffChannel() };
+      }
+      if (scenario === "fresh") {
+        // Control: on Fresh a download is offered as before.
+        setChannel("fresh");
+        fakeAU.plan.push(freshOffersX);
+        await runUpdateCheck(fakeAU);
+        fakeAU.emit("update-downloaded", { version: X });
+        return report();
+      }
+      if (scenario === "sticky") {
+        // Found on Stable once, it stays Stable's even if Fresh finds it later.
+        setChannel("stable");
+        noteFoundOn(X, "stable");
+        noteFoundOn(X, "manifest");
+        fakeAU.emit("update-downloaded", { version: X });
+        return report();
+      }
+    },
+  };
+}
+harness((m) => (m === "electron-updater" ? { autoUpdater: fakeAU } : realRequire(m)))
+  .run()
+  .then((r) => process.stdout.write(JSON.stringify(r) + "\\n"));
+"""
+
+
+def _seq_harness() -> str:
+    decls = "\n".join(
+        _decl(n)
+        for n in (
+            "UPDATE_RECHECK_MS", "UPDATE_RETRY_MS", "UPDATE_MANIFEST_URL", "UPDATE_GITHUB_FEED",
+            "UPDATE_STABLE_MANIFEST_URL", "UPDATE_DROP_RECHECK_MS", "_updateSource", "_updateRetryTimer",
+            "_updateFallbackArmed", "_autoUpdater", "pendingUpdateInfo", "_foundOn", "_inFlight",
+        )
+    )
+    funcs = "\n".join(
+        _fn(n, prefix)
+        for prefix, n in (
+            ("", "updateChannelSetting"), ("", "readUpdateChannel"), ("", "downloadFitsChannel"),
+            ("", "noteFoundOn"), ("", "noteCheckResult"), ("", "enforceUpdateChannel"),
+            ("", "dropPendingIfOffChannel"), ("", "currentUpdateChannel"), ("async ", "runUpdateCheck"),
+            ("", "forgetPendingUpdate"), ("", "initUpdater"), ("", "updateErrorKind"),
+            ("", "_updateErrorStatus"), ("", "friendlyUpdateError"), ("", "friendlyStableError"),
+            ("", "scheduleUpdateRetry"), ("", "clearUpdateRetry"), ("", "onUpdaterError"),
+            ("", "_setUpdateSource"), ("async ", "checkForUpdatesWithFallback"),
+        )
+    )
+    return _SEQ_HARNESS.replace("__DECLS__", decls).replace("__FUNCS__", funcs)
+
+
+def _seq(tmp_path: Path, scenario: str) -> dict:
+    home = tmp_path / f"home-{scenario}"
+    home.mkdir()
+    return _node(_seq_harness(), tmp_path, f"seq-{scenario}", scenario, str(home))
+
+
+@requires_node
+def test_scenario_a_a_fresh_download_in_flight_when_the_pc_moves_to_stable_never_installs(tmp_path):
+    """The reviewer's trace: "Downloading 40%" of Fresh X → pick Stable → the
+    page's check says nothing is newer while nothing is pending yet → X
+    finishes. Before the fix: "vX is ready", installed on Quit."""
+    got = _seq(tmp_path, "A")
+    assert got["cancelled"] == 1, "the switch stops the Fresh download it can reach"
+    assert got["pending"] is None and got["autoInstall"] is False, got
+    assert got["shown"] == [], "no 'is ready' notification"
+    assert got["lastStatus"] != "downloaded", got["states"]
+    assert got["timerMs"] == [15000], "one check later fetches what Stable offers"
+
+
+@requires_node
+def test_scenario_b_a_stable_check_handed_the_fresh_download_does_not_offer_it(tmp_path):
+    got = _seq(tmp_path, "B")
+    assert got["afterX"]["pending"] is None and got["afterX"]["autoInstall"] is False
+    assert got["afterX"]["shown"] == []
+    # What Stable offered is offered and installs on Quit.
+    assert got["pending"] == {"version": "1.405.0"} and got["autoInstall"] is True
+    assert got["shown"] == ["Iron Jarvis v1.405.0 is ready"]
+
+
+@requires_node
+def test_scenario_c_a_failed_stable_check_still_drops_a_waiting_fresh_download(tmp_path):
+    got = _seq(tmp_path, "C")
+    assert got["before"]["pending"] == {"version": "1.405.2"} and got["before"]["autoInstall"] is True
+    assert got["threw"] is True
+    assert got["pending"] is None and got["autoInstall"] is False, got
+    assert got["feed"].endswith("/updates-stable"), "and the failed check never reached the feed"
+
+
+@requires_node
+def test_the_install_paths_drop_an_off_channel_download_without_a_check(tmp_path):
+    got = _seq(tmp_path, "D")
+    assert got["dropped"] is True and got["again"] is False
+    assert got["pending"] is None and got["autoInstall"] is False
+
+
+@requires_node
+def test_on_fresh_a_download_is_offered_as_before_and_stable_stays_stable(tmp_path):
+    got = _seq(tmp_path, "fresh")
+    assert got["pending"] == {"version": "1.405.2"} and got["autoInstall"] is True
+    assert got["shown"] == ["Iron Jarvis v1.405.2 is ready"] and got["cancelled"] == 0
+    sticky = _seq(tmp_path, "sticky")
+    assert sticky["pending"] == {"version": "1.405.2"} and sticky["autoInstall"] is True
 
 
 _UPDATER_PKG = _ROOT / "desktop" / "node_modules" / "electron-updater"
@@ -740,21 +1078,36 @@ def test_the_real_generic_provider_reads_the_stable_branchs_manifest(tmp_path):
 def test_the_shell_wiring_reads_the_channel_at_every_check():
     src = _main_src()
     timer_site = src[src.index("function checkForUpdates()"):src.index("function checkForUpdates()") + 900]
-    assert "checkForUpdatesWithFallback(autoUpdater, currentUpdateChannel())" in timer_site
+    assert "runUpdateCheck(autoUpdater)" in timer_site
     button = src[src.index('ipcMain.handle("update:check"'):src.index('ipcMain.handle("update:apply"')]
-    assert "await checkForUpdatesWithFallback(au, currentUpdateChannel())" in button
+    assert "await runUpdateCheck(au)" in button
+    run_check = _fn("runUpdateCheck", "async ")
+    assert "const channel = currentUpdateChannel();" in run_check
+    assert "await checkForUpdatesWithFallback(au, channel)" in run_check and "noteCheckResult(result)" in run_check
     cur = _fn("currentUpdateChannel")
     assert "readUpdateChannel(updateChannelHome())" in cur and "_emitUpdateState({ channel })" in cur
+    assert "enforceUpdateChannel(channel)" in cur
+    # Every install path re-judges the waiting download by the channel NOW.
+    for name, prefix in (("requestUpdateInstall", ""), ("applyPendingUpdate", "async ")):
+        head = "\n".join(_fn(name, prefix).split("\n")[:4])
+        assert "if (dropPendingIfOffChannel()) return;" in head, (name, head)
+    quit_path = src[src.index("sweepOwnDaemonOnQuit().finally("):]
+    quit_path = quit_path[:quit_path.index("app.quit();")]
+    assert quit_path.index("dropPendingIfOffChannel();") < quit_path.index("markUpdatePending(")
     # update:channels is sender-checked like every privileged handler.
     channels = src[src.index('ipcMain.handle("update:channels"'):]
     channels = channels[:channels.index("});") + 3]
     assert "if (!isTrustedDashboardSender(event)) return null;" in channels
     assert "readChannelVersions(fetch, UPDATE_CHANNELS_TIMEOUT_MS)" in channels
-    # A Stable check that found nothing drops a Fresh download; a download re-arms install-on-quit.
+    # Where each version was found is recorded BEFORE its download starts; a
+    # landed download is judged by the channel now; a fitting one re-arms
+    # install-on-quit.
     init = src[src.index("function initUpdater()"):src.index("function checkForUpdates()")]
-    assert "dropsPendingUpdate(_updateSource, pendingUpdateInfo && pendingUpdateInfo.version)" in init
-    assert "forgetPendingUpdate(autoUpdater)" in init
-    assert "autoUpdater.autoInstallOnAppQuit = true;" in init.split('"update-downloaded"', 1)[1]
+    available = init[init.index('"update-available"'):init.index('"update-downloaded"')]
+    assert "noteFoundOn(info && info.version, _updateSource);" in available
+    downloaded = init.split('"update-downloaded"', 1)[1]
+    assert downloaded.index("downloadFitsChannel(") < downloaded.index("autoUpdater.autoInstallOnAppQuit = true;")
+    assert "forgetPendingUpdate(autoUpdater)" in downloaded
     forget = _fn("forgetPendingUpdate")
     assert "pendingUpdateInfo = null;" in forget and "au.autoInstallOnAppQuit = false;" in forget
     assert "channels: () => ipcRenderer.invoke(\"update:channels\")" in _txt(_PRELOAD)
@@ -877,7 +1230,11 @@ def test_the_hold_runs_the_stable_workflow_through_a_signed_in_gh_after_two_pres
 
     ok = c.post("/update/stable-hold", json={"version": "1.404.0", "confirm": True})
     assert ok.status_code == 200, ok.text
-    assert ok.json()["ok"] is True and "keep v1.404.0 off Stable" in ok.json()["message"]
+    msg = ok.json()["message"]
+    assert ok.json()["ok"] is True and msg.startswith("Asked GitHub to hold v1.404.0.")
+    # It claims only that the run was ASKED for: the hold lands when that run
+    # happens, and holds.txt is where it shows.
+    assert "holds.txt" in msg and "until you let it through" not in msg and "skips" not in msg
     runs = [call for call in gh_spy["calls"] if call[:2] == ["workflow", "run"]]
     assert runs == [["workflow", "run", "stable.yml", "--repo", REPO, "-f", "hold=1.404.0"]]
 

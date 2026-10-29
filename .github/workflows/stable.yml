@@ -101,16 +101,20 @@ jobs:
             find "$work/wt" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
           # stdlib-only script: --no-project skips installing the app here.
-          # Exit 3 = a requested promote was refused: the hold edits are still
-          # committed, then the run ends red with the reason in its log.
+          # Exit 3 = a requested promote was refused, 4 = the chosen release's
+          # latest.yml could not be used, 5 = the newest candidate's Tests
+          # result could not be read: the hold edits are still committed, then
+          # the run ends red with the reason in its log. Anything else (2 = a
+          # bad input) wrote nothing and ends here.
           rc=0
           uv run --no-project python scripts/promote_stable.py \
             --dir "$work/wt" --repo "$GITHUB_REPOSITORY" \
             --hold "${HOLD:-}" --unhold "${UNHOLD:-}" --promote "${PROMOTE:-}" \
             --message-out "$work/message.txt" || rc=$?
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
-            exit "$rc"
-          fi
+          case "$rc" in
+            0|3|4|5) ;;
+            *) exit "$rc" ;;
+          esac
           git -C "$work/wt" add -A
           if git -C "$work/wt" diff --cached --quiet; then
             echo "updates-stable unchanged"

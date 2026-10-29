@@ -1959,33 +1959,43 @@ this PC runs. A change applies at the next update check (the page checks at
 once); no restart is needed. A PC never goes back to an older version: if it
 was on Fresh and runs a newer version than Stable offers, it stays on that
 version until Stable passes it, and the page says so. An update Fresh had
-already downloaded is dropped when you move to Stable, so it does not install
-when you quit.
+downloaded, or was still downloading, when you moved to Stable is not offered
+and does not install when you quit (unless Stable offers that same version).
 
 **How a release reaches Stable.** Every hour a small job on GitHub (the Stable
 channel workflow) looks at the releases and takes the newest one that:
 
 - has been published for at least a day,
+- has not been replaced: when a newer patch of it is out (1.388.1 after
+  1.388.0, the way fixes ship), Stable waits for that one to be out a day
+  instead. A newer feature release (1.389.0) does not count as a replacement,
 - has its installer and update files,
-- passed the full test run on GitHub, and
+- passed the full test run on GitHub (a run someone cancelled does not count
+  either way), and
 - you have not held back.
 
-Stable only moves forward. If nothing qualifies, it stays where it is.
+Stable only moves forward. If nothing qualifies, it stays where it is. If
+GitHub's test results for the newest candidate cannot be read, the job puts
+nothing older on Stable that hour, so a Stable PC never downloads two versions
+an hour apart.
 
 **The day's wait is time only.** Iron Jarvis cannot see whether your other PC
 ran a version, how long for, or whether it worked. If a version misbehaves on
 your Fresh PC, hold it back: on the Updates page of that PC, press **Keep this
 version off Stable** twice. That asks GitHub, through the GitHub CLI (`gh`) on
 that PC when it is installed and signed in, to run the Stable channel
-workflow with that version held. Without `gh`, the page shows the exact
+workflow with that version held. The hold is recorded when that run happens;
+`holds.txt` on the `updates-stable` branch shows it (a run that was already
+putting the version on Stable can still finish first). Without `gh`, the page shows the exact
 command to run and a link to the workflow's page on GitHub, where **Run
 workflow** has three boxes:
 
 - **hold**: keep a version off Stable;
 - **unhold**: let a held version reach Stable again;
-- **promote**: put a version on Stable now, without the day's wait. It is
-  still refused for a version that is held, not published, failed its tests,
-  or is not newer than what Stable offers; the run says why.
+- **promote**: put a version on Stable now, without the day's wait (and even
+  when a newer patch replaced it: naming it is your call, and the record says
+  so). It is still refused for a version that is held, not published, failed
+  its tests, or is not newer than what Stable offers; the run says why.
 
 A version already on Stable cannot be held back: Stable never moves to an
 older version.

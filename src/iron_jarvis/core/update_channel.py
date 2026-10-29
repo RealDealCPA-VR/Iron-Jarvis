@@ -129,9 +129,13 @@ def request_hold(version: str, *, confirm: bool) -> dict[str, Any]:
     return {
         "ok": True,
         "version": v,
+        # v1.405.0 review: what is TRUE once gh answered — the run was asked
+        # for, nothing more. A run already promoting the version, or GitHub
+        # replacing a waiting run (one pending run per concurrency group), can
+        # still put it on Stable; holds.txt is where a hold that landed shows.
         "message": (
-            f"Asked GitHub to keep v{v} off Stable. The Stable channel's workflow records it "
-            "within a few minutes, and Stable skips that version until you let it through."
+            f"Asked GitHub to hold v{v}. The Stable channel's workflow records it on its next run; "
+            f"holds.txt on the updates-stable branch shows it once it has."
         ),
         "actions_url": ACTIONS_URL,
     }

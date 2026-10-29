@@ -3886,8 +3886,9 @@ does not need a bump, stop and bump it.
   all three old drains and a helper without the final turn go red).
 
 - **The STABLE update channel: a release reaches `updates-stable` only once
-  it has been out a day with its commit's Tests green and not held; the
-  daily driver reads it, the other PC stays Fresh** (v1.405.0; the user: "55
+  it has been out a day, no newer patch replaced it, its commit's Tests are
+  green and it is not held; the daily driver reads it, the other PC stays
+  Fresh** (v1.405.0; the user: "55
   releases in 7 days … a Stable update channel for the daily-driver PC").
   WRITER: `.github/workflows/stable.yml` (cron `23 * * * *` + dispatch inputs
   `hold` / `unhold` / `promote`; `permissions: contents: write, actions: read`
@@ -3899,44 +3900,69 @@ does not need a bump, stop and bump it.
   `promoted.json`, `README.md`. THE RULE is `choose_stable(releases, holds,
   tests_green, now, current, soak_hours=24, promote="")`, pure: the NEWEST
   release that is published (not draft/prerelease), out ≥ 24 h, not held, has
-  `latest.yml` + installer + blockmap (state `uploaded`), whose tag's commit's
-  NEWEST COMPLETED Tests run concluded `success` (`tests_verdict`), and newer
-  than what Stable names — never backwards. `promote` skips ONLY the wait
-  (refused, exit 3, for held / unpublished / Tests not green / not newer; the
-  hold edits still commit, then the run ends red). A failed Tests read is not
-  green. Neither release.yml nor tests.yml triggers on the branch (pinned).
-  SHELL: `desktop/main.js` reads `update_channel` from config.toml at EVERY
-  check (`updateChannelOf`: only a top-level quoted `stable`, forgiving case
-  and spaces like the Config validator; anything else is fresh) and passes it
-  to `checkForUpdatesWithFallback(au, channel)`: Fresh is byte-for-byte the
-  v1.260.0 order (manifest, then the feed); Stable reads
-  `UPDATE_STABLE_MANIFEST_URL` ONLY and rethrows (the feed names the newest
-  release and would skip the wait) — `onUpdaterError` gives the transient
-  words + one retry, `friendlyStableError` says a 404 means Stable has nothing
-  to offer yet. A Stable check that finds nothing while a Fresh download waits
-  drops it (`dropsPendingUpdate` → `forgetPendingUpdate`: no tray item,
-  `autoInstallOnAppQuit = false`; `update-downloaded` turns it back on).
-  IPC `update:channels` (sender-checked, both manifests' `version:` read at
-  once, 8 s each, null on failure); `update:getState` carries `channel`;
-  preload `update.channels`. SETTING: schema row `update_channel` (System ›
-  Updates, enum fresh/stable, `tier="allow", floor_when=("fresh",)` — Fresh
-  widens what reaches the PC), Config field (tolerant: not stable = fresh).
-  PAGE: `components/settings/UpdateChannelChoice.tsx` + `lib/updateChannel.ts`
-  inside the desktop card, drawn only when the bridge has `channels` (an
-  older shell ignores the setting): saves through PUT /settings/values, THEN
-  checks; says when this PC runs a newer version than Stable (it stays, no
-  downgrade). HOLD: `core/update_channel.py` + `GET/POST /update/stable-hold`
-  (system.py): `gh workflow run stable.yml --repo … -f hold=X.Y.Z` through
-  `harness/branches._gh` ONLY with `gh_state` signed in, the version X.Y.Z,
-  `confirm: true` (two presses); else the command + Actions URL. THE WAIT IS
+  `latest.yml` + installer + blockmap (state `uploaded`), NOT REPLACED
+  (`replaced_by`: a newer published release of the same MAJOR.MINOR — a patch
+  is how fixes ship; logged "replaced by vX — waiting for that one"; a newer
+  MINOR does not count), whose tag's commit's NEWEST COMPLETED Tests run that
+  is not `cancelled`/`skipped` concluded `success` (`tests_verdict`), and
+  newer than what Stable names — never backwards. A newest candidate whose
+  verdict was not READ stops the run (`Decision.unread`, exit 5): nothing
+  older is promoted, or a Stable PC downloads twice an hour apart. `promote`
+  skips the wait and the replacement rule, said in its `why` (refused, exit 3,
+  for held / unpublished / Tests not green / not newer). A `latest.yml` that
+  fails `stable_manifest` publishes nothing, exit 4. Exits 3–5 still commit
+  the hold edits, then the run ends red; 2 (bad input) writes nothing.
+  Neither release.yml nor tests.yml triggers on the branch (pinned).
+  SHELL: `desktop/main.js` reads `update_channel` at EVERY check
+  (`readUpdateChannel`: the state home's config.toml, else
+  `~/.ironjarvis/config.toml` — the daemon's own layering; `updateChannelSetting`:
+  only a top-level quoted `stable`, forgiving case and spaces like the Config
+  validator; anything else is fresh) through ONE `runUpdateCheck(au)` (timer and
+  page): Fresh is byte-for-byte the v1.260.0 order (manifest, then the feed);
+  Stable reads `UPDATE_STABLE_MANIFEST_URL` ONLY and rethrows (the feed names
+  the newest release and would skip the wait) — `onUpdaterError` gives the
+  transient words + one retry, `friendlyStableError` says a 404 means Stable
+  has nothing to offer yet. A download is judged by the channel the PC is on
+  WHEN IT LANDS: `update-available` records where each version was found
+  (`_foundOn`, sticky "stable"), `downloadFitsChannel(channel, foundOn)` (Fresh
+  takes anything, Stable only what Stable offered; unknown is not), and it is
+  applied before every check (`enforceUpdateChannel`: cancels a Fresh download
+  in flight via the check result's cancellationToken — electron-updater emits
+  `update-cancelled`, not an error — and forgets a waiting one, so a FAILED
+  Stable check still drops it), at `update-downloaded` (a Fresh download that
+  lands after the switch, or that electron-updater handed a Stable check
+  because one was already in progress, is not offered: `forgetPendingUpdate`,
+  `autoInstallOnAppQuit = false`, one recheck 15 s later), and before any
+  install (`requestUpdateInstall`, `applyPendingUpdate`, the Quit path via
+  `dropPendingIfOffChannel`). IPC `update:channels` (sender-checked, both
+  manifests' `version:` read at once, 8 s each, null on failure);
+  `update:getState` carries `channel`; preload `update.channels`. SETTING:
+  schema row `update_channel` (System › Updates, enum fresh/stable,
+  `tier="allow", floor_when=("fresh",)` — Fresh widens what reaches the PC),
+  Config field (tolerant: not stable = fresh). PAGE:
+  `components/settings/UpdateChannelChoice.tsx` + `lib/updateChannel.ts` inside
+  the desktop card — the ONE control on Settings › System (`SettingsHome.
+  CONTROLLED_IN_SECTION` keeps the plain schema row off the page; a search or
+  `?focus=update_channel` opens the Updates section), drawn only when the
+  bridge has `channels` (an older shell ignores the setting): saves through
+  PUT /settings/values, THEN checks; says when this PC runs a newer version
+  than Stable (it stays, no downgrade). HOLD: `core/update_channel.py` +
+  `GET/POST /update/stable-hold` (system.py): `gh workflow run stable.yml
+  --repo … -f hold=X.Y.Z` through `harness/branches._gh` ONLY with `gh_state`
+  signed in, the version X.Y.Z, `confirm: true` (two presses); else the
+  command + Actions URL. Its words claim only that the run was ASKED for
+  (GitHub keeps one pending run per concurrency group; holds.txt shows a hold
+  that landed). THE WAIT IS
   TIME: no word may say a version was tested or ran on the other PC (pinned).
   RELEASE: this commit touches `.github/workflows/*`, so the maintainer pushes
   the TAG by hand (Release flow, step 2). UNVERIFIED: the workflow has never
   run on GitHub (whether `actions: read` is needed was not provable offline;
   a real-data dry run with the user's own gh picked v1.400.7). Pins:
   `tests/test_stable_channel_v14050.py`,
-  `dashboard/__tests__/update-channel-v14050.test.tsx`; moved on purpose:
-  `test_update_channel_v1260` (the two call sites pass the channel).
+  `dashboard/__tests__/update-channel-v14050.test.tsx`,
+  `dashboard/__tests__/settings-update-channel-v14050.test.tsx`; moved on
+  purpose: `test_update_channel_v1260` (both call sites go through
+  `runUpdateCheck`).
 
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside

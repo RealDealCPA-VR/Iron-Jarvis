@@ -22,16 +22,26 @@ THE RULE (:func:`choose_stable`, pure, tested offline): the NEWEST release that
 * was published at least ``SOAK_HOURS`` ago,
 * is not held (``holds.txt``),
 * carries ``latest.yml``, its installer and the installer's blockmap,
+* has NOT been replaced: no newer published release of the same MAJOR.MINOR
+  line exists (a patch release is how this repo ships a fix — 1.388.0 out for
+  a day while its fix 1.388.1 is 19 h old is skipped, and the fix soaks; a
+  newer MINOR release does not disqualify it),
 * whose commit's **Tests** workflow ended ``success`` (Release publishes only
   after its own gate, but Tests is a separate workflow that has gone red AFTER
-  a green Release: v1.398.0, v1.326.0, v1.394.0 …), and
+  a green Release: v1.398.0, v1.326.0, v1.394.0 …; a cancelled or skipped run
+  is not a verdict), and
 * is NEWER than the version Stable names now — Stable never moves backwards
   (installed apps would not downgrade to it anyway).
 
 Nothing qualifies → nothing changes, and the log says why for each candidate.
-``--promote X.Y.Z`` skips the wait for that version only and still refuses a
-held, unpublished, Tests-failed or not-newer one (exit 3, after the hold edits
-are written).
+When the Tests verdict of the newest candidate could not be READ, the run ends
+without promoting anything older (else a PC on Stable would download the older
+one and then, an hour later, the newer one) — exit 5. ``--promote X.Y.Z``
+skips the wait for that version only (and, said in its words, the replacement
+rule: naming the version is the user's call) and still refuses a held,
+unpublished, Tests-failed or not-newer one (exit 3). A promoted release whose
+``latest.yml`` cannot be used publishes nothing (exit 4). Exits 3–5 still write
+the hold edits; exit 2 (a bad input) writes nothing.
 
 THE BRANCH (``updates-stable``, an orphan written only by
 ``.github/workflows/stable.yml``) holds ``latest.yml`` (the promoted version's
@@ -69,10 +79,19 @@ BRANCH = "updates-stable"
 TESTS_WORKFLOW = "tests.yml"
 #: How many promotions ``promoted.json`` keeps.
 HISTORY_MAX = 500
-#: Exit code when a requested ``--promote`` was refused (the hold edits are
-#: still written and committed; the workflow run is marked failed so the user
-#: sees the refusal).
+#: Exit codes. 2: a bad input, nothing written. 3–5: the hold edits are still
+#: written and committed, then the workflow run ends red so the user sees it.
+EXIT_BAD_INPUT = 2
+#: A requested ``--promote`` was refused.
 EXIT_PROMOTE_REFUSED = 3
+#: The chosen release's ``latest.yml`` could not be used; nothing published.
+EXIT_MANIFEST_REFUSED = 4
+#: The newest candidate's Tests verdict could not be read; nothing older
+#: promoted this run.
+EXIT_TESTS_UNREAD = 5
+#: Run conclusions that are not a verdict on the code (a re-run someone
+#: cancelled must not keep a green release off Stable forever).
+IGNORED_CONCLUSIONS = frozenset({"cancelled", "skipped"})
 
 _VERSION_RX = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
@@ -83,9 +102,10 @@ Machine-read by the installed Iron Jarvis desktop app when its update channel is
 offers and its installer (absolute URLs on the GitHub release).
 
 Written only by the **Stable channel** workflow (`.github/workflows/stable.yml`),
-every hour. A release reaches Stable once it has been published for a day, its
-commit's Tests workflow passed, and it is not held back. Stable never moves to an
-older version.
+every hour. A release reaches Stable once it has been published for a day, no
+newer patch release of it (same first two numbers) has come out, its commit's
+Tests workflow passed, and it is not held back. Stable never moves to an older
+version.
 
 * `holds.txt`: versions kept off Stable, one per line. Add or remove one with the
   workflow's `hold` / `unhold` inputs (Actions › Stable channel › Run workflow).
@@ -174,23 +194,31 @@ def release_from_api(raw: Mapping[str, Any]) -> Release | None:
     )
 
 
+def _newest(runs: list[Mapping[str, Any]]) -> Mapping[str, Any]:
+    return max(
+        runs,
+        key=lambda r: (str(r.get("created_at") or ""), int(r.get("run_number") or 0), int(r.get("id") or 0)),
+    )
+
+
 def tests_verdict(runs: Iterable[Mapping[str, Any]]) -> str:
     """The Tests verdict for one commit, from its workflow runs (``GET
     …/actions/workflows/tests.yml/runs?head_sha=``): the NEWEST COMPLETED
     run's conclusion (a re-run that passed after a flake is that run's latest
-    attempt; a later run that failed overrules an earlier pass), ``running``
-    when every run is still going, ``missing`` when there is none."""
+    attempt; a later run that failed overrules an earlier pass), leaving out
+    runs that ended ``cancelled`` or ``skipped`` (no verdict on the code);
+    ``running`` when nothing has finished with a verdict yet but a run is still
+    going, ``missing`` when there is no run at all."""
     runs = [r for r in runs if isinstance(r, Mapping)]
     if not runs:
         return "missing"
     done = [r for r in runs if str(r.get("status") or "") == "completed"]
-    if not done:
+    judged = [r for r in done if str(r.get("conclusion") or "") not in IGNORED_CONCLUSIONS]
+    if judged:
+        return str(_newest(judged).get("conclusion") or "unknown")
+    if len(done) < len(runs):
         return "running"
-    newest = max(
-        done,
-        key=lambda r: (str(r.get("created_at") or ""), int(r.get("run_number") or 0), int(r.get("id") or 0)),
-    )
-    return str(newest.get("conclusion") or "unknown")
+    return str(_newest(done).get("conclusion") or "unknown")
 
 
 def _tests_words(verdict: Any) -> str:
@@ -230,6 +258,21 @@ class Decision:
     #: A requested ``--promote`` that could not happen, in words ("" = none).
     refused: str = ""
     published_at: str = ""
+    #: The newest candidate whose Tests verdict was not read ("" = none):
+    #: nothing older was promoted.
+    unread: str = ""
+
+
+def replaced_by(r: Release, releases: Iterable[Release]) -> Release | None:
+    """The NEWEST published release of ``r``'s MAJOR.MINOR line that is newer
+    than ``r`` — a patch release is how this repo ships a fix — or None. A
+    draft or prerelease replaces nothing; a newer MINOR release is another line."""
+    newer = [
+        x for x in releases
+        if x.key[:2] == r.key[:2] and x.key > r.key
+        and not x.draft and not x.prerelease and x.published_at is not None
+    ]
+    return max(newer, key=lambda x: x.key) if newer else None
 
 
 def _blockers(r: Release, holds: set[str]) -> list[str]:
@@ -256,19 +299,23 @@ def tests_wanted(
     promote: str = "",
 ) -> list[str]:
     """The versions whose Tests verdict the decision needs, newest first:
-    newer than ``current``, published with every file, not held, and out for
-    the soak (or the one ``promote`` names). Everything else is decided without
-    a Tests read, so the network layer asks only for these."""
+    newer than ``current``, published with every file, not held, not replaced
+    by a newer patch, and out for the soak (or the one ``promote`` names).
+    Everything else is decided without a Tests read, so the network layer asks
+    only for these."""
+    rels = sorted(releases, key=lambda r: r.key, reverse=True)
     cur = parse_version(current) if current else None
     hold = {clean_version(h) for h in holds}
     out: list[str] = []
-    for r in sorted(releases, key=lambda r: r.key, reverse=True):
+    for r in rels:
         if cur is not None and r.key <= cur:
             break
         if _blockers(r, hold):
             continue
         if promote and r.version == promote:
             out.append(r.version)
+            continue
+        if replaced_by(r, rels) is not None:
             continue
         if r.published_at is not None and now - r.published_at >= timedelta(hours=soak_hours):
             out.append(r.version)
@@ -330,9 +377,14 @@ def choose_stable(
         age = now - r.published_at if r.published_at else timedelta(0)
         d.version = r.version
         d.published_at = r.published_at.isoformat() if r.published_at else ""
+        # Naming the version is the user's call, so a newer patch of its line
+        # does not stop it — but the record says so.
+        newer = replaced_by(r, rels)
         d.why = (
             f"v{r.version} put on Stable by request, skipping the day's wait "
-            f"(out for {_hours(age)}; its Tests passed)."
+            f"(out for {_hours(age)}; its Tests passed"
+            + (f"; v{newer.version} had replaced it" if newer is not None else "")
+            + ")."
         )
         return d
 
@@ -344,6 +396,10 @@ def choose_stable(
         if blocks:
             d.notes.append(f"v{r.version}: skipped, " + "; ".join(blocks) + ".")
             continue
+        newer = replaced_by(r, rels)
+        if newer is not None:
+            d.notes.append(f"v{r.version}: replaced by v{newer.version} — waiting for that one.")
+            continue
         age = now - r.published_at  # type: ignore[operator] — _blockers ruled out None
         if age < soak:
             d.notes.append(
@@ -351,6 +407,17 @@ def choose_stable(
             )
             continue
         verdict = tests_green.get(r.version)
+        if verdict is None:
+            # Not READ (a failed or missing read) — never green, and nothing
+            # older goes on Stable this run: a PC on Stable would otherwise
+            # download the older one now and this one an hour later.
+            d.unread = r.version
+            d.notes.append(f"v{r.version}: {_tests_words(None)}.")
+            d.why = (
+                f"Nothing changed: the Tests result of v{r.version} could not be read, so nothing "
+                "older is put on Stable this run."
+            )
+            return d
         if not _green(verdict):
             d.notes.append(f"v{r.version}: skipped, {_tests_words(verdict)}.")
             continue
@@ -497,7 +564,8 @@ def run(
 ) -> tuple[int, str]:
     """One pass: edit holds, read the facts, decide, write the branch's files.
     Returns (exit code, one-line commit message). Writes nothing when the
-    inputs are invalid (exit 2)."""
+    inputs are invalid (exit 2); exits 3–5 (module docstring) still write the
+    hold edits."""
     try:
         promote = clean_version(promote) if str(promote or "").strip() else ""
         holds_path = branch_dir / "holds.txt"
@@ -506,7 +574,7 @@ def run(
         )
     except ValueError as exc:
         log(f"promote_stable: {exc}")
-        return 2, ""
+        return EXIT_BAD_INPUT, ""
     for line in said:
         log(line)
 
@@ -524,7 +592,7 @@ def run(
             tests[v] = tests_verdict(gh.tests_runs(gh.tag_commit(r.tag)))
         except Exception as exc:  # noqa: BLE001 — a read that failed is "not read", never green
             log(f"v{v}: could not read its Tests result ({str(exc).splitlines()[0][:200]}).")
-            continue
+            break  # the decision stops at this one: nothing older is promoted this run
         if _green(tests[v]) and not promote:
             break  # the newest qualifying one wins; older ones need no read
 
@@ -535,6 +603,11 @@ def run(
 
     edits = "; ".join(s.rstrip(".") for s in said)
     message = ""
+    code = 0
+    if decision.refused:
+        code = EXIT_PROMOTE_REFUSED
+    elif decision.unread:
+        code = EXIT_TESTS_UNREAD
     if decision.version:
         r = next(x for x in releases if x.version == decision.version)
         try:
@@ -542,6 +615,7 @@ def run(
         except Exception as exc:  # noqa: BLE001 — never publish a manifest we could not check
             log(f"Nothing changed: the v{r.version} manifest could not be used ({exc}).")
             decision.version = None
+            code = EXIT_MANIFEST_REFUSED
         else:
             _write(latest_path, text)
             history_path = branch_dir / "promoted.json"
@@ -560,7 +634,7 @@ def run(
         message = f"stable: {edits}" if edits else "stable: no change"
     elif edits:
         message += f" ({edits})"
-    return (EXIT_PROMOTE_REFUSED if decision.refused else 0), message
+    return code, message
 
 
 def main(argv: list[str] | None = None, gh: Any = None, now: datetime | None = None) -> int:

@@ -995,6 +995,9 @@ const DAEMON_PORT = 8787;
 let dialogChoice = 1;
 const dialog = { showMessageBoxSync: (o) => { calls.push(["dialog", o.message, o.buttons.join("|")]); return dialogChoice; } };
 function applyPendingUpdate() { calls.push(["applyPendingUpdate"]); updateInstallInFlight = true; }
+// v1.405.0: a PC on Fresh — the channel guard drops nothing
+// (tests/test_stable_channel_v14050.py pins the Stable side).
+function dropPendingIfOffChannel() { return false; }
 function desktopLog(level, ...a) { calls.push(["log", level]); }
 // v1.249.0 (R-02): "Install when idle" says so in the tray while it waits.
 let tray = { setToolTip: (s) => calls.push(["tooltip", s]) };

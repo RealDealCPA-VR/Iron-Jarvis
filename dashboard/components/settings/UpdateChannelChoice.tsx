@@ -204,7 +204,7 @@ function HoldThisVersion({ version, stable }: { version: string; stable: string 
     setError("");
     try {
       const res = await post<{ message?: string }>("/update/stable-hold", { version, confirm: true });
-      setDone(res?.message || `Asked GitHub to keep ${versionWords(version)} off Stable.`);
+      setDone(res?.message || `Asked GitHub to hold ${versionWords(version)}.`);
       setArmed(false);
     } catch (err) {
       setError(message(err));
