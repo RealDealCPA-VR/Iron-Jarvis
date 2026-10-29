@@ -4670,6 +4670,69 @@ does not need a bump, stop and bump it.
   (Voice Chat SENDS what it hears). A window-level listener the chat page
   registers must ask `surfaceHiddenRef` before acting.
 
+- **Two coding sessions SIDE BY SIDE: one shared pane column, keys stay in
+  the focused column, both are looked at** (v1.406.0 part 7; the user: "two
+  sessions side by side", like Claude Code desktop's split view).
+  `lib/codeSplit.ts` is the ONE place for the rules (pure, import-free):
+  `CodeSplit {left, right, focus}`; `openSession` (one of the two → FOCUS it,
+  else replace the FOCUSED column's), `openBeside` (right column, focused),
+  `closeSide` (back to one, the other kept), `dropSession`; at most two.
+  ADDRESS `/chat?view=code&session=<a>&beside=<b>` (`splitFromSearch`,
+  `writeSplitToAddress`; a `beside` counts only with the session the page
+  was opened with; `writeViewToAddress("chat")` drops it too); WINDOW MEMORY
+  module state + sessionStorage `ij.code.split`, written ONLY for a split
+  (one column keeps the old `LAST_SESSION_KEY` path byte for byte —
+  `__tests__/setup.ts` resets it like turnCache, and a pin checks a return to
+  Code WITHOUT that reset). VIEW (`IjHarnessView`): ONE structure for one or
+  two columns, each column div keyed by its SESSION id (opening beside never
+  remounts the first; closing the left keeps the right's instance), carrying
+  `data-split-column="left|right"` + `data-focused` only when there are two;
+  focus = the last pointerdown / focusin in a column (`focusSide` returns
+  the same object when unchanged, so a click re-renders nothing). PANES: one
+  shared column (`harness-split-panes`, 300/360 px, "Views for <name>"):
+  `HarnessSession.panesInto` — absent = its own aside as before, null =
+  none, an element = `createPortal` there; only the focused column passes
+  the element (two pane sets at 1440 px left each conversation ~250 px).
+  NARROW (`SPLIT_MIN_WIDTH` 1280 = the harness's own xl, where a single
+  session already stacks its panes): one column + `harness-split-tabs`; the
+  other column stays MOUNTED, `hidden` + `inert`, `onScreen={false}` (its
+  reply streams on, it is not "looked at", no panes). KEYS: `ownsKeys(el,
+  target)` — a key belongs to its target's column, else the
+  `data-focused="true"` one; a column under `[inert]` owns none; an element
+  in no column owns every key exactly as before. `useHarnessKeys(handlers,
+  state, owner)` (HarnessSession passes its root) and DockAsk's window
+  handler both ask it — two sessions both registered Esc/Ctrl+L/Ctrl+K and
+  both docks answered Enter before. LOOKING: `lib/buildWatching` holds a SET
+  (`here`), the note carries `threads` (and `thread` = the first, for an
+  older window), `stopLooking(thread)` takes back only that session's note
+  (no argument = all) — a column's cleanup must never clear the other's.
+  WAYS IN: the row's `harness-open-beside-<id>` (hover / focus / touch),
+  Shift+Enter on a row, dragging a row (`SESSION_DRAG_TYPE`) onto
+  `harness-drop-beside` (wide windows only). Pins:
+  `dashboard/__tests__/code-split-v1406.test.tsx` (rules + the view with a
+  marker session), `code-split-live-v1406.test.tsx` (two REAL sessions: two
+  streams, 60 words re-render the view ≤ 1 time, Esc / Enter scoped, both
+  looked at, narrow tab looked at), e2e `dashboard/e2e/code-split.spec.ts`
+  (1600 × 900, 1280 × 800, 390 × 844); 24 mutations, all red. Moved on
+  purpose: `ij-harness-phone-unit-v1369` (the panes are `panesEl`).
+  REVIEW (each red first): (1) a card in the OTHER column took the caret
+  out of the box the user was typing in (DockAsk's "the composer had it"
+  matched ANY `[data-dock-composer]`), so the next letter picked its choice
+  and Enter its Allow — the grab and the give-back now ask `ownsKeys`
+  (`columnRef` keeps the column after the card goes). (2) The chat kept
+  behind Code still answered its WINDOW listeners (part 1): a file dropped on
+  a session's box was ALSO uploaded into the hidden chat (and made it a work
+  folder), and "Switch model" (`ij:open-switcher`, Ctrl K / the demo strip)
+  opened the hidden chat's menu portaled over Code — `surfaceHiddenRef`
+  gates both; the focused session's own menu opens instead (HarnessSession
+  listens, `ownsKeys`). (3) The narrow tabs name their panels
+  (`aria-controls` ⇄ `role="tabpanel"`). (4) e2e: the account-limit rejoin
+  stub matched `/stream` while the page asks `/stream?ids=1` (since
+  v1.384.0; a string route matches the query too) — not a product bug; the
+  model-menu e2e scopes "Switch model" to `harness-session` (the hidden
+  chat's chip stays in the DOM). Pins: `code-split-live-v1406` (+3),
+  `chat-code-hidden-window-v1406`.
+
 - **A coding session's SESSION tab reads what the app already knows; its one
   new read is the session's background programs** (v1.404.0; the user, beside
   a screenshot of Claude Code's session panel: "add a sessions rail … next to

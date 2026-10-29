@@ -31,11 +31,15 @@ export const LOOKING_BEAT_MS = 8_000;
 
 /** This window's own id (two windows may show sessions; only one has focus). */
 const WINDOW_ID = `w${Math.random().toString(36).slice(2, 10)}`;
-/** The session THIS window shows in front, focused (null = none). */
-let here: string | null = null;
+/** The sessions THIS window shows in front, focused. v1.406.0 part 7: a
+ *  window can show TWO side by side (lib/codeSplit), and both are looked at. */
+const here = new Set<string>();
 
 interface LookingNote {
+  /** The first session (what older windows read). */
   thread: string;
+  /** v1.406.0 part 7: every session the window shows (two side by side). */
+  threads?: string[];
   win: string;
   at: number;
 }
@@ -45,33 +49,41 @@ function readNote(): LookingNote | null {
     const raw = window.localStorage.getItem(LOOKING_KEY);
     if (!raw) return null;
     const n = JSON.parse(raw) as Partial<LookingNote>;
-    return typeof n?.thread === "string" && typeof n.win === "string" && typeof n.at === "number"
-      ? { thread: n.thread, win: n.win, at: n.at }
-      : null;
+    if (typeof n?.thread !== "string" || typeof n.win !== "string" || typeof n.at !== "number") return null;
+    const threads = Array.isArray(n.threads) ? n.threads.filter((t): t is string => typeof t === "string") : undefined;
+    return { thread: n.thread, threads, win: n.win, at: n.at };
   } catch {
     return null;
   }
 }
 
-/** This window shows `thread`, in front and focused. */
-export function noteLooking(thread: string, now: number = Date.now()): void {
-  here = thread;
+function writeNote(now: number): void {
   try {
-    window.localStorage.setItem(LOOKING_KEY, JSON.stringify({ thread, win: WINDOW_ID, at: now }));
+    const threads = [...here];
+    if (threads.length === 0) {
+      const n = readNote();
+      if (n && n.win === WINDOW_ID) window.localStorage.removeItem(LOOKING_KEY);
+      return;
+    }
+    window.localStorage.setItem(LOOKING_KEY, JSON.stringify({ thread: threads[0], threads, win: WINDOW_ID, at: now }));
   } catch {
     /* no storage: this window still knows */
   }
 }
 
-/** This window no longer shows a session in front (blurred, hidden, left). */
-export function stopLooking(): void {
-  here = null;
-  try {
-    const n = readNote();
-    if (n && n.win === WINDOW_ID) window.localStorage.removeItem(LOOKING_KEY);
-  } catch {
-    /* nothing to clear */
-  }
+/** This window shows `thread`, in front and focused (beside any other it
+ *  shows too). */
+export function noteLooking(thread: string, now: number = Date.now()): void {
+  here.add(thread);
+  writeNote(now);
+}
+
+/** This window no longer shows `thread` in front (blurred, hidden, left);
+ *  with no thread, no session at all. */
+export function stopLooking(thread?: string): void {
+  if (thread === undefined) here.clear();
+  else here.delete(thread);
+  writeNote(Date.now());
 }
 
 /** Is the user looking at `thread` right now — in this window (shown, in
@@ -80,7 +92,7 @@ export function lookingAt(thread: string | null | undefined, now: number = Date.
   if (!thread) return false;
   try {
     if (
-      here === thread &&
+      here.has(thread) &&
       typeof document !== "undefined" &&
       document.visibilityState === "visible" &&
       document.hasFocus()
@@ -91,7 +103,7 @@ export function lookingAt(thread: string | null | undefined, now: number = Date.
     /* a document that cannot say: ask the note */
   }
   const n = readNote();
-  if (!n || n.thread !== thread) return false;
+  if (!n || !(n.threads ?? [n.thread]).includes(thread)) return false;
   if (n.win === WINDOW_ID) return false; // this window's own note: decided above
   return now - n.at >= 0 && now - n.at < LOOKING_FRESH_MS;
 }
@@ -132,5 +144,5 @@ export function wasWatched(id: string | null | undefined): boolean {
 
 /** Tests only: forget this window's state. */
 export function __resetLooking(): void {
-  here = null;
+  here.clear();
 }

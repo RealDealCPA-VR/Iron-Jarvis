@@ -46,6 +46,7 @@ import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
 import { dockKeyAction, enterAllows, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
 import { choiceKey, findChoice } from "@/lib/letteredChoices";
+import { columnOf, ownsKeys } from "@/lib/codeSplit";
 import {
   CLOUD_ASK_KEEP,
   CLOUD_ASK_SEND,
@@ -170,6 +171,9 @@ export function DockAsk({
   const headRef = useRef<string | null>(null);
   const shownAtRef = useRef(0);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // v1.406.0 part 7 review: the split column (lib/codeSplit) the card was
+  // drawn in, kept for after it goes.
+  const columnRef = useRef<Element | null>(null);
   const ordered = withHeadFirst(asks, headRef.current);
   const head = ordered[0] ?? null;
   const headId = head?.id ?? null;
@@ -188,6 +192,12 @@ export function DockAsk({
     const ae = document.activeElement;
     // v1.369.0: Build's IJ harness composer marks itself `data-dock-composer`.
     const composerHadIt = !!ae && !!ae.closest?.('[data-testid="chat-composer"], [data-dock-composer]');
+    // v1.406.0 part 7 review: with two coding sessions side by side the card
+    // takes the caret only from ITS OWN column (lib/codeSplit) — a card in
+    // the other column must never pull the caret out of the box the user is
+    // typing in, or their next letter picks its choice and Enter its Allow.
+    columnRef.current = columnOf(wrapRef.current);
+    if (!ownsKeys(wrapRef.current, ae)) return;
     if (bodyHasFocus() || composerHadIt) wrapRef.current?.focus({ preventScroll: true });
   }, [headId]);
 
@@ -196,7 +206,9 @@ export function DockAsk({
   const hadAsk = useRef(false);
   const hasAsk = headId !== null;
   useEffect(() => {
-    if (hadAsk.current && !hasAsk && bodyHasFocus()) returnFocus?.();
+    // v1.406.0 part 7 review: only the column with the focus takes the caret
+    // back (the card is gone by now, so its column is the one kept above).
+    if (hadAsk.current && !hasAsk && bodyHasFocus() && ownsKeys(columnRef.current, null)) returnFocus?.();
     hadAsk.current = hasAsk;
   }, [hasAsk, returnFocus]);
 
@@ -225,6 +237,10 @@ export function DockAsk({
       // kept behind the Code view, `inert`) never answers a key — Enter in
       // the Code view must not press a hidden chat's Allow.
       if (wrapRef.current?.closest("[inert]")) return;
+      // v1.406.0 part 7: two coding sessions side by side — a key answers the
+      // card of the column that has the focus only (lib/codeSplit); Enter
+      // must never press the OTHER column's Allow.
+      if (!ownsKeys(wrapRef.current, e.target)) return;
       const action = dockKeyAction(e, null, false);
       if (action && press(action)) e.preventDefault();
     };

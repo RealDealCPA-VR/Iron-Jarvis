@@ -21,6 +21,8 @@
  */
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ownsKeys } from "@/lib/codeSplit";
 import {
   ArrowUp,
   CircleAlert,
@@ -401,6 +403,8 @@ export function HarnessSession({
   onOpenSession,
   onNewSession,
   onFindSessions,
+  onScreen = true,
+  panesInto,
 }: {
   threadId: string;
   terminal: SessionTerminalApi;
@@ -423,8 +427,19 @@ export function HarnessSession({
   onNewSession?: (folder: string) => Promise<string | null>;
   /** v1.379.0: "/resume" — the caret in the session search. */
   onFindSessions?: () => void;
+  /** v1.406.0 part 7: the session is on screen (false: the hidden tab of a
+   *  split on a narrow window — kept mounted so its reply streams on, but
+   *  the user is not looking at it). */
+  onScreen?: boolean;
+  /** v1.406.0 part 7: where its panes go. Absent: its own aside, as before;
+   *  null: no panes (a split column without the focus); an element: drawn
+   *  there (the split's one shared pane column). */
+  panesInto?: HTMLElement | null;
 }) {
   const daemon = useDaemon();
+  // v1.406.0 part 7: the element the session is drawn in — its keys are its
+  // own column's only when two sessions sit side by side (lib/codeSplit).
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const catalog = useModels();
   // v1.384.0: WHERE THE USER WAS (lib/turnCache) — the session last read
   // and its running reply as this window last drew it (this component is
@@ -679,9 +694,15 @@ export function HarnessSession({
   // focus, the bell knows the user is LOOKING at it (lib/buildWatching): a
   // long turn that ends here says nothing — they watched it end.
   useEffect(() => {
+    // v1.406.0 part 7: two sessions side by side are BOTH looked at; each
+    // takes back only its own note (never the other column's).
+    if (!onScreen) {
+      stopLooking(threadId);
+      return;
+    }
     const look = () => {
       if (document.visibilityState === "visible" && document.hasFocus()) noteLooking(threadId);
-      else stopLooking();
+      else stopLooking(threadId);
     };
     look();
     const beat = window.setInterval(look, LOOKING_BEAT_MS);
@@ -693,9 +714,9 @@ export function HarnessSession({
       window.removeEventListener("focus", look);
       window.removeEventListener("blur", look);
       document.removeEventListener("visibilitychange", look);
-      stopLooking();
+      stopLooking(threadId);
     };
-  }, [threadId]);
+  }, [threadId, onScreen]);
 
   // ------------------------------------------------------------- reading
   /** Take a session view the daemon answered with: the view, and (from an
@@ -2145,7 +2166,24 @@ export function HarnessSession({
       },
     },
     () => ({ busy, asking }),
+    () => rootRef.current,
   );
+  // v1.406.0 part 7 review: "Switch model" (Ctrl K, the demo strip:
+  // `ij:open-switcher`, components/ModelMenuBridge — not imported, it brings
+  // the whole app sidebar with it) opens the
+  // model menu of the session on screen — the focused column's in a split —
+  // never the chat's kept behind the Code view.
+  const askingRef = useRef(asking);
+  askingRef.current = asking;
+  useEffect(() => {
+    if (!onScreen) return;
+    const onOpen = () => {
+      if (askingRef.current || !ownsKeys(rootRef.current, null)) return;
+      setModelMenuOpen(true);
+    };
+    window.addEventListener("ij:open-switcher", onOpen);
+    return () => window.removeEventListener("ij:open-switcher", onOpen);
+  }, [onScreen]);
   // v1.377.0: a Compact found running when the session opened — read the
   // session again until it ends (then the meter shows the summary).
   useVisibleInterval(() => void load(), COMPACT_REREAD_MS, elsewhereCompacting);
@@ -2249,7 +2287,7 @@ export function HarnessSession({
 
   if (loadError && !view) {
     return (
-      <div data-testid="harness-session" className="grid h-full place-items-center p-6">
+      <div ref={rootRef} data-testid="harness-session" className="grid h-full place-items-center p-6">
         <div className="space-y-2 text-center">
           <ErrorNote>{loadError}</ErrorNote>
           <button type="button" onClick={() => void load()} className="btn-ghost text-xs">
@@ -2261,17 +2299,47 @@ export function HarnessSession({
   }
   if (!view) {
     return (
-      <div data-testid="harness-session" className="grid h-full place-items-center text-zinc-500">
+      <div ref={rootRef} data-testid="harness-session" className="grid h-full place-items-center text-zinc-500">
         <Loader2 size={18} className="animate-spin" />
       </div>
     );
   }
 
+  const panesEl = (
+    <HarnessPanes
+      view={view}
+      livePlan={livePlan}
+      terminal={terminal}
+      refreshKey={turnsEnded + rewinds}
+      pageSteps={finishedPageSteps(stream.tools)}
+      timeline={timelineLive}
+      models={catalog.models}
+      account={currentAccount}
+      messages={shown}
+      modelWords={modelPart.text}
+      helpers={helpers}
+      busy={busy}
+      undoFor={undoFor}
+      onUndo={onUndo}
+      onSessionChanged={() => {
+        void load();
+        setBranchReads((n) => n + 1);
+      }}
+      onSessionGone={onGone}
+      branchPress={branchPress}
+    />
+  );
+
   return (
     // v1.405.0: "Open in VS Code / Cursor" — the session's folder and editor,
     // lent to every step row, finding and the review pane inside.
     <SessionEditorProvider folder={view.folder}>
-    <div data-testid="harness-session" data-session={view.id} className="flex h-full min-h-0 flex-col gap-3 xl:flex-row">
+    <div
+      ref={rootRef}
+      data-testid="harness-session"
+      data-session={view.id}
+      className="flex h-full min-h-0 flex-col gap-3 xl:flex-row"
+    >
       {/* ------------------------------------------------- the conversation */}
       {/* Below xl the conversation and the panes stack, each a screen-sized
           box of its own (the transcript scrolls inside); from xl they sit
@@ -3222,30 +3290,16 @@ export function HarnessSession({
       </section>
 
       {/* ------------------------------------------------------- the panes */}
-      <aside className="flex h-[70vh] w-full shrink-0 flex-col xl:h-auto xl:min-h-0 xl:w-[320px] 2xl:w-[400px]">
-        <HarnessPanes
-          view={view}
-          livePlan={livePlan}
-          terminal={terminal}
-          refreshKey={turnsEnded + rewinds}
-          pageSteps={finishedPageSteps(stream.tools)}
-          timeline={timelineLive}
-          models={catalog.models}
-          account={currentAccount}
-          messages={shown}
-          modelWords={modelPart.text}
-          helpers={helpers}
-          busy={busy}
-          undoFor={undoFor}
-          onUndo={onUndo}
-          onSessionChanged={() => {
-            void load();
-            setBranchReads((n) => n + 1);
-          }}
-          onSessionGone={onGone}
-          branchPress={branchPress}
-        />
-      </aside>
+      {/* v1.406.0 part 7: in a split the panes are the FOCUSED column's, drawn
+          in the split's one pane column (a portal keeps this session's
+          context); the other column draws none. */}
+      {panesInto === undefined ? (
+        <aside className="flex h-[70vh] w-full shrink-0 flex-col xl:h-auto xl:min-h-0 xl:w-[320px] 2xl:w-[400px]">
+          {panesEl}
+        </aside>
+      ) : panesInto ? (
+        createPortal(panesEl, panesInto)
+      ) : null}
     </div>
     </SessionEditorProvider>
   );
