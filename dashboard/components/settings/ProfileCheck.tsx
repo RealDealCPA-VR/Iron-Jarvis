@@ -6,8 +6,9 @@
  * profile (reach the base, search it, load the guide, can it save) and shows
  * each step in a short list; a test save writes one note, in two presses.
  *
- * A 404 from either (an older Iron Jarvis) hides both buttons for every row
- * (`onGone`). The words and decoders live in lib/memoryProfileCheck (pure).
+ * A route-level 404 from either (an older Iron Jarvis) hides both buttons for
+ * every row (`onGone`); a 404 the daemon worded (a profile deleted elsewhere)
+ * is shown like any refusal. The words and decoders live in lib/memoryProfileCheck (pure).
  */
 
 import { useState } from "react";
@@ -24,6 +25,12 @@ import {
 } from "@/lib/memoryProfileCheck";
 
 const msg = (e: unknown, fallback: string) => (e as { message?: string })?.message || fallback;
+
+/** An older Iron Jarvis has no check routes: FastAPI's own 404, "Not Found".
+ *  A 404 with the daemon's OWN sentence ("That profile no longer exists.")
+ *  is about this one profile, and is said — never a reason to hide the
+ *  buttons of every other profile (v1.408.0 review). */
+const routeMissing = (e: unknown) => e instanceof ApiError && e.status === 404 && e.message === "Not Found";
 
 const TONE_CLASS = { ok: "text-tone-success", warn: "text-tone-warn", neutral: "text-zinc-500" } as const;
 
@@ -44,7 +51,7 @@ export function ProfileCheck({ id, onGone }: { id: string; onGone: () => void })
       if (s === null) setCheckError("The check gave no answer.");
       else setSteps(s);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) onGone();
+      if (routeMissing(e)) onGone();
       else setCheckError(msg(e, "Couldn't check the profile."));
     } finally {
       setChecking(false);
@@ -59,7 +66,7 @@ export function ProfileCheck({ id, onGone }: { id: string; onGone: () => void })
       if (r === null) setSaveError("The test save gave no answer.");
       else setSaved(r);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) onGone();
+      if (routeMissing(e)) onGone();
       else setSaveError(msg(e, "Couldn't try a test save."));
     }
   }

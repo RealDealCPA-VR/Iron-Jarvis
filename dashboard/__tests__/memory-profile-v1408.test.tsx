@@ -9,7 +9,8 @@
  *      row: the saved choice wins over the proposal, a fixed value has a box,
  *      a required argument cannot be left empty, problems are said, the PUT
  *      body is exact, a 400 sentence keeps the form open, 404 draws nothing,
- *      and the row's badge says whether it was ever confirmed.
+ *      and the row's badge says whether it was ever confirmed (from the
+ *      listing's tools_set_up; the tools are read when the editor opens).
  *   3. Check a memory profile (steps with their tones) and Try a test save
  *      (two presses, its words, a 409 sentence; 404 hides both).
  */
@@ -350,19 +351,27 @@ describe("2. an MCP memory base's tool roles", () => {
   it("a 404 (not an MCP base, or an older Iron Jarvis) draws nothing", async () => {
     H.gets[ROLES_PATH] = new H.FakeApiError("Not Found", 404);
     const { container } = render(<McpBaseRoles name="hermes" />);
+    fireEvent.click(await screen.findByTestId("mcp-roles-open-hermes", {}, W));
     await waitFor(() => expect(H.getCalls).toContain(ROLES_PATH));
     await flush();
     expect(container.innerHTML).toBe("");
   });
 
-  it("the row's badge: 'Not set up yet' until confirmed, then 'Tools set up'", async () => {
+  it("the row's badge: the listing's word until the editor reads or saves, never a live read on mount", async () => {
     H.gets[ROLES_PATH] = VIEW;
-    render(<McpBaseRoles name="hermes" />);
-    expect((await screen.findByTestId("mcp-roles-badge-hermes", {}, W)).textContent).toBe("Not set up yet");
-    cleanup();
-    H.gets[ROLES_PATH] = { ...VIEW, saved: { search: PROPOSED.search } };
-    render(<McpBaseRoles name="hermes" />);
+    render(<McpBaseRoles name="hermes" setUp={true} />);
     expect((await screen.findByTestId("mcp-roles-badge-hermes", {}, W)).textContent).toBe("Tools set up");
+    await flush();
+    expect(H.getCalls).toEqual([]);
+    // What the editor reads wins over the listing's (older) word.
+    fireEvent.click(screen.getByTestId("mcp-roles-open-hermes"));
+    await screen.findByTestId("mcp-roles-form-hermes", {}, W);
+    expect(screen.getByTestId("mcp-roles-badge-hermes").textContent).toBe("Not set up yet");
+    cleanup();
+    render(<McpBaseRoles name="hermes" />);
+    await flush();
+    expect(screen.queryByTestId("mcp-roles-badge-hermes")).toBeNull();
+    expect(screen.getByTestId("mcp-roles-open-hermes")).toBeTruthy();
   });
 
   it("the Long-term list puts it on an MCP base's row only (by the record's kind)", async () => {
@@ -372,14 +381,15 @@ describe("2. an MCP memory base's tool roles", () => {
         { name: "notes", kind: "markdown", path: "C:/notes" },
       ],
       active: ["brain", "hermes", "notes"],
+      bases: [{ name: "hermes", kind: "mcp", tools_set_up: false }, { name: "notes", kind: "markdown" }],
     };
     H.gets[ROLES_PATH] = VIEW;
     render(<LongTerm />);
     const row = await screen.findByTestId("ltm-source-row-hermes", {}, W);
-    expect(await within(row).findByTestId("mcp-roles-badge-hermes", {}, W)).toBeTruthy();
+    expect((await within(row).findByTestId("mcp-roles-badge-hermes", {}, W)).textContent).toBe("Not set up yet");
     expect(within(row).getByRole("button", { name: "Set up tools" })).toBeTruthy();
     expect(within(screen.getByTestId("ltm-source-row-notes")).queryByText("Set up tools")).toBeNull();
-    expect(H.getCalls.filter((p) => p.endsWith("/roles"))).toEqual([ROLES_PATH]);
+    expect(H.getCalls.filter((p) => p.endsWith("/roles"))).toEqual([]);
   });
 
   it("the decoders: unknown roles and sources die; the body keeps only the tool's own arguments", () => {

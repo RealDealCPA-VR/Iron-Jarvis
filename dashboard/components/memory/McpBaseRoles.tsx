@@ -8,13 +8,16 @@
  * ONLY through what the user confirmed here (`saved`); until then it searches
  * and reads.
  *
- * One read of GET /ltm/sources/{name}/roles when the row mounts (for the
- * row's badge), one PUT on "Use these". A 404 (not an MCP base, or an older
- * Iron Jarvis) draws nothing. The words and the rules live in
- * lib/mcpBaseRoles (pure; no lib/api import).
+ * The row's badge comes from the Long-term listing (`bases[].tools_set_up`,
+ * passed in as `setUp`). GET /ltm/sources/{name}/roles is a LIVE tools/list
+ * of the server (up to 20 s on one that does not answer), so it is read only
+ * when the user presses "Set up tools" — and again on every press, so a tool
+ * the server gained since is offered (v1.408.0 review). One PUT on "Use
+ * these". A 404 (not an MCP base, or an older Iron Jarvis) draws nothing. The
+ * words and the rules live in lib/mcpBaseRoles (pure; no lib/api import).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useId, useState } from "react";
 import { ApiError, get, put } from "@/lib/api";
 import { Badge, ErrorNote, Field, LoaderInline, SuccessNote } from "@/components/ui";
 import {
@@ -24,6 +27,8 @@ import {
   NOT_USED_WORDS,
   ROLES_INTRO,
   ROLE_WORDS,
+  SAVED_NOTHING_WORDS,
+  SAVED_WORDS,
   SET_UP_WORDS,
   SOURCE_WORDS,
   argSelectValue,
@@ -32,6 +37,7 @@ import {
   missingRequired,
   rolesBody,
   setArg,
+  shownProblems,
   startingChoice,
   toolNamed,
   type McpRolesView,
@@ -41,10 +47,12 @@ import {
 
 const msg = (e: unknown, fallback: string) => (e as { message?: string })?.message || fallback;
 
-export function McpBaseRoles({ name }: { name: string }) {
+export function McpBaseRoles({ name, setUp }: { name: string; setUp?: boolean }) {
   const path = `/ltm/sources/${encodeURIComponent(name)}/roles`;
+  const idBase = useId();
   const [view, setView] = useState<McpRolesView | null>(null);
   const [gone, setGone] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState(false);
   const [choice, setChoice] = useState<Record<string, RoleMapping | null>>({});
@@ -52,8 +60,15 @@ export function McpBaseRoles({ name }: { name: string }) {
   const [saveError, setSaveError] = useState("");
   const [note, setNote] = useState("");
 
-  const load = useCallback(async () => {
+  if (gone) return null;
+
+  /** Read the server's tools NOW and open the editor on them. */
+  async function openEditor() {
+    if (loading) return;
+    setNote("");
+    setSaveError("");
     setLoadError("");
+    setLoading(true);
     try {
       const v = decodeRolesView(await get<unknown>(path));
       if (!v) {
@@ -61,23 +76,14 @@ export function McpBaseRoles({ name }: { name: string }) {
         return;
       }
       setView(v);
+      setChoice(startingChoice(v));
+      setOpen(true);
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) setGone(true);
       else setLoadError(msg(e, "The server's tools couldn't load."));
+    } finally {
+      setLoading(false);
     }
-  }, [path]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  if (gone) return null;
-
-  function openEditor() {
-    setNote("");
-    setSaveError("");
-    if (view) setChoice(startingChoice(view));
-    setOpen(true);
   }
 
   async function save() {
@@ -93,7 +99,7 @@ export function McpBaseRoles({ name }: { name: string }) {
       const next = decodeRolesView(await put<unknown>(path, rolesBody(view, choice)));
       if (next) setView(next);
       setOpen(false);
-      setNote("Saved. Jarvis now uses these tools for this memory base.");
+      setNote(next && !next.saved ? SAVED_NOTHING_WORDS : SAVED_WORDS);
     } catch (e) {
       setSaveError(msg(e, "Couldn't save the tools."));
     } finally {
@@ -102,36 +108,39 @@ export function McpBaseRoles({ name }: { name: string }) {
   }
 
   const setRole = (role: RoleId, m: RoleMapping | null) => setChoice((c) => ({ ...c, [role]: m }));
+  // The badge: what this editor last read or saved, else the listing's word.
+  const isSetUp = view ? !!view.saved : setUp;
 
   return (
     <div className="mt-2" data-testid={`mcp-roles-${name}`}>
       <div className="flex flex-wrap items-center gap-2">
-        {view && (
+        {typeof isSetUp === "boolean" && (
           <Badge
             variant="calm"
             keepCase
-            value={view.saved ? SET_UP_WORDS : NOT_SET_UP_WORDS}
-            tone={view.saved ? "green" : "slate"}
+            value={isSetUp ? SET_UP_WORDS : NOT_SET_UP_WORDS}
+            tone={isSetUp ? "green" : "slate"}
             data-testid={`mcp-roles-badge-${name}`}
           />
         )}
-        {!open && (view || loadError) && (
+        {!open && (
           <button
             type="button"
             data-testid={`mcp-roles-open-${name}`}
-            onClick={() => (view ? openEditor() : void load().then(() => setOpen(true)))}
+            onClick={() => void openEditor()}
+            disabled={loading}
             className="btn-ghost btn-sm"
           >
-            Set up tools
+            {loading ? <LoaderInline label="Reading its tools…" /> : "Set up tools"}
           </button>
         )}
       </div>
       {note && <SuccessNote>{note}</SuccessNote>}
 
-      {open && !view && loadError && (
+      {!open && loadError && (
         <ErrorNote>
           {loadError}{" "}
-          <button type="button" onClick={() => void load()} className="underline underline-offset-2">
+          <button type="button" onClick={() => void openEditor()} className="underline underline-offset-2">
             Try again
           </button>
         </ErrorNote>
@@ -154,7 +163,7 @@ export function McpBaseRoles({ name }: { name: string }) {
           {view.roles.map((role) => {
             const m = choice[role] ?? null;
             const tool = m ? toolNamed(view, m.tool) : undefined;
-            const problems = view.problems[role] ?? [];
+            const problems = shownProblems(view, choice, role);
             return (
               <div key={role} data-testid={`mcp-role-${role}`} className="space-y-2">
                 <Field label={ROLE_WORDS[role]}>
@@ -165,7 +174,13 @@ export function McpBaseRoles({ name }: { name: string }) {
                     className="field w-full max-w-sm"
                   >
                     <option value="">{NOT_USED_WORDS}</option>
-                    {m && !tool && <option value={m.tool}>{m.tool} (the server no longer offers it)</option>}
+                    {/* A confirmed tool the listing lacks: gone from the server —
+                        or the server did not answer, and then nothing is known. */}
+                    {m && !tool && (
+                      <option value={m.tool}>
+                        {view.error ? m.tool : `${m.tool} (the server no longer offers it)`}
+                      </option>
+                    )}
                     {view.tools.map((t) => (
                       <option key={t.name} value={t.name} title={t.description || undefined}>
                         {t.name}
@@ -178,17 +193,15 @@ export function McpBaseRoles({ name }: { name: string }) {
                     {tool.params.map((p) => {
                       const current = m.args[p.name];
                       const value = argSelectValue(current);
+                      const argId = `${idBase}-${role}-${p.name}`;
                       return (
                         <li key={p.name} className="flex flex-wrap items-center gap-2">
-                          <label
-                            htmlFor={`mcp-arg-${name}-${role}-${p.name}`}
-                            className="min-w-[8rem] text-[12px] text-zinc-400"
-                          >
+                          <label htmlFor={argId} className="min-w-[8rem] text-[12px] text-zinc-400">
                             <span className="font-mono">{p.name}</span>
                             {p.required && <span className="text-zinc-500"> · required</span>}
                           </label>
                           <select
-                            id={`mcp-arg-${name}-${role}-${p.name}`}
+                            id={argId}
                             data-testid={`mcp-arg-${role}-${p.name}`}
                             value={value}
                             onChange={(e) => {

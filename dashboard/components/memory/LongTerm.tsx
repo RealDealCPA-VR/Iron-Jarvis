@@ -216,8 +216,18 @@ export function LongTerm() {
   const {
     data: sourcesData,
     reload: reloadSources,
-  } = useApi<{ sources: LtmSource[]; active: string[] }>("/ltm/sources");
+  } = useApi<{
+    sources: LtmSource[];
+    active: string[];
+    bases?: { name: string; tools_set_up?: unknown }[];
+  }>("/ltm/sources");
   const customSources = sourcesData?.sources ?? [];
+  // v1.408.0 review: an MCP base's "Tools set up" badge is the listing's own
+  // word (no live tool listing per row per visit); undefined = not said.
+  const toolsSetUp = (base: string): boolean | undefined => {
+    const v = sourcesData?.bases?.find((b) => b?.name === base)?.tools_set_up;
+    return typeof v === "boolean" ? v : undefined;
+  };
   // The active source names power the filter/append dropdowns; fall back to the
   // built-in defaults when the daemon is unreachable.
   const sourceOptions = sourcesData?.active?.length
@@ -1411,7 +1421,7 @@ export function LongTerm() {
                         {/* v1.408.0: an MCP memory base's tools are matched to
                             the note work Jarvis does; it writes to the server
                             only through what the user confirms here. */}
-                        {s.kind === "mcp" && <McpBaseRoles name={s.name} />}
+                        {s.kind === "mcp" && <McpBaseRoles name={s.name} setUp={toolsSetUp(s.name)} />}
                       </li>
                     ))}
                   </ul>

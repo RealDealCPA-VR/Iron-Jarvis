@@ -1,0 +1,907 @@
+{
+  "check_confirmed": {
+    "body": {
+      "steps": [
+        {
+          "ok": true,
+          "step": "reach",
+          "words": "hermes-brain answered."
+        },
+        {
+          "ok": true,
+          "step": "search",
+          "words": "Search works (0 note(s) for “Wiki”)."
+        },
+        {
+          "ok": null,
+          "step": "guide",
+          "words": "No operating guide is set."
+        },
+        {
+          "ok": null,
+          "step": "save",
+          "words": "Saves use create_page. Press Try a test save to check one."
+        }
+      ]
+    },
+    "status": 200
+  },
+  "check_gone_profile": {
+    "body": {
+      "detail": "That profile no longer exists."
+    },
+    "status": 404
+  },
+  "check_unconfirmed": {
+    "body": {
+      "steps": [
+        {
+          "ok": true,
+          "step": "reach",
+          "words": "hermes-brain answered."
+        },
+        {
+          "ok": true,
+          "step": "search",
+          "words": "Search works (0 note(s) for “Wiki”)."
+        },
+        {
+          "ok": null,
+          "step": "guide",
+          "words": "No operating guide is set."
+        },
+        {
+          "ok": false,
+          "step": "save",
+          "words": "hermes-brain: choose which of its tools to use to save a new note (Memory › Long-term › hermes-brain › Set up tools). Nothing was changed."
+        }
+      ]
+    },
+    "status": 200
+  },
+  "listing_confirmed": {
+    "body": {
+      "active": [
+        "brain",
+        "hermes-brain"
+      ],
+      "bases": [
+        {
+          "available": true,
+          "detail": "",
+          "kind": "brain",
+          "name": "brain"
+        },
+        {
+          "available": true,
+          "detail": "",
+          "kind": "mcp",
+          "name": "hermes-brain",
+          "tool": "search_wiki",
+          "tools_set_up": true
+        }
+      ],
+      "sources": [
+        {
+          "config_json": "",
+          "database_id": "",
+          "endpoint_url": "http://wiki.invalid/mcp",
+          "host": "",
+          "key_path": "",
+          "kind": "mcp",
+          "name": "hermes-brain",
+          "port": 22,
+          "roles_json": "{\"search\": {\"tool\": \"search_wiki\", \"args\": {\"query\": \"query\"}}, \"read\": {\"tool\": \"read_page\", \"args\": {\"path\": \"ref\"}}, \"create\": {\"tool\": \"create_page\", \"args\": {\"body\": \"content\", \"summary\": \"title\", \"type\": {\"const\": \"concept\"}, \"tags\": {\"const\": \"inbox, notes\"}}}, \"append\": {\"tool\": \"append_section\", \"args\": {\"path\": \"ref\", \"heading\": \"title\", \"content\": \"content\"}}, \"archive\": {\"tool\": \"archive_page\", \"args\": {\"path\": \"ref\"}}}",
+          "token_secret": "",
+          "username": ""
+        },
+        {
+          "config_json": "",
+          "database_id": "",
+          "endpoint_url": "",
+          "host": "",
+          "key_path": "",
+          "kind": "markdown",
+          "name": "notes",
+          "port": 22,
+          "roles_json": "",
+          "token_secret": "",
+          "username": ""
+        }
+      ]
+    },
+    "status": 200
+  },
+  "listing_unconfirmed": {
+    "body": {
+      "active": [
+        "brain",
+        "hermes-brain"
+      ],
+      "bases": [
+        {
+          "available": true,
+          "detail": "",
+          "kind": "brain",
+          "name": "brain"
+        },
+        {
+          "available": null,
+          "detail": "not checked yet — this listing does not run network checks; the Memory page's base card checks it (or ask for it with probe=true)",
+          "kind": "mcp",
+          "name": "hermes-brain",
+          "tools_set_up": false
+        }
+      ],
+      "sources": [
+        {
+          "config_json": "",
+          "database_id": "",
+          "endpoint_url": "http://wiki.invalid/mcp",
+          "host": "",
+          "key_path": "",
+          "kind": "mcp",
+          "name": "hermes-brain",
+          "port": 22,
+          "roles_json": "",
+          "token_secret": "",
+          "username": ""
+        },
+        {
+          "config_json": "",
+          "database_id": "",
+          "endpoint_url": "",
+          "host": "",
+          "key_path": "",
+          "kind": "markdown",
+          "name": "notes",
+          "port": 22,
+          "roles_json": "",
+          "token_secret": "",
+          "username": ""
+        }
+      ]
+    },
+    "status": 200
+  },
+  "put_confirmed": {
+    "body": {
+      "problems": {
+        "append": [],
+        "archive": [],
+        "create": [],
+        "delete": [],
+        "move": [],
+        "read": [],
+        "rename": [],
+        "search": []
+      },
+      "proposed": {
+        "append": {
+          "args": {
+            "content": "content",
+            "heading": "title",
+            "path": "ref"
+          },
+          "tool": "append_section"
+        },
+        "archive": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "archive_page"
+        },
+        "create": {
+          "args": {
+            "body": "content",
+            "summary": "title"
+          },
+          "tool": "create_page"
+        },
+        "delete": null,
+        "move": null,
+        "read": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "read_page"
+        },
+        "rename": null,
+        "search": {
+          "args": {
+            "query": "query"
+          },
+          "tool": "search_wiki"
+        }
+      },
+      "roles": [
+        "search",
+        "read",
+        "create",
+        "append",
+        "archive",
+        "delete",
+        "rename",
+        "move"
+      ],
+      "saved": {
+        "append": {
+          "args": {
+            "content": "content",
+            "heading": "title",
+            "path": "ref"
+          },
+          "tool": "append_section"
+        },
+        "archive": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "archive_page"
+        },
+        "create": {
+          "args": {
+            "body": "content",
+            "summary": "title",
+            "tags": {
+              "const": "inbox, notes"
+            },
+            "type": {
+              "const": "concept"
+            }
+          },
+          "tool": "create_page"
+        },
+        "read": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "read_page"
+        },
+        "search": {
+          "args": {
+            "query": "query"
+          },
+          "tool": "search_wiki"
+        }
+      },
+      "sources": [
+        "query",
+        "ref",
+        "title",
+        "content",
+        "to"
+      ],
+      "tools": [
+        {
+          "description": "Full-text search across the wiki.",
+          "name": "search_wiki",
+          "params": [
+            {
+              "name": "query",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Read a wiki page by vault-relative path.",
+          "name": "read_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Create a new wiki page following SCHEMA.md.",
+          "name": "create_page",
+          "params": [
+            {
+              "name": "body",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "related_links",
+              "required": false,
+              "type": "array"
+            },
+            {
+              "name": "summary",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "tags",
+              "required": true,
+              "type": "array"
+            },
+            {
+              "name": "type",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Append a new section to an existing page.",
+          "name": "append_section",
+          "params": [
+            {
+              "name": "content",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "heading",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Update an existing page.",
+          "name": "update_page",
+          "params": [
+            {
+              "name": "append_text",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "new_body",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "note",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Non-destructively archive a page.",
+          "name": "archive_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "required": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "List every page.",
+          "name": "list_pages",
+          "params": []
+        },
+        {
+          "description": "Return index.md.",
+          "name": "get_index",
+          "params": []
+        }
+      ]
+    },
+    "status": 200
+  },
+  "put_nothing": {
+    "body": {
+      "problems": {
+        "append": [],
+        "archive": [],
+        "create": [
+          "'tags' is required — choose a value for it (a fixed value if nothing else fits).",
+          "'type' is required — choose a value for it (a fixed value if nothing else fits)."
+        ],
+        "delete": [],
+        "move": [],
+        "read": [],
+        "rename": [],
+        "search": []
+      },
+      "proposed": {
+        "append": {
+          "args": {
+            "content": "content",
+            "heading": "title",
+            "path": "ref"
+          },
+          "tool": "append_section"
+        },
+        "archive": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "archive_page"
+        },
+        "create": {
+          "args": {
+            "body": "content",
+            "summary": "title"
+          },
+          "tool": "create_page"
+        },
+        "delete": null,
+        "move": null,
+        "read": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "read_page"
+        },
+        "rename": null,
+        "search": {
+          "args": {
+            "query": "query"
+          },
+          "tool": "search_wiki"
+        }
+      },
+      "roles": [
+        "search",
+        "read",
+        "create",
+        "append",
+        "archive",
+        "delete",
+        "rename",
+        "move"
+      ],
+      "saved": null,
+      "sources": [
+        "query",
+        "ref",
+        "title",
+        "content",
+        "to"
+      ],
+      "tools": [
+        {
+          "description": "Full-text search across the wiki.",
+          "name": "search_wiki",
+          "params": [
+            {
+              "name": "query",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Read a wiki page by vault-relative path.",
+          "name": "read_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Create a new wiki page following SCHEMA.md.",
+          "name": "create_page",
+          "params": [
+            {
+              "name": "body",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "related_links",
+              "required": false,
+              "type": "array"
+            },
+            {
+              "name": "summary",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "tags",
+              "required": true,
+              "type": "array"
+            },
+            {
+              "name": "type",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Append a new section to an existing page.",
+          "name": "append_section",
+          "params": [
+            {
+              "name": "content",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "heading",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Update an existing page.",
+          "name": "update_page",
+          "params": [
+            {
+              "name": "append_text",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "new_body",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "note",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Non-destructively archive a page.",
+          "name": "archive_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "required": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "List every page.",
+          "name": "list_pages",
+          "params": []
+        },
+        {
+          "description": "Return index.md.",
+          "name": "get_index",
+          "params": []
+        }
+      ]
+    },
+    "status": 200
+  },
+  "put_refused": {
+    "body": {
+      "detail": "Save a new note: 'tags' is required — choose a value for it (a fixed value if nothing else fits)."
+    },
+    "status": 400
+  },
+  "roles_not_mcp": {
+    "body": {
+      "detail": "notes is not an MCP memory base."
+    },
+    "status": 404
+  },
+  "roles_unconfirmed": {
+    "body": {
+      "problems": {
+        "append": [],
+        "archive": [],
+        "create": [
+          "'tags' is required — choose a value for it (a fixed value if nothing else fits).",
+          "'type' is required — choose a value for it (a fixed value if nothing else fits)."
+        ],
+        "delete": [],
+        "move": [],
+        "read": [],
+        "rename": [],
+        "search": []
+      },
+      "proposed": {
+        "append": {
+          "args": {
+            "content": "content",
+            "heading": "title",
+            "path": "ref"
+          },
+          "tool": "append_section"
+        },
+        "archive": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "archive_page"
+        },
+        "create": {
+          "args": {
+            "body": "content",
+            "summary": "title"
+          },
+          "tool": "create_page"
+        },
+        "delete": null,
+        "move": null,
+        "read": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "read_page"
+        },
+        "rename": null,
+        "search": {
+          "args": {
+            "query": "query"
+          },
+          "tool": "search_wiki"
+        }
+      },
+      "roles": [
+        "search",
+        "read",
+        "create",
+        "append",
+        "archive",
+        "delete",
+        "rename",
+        "move"
+      ],
+      "saved": null,
+      "sources": [
+        "query",
+        "ref",
+        "title",
+        "content",
+        "to"
+      ],
+      "tools": [
+        {
+          "description": "Full-text search across the wiki.",
+          "name": "search_wiki",
+          "params": [
+            {
+              "name": "query",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Read a wiki page by vault-relative path.",
+          "name": "read_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Create a new wiki page following SCHEMA.md.",
+          "name": "create_page",
+          "params": [
+            {
+              "name": "body",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "related_links",
+              "required": false,
+              "type": "array"
+            },
+            {
+              "name": "summary",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "tags",
+              "required": true,
+              "type": "array"
+            },
+            {
+              "name": "type",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Append a new section to an existing page.",
+          "name": "append_section",
+          "params": [
+            {
+              "name": "content",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "heading",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Update an existing page.",
+          "name": "update_page",
+          "params": [
+            {
+              "name": "append_text",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "new_body",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "note",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Non-destructively archive a page.",
+          "name": "archive_page",
+          "params": [
+            {
+              "name": "path",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "required": false,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "List every page.",
+          "name": "list_pages",
+          "params": []
+        },
+        {
+          "description": "Return index.md.",
+          "name": "get_index",
+          "params": []
+        }
+      ]
+    },
+    "status": 200
+  },
+  "roles_unreachable": {
+    "body": {
+      "error": "could not list hermes-brain's tools: the wiki did not answer",
+      "problems": {},
+      "proposed": {
+        "append": null,
+        "archive": null,
+        "create": null,
+        "delete": null,
+        "move": null,
+        "read": null,
+        "rename": null,
+        "search": null
+      },
+      "roles": [
+        "search",
+        "read",
+        "create",
+        "append",
+        "archive",
+        "delete",
+        "rename",
+        "move"
+      ],
+      "saved": {
+        "append": {
+          "args": {
+            "content": "content",
+            "heading": "title",
+            "path": "ref"
+          },
+          "tool": "append_section"
+        },
+        "archive": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "archive_page"
+        },
+        "create": {
+          "args": {
+            "body": "content",
+            "summary": "title",
+            "tags": {
+              "const": "inbox, notes"
+            },
+            "type": {
+              "const": "concept"
+            }
+          },
+          "tool": "create_page"
+        },
+        "read": {
+          "args": {
+            "path": "ref"
+          },
+          "tool": "read_page"
+        },
+        "search": {
+          "args": {
+            "query": "query"
+          },
+          "tool": "search_wiki"
+        }
+      },
+      "sources": [
+        "query",
+        "ref",
+        "title",
+        "content",
+        "to"
+      ],
+      "tools": []
+    },
+    "status": 200
+  },
+  "test_save_ok": {
+    "body": {
+      "ok": true,
+      "ref": "concepts/iron-jarvis-test-note.md",
+      "verified": true,
+      "words": "Saved “Iron Jarvis test note” to hermes-brain (read back and confirmed). You can delete it there."
+    },
+    "status": 200
+  }
+}
