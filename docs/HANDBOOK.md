@@ -117,7 +117,7 @@ taken away — every feature moved to a place you can reach in two clicks or by
 searching.
 
 - **The sidebar.** New chat; **Chat** (with its Chat | Code switch, since
-  v1.406.0), **Build** (the terminals), **Projects**, **Everything**,
+  v1.407.0), **Build** (the terminals), **Projects**, **Everything**,
   **Settings**; then **Chats** (by day — on the chat screen this is the
   chat's own list, with search, rename, pin, move and delete; in its Code
   view, the coding sessions) and **Projects**. At the bottom: whether Iron Jarvis is running and its version
@@ -330,7 +330,7 @@ Chat is where most work happens, and it is wired into everything:
 - **What an escalated run inherits from the chat** (v1.232.0): the armed
   tools (on every message, not just the first), a grant you answered on a
   card, the grounded folder, and the approval posture — except *Don't ask*,
-  which escalates as *Ask first* (called *Ask when risky* before v1.406.0). See *Agents & jobs* for the
+  which escalates as *Ask first* (called *Ask when risky* before v1.407.0). See *Agents & jobs* for the
   rules, and the session's amber chips ("Waiting for you · shell",
   "Completed · needs you") now keep their own case.
 
@@ -425,9 +425,9 @@ into chat as `@guide …`, ready to send.
   after you answer, "Approved. The run continues · Open run" for a moment.)
 - **The approval posture rides an escalation** (v1.232.0): when a chat hands
   work to an agent session, the chat's approval dropdown goes with it.
-  *Ask first* (called *Ask when risky* before v1.406.0) lets the tools you
+  *Ask first* (called *Ask when risky* before v1.407.0) lets the tools you
   armed in chat run without a pause and asks once for anything else; *Ask
-  before every action* (called *Ask first* before v1.406.0) asks once per run
+  before every action* (called *Ask first* before v1.407.0) asks once per run
   for every ask-tier tool, armed or not (Allow for this run covers the rest of
   the run). *Accept edits* and *Auto* ride along only to a run you are
   watching (see *One switch* below). *Don't ask* is **never inherited**: a
@@ -775,7 +775,7 @@ Build: live terminals with AI assist per terminal, for your own coding tools
 (Claude Code, Codex, any command line). **Coding sessions**, where Jarvis
 works as a coding agent in one of your folders (v1.369.0; called the IJ
 harness before v1.389.0), are on the chat page behind its **Chat | Code**
-switch since v1.406.0; a Creative gallery for
+switch since v1.407.0; a Creative gallery for
 generated media (Pixio); Skills (yours + auto-suggested from successful
 sessions, approval-gated); Connections (providers/health); Usage (token
 costs); Activity (the full undo-capable action ledger); the **/you** page
@@ -1876,7 +1876,7 @@ reads; it never writes, runs commands, or starts work on its own.
   The per-process logs (tray → Open logs folder) stamp every line with a
   time and say `killed pid=… reason=quit|update|watchdog|restart` when the
   app itself stopped a process, so a crash and a kill no longer look alike.
-- **"Starting Iron Jarvis…"** (v1.406.0) → a page that loads while Iron
+- **"Starting Iron Jarvis…"** (v1.407.0) → a page that loads while Iron
   Jarvis is still starting (a browser tab, a window opened during a restart)
   says this, calmly, until Iron Jarvis first answers; only after a minute and
   a half with no answer does it say **isn't responding**. A start also no
@@ -2017,7 +2017,7 @@ run, through four tools (brain search, read, save, change) that always go to
 the profile's primary — so an agent never needs to know whether your brain is
 Notion or a folder.
 
-## Jarvis fixes its own pull request's failing checks (v1.406.0)
+## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron
 Jarvis watches the pull request's checks on GitHub. When a check fails, the
@@ -2094,7 +2094,7 @@ To turn it off, switch off **Fix my pull requests' failing checks**
 (Settings, Agents & automation). Turning it back on from a chat always asks
 you first.
 
-## One switch: Ask, Accept edits, Auto or Plan (v1.406.0)
+## One switch: Ask, Accept edits, Auto or Plan (v1.407.0)
 
 The permission chip in the chat box (in a chat and in a coding session) is
 now the ONE place you choose how much Jarvis asks. Its levels, strictest
@@ -2102,7 +2102,7 @@ first:
 
 - **Ask before every action** (the chip says *Ask every time*): asks before
   it edits files, uses the internet, runs commands, or clicks or types in a
-  browser. This is the level that was called *Ask first* before v1.406.0.
+  browser. This is the level that was called *Ask first* before v1.407.0.
 - **Ask first**: the default. Edits files and searches the web on its own,
   asks before running commands, an app's tools and anything risky. This is
   the level that was called *Ask when risky*. Saved chats keep exactly what
@@ -2174,7 +2174,7 @@ first, as Don't ask does.
   when an account's limit resets, on another account, the work of a plan you
   approved, the night shift) runs as Ask first: nobody is watching it start.
 
-## Chat | Code: coding sessions moved to the chat page, Build is the terminals (v1.406.0)
+## Chat | Code: coding sessions moved to the chat page, Build is the terminals (v1.407.0)
 
 The chat page now has one switch at the top, in the middle: **Chat | Code**.
 
@@ -2213,7 +2213,7 @@ The chat page now has one switch at the top, in the middle: **Chat | Code**.
   ("Your coding session finished", "A coding session is waiting for your
   OK"), never "Build session". **Ctrl K** has a row for **Code** itself.
 
-## The next step under a reply (v1.406.0)
+## The next step under a reply (v1.407.0)
 
 When a reply finishes, the newest one can end with a short **"here's where
 we are"** line and one or two buttons for the obvious next move, so you can
@@ -2251,7 +2251,7 @@ quiet style as the lines around it.
 - **Suggested follow-up questions** (Settings › "Suggest follow-up
   questions", off by default) appear inside the same box, below the line.
 
-## Two coding sessions side by side (v1.406.0)
+## Two coding sessions side by side (v1.407.0)
 
 In **Chat › Code** you can open a second coding session **beside** the first
 and watch or drive both at once.

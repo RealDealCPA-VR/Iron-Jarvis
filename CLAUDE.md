@@ -771,7 +771,7 @@ does not need a bump, stop and bump it.
   a plugin that delays the one step (the loop's seed read 0.3 s; the second
   call's request 0.7 s inside its own clock): old shapes CI's exact errors, new
   green.
-  v1.406.0 part 6: THE BOOT WATCH CAUGHT IT. The packaged logs (2026-10-26 ..
+  v1.407.0 part 6: THE BOOT WATCH CAUGHT IT. The packaged logs (2026-10-26 ..
   10-29, 11 starts after an update) hold FIVE hung starts: 10-27 18:06 and
   18:15 (before the watch: user Quit/Retry), and 10-28 06:52, 10:39, 18:38
   (the watch at 30/60 s, then main.js "restarting once by itself" at 90 s;
@@ -4274,7 +4274,7 @@ does not need a bump, stop and bump it.
 
 - **A coding session's PULL REQUEST is watched; a failed check is fixed BY
   THE SESSION, reviewed by a CLOUD reviewer, and only an approved fix is
-  pushed — the ONE push without a card** (v1.406.0 part 3; the user's
+  pushed — the ONE push without a card** (v1.407.0 part 3; the user's
   decision of 2026-10-29). `harness/ci_fix.py` (`CiWatchRecord`, a late model
   in `_LATE_MODEL_MODULES`; `read_pr` = `gh pr view <branch> --json
   …headRefOid,baseRefName,statusCheckRollup`; `failed_logs` = `gh run view
@@ -4410,7 +4410,7 @@ does not need a bump, stop and bump it.
 
 - **ONE permission switch: Accept edits and Auto START from Ask first's cards
   and only remove some; risky always asks; a model may only say allow**
-  (v1.406.0 part 2; the user, 2026-10-29: approvals were the main friction,
+  (v1.407.0 part 2; the user, 2026-10-29: approvals were the main friction,
   helpers stalled for hours; Claude Code's Ask / Accept edits / Plan / Auto).
   `core/auto_approve.py` is THE module. Vocabulary: `chat_turn.APPROVAL_MODES`
   = always_ask, approve_for_me, accept_edits, auto, yolo (old stored values
@@ -4521,7 +4521,7 @@ does not need a bump, stop and bump it.
 
 - **The NEXT-STEP BOX under the newest settled reply is DERIVED, never
   saved; every button is an existing action; the user's own decisions are
-  only named** (v1.406.0 part 4; the user: like Claude Code desktop, a short
+  only named** (v1.407.0 part 4; the user: like Claude Code desktop, a short
   "here's where we are" and one or two buttons for the obvious next move).
   `lib/nextStep.ts` (pure, table-tested): `codeNextStep(codeReplyFacts(m),
   gitFacts(view.git, branchStatus))` and `chatNextStep(chatReplyFacts(m),
@@ -4586,7 +4586,7 @@ does not need a bump, stop and bump it.
   Retry line is the one place); an older reply's offer is never read.
 
 - **The coding sessions are the CHAT page's Code view; Build is the
-  terminals; the sidebar is five rooms** (v1.406.0 part 1 + 5; the user's
+  terminals; the sidebar is five rooms** (v1.407.0 part 1 + 5; the user's
   decision 2026-10-29: "the chat will contain the box at the top for chat vs
   coding and the build will only be for terminal sessions using other
   harnesses"). SWITCH: `components/chat/ChatCodeSurface.tsx` is the default
@@ -4671,7 +4671,7 @@ does not need a bump, stop and bump it.
   registers must ask `surfaceHiddenRef` before acting.
 
 - **Two coding sessions SIDE BY SIDE: one shared pane column, keys stay in
-  the focused column, both are looked at** (v1.406.0 part 7; the user: "two
+  the focused column, both are looked at** (v1.407.0 part 7; the user: "two
   sessions side by side", like Claude Code desktop's split view).
   `lib/codeSplit.ts` is the ONE place for the rules (pure, import-free):
   `CodeSplit {left, right, focus}`; `openSession` (one of the two → FOCUS it,
@@ -10567,7 +10567,7 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
-- **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.406.0
+- **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.407.0
   part 1; it had two views from v1.369.0, and the free-form react-rnd
   CANVAS of v1.218.0 is long gone — a saved `ij.build.shape` of "harness"
   or "canvas" now just opens Terminals): `components/terminal/PaneRail.tsx`
