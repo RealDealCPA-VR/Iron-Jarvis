@@ -226,6 +226,8 @@ import { leaveTurn, newViewerId, noteNotShowing, noteShowing } from "@/lib/chatA
 // Readiness 12B (G15): an app connected SOMEWHERE ELSE lets the work go on.
 import { connectOffer, nowConnected, type ConnectedNow } from "@/lib/connectedElsewhere";
 import { ConnectedElsewhere } from "@/components/chat/ConnectedElsewhere";
+import { ChatNextStepBox } from "@/components/chat/NextStepBox";
+import { chatNextStep, chatReplyFacts } from "@/lib/nextStep";
 import { getDeviceId } from "@/lib/device";
 import { NEW_CHAT_EVENT, closeChatSlot, useChatSlot } from "@/lib/sidebarSlot";
 import { ChatCodeSurface } from "@/components/chat/ChatCodeSurface";
@@ -3497,13 +3499,10 @@ const MessageRow = memo(function MessageRow({
           turns render alike; a pre-v1.199.0 message has none. */}
       <DoorsStrip doors={m.doors} />
       {/* Readiness 12B (G15): the app this reply offered to connect was
-          connected somewhere else — the key card's own words and Continue. */}
-      {connectedNow && isLast && (
-        <ConnectedElsewhere
-          connected={connectedNow}
-          onContinue={busy ? undefined : () => h.continueElsewhere(i)}
-        />
-      )}
+          connected somewhere else — the key card's own words and Continue.
+          v1.406.0 part 4: drawn INSIDE the next-step box under the newest
+          reply (the page renders it after the transcript), so the press is
+          in one place. */}
       {!m.route && m.viaProvider && (
         <div
           className="mt-1 text-[12px] text-tone-warn"
@@ -12279,19 +12278,79 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                       );
                     })}
                     </QuoteSelection>
-                    {/* v1.323.0: FOLLOW-UP QUESTIONS under the newest reply —
-                        a press puts the question in the box, never sends it. */}
-                    {!busy && followups && followups.forLen === messages.length && (
-                      <FollowupChips
-                        suggestions={followups.items}
-                        onPick={(q) => {
-                          inputFromVoiceRef.current = false;
-                          composer.setText(q);
-                          setFollowups(null);
-                          inputRef.current?.focus();
-                        }}
-                      />
-                    )}
+                    {/* v1.406.0 part 4: THE NEXT-STEP BOX under the newest
+                        settled reply — where things stand and one press for
+                        the obvious next move (lib/nextStep, read off the
+                        reply's own record; nothing saved). In a chat: the
+                        reply's closing offer ("Yes, do it"; an offer that is
+                        the user's call only fills the box), and Continue
+                        once the app it offered to connect was connected
+                        elsewhere. A failed turn's own line (Retry) is the
+                        next step there, never drawn twice. v1.323.0's
+                        FOLLOW-UP QUESTIONS render inside it: a press puts
+                        the question in the box, never sends it. Hidden while
+                        the user types (ChatNextStepBox subscribes; the page
+                        never does) and while a turn runs. */}
+                    {(() => {
+                      const lastIndex = messages.length - 1;
+                      const last = messages[lastIndex];
+                      if (busy || failedTurn || !last || last.role !== "assistant" || last.continuation) return null;
+                      const connected = connectedNow?.index === lastIndex ? connectedNow : null;
+                      const plain =
+                        !last.runResult &&
+                        !last.awaitingSession &&
+                        !last.panelWho &&
+                        !last.fromSession &&
+                        !last.panelError &&
+                        !commMetaRef.current;
+                      const step = !connected && plain ? chatNextStep(chatReplyFacts(last)) : null;
+                      const chips =
+                        followups && followups.forLen === messages.length ? (
+                          <FollowupChips
+                            suggestions={followups.items}
+                            onPick={(q) => {
+                              inputFromVoiceRef.current = false;
+                              composer.setText(q);
+                              setFollowups(null);
+                              inputRef.current?.focus();
+                            }}
+                          />
+                        ) : null;
+                      if (!step && !connected && !chips) return null;
+                      return (
+                        <ChatNextStepBox
+                          store={composer}
+                          step={step}
+                          className="mx-auto w-full max-w-[760px]"
+                          onAction={(a) => {
+                            if (!a.text) return;
+                            if (a.how === "send") {
+                              // Exactly the same as typing it and pressing
+                              // Send: the page's own send (its guards, its
+                              // cards and the lane's rules all apply).
+                              // Review: a send pressed mid-upload is queued
+                              // and fires with the BOX's words (v1.275.0),
+                              // so the words go in the box first — else the
+                              // file went out alone.
+                              if (uploadingRef.current) composer.setText(a.text);
+                              send(a.text);
+                            } else {
+                              inputFromVoiceRef.current = false;
+                              composer.setText(a.text);
+                              inputRef.current?.focus();
+                            }
+                          }}
+                        >
+                          {connected ? (
+                            <ConnectedElsewhere
+                              connected={connected}
+                              onContinue={() => rowHandlers.continueElsewhere(lastIndex)}
+                            />
+                          ) : null}
+                          {chips}
+                        </ChatNextStepBox>
+                      );
+                    })()}
                     {/* CHAT MODE: the live streaming bubble. Streamed markdown +
                         a blinking caret once the first token lands (a Thinking
                         shimmer until then), with any live tool calls below. */}

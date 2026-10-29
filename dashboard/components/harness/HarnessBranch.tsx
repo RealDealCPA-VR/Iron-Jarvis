@@ -55,15 +55,28 @@ const FIELD =
 
 type Mode = "idle" | "commit" | "pr";
 
+/** v1.406.0 part 4: the next-step box's Commit / "Open a pull request" — the
+ *  same press as the buttons below (a new `n` presses it once more). */
+export interface BranchPress {
+  kind: "commit" | "pr";
+  n: number;
+}
+
 export function BranchView({
   sessionId,
   git,
   refreshKey,
   onChanged,
   onArchived,
+  press = null,
+  onPressed,
 }: {
   /** The session's thread id. */
   sessionId: string;
+  /** v1.406.0 part 4: a press asked for from the next-step box. */
+  press?: BranchPress | null;
+  /** The press was made (or could not be: nothing to commit). */
+  onPressed?: () => void;
   git: SessionGit;
   /** Bumped when a turn ends (the branch is read again). */
   refreshKey: number;
@@ -201,6 +214,21 @@ export function BranchView({
       return made.number ? `Pull request #${made.number} is open.` : "The pull request is open.";
     });
   }
+
+  // v1.406.0 part 4: the next-step box pressed Commit / "Open a pull
+  // request": the SAME press as the buttons here, made once the branch has
+  // been read (a press that arrives before the read waits for it) and only
+  // when that button would be enabled.
+  const pressDone = useRef(0);
+  useEffect(() => {
+    if (!press || press.n === pressDone.current || !status || busy) return;
+    pressDone.current = press.n;
+    onPressed?.();
+    if (press.kind === "commit" && status.uncommitted > 0) void startCommit();
+    else if (press.kind === "pr" && status.ahead > 0 && git.base) startPr();
+    // startCommit / startPr read the state of this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [press, status, busy]);
 
   const base = git.base;
   // Review (v1.375.0): hidden as soon as a merge answers, not when the

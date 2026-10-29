@@ -310,33 +310,75 @@ def user_owns(sentence: str) -> bool:
         return True
 
 
-def ends_on_offer(text: str) -> bool:
-    """Does the reply END by offering to do MORE WORK and asking permission?
-    Deterministic, never raises. See the module docstring for what is not an
-    offer."""
+def offer_kind(text: str) -> str:
+    """What the reply's ENDING offers (v1.406.0 part 4, the next-step box):
+    ``"work"`` — more work the model can just do (:func:`ends_on_offer`);
+    ``"user"`` — an offer whose action is the USER'S to decide (send, push,
+    delete, …: :func:`user_owns`); ``""`` — no offer. Deterministic, never
+    raises. The dashboard's twin is ``dashboard/lib/closingOffer.ts``, held
+    equal by ``tests/test_closing_offer_twin_v1406.py``."""
     try:
         sentence = last_sentence(text)
     except Exception:  # noqa: BLE001 — a reading never breaks a turn
-        return False
+        return ""
     if not sentence or len(sentence) > 400:
-        return False
+        return ""
     offered = bool(_ASKS.search(sentence) or _STATES.search(sentence) or _CAN_IF.search(sentence))
     if not offered:
-        return False
+        return ""
     if _EXPLAIN_RX.search(sentence) or _VAGUE_RX.search(sentence) or _LATER_RX.search(sentence):
-        return False
+        return ""
     actions = _actions(sentence)
     if any(_EXPLAIN_START_RX.match(a) for a in actions):
-        return False
+        return ""
     # The USER'S decision (review, v1.402.0): the reply keeps its question.
     if any(_USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a) for a in actions):
-        return False
+        return "user"
     # A CHOICE between alternatives is a decision question, not an offer —
     # unless the alternative only declines or waits.
     parts = re.split(r",?\s+or\s+", sentence, flags=re.IGNORECASE)
     if len(parts) > 1 and not _DECLINE_ALT_RX.match(parts[-1].strip()):
-        return False
-    return True
+        return ""
+    return "work"
+
+
+def ends_on_offer(text: str) -> bool:
+    """Does the reply END by offering to do MORE WORK and asking permission?
+    Deterministic, never raises. See the module docstring for what is not an
+    offer."""
+    return offer_kind(text) == "work"
+
+
+#: Where an offered action's words END for the next-step box (a condition, an
+#: aside, an alternative, the sentence's own end).
+_ACTION_END_RX = re.compile(
+    r"\s+if\s+(?:you|that|it)\b|\s+(?:—|–|-)\s+|,|;|\s+or\s+|\s+(?:too|as\s+well)\s*[.?!]*$|[.?!]+",
+    re.IGNORECASE,
+)
+#: At most this many characters of an offered action in the box.
+OFFER_ACTION_MAX = 80
+
+
+def offered_action(text: str) -> str:
+    """The words of the action the reply's ending offers ("add tests",
+    "send this to the client") for the next-step box — the user's decision's
+    action when there is one, else the first — or "". Never raises."""
+    try:
+        kind = offer_kind(text)
+        if not kind:
+            return ""
+        actions = _actions(last_sentence(text))
+        if kind == "user":
+            actions = [a for a in actions if _USER_OWNS_RX.match(a) or _PRODUCTION_RX.search(a)] or actions
+        for a in actions:
+            words = _ACTION_END_RX.split(a, maxsplit=1)[0].strip()
+            if words:
+                if len(words) > OFFER_ACTION_MAX:
+                    words = words[:OFFER_ACTION_MAX].rsplit(" ", 1)[0].strip()
+                return words
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -426,5 +468,7 @@ __all__ = [
     "join",
     "last_sentence",
     "nudge_index",
+    "offer_kind",
+    "offered_action",
     "user_owns",
 ]

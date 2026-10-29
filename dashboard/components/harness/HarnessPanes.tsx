@@ -51,7 +51,7 @@ import { fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/com
 import { ChangesReview } from "@/components/harness/ChangesReview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
-import { BranchView } from "@/components/harness/HarnessBranch";
+import { BranchView, type BranchPress } from "@/components/harness/HarnessBranch";
 import { HarnessTimeline, type LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import { SessionRail } from "@/components/harness/HarnessSessionRail";
 import type { HelperView } from "@/lib/buildHelpers";
@@ -367,9 +367,15 @@ function ChangesPane({
   onSessionChanged,
   onSessionGone,
   initialScope,
+  press = null,
+  onPressed,
 }: {
   view: BuildSessionView;
   refreshKey: number;
+  /** v1.406.0 part 4: the next-step box asked for the branch's Commit or
+   *  Create PR press (the Branch view opens its own form). */
+  press?: BranchPress | null;
+  onPressed?: () => void;
   /** v1.404.0: the Session tab's "See changes" opens "This session" — the
    *  count it showed — even on a live branch. */
   initialScope?: "session";
@@ -388,6 +394,11 @@ function ChangesPane({
   const [scope, setScope] = useState<"session" | "branch">(() =>
     initialScope === "session" ? "session" : view.git && !view.git.removed && !view.git.merged ? "branch" : "session",
   );
+  // v1.406.0 part 4: a press from the next-step box is the Branch view's.
+  const pressN = press?.n ?? 0;
+  useEffect(() => {
+    if (pressN) setScope("branch");
+  }, [pressN]);
   if (view.git && scope === "branch") {
     return (
       <div data-testid="pane-changes" className="space-y-2">
@@ -398,6 +409,8 @@ function ChangesPane({
           refreshKey={refreshKey}
           onChanged={onSessionChanged}
           onArchived={onSessionGone}
+          press={press}
+          onPressed={onPressed}
         />
       </div>
     );
@@ -514,9 +527,13 @@ export function HarnessPanes({
   modelWords = "",
   helpers = [],
   busy = false,
+  branchPress = null,
 }: {
   view: BuildSessionView;
   livePlan: PlanView | null;
+  /** v1.406.0 part 4: the next-step box's Commit / "Open a pull request" —
+   *  each new `n` opens the Changes tab on the Branch view and its press. */
+  branchPress?: BranchPress | null;
   /** v1.404.0 (the Session tab): the conversation as shown — the question
    *  being sent included, so its attachment is the last one at once. */
   messages?: readonly BuildMessage[];
@@ -579,6 +596,21 @@ export function HarnessPanes({
     }
   }, []);
   const seen = addressesIn(view.messages);
+  // v1.406.0 part 4: the next-step box's branch press opens the Changes tab
+  // (its Branch view) — the user pressed for it.
+  // It is held until the Branch view has made it (`onPressed`), so the view
+  // mounted again later (the user went to another tab and back) never
+  // presses it twice.
+  const [pendingPress, setPendingPress] = useState<BranchPress | null>(null);
+  const branchPressN = branchPress?.n ?? 0;
+  useEffect(() => {
+    if (!branchPressN || !branchPress) return;
+    setPendingPress(branchPress);
+    setChangesScope(null);
+    choose("changes");
+    // a press is keyed on its number alone
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchPressN, choose]);
 
   return (
     <div data-testid="harness-panes" className="flex h-full min-h-0 flex-col gap-2">
@@ -659,6 +691,8 @@ export function HarnessPanes({
             onSessionChanged={onSessionChanged}
             onSessionGone={onSessionGone}
             initialScope={changesScope ?? undefined}
+            press={pendingPress}
+            onPressed={() => setPendingPress(null)}
           />
         ) : null}
         {tab === "session" ? (
