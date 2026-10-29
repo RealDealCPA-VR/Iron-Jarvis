@@ -125,6 +125,7 @@ import {
   type Summarized,
 } from "@/lib/buildLongJobs";
 import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
+import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 // v1.397.0: try one task on several models — the attempts' rows, their card
 // (Keep) and the box's "Try on…" control.
 import { AttemptsCardView, LiveAttemptRows } from "@/components/harness/HarnessAttempts";
@@ -2225,6 +2226,9 @@ export function HarnessSession({
   }
 
   return (
+    // v1.405.0: "Open in VS Code / Cursor" — the session's folder and editor,
+    // lent to every step row, finding and the review pane inside.
+    <SessionEditorProvider folder={view.folder}>
     <div data-testid="harness-session" data-session={view.id} className="flex h-full min-h-0 flex-col gap-3 xl:flex-row">
       {/* ------------------------------------------------- the conversation */}
       {/* Below xl the conversation and the panes stack, each a screen-sized
@@ -3183,5 +3187,6 @@ export function HarnessSession({
         />
       </aside>
     </div>
+    </SessionEditorProvider>
   );
 }

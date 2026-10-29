@@ -1942,6 +1942,65 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## Reviewing a coding session's changes, and opening them in your editor (v1.405.0)
+
+A coding session's **Changes** tab is one scrolling review. Every file the
+session changed shows its changes right there, one file after another: no
+press to open a file and no dialog to close. Both views work this way: **This
+session** (what this session changed) and **Branch** (everything the branch
+changed against where it started, for a session on its own branch).
+
+- **The top line** says how many files changed, how many lines were added
+  and removed, and how many files you have marked reviewed ("3 files changed
+  +42 −7 · 1 of 3 reviewed"). **Collapse reviewed** folds the files you have
+  marked; **Expand all** opens every file again; **Wide view** shows the same
+  review in a large window, side by side (before | after) on a wide screen.
+- **Each file** starts with a line that stays at the top while you scroll
+  through that file: what happened (edited, new file, deleted), its path, the
+  lines added and removed, and the words that matter without a press —
+  *changed since* (the file changed again after the session wrote it),
+  *undone*, *binary*, or why there are no lines to show. Then:
+  - **Open in VS Code** (or **Open in Cursor**) opens the file at its first
+    changed line;
+  - **Undo** (in **This session** only) takes that change back, the same Undo
+    as under a reply. The Branch view has no Undo: committed work is not in
+    the undo record;
+  - **Reviewed** marks the file and folds it. The mark is kept for this
+    session on this computer, and it is cleared by itself when the file
+    changes again, so a file the session edits once more asks for a new look.
+- **Each part of a file** (a hunk) says where it is and offers **Open at line
+  N**, the line where that part starts in the new file. A deleted file opens
+  nothing.
+- **There is no Keep.** A change is already saved on disk when you see it;
+  Undo takes one back.
+- A long file shows its first 400 lines with **Show all N lines** for the
+  rest. With many files, a file's lines are drawn as it comes near the screen.
+
+**Open in your editor from anywhere in a coding session.** A step that worked
+on a file (read, wrote, edited or patched it) has **Open in VS Code** at the
+end of its line (shown when the pointer is on the line; always shown on a
+touch screen); a read opens at the line it started from. In a reviewer's
+report, every place it names like `src/app.py:12`, `src/app.py:12:5` or
+`app.py#L12` can be pressed to open that file at that line. Only a file inside
+the session's folder opens from a report; a web address or a path that climbs
+out of the folder stays plain text.
+
+**Which editor.** Iron Jarvis finds VS Code and Cursor on this PC by the links
+they register when installed. **Settings › Agents & automation › Code editor**
+chooses: **Automatic** (VS Code when it is installed, else Cursor), **VS
+Code** or **Cursor**. With no editor found, no Open button is shown. On a Mac
+or Linux the app cannot tell which editors are installed, so choose one there
+to see the buttons. A press opens the editor through its own link; if the
+file is gone, outside the folders Iron Jarvis may read, or on a network share,
+the button says so in one line beside it. The chat page shows none of these
+buttons, and neither does a session whose folder is on a network share. VS
+Code shows its own confirmation dialog the first time a link from Iron Jarvis
+opens it (asking whether to allow it); that question is VS Code's, and Iron
+Jarvis cannot answer it for you. A workspace file (`.code-workspace`) is never
+opened this way, because the editor would load that workspace's settings and
+tasks, and a shortcut (a link) that leads into a network share is refused
+before anything follows it.
+
 ## Stable or Fresh updates (v1.405.0)
 
 Iron Jarvis ships often, and now and then a release has a problem the next one

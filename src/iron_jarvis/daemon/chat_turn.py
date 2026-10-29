@@ -2916,6 +2916,39 @@ def _masked_head(text: str, cap: int) -> str:
     return str(mask(text[:MASK_WINDOW_CHARS]))[:cap]
 
 
+#: v1.405.0 review: the file tools whose FILE must survive the 300-character
+#: cut of a step's saved ``detail.input``. Sorted keys put ``path`` after
+#: ``content`` / ``edits`` / ``new`` / ``new_source``, so a settled step of
+#: these four lost its file (and the coding session's "Open in" press with
+#: it). For them the path keys come FIRST; every other key keeps the sorted
+#: order, and every other tool's line is byte-identical (``sort_keys``).
+PATH_FIRST_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "multi_edit", "notebook_edit"})
+_PATH_KEYS: tuple[str, ...] = ("path", "file_path", "notebook_path")
+
+
+def _args_line(name: str, safe_args: object) -> str:
+    """The redacted args as ONE JSON line, the way a step's detail and an
+    escalation row show them: ``json.dumps(sort_keys=True)`` — except for
+    :data:`PATH_FIRST_TOOLS`, whose path keys lead (each value still dumped
+    with sorted keys, the same separators). Raises what ``json.dumps``
+    raises (the callers fall back to ``repr``)."""
+    if (
+        name in PATH_FIRST_TOOLS
+        and isinstance(safe_args, dict)
+        and all(isinstance(k, str) for k in safe_args)
+        and any(k in safe_args for k in _PATH_KEYS)
+    ):
+        order = [k for k in _PATH_KEYS if k in safe_args]
+        order += [k for k in sorted(safe_args) if k not in _PATH_KEYS]
+        parts = [
+            f"{_json.dumps(k, ensure_ascii=False)}: "
+            f"{_json.dumps(safe_args[k], default=str, ensure_ascii=False, sort_keys=True)}"
+            for k in order
+        ]
+        return "{" + ", ".join(parts) + "}"
+    return _json.dumps(safe_args, default=str, ensure_ascii=False, sort_keys=True)
+
+
 def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: object) -> dict[str, Any]:
     """One ``prior_tool_results`` row for a call that settled: the tool, the
     redacted args as one JSON line (masked, cut to the args cap), whether it
@@ -2924,7 +2957,7 @@ def prior_tool_result_entry(name: str, safe_args: object, ok: bool, content: obj
     from .schemas import PRIOR_RESULT_ARGS_CHARS, PRIOR_RESULT_OUTPUT_CHARS
 
     try:
-        args_text = _json.dumps(safe_args, default=str, ensure_ascii=False, sort_keys=True)
+        args_text = _args_line(name, safe_args)
     except Exception:  # noqa: BLE001
         args_text = repr(safe_args)
     return {
@@ -2996,7 +3029,7 @@ def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]
             args_text = ""
         else:
             try:
-                args_text = _json.dumps(safe_args, default=str, ensure_ascii=False, sort_keys=True)
+                args_text = _args_line(name, safe_args)
             except Exception:  # noqa: BLE001
                 args_text = repr(safe_args)
         return {

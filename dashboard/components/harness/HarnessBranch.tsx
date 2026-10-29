@@ -8,7 +8,7 @@
  *  - one line for the branch: its commits, the files not committed yet, and
  *    whether the remote has it;
  *  - the whole diff against its base (where they meet), committed and not,
- *    with the Changes pane's own pieces (`ChangedFiles` / `DiffView`);
+ *    in the Changes pane's one scrolling review (`ChangesReview`, v1.405.0);
  *  - the person's buttons, each a POST to the daemon (routes/build_git.py):
  *    Commit (the session's model drafts the message, the user edits it),
  *    Push (never a force), Create PR (GitHub CLI signed in; otherwise the
@@ -24,7 +24,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GitBranch, Loader2, RefreshCw } from "lucide-react";
-import { ChangedFiles, decodeChanges, type FileChange } from "@/components/chat/ChangedFiles";
+import { decodeChanges, type FileChange } from "@/components/chat/ChangedFiles";
+import { ChangesReview } from "@/components/harness/ChangesReview";
 import { ConfirmButton } from "@/components/ui";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
@@ -487,7 +488,9 @@ export function BranchView({
           No changes against {base || "the commit it started from"} yet.
         </p>
       ) : (
-        <ChangedFiles changes={changes} more={more} defaultOpen />
+        // v1.405.0: the branch's whole diff, every file inline (no Undo:
+        // committed work is not in the undo journal).
+        <ChangesReview changes={changes} sessionId={sessionId} more={more} />
       )}
     </div>
   );

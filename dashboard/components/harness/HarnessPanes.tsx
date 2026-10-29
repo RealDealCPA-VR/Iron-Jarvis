@@ -13,8 +13,9 @@
  *  - terminal: a NORMAL Build terminal in the session's folder, made through
  *    the terminals API and drawn by the page's own TerminalPane (the pane
  *    host, v1.243.0) — it is in the Terminals view's rail too;
- *  - changes: `ChangedFiles` / `DiffView` from `POST /chat/changes` with the
- *    session's own `build:<id>` journal, with Undo;
+ *  - changes: ONE scrolling review (`ChangesReview`, v1.405.0) of
+ *    `POST /chat/changes` with the session's own `build:<id>` journal: every
+ *    file's diff inline, Undo, Reviewed marks, Open in VS Code / Cursor;
  *  - browser: a preview of a page on this PC or the user's network, and the
  *    paired browser named (BrowserPreview);
  *  - files: `FilesPanel` (calm) on the session's folder;
@@ -46,7 +47,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { PlanChecklist } from "@/components/chat/PlanChecklist";
-import { ChangedFiles, fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
+import { fetchTurnChangeSet, type ChangeUndoState, type FileChange } from "@/components/chat/ChangedFiles";
+import { ChangesReview } from "@/components/harness/ChangesReview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { BrowserPreview } from "@/components/harness/BrowserPreview";
 import { BranchView } from "@/components/harness/HarnessBranch";
@@ -479,9 +481,13 @@ function SessionChanges({
           No files changed yet.
         </p>
       ) : (
-        <ChangedFiles
+        // v1.405.0: every file's diff inline in one scroll (no press per
+        // file, no dialog), Undo through the SAME handler as before.
+        <ChangesReview
           changes={changes}
+          sessionId={view.id}
           more={more}
+          hint
           undoFor={undoFor}
           onUndo={onUndo}
           onUndone={() => setRound((n) => n + 1)}

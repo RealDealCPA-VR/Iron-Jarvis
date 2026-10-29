@@ -3885,6 +3885,131 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **A coding session's Changes tab is ONE scrolling review, and every file,
+  hunk, step and finding opens in VS Code / Cursor at its line — the daemon
+  builds the editor's URL, never a client** (v1.405.0; the user: "Live where
+  the code is … Claude Code takes one press"). DAEMON: `harness/code_editor.py`
+  + `daemon/routes/editor.py` (registered after build_attempts). `GET
+  /editor/options` → `{editors: [{id, label, installed}], preferred,
+  preferred_label, setting, known, note}`; detection reads
+  `HKEY_CLASSES_ROOT\vscode|cursor` (a URL protocol whose open command's
+  program EXISTS — a stale key is not installed), cached `CACHE_S` 300, never
+  raises, `None` ("not known") off Windows or on an unexpected registry error;
+  `preferred`: "auto" = VS Code if installed else Cursor and never a guess
+  when nothing is known, a named editor stands unless KNOWN not installed.
+  `POST /editor/open {path, line?, column?, editor?}` (sync def: off the loop)
+  checks `check_position` (whole numbers, 1..10,000,000 / 1..100,000; a bool
+  is not a number), then `check_path`: a network share or device spelling
+  (`\\host`, `//host`, `\\?\`, `\\.\`) is refused BEFORE the file policy
+  (which resolves paths — an editor opening a model-written UNC path would
+  send a sign-in hash out, the v1.379.0 lesson), then absolute, the protected
+  roots (`NOT_ALLOWED`), the folder limits (the policy's own sentence), an
+  existing FILE (`MISSING` 404 / `A_FOLDER`). REVIEW FIXES: before the file
+  policy, `_walk_links` follows every symlink/junction ONE HOP AT A TIME with
+  `lstat` + `readlink` (never `resolve`/`realpath`) and refuses a link whose
+  target is `\\host`, `UNC\` (also after `\\?\` / `\??\`), a device or a
+  non-drive long path (`NETWORK_PATH`), an unreadable, drive-relative or
+  rooted-no-drive target or more than `MAX_LINK_HOPS` 40 (`UNREADABLE_LINK`);
+  a `*.code-workspace` (by its own name or the name a link leads to) is
+  refused (`WORKSPACE_FILE` — the editor would load its settings and tasks);
+  `_workspace_name` reads a name the way Windows opens it (a `:stream`
+  suffix and trailing dots/spaces dropped) and the check runs on the path's
+  OWN name, the link's destination AND its 8.3 long name (`_long_name`,
+  `GetLongPathNameW`, after the walk) — a link NAMED `x.code-workspace`
+  passed the first review round (second review);
+  then `editor_url`:
+  `<scheme>://file/<path>:<line>:<col>` — forward slashes, `quote(safe="/:")`
+  (space, `#`, `%`, `?`, non-ASCII encoded; the drive colon kept), ALWAYS a
+  line and column (1 by default) so a name ending `:<digits>` is never a line;
+  launched by module-level `_launch_url` (the `_open_native` pattern — tests
+  spy it, nothing here ever opens a real editor). Every refusal is one plain
+  sentence (`EditorRefusal`). Setting `code_editor` (auto | vscode | cursor,
+  allow tier, a schema row after `build_auto_resume`; Config field tolerant:
+  an unknown value reads "auto"), read live. DASHBOARD: `lib/codeEditor.ts`
+  (`readEditorOptions` reads FRESH on every `SessionEditorProvider` mount —
+  only a read in flight is shared, nothing is kept: a read kept for the
+  window's life named VS Code after the setting moved to Cursor —, and every
+  press sends `editor: <preferred>` so the label and the editor that opens
+  never differ; `EditorContext` —
+  `components/harness/OpenInEditor.SessionEditorProvider` wraps
+  `HarnessSession` and lends `{folder, label, open}` only when an editor is
+  preferred AND the folder is not on a network share (`folderOnShare`: `\\` or
+  `//` — the daemon refuses every network path, so the presses would be
+  dead), so the CHAT PAGE, a share and a PC with no editor render no press
+  anywhere; a press's accessible name STARTS with its visible words
+  ("Open at line 12, open cart.py at line 12 in VS Code"); `resolveInFolder` (never a URL/scheme, a share, a device
+  path, `C:foo`, a `***` mask; a relative path joined to the folder and never
+  `..` out of it; an absolute path kept for a STEP, confined to the folder
+  for a FINDING); `stepEditorTarget` (read_file/write_file/edit_file/
+  multi_edit/apply_patch/notebook_edit from live args or the saved redacted
+  `detail.input` cut at 300 chars — a value whose closing quote was cut, or a
+  patch header whose newline was cut, opens nothing; a read's `offset` is the
+  line. The daemon makes that possible: `chat_turn._args_line` puts the path
+  keys FIRST for `PATH_FIRST_TOOLS` (write_file, edit_file, multi_edit,
+  notebook_edit — sorted keys put `path` after `content`/`edits`/`new`/
+  `new_source` and the cut lost it), nested values still sorted; every other
+  tool's line is byte-identical `sort_keys` and `prior_tool_result_entry`
+  uses the same helper; fixture `dashboard/__tests__/fixtures/
+  editor-step-inputs-v1405.json` is recorded from the REAL `step_detail`
+  (`IJ_REGEN_EDITOR_STEPS=1`)); `findEditorRefs` (a TIGHT `path:line`,
+  `path:line:col`, `path#L12` pattern: a separator or a source extension,
+  never the tail of a word or a URL; never a product name (`Node.js:18`), a
+  last segment with no letter (`2024/10/30:12`), a schemeless web host
+  (`github.com/…#L4`), or the TAIL of a path with a space — inside backticks
+  or quotes a ref must start the span, in plain text it must not follow a
+  word that is itself a path; plain words before a path are not part of it,
+  so plain `my project/app.py:12` links `project/app.py:12`)). `components/harness/ChangesReview.tsx` serves BOTH Changes views
+  (`HarnessPanes.SessionChanges` with the session's own `undoFor`/`onUndo` —
+  the receipt's undo, never a second path — and `hint`; `HarnessBranch`
+  with NO undo): every file's diff inline (no press, no dialog), a sticky
+  header (status, path, counts, changed since / undone / binary / note, Open
+  in <editor> at the first hunk's NEW line — none for a deleted file —, Undo,
+  Reviewed), "Open at line N" on each hunk (`hunkChangeLines` over
+  `parseUnified`'s rows: the hunk's FIRST CHANGE — an added row's own new
+  number, a removal's place in the new file — never the header's start,
+  which is up to three context lines above it; `firstNewLine` the same for
+  the header press; through `UnifiedRows`/`SplitRows`'s new `hunkAction`;
+  DiffView itself draws exactly as before), "N files changed +A −R · M of N reviewed", Collapse
+  reviewed / Expand all / Wide view (a `Modal`, side by side from `md`).
+  Reviewed marks: `lib/changesReview.ts`, localStorage
+  `ij.build.reviewed.<session>` = `path + NUL + diffHash` (FNV-1a over status,
+  added, removed, the cut flag, a binary file's `size` and the diff — the text
+  alone missed a change past the 200 KB cut and every binary change; both
+  daemon views put `size` on a binary row: `chat_changes._one_change`,
+  `branches._new_file_change` / `branch_changes`), ≤ `MAX_MARKS` 1000 — a
+  file whose change moves is unreviewed by itself; a reviewed file folds;
+  each Reviewed box is named "Reviewed: <path>". `ReviewFile` is
+  `memo` with plain-value props (the undo match as `undoActionId`/
+  `undoable`/`undoReason`) and callbacks made once (`useCallback`; the
+  caller's `onUndo`/`onUndone` read through refs), `firstNewLine` in
+  `useMemo` — marking one file reviewed redraws that file only. Bounded: `REVIEW_ROWS_PER_FILE` 400 + "Show
+  all N lines" (to DiffView's `MAX_DIFF_ROWS`), and from `LAZY_FROM_FILES` 8
+  files a file's rows draw only near the screen (IntersectionObserver on the
+  nearest scroll box; none → everything draws). WorkLine's `ToolRow`/`StepRow`
+  wrap a file step in `work-row-with-open` + `StepOpenInEditor` (hover-shown,
+  always on touch) ONLY when the context exists; a running or failed step has
+  none. A helper's report (`SettledHelperRow`, the reviewer's findings among
+  them) renders through `LinkedRefs`. A wrapping flex header must not use
+  `flex-1` (basis 0) for the item that holds a path: the first cut squeezed
+  the path and the summary to nothing at 320 px — `grow basis-[14rem]`, and
+  the real-browser spec measures it. Moved on purpose:
+  `ij-harness-panes-v1369` (the pane shows `changes-review`, not the quiet
+  `changed-files` line). Pins: `tests/test_code_editor_v1405.py` (74; 13 +
+  6 review mutations, all red), `dashboard/__tests__/review-pane-v1405.test.tsx`
+  (65) + `review-pane-memo-v1405.test.tsx` (2; counts draws and parses, never
+  times) (23 + 19 review mutations, all red), e2e
+  `dashboard/e2e/review-pane.spec.ts` (3: 1280 ×
+  800 and 390 × 844, a step and a finding; the editor routes stubbed in the
+  browser, never the scratch daemon's). OPEN: an editor
+  really opening was never driven (no test may launch one); a binary file
+  rewritten at the SAME size keeps its Reviewed mark (only the size is
+  hashed); in plain prose (no quotes) the words before a path with a space
+  are not part of it, so `my project/app.py:12` links `project/app.py:12`;
+  VS Code's own first-time confirmation dialog is not something the app
+  can answer (the Handbook says so); the Branch view's
+  reviewed marks share the session's key; `notebook_edit` opens the notebook
+  file (no cell line).
+
 - **The STABLE update channel: a release reaches `updates-stable` only once
   it has been out a day, no newer patch replaced it, its commit's Tests are
   green and it is not held; the daily driver reads it, the other PC stays
