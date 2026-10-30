@@ -50,6 +50,42 @@ THIS_PC = (
     "to move between accounts."
 )
 GONE_DURING_TURN = "{label} stopped while it was working."
+CLAIMED = "This session is {what} — try again in a moment."
+HELD_BY_ROW = (
+    "This conversation is already open in another Code-view session — use that one, "
+    "or archive it first."
+)
+HELD_BY_TERMINAL = (
+    "This conversation is open in a Build terminal — exit {label} there first (type /exit), "
+    "then send your message here."
+)
+OPEN_IN_TERMINAL = (
+    "This conversation is open in a Build terminal — exit {label} there first (type /exit), "
+    "then send your message here."
+)
+CANNOT_TELL = (
+    "Iron Jarvis cannot tell which {label} conversation this terminal ran — open it from the "
+    "folder's saved sessions instead."
+)
+STOPPED_BECAUSE = "Stopped because the session is {why}."
+STOPPED_PLAIN = "Stopped: the coding tool was closed."
+CODEX_MODE_NEXT = (
+    "Codex keeps its current mode for the message it is working on; {mode} applies from your "
+    "next message."
+)
+MODE_FROM_SESSION_ALLOW = "{label} now runs in {mode} for the rest of this session (you chose Allow for this session)."
+NO_CONVERSATION_FILE = (
+    "The conversation's file is not in this account's folder, so it cannot move to another "
+    "account — nothing was changed."
+)
+CANNOT_COPY = "The conversation could not be copied to the other account — nothing was changed."
+DIVERGED = (
+    '"{title}" already holds a different copy of this conversation, so it was not moved — '
+    "nothing was changed."
+)
+CONTINUED = (
+    'Continued on "{title}" — the conversation was copied there; your next message resumes it.'
+)
 
 
 def label(harness: str) -> str:

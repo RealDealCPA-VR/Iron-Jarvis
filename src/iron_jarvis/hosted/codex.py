@@ -109,6 +109,15 @@ def _change_rows(changes: Any) -> list[tuple[str, str, str]]:
     return out
 
 
+def offers_session(params: dict[str, Any]) -> bool:
+    """Does this command request offer ``acceptForSession``? Only when its
+    ``availableDecisions`` names it (the recorded request did not)."""
+    offered = params.get("availableDecisions")
+    if not isinstance(offered, list):
+        return False
+    return any(d == "acceptForSession" for d in offered)
+
+
 def _token_numbers(raw: Any) -> dict[str, int]:
     def n(k: str) -> int:
         v = (raw or {}).get(k) if isinstance(raw, dict) else None
@@ -232,6 +241,8 @@ class CodexDriver(Driver):
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
         method = ask.data.get("method")
+        if decision == "allow_session" and not ask.can_session:
+            raise AskRefused("Codex offers no session-wide allow for this one — allow it once.")
         if method in ("execCommandApproval", "applyPatchApproval"):
             await self.respond(ask.native, {"decision": _DECISION_LEGACY[decision]})
         elif method == "item/permissions/requestApproval":
@@ -318,11 +329,16 @@ class CodexDriver(Driver):
             item = self._items.get(str(p.get("itemId") or "")) or {}
             command = _command_of(p) or _command_of(item)
             network = isinstance(p.get("networkApprovalContext"), dict)
+            # "Allow for this session" ONLY when Codex offers it for THIS
+            # request (`availableDecisions`, v2); the legacy request has no list.
+            can_session = offers_session(p) if method != "execCommandApproval" else True
             ev = make("approval", request_id=ask_id, kind="network" if network else "command",
                       title=f"Run {one_line(command, 90)}" if command else "Run a command",
                       detail=clip(p.get("reason") or "", DETAIL_CHARS), command=clip(command, 2000),
-                      can_session=True)
-            self.raise_ask(Ask(ask_id, "approval", "shell", rid, {"method": method}, ev, ev["at"], True))
+                      can_session=can_session)
+            if not can_session:
+                ev["once_only"] = True
+            self.raise_ask(Ask(ask_id, "approval", "shell", rid, {"method": method}, ev, ev["at"], can_session))
             return
         if method in ("item/fileChange/requestApproval", "applyPatchApproval"):
             item = self._items.get(str(p.get("itemId") or "")) or {}

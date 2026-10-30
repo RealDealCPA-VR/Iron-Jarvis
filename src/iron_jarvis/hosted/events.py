@@ -65,9 +65,12 @@ TITLE_CHARS = 120
 DETAIL_CHARS = 1500
 TEXT_CHARS = 200_000
 
-#: The log's bounds.
+#: The log's bounds. Past one, the oldest lines go until the log is back to
+#: :data:`TRIM_TO` of it — hysteresis, so a full log is rewritten once per
+#: fifth of its size, never on every flush.
 MAX_LINES = 20_000
 MAX_BYTES = 20 * 1024 * 1024
+TRIM_TO = 0.8
 #: How often the writer thread writes what it holds (seconds).
 FLUSH_EVERY_S = 0.25
 
@@ -150,14 +153,23 @@ def _mergeable(a: dict[str, Any], b: dict[str, Any]) -> bool:
     )
 
 
+def coalesce_into(out: list[dict[str, Any]], ev: dict[str, Any]) -> None:
+    """Append ``ev`` to ``out``, merging it into the last event when both are
+    deltas of the same item (the first one's ``at``). The merged text is
+    MASKED AGAIN: a key split across two deltas was never whole for the mask
+    of either."""
+    if out and _mergeable(out[-1], ev):
+        merged = str(out[-1].get("delta") or "") + str(ev.get("delta") or "")
+        out[-1] = {**out[-1], "delta": mask(merged)}
+    else:
+        out.append(dict(ev))
+
+
 def coalesce(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Consecutive deltas of the same item merged (the first one's ``at``)."""
+    """Consecutive deltas of the same item merged and masked again."""
     out: list[dict[str, Any]] = []
     for ev in events:
-        if out and _mergeable(out[-1], ev):
-            out[-1] = {**out[-1], "delta": str(out[-1].get("delta") or "") + str(ev.get("delta") or "")}
-        else:
-            out.append(dict(ev))
+        coalesce_into(out, ev)
     return out
 
 
@@ -248,9 +260,9 @@ class EventLog:
             return
         with open(self.path, "rb") as fh:
             rows = fh.read().splitlines(keepends=True)
-        keep = rows[-MAX_LINES:]
+        keep = rows[-max(1, int(MAX_LINES * TRIM_TO)):]
         total = sum(len(r) for r in keep)
-        while keep and total > MAX_BYTES:
+        while keep and total > int(MAX_BYTES * TRIM_TO):
             total -= len(keep[0])
             keep = keep[1:]
         dropped = len(rows) - len(keep)

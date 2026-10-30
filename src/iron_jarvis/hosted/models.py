@@ -47,3 +47,6 @@ class HostedSessionRecord(SQLModel, table=True):
     archived_at: datetime | None = None
     #: The last failure in plain words ("" = none).
     last_error: str = ""
+    #: The Build terminal "Open in terminal" started on this conversation;
+    #: the row takes no message while that terminal's CLI still runs.
+    terminal_id: str = ""

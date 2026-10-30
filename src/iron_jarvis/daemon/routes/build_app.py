@@ -83,11 +83,13 @@ def register(app: FastAPI, d: Any) -> None:
             raise _http(r) from None
 
     @app.get("/build/app/sessions")
-    async def app_list(archived: str = "", folder: str = "", disk: str = "") -> dict[str, Any]:
+    async def app_list(archived: str = "", folder: str = "", disk: str = "", account: str = "") -> dict[str, Any]:
+        """``disk=1`` + ``folder``: the tools' own saved conversations for that
+        folder, read from ``account``'s home ("" = this PC's login)."""
         try:
             return await svc().list_sessions(
                 archived=archived in ("1", "true", "yes"), folder=folder,
-                disk=disk in ("1", "true", "yes"),
+                disk=disk in ("1", "true", "yes"), account=account,
             )
         except S.Refused as r:
             raise _http(r) from None

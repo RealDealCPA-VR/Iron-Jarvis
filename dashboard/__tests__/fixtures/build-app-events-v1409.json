@@ -10,7 +10,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "f97030e3-5154-4f15-a6b0-d1d68826e569",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -55,7 +55,7 @@
     "request_id": "ask-1",
     "kind": "edit",
     "title": "Edit hello.txt",
-    "detail": "hello.txt",
+    "detail": "hello.txt\n\nAllow for this session switches Claude Code to Auto edits for the rest of this session.",
     "can_session": true,
     "path": "C:\\work\\demo\\hello.txt",
     "diff": "--- a/C:/work/demo/hello.txt\n+++ b/C:/work/demo/hello.txt\n@@ -1 +1 @@\n-hi\n+hello",
@@ -130,7 +130,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -190,7 +190,7 @@
     "request_id": "ask-2",
     "kind": "edit",
     "title": "Write hello.txt",
-    "detail": "hello.txt",
+    "detail": "hello.txt\n\nAllow for this session switches Claude Code to Auto edits for the rest of this session.",
     "can_session": true,
     "path": "C:\\work\\demo\\hello.txt",
     "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
@@ -240,6 +240,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Claude Code now runs in Auto edits for the rest of this session (you chose Allow for this session).",
+    "turn": "turn-1"
+   },
+   {
     "type": "text",
     "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
     "delta": "hello.txt` containing",
@@ -282,7 +287,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "f15bf227-950c-49cb-bfb0-a77b94dacbbf",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -304,7 +309,7 @@
     "request_id": "ask-1",
     "kind": "edit",
     "title": "Write deny.txt",
-    "detail": "deny.txt",
+    "detail": "deny.txt\n\nAllow for this session switches Claude Code to Auto edits for the rest of this session.",
     "can_session": true,
     "path": "C:\\work\\demo\\deny.txt",
     "diff": "--- /dev/null\n+++ b/C:/work/demo/deny.txt\n@@ -0,0 +1,1 @@\n+no",
@@ -407,7 +412,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "308a7e39-27e9-479f-9cce-f141b156da39",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -599,7 +604,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -691,7 +696,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "d97715b9-6b4d-43cf-8984-ec7540aa1510",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -729,7 +734,7 @@
    {
     "type": "session",
     "harness": "claude-code",
-    "harness_session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21",
+    "harness_session_id": "harness-session-1",
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -773,7 +778,7 @@
    {
     "type": "session",
     "harness": "codex",
-    "harness_session_id": "01a189c5-dbad-7463-b568-0b39fd57450e",
+    "harness_session_id": "harness-session-1",
     "model": "gpt-5.6-terra",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -874,7 +879,8 @@
     "title": "Run Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoS…",
     "detail": "",
     "command": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize",
-    "can_session": true,
+    "can_session": false,
+    "once_only": true,
     "turn": "turn-1"
    },
    {
@@ -920,7 +926,7 @@
    {
     "type": "resolved",
     "request_id": "ask-2",
-    "decision": "allow",
+    "decision": "allow_session",
     "turn": "turn-1"
    },
    {
@@ -1054,7 +1060,7 @@
    {
     "type": "session",
     "harness": "codex",
-    "harness_session_id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+    "harness_session_id": "harness-session-1",
     "model": "gpt-5.6-terra",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -1269,7 +1275,7 @@
    {
     "type": "session",
     "harness": "codex",
-    "harness_session_id": "01a189c5-1571-76b2-b4fd-517728eb3018",
+    "harness_session_id": "harness-session-1",
     "model": "gpt-5.6-terra",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
@@ -1322,7 +1328,7 @@
    {
     "type": "session",
     "harness": "codex",
-    "harness_session_id": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+    "harness_session_id": "harness-session-1",
     "model": "gpt-6-astra",
     "cwd": "C:\\work\\demo",
     "mode": "ask",

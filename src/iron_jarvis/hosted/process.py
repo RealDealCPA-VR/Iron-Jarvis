@@ -27,6 +27,7 @@ import logging
 import shutil
 import subprocess
 import threading
+import time
 from collections import deque
 from typing import Any, Callable
 
@@ -41,6 +42,8 @@ BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex"}
 EXIT_GRACE_S = 3.0
 #: One write to the harness's stdin.
 WRITE_TIMEOUT_S = 15.0
+#: How long a stop waits, in all, for the reader threads to finish.
+STOP_JOIN_S = 3.0
 
 
 def binary_for(harness: str) -> list[str] | None:
@@ -112,6 +115,11 @@ class HarnessProcess:
         proc = procs.spawn(  # argv list, no shell; its own kill-on-close Job
             self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=self.cwd, env=self.env,
+            # NO member may leave the Job: Claude Code's Bash tool runs Git
+            # Bash (MSYS2), which starts every Windows program with
+            # CREATE_BREAKAWAY_FROM_JOB whenever the Job allows it — a dev
+            # server it started then outlived the session (v1.386.0's rule).
+            breakaway_ok=False,
         )
         self.proc = proc
 
@@ -196,9 +204,19 @@ class HarnessProcess:
         except Exception:  # noqa: BLE001 — a wedged reap must not hang a stop
             pass
         procs.release(proc)
+        # Bounded: a reader still blocked means something still holds the pipe;
+        # closing a pipe another thread is reading can block on Windows, so
+        # only the pipes whose reader has finished are closed.
+        end = time.monotonic() + STOP_JOIN_S
         for t in self._threads:
-            t.join(timeout=5)
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            t.join(timeout=max(0.0, end - time.monotonic()))
+        alive = {t.name.rsplit("-", 1)[-1] for t in self._threads if t.is_alive()}
+        pipes = [proc.stdin]
+        if "out" not in alive:
+            pipes.append(proc.stdout)
+        if "err" not in alive:
+            pipes.append(proc.stderr)
+        for pipe in pipes:
             try:
                 if pipe and not pipe.closed:
                     pipe.close()

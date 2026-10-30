@@ -10,11 +10,24 @@ starts it as its own task and the response only FOLLOWS it
 the end). Closing the page never stops a turn — only Stop (``POST
 …/interrupt``) does, or the harness ending. Any number of windows rejoin
 (``GET …/turns/{id}/stream``); a turn this process no longer holds is replayed
-from the session's ``events.jsonl``.
+from the session's ``events.jsonl``. A turn ENDS in exactly one place
+(:meth:`HostedService._end_turn`): the row's ``last_error`` is written first,
+then the ``done`` reaches the log and every follower.
 
 ONE TURN AT A TIME: a message sent while one runs is refused in words
 (:data:`hosted.words.BUSY`) — Claude Code would queue it, Codex would not, and
 a queued message would have no turn of its own to follow.
+
+ONE HARNESS SESSION, ONE PROCESS: two processes resuming one Claude Code
+session (or one Codex thread) corrupt it. A create, an open-from-terminal and
+a message are refused in words when another live Code-view row or a Build
+terminal holds that conversation; Open in terminal marks the row, and its next
+message is refused until that terminal's CLI has exited.
+
+ONE THING AT A TIME PER SESSION: continue on another account, delete and
+archive hold a CLAIM across check → stop → copy; a message during a claim is
+refused in words. Stopping a process always ends its running turn
+("interrupted") and closes its open cards.
 
 THE POOL: at most :data:`MAX_LIVE` harness processes; when a new one is needed
 the oldest IDLE one (no turn, no open ask) is stopped first, else the start is
@@ -26,7 +39,7 @@ daemon's shutdown stop it. Every stop is a tree kill, off the loop.
 NOTHING IS GRANTED HERE: every permission question the harness asks becomes a
 card (``approval`` / ``question``); only the user's answer goes back. "Allow
 for this session" is the harness's OWN session-wide allow, offered only when
-the harness offers one.
+the harness offers one (and never one that would switch on Full access).
 """
 
 from __future__ import annotations
@@ -56,7 +69,7 @@ from .codex import HIDDEN_MODES as CODEX_HIDDEN
 from .codex import MODES as CODEX_MODES
 from .codex import CodexDriver
 from .driver import DECISIONS, Ask, AskRefused, ControlRefused, Driver
-from .events import TEXT_CHARS, EventLog, clip, make, session_dir
+from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
 log = logging.getLogger(__name__)
@@ -72,6 +85,15 @@ REAP_EVERY_S = 60.0
 FINISHED_KEEP_S = 600.0
 #: The newest events ``GET /build/app/sessions/{id}`` returns by default.
 DEFAULT_EVENTS = 2000
+#: A turn's in-memory replay keeps at most this many characters of streamed
+#: text; past it only the non-delta events are kept (``text_done`` still
+#: carries every answer whole).
+MAX_TURN_CHARS = 8_000_000
+#: The interrupt route answers within this (the harness is told; the turn
+#: ends when it says so, or when its process goes).
+INTERRUPT_WAIT_S = 5.0
+#: Disk listings read at most this many conversation files (newest first).
+DISK_FILES = 500
 
 #: Effort levels each harness takes.
 EFFORTS: dict[str, tuple[str, ...]] = {
@@ -82,6 +104,9 @@ _MODEL_RX = re.compile(r"^[A-Za-z0-9._:/\-\[\]]{1,120}$")
 #: A harness session id typed into a terminal: a UUID (Claude) or Codex's
 #: UUID-shaped thread id — nothing else is ever typed.
 _SID_RX = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+STOPPED_TITLE = "Iron Jarvis stopped while this was working"
+STOPPED_FIX = "Send the message again — the conversation is kept."
 
 
 class Refused(Exception):
@@ -145,6 +170,134 @@ def check_effort(harness: str, effort: Any) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Homes and the harnesses' own saved sessions
+# --------------------------------------------------------------------------- #
+def default_home(harness: str) -> str:
+    """The CLI's own default home (this PC's login): the daemon's environment
+    variable, else ``~/.claude`` / ``~/.codex``."""
+    if harness == CLAUDE:
+        return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+
+
+def home_of(harness: str, account: dict[str, Any] | None) -> str:
+    """The home a session's CLI reads its saved conversations from: the
+    account's recorded home, else the CLI's default."""
+    home = str((account or {}).get("home") or "").strip()
+    return home or default_home(harness)
+
+
+def _conversation_files(harness: str, home: str) -> list[Path]:
+    """BLOCKING: the conversation files under ``home``, newest first, at most
+    :data:`DISK_FILES` (a stat each; nothing is opened)."""
+    root = Path(home)
+    try:
+        if harness == CLAUDE:
+            files = [p for p in root.glob("projects/*/*.jsonl") if _SID_RX.match(p.stem)]
+        else:
+            files = list(root.glob("sessions/*/*/*/*.jsonl"))
+    except OSError:
+        return []
+    stamped = []
+    for p in files:
+        try:
+            stamped.append((p.stat().st_mtime, p))
+        except OSError:
+            continue
+    stamped.sort(key=lambda x: x[0], reverse=True)
+    return [p for _, p in stamped[:DISK_FILES]]
+
+
+def disk_sessions(harness: str, home: str, folder: str, *, since: float | None = None) -> list[dict[str, Any]]:
+    """BLOCKING: the harness's OWN saved conversations for ``folder`` in
+    ``home`` (read-only, through the ``history`` reader's summaries), newest
+    first. ``since``: only files written at or after that time (epoch s)."""
+    from ..history import index as HI
+
+    out = []
+    for path in _conversation_files(harness, home):
+        try:
+            if since is not None and path.stat().st_mtime < since:
+                continue
+        except OSError:
+            continue
+        s = HI.summarize(harness, path)
+        if s and same_folder(s.get("project"), folder):
+            s["mtime"] = path.stat().st_mtime if path.exists() else 0
+            out.append(s)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Terminals
+# --------------------------------------------------------------------------- #
+def pane_harness(pane: Any) -> str | None:
+    """The Code-view harness a Build terminal ran (Claude Code / Codex), else None."""
+    cli = str(getattr(pane, "agent_cli", None) or getattr(pane, "resume_cli", None) or "").lower()
+    if not cli:
+        try:
+            cli = str(pane.activity().cli or "").lower()
+        except Exception:  # noqa: BLE001
+            cli = ""
+    return {"claude": CLAUDE, "codex": CODEX}.get(cli)
+
+
+def pane_exited(pane: Any) -> bool:
+    """Is the terminal back at its SHELL prompt (the CLI has exited)? A row
+    Claude Code drew can end like a prompt, so its own screen furniture in the
+    last lines says it still runs (``routes/terminals._claude_ui_visible``)."""
+    from ..daemon.routes.terminals import _claude_ui_visible
+    from ..terminals.handoff import at_shell_prompt
+
+    try:
+        tail = pane.output_tail()
+        return bool(at_shell_prompt(tail, pane.shell)) and not _claude_ui_visible(tail)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def can_open_in_code(pane: Any) -> bool:
+    """A terminal row's ``can_open_in_code``: its Claude Code / Codex has
+    exited and a conversation can be named — Claude by the session id the
+    pane recorded; Codex records none, so the press looks for the pane's own
+    thread (and refuses in words when it cannot tell which). Reads the pane's
+    cached tail only. Never raises."""
+    try:
+        harness = pane_harness(pane)
+        if harness is None or not getattr(pane, "alive", True):
+            return False
+        if harness == CLAUDE and not _SID_RX.match(str(getattr(pane, "claude_session_id", None) or "")):
+            return False
+        return pane_exited(pane)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def terminal_holds(platform: Any, hid: str) -> bool:
+    """Does a live Build terminal hold this Claude conversation (its recorded
+    session id, its CLI still running)? Never raises."""
+    terminals = getattr(platform, "terminals", None)
+    if terminals is None or not hid:
+        return False
+    try:
+        infos = terminals.list()
+    except Exception:  # noqa: BLE001
+        return False
+    for info in infos:
+        try:
+            if not info.get("alive", True):
+                continue
+            pane = terminals.get(info["id"])
+            if pane is None or str(getattr(pane, "claude_session_id", None) or "") != hid:
+                continue
+            if not pane_exited(pane):
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+# --------------------------------------------------------------------------- #
 # Turns
 # --------------------------------------------------------------------------- #
 def sse(event: str, data: Any) -> str:
@@ -159,6 +312,8 @@ class HostedTurn:
     def __init__(self, turn_id: str, sid: str) -> None:
         self.id = turn_id
         self.sid = sid
+        #: The replay: consecutive deltas of one item merged (masked again
+        #: after the merge), bounded by :data:`MAX_TURN_CHARS`.
         self.events: list[dict[str, Any]] = []
         self.status = "running"
         self._followers: set[asyncio.Queue] = set()
@@ -166,6 +321,9 @@ class HostedTurn:
         self.finished_at: float | None = None
         self.task: asyncio.Task | None = None
         self.started_at = utcnow()
+        self._chars = 0
+        #: True once the turn's end is being written (the done follows).
+        self.ending = False
 
     @property
     def running(self) -> bool:
@@ -176,7 +334,12 @@ class HostedTurn:
         return bool(self._followers)
 
     def add(self, ev: dict[str, Any]) -> None:
-        self.events.append(ev)
+        delta = ev.get("delta") if ev.get("type") in ("text", "thinking") else None
+        if delta is not None and self._chars > MAX_TURN_CHARS:
+            pass  # replay past its bound: only non-delta events are kept
+        else:
+            self._chars += len(str(delta or ""))
+            coalesce_into(self.events, ev)
         for q in list(self._followers):
             q.put_nowait(ev)
 
@@ -231,6 +394,9 @@ class LiveSession:
         self.last_error = ""
         #: The Iron-Proxy account the session runs on ("" = this PC's login).
         self.account = ""
+        #: What holds the session right now ("" = nothing): continue-on,
+        #: delete, archive. A message during a claim is refused in words.
+        self.claim = ""
 
     @property
     def running(self) -> bool:
@@ -238,7 +404,7 @@ class LiveSession:
 
     @property
     def busy(self) -> bool:
-        return (self.turn is not None and self.turn.running) or bool(self.asks)
+        return (self.turn is not None and self.turn.running) or bool(self.asks) or bool(self.claim)
 
 
 # --------------------------------------------------------------------------- #
@@ -281,9 +447,17 @@ class HostedService:
             if t.finished_at is not None and now - t.finished_at > FINISHED_KEEP_S:
                 self.turns.pop(tid, None)
 
+    def _claim(self, live: LiveSession, what: str) -> None:
+        if live.claim:
+            raise Refused(W.CLAIMED.format(what=live.claim))
+        if live.turn is not None and live.turn.running:
+            raise Refused(W.RUNNING)
+        live.claim = what
+
     # -- the harnesses -----------------------------------------------------------
     def harnesses(self) -> list[dict[str, Any]]:
-        """What can be started, from CACHED reads only (never a probe)."""
+        """What can be started, from CACHED reads only (never a probe).
+        BLOCKING (a PATH lookup): the route is a sync ``def``."""
         from ..harness import build_accounts as BA
         from ..providers.cli_auth import DEFAULT_PROBE, never_probe
 
@@ -330,6 +504,43 @@ class HostedService:
                 log.debug("claude model catalog unreadable", exc_info=True)
         return rows
 
+    def commands_for(self, harness: str, live: "LiveSession | None" = None) -> list[dict[str, str]]:
+        """The harness's own `/` commands: what its running process said, else
+        what it said last in this process (never a start just to ask)."""
+        from .claude import LAST_COMMANDS
+
+        rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        return [{"name": c["name"], "description": c.get("description", "")} for c in rows]
+
+    async def commands(self, sid: str) -> list[dict[str, str]]:
+        row = await self._row(sid)
+        return self.commands_for(row.harness, self.live.get(sid))
+
+    # -- who holds a conversation -------------------------------------------------
+    def _holder(self, harness: str, hid: str, *, except_sid: str = "") -> str:
+        """BLOCKING: why ``hid`` cannot be opened here ("" = it can): another
+        live (not archived) Code-view row holds it, or a Build terminal does."""
+        if not hid:
+            return ""
+        for r in store.list_rows(self.engine):
+            if r.id != except_sid and r.harness == harness and r.harness_session_id == hid:
+                return W.HELD_BY_ROW
+        if harness == CLAUDE and terminal_holds(self.platform, hid):
+            return W.HELD_BY_TERMINAL.format(label=W.label(harness))
+        return ""
+
+    def _opened_terminal_runs(self, row: Any) -> bool:
+        """BLOCKING-light: is the terminal Open in terminal started for this row
+        still running the CLI? (A gone or exited terminal releases the row.)"""
+        tid = str(row.terminal_id or "")
+        if not tid:
+            return False
+        terminals = getattr(self.platform, "terminals", None)
+        pane = terminals.get(tid) if terminals is not None else None
+        if pane is None or not getattr(pane, "alive", True):
+            return False
+        return not pane_exited(pane)
+
     # -- sessions ----------------------------------------------------------------
     async def create(self, body: dict[str, Any]) -> dict[str, Any]:
         harness = str(body.get("harness") or "").strip().lower()
@@ -348,13 +559,18 @@ class HostedService:
         effort = check_effort(harness, body.get("effort"))
         resume_id = str(body.get("harness_session_id") or "").strip()
         title = clip(body.get("title") or "", 120)
+        account = str(body.get("account") or "").strip()
+        acc = await asyncio.to_thread(self._resolve_account, harness, account)
         if resume_id:
-            found = await asyncio.to_thread(self._disk_session, harness, folder, resume_id)
+            held = await asyncio.to_thread(self._holder, harness, resume_id)
+            if held:
+                raise Refused(held)
+            found = await asyncio.to_thread(
+                self._disk_session, harness, folder, resume_id, home_of(harness, acc)
+            )
             if found is None:
                 raise Refused(f"{W.label(harness)} has no saved conversation with that id in this folder.", 404)
             title = title or clip(found.get("title") or "", 120)
-        account = str(body.get("account") or "").strip()
-        acc = await asyncio.to_thread(self._resolve_account, harness, account)
         row = await asyncio.to_thread(
             store.create, self.engine, harness=harness, folder=folder, title=title,
             account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
@@ -378,15 +594,31 @@ class HostedService:
         rec = got.records.get(provider)
         return dict(rec) if rec else {}
 
-    async def list_sessions(self, *, archived: bool = False, folder: str = "", disk: bool = False) -> dict[str, Any]:
+    def _account_for_listing(self, harness: str, account: str) -> dict[str, Any]:
+        """BLOCKING: the account a disk listing reads (the CACHED snapshot —
+        never a call): "" or "default" = this PC's login."""
+        if not account or account == "default":
+            return {}
+        from ..harness import build_accounts as BA
+
+        snap = BA.snapshot(getattr(self.platform, "iron_proxy", None))
+        for prof in (snap[0] if snap else []):
+            if str(prof.get("id")) == account and prof.get("provider") == W.PROXY[harness]:
+                cli = prof.get("cli") if isinstance(prof.get("cli"), dict) else {}
+                return {"id": account, "home": str(cli.get("home") or "")}
+        raise Refused("That account is not one Iron-Proxy lists for this tool.", 404)
+
+    async def list_sessions(self, *, archived: bool = False, folder: str = "", disk: bool = False,
+                            account: str = "") -> dict[str, Any]:
         rows = await asyncio.to_thread(store.list_rows, self.engine, archived=archived, folder=folder)
         out = [self._with_live(store.view(r)) for r in rows]
         result: dict[str, Any] = {"sessions": out}
         if disk:
             if not folder:
                 raise Refused("Name the folder whose saved sessions to list.", 400)
-            used = {r.harness_session_id for r in rows if r.harness_session_id}
-            result["disk"] = await asyncio.to_thread(self._disk_rows, folder, used)
+            used = {r.harness_session_id for r in await asyncio.to_thread(store.list_rows, self.engine)
+                    if r.harness_session_id}
+            result["disk"] = await asyncio.to_thread(self._disk_rows, folder, used, account)
         return result
 
     def _with_live(self, view: dict[str, Any]) -> dict[str, Any]:
@@ -396,37 +628,30 @@ class HostedService:
         view["waiting"] = bool(live and live.asks)
         return view
 
-    def _disk_rows(self, folder: str, used: set[str]) -> list[dict[str, Any]]:
-        """BLOCKING: the harnesses' OWN saved sessions for ``folder`` (the
-        history reader: read-only, names only)."""
-        from .. import history
-
+    def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
+        """BLOCKING: each harness's OWN saved sessions for ``folder``, from the
+        CHOSEN account's home (read-only, names only)."""
         out = []
-        try:
-            rows = history.list_sessions(None, limit=500)
-        except Exception:  # noqa: BLE001 — a listing never fails over this
-            return []
-        for s in rows:
-            if s.get("harness") not in HARNESSES or not same_folder(s.get("project"), folder):
+        for harness in HARNESSES:
+            try:
+                acc = self._account_for_listing(harness, account)
+            except Refused:
                 continue
-            if s.get("id") in used:
-                continue
-            out.append({
-                "source": "disk", "harness": s["harness"], "harness_session_id": s.get("id"),
-                "title": clip(s.get("title") or "", 120), "folder": folder,
-                "started": s.get("started"), "ended": s.get("ended"),
-            })
+            for s in disk_sessions(harness, home_of(harness, acc), folder):
+                if s.get("id") in used:
+                    continue
+                out.append({
+                    "source": "disk", "harness": harness, "harness_session_id": s.get("id"),
+                    "title": clip(s.get("title") or "", 120), "folder": folder,
+                    "started": s.get("started"), "ended": s.get("ended"),
+                })
+        out.sort(key=lambda r: str(r.get("ended") or ""), reverse=True)
         return out
 
-    def _disk_session(self, harness: str, folder: str, sid: str) -> dict[str, Any] | None:
-        from .. import history
-
-        try:
-            for s in history.list_sessions(harness, limit=500):
-                if s.get("id") == sid and same_folder(s.get("project"), folder):
-                    return s
-        except Exception:  # noqa: BLE001
-            return None
+    def _disk_session(self, harness: str, folder: str, sid: str, home: str | None = None) -> dict[str, Any] | None:
+        for s in disk_sessions(harness, home or default_home(harness), folder):
+            if s.get("id") == sid:
+                return s
         return None
 
     async def view(self, sid: str, *, limit: int = DEFAULT_EVENTS) -> dict[str, Any]:
@@ -434,6 +659,7 @@ class HostedService:
         log_ = self.live[sid].log if sid in self.live else EventLog(self.home, sid)
         events, total, dropped = await asyncio.to_thread(log_.read, max(1, min(int(limit or DEFAULT_EVENTS), 20_000)))
         live = self.live.get(sid)
+        running = live.turn.id if live and live.turn and live.turn.running else None
         out: dict[str, Any] = {
             "session": self._with_live(store.view(row)),
             "events": events,
@@ -441,30 +667,19 @@ class HostedService:
             "dropped": dropped,
             # The running turn's id (rejoin with GET …/turns/{id}/stream — its
             # replay starts with the turn's `user` event), else null.
-            "running": live.turn.id if live and live.turn and live.turn.running else None,
-            "turn_id": live.turn.id if live and live.turn and live.turn.running else None,
+            "running": running,
+            "turn_id": running,
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
         out["commands"] = self.commands_for(row.harness, live)
         return out
-
-    def commands_for(self, harness: str, live: "LiveSession | None" = None) -> list[dict[str, str]]:
-        """The harness's own `/` commands: what its running process said, else
-        what it said last in this process (never a start just to ask)."""
-        from .claude import LAST_COMMANDS
-
-        rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
-        return [{"name": c["name"], "description": c.get("description", "")} for c in rows]
-
-    async def commands(self, sid: str) -> list[dict[str, str]]:
-        row = await self._row(sid)
-        return self.commands_for(row.harness, self.live.get(sid))
 
     async def patch(self, sid: str, body: dict[str, Any]) -> dict[str, Any]:
         row = await self._row(sid)
         fields: dict[str, Any] = {}
         applied: dict[str, str] = {}
         live = self.live.get(sid)
+        running_turn = bool(live and live.turn and live.turn.running)
         if "title" in body and body["title"] is not None:
             fields["title"] = clip(body["title"], 120)
         if body.get("mode") is not None:
@@ -476,6 +691,8 @@ class HostedService:
                     raise Refused(str(exc)) from None
             else:
                 applied["mode"] = "next"
+            if row.harness == CODEX and running_turn and live is not None:
+                self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
             fields["mode"] = mode
         if body.get("model") is not None:
             model = check_model(body["model"])
@@ -503,24 +720,30 @@ class HostedService:
 
     async def archive(self, sid: str, archived: bool = True) -> dict[str, Any]:
         row = await self._row(sid)
+        live = self._live(row)
         if archived:
-            await self._stop(sid, why="archived")
-        row = await asyncio.to_thread(
-            store.update, self.engine, sid, archived_at=utcnow() if archived else None,
-        )
+            self._claim(live, "being archived")
+            try:
+                await self._stop_process(live, why="archived")
+                row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=utcnow())
+            finally:
+                live.claim = ""
+        else:
+            row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=None)
         return self._with_live(store.view(row))
 
     async def delete(self, sid: str) -> dict[str, Any]:
-        await self._row(sid)
-        live = self.live.get(sid)
-        if live and live.turn and live.turn.running:
-            raise Refused(W.RUNNING)
-        await self._stop(sid, why="deleted")
-        live = self.live.pop(sid, None)
-        if live:
+        row = await self._row(sid)
+        live = self._live(row)
+        self._claim(live, "being deleted")
+        try:
+            await self._stop_process(live, why="deleted")
+            self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
-        await asyncio.to_thread(store.delete, self.engine, sid)
-        moved = await asyncio.to_thread(self._trash_events, sid)
+            await asyncio.to_thread(store.delete, self.engine, sid)
+            moved = await asyncio.to_thread(self._trash_events, sid)
+        finally:
+            live.claim = ""
         return {"ok": True, "deleted": sid, "events_moved_to": moved}
 
     def _trash_events(self, sid: str) -> str:
@@ -546,10 +769,16 @@ class HostedService:
         if live.running and live.restart:
             await self._stop_process(live)
         live.restart = False
-        argv0 = binary_for(row.harness)
+        argv0 = await asyncio.to_thread(binary_for, row.harness)  # a PATH walk: off the loop
         if argv0 is None:
             raise Refused(W.NOT_INSTALLED.format(label=W.label(row.harness)))
         async with self._lock():
+            # Another row's process on this very conversation (a race the
+            # turn's own check could miss): never a second process.
+            for other in self.live.values():
+                if other is not live and other.running and other.driver is not None \
+                        and row.harness_session_id and other.driver.session_id == row.harness_session_id:
+                    raise Refused(W.HELD_BY_ROW)
             others = [lv for lv in self.live.values() if lv is not live and lv.running]
             if len(others) >= MAX_LIVE:
                 idle = sorted((lv for lv in others if not lv.busy), key=lambda lv: lv.last_active)
@@ -604,7 +833,7 @@ class HostedService:
             await driver.open(session_id=sid, resume=resume)
         except Exception as exc:  # noqa: BLE001 — said in words below
             await self._stop_process(live)
-            said = getattr(exc, "args", [""])[0] if exc.args else type(exc).__name__
+            said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
 
     def _on_session_id(self, live: LiveSession, sid: str) -> None:
@@ -627,37 +856,38 @@ class HostedService:
         live.proc, live.driver = None, None
         self._expire_asks(live)
         turn = live.turn
-        if turn is not None and turn.running and not proc.stopped:
+        if turn is not None and turn.running and not turn.ending and not proc.stopped:
             technical = proc.stderr_text() or f"exit code {code}"
             ev = W.failure_for(live.harness, technical)
             ev["title"] = W.GONE_DURING_TURN.format(label=W.label(live.harness))
             self._emit(live, ev)
-            self._emit(live, make("done", stop="failed"))
+            asyncio.ensure_future(self._end_turn(live, "failed"))
 
-    async def _stop_process(self, live: LiveSession) -> None:
+    async def _stop_process(self, live: LiveSession, *, why: str = "") -> None:
+        """Stop the process (tree kill, off the loop). ALWAYS: its open cards
+        close and its running turn ends "interrupted" — a stop never leaves a
+        follower waiting for a done that cannot come."""
         proc = live.proc
-        if proc is None:
-            return
         live.proc = None
         drv, live.driver = live.driver, None
-        await asyncio.to_thread(proc.stop)
+        if proc is not None:
+            await asyncio.to_thread(proc.stop)
         if drv is not None:
             drv.on_exit()
-
-    async def _stop(self, sid: str, *, why: str) -> None:
-        live = self.live.get(sid)
-        if live is None:
-            return
-        turn = live.turn
-        await self._stop_process(live)
         self._expire_asks(live)
-        if turn is not None and turn.running:
-            self._emit(live, make("notice", text=f"Stopped because the session was {why}."))
-            self._emit(live, make("done", stop="interrupted"))
+        turn = live.turn
+        if turn is not None and turn.running and not turn.ending:
+            self._emit(live, make("notice", text=W.STOPPED_BECAUSE.format(why=why) if why else W.STOPPED_PLAIN))
+            await self._end_turn(live, "interrupted")
 
     # -- events ----------------------------------------------------------------
     def _emit(self, live: LiveSession, ev: dict[str, Any]) -> None:
         turn = live.turn
+        if ev.get("type") == "done":
+            # The ONE way a turn ends (the row is stamped first).
+            stop = str(ev.get("stop") or "completed")
+            asyncio.ensure_future(self._end_turn(live, stop, ev))
+            return
         if turn is not None and turn.running:
             ev["turn"] = turn.id
         if ev.get("type") == "error":
@@ -669,17 +899,32 @@ class HostedService:
         live.log.append(ev)
         if turn is not None and turn.running:
             turn.add(ev)
-            if ev.get("type") == "done":
-                live.last_active = self.clock()
-                turn.end("done" if ev.get("stop") == "completed" else str(ev.get("stop") or "done"))
-                asyncio.ensure_future(self._after_turn(live))
 
-    async def _after_turn(self, live: LiveSession) -> None:
+    async def _end_turn(self, live: LiveSession, stop: str, done: dict[str, Any] | None = None) -> None:
+        """Stamp the row's ``last_error`` (this turn's own outcome) FIRST, then
+        put the ``done`` in the log and in front of every follower. Idempotent:
+        a turn already ending is left to the first caller."""
+        turn = live.turn
+        if turn is None or not turn.running or turn.ending:
+            if done is not None:
+                live.log.append(done)
+            return
+        turn.ending = True
+        error = live.last_error
         try:
-            await asyncio.to_thread(store.update, self.engine, live.sid, last_error=live.last_error)
-        except Exception:  # noqa: BLE001
+            await asyncio.to_thread(store.update, self.engine, live.sid, last_error=error)
+        except Exception:  # noqa: BLE001 — the done still goes out
             log.debug("could not stamp a Code-view session", exc_info=True)
+        done = dict(done) if done is not None else make("done", stop=stop)
+        done.setdefault("stop", stop)
+        done["turn"] = turn.id
+        live.log.append(done)
+        turn.add(done)
+        live.last_active = self.clock()
         live.last_error = ""
+        turn.end("done" if done.get("stop") == "completed" else str(done.get("stop")))
+        if live.turn is turn:
+            live.turn = None
 
     def _expire_asks(self, live: LiveSession) -> None:
         """Every open card closes when its process goes (nobody can answer it)."""
@@ -712,8 +957,26 @@ class HostedService:
             raise Refused(problems, 400)
         live = self._live(row)
         live.account = row.account
+        if live.claim:
+            raise Refused(W.CLAIMED.format(what=live.claim))
         if live.turn is not None and live.turn.running:
             raise Refused(W.BUSY)
+        if row.terminal_id:
+            if await asyncio.to_thread(self._opened_terminal_runs, row):
+                raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness)))
+            await asyncio.to_thread(store.update, self.engine, sid, terminal_id="")
+        if not live.running:
+            holder = await asyncio.to_thread(self._holder, row.harness, row.harness_session_id, except_sid=sid)
+            if holder == W.HELD_BY_ROW:
+                # Another row: held only while ITS process runs.
+                for other in self.live.values():
+                    if other.sid != sid and other.running and other.driver is not None \
+                            and other.driver.session_id == row.harness_session_id:
+                        raise Refused(holder)
+            elif holder:
+                raise Refused(holder)
+            if live.claim or (live.turn is not None and live.turn.running):
+                raise Refused(W.BUSY)
         turn = HostedTurn(turn_id, sid)
         self.turns[turn_id] = turn
         live.turn = turn
@@ -748,28 +1011,25 @@ class HostedService:
                 await turn.finished.wait()
         except Refused as r:
             self._emit(live, W.error(r.sentence, "Fix that, then send your message again.", ""))
-            self._emit(live, make("done", stop="failed"))
+            await self._end_turn(live, "failed")
         except HarnessGone as exc:
-            if turn.running:
+            if turn.running and not turn.ending:
                 self._emit(live, W.generic_error(live.harness, str(exc)))
-                self._emit(live, make("done", stop="failed"))
+                await self._end_turn(live, "failed")
         except asyncio.CancelledError:
-            if turn.running:
-                self._emit(live, W.error(
-                    "Iron Jarvis stopped while this was working",
-                    "Send the message again — the conversation is kept.", "",
-                ))
-                self._emit(live, make("done", stop="interrupted"))
+            if turn.running and not turn.ending:
+                self._emit(live, W.error(STOPPED_TITLE, STOPPED_FIX, ""))
+                await asyncio.shield(self._end_turn(live, "interrupted"))
             raise
         except Exception as exc:  # noqa: BLE001 — every failure becomes words
             log.warning("a Code-view turn failed", exc_info=True)
-            if turn.running:
+            if turn.running and not turn.ending:
                 self._emit(live, W.generic_error(live.harness, f"{type(exc).__name__}: {exc}"))
-                self._emit(live, make("done", stop="failed"))
+                await self._end_turn(live, "failed")
         finally:
-            if turn.running:  # never leave a follower hanging
-                turn.end("failed")
-            if live.turn is turn:
+            if turn.running and not turn.ending:  # never leave a follower hanging
+                await asyncio.shield(self._end_turn(live, "failed"))
+            if live.turn is turn and not turn.running:
                 live.turn = None
             live.last_active = self.clock()
 
@@ -790,45 +1050,66 @@ class HostedService:
                      answers: Any = None) -> dict[str, Any]:
         await self._row(sid)
         live = self.live.get(sid)
-        ask = live.asks.get(str(request_id or "")) if live else None
-        if live is None or ask is None or live.driver is None:
-            raise Refused("No such question is waiting (it was answered, or the session stopped).", 404)
         decision = str(decision or "").strip()
         if decision not in DECISIONS:
             raise Refused(f"Answer with one of: {', '.join(DECISIONS)}.", 400)
+        rid = str(request_id or "")
+        ask = live.asks.get(rid) if live else None
+        if live is None or ask is None or live.driver is None:
+            raise Refused("No such question is waiting (it was answered, or the session stopped).", 404)
         if ask.kind == "question" and decision == "allow_session":
             decision = "allow"
         if decision == "allow_session" and not ask.can_session:
             raise Refused(f"{W.label(live.harness)} offers no session-wide allow for this one — allow it once.", 400)
+        # CLAIMED before the await: a second answer to this card finds nothing.
+        live.asks.pop(rid, None)
+        driver = live.driver
         try:
-            await live.driver.answer(ask, decision, clip(message or "", 2000), answers)
+            await driver.answer(ask, decision, clip(message or "", 2000), answers)
         except AskRefused as exc:
+            live.asks[rid] = ask  # still waiting: the answer did not reach the harness
             raise Refused(str(exc), 400) from None
         except HarnessGone:
             raise Refused("The session stopped before your answer reached it.", 409) from None
-        live.asks.pop(ask.id, None)
         self._emit(live, make("resolved", request_id=ask.id, decision=decision))
+        new_mode = ask.data.get("sets_mode") if decision == "allow_session" else None
+        if new_mode:
+            await asyncio.to_thread(store.update, self.engine, sid, mode=new_mode)
+            self._emit(live, make("notice", text=W.MODE_FROM_SESSION_ALLOW.format(
+                label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
         return {"ok": True, "request_id": ask.id, "decision": decision}
 
     async def interrupt(self, sid: str) -> dict[str, Any]:
+        """Tell the harness to stop; answers within :data:`INTERRUPT_WAIT_S`
+        (the turn ends when the harness says so, or with its process)."""
         await self._row(sid)
         live = self.live.get(sid)
         if live is None or live.turn is None or not live.turn.running:
             return {"ok": True, "running": False}
-        if live.driver is not None and live.running:
-            for ask_id in list(live.asks):  # an unanswered card goes with the stop
-                ask = live.asks.pop(ask_id)
+        driver = live.driver
+        if driver is not None and live.running:
+            async def tell() -> None:
+                for ask_id in list(live.asks):  # an unanswered card goes with the stop
+                    ask = live.asks.pop(ask_id, None)
+                    if ask is None:
+                        continue
+                    try:
+                        await driver.answer(ask, "deny", "The user pressed Stop.", None)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._emit(live, make("resolved", request_id=ask_id, decision="deny"))
                 try:
-                    await live.driver.answer(ask, "deny", "The user pressed Stop.", None)
-                except Exception:  # noqa: BLE001
+                    await driver.interrupt()
+                except Exception:  # noqa: BLE001 — a gone process ends the turn
                     pass
-                self._emit(live, make("resolved", request_id=ask_id, decision="deny"))
+
+            task = asyncio.ensure_future(tell())
             try:
-                await live.driver.interrupt()
-            except Exception:  # noqa: BLE001 — a gone process ends the turn below
-                pass
+                await asyncio.wait_for(asyncio.shield(task), timeout=INTERRUPT_WAIT_S)
+            except asyncio.TimeoutError:
+                pass  # the harness is slow to answer: the turn still ends when it does
         else:
-            self._emit(live, make("done", stop="interrupted"))
+            await self._end_turn(live, "interrupted")
         return {"ok": True, "running": True}
 
     # -- the bell ----------------------------------------------------------------
@@ -885,12 +1166,9 @@ class HostedService:
         lives = list(self.live.values())
         for live in lives:
             self._expire_asks(live)
-            if live.turn is not None and live.turn.running:
-                self._emit(live, W.error(
-                    "Iron Jarvis stopped while this was working",
-                    "Send the message again — the conversation is kept.", "",
-                ))
-                self._emit(live, make("done", stop="interrupted"))
+            if live.turn is not None and live.turn.running and not live.turn.ending:
+                self._emit(live, W.error(STOPPED_TITLE, STOPPED_FIX, ""))
+        await asyncio.gather(*(self._end_turn(lv, "interrupted") for lv in lives), return_exceptions=True)
         await asyncio.gather(*(self._stop_process(lv) for lv in lives), return_exceptions=True)
         await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in lives), return_exceptions=True)
 
@@ -898,7 +1176,7 @@ class HostedService:
     async def open_terminal(self, sid: str) -> dict[str, Any]:
         row = await self._row(sid)
         live = self.live.get(sid)
-        if live and live.turn and live.turn.running:
+        if live and ((live.turn and live.turn.running) or live.claim):
             raise Refused(W.RUNNING)
         hid = row.harness_session_id
         if not hid:
@@ -908,6 +1186,8 @@ class HostedService:
         if live:
             await self._stop_process(live)  # two processes on one session corrupt it
         session = await asyncio.to_thread(self._launch_terminal, row, hid)
+        # The row is now the terminal's until that terminal's CLI has exited.
+        await asyncio.to_thread(store.update, self.engine, sid, terminal_id=str(session.id))
         return {"terminal_id": session.id}
 
     def _launch_terminal(self, row: Any, hid: str) -> Any:
@@ -935,10 +1215,18 @@ class HostedService:
         pane = terminals.get(pane_id) if terminals is not None else None
         if pane is None:
             raise Refused("No such terminal.", 404)
-        facts = await asyncio.to_thread(self._pane_facts, pane)
-        harness, hid, title = facts
-        acc = (getattr(pane, "accounts", None) or {}).get(W.PROXY[harness]) or {}
-        acc = {k: v for k, v in dict(acc).items() if k in ("id", "title", "source", "home", "unset", "note")}
+        from ..core.fs_policy import root_problem
+
+        problem = await asyncio.to_thread(root_problem, str(pane.cwd or ""))
+        if problem:
+            raise Refused(problem, 400)
+        harness, hid, title, acc = await asyncio.to_thread(self._pane_facts, pane)
+        # A repeated press reuses the row that already holds this conversation.
+        for r in await asyncio.to_thread(store.list_rows, self.engine):
+            if r.harness == harness and r.harness_session_id == hid:
+                out = store.view(r)
+                out["reused"] = True
+                return out
         row = await asyncio.to_thread(
             store.create, self.engine, harness=harness, folder=str(pane.cwd or ""),
             title=title or "From a terminal", account=str(acc.get("id") or ""),
@@ -946,9 +1234,13 @@ class HostedService:
         )
         return store.view(row)
 
-    def _pane_facts(self, pane: Any) -> tuple[str, str, str]:
-        """BLOCKING: ``(harness, session id, title)`` of a terminal whose
-        Claude Code / Codex has EXITED, else :class:`Refused`."""
+    def _pane_facts(self, pane: Any) -> tuple[str, str, str, dict[str, Any]]:
+        """BLOCKING: ``(harness, session id, title, account)`` of a terminal
+        whose Claude Code / Codex has EXITED, else :class:`Refused`. The
+        conversation is the one the PANE ran: Claude's recorded session id;
+        else (Codex records none) the ONE conversation for this folder written
+        in the pane's own account home since the pane started — never a guess
+        among several."""
         harness = pane_harness(pane)
         if harness is None:
             raise Refused("This terminal is not running Claude Code or Codex.")
@@ -957,64 +1249,61 @@ class HostedService:
                 f"{W.label(harness)} is still running in this terminal — exit it there first "
                 "(type /exit), then open it in the Code view."
             )
+        acc = (getattr(pane, "accounts", None) or {}).get(W.PROXY[harness]) or {}
+        acc = {k: v for k, v in dict(acc).items() if k in ("id", "title", "source", "home", "unset", "note")}
         hid = str(getattr(pane, "claude_session_id", None) or "") if harness == CLAUDE else ""
         title = ""
         if not hid or not _SID_RX.match(hid):
-            newest = self._newest_disk(harness, str(pane.cwd or ""))
-            if newest is None:
-                raise Refused(
-                    "This terminal has no saved conversation the Code view can open — start one in "
-                    "the terminal first."
-                )
-            hid, title = str(newest.get("id") or ""), str(newest.get("title") or "")
-        return harness, hid, clip(title, 120)
-
-    def _newest_disk(self, harness: str, folder: str) -> dict[str, Any] | None:
-        from .. import history
-
-        try:
-            for s in history.list_sessions(harness, limit=200):
-                if same_folder(s.get("project"), folder):
-                    return s
-        except Exception:  # noqa: BLE001
-            return None
-        return None
+            since = None
+            created = getattr(pane, "created_at", None)
+            if isinstance(created, datetime):
+                since = (created if created.tzinfo else created.replace(tzinfo=timezone.utc)).timestamp() - 5
+            found = disk_sessions(harness, home_of(harness, acc), str(pane.cwd or ""), since=since)
+            if len(found) != 1:
+                raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))
+            hid, title = str(found[0].get("id") or ""), str(found[0].get("title") or "")
+        return harness, hid, clip(title, 120), acc
 
     # -- continue on the next account (Claude Code) -------------------------------
     async def continue_on(self, sid: str, account: str = "") -> dict[str, Any]:
         row = await self._row(sid)
         if row.harness != CLAUDE:
             raise Refused(W.CODEX_CONTINUE)
-        live = self.live.get(sid)
-        if live and live.turn and live.turn.running:
-            raise Refused(W.RUNNING)
         if not row.harness_session_id:
             raise Refused(W.NO_SESSION_YET)
-        limit = live.limit if live else None
-        since = live.limit_since if live else ""
-        plan = await asyncio.to_thread(self._continue_blocking, row, str(account or "").strip(), limit, since)
-        if live:
-            await self._stop_process(live)
-        lease, note = plan
-        from ..terminals import pane_accounts as PA
+        live = self._live(row)
+        self._claim(live, "moving to another account")
+        try:
+            limit = live.limit
+            plan = await asyncio.to_thread(
+                self._continue_blocking, row, str(account or "").strip(), limit, live.limit_since
+            )
+            lease, source, client, current = plan
+            # The process goes BEFORE the copy: its last write lands first.
+            await self._stop_process(live, why="moving to another account")
+            await asyncio.to_thread(self._carry, lease, source, client, current, limit)
+            from ..terminals import pane_accounts as PA
 
-        out = PA.PaneAccounts()
-        out.use_lease(W.PROXY[CLAUDE], lease)
-        rec = out.records[W.PROXY[CLAUDE]]
-        row = await asyncio.to_thread(
-            store.update, self.engine, sid, account=str(lease.profile_id), account_json=json.dumps(rec),
-        )
-        if live:
+            out = PA.PaneAccounts()
+            out.use_lease(W.PROXY[CLAUDE], lease)
+            rec = out.records[W.PROXY[CLAUDE]]
+            row = await asyncio.to_thread(
+                store.update, self.engine, sid, account=str(lease.profile_id), account_json=json.dumps(rec),
+            )
+            note = W.CONTINUED.format(title=lease.title)
             live.limit, live.limit_since = None, ""
+            live.account = str(lease.profile_id)
             self._emit(live, make("notice", text=clip(note, 500)))
+        finally:
+            live.claim = ""
         return {"session": self._with_live(store.view(row)), "account": lease.profile_id,
                 "account_name": lease.title, "note": note}
 
-    def _continue_blocking(self, row: Any, account: str, limit: Any, since: str) -> tuple[Any, str]:
-        """BLOCKING: pick the next account, tell Iron-Proxy (only the limit
-        message), COPY the conversation into the next account's home
-        (``continue_on.carry_over`` — never moved, a diverged copy never
-        overwritten). Refuses in words BEFORE anything is told or copied."""
+    def _continue_blocking(self, row: Any, account: str, limit: Any, since: str) -> tuple[Any, Path, Any, str]:
+        """BLOCKING: pick the next account and FIND the conversation (and check
+        it can be copied) — refusing in words BEFORE Iron-Proxy is told
+        anything or anything is copied. Returns ``(lease, source file, client,
+        current account id)``."""
         from ..iron_proxy import accounts as _acc
         from ..terminals import continue_on as CO
         from ..terminals import pane_accounts as PA
@@ -1058,11 +1347,6 @@ class HostedService:
             lease = CO._own_choice(profiles, states, current)
             if lease is None:
                 raise Refused(CO._none_free(profiles, states, current).sentence)
-        if limit is not None:
-            try:
-                client.signal(current, text=limit.signal_text())
-            except Exception as exc:  # noqa: BLE001 — the user pressed the button: carry on
-                _acc._note("continue signal", exc)
         home = str(rec.get("home") or "")
         source = CO.newest_recorded(home, row.harness_session_id) if home else None
         if source is None and home:
@@ -1071,52 +1355,81 @@ class HostedService:
             except OSError:
                 hits = []
             source = hits[0] if hits else None
+        if source is None or not source.is_file():
+            raise Refused(W.NO_CONVERSATION_FILE)
+        dest = Path(lease.home) / "projects" / source.parent.name / source.name
+        if not str(lease.home or "").strip():
+            raise Refused(W.CANNOT_COPY)
+        if dest.exists() and dest.resolve() != source.resolve() and not (
+            CO._same_bytes(source, dest) or CO._is_prefix(dest, source)
+        ):
+            raise Refused(W.DIVERGED.format(title=lease.title))
+        return lease, source, client, current
+
+    def _carry(self, lease: Any, source: Path, client: Any, current: str, limit: Any) -> None:
+        """BLOCKING: tell Iron-Proxy (ONLY the limit message) and COPY the
+        conversation into the next account's home (``carry_over``: never
+        moved, an older copy kept in Iron Jarvis's trash)."""
+        from ..iron_proxy import accounts as _acc
+        from ..terminals import continue_on as CO
+
+        if limit is not None:
+            try:
+                client.signal(current, text=limit.signal_text())
+            except Exception as exc:  # noqa: BLE001 — the user pressed the button: carry on
+                _acc._note("continue signal", exc)
         carried = CO.carry_over(source, lease.home, lease.title, "", self.home / "trash")
         if not carried.resumed:
-            raise Refused(carried.note)
-        return lease, f'Continued on "{lease.title}" — the conversation was copied there.'
+            raise Refused(W.CANNOT_COPY)
 
 
-def pane_harness(pane: Any) -> str | None:
-    """The Code-view harness a Build terminal ran (Claude Code / Codex), else None."""
-    cli = str(getattr(pane, "agent_cli", None) or getattr(pane, "resume_cli", None) or "").lower()
-    if not cli:
+# --------------------------------------------------------------------------- #
+# Boot
+# --------------------------------------------------------------------------- #
+#: How much of a session's log the boot reconcile reads (its END).
+_RECONCILE_TAIL = 256 * 1024
+
+
+def reconcile_cut_turns(home: Any) -> int:
+    """BLOCKING (boot, off the loop): a turn a crash cut off (its last event
+    is not a ``done``) gets its error + ``done`` (interrupted) appended to the
+    session's ``events.jsonl``, so a reopened window shows it ended. Returns
+    how many were closed. Never raises."""
+    root = Path(home) / "hosted"
+    closed = 0
+    try:
+        logs = list(root.glob("*/events.jsonl"))
+    except OSError:
+        return 0
+    for path in logs[:2000]:
         try:
-            cli = str(pane.activity().cli or "").lower()
-        except Exception:  # noqa: BLE001
-            cli = ""
-    return {"claude": CLAUDE, "codex": CODEX}.get(cli)
-
-
-def pane_exited(pane: Any) -> bool:
-    """Is the terminal back at its SHELL prompt (the CLI has exited)? A row
-    Claude Code drew can end like a prompt, so its own screen furniture in the
-    last lines says it still runs (``routes/terminals._claude_ui_visible``)."""
-    from ..daemon.routes.terminals import _claude_ui_visible
-    from ..terminals.handoff import at_shell_prompt
-
-    try:
-        tail = pane.output_tail()
-        return bool(at_shell_prompt(tail, pane.shell)) and not _claude_ui_visible(tail)
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def can_open_in_code(pane: Any) -> bool:
-    """A terminal row's ``can_open_in_code``: its Claude Code / Codex has
-    exited and a conversation can be named — Claude by the session id the
-    pane recorded; Codex records none, so its newest saved thread for the
-    folder is looked up (and refused in words) when the user presses it.
-    Reads the pane's cached tail only. Never raises."""
-    try:
-        harness = pane_harness(pane)
-        if harness is None or not getattr(pane, "alive", True):
-            return False
-        if harness == CLAUDE and not _SID_RX.match(str(getattr(pane, "claude_session_id", None) or "")):
-            return False
-        return pane_exited(pane)
-    except Exception:  # noqa: BLE001
-        return False
+            with open(path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - _RECONCILE_TAIL))
+                tail = fh.read().splitlines()
+            last = None
+            for raw in reversed(tail):
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(ev, dict) and ev.get("turn"):
+                    last = ev
+                    break
+            if last is None or last.get("type") == "done":
+                continue
+            turn = last["turn"]
+            rows = [
+                {**W.error(STOPPED_TITLE, STOPPED_FIX, ""), "turn": turn},
+                {**make("done", stop="interrupted"), "turn": turn},
+            ]
+            with open(path, "ab") as fh:
+                fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8"))
+            closed += 1
+        except OSError:
+            continue
+    return closed
 
 
 def service_for(platform: Any) -> HostedService:

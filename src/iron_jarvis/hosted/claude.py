@@ -181,6 +181,56 @@ def _edit_diff(name: str, inp: dict[str, Any]) -> str:
     return ""
 
 
+def session_suggestions(raw: Any) -> list[dict[str, Any]]:
+    """Claude Code's ``permission_suggestions`` the card may offer as "Allow
+    for this session" — NEVER one that switches on bypassPermissions (Full
+    access is two presses of its own, never a side effect of an allow)."""
+    out = []
+    for s in raw or []:
+        if not isinstance(s, dict):
+            continue
+        if s.get("type") == "setMode" and s.get("mode") not in MODE_OF:
+            continue
+        if s.get("type") == "setMode" and MODE_OF.get(str(s.get("mode"))) == "full":
+            return []
+        out.append(s)
+    return out
+
+
+def suggested_mode(sugg: list[dict[str, Any]]) -> str:
+    """The preset an accepted suggestion switches the session to ("" = none)."""
+    for s in sugg:
+        if s.get("type") == "setMode":
+            return MODE_OF.get(str(s.get("mode")), "")
+    return ""
+
+
+def suggestion_words(sugg: list[dict[str, Any]]) -> str:
+    """What "Allow for this session" does, in plain words, before the press."""
+    parts = []
+    for s in sugg:
+        kind = s.get("type")
+        if kind == "setMode":
+            parts.append(f"Allow for this session switches Claude Code to {MODE_LABELS[MODE_OF[str(s['mode'])]]} "
+                         "for the rest of this session.")
+        elif kind in ("addRules", "replaceRules"):
+            rules = []
+            for r in s.get("rules") or []:
+                if isinstance(r, dict):
+                    tool, content = str(r.get("toolName") or ""), str(r.get("ruleContent") or "")
+                    rules.append(f"{tool}({content})" if content else tool)
+            if rules:
+                parts.append("Allow for this session always allows " + ", ".join(clip(r, 80) for r in rules)
+                             + " for the rest of this session.")
+        elif kind == "addDirectories":
+            dirs = [clip(d, 120) for d in s.get("directories") or [] if isinstance(d, str)]
+            if dirs:
+                parts.append("Allow for this session lets Claude Code work in " + ", ".join(dirs) + ".")
+    if sugg and not parts:
+        parts.append("Allow for this session saves Claude Code's own permission rule for this session.")
+    return " ".join(parts)
+
+
 def plan_steps(inp: dict[str, Any]) -> list[dict[str, str]]:
     out = []
     for t in inp.get("todos") or []:
@@ -341,6 +391,8 @@ class ClaudeDriver(Driver):
             if not sugg:
                 raise AskRefused("Claude Code offers no session-wide allow for this one — allow it once.")
             resp = {"behavior": "allow", "updatedInput": inp, "updatedPermissions": sugg}
+            if ask.data.get("sets_mode"):
+                self.mode = ask.data["sets_mode"]
         else:
             resp = {"behavior": "allow", "updatedInput": inp}
         await self.write({
@@ -420,7 +472,7 @@ class ClaudeDriver(Driver):
             return
         name = str(req.get("tool_name") or "")
         inp = req.get("input") if isinstance(req.get("input"), dict) else {}
-        sugg = [s for s in (req.get("permission_suggestions") or []) if isinstance(s, dict)]
+        sugg = session_suggestions(req.get("permission_suggestions"))
         ask_id = new_ask_id()
         if name == "AskUserQuestion":
             ev = make("question", request_id=ask_id, questions=questions_of(inp))
@@ -428,10 +480,13 @@ class ClaudeDriver(Driver):
             return
         kind = tool_kind(name)
         akind = {"command": "command", "edit": "edit", "write": "edit", "web": "network"}.get(kind, "tool")
+        detail = clip(req.get("description") or req.get("decision_reason") or "", DETAIL_CHARS)
+        effect = suggestion_words(sugg)
+        if effect:
+            detail = f"{detail}\n\n{effect}" if detail else effect
         ev = make(
             "approval", request_id=ask_id, kind=akind, title=tool_title(name, inp),
-            detail=clip(req.get("description") or req.get("decision_reason") or "", DETAIL_CHARS),
-            can_session=bool(sugg),
+            detail=detail, can_session=bool(sugg),
         )
         if not sugg:
             # No session-wide allow offered: the card answers this one call.
@@ -447,8 +502,11 @@ class ClaudeDriver(Driver):
                 ev["diff"] = clip(diff, DIFF_CHARS)
         if name.startswith("mcp__") or akind == "tool":
             ev["tool"] = clip(name, 120)
-        self.raise_ask(Ask(ask_id, "approval", name, rid, {"input": inp, "suggestions": sugg}, ev,
-                           ev["at"], bool(sugg)))
+        data: dict[str, Any] = {"input": inp, "suggestions": sugg}
+        mode = suggested_mode(sugg)
+        if mode:
+            data["sets_mode"] = mode
+        self.raise_ask(Ask(ask_id, "approval", name, rid, data, ev, ev["at"], bool(sugg)))
 
     async def _refuse_control(self, rid: Any, why: str) -> None:
         try:

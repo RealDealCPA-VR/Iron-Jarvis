@@ -129,27 +129,35 @@ async def test_ties_on_updated_at_break_on_rowid(app, work):
     assert rows == list(reversed(ids))
 
 
-async def test_disk_listing_reads_the_harness_store_read_only(app, work, monkeypatch):
-    from iron_jarvis import history
+def write_claude_conversation(home: Path, folder: Path, sid: str, prompt: str) -> Path:
+    path = home / "projects" / "C--demo" / f"{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"type": "user", "sessionId": sid, "cwd": str(folder),
+                                "timestamp": "2026-10-29T10:00:00Z",
+                                "message": {"role": "user", "content": prompt}}) + "\n", encoding="utf-8")
+    return path
 
-    monkeypatch.setattr(history, "list_sessions", lambda harness=None, limit=200: [
-        {"harness": "claude-code", "id": "11111111-2222-3333-4444-555555555555", "project": str(work),
-         "title": "fix the bug", "started": "2026-10-29T10:00:00Z", "ended": "2026-10-29T10:05:00Z"},
-        {"harness": "codex", "id": "01a189c4-9316-7d30-b03e-8a6c95d7bacd", "project": str(work) + "-x",
-         "title": "elsewhere"},
-    ])
+
+async def test_disk_listing_reads_the_harness_store_read_only(app, work, tmp_path, monkeypatch):
+    home = tmp_path / "claude-home"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    write_claude_conversation(home, work, "11111111-2222-3333-4444-555555555555", "fix the bug")
+    write_claude_conversation(home, tmp_path / "elsewhere", "22222222-2222-3333-4444-555555555555", "x")
     async with client(app) as c:
         r = await c.get("/build/app/sessions?disk=1")
         assert r.status_code == 400
         rows = (await c.get(f"/build/app/sessions?folder={work}&disk=1")).json()["disk"]
-        assert rows == [{"source": "disk", "harness": "claude-code",
-                         "harness_session_id": "11111111-2222-3333-4444-555555555555", "title": "fix the bug",
-                         "folder": str(work), "started": "2026-10-29T10:00:00Z", "ended": "2026-10-29T10:05:00Z"}]
+        assert [(x["source"], x["harness"], x["harness_session_id"], x["title"]) for x in rows] == [
+            ("disk", "claude-code", "11111111-2222-3333-4444-555555555555", "fix the bug")]
         made = await new_session(c, work, harness_session_id="11111111-2222-3333-4444-555555555555")
         assert made["harness_session_id"] == "11111111-2222-3333-4444-555555555555"
         assert made["title"] == "fix the bug"
         rows = (await c.get(f"/build/app/sessions?folder={work}&disk=1")).json()["disk"]
         assert rows == [], "a disk session already opened here is listed once"
+        r = await c.post("/build/app/sessions", json={"harness": "claude-code", "folder": str(work),
+                                                      "harness_session_id": "11111111-2222-3333-4444-555555555555"})
+        assert r.status_code == 409 and "already open" in r.json()["detail"], "one conversation, one row"
         r = await c.post("/build/app/sessions", json={"harness": "codex", "folder": str(work),
                                                       "harness_session_id": "01a189c4-9316-7d30-b03e-8a6c95d7bacd"})
         assert r.status_code == 404
@@ -191,7 +199,8 @@ async def test_a_claude_turn_asks_the_user_and_sends_only_the_users_answer(app, 
         "description": "List files in current directory"}}
     assert responses[1]["updatedPermissions"] == [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]
     view = (await _view(app, s["id"]))
-    assert view["session"]["harness_session_id"] == "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+    argv = starts(log)[0]["argv"]
+    assert view["session"]["harness_session_id"] == argv[argv.index("--session-id") + 1]
     assert view["running"] is None and view["pending"] == []
     await stop_all(app)
 
@@ -237,7 +246,7 @@ async def test_ask_user_question_is_answered_in_claudes_own_shape(app, work, tmp
         s = await new_session(c, work)
         task = await _turn(c, s["id"])
         q = (await wait_pending(c, s["id"]))[0]
-        assert q["type"] == "question"
+        assert q["type"] == "question" and "once_only" not in q
         assert q["questions"][0]["options"][1]["label"] == "Blue" and q["questions"][0]["multi"] is False
         r = await c.post(f"/build/app/sessions/{s['id']}/answer",
                          json={"request_id": q["request_id"], "decision": "allow"})
@@ -284,10 +293,13 @@ async def test_closing_the_page_never_stops_the_turn_and_a_rejoin_replays_it(app
         await c.post(f"/build/app/sessions/{s['id']}/answer", json={"request_id": ask["request_id"], "decision": "deny"})
         evs = frames((await asyncio.wait_for(rejoin, 30)).text)
         assert evs[0]["type"] == "user" and evs[-1]["type"] == "done"
-        # A repeated send of the same turn id follows it, never runs it twice.
+        # A repeated send of the same turn id follows it, never runs it twice
+        # (its replay: the same events, streamed deltas merged).
         again = frames((await c.post(f"/build/app/sessions/{s['id']}/turn",
                                      json={"text": "hi", "turn_id": "keep-me"})).text)
-        assert [e["type"] for e in again] == [e["type"] for e in evs]
+        from iron_jarvis.hosted.events import coalesce
+
+        assert [e["type"] for e in again] == [e["type"] for e in coalesce(evs)]
         # Evicted from memory: replayed from events.jsonl.
         svc.turns.clear()
         replay = frames((await c.get(f"/build/app/sessions/{s['id']}/turns/keep-me/stream")).text)
@@ -325,7 +337,13 @@ async def test_a_codex_turn_asks_for_its_command_and_its_file_change(app, work, 
         s = await new_session(c, work, harness="codex")
         task = await _turn(c, s["id"])
         cmd = (await wait_pending(c, s["id"]))[0]
-        assert cmd["kind"] == "command" and "Get-ChildItem" in cmd["command"] and cmd["can_session"] is True
+        # R1: Codex did not offer acceptForSession for this command
+        # (its `availableDecisions`), so the card offers once only.
+        assert cmd["kind"] == "command" and "Get-ChildItem" in cmd["command"]
+        assert cmd["can_session"] is False and cmd["once_only"] is True
+        r = await c.post(f"/build/app/sessions/{s['id']}/answer",
+                         json={"request_id": cmd["request_id"], "decision": "allow_session"})
+        assert r.status_code == 400
         await c.post(f"/build/app/sessions/{s['id']}/answer", json={"request_id": cmd["request_id"], "decision": "allow"})
         edit = await until(lambda: _next_pending(c, s["id"], cmd["request_id"]))
         assert edit["kind"] == "edit" and edit["title"] == "Create hello.txt" and "+hi" in edit["diff"]
