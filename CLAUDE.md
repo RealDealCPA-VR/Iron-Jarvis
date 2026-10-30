@@ -10686,6 +10686,37 @@ does not need a bump, stop and bump it.
   `test_failed_run_rows_settle_v1288.py`, `test_remote_deadline_v1288.py`,
   `test_agent_empty_final_v1288.py`, `test_wave3_leftovers_v1288.py`.
 
+- **NO WinRT IN THE DAEMON PROCESS: Windows OCR runs in a killable child**
+  (v1.410.2, a USER BUG: "Iron Jarvis isn't responding" after every start).
+  `logs/daemon-freeze.txt` (v1.409.1's watcher) showed, in all three frozen
+  runs, a pane restore parked in `CreateProcessW` (the Store pwsh) AND the
+  OCR self-test (`GET /onboarding` → readiness → doctor `check_local_ocr` →
+  `local_ocr.self_test`) parked at its first WinRT object
+  (`InMemoryRandomAccessStream()`). A call through the `winrt` bindings HOLDS
+  THE GIL while it waits, so a stalled Windows activation stopped every
+  thread — loop, `/health`, the freeze watcher's re-arm — and the desktop
+  watchdog restarted it into the same freeze. (This is very likely also the
+  "cause NOT found" of v1.409.1.) `src/iron_jarvis/ocr_worker.py` is now the
+  ONLY module that imports `winrt`; `documents/local_ocr` asks it through
+  `_ask_worker` (`core/procs.run`, one JSON request on stdin, killed at
+  `deadline * pages + WORKER_START_S`), `languages()`, `recognize_many` (one
+  child per document via `local_ocr_many`), `recognize_png`; frozen =
+  `ironjarvis.exe ocr-worker` (fast path in `packaging/ironjarvis_entry.py`,
+  identical to the hidden CLI subcommand), source = `python -m
+  iron_jarvis.ocr_worker`. A self-test whose worker did not answer says "Windows
+  OCR did not answer" and is NOT cached. Chat asks `available()` through
+  `asyncio.to_thread`. RULE: any native binding that can block inside
+  Windows (WinRT, COM activation) runs in a child process, never in the
+  daemon — a GIL-holding wait cannot be bounded from inside the process.
+  Pins: `tests/test_ocr_isolation_v14102.py` (a worker that holds ITS OWN GIL
+  forever: this process's heartbeat keeps ticking; a fresh daemon process has
+  never loaded `winrt` after a real self-test); `test_local_ocr_scans` seams
+  moved to `local_ocr_many` / `_ask_worker` / `_worker_argv`. SAME RELEASE:
+  `background-layer-v1410` no longer spies on the frame's `contentWindow`
+  (CI's jsdom replaced the window after the spy went on; v1.410.0 and
+  v1.410.1 published nothing because of it) — it reads the layer's own
+  `data-running` / `data-motion` and pins `backgroundMessages` as a function.
+
 - **An animated background is DOWNLOADED, VERIFIED and SEALED; the app ships
   only the catalog** (v1.410.0; the user: five backgrounds of our own, written
   clean room, never in the installer, downloaded on pick, kept until deleted,

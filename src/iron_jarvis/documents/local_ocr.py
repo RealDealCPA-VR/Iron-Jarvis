@@ -25,9 +25,11 @@ falls back to exactly the pre-C-05 behaviour — the same asymmetry rule as
 :mod:`.pdf_classify`: an engine that is absent or broken may never make the
 app read LESS of a document than before.
 
-BLOCKING: the recognizer runs its own tiny event loop, so these functions are
-only ever called through ``asyncio.to_thread`` (the v1.153.1 rule); calling one
-on a thread whose loop is running returns ``None`` instead of freezing it.
+BLOCKING: every call waits on a short-lived worker PROCESS
+(:mod:`iron_jarvis.ocr_worker`, v1.410.2 — a WinRT call holds the GIL while it
+waits, and a stalled one froze the whole daemon), so these functions are only
+ever called through ``asyncio.to_thread`` (the v1.153.1 rule); calling one on a
+thread whose loop is running returns ``None`` instead of freezing it.
 """
 
 from __future__ import annotations
@@ -98,22 +100,61 @@ def local_enabled(config: Any = None) -> bool:
     return True if value is None else bool(value)
 
 
-def _import_engine() -> Any:
-    from winrt.windows.media.ocr import OcrEngine  # noqa: PLC0415
+#: v1.410.2 — THE ENGINE RUNS IN ITS OWN PROCESS (:mod:`iron_jarvis.ocr_worker`).
+#: A WinRT call holds Python's GIL while it waits, and on 2026-10-30 a stalled
+#: WinRT activation in the OCR self-test froze the whole daemon on every start
+#: (the desktop's watchdog restarted it, and it froze again). Here nothing
+#: touches WinRT: each request starts a short-lived child, hands it one JSON
+#: request on stdin, and kills it when its deadline passes.
+WORKER_SUBCOMMAND = "ocr-worker"
+#: How long the child may take to start (import the bindings) on top of the
+#: work itself. A frozen fast-path start is ~0.3 s; a cold source start ~2 s.
+WORKER_START_S = 15.0
+#: The whole "which OCR languages are installed" question.
+LANGUAGES_TIMEOUT_S = 20.0
 
-    return OcrEngine
+
+def _worker_argv() -> "list[str]":
+    """How to start the worker: the frozen exe's hidden subcommand (served by
+    ``packaging/ironjarvis_entry._fast_path``), else this interpreter."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, WORKER_SUBCOMMAND]
+    return [sys.executable, "-m", "iron_jarvis.ocr_worker"]
+
+
+def _ask_worker(request: dict, timeout: float) -> "dict | None":
+    """One request to a fresh worker; ``None`` on any failure or when the
+    child runs past ``timeout`` (its whole process tree is killed then).
+    BLOCKING — never on the event loop. Never raises."""
+    import json  # noqa: PLC0415
+
+    from ..core import procs  # noqa: PLC0415
+
+    try:
+        result = procs.run(
+            _worker_argv(),
+            timeout=timeout,
+            input=json.dumps(request).encode("ascii"),
+        )
+    except Exception:  # noqa: BLE001 — a missing program, a refused spawn
+        return None
+    if result.timed_out or result.returncode != 0:
+        return None
+    try:
+        out = json.loads(result.stdout.decode("ascii", errors="replace") or "null")
+    except Exception:  # noqa: BLE001
+        return None
+    return out if isinstance(out, dict) else None
 
 
 def languages() -> "list[str]":
-    """OCR recognizer languages installed on this PC (``[]`` when none or no
-    engine). Never raises."""
+    """OCR recognizer languages installed on this PC (``[]`` when none, no
+    engine, or the worker did not answer). BLOCKING. Never raises."""
     if sys.platform != "win32":
         return []
-    try:
-        engine = _import_engine()
-        return [str(lang.language_tag) for lang in engine.available_recognizer_languages]
-    except Exception:  # noqa: BLE001
-        return []
+    out = _ask_worker({"op": "languages"}, LANGUAGES_TIMEOUT_S)
+    langs = (out or {}).get("languages")
+    return [str(x) for x in langs] if isinstance(langs, list) else []
 
 
 def available() -> bool:
@@ -131,51 +172,36 @@ def available() -> bool:
 # ------------------------------------------------------------ recognition ---
 
 
-async def _recognize_async(png: bytes) -> str:
-    from winrt.windows.graphics.imaging import BitmapDecoder  # noqa: PLC0415
-    from winrt.windows.storage.streams import (  # noqa: PLC0415
-        DataWriter,
-        InMemoryRandomAccessStream,
-    )
+def recognize_many(pngs: "list[bytes]", *, deadline_s: float = PAGE_DEADLINE_S) -> "list[str | None]":
+    """Text Windows OCR reads off each PNG — one worker for the whole batch,
+    ``None`` for a page that failed or ran past ``deadline_s``. The worker is
+    killed after every page's deadline plus its start-up allowance. BLOCKING —
+    call through ``asyncio.to_thread``; inside a running loop it refuses."""
+    if sys.platform != "win32" or not pngs:
+        return [None] * len(pngs)
+    try:
+        asyncio.get_running_loop()
+        return [None] * len(pngs)  # never block a running event loop
+    except RuntimeError:
+        pass
+    import base64  # noqa: PLC0415
 
-    engine_cls = _import_engine()
-    stream = InMemoryRandomAccessStream()
-    writer = DataWriter(stream)
-    writer.write_bytes(png)
-    await writer.store_async()
-    writer.detach_stream()
-    stream.seek(0)
-    decoder = await BitmapDecoder.create_async(stream)
-    bitmap = await decoder.get_software_bitmap_async()
-    engine = engine_cls.try_create_from_user_profile_languages()
-    if engine is None:
-        # The user's display language has no OCR pack; use one that does.
-        from winrt.windows.globalization import Language  # noqa: PLC0415
-
-        for tag in languages():
-            engine = engine_cls.try_create_from_language(Language(tag))
-            if engine is not None:
-                break
-    if engine is None:
-        return ""
-    result = await engine.recognize_async(bitmap)
-    return "\n".join(str(line.text) for line in result.lines)
+    request = {
+        "op": "recognize",
+        "pngs": [base64.b64encode(p).decode("ascii") for p in pngs],
+        "deadline_s": deadline_s,
+    }
+    out = _ask_worker(request, timeout=deadline_s * len(pngs) + WORKER_START_S)
+    texts = (out or {}).get("texts")
+    if not isinstance(texts, list) or len(texts) != len(pngs):
+        return [None] * len(pngs)
+    return [t if isinstance(t, str) else None for t in texts]
 
 
 def recognize_png(png: bytes, *, deadline_s: float = PAGE_DEADLINE_S) -> "str | None":
     """Text Windows OCR reads off one PNG, ``None`` on any failure or when the
     deadline passes. BLOCKING — call through ``asyncio.to_thread``."""
-    if sys.platform != "win32":
-        return None
-    try:
-        asyncio.get_running_loop()
-        return None  # never block a running event loop
-    except RuntimeError:
-        pass
-    try:
-        return asyncio.run(asyncio.wait_for(_recognize_async(png), timeout=deadline_s))
-    except Exception:  # noqa: BLE001 — TimeoutError included: None = fall back
-        return None
+    return recognize_many([png], deadline_s=deadline_s)[0]
 
 
 def _to_png(data: bytes) -> "bytes | None":
@@ -222,28 +248,42 @@ def _judge(text: str) -> "tuple[bool, bool]":
     return confident, number_heavy
 
 
+def local_ocr_many(
+    blobs: "list[bytes]", *, deadline_s: float = PAGE_DEADLINE_S
+) -> "list[OcrResult | None]":
+    """Read page images (PNG/JPEG/…) on this PC — ONE worker process for all
+    of them (v1.410.2). Each entry is ``None`` when the engine is unavailable,
+    the image cannot be decoded, its deadline passes, or it came back with no
+    text. BLOCKING. Never raises."""
+    out: "list[OcrResult | None]" = [None] * len(blobs)
+    try:
+        if not blobs or not available():
+            return out
+        pngs = [_to_png(b) for b in blobs]
+        live = [i for i, png in enumerate(pngs) if png is not None]
+        if not live:
+            return out
+        t0 = time.perf_counter()
+        texts = recognize_many([pngs[i] for i in live], deadline_s=deadline_s)  # type: ignore[misc]
+        each = (time.perf_counter() - t0) / len(live)
+        for i, text in zip(live, texts):
+            if not text or not text.strip():
+                continue
+            confident, number_heavy = _judge(text)
+            out[i] = OcrResult(text=text.strip(), confident=confident,
+                               number_heavy=number_heavy, seconds=each)
+    except Exception:  # noqa: BLE001
+        return [None] * len(blobs)
+    return out
+
+
 def local_ocr_bytes(
     data: bytes, *, deadline_s: float = PAGE_DEADLINE_S
 ) -> "OcrResult | None":
     """Read one page image (PNG/JPEG/…) on this PC. ``None`` when the engine
     is unavailable, the image cannot be decoded, the deadline passes, or the
     page came back with no text at all. BLOCKING. Never raises."""
-    try:
-        if not available():
-            return None
-        png = _to_png(data)
-        if png is None:
-            return None
-        t0 = time.perf_counter()
-        text = recognize_png(png, deadline_s=deadline_s)
-        seconds = time.perf_counter() - t0
-        if not text or not text.strip():
-            return None
-        confident, number_heavy = _judge(text)
-        return OcrResult(text=text.strip(), confident=confident,
-                         number_heavy=number_heavy, seconds=seconds)
-    except Exception:  # noqa: BLE001
-        return None
+    return local_ocr_many([data], deadline_s=deadline_s)[0]
 
 
 def local_ocr_image(path: "str | Path") -> "OcrResult | None":
@@ -263,15 +303,15 @@ def read_pages(
     """Read each harvested page image on this PC — ``{page number: result}``
     for the pages that produced text (C-05).
 
-    BLOCKING (one recognizer call per page), so :mod:`.ocr` calls it through a
+    BLOCKING (one worker process for all the pages), so :mod:`.ocr` calls it through a
     single ``asyncio.to_thread`` hop rather than one per page. Switched off,
     or with no engine here, it returns ``{}`` and every page takes the vision
     path exactly as before."""
     out: dict[int, OcrResult] = {}
     if not local_enabled(config) or not available():
         return out
-    for blob, number in zip(blobs, numbers):
-        result = local_ocr_bytes(blob)
+    # v1.410.2: one worker process for every page of the document.
+    for number, result in zip(numbers, local_ocr_many(list(blobs))):
         if result is not None:
             out[number] = result
     return out
@@ -322,7 +362,12 @@ def self_test() -> "dict[str, Any]":
                 daemon=True,
             )
             worker.start()
-            worker.join(12)
+            worker.join(WORKER_START_S + 12)
+            if worker.is_alive() or "text" not in holder or holder.get("text") is None:
+                # The OCR worker did not answer in time: say so, and ask
+                # again next time (a stalled Windows call is not "no OCR").
+                out["detail"] = "Windows OCR did not answer"
+                return out
             text = holder.get("text") or ""
             out["ok"] = "4821" in text
             out["detail"] = "read the test line" if out["ok"] else f"read {text!r} instead of the test line"

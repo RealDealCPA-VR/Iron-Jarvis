@@ -26,7 +26,7 @@ vi.mock("@/lib/api", () => ({
   del: (...a: unknown[]) => H.del(...a),
 }));
 
-import { BackgroundLayer, BACKGROUND_SANDBOX } from "@/components/BackgroundLayer";
+import { BackgroundLayer, BACKGROUND_SANDBOX, backgroundMessages } from "@/components/BackgroundLayer";
 import { BackgroundPicker, DownloadedBackgrounds } from "@/components/BackgroundPicker";
 import { BACKGROUNDS } from "@/lib/backgroundCatalog";
 import { makePalette, PALETTES_KEY, SCRIM_ALPHA, type PaletteBackground } from "@/lib/themePalette";
@@ -183,34 +183,40 @@ describe("B. a missing file falls back to the plain theme", () => {
 });
 
 describe("C. light on the PC", () => {
-  function sent(frame: HTMLIFrameElement) {
-    return (frame.contentWindow!.postMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
-  }
+  // v1.410.2: the first cut spied on the frame's contentWindow.postMessage,
+  // and on CI's runner the frame's window was replaced after the spy went on
+  // (jsdom navigating it), so the spy heard nothing ("expected [] to deep
+  // equally contain"). What the layer decides is read off its own attributes,
+  // and the messages those decisions become are pinned as a pure function.
+  it("says still and running as the page is told", () => {
+    expect(backgroundMessages(true, false)).toEqual([
+      { type: "ij-bg", still: true },
+      { type: "ij-bg", run: false },
+    ]);
+    expect(backgroundMessages(false, true)).toEqual([
+      { type: "ij-bg", still: false },
+      { type: "ij-bg", run: true },
+    ]);
+  });
 
-  it("tells the page to stop while the window is hidden, and to hold still when chosen", async () => {
+  it("stops while the window is hidden, and holds still when chosen", async () => {
     H.list = H.list.map((r) => (r.id === "aurora" ? row("aurora", "ready") : r));
     useTheme({ id: "aurora", motion: "still" });
     render(<BackgroundLayer />);
-    const frame = (await screen.findByTestId("app-background-frame")) as HTMLIFrameElement;
-    const spy = vi.fn();
-    Object.defineProperty(frame.contentWindow!, "postMessage", { value: spy, configurable: true });
-    act(() => {
-      window.dispatchEvent(
-        new MessageEvent("message", { data: { type: "ij-bg-ready" }, source: frame.contentWindow }),
-      );
-    });
-    await waitFor(() => expect(sent(frame)).toContainEqual({ type: "ij-bg", still: true }));
-    expect(screen.getByTestId("app-background").dataset.motion).toBe("still");
+    await screen.findByTestId("app-background-frame");
+    const layer = () => screen.getByTestId("app-background");
+    expect(layer().dataset.motion).toBe("still");
+    expect(layer().dataset.running).toBe("yes");
     const vis = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     act(() => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await waitFor(() => expect(sent(frame)).toContainEqual({ type: "ij-bg", run: false }));
+    await waitFor(() => expect(layer().dataset.running).toBe("no"));
     vis.mockReturnValue("visible");
     act(() => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await waitFor(() => expect(sent(frame).at(-1)).toEqual({ type: "ij-bg", run: true }));
+    await waitFor(() => expect(layer().dataset.running).toBe("yes"));
     vis.mockRestore();
   });
 

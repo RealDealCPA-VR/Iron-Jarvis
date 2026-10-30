@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.410.0 (2026-10-30).*
+holds itself to. Current as of v1.410.2 (2026-10-30).*
 
 ---
 
@@ -1979,6 +1979,36 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
+## The background glow costs less while the app sits idle (v1.410.1)
+
+The soft glow that drifts behind every page now moves a step about twice a
+second instead of 60 times a second. It follows the same path and looks the
+same (it only moves about a pixel a second), but with the app sitting idle it
+now costs about 2–4% of one CPU core and almost no graphics work, down from
+11–15% and 1.3–1.8% GPU (measured on this PC in a 1440 × 900 window, on the
+chat and Settings pages). It still stops when Windows is set to show less
+motion and while an animated background is showing.
+
+## "Iron Jarvis isn't responding" after an update, fixed (v1.410.2)
+
+After the v1.409.x updates, Iron Jarvis could stop answering a few seconds
+after every start, show **Iron Jarvis isn't responding**, restart itself and
+stop again. The freeze record Iron Jarvis keeps (`logs/daemon-freeze.txt`)
+named the cause every time. When Iron Jarvis starts, it reopens your Build
+terminals and checks that **reading text from pictures on this PC** (Windows'
+built-in text recognition) works. Windows sometimes takes a long time to start
+the Store version of PowerShell for a terminal. While it did, the
+text-recognition check waited inside Windows **and held up all of Iron
+Jarvis** while it waited.
+
+Text recognition now runs in a small separate helper program that Iron Jarvis
+starts for each job and stops if it does not answer in time. If Windows stalls
+it, only that one reading is lost: a scanned page then goes to a vision model
+(or says it could not be read), exactly as it does on a PC without Windows text
+recognition, and the next attempt tries again. Iron Jarvis itself keeps
+answering. Reading a scan works as before; the first page of a job takes a
+moment longer while the helper starts.
+
 ## An animated background behind the app (v1.410.0)
 
 Your own themes can have a moving background. In **Settings → Appearance**,
@@ -2024,7 +2054,7 @@ own on battery power and when Windows is set to show less motion (Settings ›
 Accessibility › Visual effects › Animation effects), and it stops completely
 while the window is hidden or minimised. A popped-out window shows the same
 background. Measured on this PC (a 1440 × 900 window, idle, the browser's own
-processes): the plain theme 15–24% of one CPU core and 2.0% GPU (its own slowly
+processes): the plain theme 15–24% of one CPU core and 2.0% GPU before v1.410.1 (its own slowly
 drifting glow is what costs that; it is switched off while a background
 shows); Reactor 10% and 0.7%, Grid 13% and 0.7%, Waves 14% and 0.8%, Drift
 18% and 1.2%, Aurora 22% and 1.3%; any background on **Still** 2% and 0.1%.
