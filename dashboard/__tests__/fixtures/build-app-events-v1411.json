@@ -1,0 +1,502 @@
+{
+ "_about": "v1.411.0 Build Code view, Pi: the normalized events the REAL daemon sends for each scenario, produced by tests/test_build_app_pi_v1411.py from recorded Pi output (tests/fixtures/build_app_v1411, masked live runs of pi 1.3.0 on this PC). `at` is dropped; request ids are ask-N; item ids are item-N; every turn id is turn-1. Regenerate with IJ_REGEN_BUILD_APP_PI=1.",
+ "scenarios": {
+  "pi_read_a_file": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "read",
+    "name": "read",
+    "title": "Read hello.txt",
+    "input": "{\"limit\": 1, \"offset\": 1, \"path\": \"hello.txt\"}",
+    "status": "running",
+    "path": "hello.txt",
+    "line": 1,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "read",
+    "name": "read",
+    "title": "Read hello.txt",
+    "input": "{\"limit\": 1, \"offset\": 1, \"path\": \"hello.txt\"}",
+    "status": "done",
+    "path": "hello.txt",
+    "line": 1,
+    "output": "apple pie\n\n[2 more lines in file. Use offset=2 to continue.]",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "apple",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " pie",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "apple pie",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 6887,
+    "output": 32,
+    "cache_read": 6528,
+    "list_price": true,
+    "cost_usd": 0.00077,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_extension_confirm_before_an_edit": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "edit",
+    "name": "edit",
+    "title": "Edit hello.txt",
+    "input": "{\"edits\": [{\"newText\": \"pear\", \"oldText\": \"apple\"}], \"path\": \"hello.txt\"}",
+    "status": "running",
+    "path": "hello.txt",
+    "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-apple\n+pear",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Edit hello.txt",
+    "detail": "Allow this change?\nTool: edit\nPath: hello.txt",
+    "can_session": false,
+    "tool": "edit",
+    "path": "hello.txt",
+    "diff": "--- a/hello.txt\n+++ b/hello.txt\n@@ -1 +1 @@\n-apple\n+pear",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "edit",
+    "name": "edit",
+    "title": "Edit hello.txt",
+    "input": "{\"edits\": [{\"newText\": \"pear\", \"oldText\": \"apple\"}], \"path\": \"hello.txt\"}",
+    "status": "done",
+    "path": "hello.txt",
+    "output": "Successfully replaced 1 block(s) in hello.txt.",
+    "diff": "--- hello.txt\n+++ hello.txt\n@@ -1,2 +1,2 @@\n-apple pie\n+pear pie\n second line\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 496,
+    "output": 38,
+    "cache_read": 13184,
+    "list_price": true,
+    "cost_usd": 0.0002,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_shell_command_streams_its_output": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo hello-from-bash",
+    "input": "{\"command\": \"echo hello-from-bash\", \"timeout\": null}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo hello-from-bash",
+    "input": "{\"command\": \"echo hello-from-bash\", \"timeout\": null}",
+    "status": "running",
+    "output": "hello-from-bash\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo hello-from-bash",
+    "input": "{\"command\": \"echo hello-from-bash\", \"timeout\": null}",
+    "status": "done",
+    "output": "hello-from-bash\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "hello",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "-from",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "-b",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "ash",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "hello-from-bash",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 368,
+    "output": 34,
+    "cache_read": 13568,
+    "list_price": true,
+    "cost_usd": 0.000189,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_extension_select_before_a_command": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run rm -rf ./nothing-here",
+    "input": "{\"command\": \"rm -rf ./nothing-here\", \"timeout\": null}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Dangerous command: rm -rf ./nothing-here",
+      "options": [
+       {
+        "label": "Allow"
+       },
+       {
+        "label": "Block"
+       }
+      ],
+      "multi": false
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Pi: Command allowed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run rm -rf ./nothing-here",
+    "input": "{\"command\": \"rm -rf ./nothing-here\", \"timeout\": null}",
+    "status": "done",
+    "output": "(no output)",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 398,
+    "output": 33,
+    "cache_read": 14080,
+    "list_price": true,
+    "cost_usd": 0.000197,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_extension_command_asks_for_input": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Enter a value",
+      "options": [],
+      "multi": false,
+      "header": "type something..."
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Pi: You entered: typed-by-test",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_interrupt": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "openai-codex/gpt-6-luna",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "1",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "2",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "3",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_provider_answers_an_error": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "local-models/fleet-fast",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Pi's model answered with an error",
+    "fix": "Send the message again. If it happens again, choose another model for this session.",
+    "technical": "400: {\"message\":\"No connected db.\",\"type\":\"no_db_connection\",\"param\":null,\"code\":\"400\"}",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "pi_not_signed_in_for_the_model": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "pi",
+    "harness_session_id": "harness-session-1",
+    "model": "anthropic/claude-sonnet-4-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "own",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Pi isn't signed in for this model",
+    "fix": "Open Pi in a terminal and type /login to sign in to that model's provider, or choose another model.",
+    "technical": "No API key found for anthropic.\n\nUse /login to log into a provider via OAuth or API key. See:\n  C:\\Users\\me\\AppData\\Local\\pi-node\\current\\node_modules\\@earendil-works\\pi-coding-agent\\docs\\providers.md\n  C:\\Users\\me\\AppData\\Local\\pi-node\\current\\node_modules\\@earendil-works\\pi-coding-agent\\docs\\models.md",
+    "fix_kind": "sign_in",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ]
+ }
+}

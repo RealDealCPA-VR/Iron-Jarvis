@@ -1,4 +1,5 @@
-"""A fake Claude Code / Codex for the Code-view tests (v1.409.0).
+"""A fake Claude Code / Codex / Pi for the Code-view tests (v1.409.0; Pi in
+v1.411.0).
 
 Replays a RECORDED session (``tests/fixtures/build_app_v1409/*.json``, masked
 real output of claude 2.1.311 / codex-cli 0.157.0) over stdio, the way the
@@ -9,9 +10,12 @@ real harness spoke it:
   ``user`` (a stream-json user message), ``control`` + ``subtype`` (a
   control_request), ``response`` + ``request_id`` (a control_response to the
   harness's own can_use_tool), ``request`` + ``method`` (a JSON-RPC request),
-  ``response`` + ``id`` (a JSON-RPC response to the harness's own request);
-* ``reply_to_control`` / ``reply_to``: the frame answers the host's request of
-  that subtype / method — its id is rewritten to the one the host sent.
+  ``response`` + ``id`` (a JSON-RPC response to the harness's own request),
+  ``command`` + ``command`` (a Pi RPC command of that type), ``ui`` + ``id``
+  (Pi: the ``extension_ui_response`` to the dialog Pi sent with that id);
+* ``reply_to_control`` / ``reply_to`` / ``reply_to_command``: the frame answers
+  the host's request of that subtype / method / Pi command — its id is
+  rewritten to the one the host sent.
 
 Every line the host sends is appended to ``IJ_FAKE_LOG`` (JSON lines), after a
 first line with the argv, the folder and the account-related environment, so
@@ -27,7 +31,8 @@ import threading
 SCENARIO = os.environ["IJ_FAKE_SCENARIO"]
 LOG = os.environ.get("IJ_FAKE_LOG", "")
 ENV_KEYS = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID",
-            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN")
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN",
+            "PI_SESSION_ID", "PI_SESSION_FILE", "PI_CODING_AGENT")
 
 
 def log(obj):
@@ -53,6 +58,12 @@ for flag in ("--session-id", "--resume"):
 RECORDED = next((s["out"].get("session_id", "") for s in steps
                  if isinstance(s.get("out"), dict) and s["out"].get("type") == "system"
                  and s["out"].get("subtype") == "init"), "")
+# Pi says its session id in the answer to `get_state`.
+RECORDED = RECORDED or next((((s["out"].get("data") or {}).get("sessionId") or "") for s in steps
+                             if isinstance(s.get("out"), dict) and s["out"].get("type") == "response"
+                             and s["out"].get("command") == "get_state"), "")
+#: Message types that are NOT Pi commands (Claude's / Codex's / Pi's answers).
+NOT_PI = {"user", "control_request", "control_response", "extension_ui_response"}
 
 inbox: "queue.Queue" = queue.Queue()
 
@@ -75,6 +86,7 @@ threading.Thread(target=read_stdin, daemon=True).start()
 buffer = []
 controls = {}  # subtype -> [request ids]
 requests = {}  # method -> [ids]
+commands = {}  # Pi command type -> [ids]
 
 
 def matches(step, obj):
@@ -85,6 +97,10 @@ def matches(step, obj):
         return obj.get("type") == "control_request" and (obj.get("request") or {}).get("subtype") == step["subtype"]
     if kind == "request":
         return obj.get("method") == step["method"] and "id" in obj
+    if kind == "command":
+        return obj.get("type") == step["command"] and "method" not in obj
+    if kind == "ui":
+        return obj.get("type") == "extension_ui_response" and obj.get("id") == step["id"]
     if kind == "response":
         if "request_id" in step:
             return obj.get("type") == "control_response" and (obj.get("response") or {}).get("request_id") == step["request_id"]
@@ -97,6 +113,8 @@ def remember(obj):
         controls.setdefault((obj.get("request") or {}).get("subtype"), []).append(obj.get("request_id"))
     elif "method" in obj and "id" in obj:
         requests.setdefault(obj["method"], []).append(obj["id"])
+    elif obj.get("type") and obj.get("type") not in NOT_PI and "jsonrpc" not in obj:
+        commands.setdefault(obj["type"], []).append(obj.get("id"))
 
 
 def wait_for(step):
@@ -129,6 +147,9 @@ def emit(step):
     method = step.get("reply_to")
     if method and requests.get(method):
         obj["id"] = requests[method].pop(0)
+    cmd = step.get("reply_to_command")
+    if cmd and commands.get(cmd):
+        obj["id"] = commands[cmd].pop(0)
     out(obj)
 
 
@@ -149,3 +170,6 @@ while True:
             "subtype": "success", "request_id": obj.get("request_id"), "response": {}}})
     elif "method" in obj and "id" in obj:
         out({"jsonrpc": "2.0", "id": obj["id"], "result": {}})
+    elif obj.get("type") and obj.get("type") not in NOT_PI and "jsonrpc" not in obj:
+        # A Pi command the recording did not script: a plain success.
+        out({"id": obj.get("id"), "type": "response", "command": obj["type"], "success": True})

@@ -71,6 +71,7 @@ import { CodeConversation } from "@/components/buildCode/CodeConversation";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
   OPEN_IN_TERMINAL,
+  OWN_SIGN_IN_TITLE,
   accountStatusWords,
   accountWords,
   appliedNextWords,
@@ -93,7 +94,9 @@ import {
   groupByFolder,
   modeIsDangerous,
   modeLabel,
+  ownSignInWords,
   sessionRowLine,
+  signsInItself,
   sessionTitle,
   toolLabel,
   toolUnavailable,
@@ -1097,7 +1100,11 @@ function SessionPane({
               />
               <span
                 data-testid="code-account-chip"
-                title="The account this session runs on (chosen when it was made)"
+                title={
+                  signsInItself(session.tool, tools)
+                    ? OWN_SIGN_IN_TITLE
+                    : "The account this session runs on (chosen when it was made)"
+                }
                 className="inline-flex h-7 max-w-[12rem] items-center gap-1.5 truncate px-2 text-[12px] text-zinc-500"
               >
                 <UserRound size={13} aria-hidden="true" className="shrink-0" />
@@ -1209,7 +1216,7 @@ function NewSession({
               {toolsError}
             </p>
           ) : !tools ? (
-            <p className="text-[13px] text-zinc-500">Looking for Claude Code and Codex on this PC…</p>
+            <p className="text-[13px] text-zinc-500">Looking for coding tools on this PC…</p>
           ) : (
             tools.map((t) => {
               const why = toolUnavailable(t);
@@ -1260,28 +1267,36 @@ function NewSession({
 
         {tool ? (
           <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-1.5 text-[13px] text-zinc-400">
-              Account
-              <select
-                data-testid="code-new-account"
-                value={account}
-                onChange={(e) => setAccount(e.target.value)}
-                className={CHIP_SELECT}
-              >
-                <option value="">This PC&apos;s sign-in</option>
-                {tool.accounts.map((a) => {
-                  // The account's state in words; one that cannot start a
-                  // session (signed out, at its limit, turned off) is greyed.
-                  const st = accountStatusWords(a.status);
-                  return (
-                    <option key={a.id} value={a.id} disabled={!st.usable}>
-                      {a.name}
-                      {st.words ? ` (${st.words})` : ""}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
+            {tool.ownSignIn ? (
+              // v1.411.0: Pi signs in by itself, per model provider: there is
+              // no account to choose, and the line says so.
+              <span data-testid="code-new-account-own" title={OWN_SIGN_IN_TITLE} className="text-[13px] text-zinc-400">
+                Account: <span className="text-zinc-200">{ownSignInWords(tool.id, tools)}</span>
+              </span>
+            ) : (
+              <label className="flex items-center gap-1.5 text-[13px] text-zinc-400">
+                Account
+                <select
+                  data-testid="code-new-account"
+                  value={account}
+                  onChange={(e) => setAccount(e.target.value)}
+                  className={CHIP_SELECT}
+                >
+                  <option value="">This PC&apos;s sign-in</option>
+                  {tool.accounts.map((a) => {
+                    // The account's state in words; one that cannot start a
+                    // session (signed out, at its limit, turned off) is greyed.
+                    const st = accountStatusWords(a.status);
+                    return (
+                      <option key={a.id} value={a.id} disabled={!st.usable}>
+                        {a.name}
+                        {st.words ? ` (${st.words})` : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+            )}
             <span className="flex items-center gap-1.5 text-[13px] text-zinc-400">
               Mode
               <ModeChip
@@ -1386,7 +1401,7 @@ export function BuildCodeView({
     readList();
     get<unknown>(TOOLS)
       .then((raw) => setTools(decodeCodingTools(raw)))
-      .catch((e) => setToolsError(errorWords(e, "Claude Code and Codex could not be looked for.")));
+      .catch((e) => setToolsError(errorWords(e, "The coding tools could not be looked for.")));
   }, [readList]);
   useVisibleInterval(readList, CODE_LIST_REREAD_MS);
 
@@ -1693,7 +1708,7 @@ export function BuildCodeView({
             <p className="px-2 py-2 text-[12px] text-zinc-500">Reading your sessions…</p>
           ) : groups.length === 0 ? (
             <p data-testid="code-list-empty" className="px-2 py-2 text-[12px] text-zinc-500">
-              No sessions yet. Press New session to start Claude Code or Codex in a folder.
+              No sessions yet. Press New session to start Claude Code, Codex or Pi in a folder.
             </p>
           ) : (
             groups.map((g) => (
@@ -1773,7 +1788,7 @@ export function BuildCodeView({
           <div className="grid h-full place-items-center px-6 text-center">
             <div className="max-w-sm space-y-3">
               <Code2 size={24} className="mx-auto text-zinc-600" aria-hidden="true" />
-              <p className="text-[14px] text-zinc-200">Build&apos;s Code view: Claude Code or Codex, in a window</p>
+              <p className="text-[14px] text-zinc-200">Build&apos;s Code view: Claude Code, Codex or Pi, in a window</p>
               <p className="text-[13px] text-zinc-500">
                 The real coding tool runs here with its own settings and its own saved conversations. Iron Jarvis
                 shows what it does and asks you whenever it asks.

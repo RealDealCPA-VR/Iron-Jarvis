@@ -3174,7 +3174,7 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     const isApp = isChat && ask.surface === "build_app";
     const appId = isApp && typeof ask.app_session === "string" ? ask.app_session : "";
     const appName = isApp
-      ? ({ "claude-code": "Claude Code", codex: "Codex" })[ask.harness] || "Your coding tool"
+      ? ({ "claude-code": "Claude Code", codex: "Codex", pi: "Pi" })[ask.harness] || "Your coding tool"
       : "";
     const hasTool = typeof ask.tool === "string" && ask.tool !== "";
     // v1.358.0 (lane 8E): the card's words, then WHICH task is asking —

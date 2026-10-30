@@ -1062,7 +1062,7 @@ export default function TerminalsPage() {
           // behind the chat page's Chat | Code switch.
           subtitle={
             buildView === "code"
-              ? "Claude Code or Codex, running for real with their own tools, settings and saved conversations. Iron Jarvis shows what they do and asks you whenever they ask."
+              ? "Claude Code, Codex or Pi, running for real with their own tools, settings and saved conversations. Iron Jarvis shows what they do and asks you whenever they ask."
               : `Live terminals on this PC. Press New terminal to open one, or pick a project folder and open a terminal in it. ${CODING_SESSIONS_LIST}, where Jarvis writes the code, are in ${CODING_SESSIONS_PLACE}.`
           }
           actions={

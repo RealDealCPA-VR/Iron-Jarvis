@@ -1,0 +1,1140 @@
+{
+ "harness": "pi",
+ "source": "recorded live 2026-10-30, pi 1.3.0, this PC, scratch folder (masked) — an extension's select before a shell command (rpc-demo's dangerous-command gate)",
+ "steps": [
+  {
+   "await": "command",
+   "command": "get_state"
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "7ff13453-3a95-4f87-80a2-e484a0163523",
+    "method": "setTitle",
+    "title": "pi RPC Demo"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "9e7000dd-2ebd-4d13-85c0-7298e1ae1808",
+    "method": "setWidget",
+    "widgetKey": "rpc-demo",
+    "widgetLines": [
+     "--- RPC Extension UI Demo ---",
+     "Loaded and ready."
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "a76a95cd-0605-4351-81be-75dbb69e1176",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turns: 0"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "9e0030bf-cb63-47cf-8754-f8305a2f64c9",
+    "method": "setStatus",
+    "statusKey": "mode",
+    "statusText": "mode: manual"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "fa30a931-b9fc-4078-bc1b-d544b5d5bf29",
+    "method": "setStatus",
+    "statusKey": "plan-mode"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "ded756be-a699-48eb-9999-f1c924b33c4a",
+    "method": "setWidget",
+    "widgetKey": "plan-todos"
+   }
+  },
+  {
+   "out": {
+    "id": "s1",
+    "type": "response",
+    "command": "get_state",
+    "success": true,
+    "data": {
+     "model": {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "reasoning": true,
+      "input": [
+       "text",
+       "image"
+      ],
+      "cost": {
+       "input": 0.1,
+       "output": 0.5,
+       "cacheRead": 0.01,
+       "cacheWrite": 0.125,
+       "tiers": [
+        {
+         "inputTokensAbove": 272000,
+         "input": 0.2,
+         "output": 0.75,
+         "cacheRead": 0.02,
+         "cacheWrite": 0.25
+        }
+       ]
+      },
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "thinkingLevelMap": {
+       "off": "none",
+       "minimal": "low",
+       "low": "low",
+       "medium": "medium",
+       "high": "high",
+       "xhigh": "xhigh",
+       "max": "max"
+      },
+      "compat": {
+       "supportsOpenAIGrammarTools": true,
+       "supportsAdditionalTools": true,
+       "supportsToolSearch": true,
+       "supportsMidConvoSystemMessages": true
+      },
+      "inputLimits": {
+       "images": {
+        "resize": {
+         "maxWidth": 2000,
+         "maxHeight": 2000,
+         "maxBytes": 4718592,
+         "jpegQuality": 80
+        }
+       }
+      },
+      "type": "chat"
+     },
+     "thinkingLevel": "low",
+     "isStreaming": false,
+     "isCompacting": false,
+     "steeringMode": "one-at-a-time",
+     "followUpMode": "one-at-a-time",
+     "sessionFile": "C:\\Users\\me\\.pi\\agent\\sessions\\--C--work-demo--\\2026-10-30T13-12-13-190Z_46a90daa-be98-49b6-9f0a-e43db9c81108.jsonl",
+     "sessionId": "46a90daa-be98-49b6-9f0a-e43db9c81108",
+     "autoCompactionEnabled": true,
+     "messageCount": 22,
+     "pendingMessageCount": 0
+    }
+   },
+   "reply_to_command": "get_state"
+  },
+  {
+   "await": "command",
+   "command": "get_commands"
+  },
+  {
+   "out": {
+    "type": "response",
+    "command": "get_commands",
+    "success": true,
+    "data": {
+     "commands": []
+    }
+   },
+   "reply_to_command": "get_commands"
+  },
+  {
+   "await": "command",
+   "command": "get_available_models"
+  },
+  {
+   "out": {
+    "type": "response",
+    "command": "get_available_models",
+    "success": true,
+    "data": {
+     "models": []
+    }
+   },
+   "reply_to_command": "get_available_models"
+  },
+  {
+   "await": "command",
+   "command": "prompt"
+  },
+  {
+   "out": {
+    "id": "p1",
+    "type": "response",
+    "command": "prompt",
+    "success": true,
+    "data": {
+     "disposition": "started"
+    }
+   },
+   "reply_to_command": "prompt"
+  },
+  {
+   "out": {
+    "type": "agent_start"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "57a12049-34ee-4363-a3b1-9f9b45878b27",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 1 running..."
+   }
+  },
+  {
+   "out": {
+    "type": "turn_start"
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Run exactly this shell command and nothing else: rm -rf ./nothing-here   -- then say ok."
+      }
+     ],
+     "timestamp": 1793366667194
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Run exactly this shell command and nothing else: rm -rf ./nothing-here   -- then say ok."
+      }
+     ],
+     "timestamp": 1793366667194
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "custom",
+     "customType": "harness-policy",
+     "content": "Harness policy (thinking: LOW) — EXECUTE ONCE. Make the change in one pass. Do not run a full verification suite unless the task explicitly requires it; a quick targeted check is enough. Then report.",
+     "display": false,
+     "timestamp": 1793366667194
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "custom",
+     "customType": "harness-policy",
+     "content": "Harness policy (thinking: LOW) — EXECUTE ONCE. Make the change in one pass. Do not run a full verification suite unless the task explicitly requires it; a quick targeted check is enough. Then report.",
+     "display": false,
+     "timestamp": 1793366667194
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "assistant",
+     "content": [],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "total": 0
+      }
+     },
+     "stopReason": "pending",
+     "timestamp": 1793366667216
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_start",
+     "contentIndex": 0,
+     "id": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+     "toolName": "bash"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "{\""
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "command"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "\":\""
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "rm"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": " -"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "rf"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": " ./"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "nothing"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "-h"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "ere"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "\",\""
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "timeout"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "\":"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "null"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_delta",
+     "contentIndex": 0,
+     "delta": "}"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "toolcall_end",
+     "contentIndex": 0,
+     "toolCall": {
+      "type": "toolCall",
+      "id": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+      "name": "bash",
+      "arguments": {
+       "command": "rm -rf ./nothing-here",
+       "timeout": null
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "toolCall",
+       "id": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+       "name": "bash",
+       "arguments": {
+        "command": "rm -rf ./nothing-here",
+        "timeout": null
+       }
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 178,
+      "output": 28,
+      "cacheRead": 7040,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "totalTokens": 7246,
+      "cost": {
+       "input": 1.7800000000000002e-05,
+       "output": 1.4e-05,
+       "cacheRead": 7.04e-05,
+       "cacheWrite": 0,
+       "total": 0.0001022
+      }
+     },
+     "stopReason": "toolUse",
+     "timestamp": 1793366667216,
+     "responseId": "resp_05f3be265c61a5dc016ae49a8bd3788195b7a1a7299e4ef2a3",
+     "rawStopReason": "completed",
+     "durationMs": 1984,
+     "thinkingLevel": "low"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "tool_execution_start",
+    "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+    "toolName": "bash",
+    "args": {
+     "command": "rm -rf ./nothing-here",
+     "timeout": null
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "a4cbdebf-e05c-46b6-8798-ef0d47fc2aae",
+    "method": "select",
+    "title": "Dangerous command: rm -rf ./nothing-here",
+    "options": [
+     "Allow",
+     "Block"
+    ]
+   }
+  },
+  {
+   "await": "ui",
+   "id": "a4cbdebf-e05c-46b6-8798-ef0d47fc2aae"
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "4791cd24-6c2e-4f82-9e12-515d084c9960",
+    "method": "notify",
+    "message": "Command allowed",
+    "notifyType": "info"
+   }
+  },
+  {
+   "out": {
+    "type": "tool_execution_update",
+    "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+    "toolName": "bash",
+    "args": {
+     "command": "rm -rf ./nothing-here",
+     "timeout": null
+    },
+    "partialResult": {
+     "content": []
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "tool_execution_end",
+    "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+    "toolName": "bash",
+    "result": {
+     "content": [
+      {
+       "type": "text",
+       "text": "(no output)"
+      }
+     ],
+     "structuredContent": {
+      "output": "",
+      "truncated": false,
+      "exit_code": 0,
+      "wall_time_seconds": 0.3
+     }
+    },
+    "isError": false,
+    "durationMs": 264
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "toolResult",
+     "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+     "toolName": "bash",
+     "content": [
+      {
+       "type": "text",
+       "text": "(no output)"
+      }
+     ],
+     "isError": false,
+     "durationMs": 264,
+     "timestamp": 1793366669469
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "toolResult",
+     "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+     "toolName": "bash",
+     "content": [
+      {
+       "type": "text",
+       "text": "(no output)"
+      }
+     ],
+     "isError": false,
+     "durationMs": 264,
+     "timestamp": 1793366669469
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "ea10f1d8-bb5d-4620-ad74-91cdb93eba8b",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 1 done"
+   }
+  },
+  {
+   "out": {
+    "type": "turn_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "toolCall",
+       "id": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+       "name": "bash",
+       "arguments": {
+        "command": "rm -rf ./nothing-here",
+        "timeout": null
+       }
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 178,
+      "output": 28,
+      "cacheRead": 7040,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "totalTokens": 7246,
+      "cost": {
+       "input": 1.7800000000000002e-05,
+       "output": 1.4e-05,
+       "cacheRead": 7.04e-05,
+       "cacheWrite": 0,
+       "total": 0.0001022
+      }
+     },
+     "stopReason": "toolUse",
+     "timestamp": 1793366667216,
+     "responseId": "resp_05f3be265c61a5dc016ae49a8bd3788195b7a1a7299e4ef2a3",
+     "rawStopReason": "completed",
+     "durationMs": 1984,
+     "thinkingLevel": "low"
+    },
+    "toolResults": [
+     {
+      "role": "toolResult",
+      "toolCallId": "call_aaebc4e352874997a2ae9e7487069139|fc_05f3be265c61a5dc016ae49a8cb0088195a4795bb5873bb4cf",
+      "toolName": "bash",
+      "content": [
+       {
+        "type": "text",
+        "text": "(no output)"
+       }
+      ],
+      "isError": false,
+      "durationMs": 264,
+      "timestamp": 1793366669469
+     }
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "18ef4984-c16e-4c7f-9ec2-c8f1769f1292",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 2 running..."
+   }
+  },
+  {
+   "out": {
+    "type": "turn_start"
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "assistant",
+     "content": [],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "total": 0
+      }
+     },
+     "stopReason": "pending",
+     "timestamp": 1793366669474
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_start",
+     "contentIndex": 0
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "ok"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_end",
+     "contentIndex": 0,
+     "content": "ok"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "ok",
+       "textSignature": "{\"v\":1,\"id\":\"msg_05f3be265c61a5dc016ae49a8e210881958cf78d34f3b9c7bb\",\"phase\":\"final_answer\"}"
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 220,
+      "output": 5,
+      "cacheRead": 7040,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "totalTokens": 7265,
+      "cost": {
+       "input": 2.2000000000000003e-05,
+       "output": 2.4999999999999998e-06,
+       "cacheRead": 7.04e-05,
+       "cacheWrite": 0,
+       "total": 9.49e-05
+      }
+     },
+     "stopReason": "stop",
+     "timestamp": 1793366669474,
+     "responseId": "resp_05f3be265c61a5dc016ae49a8d870881959cf534cf93e38331",
+     "rawStopReason": "completed",
+     "durationMs": 1204,
+     "thinkingLevel": "low"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "de0b3009-e471-4564-97ae-911ee4ee575b",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 2 done"
+   }
+  },
+  {
+   "out": {
+    "type": "turn_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "ok",
+       "textSignature": "{\"v\":1,\"id\":\"msg_05f3be265c61a5dc016ae49a8e210881958cf78d34f3b9c7bb\",\"phase\":\"final_answer\"}"
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 220,
+      "output": 5,
+      "cacheRead": 7040,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "totalTokens": 7265,
+      "cost": {
+       "input": 2.2000000000000003e-05,
+       "output": 2.4999999999999998e-06,
+       "cacheRead": 7.04e-05,
+       "cacheWrite": 0,
+       "total": 9.49e-05
+      }
+     },
+     "stopReason": "stop",
+     "timestamp": 1793366669474,
+     "responseId": "resp_05f3be265c61a5dc016ae49a8d870881959cf534cf93e38331",
+     "rawStopReason": "completed",
+     "durationMs": 1204,
+     "thinkingLevel": "low"
+    },
+    "toolResults": []
+   }
+  },
+  {
+   "out": {
+    "type": "agent_end",
+    "messages": [],
+    "willRetry": false
+   }
+  },
+  {
+   "out": {
+    "type": "agent_settled",
+    "aborted": false
+   }
+  }
+ ]
+}

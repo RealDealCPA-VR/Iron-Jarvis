@@ -1,0 +1,139 @@
+{
+ "harness": "pi",
+ "source": "recorded live 2026-10-30, pi 1.3.0, this PC, scratch folder (masked) — a model whose provider Pi is not signed in to (anthropic, no key)",
+ "steps": [
+  {
+   "await": "command",
+   "command": "get_state"
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "ebd2a8f1-74ee-44bb-a8bb-228c90fcce76",
+    "method": "setStatus",
+    "statusKey": "mode",
+    "statusText": "mode: manual"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "16505c5f-29f9-4f32-94c4-1c69693c6964",
+    "method": "setStatus",
+    "statusKey": "plan-mode"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "45419baf-504a-482b-935d-6010b5ded2b6",
+    "method": "setWidget",
+    "widgetKey": "plan-todos"
+   }
+  },
+  {
+   "out": {
+    "id": "s1",
+    "type": "response",
+    "command": "get_state",
+    "success": true,
+    "data": {
+     "model": {
+      "id": "claude-sonnet-4-5",
+      "name": "Claude Sonnet 4.5 (latest)",
+      "api": "anthropic-messages",
+      "provider": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "reasoning": true,
+      "input": [
+       "text",
+       "image"
+      ],
+      "cost": {
+       "input": 3,
+       "output": 15,
+       "cacheRead": 0.3,
+       "cacheWrite": 3.75
+      },
+      "contextWindow": 200000,
+      "maxTokens": 64000,
+      "compat": {
+       "supportsStrictTools": true
+      },
+      "promptCache": {
+       "short": 300,
+       "long": 3600
+      },
+      "inputLimits": {
+       "maxRequestBytes": 33554432,
+       "images": {
+        "maxPerRequest": 100,
+        "resize": {
+         "maxWidth": 2000,
+         "maxHeight": 2000,
+         "maxBytes": 4718592,
+         "jpegQuality": 80
+        }
+       }
+      },
+      "type": "chat"
+     },
+     "thinkingLevel": "medium",
+     "isStreaming": false,
+     "isCompacting": false,
+     "steeringMode": "one-at-a-time",
+     "followUpMode": "one-at-a-time",
+     "sessionId": "01a18cf1-aeac-758a-94e1-48797eea8dfc",
+     "autoCompactionEnabled": true,
+     "messageCount": 0,
+     "pendingMessageCount": 0
+    }
+   },
+   "reply_to_command": "get_state"
+  },
+  {
+   "await": "command",
+   "command": "get_commands"
+  },
+  {
+   "out": {
+    "type": "response",
+    "command": "get_commands",
+    "success": true,
+    "data": {
+     "commands": []
+    }
+   },
+   "reply_to_command": "get_commands"
+  },
+  {
+   "await": "command",
+   "command": "get_available_models"
+  },
+  {
+   "out": {
+    "type": "response",
+    "command": "get_available_models",
+    "success": true,
+    "data": {
+     "models": []
+    }
+   },
+   "reply_to_command": "get_available_models"
+  },
+  {
+   "await": "command",
+   "command": "prompt"
+  },
+  {
+   "out": {
+    "id": "p1",
+    "type": "response",
+    "command": "prompt",
+    "success": false,
+    "error": "No API key found for anthropic.\n\nUse /login to log into a provider via OAuth or API key. See:\n  C:\\Users\\me\\AppData\\Local\\pi-node\\current\\node_modules\\@earendil-works\\pi-coding-agent\\docs\\providers.md\n  C:\\Users\\me\\AppData\\Local\\pi-node\\current\\node_modules\\@earendil-works\\pi-coding-agent\\docs\\models.md"
+   },
+   "reply_to_command": "prompt"
+  }
+ ]
+}

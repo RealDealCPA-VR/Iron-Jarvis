@@ -17,13 +17,14 @@ from typing import Any
 from .events import clip, make
 
 #: harness id -> how a person names it.
-LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex"}
+LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi"}
 #: harness id -> the Iron Jarvis provider whose CLI it is.
 PROVIDERS: dict[str, str] = {"claude-code": "claude-cli", "codex": "codex-cli"}
-#: harness id -> the Iron-Proxy provider of its accounts.
+#: harness id -> the Iron-Proxy provider of its accounts. Pi has none: it
+#: signs in by itself, per model provider (its own `/login`).
 PROXY: dict[str, str] = {"claude-code": "anthropic", "codex": "openai"}
 #: harness id -> the Build terminal Launch id (``terminals/ai_clis``).
-CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex"}
+CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
 
 BUSY = (
     "This session is still working on your last message — wait for it to finish, "
@@ -41,6 +42,14 @@ POOL_FULL = (
 NO_SESSION_YET = "This session has no conversation yet — send a message first."
 RUNNING = "This session is working on a message — stop it or let it finish first."
 ACCOUNT_LIMIT_FIX = "Press Continue on another account, or wait until it resets."
+PI_OWN_SIGN_IN = (
+    "Pi signs in by itself, per model provider, so a Pi session has no account to choose — "
+    "type /login in Pi to change its sign-in."
+)
+PI_CONTINUE = (
+    "Pi signs in by itself, per model provider, so it has no other account to continue on — "
+    "choose another model instead."
+)
 CODEX_CONTINUE = (
     "Continue on another account works for Claude Code sessions only for now — "
     "open a new Codex session on the other account instead."

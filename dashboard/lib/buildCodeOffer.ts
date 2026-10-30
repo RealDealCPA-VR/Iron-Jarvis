@@ -20,7 +20,7 @@
 
 export interface CodeViewOffer {
   paneId: string;
-  /** "Claude Code" or "Codex". */
+  /** "Claude Code", "Codex" or "Pi". */
   toolName: string;
 }
 
@@ -29,6 +29,8 @@ function toolOf(cli: unknown): string | null {
   if (!c) return null;
   if (c === "claude" || c.startsWith("claude")) return "Claude Code";
   if (c === "codex" || c.startsWith("codex")) return "Codex";
+  // v1.411.0: Pi (exactly "pi" — never a word that starts with it).
+  if (c === "pi") return "Pi";
   return null;
 }
 

@@ -69,12 +69,15 @@ from .codex import HIDDEN_MODES as CODEX_HIDDEN
 from .codex import MODES as CODEX_MODES
 from .codex import CodexDriver
 from .driver import DECISIONS, Ask, AskRefused, ControlRefused, Driver
+from . import pi as P
+from .pi import HARNESS as PI
+from .pi import PiDriver
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
 log = logging.getLogger(__name__)
 
-HARNESSES: tuple[str, ...] = (CLAUDE, CODEX)
+HARNESSES: tuple[str, ...] = (CLAUDE, CODEX, PI)
 #: At most this many harness processes at once.
 MAX_LIVE = 6
 #: A process with no turn for this long is stopped by the reaper.
@@ -99,6 +102,7 @@ DISK_FILES = 500
 EFFORTS: dict[str, tuple[str, ...]] = {
     CLAUDE: ("low", "medium", "high", "xhigh", "max"),
     CODEX: ("minimal", "low", "medium", "high", "xhigh"),
+    PI: P.EFFORTS,
 }
 _MODEL_RX = re.compile(r"^[A-Za-z0-9._:/\-\[\]]{1,120}$")
 #: A harness session id typed into a terminal: a UUID (Claude) or Codex's
@@ -126,7 +130,26 @@ def same_folder(a: Any, b: Any) -> bool:
 
 
 def modes_for(harness: str) -> dict[str, Any]:
+    if harness == PI:
+        return P.MODES
     return CLAUDE_MODES if harness == CLAUDE else CODEX_MODES
+
+
+#: Every preset in the menu's order (the four shared ones, then Pi's own).
+MODE_ORDER: tuple[str, ...] = ("ask", "edits", "plan", "full", P.OWN)
+
+
+def mode_label(harness: str, mode: str) -> str:
+    """A preset's words for this tool ("Pi's own rules" is Pi's alone)."""
+    if harness == PI and mode in P.MODE_LABELS:
+        return P.MODE_LABELS[mode]
+    return MODE_LABELS.get(mode, mode)
+
+
+def default_mode(harness: str) -> str:
+    """The preset a new session starts in: Ask first, else the tool's first."""
+    modes = modes_for(harness)
+    return "ask" if "ask" in modes else next(iter(modes))
 
 
 #: How long a session's title from its first message may be.
@@ -146,24 +169,26 @@ def first_message_title(text: str) -> str:
 
 def mode_rows(harness: str) -> list[dict[str, Any]]:
     return [
-        {"id": m, "label": MODE_LABELS[m], "dangerous": m == "full"}
-        for m in ("ask", "edits", "plan", "full") if m in modes_for(harness)
+        {"id": m, "label": mode_label(harness, m), "dangerous": m == "full"}
+        for m in MODE_ORDER if m in modes_for(harness)
     ]
 
 
 def hidden_mode_rows(harness: str) -> list[dict[str, str]]:
     if harness == CLAUDE:
         return []
-    return [{"id": m, "label": MODE_LABELS[m], "reason": why} for m, why in CODEX_HIDDEN.items()]
+    hidden = P.HIDDEN_MODES if harness == PI else CODEX_HIDDEN
+    return [{"id": m, "label": MODE_LABELS.get(m, m), "reason": why} for m, why in hidden.items()]
 
 
 def check_mode(harness: str, mode: str, confirm: bool) -> str:
-    mode = str(mode or "ask").strip().lower()
+    mode = str(mode or default_mode(harness)).strip().lower()
     if mode not in modes_for(harness):
         hidden = dict((r["id"], r["reason"]) for r in hidden_mode_rows(harness))
         if mode in hidden:
             raise Refused(f"{MODE_LABELS.get(mode, mode)} is not offered for {W.label(harness)}: {hidden[mode]}", 400)
-        raise Refused(f'"{mode}" is not a mode — use ask, edits, plan or full.', 400)
+        offered = [m for m in MODE_ORDER if m in modes_for(harness)]
+        raise Refused(f'"{mode}" is not a mode {W.label(harness)} has — use {" or ".join(offered)}.', 400)
     if mode == "full" and not confirm:
         raise Refused(W.FULL_NEEDS_CONFIRM.format(label=W.label(harness)), 400)
     return mode
@@ -189,7 +214,9 @@ def check_effort(harness: str, effort: Any) -> str:
 # --------------------------------------------------------------------------- #
 def default_home(harness: str) -> str:
     """The CLI's own default home (this PC's login): the daemon's environment
-    variable, else ``~/.claude`` / ``~/.codex``."""
+    variable, else ``~/.claude`` / ``~/.codex`` / ``~/.pi/agent``."""
+    if harness == PI:
+        return str(P.agent_dir())
     if harness == CLAUDE:
         return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
@@ -207,7 +234,12 @@ def _conversation_files(harness: str, home: str) -> list[Path]:
     :data:`DISK_FILES` (a stat each; nothing is opened)."""
     root = Path(home)
     try:
-        if harness == CLAUDE:
+        if harness == PI:
+            # Pi keeps sessions in its own sessions folder (environment,
+            # setting, else under its config folder); the file NAME carries
+            # the id (``P.session_id_of``).
+            files = P.conversation_files(P.sessions_dir() if same_folder(home, P.agent_dir()) else root / "sessions")
+        elif harness == CLAUDE:
             files = [p for p in root.glob("projects/*/*.jsonl") if _SID_RX.match(p.stem)]
         else:
             files = list(root.glob("sessions/*/*/*/*.jsonl"))
@@ -236,7 +268,7 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
                 continue
         except OSError:
             continue
-        s = HI.summarize(harness, path)
+        s = P.summarize(path) if harness == PI else HI.summarize(harness, path)
         if s and same_folder(s.get("project"), folder):
             s["mtime"] = path.stat().st_mtime if path.exists() else 0
             out.append(s)
@@ -254,7 +286,7 @@ def pane_harness(pane: Any) -> str | None:
             cli = str(pane.activity().cli or "").lower()
         except Exception:  # noqa: BLE001
             cli = ""
-    return {"claude": CLAUDE, "codex": CODEX}.get(cli)
+    return {"claude": CLAUDE, "codex": CODEX, "pi": PI}.get(cli)
 
 
 def pane_exited(pane: Any) -> bool:
@@ -436,6 +468,8 @@ class HostedService:
         self._reaper: asyncio.Task | None = None
         self._closing = False
         self._pool_lock: asyncio.Lock | None = None
+        #: The model list a Pi process last said, kept for the next listing.
+        self._pi_catalog = self.home / "hosted" / "pi_models.json"
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -481,13 +515,18 @@ class HostedService:
         for h in HARNESSES:
             cli = W.CLI[h]
             installed = binary_for(h) is not None
-            with never_probe():
-                try:
-                    signed = DEFAULT_PROBE.verdict(cli)
-                except Exception:  # noqa: BLE001
-                    signed = None
+            signed = None
+            # Pi signs in by ITSELF, per provider (`/login`, its own auth
+            # file): there is no one verdict to read, and Iron-Proxy's
+            # accounts are other tools' homes. "Not known" is honest.
+            if h != PI:
+                with never_probe():
+                    try:
+                        signed = DEFAULT_PROBE.verdict(cli)
+                    except Exception:  # noqa: BLE001
+                        signed = None
             accounts = []
-            if snap is not None:
+            if snap is not None and h != PI:
                 for r in BA.vendor_rows(snap, "claude" if h == CLAUDE else "codex"):
                     accounts.append({"id": r["id"], "name": r["name"], "status": r["status"]})
             out.append({
@@ -501,12 +540,16 @@ class HostedService:
                 "models": self._models(h),
                 "efforts": list(EFFORTS[h]),
                 "accounts": accounts,
+                "own_sign_in": h == PI,
                 "commands": self.commands_for(h),
             })
         return out
 
     def _models(self, harness: str) -> list[dict[str, str]]:
         rows = [{"id": "", "label": f"{W.label(harness)}'s default"}]
+        if harness == PI:
+            # What a Pi process last listed (never a start just to ask).
+            rows += P.cached_models(self._pi_catalog)
         if harness == CLAUDE:
             try:
                 from ..providers import claude_models
@@ -560,7 +603,7 @@ class HostedService:
     async def create(self, body: dict[str, Any]) -> dict[str, Any]:
         harness = str(body.get("harness") or "").strip().lower()
         if harness not in HARNESSES:
-            raise Refused('Choose "claude-code" or "codex".', 400)
+            raise Refused('Choose "claude-code", "codex" or "pi".', 400)
         folder = str(body.get("folder") or "").strip()
         if not folder:
             raise Refused("Choose a folder for the session.", 400)
@@ -569,12 +612,14 @@ class HostedService:
         problem = await asyncio.to_thread(root_problem, folder)
         if problem:
             raise Refused(problem, 400)
-        mode = check_mode(harness, body.get("mode") or "ask", bool(body.get("confirm")))
+        mode = check_mode(harness, body.get("mode") or default_mode(harness), bool(body.get("confirm")))
         model = check_model(body.get("model"))
         effort = check_effort(harness, body.get("effort"))
         resume_id = str(body.get("harness_session_id") or "").strip()
         title = clip(body.get("title") or "", 120)
         account = str(body.get("account") or "").strip()
+        if account and harness == PI:
+            raise Refused(W.PI_OWN_SIGN_IN, 400)
         acc = await asyncio.to_thread(self._resolve_account, harness, account)
         if resume_id:
             held = await asyncio.to_thread(self._holder, harness, resume_id)
@@ -599,7 +644,9 @@ class HostedService:
         first free account from the CACHED snapshot, else this PC's login)."""
         from ..terminals import pane_accounts as PA
 
-        provider = W.PROXY[harness]
+        provider = W.PROXY.get(harness)
+        if provider is None:  # Pi: its own sign-in, never an Iron-Proxy account
+            return {}
         svc = getattr(self.platform, "iron_proxy", None)
         request = {provider: account} if account else {}
         try:
@@ -612,7 +659,7 @@ class HostedService:
     def _account_for_listing(self, harness: str, account: str) -> dict[str, Any]:
         """BLOCKING: the account a disk listing reads (the CACHED snapshot —
         never a call): "" or "default" = this PC's login."""
-        if not account or account == "default":
+        if not account or account == "default" or harness not in W.PROXY:
             return {}
         from ..harness import build_accounts as BA
 
@@ -718,16 +765,23 @@ class HostedService:
                     raise Refused(str(exc)) from None
             else:
                 applied["model"] = "next"
-                if live and live.running and row.harness == CLAUDE:
+                if live and live.running and row.harness in (CLAUDE, PI):
                     live.restart = True  # back to the CLI's default: a restart
             fields["model"] = model
         if body.get("effort") is not None:
             effort = check_effort(row.harness, body["effort"])
-            if live and live.driver:
+            applied["effort"] = "next"
+            set_effort = getattr(live.driver, "set_effort", None) if live and live.running and live.driver else None
+            if set_effort is not None:
+                # Pi changes its thinking level live (`set_thinking_level`).
+                try:
+                    applied["effort"] = await set_effort(effort)
+                except ControlRefused as exc:
+                    raise Refused(str(exc)) from None
+            elif live and live.driver:
                 live.driver.effort = effort
             if row.harness == CLAUDE and live and live.running:
                 live.restart = True  # --effort is read at start only
-            applied["effort"] = "next"
             fields["effort"] = effort
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
@@ -808,11 +862,15 @@ class HostedService:
 
         loop = asyncio.get_running_loop()
         acc = store.account_record(row)
-        accounts = PA.from_recorded({W.PROXY[row.harness]: acc})[0] if acc else None
+        accounts = PA.from_recorded({W.PROXY[row.harness]: acc})[0] if acc and row.harness in W.PROXY else None
         env = build_env(accounts)
+        if row.harness == PI:
+            env = P.child_env(env)  # a parent Pi session's markers never cross
         resume = bool(row.harness_session_id)
-        sid = row.harness_session_id or (str(uuid.uuid4()) if row.harness == CLAUDE else "")
-        cls = ClaudeDriver if row.harness == CLAUDE else CodexDriver
+        # Claude Code and Pi take the id to save under (`--session-id`): minted
+        # here, so the row names the conversation before it starts.
+        sid = row.harness_session_id or (str(uuid.uuid4()) if row.harness in (CLAUDE, PI) else "")
+        cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver}[row.harness]
         proc_holder: dict[str, HarnessProcess] = {}
 
         async def write(obj: dict[str, Any]) -> None:
@@ -826,6 +884,9 @@ class HostedService:
             on_session_id=lambda s: self._on_session_id(live, s),
             mode=row.mode, model=row.model, effort=row.effort, cwd=row.folder,
         )
+        if isinstance(driver, PiDriver):
+            driver.catalog_path = self._pi_catalog
+            driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
         proc = HarnessProcess(
             argv0 + driver.argv(session_id=sid, resume=resume), env=env, cwd=row.folder,
             name=f"hosted-{row.id}",
@@ -873,7 +934,9 @@ class HostedService:
         turn = live.turn
         if turn is not None and turn.running and not turn.ending and not proc.stopped:
             technical = proc.stderr_text() or f"exit code {code}"
-            ev = W.failure_for(live.harness, technical)
+            # Pi signs in by itself and has no accounts to move between: its
+            # own words, never the other tools' sign-in or account presses.
+            ev = P.failure_event(technical) if live.harness == PI else W.failure_for(live.harness, technical)
             ev["title"] = W.GONE_DURING_TURN.format(label=W.label(live.harness))
             self._emit(live, ev)
             asyncio.ensure_future(self._end_turn(live, "failed"))
@@ -945,6 +1008,11 @@ class HostedService:
         """Every open card closes when its process goes (nobody can answer it)."""
         for ask_id in list(live.asks):
             live.asks.pop(ask_id, None)
+            self._emit(live, make("resolved", request_id=ask_id, decision="expired"))
+
+    def _forget_ask(self, live: LiveSession, ask_id: str) -> None:
+        """One card the tool stopped waiting for (a Pi dialog that timed out)."""
+        if live.asks.pop(ask_id, None) is not None:
             self._emit(live, make("resolved", request_id=ask_id, decision="expired"))
 
     def _ask(self, live: LiveSession, ask: Ask) -> None:
@@ -1243,7 +1311,13 @@ class HostedService:
         cli = W.CLI[row.harness]
         entry = launch_entry(cli) or {"command": cli}
         acc = store.account_record(row)
-        accounts = PA.from_recorded({W.PROXY[row.harness]: acc})[0] if acc else PA.PaneAccounts()
+        accounts = (PA.from_recorded({W.PROXY[row.harness]: acc})[0] if acc and row.harness in W.PROXY
+                    else PA.PaneAccounts())
+        if row.harness == PI:
+            # Pi's own way back into a saved session: `--session <id>`.
+            command = f"{entry['command']} --session {hid}"
+            return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
+                               accounts=accounts, command=command)
         if row.harness == CLAUDE:
             command = f"{entry['command']} --resume {hid}"
             return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
@@ -1272,7 +1346,7 @@ class HostedService:
         row = await asyncio.to_thread(
             store.create, self.engine, harness=harness, folder=str(pane.cwd or ""),
             title=title or "From a terminal", account=str(acc.get("id") or ""),
-            account_json=json.dumps(acc) if acc else "", mode="ask", harness_session_id=hid,
+            account_json=json.dumps(acc) if acc else "", mode=default_mode(harness), harness_session_id=hid,
         )
         return store.view(row)
 
@@ -1285,13 +1359,14 @@ class HostedService:
         among several."""
         harness = pane_harness(pane)
         if harness is None:
-            raise Refused("This terminal is not running Claude Code or Codex.")
+            raise Refused("This terminal is not running Claude Code, Codex or Pi.")
         if not pane_exited(pane):
             raise Refused(
                 f"{W.label(harness)} is still running in this terminal — exit it there first "
                 "(type /exit), then open it in the Code view."
             )
-        acc = (getattr(pane, "accounts", None) or {}).get(W.PROXY[harness]) or {}
+        proxy = W.PROXY.get(harness)  # Pi: none (its own sign-in)
+        acc = ((getattr(pane, "accounts", None) or {}).get(proxy) or {}) if proxy else {}
         acc = {k: v for k, v in dict(acc).items() if k in ("id", "title", "source", "home", "unset", "note")}
         hid = str(getattr(pane, "claude_session_id", None) or "") if harness == CLAUDE else ""
         title = ""
@@ -1310,7 +1385,7 @@ class HostedService:
     async def continue_on(self, sid: str, account: str = "") -> dict[str, Any]:
         row = await self._row(sid)
         if row.harness != CLAUDE:
-            raise Refused(W.CODEX_CONTINUE)
+            raise Refused(W.PI_CONTINUE if row.harness == PI else W.CODEX_CONTINUE)
         if not row.harness_session_id:
             raise Refused(W.NO_SESSION_YET)
         live = self._live(row)

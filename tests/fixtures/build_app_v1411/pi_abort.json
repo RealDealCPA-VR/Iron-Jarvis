@@ -1,0 +1,732 @@
+{
+ "harness": "pi",
+ "source": "recorded live 2026-10-30, pi 1.3.0, this PC, scratch folder (masked) — Stop while it answers",
+ "steps": [
+  {
+   "await": "command",
+   "command": "get_state"
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "71186072-c61f-4e7c-be7d-cfc752106efa",
+    "method": "setTitle",
+    "title": "pi RPC Demo"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "32f5c8aa-a5df-439a-9680-b64a6dc832fb",
+    "method": "setWidget",
+    "widgetKey": "rpc-demo",
+    "widgetLines": [
+     "--- RPC Extension UI Demo ---",
+     "Loaded and ready."
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "852708ff-302a-4bd6-ace7-fe0b0042a320",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turns: 0"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "948ae63b-e3e0-4a89-a68f-321fce0e485d",
+    "method": "setStatus",
+    "statusKey": "mode",
+    "statusText": "mode: manual"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "b1443c0c-cdd1-408d-be02-5b1573fedfd7",
+    "method": "setStatus",
+    "statusKey": "plan-mode"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "b5ebcf22-9698-435d-bbc7-6691a74e7698",
+    "method": "setWidget",
+    "widgetKey": "plan-todos"
+   }
+  },
+  {
+   "out": {
+    "id": "s1",
+    "type": "response",
+    "command": "get_state",
+    "success": true,
+    "data": {
+     "model": {
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "api": "openai-codex-responses",
+      "provider": "openai-codex",
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "reasoning": true,
+      "input": [
+       "text",
+       "image"
+      ],
+      "cost": {
+       "input": 0.1,
+       "output": 0.5,
+       "cacheRead": 0.01,
+       "cacheWrite": 0.125,
+       "tiers": [
+        {
+         "inputTokensAbove": 272000,
+         "input": 0.2,
+         "output": 0.75,
+         "cacheRead": 0.02,
+         "cacheWrite": 0.25
+        }
+       ]
+      },
+      "contextWindow": 272000,
+      "maxTokens": 128000,
+      "thinkingLevelMap": {
+       "off": "none",
+       "minimal": "low",
+       "low": "low",
+       "medium": "medium",
+       "high": "high",
+       "xhigh": "xhigh",
+       "max": "max"
+      },
+      "compat": {
+       "supportsOpenAIGrammarTools": true,
+       "supportsAdditionalTools": true,
+       "supportsToolSearch": true,
+       "supportsMidConvoSystemMessages": true
+      },
+      "inputLimits": {
+       "images": {
+        "resize": {
+         "maxWidth": 2000,
+         "maxHeight": 2000,
+         "maxBytes": 4718592,
+         "jpegQuality": 80
+        }
+       }
+      },
+      "type": "chat"
+     },
+     "thinkingLevel": "medium",
+     "isStreaming": false,
+     "isCompacting": false,
+     "steeringMode": "one-at-a-time",
+     "followUpMode": "one-at-a-time",
+     "sessionFile": "C:\\Users\\me\\.pi\\agent\\sessions\\--C--work-demo--\\2026-10-30T13-12-13-190Z_46a90daa-be98-49b6-9f0a-e43db9c81108.jsonl",
+     "sessionId": "46a90daa-be98-49b6-9f0a-e43db9c81108",
+     "autoCompactionEnabled": true,
+     "messageCount": 0,
+     "pendingMessageCount": 0
+    }
+   },
+   "reply_to_command": "get_state"
+  },
+  {
+   "await": "command",
+   "command": "get_commands"
+  },
+  {
+   "out": {
+    "id": "c1",
+    "type": "response",
+    "command": "get_commands",
+    "success": true,
+    "data": {
+     "commands": [
+      {
+       "name": "rpc-input",
+       "description": "Prompt for text input (demonstrates ctx.ui.input in RPC)",
+       "source": "extension",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\.pi\\agent\\extensions\\example.ts",
+        "source": "local",
+        "scope": "user",
+        "origin": "top-level"
+       }
+      },
+      {
+       "name": "plan",
+       "description": "Toggle plan mode (read-only exploration)",
+       "source": "extension",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\.pi\\agent\\extensions\\example.ts",
+        "source": "local",
+        "scope": "user",
+        "origin": "top-level"
+       }
+      },
+      {
+       "name": "todos",
+       "description": "Show current plan todo list",
+       "source": "extension",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\.pi\\agent\\extensions\\example.ts",
+        "source": "local",
+        "scope": "user",
+        "origin": "top-level"
+       }
+      },
+      {
+       "name": "implement",
+       "description": "Full implementation workflow - scout gathers context, planner creates plan, worker implements",
+       "source": "prompt",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\.pi\\agent\\extensions\\example.ts",
+        "source": "local",
+        "scope": "user",
+        "origin": "top-level"
+       }
+      },
+      {
+       "name": "scout-and-plan",
+       "description": "Scout gathers context, planner creates implementation plan (no implementation)",
+       "source": "prompt",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\.pi\\agent\\extensions\\example.ts",
+        "source": "local",
+        "scope": "user",
+        "origin": "top-level"
+       }
+      }
+     ]
+    }
+   },
+   "reply_to_command": "get_commands"
+  },
+  {
+   "await": "command",
+   "command": "get_available_models"
+  },
+  {
+   "out": {
+    "id": "m1",
+    "type": "response",
+    "command": "get_available_models",
+    "success": true,
+    "data": {
+     "models": [
+      {
+       "id": "gpt-6-astra",
+       "name": "GPT-6 Astra",
+       "api": "openai-codex-responses",
+       "provider": "openai-codex",
+       "baseUrl": "https://chatgpt.com/backend-api",
+       "reasoning": true,
+       "input": [
+        "text",
+        "image"
+       ],
+       "cost": {
+        "input": 10,
+        "output": 50,
+        "cacheRead": 1,
+        "cacheWrite": 12.5,
+        "tiers": [
+         {
+          "inputTokensAbove": 272000,
+          "input": 20,
+          "output": 75,
+          "cacheRead": 2,
+          "cacheWrite": 25
+         }
+        ]
+       },
+       "contextWindow": 272000,
+       "maxTokens": 128000,
+       "thinkingLevelMap": {
+        "off": null,
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+       },
+       "compat": {
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true
+       },
+       "inputLimits": {
+        "images": {
+         "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+         }
+        }
+       },
+       "type": "chat"
+      },
+      {
+       "id": "gpt-6-luna",
+       "name": "GPT-6 Luna",
+       "api": "openai-codex-responses",
+       "provider": "openai-codex",
+       "baseUrl": "https://chatgpt.com/backend-api",
+       "reasoning": true,
+       "input": [
+        "text",
+        "image"
+       ],
+       "cost": {
+        "input": 0.1,
+        "output": 0.5,
+        "cacheRead": 0.01,
+        "cacheWrite": 0.125,
+        "tiers": [
+         {
+          "inputTokensAbove": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cacheRead": 0.02,
+          "cacheWrite": 0.25
+         }
+        ]
+       },
+       "contextWindow": 272000,
+       "maxTokens": 128000,
+       "thinkingLevelMap": {
+        "off": "none",
+        "minimal": "low",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max"
+       },
+       "compat": {
+        "supportsOpenAIGrammarTools": true,
+        "supportsAdditionalTools": true,
+        "supportsToolSearch": true,
+        "supportsMidConvoSystemMessages": true
+       },
+       "inputLimits": {
+        "images": {
+         "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+         }
+        }
+       },
+       "type": "chat"
+      },
+      {
+       "id": "fleet",
+       "name": "GLM 5.3-Flash (local via Fleet)",
+       "api": "openai-completions",
+       "provider": "local-models",
+       "baseUrl": "http://127.0.0.1:4000/v1",
+       "reasoning": false,
+       "input": [
+        "text"
+       ],
+       "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+       },
+       "contextWindow": 980000,
+       "maxTokens": 65536,
+       "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+       }
+      }
+     ]
+    }
+   },
+   "reply_to_command": "get_available_models"
+  },
+  {
+   "await": "command",
+   "command": "prompt"
+  },
+  {
+   "out": {
+    "id": "p4",
+    "type": "response",
+    "command": "prompt",
+    "success": true,
+    "data": {
+     "disposition": "started"
+    }
+   },
+   "reply_to_command": "prompt"
+  },
+  {
+   "out": {
+    "type": "agent_start"
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "dc9280c3-6248-440c-bae0-8236836727bd",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 7 running..."
+   }
+  },
+  {
+   "out": {
+    "type": "turn_start"
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Count from 1 to 300, one number per line, nothing else."
+      }
+     ],
+     "timestamp": 1793365944895
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Count from 1 to 300, one number per line, nothing else."
+      }
+     ],
+     "timestamp": 1793365944895
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "custom",
+     "customType": "harness-policy",
+     "content": "Harness policy (thinking: LOW) — EXECUTE ONCE. Make the change in one pass. Do not run a full verification suite unless the task explicitly requires it; a quick targeted check is enough. Then report.",
+     "display": false,
+     "timestamp": 1793365944895
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "custom",
+     "customType": "harness-policy",
+     "content": "Harness policy (thinking: LOW) — EXECUTE ONCE. Make the change in one pass. Do not run a full verification suite unless the task explicitly requires it; a quick targeted check is enough. Then report.",
+     "display": false,
+     "timestamp": 1793365944895
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_start",
+    "message": {
+     "role": "assistant",
+     "content": [],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "total": 0
+      }
+     },
+     "stopReason": "pending",
+     "timestamp": 1793365944900
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_start",
+     "contentIndex": 0
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "1"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "\n"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "2"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "\n"
+    }
+   }
+  },
+  {
+   "await": "command",
+   "command": "abort"
+  },
+  {
+   "out": {
+    "type": "message_update",
+    "usage": {
+     "input": 0,
+     "output": 0,
+     "cacheRead": 0,
+     "cacheWrite": 0,
+     "totalTokens": 0,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+     }
+    },
+    "assistantMessageEvent": {
+     "type": "text_delta",
+     "contentIndex": 0,
+     "delta": "3"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "message_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "1\n2\n3"
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "total": 0
+      }
+     },
+     "stopReason": "aborted",
+     "timestamp": 1793365944900,
+     "responseId": "resp_05f3be265c61a5dc016ae497b8d6608195b929830c27a89819",
+     "errorMessage": "Request was aborted",
+     "durationMs": 1527,
+     "thinkingLevel": "low"
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "extension_ui_request",
+    "id": "562b4607-2eec-46af-8c3a-ea615eac36a3",
+    "method": "setStatus",
+    "statusKey": "rpc-demo",
+    "statusText": "Turn 7 done"
+   }
+  },
+  {
+   "out": {
+    "type": "turn_end",
+    "message": {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "1\n2\n3"
+      }
+     ],
+     "api": "openai-codex-responses",
+     "provider": "openai-codex",
+     "model": "gpt-6-luna",
+     "usage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "totalTokens": 0,
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0,
+       "total": 0
+      }
+     },
+     "stopReason": "aborted",
+     "timestamp": 1793365944900,
+     "responseId": "resp_05f3be265c61a5dc016ae497b8d6608195b929830c27a89819",
+     "errorMessage": "Request was aborted",
+     "durationMs": 1527,
+     "thinkingLevel": "low"
+    },
+    "toolResults": []
+   }
+  },
+  {
+   "out": {
+    "type": "agent_end",
+    "messages": [],
+    "willRetry": false
+   }
+  },
+  {
+   "out": {
+    "type": "agent_settled",
+    "aborted": true
+   }
+  },
+  {
+   "out": {
+    "id": "a1",
+    "type": "response",
+    "command": "abort",
+    "success": true
+   },
+   "reply_to_command": "abort"
+  }
+ ]
+}

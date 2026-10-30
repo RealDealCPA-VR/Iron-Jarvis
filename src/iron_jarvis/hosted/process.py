@@ -36,7 +36,7 @@ from ..core import procs
 log = logging.getLogger(__name__)
 
 #: harness id -> the command it is started with.
-BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex"}
+BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
 
 #: How long a graceful stop waits for the harness to exit on its own.
 EXIT_GRACE_S = 3.0
@@ -51,6 +51,13 @@ def binary_for(harness: str) -> list[str] | None:
     installed. THE chokepoint tests replace."""
     name = BINARIES.get(harness)
     exe = shutil.which(name) if name else None
+    if exe is None and name == "pi":
+        # Pi's installer puts pi.cmd in %LOCALAPPDATA%\pi-node\current and
+        # adds it to the USER PATH, which a daemon started before the install
+        # never sees — the Launch menu's own lookup (``ai_clis._find``).
+        from ..terminals.ai_clis import _find
+
+        exe = _find(name)
     return [exe] if exe else None
 
 

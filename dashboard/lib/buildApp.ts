@@ -214,6 +214,9 @@ export interface CodingTool {
   id: string;
   label: string;
   installed: boolean;
+  /** v1.411.0: the tool signs in BY ITSELF (Pi: per model provider, its own
+   *  `/login`) — no account to choose; the chip says "Pi's own sign-in". */
+  ownSignIn: boolean;
   /** null = not known (the daemon never starts a check to find out). */
   signedIn: boolean | null;
   version: string;
@@ -232,6 +235,7 @@ export function toolLabel(id: string, tools?: readonly CodingTool[] | null): str
   if (t?.label) return t.label;
   if (id === "claude-code") return "Claude Code";
   if (id === "codex") return "Codex";
+  if (id === "pi") return "Pi";
   return id || "Coding tool";
 }
 
@@ -287,6 +291,7 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       id,
       label: str(r.label, 80) || toolLabel(id),
       installed: r.installed === true,
+      ownSignIn: r.own_sign_in === true,
       signedIn: r.signed_in === true ? true : r.signed_in === false ? false : null,
       version: str(r.version, 60),
       modes,
@@ -422,11 +427,27 @@ export function groupByFolder(sessions: readonly CodeSession[], opts: { archived
 
 /** The account a session runs on, in words. */
 export function accountWords(s: Pick<CodeSession, "account" | "accountName" | "tool">, tools?: readonly CodingTool[] | null): string {
-  if (!s.account) return "this PC's sign-in";
+  if (!s.account) return signsInItself(s.tool, tools) ? ownSignInWords(s.tool, tools) : "this PC's sign-in";
   if (s.accountName) return s.accountName;
   const t = tools?.find((x) => x.id === s.tool);
   return t?.accounts.find((a) => a.id === s.account)?.name || s.account;
 }
+
+/** v1.411.0: does this tool sign in by itself (Pi)? The daemon's word, else
+ *  Pi by name (a list not read yet). */
+export function signsInItself(tool: string, tools?: readonly CodingTool[] | null): boolean {
+  const t = tools?.find((x) => x.id === tool);
+  return t ? t.ownSignIn : tool === "pi";
+}
+
+/** "Pi's own sign-in". */
+export function ownSignInWords(tool: string, tools?: readonly CodingTool[] | null): string {
+  return `${toolLabel(tool, tools)}'s own sign-in`;
+}
+
+/** What the chip's title says about a tool that signs in by itself. */
+export const OWN_SIGN_IN_TITLE =
+  "Pi signs in by itself, per model provider: type /login in Pi to change it. Iron Jarvis's accounts do not apply.";
 
 /** A session row's second line: which tool, on which account. */
 export function sessionRowLine(s: CodeSession, tools?: readonly CodingTool[] | null): string {
@@ -443,6 +464,8 @@ const MODE_WORDS: Record<string, string> = {
   edits: "Auto edits",
   plan: "Plan",
   full: "Full access",
+  // v1.411.0: a tool that has ONE mode, its own (Pi asks nothing itself).
+  own: "Its own rules",
 };
 
 /** A mode's words: the tool's own list, else the daemon's four names —
