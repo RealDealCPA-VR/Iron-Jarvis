@@ -377,6 +377,19 @@ class ClaudeDriver(Driver):
         })
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
+        await self.write(self.prepare_answer(ask, decision, message, answers))
+        self.answered(ask, decision)
+        return decision
+
+    def answered(self, ask: Ask, decision: str) -> None:
+        """The answer reached Claude Code: a session-wide allow that set a mode
+        is now this session's mode."""
+        if decision == "allow_session" and ask.data.get("sets_mode"):
+            self.mode = ask.data["sets_mode"]
+
+    def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
+        """The ``control_response`` for the user's answer — or AskRefused,
+        before anything is sent."""
         inp = dict(ask.data.get("input") or {})
         if ask.kind == "question":
             if decision == "deny":
@@ -391,15 +404,12 @@ class ClaudeDriver(Driver):
             if not sugg:
                 raise AskRefused("Claude Code offers no session-wide allow for this one — allow it once.")
             resp = {"behavior": "allow", "updatedInput": inp, "updatedPermissions": sugg}
-            if ask.data.get("sets_mode"):
-                self.mode = ask.data["sets_mode"]
         else:
             resp = {"behavior": "allow", "updatedInput": inp}
-        await self.write({
+        return {
             "type": "control_response",
             "response": {"subtype": "success", "request_id": ask.native, "response": resp},
-        })
-        return decision
+        }
 
     async def interrupt(self) -> None:
         self._interrupting = True

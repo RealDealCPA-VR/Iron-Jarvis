@@ -203,6 +203,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Claude Code now runs in Auto edits for the rest of this session (you chose Allow for this session).",
+    "turn": "turn-1"
+   },
+   {
     "type": "tool",
     "item": "toolu_01KATgkcH3RU75uFi9t5ry1W",
     "kind": "write",
@@ -237,11 +242,6 @@
     "type": "text",
     "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
     "delta": " bytes). I created `",
-    "turn": "turn-1"
-   },
-   {
-    "type": "notice",
-    "text": "Claude Code now runs in Auto edits for the rest of this session (you chose Allow for this session).",
     "turn": "turn-1"
    },
    {

@@ -1064,19 +1064,35 @@ class HostedService:
         # CLAIMED before the await: a second answer to this card finds nothing.
         live.asks.pop(rid, None)
         driver = live.driver
+        message = clip(message or "", 2000)
+        prepare = getattr(driver, "prepare_answer", None)
         try:
-            await driver.answer(ask, decision, clip(message or "", 2000), answers)
+            if prepare is None:  # a driver with one step (tests)
+                await driver.answer(ask, decision, message, answers)
+                payload = None
+            else:
+                # Built (and refused) BEFORE anything is sent or said.
+                payload = prepare(ask, decision, message, answers)
         except AskRefused as exc:
             live.asks[rid] = ask  # still waiting: the answer did not reach the harness
             raise Refused(str(exc), 400) from None
         except HarnessGone:
             raise Refused("The session stopped before your answer reached it.", 409) from None
+        # Said BEFORE the answer is sent, so the card closes ahead of whatever
+        # the harness does next (its frames arrive only after it reads this).
         self._emit(live, make("resolved", request_id=ask.id, decision=decision))
         new_mode = ask.data.get("sets_mode") if decision == "allow_session" else None
         if new_mode:
-            await asyncio.to_thread(store.update, self.engine, sid, mode=new_mode)
             self._emit(live, make("notice", text=W.MODE_FROM_SESSION_ALLOW.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
+        if payload is not None:
+            try:
+                await driver.write(payload)
+            except HarnessGone:
+                raise Refused("The session stopped before your answer reached it.", 409) from None
+            driver.answered(ask, decision)
+        if new_mode:
+            await asyncio.to_thread(store.update, self.engine, sid, mode=new_mode)
         return {"ok": True, "request_id": ask.id, "decision": decision}
 
     async def interrupt(self, sid: str) -> dict[str, Any]:
