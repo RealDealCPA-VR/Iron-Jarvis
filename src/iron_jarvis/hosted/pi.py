@@ -35,8 +35,10 @@ MEASURED on this PC (pi 1.3.0, live, in scratch folders; the recordings are
   ``{"confirmed": true|false}``), ``select`` / ``input`` / ``editor``
   (``{"value": …}``), or ``{"cancelled": true}``. A ``tool_call`` hook's
   confirm arrives AFTER that tool's ``tool_execution_start`` (measured with a
-  gate extension: start → confirm → end), so a confirm while a tool runs is
-  drawn as an approval OF THAT TOOL (its title, command, path, diff). The
+  gate extension: start → confirm → end), so a confirm while ONE tool runs
+  is drawn as an approval OF THAT TOOL (its title, command, path, diff); with
+  several running (Pi's parallel tool mode starts them all first) nobody can
+  tell which, and the card says the dialog's own words. The
   user's own extensions here ask through ``select`` / ``editor`` (plan mode's
   "what next?") and ``confirm`` (subagent's "Run project-local agents?");
   none gates tools by default. ``notify`` becomes a ``notice``; ``setStatus``
@@ -51,9 +53,15 @@ MEASURED on this PC (pi 1.3.0, live, in scratch folders; the recordings are
   when missing (stderr: "No project session found with id …; creating a new
   session with that id"), so the same argv starts AND resumes; ids are
   UUID-shaped (Pi mints UUIDv7). Files live in
-  ``<sessions dir>/--<folder>--/<timestamp>_<id>.jsonl`` (header line
-  ``{"type": "session", "id", "cwd", "timestamp"}``). In a terminal ``pi
-  --session <id>`` opens it.
+  ``~/.pi/agent/sessions/--<folder>--/<timestamp>_<id>.jsonl`` by default,
+  but FLAT in a ``sessionDir`` (the setting, a project's own
+  ``.pi/settings.json`` over the global one, or
+  ``PI_CODING_AGENT_SESSION_DIR``) — header line ``{"type": "session", "id",
+  "cwd", "timestamp"}``. In a terminal ``pi --session <id>`` opens it.
+* RUNS belong to a message: the one whose prompt is waiting when
+  ``agent_start`` comes owns it, and only its ``agent_settled`` ends that
+  turn. A run an extension starts by itself (or after the handled grace) is
+  nobody's: the session stays busy until it settles.
 * ``set_model {provider, modelId}`` applies live (``"Model not found: x/y"``
   refused); ``set_thinking_level`` applies live (``thinking_level_changed``);
   a model without reasoning answers success and stays ``off``.
@@ -147,8 +155,21 @@ _TODO_TOOLS = {"todo", "todos", "todo_write"}
 _SIGN_IN_RX = re.compile(r"no api key found|use /login|not logged in|\b401\b|unauthori[sz]ed|"
                          r"invalid api key|authentication (?:failed|error)|oauth.*(?:expired|refresh)", re.I)
 _LIMIT_RX = re.compile(r"usage limit|rate limit|\b429\b|quota|too many requests", re.I)
+#: Pi's refusal of a prompt while a run is going (agent-session.js).
+_BUSY_RX = re.compile(r"already processing", re.I)
+#: How many of a select's choices a card shows.
+MAX_CHOICES = 20
 SIGN_IN_FIX = ("Open Pi in a terminal and type /login to sign in to that model's provider, "
                "or choose another model.")
+
+
+class PiStillWorking(ControlRefused):
+    """A message while Pi runs something no message owns (said in words)."""
+
+
+def _choice_label(option: Any) -> str:
+    """A select choice as the card shows it (and the answer comes back)."""
+    return clip(option, 120)
 LIMIT_FIX = "Wait until it resets, or choose another model."
 OTHER_FIX = "Send the message again. If it happens again, choose another model for this session."
 
@@ -168,24 +189,36 @@ def agent_dir() -> Path:
     return Path(os.path.expanduser(env)) if env else Path.home() / ".pi" / "agent"
 
 
-def sessions_dir() -> Path:
-    """Where Pi saves sessions: ``PI_CODING_AGENT_SESSION_DIR``, else the
-    ``sessionDir`` setting, else ``<agent dir>/sessions``. BLOCKING (reads
-    settings.json, bounded)."""
-    env = (os.environ.get("PI_CODING_AGENT_SESSION_DIR") or "").strip()
-    if env:
-        return Path(os.path.expanduser(env))
-    base = agent_dir()
+def _setting_session_dir(path: Path, base: Path) -> Path | None:
+    """The ``sessionDir`` one Pi settings file names (relative to ``base``,
+    as Pi resolves it against the folder it runs in), else None."""
     try:
-        path = base / "settings.json"
         if path.is_file() and path.stat().st_size < 1_000_000:
             data = json.loads(path.read_text(encoding="utf-8"))
             value = data.get("sessionDir") if isinstance(data, dict) else None
             if isinstance(value, str) and value.strip():
-                return Path(os.path.expanduser(value.strip()))
+                got = Path(os.path.expanduser(value.strip()))
+                return got if got.is_absolute() else base / got
     except (OSError, ValueError):
         pass
-    return base / "sessions"
+    return None
+
+
+def sessions_dir(folder: str | os.PathLike[str] = "") -> Path:
+    """Where Pi saves sessions for a process started in ``folder`` — Pi's own
+    order (main.js): ``PI_CODING_AGENT_SESSION_DIR``, else the ``sessionDir``
+    setting with the PROJECT's ``<folder>/.pi/settings.json`` over the global
+    one, else ``<agent dir>/sessions``. BLOCKING (reads settings, bounded)."""
+    env = (os.environ.get("PI_CODING_AGENT_SESSION_DIR") or "").strip()
+    if env:
+        return Path(os.path.expanduser(env))
+    base = agent_dir()
+    if folder:
+        got = _setting_session_dir(Path(folder) / ".pi" / "settings.json", Path(folder))
+        if got is not None:
+            return got
+    got = _setting_session_dir(base / "settings.json", Path(folder) if folder else Path.cwd())
+    return got if got is not None else base / "sessions"
 
 
 def session_id_of(path: Path) -> str:
@@ -195,11 +228,44 @@ def session_id_of(path: Path) -> str:
 
 
 def conversation_files(root: Path) -> list[Path]:
-    """BLOCKING: Pi's session files under ``root`` (one folder per project)."""
+    """BLOCKING: Pi's session files under ``root``, in BOTH of Pi's layouts:
+    the default ``~/.pi/agent/sessions`` keeps one ``--<folder>--`` subfolder
+    per project, while a ``sessionDir`` (setting or
+    ``PI_CODING_AGENT_SESSION_DIR``) holds them FLAT (session-manager.js
+    ``create``/``findById``) — a flat file is matched to its folder by its
+    header's ``cwd`` (:func:`summarize`)."""
     try:
-        return [p for p in root.glob("*/*.jsonl") if session_id_of(p)]
+        return [p for pattern in ("*.jsonl", "*/*.jsonl") for p in root.glob(pattern) if session_id_of(p)]
     except OSError:
         return []
+
+
+def find_session_file(root: Path, hid: str) -> Path | None:
+    """BLOCKING: the file holding Pi session ``hid`` under ``root`` (matched
+    by NAME against the listing, never joined into a path), else None."""
+    for p in conversation_files(root):
+        if session_id_of(p) == hid:
+            return p
+    return None
+
+
+def has_messages(path: Path | None) -> bool:
+    """BLOCKING: does a Pi session file hold a message (then Pi, reopening
+    it, restores its last model and thinking level — core/sdk.js)?"""
+    if path is None:
+        return False
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                try:
+                    row = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("type") == "message":
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 #: How much of a session file the summary reads from each end.
@@ -441,8 +507,18 @@ class PiDriver(Driver):
         self._retry_said = False
         self._waiting_run = False
         self._handled: asyncio.TimerHandle | None = None
+        #: The message the user sent last (each ``send_user`` counts one).
+        self._turn_n = 0
+        #: A Pi run is going (``agent_start`` .. ``agent_settled``), and the
+        #: message it belongs to (None = no message: an extension started it
+        #: by itself, or it began after its message's turn had ended).
+        self._run_open = False
+        self._run_owner: int | None = None
         #: Pi's dialog id -> Iron Jarvis's ask id (a dialog Pi timed out goes).
         self._dialogs: dict[str, str] = {}
+        #: The dialogs raised while a run was going: Pi resolves them by itself
+        #: when that run ends or is aborted (rpc-mode.js, the dialog's signal).
+        self._run_dialogs: set[str] = set()
         #: The service's way to close a card nobody can answer any more.
         self.forget_ask: Any = None
         #: Where the service keeps the model list (set before ``open``).
@@ -502,12 +578,24 @@ class PiDriver(Driver):
             log.debug("pi did not list its models", exc_info=True)
 
     # -- the user's side ----------------------------------------------------------
+    @property
+    def busy_alone(self) -> bool:
+        """Pi is running something no open message owns (an extension started
+        it, or it outlived its message): the session is busy, and a new
+        message would be refused by Pi ("Agent is already processing")."""
+        return self._run_open and (self._run_owner is None or not self.turn_open or self._run_owner != self._turn_n)
+
     async def send_user(self, text: str, files: list[str]) -> None:
+        if self.busy_alone:
+            raise PiStillWorking(W.PI_STILL_WORKING)
         images, others = await asyncio.to_thread(_read_images, files)
         body = str(text or "")
         if others:
             listed = "\n".join(others)
             body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
+        if self.busy_alone:  # it began while the files were read
+            raise PiStillWorking(W.PI_STILL_WORKING)
+        self._turn_n += 1
         self.turn_open = True
         self._errored = False
         self._interrupting = False
@@ -536,7 +624,14 @@ class PiDriver(Driver):
             # Refused before it was accepted (a provider with no sign-in):
             # nothing ran, the turn ends here.
             self._waiting_run = False
-            self._fail(str(exc))
+            if _BUSY_RX.search(str(exc)):
+                # Pi was already running something an extension started: our
+                # own words, never "the model answered with an error".
+                if not self._errored:
+                    self._errored = True
+                    self.emit(W.error(W.PI_STILL_WORKING_TITLE, W.PI_STILL_WORKING_FIX, str(exc)))
+            else:
+                self._fail(str(exc))
             self._end("failed")
             return
         if exc is not None:
@@ -553,7 +648,9 @@ class PiDriver(Driver):
         self._handled = None
         if self.turn_open and self._waiting_run:
             self._waiting_run = False
-            self._end("completed")
+            # A Stop on an extension command's dialog: the command ended
+            # because of it, so the turn was interrupted, not completed.
+            self._end("interrupted" if self._interrupting else "completed")
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
         await self.write(self.prepare_answer(ask, decision, message, answers))
@@ -562,6 +659,7 @@ class PiDriver(Driver):
 
     def answered(self, ask: Ask, decision: str) -> None:
         self._dialogs.pop(str(ask.native), None)
+        self._run_dialogs.discard(str(ask.native))
 
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
         """The ``extension_ui_response`` for the user's answer — or AskRefused,
@@ -579,6 +677,16 @@ class PiDriver(Driver):
         value = _answer_value(ask, answers)
         if value is None:
             raise AskRefused("Choose an answer for the question first.")
+        options = [str(o) for o in ask.data.get("options") or []]
+        if method == "select" and options:
+            # A select takes one of ITS choices only (the extension compares
+            # the value with them); typed words are refused before Pi sees them.
+            # The card shows each choice as `_choice_label` drew it.
+            shown = [_choice_label(o) for o in options[:MAX_CHOICES]]
+            if value in shown:
+                value = options[shown.index(value)]
+            elif value not in options:
+                raise AskRefused("Choose one of the answers Pi offered.")
         out["value"] = value
         return out
 
@@ -587,6 +695,12 @@ class PiDriver(Driver):
         try:
             await self.request("abort")
         except (asyncio.TimeoutError, ControlRefused):
+            pass
+
+    async def _abort_again(self) -> None:
+        try:
+            await self.request("abort")
+        except Exception:  # noqa: BLE001 — a gone process ends the turn anyway
             pass
 
     async def set_mode(self, mode: str) -> str:
@@ -629,10 +743,24 @@ class PiDriver(Driver):
             self._on_ui(obj)
             return
         if kind == "agent_start":
-            self._waiting_run = False
-            if self._handled is not None:
-                self._handled.cancel()
-                self._handled = None
+            self._run_open = True
+            if self.turn_open and self._waiting_run:
+                # The run the user's message started (or its extension command).
+                self._run_owner = self._turn_n
+                self._waiting_run = False
+                if self._handled is not None:
+                    self._handled.cancel()
+                    self._handled = None
+                if self._interrupting:
+                    # A Stop that came while Pi was still preparing the prompt
+                    # (extension input handlers, sign-in check): Pi's abort
+                    # stops an ACTIVE run only, so it was lost — say it again
+                    # now that the run is active.
+                    asyncio.ensure_future(self._abort_again())
+            else:
+                # Nobody's message: an extension started it by itself, or it
+                # began after its message's turn had ended.
+                self._run_owner = None
             return
         if kind == "message_start":
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
@@ -799,9 +927,12 @@ class PiDriver(Driver):
             question = title or ("Choose one" if method == "select" else "Type an answer")
             row: dict[str, Any] = {
                 "question": clip(question, 500),
-                "options": [{"label": clip(o, 120)} for o in options[:20]],
+                "options": [{"label": _choice_label(o)} for o in options[:MAX_CHOICES]],
                 "multi": False,
             }
+            if method == "select" and options:
+                # One of Pi's choices only: the card offers no typed answer.
+                row["free_text"] = False
             hint = obj.get("placeholder") if method == "input" else None
             if method == "editor" and str(obj.get("prefill") or "").strip():
                 row["options"] = [{"label": "Keep the text as it is", "description": clip(obj.get("prefill"), 300)}]
@@ -812,6 +943,8 @@ class PiDriver(Driver):
             data = {"method": method, "question": row["question"], "options": options,
                     "prefill": str(obj.get("prefill") or "")}
         self._dialogs[native] = ask_id
+        if self._run_open:
+            self._run_dialogs.add(native)
         self.raise_ask(Ask(ask_id, "approval" if method == "confirm" else "question", tool, native, data,
                            ev, ev["at"], False))
         timeout = obj.get("timeout")
@@ -820,14 +953,27 @@ class PiDriver(Driver):
             asyncio.get_running_loop().call_later(float(timeout) / 1000.0, self._dialog_timed_out, native)
 
     def _dialog_timed_out(self, native: str) -> None:
+        self._run_dialogs.discard(native)
         ask_id = self._dialogs.pop(native, None)
         if ask_id and callable(self.forget_ask):
             self.forget_ask(ask_id)
 
+    def _close_dialogs(self, *, every: bool) -> None:
+        """Cards Pi stopped waiting for: the dialogs of a run that ended (Pi
+        resolves them on the run's own abort signal), or — ``every`` — all of
+        them (an aborted run). A card nobody can answer must not stay up."""
+        for native in list(self._dialogs):
+            if every or native in self._run_dialogs:
+                self._dialog_timed_out(native)
+        self._run_dialogs.clear()
+
     def _current_tool(self) -> tuple[str, tuple[str, dict[str, Any]]] | None:
-        if not self._running:
+        """The ONE tool that is running, else None. In Pi's parallel tool mode
+        every ``tool_execution_start`` comes before any runs, so with several
+        open nobody can tell which one a dialog is about."""
+        if len(self._running) != 1:
             return None
-        tid = next(reversed(self._running))
+        tid = next(iter(self._running))
         return tid, self._running[tid]
 
     # -- the end of a turn --
@@ -838,8 +984,14 @@ class PiDriver(Driver):
         self.emit(failure_event(said))
 
     def _settled(self, aborted: bool) -> None:
+        was_open, owner = self._run_open, self._run_owner
+        self._run_open, self._run_owner = False, None
+        # Pi resolved the dialogs of the run that ended by itself.
+        self._close_dialogs(every=aborted)
         if not self.turn_open:
             return
+        if was_open and owner != self._turn_n:
+            return  # a run no open message owns: it ends no turn
         self._waiting_run = False
         if self._interrupting or aborted:
             self._end("interrupted")
@@ -859,9 +1011,14 @@ class PiDriver(Driver):
             self._handled.cancel()
             self._handled = None
         if any(self._usage.values()) or self._cost:
-            usage = make("usage", **self._usage, list_price=True)
+            # Pi prices every call from its own model table, whether the
+            # provider is a subscription (OAuth) or a pay-per-use key, and the
+            # RPC says neither: the cost is "what Pi reported" — never called
+            # list price (it may be real spend) nor spend (it may not be).
+            usage = make("usage", **self._usage, list_price=False)
             if self._cost:
                 usage["cost_usd"] = round(self._cost, 6)
+                usage["cost_reported_by"] = "Pi"
             self.emit(usage)
         self.emit(make("done", stop=stop))
 

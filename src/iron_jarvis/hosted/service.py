@@ -229,7 +229,7 @@ def home_of(harness: str, account: dict[str, Any] | None) -> str:
     return home or default_home(harness)
 
 
-def _conversation_files(harness: str, home: str) -> list[Path]:
+def _conversation_files(harness: str, home: str, folder: str = "") -> list[Path]:
     """BLOCKING: the conversation files under ``home``, newest first, at most
     :data:`DISK_FILES` (a stat each; nothing is opened)."""
     root = Path(home)
@@ -238,7 +238,9 @@ def _conversation_files(harness: str, home: str) -> list[Path]:
             # Pi keeps sessions in its own sessions folder (environment,
             # setting, else under its config folder); the file NAME carries
             # the id (``P.session_id_of``).
-            files = P.conversation_files(P.sessions_dir() if same_folder(home, P.agent_dir()) else root / "sessions")
+            # (a project's own .pi/settings.json may name it, so the folder counts).
+            files = P.conversation_files(
+                P.sessions_dir(folder) if same_folder(home, P.agent_dir()) else root / "sessions")
         elif harness == CLAUDE:
             files = [p for p in root.glob("projects/*/*.jsonl") if _SID_RX.match(p.stem)]
         else:
@@ -262,7 +264,7 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
     from ..history import index as HI
 
     out = []
-    for path in _conversation_files(harness, home):
+    for path in _conversation_files(harness, home, folder):
         try:
             if since is not None and path.stat().st_mtime < since:
                 continue
@@ -273,6 +275,28 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
             s["mtime"] = path.stat().st_mtime if path.exists() else 0
             out.append(s)
     return out
+
+
+def _pi_login_typed(text: str, commands: list[dict[str, str]]) -> bool:
+    """Is the message Pi's interactive ``/login`` (or ``/logout``) — unless
+    an extension of the user's offers a command by that name?"""
+    word = (str(text or "").strip().split() or [""])[0].lower()
+    if word not in ("/login", "/logout"):
+        return False
+    return word[1:] not in {str(c.get("name") or "").lower().lstrip("/") for c in commands or []}
+
+
+def pi_keeps_last(row: Any) -> bool:
+    """BLOCKING: does this Pi session's conversation already hold messages?
+    Then Pi, reopening it, restores the model and thinking level it last used
+    (core/sdk.js), so "Pi's default" no longer applies to it."""
+    hid = str(getattr(row, "harness_session_id", "") or "")
+    if getattr(row, "harness", "") != PI or not hid:
+        return False
+    try:
+        return P.has_messages(P.find_session_file(P.sessions_dir(row.folder), hid))
+    except Exception:  # noqa: BLE001 — not known: the default stays offered
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -320,12 +344,18 @@ def can_open_in_code(pane: Any) -> bool:
         return False
 
 
-def terminal_holds(platform: Any, hid: str) -> bool:
-    """Does a live Build terminal hold this Claude conversation (its recorded
-    session id, its CLI still running)? Never raises."""
+def terminal_holds(platform: Any, hid: str, *, harness: str = CLAUDE, rows: Any = None) -> bool:
+    """Does a live Build terminal hold this conversation, its CLI still
+    running? Claude Code: the session id the pane recorded. Codex and Pi
+    record none (v1.411.0), so a terminal holds one when it runs that CLI and
+    either the Code view opened it there (a row's ``terminal_id``) or its own
+    screen still shows the id it was started with (``pi --session <id>`` /
+    ``codex resume <id>`` typed in it). Never raises."""
     terminals = getattr(platform, "terminals", None)
     if terminals is None or not hid:
         return False
+    opened = {str(r.terminal_id) for r in (rows or [])
+              if getattr(r, "terminal_id", "") and r.harness == harness and r.harness_session_id == hid}
     try:
         infos = terminals.list()
     except Exception:  # noqa: BLE001
@@ -335,8 +365,16 @@ def terminal_holds(platform: Any, hid: str) -> bool:
             if not info.get("alive", True):
                 continue
             pane = terminals.get(info["id"])
-            if pane is None or str(getattr(pane, "claude_session_id", None) or "") != hid:
+            if pane is None:
                 continue
+            if harness == CLAUDE:
+                if str(getattr(pane, "claude_session_id", None) or "") != hid:
+                    continue
+            else:
+                if pane_harness(pane) != harness:
+                    continue
+                if str(info["id"]) not in opened and hid not in str(pane.output_tail() or ""):
+                    continue
             if not pane_exited(pane):
                 return True
         except Exception:  # noqa: BLE001
@@ -450,8 +488,15 @@ class LiveSession:
         return self.proc is not None and self.proc.alive
 
     @property
+    def working_alone(self) -> bool:
+        """The tool is running something no message owns (Pi: a run an
+        extension started by itself) — never reaped, never evicted."""
+        return bool(self.driver is not None and getattr(self.driver, "busy_alone", False))
+
+    @property
     def busy(self) -> bool:
-        return (self.turn is not None and self.turn.running) or bool(self.asks) or bool(self.claim)
+        return ((self.turn is not None and self.turn.running) or bool(self.asks) or bool(self.claim)
+                or self.working_alone)
 
 
 # --------------------------------------------------------------------------- #
@@ -580,11 +625,12 @@ class HostedService:
         live (not archived) Code-view row holds it, or a Build terminal does."""
         if not hid:
             return ""
-        for r in store.list_rows(self.engine):
+        rows = store.list_rows(self.engine)
+        for r in rows:
             if r.id != except_sid and r.harness == harness and r.harness_session_id == hid:
                 return W.HELD_BY_ROW
-        if harness == CLAUDE and terminal_holds(self.platform, hid):
-            return W.HELD_BY_TERMINAL.format(label=W.label(harness))
+        if terminal_holds(self.platform, hid, harness=harness, rows=rows):
+            return W.HELD_BY_TERMINAL.format(label=W.label(harness), exit=W.exit_command(harness))
         return ""
 
     def _opened_terminal_runs(self, row: Any) -> bool:
@@ -734,6 +780,8 @@ class HostedService:
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
         out["commands"] = self.commands_for(row.harness, live)
+        if row.harness == PI:
+            out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         return out
 
     async def patch(self, sid: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -756,6 +804,14 @@ class HostedService:
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
             fields["mode"] = mode
+        if row.harness == PI and (
+            (body.get("model") is not None and not check_model(body["model"]) and row.model)
+            or (body.get("effort") is not None and not check_effort(row.harness, body["effort"]) and row.effort)
+        ) and await asyncio.to_thread(pi_keeps_last, row):
+            # Back to "Pi's default" would change nothing: reopening a
+            # conversation with messages, Pi restores its LAST model and
+            # thinking level (core/sdk.js) — said, never pretended.
+            raise Refused(W.PI_KEEPS_LAST)
         if body.get("model") is not None:
             model = check_model(body["model"])
             if live and live.running and live.driver and model:
@@ -780,12 +836,17 @@ class HostedService:
                     raise Refused(str(exc)) from None
             elif live and live.driver:
                 live.driver.effort = effort
-            if row.harness == CLAUDE and live and live.running:
-                live.restart = True  # --effort is read at start only
+            if (row.harness == CLAUDE or (row.harness == PI and not effort)) and live and live.running:
+                # --effort is read at start only; Pi's own default (no
+                # --thinking) applies only to a process started without one.
+                live.restart = True
             fields["effort"] = effort
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
-        return {"session": self._with_live(store.view(row)), "applied": applied}
+        out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
+        if row.harness == PI:
+            out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
+        return out
 
     async def archive(self, sid: str, archived: bool = True) -> dict[str, Any]:
         row = await self._row(sid)
@@ -903,7 +964,13 @@ class HostedService:
             except Exception:  # noqa: BLE001
                 log.warning("a %s frame could not be read", row.harness, exc_info=True)
 
-        await asyncio.to_thread(proc.start, loop, on_message, on_exit)
+        try:
+            await asyncio.to_thread(proc.start, loop, on_message, on_exit)
+        except OSError as exc:
+            # The program could not be started at all (v1.411.0: npm's POSIX
+            # `pi` shim beside pi.cmd is not a Windows program, WinError 193):
+            # one plain sentence, never a bare OSError.
+            raise Refused(W.could_not_start(row.harness, argv0[0] if argv0 else "", exc)) from None
         live.proc, live.driver = proc, driver
         try:
             await driver.open(session_id=sid, resume=resume)
@@ -1044,9 +1111,15 @@ class HostedService:
             raise Refused(W.CLAIMED.format(what=live.claim))
         if live.turn is not None and live.turn.running:
             raise Refused(W.BUSY)
+        if live.working_alone:
+            raise Refused(W.PI_STILL_WORKING)
+        if row.harness == PI and _pi_login_typed(text, self.commands_for(row.harness, live)):
+            # /login is Pi's sign-in SCREEN (a terminal's only): typed here it
+            # would reach the model as plain text.
+            raise Refused(W.PI_LOGIN_HERE, 400)
         if row.terminal_id:
             if await asyncio.to_thread(self._opened_terminal_runs, row):
-                raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness)))
+                raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness), exit=W.exit_command(row.harness)))
             await asyncio.to_thread(store.update, self.engine, sid, terminal_id="")
         if not live.running:
             holder = await asyncio.to_thread(self._holder, row.harness, row.harness_session_id, except_sid=sid)
@@ -1105,6 +1178,9 @@ class HostedService:
                 await turn.finished.wait()
         except Refused as r:
             self._emit(live, W.error(r.sentence, "Fix that, then send your message again.", ""))
+            await self._end_turn(live, "failed")
+        except P.PiStillWorking:
+            self._emit(live, W.error(W.PI_STILL_WORKING_TITLE, W.PI_STILL_WORKING_FIX, ""))
             await self._end_turn(live, "failed")
         except HarnessGone as exc:
             if turn.running and not turn.ending:
@@ -1363,7 +1439,7 @@ class HostedService:
         if not pane_exited(pane):
             raise Refused(
                 f"{W.label(harness)} is still running in this terminal — exit it there first "
-                "(type /exit), then open it in the Code view."
+                f"(type {W.exit_command(harness)}), then open it in the Code view."
             )
         proxy = W.PROXY.get(harness)  # Pi: none (its own sign-in)
         acc = ((getattr(pane, "accounts", None) or {}).get(proxy) or {}) if proxy else {}

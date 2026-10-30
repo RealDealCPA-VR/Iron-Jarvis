@@ -27,6 +27,7 @@ import os
 import queue
 import sys
 import threading
+import time
 
 SCENARIO = os.environ["IJ_FAKE_SCENARIO"]
 LOG = os.environ.get("IJ_FAKE_LOG", "")
@@ -117,14 +118,20 @@ def remember(obj):
         commands.setdefault(obj["type"], []).append(obj.get("id"))
 
 
-def wait_for(step):
+def wait_for(step, within=None):
+    """True when the awaited message came; False when the host closed stdin;
+    None when ``within`` seconds passed first."""
+    deadline = time.monotonic() + within if within else None
     while True:
         for i, obj in enumerate(buffer):
             if matches(step, obj):
                 buffer.pop(i)
                 remember(obj)
                 return True
-        obj = inbox.get()
+        try:
+            obj = inbox.get(timeout=max(0.0, deadline - time.monotonic()) if deadline else None)
+        except queue.Empty:
+            return None
         if obj is None:
             return False
         buffer.append(obj)
@@ -153,12 +160,24 @@ def emit(step):
     out(obj)
 
 
-for step in steps:
-    if "await" in step:
-        if not wait_for(step):
-            sys.exit(0)
-    else:
-        emit(step)
+def run(script):
+    """``{"sleep": s}`` pauses; an ``await`` with ``within`` (s) that does not
+    come in time plays its ``otherwise`` steps instead (a harness that went
+    on without the host's message)."""
+    for step in script:
+        if "sleep" in step:
+            time.sleep(step["sleep"])
+        elif "await" in step:
+            got = wait_for(step, step.get("within"))
+            if got is False:
+                sys.exit(0)
+            if got is None:
+                run(step.get("otherwise") or [])
+        else:
+            emit(step)
+
+
+run(steps)
 
 # The script is spent: answer anything else plainly until the host closes stdin.
 while True:

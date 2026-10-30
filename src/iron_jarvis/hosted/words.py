@@ -44,7 +44,26 @@ RUNNING = "This session is working on a message — stop it or let it finish fir
 ACCOUNT_LIMIT_FIX = "Press Continue on another account, or wait until it resets."
 PI_OWN_SIGN_IN = (
     "Pi signs in by itself, per model provider, so a Pi session has no account to choose — "
-    "type /login in Pi to change its sign-in."
+    "to change its sign-in, open Pi in a Build terminal and type /login there."
+)
+#: v1.411.0: /login typed in the Code view's box would reach the model as
+#: text (Pi's sign-in screen exists in its terminal only).
+PI_LOGIN_HERE = (
+    "Pi signs in on its own screen, which needs a terminal — open Pi in a Build terminal "
+    "(Open in terminal) and type /login there."
+)
+#: v1.411.0: Pi is running something an extension started, outside any message.
+PI_STILL_WORKING_TITLE = "Pi is still working on something an extension started"
+PI_STILL_WORKING_FIX = "Wait for it to finish, then send your message again."
+PI_STILL_WORKING = (
+    "Pi is still working on something an extension started — wait for it to finish, "
+    "then send your message again."
+)
+#: v1.411.0: Pi restores a conversation's last model and thinking level when it
+#: reopens it, so "Pi's default" cannot apply to one that already has messages.
+PI_KEEPS_LAST = (
+    "This Pi conversation keeps the model and thinking level it last used — "
+    "choose one from the list instead."
 )
 PI_CONTINUE = (
     "Pi signs in by itself, per model provider, so it has no other account to continue on — "
@@ -65,11 +84,11 @@ HELD_BY_ROW = (
     "or archive it first."
 )
 HELD_BY_TERMINAL = (
-    "This conversation is open in a Build terminal — exit {label} there first (type /exit), "
+    "This conversation is open in a Build terminal — exit {label} there first (type {exit}), "
     "then send your message here."
 )
 OPEN_IN_TERMINAL = (
-    "This conversation is open in a Build terminal — exit {label} there first (type /exit), "
+    "This conversation is open in a Build terminal — exit {label} there first (type {exit}), "
     "then send your message here."
 )
 CANNOT_TELL = (
@@ -99,6 +118,32 @@ CONTINUED = (
 
 def label(harness: str) -> str:
     return LABELS.get(harness, harness or "The harness")
+
+
+#: harness id -> the command that quits it in a terminal (Pi's is /quit).
+EXIT_COMMANDS: dict[str, str] = {"pi": "/quit"}
+
+
+def exit_command(harness: str) -> str:
+    return EXIT_COMMANDS.get(harness, "/exit")
+
+
+def could_not_start(harness: str, program: str, exc: BaseException) -> str:
+    """The sentence for a program Windows could not start at all."""
+    import os
+
+    name = os.path.basename(str(program or "")) or label(harness)
+    code = getattr(exc, "winerror", None)
+    if code == 193:
+        why = "that file is not a program Windows can run"
+    elif code == 2 or isinstance(exc, FileNotFoundError):
+        why = "that file is not there any more"
+    elif code == 5 or isinstance(exc, PermissionError):
+        why = "Windows did not allow it to run"
+    else:
+        why = clip(getattr(exc, "strerror", None) or type(exc).__name__, 120)
+    return (f"Iron Jarvis could not start {label(harness)} from {clip(name, 80)}: {why}. "
+            f"Check that {label(harness)} runs in a Build terminal.")
 
 
 def error(title: str, fix: str, technical: Any = "", **extra: Any) -> dict[str, Any]:

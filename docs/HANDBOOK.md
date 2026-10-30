@@ -2199,8 +2199,9 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     four and says why each is not offered. Only one of your Pi extensions can
     ask, and its question comes here as a card: a yes-or-no question is an
     Allow / Deny card (shown with the step it is about, such as the edit and
-    its changes, and Enter never allows it), a choice lists its options, and a
-    question that wants words has a box. A message an extension shows (such
+    its changes, when one step is running; Enter never allows it), a choice
+    lists its options and takes one of them only, and a question that wants
+    words has a box. A card closes by itself when Pi stops waiting for it. A message an extension shows (such
     as "Plan mode enabled") is a quiet line in the conversation.
   - **Plan mode** comes from Pi's plan extension, if you have it: type
     `/plan` in the box (it is in the `/` list with your other Pi commands,
@@ -2209,15 +2210,27 @@ same switch as the chat page's Chat | Code, in the same place on the page.
   - **Pi signs in by itself**, per model provider, so a Pi session has no
     account to choose: the chip says "Pi's own sign-in". If the model's
     provider is not signed in, the reply says so: open Pi in a terminal and
-    type `/login`, or choose another model. Continue on another account is
-    not offered for Pi.
+    type `/login`, or choose another model (typing `/login` in the Code view's
+    box says the same, because Pi's sign-in screen needs a terminal). Continue
+    on another account is not offered for Pi.
   - **The model** list is the one Pi itself lists (shown once a Pi session
     has started on this PC), and the **effort** is Pi's thinking level (off
-    to max). Both change at once, even while Pi runs. The usage line's cost
-    is Pi's own figure from its price table, so it reads "at list price".
+    to max). Both change at once, even while Pi runs. Once a conversation
+    has messages, Pi reopens it on the model and thinking level it last used,
+    so "Pi's default" is no longer offered for it. The usage line's cost is
+    Pi's own figure from its price table and reads "the cost Pi reported":
+    on a pay-per-use key it is what you spent, on a subscription it is not,
+    and Pi does not say which.
+  - **When an extension starts work by itself**, Pi works on it outside any
+    message: the session stays busy until it finishes, and a message sent
+    meanwhile is answered "Pi is still working on something an extension
+    started".
   - **Saved sessions**: Pi saves every session in its own sessions folder,
-    so a session started here is listed by Pi itself, and **Open in
-    terminal** types `pi --session <id>` to carry it on there. A terminal
+    so a session started here is listed by Pi itself (including a folder
+    Pi's `sessionDir` setting names, a project's own one too), and **Open in
+    terminal** types `pi --session <id>` to carry it on there. While Pi has
+    that conversation open in a terminal, the Code view waits: quit Pi there
+    (`/quit`) first. A terminal
     where Pi has finished offers **Open in Code view**.
 - **Next**: OpenCode, as a coding tool for the Code view.
 

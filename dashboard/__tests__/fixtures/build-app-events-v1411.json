@@ -64,8 +64,9 @@
     "input": 6887,
     "output": 32,
     "cache_read": 6528,
-    "list_price": true,
+    "list_price": false,
     "cost_usd": 0.00077,
+    "cost_reported_by": "Pi",
     "turn": "turn-1"
    },
    {
@@ -150,8 +151,9 @@
     "input": 496,
     "output": 38,
     "cache_read": 13184,
-    "list_price": true,
+    "list_price": false,
     "cost_usd": 0.0002,
+    "cost_reported_by": "Pi",
     "turn": "turn-1"
    },
    {
@@ -242,8 +244,9 @@
     "input": 368,
     "output": 34,
     "cache_read": 13568,
-    "list_price": true,
+    "list_price": false,
     "cost_usd": 0.000189,
+    "cost_reported_by": "Pi",
     "turn": "turn-1"
    },
    {
@@ -291,7 +294,8 @@
         "label": "Block"
        }
       ],
-      "multi": false
+      "multi": false,
+      "free_text": false
      }
     ],
     "turn": "turn-1"
@@ -335,8 +339,9 @@
     "input": 398,
     "output": 33,
     "cache_read": 14080,
-    "list_price": true,
+    "list_price": false,
     "cost_usd": 0.000197,
+    "cost_reported_by": "Pi",
     "turn": "turn-1"
    },
    {

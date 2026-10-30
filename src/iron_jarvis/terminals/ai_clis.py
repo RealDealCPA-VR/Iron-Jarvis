@@ -312,7 +312,11 @@ def _find(command: str) -> str | None:
     found = shutil.which(exe)
     if found:
         return found
-    exts = ["", ".cmd", ".exe", ".bat", ".ps1"] if os.name == "nt" else [""]
+    # v1.411.0: on Windows a program file comes BEFORE an extensionless one.
+    # npm puts a POSIX ``sh`` shim (``pi``) beside ``pi.cmd``; that shim is
+    # not a Windows program, so starting it fails (WinError 193) and typing
+    # it in a shell does nothing. ``.ps1`` runs only inside PowerShell.
+    exts = [".exe", ".cmd", ".bat", ".com", ".ps1", ""] if os.name == "nt" else [""]
     for d in _extra_bin_dirs():
         for ext in exts:
             cand = d / (exe + ext)

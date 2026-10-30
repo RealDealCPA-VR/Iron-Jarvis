@@ -183,15 +183,17 @@ function QuestionBody({
               </button>
             );
           })}
-          <input
-            type="text"
-            aria-label={`Something else for: ${q.question}`}
-            placeholder="Something else…"
-            data-testid={`code-ask-other-${qi}`}
-            value={other[qi] ?? ""}
-            onChange={(e) => setOther((prev) => ({ ...prev, [qi]: e.target.value }))}
-            className="field h-8 w-full text-[13px]"
-          />
+          {q.freeText ? (
+            <input
+              type="text"
+              aria-label={`Something else for: ${q.question}`}
+              placeholder="Something else…"
+              data-testid={`code-ask-other-${qi}`}
+              value={other[qi] ?? ""}
+              onChange={(e) => setOther((prev) => ({ ...prev, [qi]: e.target.value }))}
+              className="field h-8 w-full text-[13px]"
+            />
+          ) : null}
         </fieldset>
       ))}
       <div className="flex flex-wrap items-center gap-2">

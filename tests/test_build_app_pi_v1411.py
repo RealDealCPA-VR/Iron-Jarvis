@@ -462,9 +462,12 @@ async def test_a_second_process_resumes_the_same_pi_session(app, work, tmp_path,
 # --------------------------------------------------------------------------- #
 def write_pi_session(root: Path, folder: Path, sid: str, first: str, *, name: str = "",
                      header_id: str | None = None, stamp: str = "2026-10-30T13-12-13-190Z") -> Path:
-    project = root / ("--" + str(folder).replace(":", "-").replace("\\", "-").replace("/", "-") + "--")
-    project.mkdir(parents=True, exist_ok=True)
-    path = project / f"{stamp}_{sid}.jsonl"
+    """A Pi session file as Pi writes it under a ``sessionDir`` /
+    PI_CODING_AGENT_SESSION_DIR: FLAT in that folder (session-manager.js;
+    only the default ``~/.pi/agent/sessions`` has per-folder subfolders),
+    matched to its project by the header's ``cwd``."""
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{stamp}_{sid}.jsonl"
     rows = [
         {"type": "session", "version": 3, "id": header_id or sid, "timestamp": "2026-10-30T13:12:13.190Z",
          "cwd": str(folder)},

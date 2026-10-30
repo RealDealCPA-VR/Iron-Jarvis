@@ -4144,30 +4144,60 @@ does not need a bump, stop and bump it.
   get ONE `response`; a `prompt` answers at once (`started` | `handled`, an
   extension command — the turn ends after `HANDLED_GRACE_S` if no run begins;
   its answer is read when it comes, never awaited: `/rpc-input` answers only
-  after its dialog); `agent_settled` (never `agent_end`) ends a turn; a model
+  after its dialog); `agent_settled` (never `agent_end`) ends a turn — ONLY
+  the turn whose message owns the run (`agent_start` while that message
+  waits for its run); a run no message owns (an extension started it, or it
+  began after the grace) keeps the session BUSY (`LiveSession.working_alone`:
+  never reaped or evicted) and a message meanwhile is refused in our words
+  (`W.PI_STILL_WORKING`; Pi's own "Agent is already processing" too, never
+  "the model answered with an error"). A Stop that lands during prompt
+  preflight (Pi's `abort` stops an ACTIVE run only) is sent AGAIN at the
+  run's `agent_start`; a Stop on a waiting extension command ends
+  "interrupted". A model
   error is an assistant `stopReason: "error"`, a missing sign-in a FAILED
   prompt response. Pi asks NOTHING before a tool: ONE mode `own` ("Pi's own
   rules", not dangerous), the other four `hidden_modes` with the reason (plan
   is an extension that turns itself off — `/plan` stays a `/` command). Only
   an extension asks (`extension_ui_request`): `confirm` → an approval drawn
-  as the RUNNING tool's card (its diff/command), `once_only`, answered
-  `confirmed`; `select`/`input`/`editor` → a question (`value` /
-  `cancelled`); a dialog's `timeout` closes the card (`forget_ask`);
+  as the running tool's card (its diff/command) ONLY when exactly one tool
+  runs (Pi's parallel tool mode starts them all first), else the dialog's own
+  words; `once_only`, answered `confirmed`; `select`/`input`/`editor` → a
+  question (`value` / `cancelled`) — a `select` takes one of ITS choices only
+  (`free_text: false`, the card has no typed box, another value is refused);
+  a dialog's `timeout` closes the card (`forget_ask`), and so does the end of
+  the run it was raised in (every card on an aborted settle);
   `notify` → `notice`; the rest is ignored. Pi signs in by itself: no
   Iron-Proxy account (`W.PROXY` has no `pi`; create with an account → 400,
   continue-on refused), `own_sign_in: true`, `signed_in: null`; its failures
-  are `P.failure_event` (sign-in → `/login`, never the other tools'
-  presses). A parent Pi session's `PI_SESSION_*` markers are dropped from the
+  are `P.failure_event` (sign-in → `/login` in a TERMINAL, never the other
+  tools' presses); `/login` / `/logout` typed in the Code view's box is
+  answered 400 (`W.PI_LOGIN_HERE`), never sent to the model. Its cost is
+  `cost_reported_by: "Pi"`, never `list_price` (Pi prices a subscription and
+  a pay-per-use key alike; the RPC says neither). A parent Pi session's `PI_SESSION_*` markers are dropped from the
   child env. Models: what a Pi process listed (`get_available_models`),
-  kept in `<home>/hosted/pi_models.json`; never a start to ask. Disk rows:
+  kept in `<home>/hosted/pi_models.json`; never a start to ask. A
+  conversation with messages keeps its LAST model and thinking level (Pi
+  restores them on reopen, core/sdk.js): the view's `keeps_last` hides "Pi's
+  default" and a PATCH back to it is refused (`W.PI_KEEPS_LAST`). Disk rows:
   Pi's own sessions folder (`PI_CODING_AGENT_SESSION_DIR` → `sessionDir`
-  setting → `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions`), id read from
-  the file NAME and matched, header `cwd` = the folder. Open in terminal types
+  setting, the PROJECT's `<folder>/.pi/settings.json` over the global one →
+  `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions`), read in BOTH layouts
+  (FLAT under a sessionDir, `--<folder>--` subfolders only under the
+  default), id read from the file NAME and matched, header `cwd` = the
+  folder. Open in terminal types
   `pi --session <id>`; from-terminal finds the one session written since the
-  pane started. No new event kind. Pins: `tests/test_build_app_pi_v1411.py`
+  pane started. A Pi or Codex conversation is HELD by a live terminal running
+  that CLI that the Code view opened it in, or whose screen still shows the
+  id (`pi --session <id>` / `codex resume <id>`), like Claude's recorded id
+  (`terminal_holds(harness=)`; Pi quits with `/quit`). `binary_for` →
+  `ai_clis._find` prefers `.exe/.cmd/.bat/.com` over npm's extensionless sh
+  shim, and a program Windows cannot start is one sentence
+  (`W.could_not_start`). No new event kind. Pins: `tests/test_build_app_pi_v1411.py`
   (recordings `tests/fixtures/build_app_v1411`, contract
   `dashboard/__tests__/fixtures/build-app-events-v1411.json`,
-  `IJ_REGEN_BUILD_APP_PI=1`), `dashboard/__tests__/build-app-pi-v1411.test.tsx`.
+  `IJ_REGEN_BUILD_APP_PI=1`), `tests/test_build_app_pi_review_v1411.py` (the
+  review's twelve; the fake harness takes `sleep` and `await … within/
+  otherwise` steps), `dashboard/__tests__/build-app-pi-v1411.test.tsx`.
   Live-proven (scratch home + scratch Pi session folder, real pi 1.3.0 on
   openai-codex/gpt-6-luna): a read, an edit that landed, the user's own
   plan extension's "what next?" answered as a question card, and `pi

@@ -27,6 +27,8 @@ const H = vi.hoisted(() => ({
   scripts: [] as { event: string; data: Record<string, unknown> }[][],
   hold: null as Promise<void> | null,
   release: null as (() => void) | null,
+  patches: [] as { path: string; body: unknown }[],
+  patchReply: {} as Record<string, unknown>,
 }));
 
 vi.mock("@/lib/api", () => {
@@ -49,7 +51,10 @@ vi.mock("@/lib/api", () => {
       H.posts.push({ path, body });
       return Promise.resolve(H.postReply[path] ?? {});
     },
-    patch: () => Promise.resolve({}),
+    patch: (path: string, body?: unknown) => {
+      H.patches.push({ path, body });
+      return Promise.resolve(H.patchReply[path] ?? {});
+    },
     del: () => Promise.resolve({}),
   };
 });
@@ -85,6 +90,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
 import {
+  KEEPS_LAST_TITLE,
   OWN_SIGN_IN_TITLE,
   accountWords,
   decodeCodeEvent,
@@ -95,6 +101,7 @@ import {
   modeLabel,
   sessionRowLine,
   toolLabel,
+  usageWords,
   type CodeEvent,
 } from "@/lib/buildApp";
 import { codeViewOfferFor } from "@/lib/buildCodeOffer";
@@ -187,6 +194,8 @@ function waitingOn(scenario: string, id = "p1") {
 }
 
 beforeEach(() => {
+  H.patches = [];
+  H.patchReply = {};
   H.posts = [];
   H.postReply = {};
   H.streams = [];
@@ -365,5 +374,83 @@ describe("the view", () => {
         answers: { "Dangerous command: rm -rf ./nothing-here": "Allow" },
       }),
     );
+  });
+});
+
+/* ======================================================= the review (v1.411.0) */
+
+describe("the review's fixes", () => {
+  it("a Pi select offers its own choices only: no typed answer on the card", async () => {
+    const sel = decodeAll(SC.pi_extension_select_before_a_command).find((e) => e.type === "question");
+    expect(sel?.type === "question" && sel.questions[0].freeText).toBe(false);
+    const inp = decodeAll(SC.pi_extension_command_asks_for_input).find((e) => e.type === "question");
+    expect(inp?.type === "question" && inp.questions[0].freeText).toBe(true);
+    waitingOn("pi_extension_select_before_a_command");
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    expect(within(card).getByTestId("code-ask-option-0-0")).toBeInTheDocument();
+    expect(within(card).queryByTestId("code-ask-other-0")).toBeNull();
+  });
+
+  it("an input keeps its typed answer", async () => {
+    waitingOn("pi_extension_command_asks_for_input");
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    expect(within(card).getByTestId("code-ask-other-0")).toBeInTheDocument();
+  });
+
+  it("Pi's cost says who reported it, never list price", async () => {
+    expect(usageWords({ input: 10, output: 5, costUsd: 0.25, listPrice: false, costReportedBy: "Pi" })).toBe(
+      "10 in · 5 out · $0.25, the cost Pi reported",
+    );
+    const usage = decodeAll(SC.pi_read_a_file).find((e) => e.type === "usage");
+    expect(usage?.type === "usage" && usage.listPrice).toBe(false);
+    expect(usage?.type === "usage" && usage.costReportedBy).toBe("Pi");
+    seed([sess("p1")]);
+    H.gets["/build/app/sessions/p1"] = { session: sess("p1"), events: SC.pi_read_a_file, running: false, pending: [] };
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    const line = (await screen.findAllByTestId("code-usage"))[0].textContent ?? "";
+    expect(line).toContain("the cost Pi reported");
+    expect(line).not.toContain("list price");
+  });
+
+  it("the sign-in title points at a terminal, where Pi's /login is", () => {
+    expect(OWN_SIGN_IN_TITLE).toContain("Build terminal");
+    expect(OWN_SIGN_IN_TITLE).toContain("/login");
+    expect(OWN_SIGN_IN_TITLE).not.toContain("type /login in Pi");
+  });
+
+  it("a conversation that keeps its last model and effort offers no default", async () => {
+    const chosen = sess("p1", { model: "openai-codex/gpt-6-luna", effort: "high" });
+    seed([chosen]);
+    H.gets["/build/app/sessions/p1"] = { session: chosen, events: [], running: false, pending: [], keeps_last: true };
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
+    await waitFor(() => expect(model.getAttribute("title")).toBe(KEEPS_LAST_TITLE));
+    expect(Array.from(model.options).map((o) => o.value)).not.toContain("");
+    const effort = screen.getByTestId("code-effort-chip") as HTMLSelectElement;
+    expect(Array.from(effort.options).map((o) => o.value)).not.toContain("");
+    expect(effort.getAttribute("title")).toBe(KEEPS_LAST_TITLE);
+  });
+
+  it("with no choice saved, the first row says the conversation's last model, not the default", async () => {
+    seed([sess("p1")]);
+    H.gets["/build/app/sessions/p1"] = { session: sess("p1"), events: [], running: false, pending: [], keeps_last: true };
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
+    await waitFor(() => expect(model.options[0].textContent).toBe("Pi · its last model"));
+    expect((screen.getByTestId("code-effort-chip") as HTMLSelectElement).options[0].textContent).toBe("Its last effort");
+  });
+
+  it("a conversation with no messages yet still offers Pi's default", async () => {
+    const chosen = sess("p1", { model: "openai-codex/gpt-6-luna" });
+    seed([chosen]);
+    H.gets["/build/app/sessions/p1"] = { session: chosen, events: [], running: false, pending: [], keeps_last: false };
+    render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
+    const model = (await screen.findByTestId("code-model-chip")) as HTMLSelectElement;
+    await waitFor(() => expect(model.options[0].textContent).toBe("Pi · default model"));
+    expect(model.options[0].value).toBe("");
+    expect(model.getAttribute("title")).toBeNull();
   });
 });

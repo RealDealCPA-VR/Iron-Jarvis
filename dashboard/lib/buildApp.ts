@@ -447,7 +447,8 @@ export function ownSignInWords(tool: string, tools?: readonly CodingTool[] | nul
 
 /** What the chip's title says about a tool that signs in by itself. */
 export const OWN_SIGN_IN_TITLE =
-  "Pi signs in by itself, per model provider: type /login in Pi to change it. Iron Jarvis's accounts do not apply.";
+  "Pi signs in by itself, per model provider: to change it, open Pi in a Build terminal and type /login there. " +
+  "Iron Jarvis's accounts do not apply.";
 
 /** A session row's second line: which tool, on which account. */
 export function sessionRowLine(s: CodeSession, tools?: readonly CodingTool[] | null): string {
@@ -518,6 +519,9 @@ export interface QuestionItem {
   header: string;
   options: { label: string; description: string }[];
   multi: boolean;
+  /** v1.411.0: may the user type an answer of their own? False for a Pi
+   *  extension's `select`, which takes one of ITS choices only. */
+  freeText: boolean;
 }
 
 /** Every event may name the turn it belongs to (the daemon's `turn`): a
@@ -564,7 +568,18 @@ type CodeEventBody =
     }
   | { type: "question"; at: string; requestId: string; questions: QuestionItem[] }
   | { type: "resolved"; at: string; requestId: string; decision: string }
-  | { type: "usage"; at: string; input: number; output: number; cacheRead: number; costUsd: number | null; listPrice: boolean }
+  | {
+      type: "usage";
+      at: string;
+      input: number;
+      output: number;
+      cacheRead: number;
+      costUsd: number | null;
+      listPrice: boolean;
+      /** v1.411.0: the tool that reported the cost when nobody can say
+       *  whether it is list price or real spend (Pi), else "". */
+      costReportedBy: string;
+    }
   | { type: "notice"; at: string; text: string }
   | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string };
@@ -680,7 +695,13 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
           if (!oo || !label) continue;
           options.push({ label, description: str(oo.description, 500) });
         }
-        questions.push({ question, header: str(qo.header, 80), options, multi: qo.multi === true });
+        questions.push({
+          question,
+          header: str(qo.header, 80),
+          options,
+          multi: qo.multi === true,
+          freeText: qo.free_text !== false,
+        });
       }
       if (!questions.length) return null;
       return { type, at, requestId, questions };
@@ -699,6 +720,7 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         cacheRead: num(r.cache_read) ?? 0,
         costUsd: num(r.cost_usd),
         listPrice: r.list_price === true,
+        costReportedBy: str(r.cost_reported_by, 40).trim(),
       };
     case "notice": {
       const text = str(r.text, 2_000).trim();
@@ -748,6 +770,10 @@ export interface CodeSessionView {
   dropped: number;
   /** The tool's own `/` commands (what its process said). */
   commands: ToolCommand[] | null;
+  /** v1.411.0: the conversation keeps its LAST model and effort (Pi restores
+   *  them when it reopens a conversation with messages), so "the tool's
+   *  default" is not offered. */
+  keepsLast: boolean;
 }
 
 /** The `/` commands an answer lists (null when the answer has no list). */
@@ -792,7 +818,28 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
     pending,
     dropped: dropped !== null && dropped > 0 ? Math.floor(dropped) : 0,
     commands: decodeCommands(r.commands),
+    keepsLast: r.keeps_last === true,
   };
+}
+
+/** A view's or a change's `keeps_last` (null when the answer does not say). */
+export function keepsLastOf(raw: unknown): boolean | null {
+  const r = obj(raw);
+  return r && typeof r.keeps_last === "boolean" ? r.keeps_last : null;
+}
+
+/** Why the model and effort chips offer no "default" for such a conversation. */
+export const KEEPS_LAST_TITLE =
+  "This conversation keeps the model and thinking level it last used: Pi restores them when it reopens it.";
+
+/** The first row of the model chip. */
+export function defaultModelWords(toolName: string, keepsLast: boolean): string {
+  return keepsLast ? `${toolName} · its last model` : `${toolName} · default model`;
+}
+
+/** The first row of the effort chip. */
+export function defaultEffortWords(keepsLast: boolean): string {
+  return keepsLast ? "Its last effort" : "Default effort";
 }
 
 // ── the conversation ────────────────────────────────────────────────────────
@@ -811,7 +858,15 @@ export type ConvItem =
   | { kind: "resolved"; key: string; requestId: string; decision: string; about: string; question: boolean }
   | { kind: "notice"; key: string; text: string }
   | { kind: "error"; key: string; title: string; fix: string; technical: string; fixKind: string; account: string }
-  | { kind: "usage"; key: string; input: number; output: number; costUsd: number | null; listPrice: boolean }
+  | {
+      kind: "usage";
+      key: string;
+      input: number;
+      output: number;
+      costUsd: number | null;
+      listPrice: boolean;
+      costReportedBy: string;
+    }
   | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string };
 
 export interface Conversation {
@@ -951,7 +1006,15 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
         });
         break;
       case "usage":
-        items.push({ kind: "usage", key: key("g"), input: ev.input, output: ev.output, costUsd: ev.costUsd, listPrice: ev.listPrice });
+        items.push({
+          kind: "usage",
+          key: key("g"),
+          input: ev.input,
+          output: ev.output,
+          costUsd: ev.costUsd,
+          listPrice: ev.listPrice,
+          costReportedBy: ev.costReportedBy,
+        });
         break;
       case "done":
         items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result });
@@ -1086,12 +1149,22 @@ export function doneWords(stop: Extract<CodeEvent, { type: "done" }>["stop"]): s
   return "";
 }
 
-/** The usage line ("1,240 in · 310 out · about $0.02 at list price"). */
-export function usageWords(u: { input: number; output: number; costUsd: number | null; listPrice: boolean }): string {
+/** The usage line ("1,240 in · 310 out · about $0.02 at list price"). A
+ *  cost only the tool can vouch for (Pi prices a subscription and a
+ *  pay-per-use key alike) says who reported it, claiming neither. */
+export function usageWords(u: {
+  input: number;
+  output: number;
+  costUsd: number | null;
+  listPrice: boolean;
+  costReportedBy?: string;
+}): string {
   const parts = [`${u.input.toLocaleString("en-US")} in`, `${u.output.toLocaleString("en-US")} out`];
   if (u.costUsd !== null && u.costUsd > 0) {
     const dollars = u.costUsd < 0.01 ? "under $0.01" : `$${u.costUsd.toFixed(2)}`;
-    parts.push(u.listPrice ? `about ${dollars} at list price` : dollars);
+    if (u.listPrice) parts.push(`about ${dollars} at list price`);
+    else if (u.costReportedBy) parts.push(`${dollars}, the cost ${u.costReportedBy} reported`);
+    else parts.push(dollars);
   }
   return parts.join(" · ");
 }

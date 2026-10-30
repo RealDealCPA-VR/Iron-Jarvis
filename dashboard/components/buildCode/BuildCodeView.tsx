@@ -71,10 +71,13 @@ import { CodeConversation } from "@/components/buildCode/CodeConversation";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
   OPEN_IN_TERMINAL,
+  KEEPS_LAST_TITLE,
   OWN_SIGN_IN_TITLE,
   accountStatusWords,
   accountWords,
   appliedNextWords,
+  defaultEffortWords,
+  defaultModelWords,
   cutForRejoin,
   decodeDiskSessions,
   diskListPath,
@@ -92,6 +95,7 @@ import {
   decodeCodingTools,
   foldConversation,
   groupByFolder,
+  keepsLastOf,
   modeIsDangerous,
   modeLabel,
   ownSignInWords,
@@ -346,6 +350,8 @@ function SessionPane({
   const [moreOpen, setMoreOpen] = useState(false);
   const [fetchedCommands, setFetchedCommands] = useState<ToolCommand[] | null>(null);
   const [viewCommands, setViewCommands] = useState<ToolCommand[] | null>(null);
+  /** v1.411.0: the conversation keeps its last model and effort (Pi). */
+  const [keepsLast, setKeepsLast] = useState(false);
   const [dropped, setDropped] = useState(0);
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
@@ -432,6 +438,7 @@ function SessionPane({
         setExtra(view.pending);
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
+        setKeepsLast(view.keepsLast);
         if (view.running && view.runningTurn && opts.follow) {
           const { base, carry } = cutForRejoin(view.events, view.runningTurn);
           setEvents(base);
@@ -554,6 +561,7 @@ function SessionPane({
     setAskError(null);
     setFetchedCommands(null);
     setViewCommands(null);
+    setKeepsLast(false);
     setDropped(0);
     setInfo(null);
     void load({ follow: true });
@@ -693,6 +701,8 @@ function SessionPane({
         const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}`, patchIn);
         const later = appliedNextWords(raw);
         if (later) setInfo(later);
+        const keeps = keepsLastOf(raw);
+        if (keeps !== null) setKeepsLast(keeps);
         const next = decodeCodeSession(raw);
         if (next) {
           setSession(next);
@@ -1061,10 +1071,15 @@ function SessionPane({
                 data-testid="code-model-chip"
                 value={session.model}
                 disabled={running}
+                title={keepsLast ? KEEPS_LAST_TITLE : undefined}
                 onChange={(e) => void change({ model: e.target.value })}
                 className={CHIP_SELECT}
               >
-                <option value="">{toolName} · default model</option>
+                {/* A conversation that keeps its last model offers no way
+                    back to the default (Pi would restore the last one). */}
+                {!keepsLast || !session.model ? (
+                  <option value="">{defaultModelWords(toolName, keepsLast)}</option>
+                ) : null}
                 {(tool?.models ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
                     {toolName} · {m.label}
@@ -1082,10 +1097,13 @@ function SessionPane({
                   data-testid="code-effort-chip"
                   value={session.effort}
                   disabled={running}
+                  title={keepsLast ? KEEPS_LAST_TITLE : undefined}
                   onChange={(e) => void change({ effort: e.target.value })}
                   className={CHIP_SELECT}
                 >
-                  <option value="">Default effort</option>
+                  {!keepsLast || !session.effort ? (
+                    <option value="">{defaultEffortWords(keepsLast)}</option>
+                  ) : null}
                   {tool.efforts.map((x) => (
                     <option key={x} value={x}>
                       {x.charAt(0).toUpperCase() + x.slice(1)} effort
