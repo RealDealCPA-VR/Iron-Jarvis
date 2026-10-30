@@ -1,0 +1,499 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-10-29, codex-cli 0.157.0, this PC, scratch folder (masked) — CODEX_HOME pointed at an empty folder",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\work\\demo",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": null,
+      "createdAt": 1793312878,
+      "updatedAt": 1793312878,
+      "recencyAt": 1793312878,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\work\\demo\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-27-58-01a189c6-f109-74e3-82ca-77e1eb54e8b6.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-6-astra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "dangerFullAccess"
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": null,
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c6-f128-7913-b0db-fb8a8ad4f18a",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-6-astra",
+      "reasoningEffort": null,
+      "createdAt": 1793312878,
+      "updatedAt": 1793312878,
+      "recencyAt": 1793312878,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\work\\demo\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-27-58-01a189c6-f109-74e3-82ca-77e1eb54e8b6.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312878887
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312878919
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turn": {
+      "id": "01a189c6-f128-7913-b0db-fb8a8ad4f18a",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312878,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312878919
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c6-f20c-7251-83aa-bf77253bd0f4",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say the word ready and nothing else.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a",
+     "startedAtMs": 1793312879117
+    },
+    "emittedAtMs": 1793312879117
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c6-f20c-7251-83aa-bf77253bd0f4",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say the word ready and nothing else.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a",
+     "completedAtMs": 1793312879117
+    },
+    "emittedAtMs": 1793312879119
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 2/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked)",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312879536
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 3/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked)",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312880080
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 4/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked)",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312880950
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 5/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked)",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312882770
+   }
+  },
+  {
+   "out": {
+    "method": "warning",
+    "params": {
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "message": "Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses, cf-ray: (masked)"
+    },
+    "emittedAtMs": 1793312885773
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 1/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312886056
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 2/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312886477
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 3/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312887138
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 4/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312888209
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "Reconnecting... 5/5",
+      "codexErrorInfo": {
+       "responseStreamDisconnected": {
+        "httpStatusCode": 401
+       }
+      },
+      "additionalDetails": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "misalignment": null
+     },
+     "willRetry": true,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312890079
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "status": {
+      "type": "systemError"
+     }
+    },
+    "emittedAtMs": 1793312893814
+   }
+  },
+  {
+   "out": {
+    "method": "error",
+    "params": {
+     "error": {
+      "message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+      "codexErrorInfo": "other",
+      "additionalDetails": null,
+      "misalignment": null
+     },
+     "willRetry": false,
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turnId": "01a189c6-f128-7913-b0db-fb8a8ad4f18a"
+    },
+    "emittedAtMs": 1793312893814
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+     "turn": {
+      "id": "01a189c6-f128-7913-b0db-fb8a8ad4f18a",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "failed",
+      "error": {
+       "message": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+       "codexErrorInfo": "other",
+       "additionalDetails": null,
+       "misalignment": null
+      },
+      "startedAt": 1793312878,
+      "completedAt": 1793312893,
+      "durationMs": 14921
+     }
+    },
+    "emittedAtMs": 1793312893818
+   }
+  }
+ ]
+}

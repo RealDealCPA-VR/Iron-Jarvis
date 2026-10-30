@@ -1,0 +1,502 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-10-29, codex-cli 0.157.0, this PC, scratch folder (masked) — thread/resume of an earlier thread",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/resume"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "List the files in this folder with a shell command, then create hello.txt containing the word hi. Be brief.",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312723,
+      "updatedAt": 1793312905,
+      "recencyAt": 1793312724,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-23-01a189c4-9316-7d30-b03e-8a6c95d7bacd.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": [
+       {
+        "id": "01a189c4-947a-7c01-8d48-00303bfea161",
+        "items": [
+         {
+          "type": "userMessage",
+          "id": "01a189c4-9f5d-7920-9f69-abdb350f15aa",
+          "clientId": null,
+          "content": [
+           {
+            "type": "text",
+            "text": "List the files in this folder with a shell command, then create hello.txt containing the word hi. Be brief.",
+            "text_elements": []
+           }
+          ]
+         },
+         {
+          "type": "reasoning",
+          "id": "rs_0f6f6f451bd88f77016ae3c7d982188190b4d906a9a06bc15b",
+          "summary": [],
+          "content": []
+         },
+         {
+          "type": "agentMessage",
+          "id": "msg_0f6f6f451bd88f77016ae3c7d999b88190815df415c0039ef8",
+          "text": "I’ll list the folder contents, then add `hello.txt` with `hi`.",
+          "phase": "commentary",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+         },
+         {
+          "type": "commandExecution",
+          "id": "exec-bf58ff8d-2309-49a7-9333-4b9a632ab868",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "\"C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\pwsh.exe\" -Command 'rg --files'",
+          "cwd": "C:\\work\\demo",
+          "processId": "21024",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+           {
+            "type": "unknown",
+            "command": "rg --files"
+           }
+          ],
+          "aggregatedOutput": "a.txt\n",
+          "exitCode": 0,
+          "durationMs": 406
+         },
+         {
+          "type": "fileChange",
+          "id": "exec-84156bb0-f81f-49c4-beab-322d956fef89",
+          "changes": [
+           {
+            "path": "C:\\work\\demo\\hello.txt",
+            "kind": {
+             "type": "add"
+            },
+            "diff": "hi\n"
+           }
+          ],
+          "status": "completed"
+         },
+         {
+          "type": "agentMessage",
+          "id": "msg_0f6f6f451bd88f77016ae3c7df5db88190adf7299134389300",
+          "text": "Listed: `a.txt`. Created `hello.txt` containing `hi`.",
+          "phase": "final_answer",
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+         }
+        ],
+        "itemsView": "full",
+        "status": "completed",
+        "error": null,
+        "startedAt": 1793312724,
+        "completedAt": 1793312737,
+        "durationMs": 12997
+       }
+      ]
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "dangerFullAccess"
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "collaborationMode": {
+      "mode": "default",
+      "settings": {
+       "model": "gpt-5.6-terra",
+       "reasoning_effort": "medium",
+       "developer_instructions": null
+      }
+     },
+     "multiAgentMode": "explicitRequestOnly",
+     "initialTurnsPage": null,
+     "turnsBackwardsCursor": "{\"requestedThreadId\":\"01a189c4-9316-7d30-b03e-8a6c95d7bacd\",\"rolloutOrdinal\":1,\"includeAnchor\":true,\"scope\":{\"kind\":\"turns\"}}",
+     "itemsBackwardsCursor": "{\"requestedThreadId\":\"01a189c4-9316-7d30-b03e-8a6c95d7bacd\",\"rolloutOrdinal\":24,\"includeAnchor\":true,\"scope\":{\"kind\":\"itemsByCreatedAtOrdinal\"}}"
+    }
+   },
+   "reply_to": "thread/resume"
+  },
+  {
+   "out": {
+    "method": "deprecationNotice",
+    "params": {
+     "summary": "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.",
+     "details": null
+    },
+    "emittedAtMs": 1793312905419
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793312905555
+   }
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c4-947a-7c01-8d48-00303bfea161",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 64607,
+       "inputTokens": 64386,
+       "cachedInputTokens": 32256,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 221,
+       "reasoningOutputTokens": 34
+      },
+      "last": {
+       "totalTokens": 21907,
+       "inputTokens": 21888,
+       "cachedInputTokens": 21248,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 19,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312905557
+   }
+  },
+  {
+   "out": {
+    "method": "thread/goal/cleared",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd"
+    },
+    "emittedAtMs": 1793312905557
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312905573
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turn": {
+      "id": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312905,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312905573
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c7-61cf-7d03-a795-83040d3c7a62",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say the word ready and nothing else.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "startedAtMs": 1793312907728
+    },
+    "emittedAtMs": 1793312907728
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c7-61cf-7d03-a795-83040d3c7a62",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Say the word ready and nothing else.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "completedAtMs": 1793312907728
+    },
+    "emittedAtMs": 1793312907730
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0b1dba2aa4ff706e016ae3c88cc3f4819680d12a20f340da01",
+      "text": "",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "startedAtMs": 1793312909129
+    },
+    "emittedAtMs": 1793312909129
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "itemId": "msg_0b1dba2aa4ff706e016ae3c88cc3f4819680d12a20f340da01",
+     "delta": "ready"
+    },
+    "emittedAtMs": 1793312909129
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0b1dba2aa4ff706e016ae3c88cc3f4819680d12a20f340da01",
+      "text": "ready",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "completedAtMs": 1793312909173
+    },
+    "emittedAtMs": 1793312909175
+   }
+  },
+  {
+   "out": {
+    "method": "thread/tokenUsage/updated",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turnId": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+     "tokenUsage": {
+      "total": {
+       "totalTokens": 87381,
+       "inputTokens": 87155,
+       "cachedInputTokens": 52480,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 226,
+       "reasoningOutputTokens": 34
+      },
+      "last": {
+       "totalTokens": 22774,
+       "inputTokens": 22769,
+       "cachedInputTokens": 20224,
+       "cacheWriteInputTokens": 0,
+       "outputTokens": 5,
+       "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400
+     }
+    },
+    "emittedAtMs": 1793312909250
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 3,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312909250
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793312910241
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c4-9316-7d30-b03e-8a6c95d7bacd",
+     "turn": {
+      "id": "01a189c7-595b-7922-9b0b-4a1dfc62575d",
+      "items": [
+       {
+        "type": "agentMessage",
+        "id": "msg_0b1dba2aa4ff706e016ae3c88cc3f4819680d12a20f340da01",
+        "text": "ready",
+        "phase": "final_answer",
+        "memoryCitation": null,
+        "delivery": null,
+        "questions": null
+       }
+      ],
+      "itemsView": "summary",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1793312905,
+      "completedAt": 1793312910,
+      "durationMs": 4668
+     }
+    },
+    "emittedAtMs": 1793312910241
+   }
+  }
+ ]
+}

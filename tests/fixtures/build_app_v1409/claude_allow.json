@@ -1,0 +1,1339 @@
+{
+ "harness": "claude-code",
+ "source": "recorded live 2026-10-29, Claude Code 2.1.311, this PC, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "control",
+   "subtype": "initialize"
+  },
+  {
+   "out": {
+    "type": "control_response",
+    "response": {
+     "subtype": "success",
+     "request_id": "init-1",
+     "response": {
+      "commands": [
+       {
+        "name": "init",
+        "description": "Set up a CLAUDE.md file",
+        "argumentHint": ""
+       }
+      ],
+      "models": []
+     },
+     "pending_permission_requests": [],
+     "pending_user_dialog_requests": []
+    }
+   },
+   "reply_to_control": "initialize"
+  },
+  {
+   "await": "user"
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\work\\demo",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "model": "claude-opus-5-5",
+    "permissionMode": "default",
+    "tools": [
+     "Task",
+     "AskUserQuestion",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "DesignSync",
+     "Edit",
+     "EnterPlanMode",
+     "EnterWorktree",
+     "ExitPlanMode",
+     "ExitWorktree",
+     "Glob",
+     "Grep",
+     "ListAgents",
+     "Monitor",
+     "NotebookEdit",
+     "PowerShell",
+     "PushNotification",
+     "Read",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write"
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "ab647eae-52ee-4c26-9bd6-c8902cedaae5"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJsZyxnv9qnptQHbo3T",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 32004,
+       "cache_read_input_tokens": 0,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 32004
+       },
+       "output_tokens": 24,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "4566528e-a4ad-4e21-a8bc-012c9ba61c0a",
+    "ttft_ms": 819,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "tool_use",
+      "id": "toolu_01UQXF9457SGwDH86USrTKYy",
+      "name": "PowerShell",
+      "input": {},
+      "caller": {
+       "type": "direct"
+      }
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "d2a31fbc-7ac2-4105-afd4-67cecf0d9343",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ""
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "fc5bf51d-f1ff-4341-a274-ea2080a82f0b",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"command\": \"Get-"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "37d8ba4d-15fc-445d-a85b-4bee93178e82",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "ChildItem -Force"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "a7f7ca69-03ab-4208-9c91-4854f16f47f1",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " | Select-Object M"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "769ed276-732a-4639-aee6-f183672a2790",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "ode, Length"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "a4d02b11-2a4a-488c-8393-ffd388f78926",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ", Name"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "a27c4d7a-6c0d-4110-848e-bb5e57d815ff",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"description\": \"List"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "fd463e74-22a1-4ffd-92f4-8b9810586077",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": " files in current directory"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "3b6f925c-f63f-447e-b04b-35aee0cc8547",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\"}"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "720f0a94-48ea-49a0-9ba6-5ce5de5bf49a",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJsZyxnv9qnptQHbo3T",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01UQXF9457SGwDH86USrTKYy",
+       "name": "PowerShell",
+       "input": {
+        "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
+        "description": "List files in current directory"
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 32004,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 32004
+      },
+      "output_tokens": 24,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "d9dc8ecb-2437-4979-b554-ea0d8a66f370",
+    "timestamp": "2026-10-29T22:22:06.228Z",
+    "request_id": "req_masked",
+    "wire_tool_inputs": {
+     "toolu_01UQXF9457SGwDH86USrTKYy": {
+      "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
+      "description": "List files in current directory"
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "aedb5a2d-8e4e-4aca-8580-5dc3fe71327f",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 32004,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 100,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 100,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 32004,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 32004
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "8cffe58c-7d9a-48da-a72f-2ff7ad220c97",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "bbfcdfd2-21da-45c3-aa8d-38efe2a33575",
+    "api_message_id": "msg_011CgXJsZyxnv9qnptQHbo3T"
+   }
+  },
+  {
+   "out": {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+     "status": "allowed",
+     "resetsAt": 1793318400,
+     "rateLimitType": "five_hour",
+     "overageStatus": "rejected",
+     "overageDisabledReason": "out_of_credits",
+     "isUsingOverage": false,
+     "unifiedWindows": {
+      "five_hour": {
+       "utilization": 0.24,
+       "resetsAt": 1793318400,
+       "status": "allowed"
+      },
+      "seven_day": {
+       "utilization": 0.27,
+       "resetsAt": 1793502000,
+       "status": "allowed"
+      }
+     }
+    },
+    "uuid": "f8322b6f-7625-4f34-ac9a-b6525424a979",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "control_request",
+    "request_id": "0c2b2706-fc2b-4df7-87e8-a567532802e3",
+    "request": {
+     "subtype": "can_use_tool",
+     "tool_name": "PowerShell",
+     "display_name": "PowerShell",
+     "input": {
+      "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
+      "description": "List files in current directory"
+     },
+     "description": "List files in current directory",
+     "decision_reason_type": "subcommandResults",
+     "tool_use_id": "toolu_01UQXF9457SGwDH86USrTKYy"
+    }
+   }
+  },
+  {
+   "await": "response",
+   "request_id": "0c2b2706-fc2b-4df7-87e8-a567532802e3"
+  },
+  {
+   "out": {
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "tool_use_id": "toolu_01UQXF9457SGwDH86USrTKYy",
+       "type": "tool_result",
+       "content": "Mode  Length Name\r\n----  ------ ----\r\n-a---      7 a.txt",
+       "is_error": false
+      }
+     ]
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "e8187015-0cb9-4b39-8c05-63d95b0b5396",
+    "timestamp": "2026-10-29T22:22:10.234Z",
+    "tool_use_result": {
+     "stdout": "Mode  Length Name\r\n----  ------ ----\r\n-a---      7 a.txt",
+     "stderr": "",
+     "interrupted": false,
+     "isImage": false
+    },
+    "tool_result_meta": [
+     {
+      "id": "toolu_01UQXF9457SGwDH86USrTKYy",
+      "permission_decision": {
+       "decision": "accept",
+       "source": "user_temporary"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "a14c633d-d333-46a2-b98c-8ad73a90c983"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJszCFJTwC6U9FYbX3Z",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 6863,
+       "cache_read_input_tokens": 32004,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 6863
+       },
+       "output_tokens": 17,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "6bb2e1b1-3673-4709-b39c-2c0ad5198e99",
+    "ttft_ms": 798,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "tool_use",
+      "id": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+      "name": "Write",
+      "input": {},
+      "caller": {
+       "type": "direct"
+      }
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "0474300f-27d3-4f96-a1ed-42cbfee82155",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ""
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "57a84d79-1a34-49c5-826b-30bf7bb53b48",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"file_path\": \"C:\\\\Users"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "152c3f04-12c7-43c3-9fe8-bc4de52e15f5",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\\\\me\\\\AppData\\\\"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "606b5cab-f5a0-48b2-b185-fc1b05c3e073",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "Local\\\\Temp\\\\"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "37393029-52ab-481f-a2a0-64737527118a",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "ij-appview-live\\\\c"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "5c26a0a0-70f0-48d7-b9aa-2aa7c1442f22",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "2\\\\hello.txt"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "78032e9b-cc0a-444b-ab95-161ede466aee",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\", \"content\": \"hi"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "75beb871-c991-47d6-86b4-96e66481b79d",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "\"}"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "ff4ea844-a091-44c1-8f0a-d6681f790b0c",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJszCFJTwC6U9FYbX3Z",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+       "name": "Write",
+       "input": {
+        "file_path": "C:\\work\\demo\\hello.txt",
+        "content": "hi"
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 6863,
+      "cache_read_input_tokens": 32004,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 6863
+      },
+      "output_tokens": 17,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "ad4f347f-56cd-469e-94d4-0cdea3adcc8d",
+    "timestamp": "2026-10-29T22:22:11.633Z",
+    "request_id": "req_masked",
+    "wire_tool_inputs": {
+     "toolu_01KATgkcH3RU75uFi9t5ry1W": {
+      "file_path": "C:\\work\\demo\\hello.txt",
+      "content": "hi"
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "9a59d7a1-872f-4476-8f19-b5bf44fd5c0f",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "control_request",
+    "request_id": "95986e1f-4aba-4385-933f-d4a5d1c119a1",
+    "request": {
+     "subtype": "can_use_tool",
+     "tool_name": "Write",
+     "display_name": "Write",
+     "input": {
+      "file_path": "C:\\work\\demo\\hello.txt",
+      "content": "hi"
+     },
+     "description": "hello.txt",
+     "permission_suggestions": [
+      {
+       "type": "setMode",
+       "mode": "acceptEdits",
+       "destination": "session"
+      }
+     ],
+     "tool_use_id": "toolu_01KATgkcH3RU75uFi9t5ry1W"
+    }
+   }
+  },
+  {
+   "await": "response",
+   "request_id": "95986e1f-4aba-4385-933f-d4a5d1c119a1"
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "tool_use",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 6863,
+      "cache_read_input_tokens": 32004,
+      "output_tokens": 105,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 105,
+        "cache_read_input_tokens": 32004,
+        "cache_creation_input_tokens": 6863,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 6863
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "1fb47916-b4e9-4ca9-8ba9-e6603b65d673",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "2326d09c-6006-442c-b618-de54f1e50983",
+    "api_message_id": "msg_011CgXJszCFJTwC6U9FYbX3Z"
+   }
+  },
+  {
+   "out": {
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "tool_use_id": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+       "type": "tool_result",
+       "content": "File created successfully at: C:\\work\\demo\\hello.txt (file state is current in your context — no need to Read it back)"
+      }
+     ]
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "feacfdd0-3fff-4d9e-99ed-63e31046ceb2",
+    "timestamp": "2026-10-29T22:22:11.699Z",
+    "tool_use_result": {
+     "type": "create",
+     "filePath": "C:\\work\\demo\\hello.txt",
+     "content": "hi",
+     "structuredPatch": [],
+     "originalFile": null,
+     "userModified": false
+    },
+    "tool_result_meta": [
+     {
+      "id": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+      "permission_decision": {
+       "decision": "accept",
+       "source": "user_temporary"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "145e5fa0-4c48-4768-b426-09db075a3693"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "model": "claude-opus-5-5",
+      "id": "msg_011CgXJt6Vku4q6MD2RQZAUU",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+       "input_tokens": 2,
+       "cache_creation_input_tokens": 170,
+       "cache_read_input_tokens": 38867,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 170
+       },
+       "output_tokens": 38,
+       "service_tier": "standard",
+       "inference_geo": "global",
+       "speed": "standard"
+      },
+      "input_transformations": [],
+      "diagnostics": null,
+      "context_management": null
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "72d4adc9-0311-4f8f-a673-8e0e9a1bc650",
+    "ttft_ms": 941,
+    "thinking_display": "updates",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "e7485f0b-88a5-4222-bb2e-8e42fb52b013",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "The folder had one"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "06be2f51-213b-4d92-8c83-0b15fcdddd04",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": " file,"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "6c48b637-bb7b-4fb5-a52b-a4ddb14ea4c2",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": " `a.txt` (7"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "8a5f464e-a172-48e1-9bdf-eb956e3f77ee",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": " bytes). I created `"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "f600591f-5812-4562-bc7d-97853749b24d",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "hello.txt` containing"
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "1923db0c-100a-4e6b-b6ec-bed2dc76c87d",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": " `hi`."
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "581c778a-7e1c-4eaf-a52c-32c3adb97131",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_011CgXJt6Vku4q6MD2RQZAUU",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`."
+      }
+     ],
+     "container": null,
+     "stop_reason": null,
+     "stop_sequence": null,
+     "stop_details": null,
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 170,
+      "cache_read_input_tokens": 38867,
+      "cache_creation": {
+       "ephemeral_5m_input_tokens": 0,
+       "ephemeral_1h_input_tokens": 170
+      },
+      "output_tokens": 38,
+      "service_tier": "standard",
+      "inference_geo": "global",
+      "speed": "standard"
+     },
+     "input_transformations": [],
+     "diagnostics": null,
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "uuid": "120d51f3-1850-4494-adb0-1ffbebeef155",
+    "timestamp": "2026-10-29T22:22:12.664Z",
+    "request_id": "req_masked"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "0a4836ac-628e-4487-8548-493055578a66",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "container": null
+     },
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 170,
+      "cache_read_input_tokens": 38867,
+      "output_tokens": 38,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "iterations": [
+       {
+        "input_tokens": 2,
+        "output_tokens": 38,
+        "cache_read_input_tokens": 38867,
+        "cache_creation_input_tokens": 170,
+        "cache_creation": {
+         "ephemeral_5m_input_tokens": 0,
+         "ephemeral_1h_input_tokens": 170
+        },
+        "type": "message"
+       }
+      ]
+     },
+     "context_management": {
+      "applied_edits": []
+     }
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "edd6096d-2dee-4ded-bcac-8883de9a215b",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "parent_tool_use_id": null,
+    "uuid": "6a104896-21fa-453b-8be7-de5acf15a01e",
+    "api_message_id": "msg_011CgXJt6Vku4q6MD2RQZAUU"
+   }
+  },
+  {
+   "out": {
+    "duration_api_ms": 5340,
+    "stop_reason": "end_turn",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "total_cost_usd": 0.3313542,
+    "usage": {
+     "input_tokens": 6,
+     "cache_creation_input_tokens": 39037,
+     "cache_read_input_tokens": 70871,
+     "output_tokens": 243,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 39037,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "global",
+     "iterations": [
+      {
+       "input_tokens": 2,
+       "output_tokens": 38,
+       "cache_read_input_tokens": 38867,
+       "cache_creation_input_tokens": 170,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 170
+       },
+       "type": "message"
+      }
+     ],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 243,
+      "cacheReadInputTokens": 70871,
+      "cacheCreationInputTokens": 39037,
+      "webSearchRequests": 0,
+      "costUSD": 0.3313542,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39037,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "fast_mode_disabled_reason": "sdk_opt_in_required",
+    "subagent_stats": {
+     "spawned": 0,
+     "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+     },
+     "started_in_background": 0,
+     "max_depth": 0,
+     "spawned_by_subagents": 0,
+     "completed": 0,
+     "failed": 0,
+     "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+     },
+     "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+     },
+     "by_type": {}
+    },
+    "safety_stops": 0,
+    "is_error": false,
+    "num_turns": 3,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+    "ttft_ms": 1910,
+    "type": "result",
+    "duration_ms": 8370,
+    "uuid": "9f717459-d6dc-4b9d-aec9-d7555664f1af",
+    "ttft_stream_ms": 1093,
+    "time_to_request_ms": 278,
+    "time_to_request_phases_ms": {
+     "other": 28,
+     "system_prompt": 167,
+     "resume_other": 1,
+     "process_user_input": 4,
+     "input_attachments": 17,
+     "input_hooks": 2,
+     "transcript_persist": 12,
+     "tool_pool_refresh": 1,
+     "init_message": 8,
+     "engine_pickup": 1,
+     "message_prep": 1,
+     "model_config_wait": 1,
+     "autocompact": 2,
+     "query_setup": 0,
+     "model_gates": 1,
+     "tool_schema_build": 14,
+     "message_normalization": 3,
+     "client_creation": 4,
+     "request_build": 11
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 0,
+    "time_to_request_loop_lag_ms": 68,
+    "time_to_request_cpu_ms": 500,
+    "time_to_request_major_faults": 13829,
+    "input_attachments_detail": {
+     "slowest_producer": "queued_commands",
+     "slowest_producer_ms": 11,
+     "cpu_ms": 16,
+     "major_faults": 592
+    },
+    "first_content_frame_ms": 1094,
+    "queued_turn_count": 0,
+    "result_index": 0,
+    "model_usage_since_last_result": {
+     "claude-opus-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 243,
+      "cacheReadInputTokens": 70871,
+      "cacheCreationInputTokens": 39037,
+      "webSearchRequests": 0,
+      "costUSD": 0.3313542,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39037,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  }
+ ]
+}

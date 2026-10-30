@@ -2118,6 +2118,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # waits up to 10 minutes for tool results) goes with the daemon.
             # Only when codex-cli was ever used: the module is not imported
             # for a shutdown. Off the loop, bounded.
+            # v1.409.0: every Code-view harness process (the user's real
+            # Claude Code / Codex) goes with the daemon, its turns ended with
+            # what they wrote kept. Only when the Code view was used.
+            _hosted = getattr(platform, "hosted", None)
+            if _hosted is not None:
+                try:
+                    await asyncio.wait_for(_hosted.shutdown(), timeout=30.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("code view shutdown failed", exc_info=True)
             _codex = sys.modules.get("iron_jarvis.providers.adapters.codex_native.session")
             if _codex is not None:
                 try:
@@ -3552,6 +3561,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import editor as _editor_routes
 
     _editor_routes.register(app, d)
+    # Build's Code view (v1.409.0, hosted/): the user's REAL Claude Code /
+    # Codex with all of their own tools on; every permission question they
+    # ask becomes a card the user answers.
+    from .routes import build_app as _build_app_routes
+
+    _build_app_routes.register(app, d)
     # Brain Profiles (v1.406.0, brain/): which memory base is the durable
     # brain, app-wide and per project, and the saves that are still waiting.
     from .routes import brain as _brain_routes

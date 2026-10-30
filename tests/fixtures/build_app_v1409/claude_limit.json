@@ -1,0 +1,13 @@
+{
+ "harness": "claude-code",
+ "source": "SYNTHESIZED (no account at its limit to record on 2026-10-29): the frame shapes are the live claude_signin recording's (an assistant frame carrying an `error` code and the CLI's own sentence, then an is_error result); the sentence and the error code are the ones Claude Code writes into its session jsonl for an account limit (terminals/limit_state.py's allow-list, v1.303.0)",
+ "steps": [
+  {"await": "control", "subtype": "initialize"},
+  {"out": {"type": "control_response", "response": {"subtype": "success", "request_id": "init-1", "response": {"commands": [], "models": []}}}, "reply_to_control": "initialize"},
+  {"await": "user"},
+  {"out": {"type": "system", "subtype": "init", "cwd": "C:\\work\\demo", "session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21", "model": "claude-opus-5-5", "permissionMode": "default", "tools": ["Bash", "Edit", "Read", "Write"]}},
+  {"out": {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1793318400, "rateLimitType": "five_hour", "overageStatus": "rejected", "isUsingOverage": false}, "session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21"}},
+  {"out": {"type": "assistant", "message": {"id": "f107af82-4d22-4248-b436-af774dbea9aa", "model": "<synthetic>", "role": "assistant", "type": "message", "content": [{"type": "text", "text": "You've hit your session limit · resets 3:45pm (America/New_York)"}], "usage": {"input_tokens": 0, "output_tokens": 0}}, "error": "rate_limit", "session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21"}},
+  {"out": {"type": "result", "subtype": "success", "is_error": true, "result": "You've hit your session limit · resets 3:45pm (America/New_York)", "stop_reason": "stop_sequence", "terminal_reason": "api_error", "session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21", "total_cost_usd": 0, "usage": {"input_tokens": 0, "output_tokens": 0}}}
+ ]
+}

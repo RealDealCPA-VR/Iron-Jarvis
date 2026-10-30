@@ -5,8 +5,9 @@ The user, 2026-10-29, beside a screenshot of Chat's Code view and one of Build:
 similar to the code, but it would run and control the claude harness or the
 codex harness … like https://github.com/pingdotgg/t3code … only effect the
 build module." Approved as planned: Claude Code and Codex first; the harness's
-own approvals answered by Iron Jarvis cards; a Terminal | App switch at the
-top of Build; Open in terminal both ways; other tools later through ACP.
+own approvals answered by Iron Jarvis cards; a **</> Code | Terminal** switch at
+the top of Build (Code is this view); Open in terminal both ways; Pi next, then
+OpenCode.
 
 ## What is different from Chat's Code view
 
@@ -150,7 +151,7 @@ is written FROM THE REAL DAEMON PARSER fed recorded harness output
 ## Dashboard
 
 - Build's header centre (`PageHeader center=`, the empty space) gets the
-  switch **Terminal | App** (`ij.build.view`, `?view=app`). Terminal is today's
+  switch **</> Code | Terminal** (`ij.build.view`, `?view=code`). Terminal is today's
   page byte-for-byte.
 - App view: left list of App sessions grouped by folder ("New session":
   harness (by name, greyed with the reason when not installed / signed out),
@@ -166,9 +167,42 @@ is written FROM THE REAL DAEMON PARSER fed recorded harness output
 - A Build terminal running claude/codex shows "Open in App view" when the
   CLI has exited and a session is recorded.
 - The bell: an App session waiting on an approval with nobody looking → the
-  same row/ping rules as a waiting chat (link `/terminals?view=app&app=<id>`).
+  same row/ping rules as a waiting chat (link `/terminals?view=code&code=<id>`).
 
 ## Not in this release
 
-ACP (Gemini CLI, OpenCode, Cursor …) — next. Attempts / teams / night shift
+Pi — next; then OpenCode. Attempts / teams / night shift
 stay in Chat's Code view. Phone answers for App approvals — later.
+
+## Changes from the user (2026-10-29), and what the daemon measured
+
+- The switch is **</> Code | Terminal** and a session links as
+  `/terminals?view=code&code=<id>`; the routes keep `/build/app/…` (internal).
+- Sessions are the tool's OWN saved sessions on disk: never ephemeral, always
+  under the account's home, so `claude --resume <id>` / `codex resume <id>`
+  keep working on sessions started here. `GET /build/app/sessions?folder=…&disk=1`
+  lists the tool's existing saved sessions for that folder (`source: "disk"`,
+  read-only, the `history/` reader's rules); `POST /build/app/sessions` with
+  `harness_session_id` opens one in the Code view.
+- Continue on the next account (Claude Code): an account limit in the stream
+  (an assistant frame `error: "rate_limit"`, a `rate_limit_event` that is not
+  `allowed`, the `terminals/limit_state` allow-list read on the harness's own
+  words) is an `error` with `fix_kind: "account_limit"` and `account`;
+  `POST /build/app/sessions/{id}/continue-on {account?}` copies the
+  conversation with `continue_on.carry_over` into the next account's home and
+  the next message resumes it there; refused in words when no other account
+  can take over (and for Codex, for now).
+- Next releases: Pi, then OpenCode (not ACP).
+- MEASURED (claude 2.1.311): `--permission-prompts host` alone DENIES every
+  tool that needs permission; `--permission-prompt-tool stdio` is also needed
+  for `can_use_tool` control requests to arrive. Ask first = `default` (the
+  flag and `set_permission_mode` both take it; `manual` is only a flag
+  spelling).
+- MEASURED (codex-cli 0.157.0, Windows): `read-only` and `workspace-write`
+  cannot start a command (`CreateProcessAsUserW … Access is denied`), even
+  after an allow. Ask first = `untrusted` + `danger-full-access` (asks before
+  every command and every file change; an allowed one runs). Full access =
+  `never` + `danger-full-access`. `on-request` + `danger-full-access` asks
+  nothing, so Auto edits (and Plan) are not offered for Codex on Windows.
+- A message sent while a turn runs is refused in words (409): Codex would not
+  queue it and a queued Claude message would have no turn of its own to follow.

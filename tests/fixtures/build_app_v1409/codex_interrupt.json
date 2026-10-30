@@ -1,0 +1,427 @@
+{
+ "harness": "codex",
+ "source": "recorded live 2026-10-29, codex-cli 0.157.0, this PC, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-1571-76b2-b4fd-517728eb3018",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-57-01a189c5-1571-76b2-b4fd-517728eb3018.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "on-request",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c5-1571-76b2-b4fd-517728eb3018",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-57-01a189c5-1571-76b2-b4fd-517728eb3018.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312757207
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312757227
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turn": {
+      "id": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312757227
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e75-7481-a8e1-3336a360b76a",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Write the numbers from 1 to 400, one per line, with the word 'number' before each. Do not use tools.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "startedAtMs": 1793312759414
+    },
+    "emittedAtMs": 1793312759414
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e75-7481-a8e1-3336a360b76a",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Write the numbers from 1 to 400, one per line, with the word 'number' before each. Do not use tools.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "completedAtMs": 1793312759414
+    },
+    "emittedAtMs": 1793312759417
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0751a703dca30cb8016ae3c7f89960819792e3efdd786efb6b",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "startedAtMs": 1793312761149
+    },
+    "emittedAtMs": 1793312761150
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "reasoning",
+      "id": "rs_0751a703dca30cb8016ae3c7f89960819792e3efdd786efb6b",
+      "summary": [],
+      "content": []
+     },
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "completedAtMs": 1793312761150
+    },
+    "emittedAtMs": 1793312761151
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "agentMessage",
+      "id": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+      "text": "",
+      "phase": "final_answer",
+      "memoryCitation": null,
+      "delivery": null,
+      "questions": null
+     },
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "startedAtMs": 1793312761200
+    },
+    "emittedAtMs": 1793312761200
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "itemId": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+     "delta": "number"
+    },
+    "emittedAtMs": 1793312761327
+   }
+  },
+  {
+   "await": "request",
+   "method": "turn/interrupt"
+  },
+  {
+   "out": {
+    "id": 4,
+    "result": {}
+   },
+   "reply_to": "turn/interrupt"
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "itemId": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+     "delta": " "
+    },
+    "emittedAtMs": 1793312761327
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "itemId": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+     "delta": "1"
+    },
+    "emittedAtMs": 1793312761328
+   }
+  },
+  {
+   "out": {
+    "method": "item/agentMessage/delta",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turnId": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+     "itemId": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+     "delta": "\n"
+    },
+    "emittedAtMs": 1793312761328
+   }
+  },
+  {
+   "out": {
+    "method": "account/rateLimits/updated",
+    "params": {
+     "rateLimits": {
+      "limitId": "codex",
+      "limitName": null,
+      "normalModelSlug": null,
+      "primary": {
+       "usedPercent": 1,
+       "windowDurationMins": 300,
+       "resetsAt": 1793330730
+      },
+      "secondary": {
+       "usedPercent": 0,
+       "windowDurationMins": 10080,
+       "resetsAt": 1793917530
+      },
+      "credits": {
+       "hasCredits": false,
+       "unlimited": false,
+       "balance": "0"
+      },
+      "individualLimit": null,
+      "spendControlReached": null,
+      "planType": "plus",
+      "rateLimitReachedType": null
+     }
+    },
+    "emittedAtMs": 1793312761331
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "status": {
+      "type": "idle"
+     }
+    },
+    "emittedAtMs": 1793312761338
+   }
+  },
+  {
+   "out": {
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c5-1571-76b2-b4fd-517728eb3018",
+     "turn": {
+      "id": "01a189c5-15d8-7793-b973-0ec056bfa6dd",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "interrupted",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": 1793312761,
+      "durationMs": 4120
+     }
+    },
+    "emittedAtMs": 1793312761338
+   }
+  }
+ ]
+}

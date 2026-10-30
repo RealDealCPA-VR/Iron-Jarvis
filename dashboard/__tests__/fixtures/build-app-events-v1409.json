@@ -1,0 +1,1359 @@
+{
+ "_about": "v1.409.0 Build Code view: the normalized events the REAL daemon sends for each scenario, produced by tests/test_build_app_v1409.py from recorded harness output (tests/fixtures/build_app_v1409, masked live runs of claude 2.1.311 / codex-cli 0.157.0; claude_account_limit_synthesized is built from recorded frame shapes, see its fixture). `at` is dropped; request ids are ask-N; every turn id is turn-1. Regenerate with IJ_REGEN_BUILD_APP=1.",
+ "scenarios": {
+  "claude_tool_approval_edit": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "f97030e3-5154-4f15-a6b0-d1d68826e569",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_017N95z45uqXc3vyTw4CYh1f",
+    "kind": "read",
+    "name": "Read",
+    "title": "Read hello.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_017N95z45uqXc3vyTw4CYh1f",
+    "kind": "read",
+    "name": "Read",
+    "title": "Read hello.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "done",
+    "output": "1\thi",
+    "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01RSB5g2SLEpPjvvfwSjCXLV",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit hello.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\", \"new_string\": \"hello\", \"old_string\": \"hi\", \"replace_all\": false}",
+    "status": "running",
+    "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Edit hello.txt",
+    "detail": "hello.txt",
+    "can_session": true,
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- a/C:/work/demo/hello.txt\n+++ b/C:/work/demo/hello.txt\n@@ -1 +1 @@\n-hi\n+hello",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01RSB5g2SLEpPjvvfwSjCXLV",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit hello.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\", \"new_string\": \"hello\", \"old_string\": \"hi\", \"replace_all\": false}",
+    "status": "done",
+    "output": "The file C:\\work\\demo\\hello.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+    "path": "C:\\work\\demo\\hello.txt",
+    "line": 1,
+    "diff": "--- a/C:/work/demo/hello.txt\n+++ b/C:/work/demo/hello.txt\n@@ -1,1 +1,1 @@\n-hi\n\\ No newline at end of file\n+hello\n\\ No newline at end of file",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvQQ5PWsBcGGa5sw5i:0",
+    "delta": "I replaced \"hi\"",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvQQ5PWsBcGGa5sw5i:0",
+    "delta": " with \"hello\" in `h",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvQQ5PWsBcGGa5sw5i:0",
+    "delta": "ello.txt`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011CgXJvQQ5PWsBcGGa5sw5i:0",
+    "text": "I replaced \"hi\" with \"hello\" in `hello.txt`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109870,
+    "output": 239,
+    "cache_read": 90645,
+    "list_price": true,
+    "cost_usd": 0.176685,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "I replaced \"hi\" with \"hello\" in `hello.txt`.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_two_approvals": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01UQXF9457SGwDH86USrTKYy",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Mode, Length, Name\", \"description\": \"List files in current directory\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "detail": "List files in current directory",
+    "can_session": false,
+    "once_only": true,
+    "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01UQXF9457SGwDH86USrTKYy",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Mode, Length, Name\", \"description\": \"List files in current directory\"}",
+    "status": "done",
+    "output": "Mode  Length Name\r\n----  ------ ----\r\n-a---      7 a.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write hello.txt",
+    "input": "{\"content\": \"hi\", \"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-2",
+    "kind": "edit",
+    "title": "Write hello.txt",
+    "detail": "hello.txt",
+    "can_session": true,
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-2",
+    "decision": "allow_session",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write hello.txt",
+    "input": "{\"content\": \"hi\", \"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "done",
+    "output": "File created successfully at: C:\\work\\demo\\hello.txt (file state is current in your context — no need to Read it back)",
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": "The folder had one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": " file,",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": " `a.txt` (7",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": " bytes). I created `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": "hello.txt` containing",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "delta": " `hi`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011CgXJt6Vku4q6MD2RQZAUU:0",
+    "text": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109914,
+    "output": 243,
+    "cache_read": 70871,
+    "list_price": true,
+    "cost_usd": 0.331354,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_deny": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "f15bf227-950c-49cb-bfb0-a77b94dacbbf",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KDaiQvW3XjPz1Sh3LtC5Lx",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write deny.txt",
+    "input": "{\"content\": \"no\", \"file_path\": \"C:\\\\work\\\\demo\\\\deny.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\deny.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Write deny.txt",
+    "detail": "deny.txt",
+    "can_session": true,
+    "path": "C:\\work\\demo\\deny.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/deny.txt\n@@ -0,0 +1,1 @@\n+no",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KDaiQvW3XjPz1Sh3LtC5Lx",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write deny.txt",
+    "input": "{\"content\": \"no\", \"file_path\": \"C:\\\\work\\\\demo\\\\deny.txt\"}",
+    "status": "failed",
+    "output": "The user said no to this.",
+    "path": "C:\\work\\demo\\deny.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": "I didn't",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": " create `deny.txt`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": " because the write was decl",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": "ined. If",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": " you still",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": " want the file, appro",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": "ve the write and I'll create",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "delta": " it.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011CgXJvFNrdWHggVA8WD9fp:1",
+    "text": "I didn't create `deny.txt` because the write was declined. If you still want the file, approve the write and I'll create it.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 70867,
+    "output": 171,
+    "cache_read": 50032,
+    "list_price": true,
+    "cost_usd": 0.18009,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "I didn't create `deny.txt` because the write was declined. If you still want the file, approve the write and I'll create it.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_interrupt": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "308a7e39-27e9-479f-9cce-f141b156da39",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": "number",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 1\nnumber 2\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 3\nnumber 4\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 5\nnumber 6\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 7\nnumber 8\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 9\nnumber 10\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 11\nnumber 12\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 13\nnumber 14\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 15\nnumber 16\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 17\nnumber 18\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 19\nnumber 20\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 21\nnumber 22\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 23\nnumber 24\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 25\nnumber 26\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 27\nnumber 28\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 29\nnumber 30\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 31\nnumber 32\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 33\nnumber 34\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 35\nnumber 36\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 37\nnumber 38\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 39\nnumber 40\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 41\nnumber 42\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 43\nnumber 44\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 45\nnumber 46\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 47\nnumber 48\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "delta": " 49\nnumber 50\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011CgXJv8iFw8HXUJdqBv2gQ:1",
+    "text": "number 1\nnumber 2\nnumber 3\nnumber 4\nnumber 5\nnumber 6\nnumber 7\nnumber 8\nnumber 9\nnumber 10\nnumber 11\nnumber 12\nnumber 13\nnumber 14\nnumber 15\nnumber 16\nnumber 17\nnumber 18\nnumber 19\nnumber 20\nnumber 21\nnumber 22\nnumber 23\nnumber 24\nnumber 25\nnumber 26\nnumber 27\nnumber 28\nnumber 29\nnumber 30\nnumber 31\nnumber 32\nnumber 33\nnumber 34\nnumber 35\nnumber 36\nnumber 37\nnumber 38\nnumber 39\nnumber 40\nnumber 41\nnumber 42\nnumber 43\nnumber 44\nnumber 45\nnumber 46\nnumber 47\nnumber 48\nnumber 49\nnumber 50\nnumber",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "list_price": true,
+    "cost_usd": 0.0,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_ask_user_question": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "fcc35c19-a26b-41db-b7a9-4da0ecadc2de",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+    "kind": "other",
+    "name": "AskUserQuestion",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"header\": \"Colour\", \"multiSelect\": false, \"options\": [{\"description\": \"The colour red\", \"label\": \"Red\"}, {\"description\": \"The colour blue\", \"label\": \"Blue\"}], \"question\": \"Which colour do you prefer?\"}]}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "question",
+    "request_id": "ask-1",
+    "questions": [
+     {
+      "question": "Which colour do you prefer?",
+      "options": [
+       {
+        "label": "Red",
+        "description": "The colour red"
+       },
+       {
+        "label": "Blue",
+        "description": "The colour blue"
+       }
+      ],
+      "multi": false,
+      "header": "Colour"
+     }
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+    "kind": "other",
+    "name": "AskUserQuestion",
+    "title": "Ask you a question",
+    "input": "{\"questions\": [{\"header\": \"Colour\", \"multiSelect\": false, \"options\": [{\"description\": \"The colour red\", \"label\": \"Red\"}, {\"description\": \"The colour blue\", \"label\": \"Blue\"}], \"question\": \"Which colour do you prefer?\"}]}",
+    "status": "done",
+    "output": "The user answered: \"Which colour do you prefer?\"=\"blue\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011CgXJvFxpsRJZjrpR6pUUu:0",
+    "delta": "Blue",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011CgXJvFxpsRJZjrpR6pUUu:0",
+    "text": "Blue",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 71010,
+    "output": 136,
+    "cache_read": 50069,
+    "list_price": true,
+    "cost_usd": 0.180246,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "Blue",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_sign_in": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "d97715b9-6b4d-43cf-8984-ec7540aa1510",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Claude Code isn't signed in",
+    "fix": "Press Sign in beside Claude Code in Settings › Connections.",
+    "technical": "Not logged in · Please run /login",
+    "fix_kind": "sign_in",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "list_price": true,
+    "cost_usd": 0.0,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_account_limit_synthesized": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Claude Code says this account reached its 5-hour limit.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Claude Code hit this account's limit",
+    "fix": "Press Continue on another account, or wait until it resets (resets 3:45pm (America/New_York)).",
+    "technical": "You've hit your session limit · resets 3:45pm (America/New_York)",
+    "fix_kind": "account_limit",
+    "turn": "turn-1",
+    "account": "p1"
+   },
+   {
+    "type": "usage",
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "list_price": true,
+    "cost_usd": 0.0,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "codex_command_and_file_change": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "codex",
+    "harness_session_id": "01a189c5-dbad-7463-b568-0b39fd57450e",
+    "model": "gpt-5.6-terra",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": "I",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": "’ll",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " list",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " folder",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": ",",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " then",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " add",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": "hello",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": ".txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "delta": "`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_00e548d3a0862cf0016ae3c82b54088190b2c867c759a31246",
+    "text": "I’ll list the folder, then add `hello.txt`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+    "kind": "command",
+    "name": "shell",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoS…",
+    "input": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoS…",
+    "detail": "",
+    "command": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize",
+    "can_session": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+    "kind": "command",
+    "name": "shell",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoS…",
+    "input": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize",
+    "status": "done",
+    "output": "\r\nMode  Length LastWriteTime         Name\r\n----  ------ -------------         ----\r\n-a---      7 10/29/2026 6:26:46 PM a.txt\r\n\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-41928728-de4d-4f99-b61e-fa7ef75a7cdc",
+    "kind": "write",
+    "name": "apply_patch",
+    "title": "Write hello.txt",
+    "input": "C:\\work\\demo\\hello.txt",
+    "status": "running",
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-2",
+    "kind": "edit",
+    "title": "Create hello.txt",
+    "detail": "",
+    "can_session": true,
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-2",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-41928728-de4d-4f99-b61e-fa7ef75a7cdc",
+    "kind": "write",
+    "name": "apply_patch",
+    "title": "Write hello.txt",
+    "input": "C:\\work\\demo\\hello.txt",
+    "status": "done",
+    "path": "C:\\work\\demo\\hello.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/hello.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "Listed",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "a",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": ".txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " and",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " created",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "hello",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": ".txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " containing",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "delta": "`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_00e548d3a0862cf0016ae3c833138081908077b6494d3c881b",
+    "text": "Listed `a.txt` and created `hello.txt` containing `hi`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 54194,
+    "output": 234,
+    "cache_read": 36096,
+    "list_price": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "codex_deny": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "codex",
+    "harness_session_id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+    "model": "gpt-5.6-terra",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": "I",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": "’ll",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": " create",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": " requested",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": " file",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_0d89af7783f9ad0b016ae3c7f877648194bbfb1019eb723d31",
+    "text": "I’ll create the requested file.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-92f644d8-dc2b-4c1f-823c-4a89c1887d5b",
+    "kind": "write",
+    "name": "apply_patch",
+    "title": "Write deny.txt",
+    "input": "C:\\work\\demo\\deny.txt",
+    "status": "running",
+    "path": "C:\\work\\demo\\deny.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/deny.txt\n@@ -0,0 +1,1 @@\n+no",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Create deny.txt",
+    "detail": "command failed; retry without sandbox?",
+    "can_session": true,
+    "path": "C:\\work\\demo\\deny.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/deny.txt\n@@ -0,0 +1,1 @@\n+no",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-92f644d8-dc2b-4c1f-823c-4a89c1887d5b",
+    "kind": "write",
+    "name": "apply_patch",
+    "title": "Write deny.txt",
+    "input": "C:\\work\\demo\\deny.txt",
+    "status": "failed",
+    "path": "C:\\work\\demo\\deny.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/deny.txt\n@@ -0,0 +1,1 @@\n+no",
+    "output": "The user said no to this.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "Could",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "’t",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " create",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": ".txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "`:",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " file",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": "-change",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " request",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " was",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": " rejected",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_0d89af7783f9ad0b016ae3c803991c8194bc1c20ecfc34138c",
+    "text": "Couldn’t create `deny.txt`: the file-change request was rejected.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 41354,
+    "output": 142,
+    "cache_read": 18944,
+    "list_price": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "codex_interrupt": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "codex",
+    "harness_session_id": "01a189c5-1571-76b2-b4fd-517728eb3018",
+    "model": "gpt-5.6-terra",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+    "delta": "number",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+    "delta": " ",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+    "delta": "1",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_0751a703dca30cb8016ae3c7f8c71481978788e0b628001896",
+    "delta": "\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "list_price": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "codex_sign_in": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "codex",
+    "harness_session_id": "01a189c6-f109-74e3-82ca-77e1eb54e8b6",
+    "model": "gpt-6-astra",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Codex lost its connection and is retrying (Reconnecting... 2/5).",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Codex isn't signed in",
+    "fix": "Press Sign in beside Codex in Settings › Connections.",
+    "technical": "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: (masked), request id: req_masked",
+    "fix_kind": "sign_in",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "list_price": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ]
+ }
+}
