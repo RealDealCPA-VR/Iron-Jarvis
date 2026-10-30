@@ -1280,8 +1280,10 @@ describe("review: words", () => {
     H.gets["/build/app/harnesses"] = tools;
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
     // v1.412.0 (moved on purpose): the start composer's account chip.
-    fireEvent.click(await screen.findByTestId("code-start-account"));
-    const menu = screen.getByTestId("code-start-account-menu");
+    // v1.412.0 review (moved on purpose): with several logins and none
+    // remembered, the question is OPEN at once.
+    await screen.findByTestId("code-start-account");
+    const menu = await screen.findByTestId("code-start-account-menu");
     const opts = within(menu)
       .getAllByRole("menuitemradio")
       .map((o) => [o.textContent, (o as HTMLButtonElement).disabled]);

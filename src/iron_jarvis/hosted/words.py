@@ -36,6 +36,19 @@ ARCHIVED = "This session is archived — unarchive it to send a message."
 NO_FOLDER_RESUME = "A saved conversation belongs to its folder — choose that folder to open it."
 NO_FOLDER_MADE = "This session's own folder could not be made in {root}: {why}"
 NO_FOLDER_UNUSABLE = "This session's own folder cannot be used: {why}"
+#: v1.412.0 review: the session's own folder is gone and cannot be made again
+#: at its path (the folder above it is gone too — an unplugged drive, a moved
+#: chat files folder). Its conversation belongs to that path.
+NO_FOLDER_GONE = (
+    "This session's folder {folder} is missing, and the folder above it is gone too, so it "
+    "cannot be made again. Put that folder back (or plug its drive in), then send your message again."
+)
+#: v1.412.0 review: the folder a session works in is missing (Windows only
+#: says "The directory name is invalid", which read as the tool's fault).
+FOLDER_MISSING = (
+    "This session's folder {folder} is missing. Put it back (or plug its drive in), "
+    "or start a new session in another folder."
+)
 NOT_INSTALLED = "{label} is not installed on this PC, so this session cannot start it."
 FULL_NEEDS_CONFIRM = (
     "Full access lets {label} run anything without asking — press it twice to confirm."
@@ -145,6 +158,10 @@ def could_not_start(harness: str, program: str, exc: BaseException) -> str:
         why = "that file is not there any more"
     elif code == 5 or isinstance(exc, PermissionError):
         why = "Windows did not allow it to run"
+    elif code == 267:
+        # v1.412.0 review: the folder the tool starts in is missing, not
+        # the tool ("The directory name is invalid").
+        return f"The folder this session works in is missing, so {label(harness)} could not start there."
     else:
         why = clip(getattr(exc, "strerror", None) or type(exc).__name__, 120)
     return (f"Iron Jarvis could not start {label(harness)} from {clip(name, 80)}: {why}. "

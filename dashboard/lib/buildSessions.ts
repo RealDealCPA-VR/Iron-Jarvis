@@ -589,8 +589,22 @@ export function renameFolder(path: string, name: string): Promise<unknown> {
   return post("/build/folders/rename", { path, name });
 }
 
-export function deleteSession(id: string): Promise<unknown> {
-  return del(`/build/sessions/${encodeURIComponent(id)}`);
+/** v1.412.0 review: `onlyIfEmpty` deletes ONLY a session nobody used yet —
+ *  the daemon refuses (409, `code: "not_empty"`) one with a message, a
+ *  waiting message or a reply running. The move of an empty session to a
+ *  folder and the clean-up of an abandoned New session use it, and READ the
+ *  answer (a refused delete is an ApiError). */
+export function deleteSession(id: string, opts: { onlyIfEmpty?: boolean } = {}): Promise<unknown> {
+  return del(`/build/sessions/${encodeURIComponent(id)}${opts.onlyIfEmpty ? "?only_if_empty=1" : ""}`);
+}
+
+/** v1.412.0 review: the daemon refused an `onlyIfEmpty` delete because the
+ *  session holds something (a 409 with `code: "not_empty"`). */
+export function refusedNotEmpty(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const status = (e as { status?: unknown }).status;
+  const body = (e as { body?: unknown }).body as { code?: unknown } | undefined;
+  return status === 409 && !!body && body.code === "not_empty";
 }
 
 /** Archive: the chat archive's rules — a 409 lists what is still running

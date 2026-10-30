@@ -4215,15 +4215,24 @@ does not need a bump, stop and bump it.
   used `ij.code.lastTool`, else the first that `toolUnavailable` passes),
   Account ONLY when `accountChoices(tool).length > 1` (Iron-Proxy rows; Pi's
   own sign-in never asks; picking such a tool OPENS the account menu at once;
-  default `ij.code.lastAccount.<tool>` while listed and usable), Mode
+  default `ij.code.lastAccount.<tool>` while listed and usable — REVIEW: with
+  none remembered the DEFAULT tool asks too, and Send waits for an answer;
+  none usable = Send off and the chip says why, `noUsableAccount`), Mode
   (`components/buildCode/ModeChip.tsx`, lifted out of BuildCodeView, which
   re-exports it and the two-press timings), Model, Effort only when
-  `tool.efforts` is non-empty. Send = `POST /build/app/sessions` (the one
+  `lib/buildApp.effortsFor(tool, model)` is non-empty (REVIEW: the model's
+  own levels — `harnesses()` model rows carry `efforts` from
+  `claude_models.model_efforts`, `()` for `supportsEffort: false`, and Pi's
+  `reasoning: false` rows; an effort the new model does not take is dropped,
+  by the composer and by `patch`). Send = `POST /build/app/sessions` (the one
   create path) then the SessionPane sends the words as the first message
   (`firstMessage`, once). A folder heading's "+" starts on that folder; New
   session on NONE (the session in front's folder is only where Choose… opens).
-  A 400 from the create with a folder chosen is said ON the chip
-  (`code-start-folder-problem`), nothing started, the words kept. DAEMON:
+  A 400 from the create is said ON the chip its `field` names (REVIEW:
+  `Refused.field`; the create route answers `{detail, field}` —
+  `code-start-<field>-problem`; folder → the folder chip), nothing started,
+  the words kept. A first message parked for a just-made session is dropped
+  when the user opens another session before it went (`firstFor`). DAEMON:
   `AppSessionCreate.folder` may be "" → `HostedSessionRecord.no_folder`
   (additive; NULL = False); a saved conversation (`harness_session_id`) still
   needs its folder (400). `start_turn` makes the OWN folder after the input
@@ -4231,9 +4240,17 @@ does not need a bump, stop and bump it.
   `routes/build._work_folder_title`, `root_problem`-checked, kept by
   `store.set_folder_if_empty` — first wins) and every refusal or exception
   before the turn exists takes it back while EMPTY (`_take_back_folder`, never
-  while a turn of that session runs); archive and delete drop an empty own
-  folder inside the chat files folder that no other row uses
-  (`_drop_own_folder`). Views carry `no_folder` + `work_root`; the list
+  while a turn of that session runs) — REVIEW: also a first message whose
+  tool never STARTED inside `_drive` (not installed, Windows could not start
+  it); once the tool ran, the folder is the conversation's. ONLY DELETE drops
+  an empty own folder inside the chat files folder that no other row uses
+  (`_drop_own_folder`); ARCHIVE KEEPS IT (Claude Code and Pi keep a
+  conversation by its folder: unarchive must resume at the same path). An own
+  folder the user deleted is made AGAIN at the same path at the next message
+  (`_remake_own_folder` = `routes/build._make_again`), refused in words
+  (`W.NO_FOLDER_GONE`) when the folder above it is gone; a missing folder of
+  any session says so (`W.FOLDER_MISSING`, never Windows' "directory name is
+  invalid"). Views carry `no_folder` + `work_root`; the list
   answers `work_root` too. The dashboard groups every no-folder session under
   ONE "No folder" heading (its "+" starts another). CHAT › CODE: the sidebar's
   New session (and Ctrl+N) `onStart("")` AT ONCE — `NewSessionForm` is gone;
@@ -4241,10 +4258,23 @@ does not need a bump, stop and bump it.
   session has NO messages (not in the one-row toolbar: the v1.400.0 fit is
   untouched) and a chosen folder MOVES the empty session (`moveToFolder`:
   `createSession(folder, carry)` with provider/model/reasoning/approval_mode/
-  plan mode/account + `branch` only when the switch was shown, `local_only`
-  patched after, THEN the old one deleted, THEN `onBranched(new, draft)` with
-  the box's words, files and skill — a refused folder moves and deletes
-  nothing). A repository that can branch asks "Work on a new branch" there
+  plan mode/account/`local_only`/`cap`/`team` AT CREATE (`BuildSessionCreate`
+  takes `local_only` and `cap`, the cap checked as PATCH checks it) +
+  `branch` only when the switch was shown, THEN the old one deleted with
+  `DELETE …?only_if_empty=1`, THEN `onMoved(new, draft)` with the box's
+  words, files and skill READ AT COMMIT (refs) — a refused folder moves and
+  deletes nothing). REVIEW (the move could delete a session the user had
+  written in): while the move is in flight nothing sends or attaches
+  (`movingRef`, "Moving to <folder>…", Send disabled); a file still uploading
+  refuses the move in words (`MOVE_WAITS_FOR_UPLOAD`); `only_if_empty`
+  answers 409 `{detail, code: "not_empty"}` for any message, waiting message
+  or reply running/starting, and a refused delete keeps the user on the OLD
+  session and takes the new one back (`refusedNotEmpty`). ABANDONED New
+  sessions: `IjHarnessView` deletes (only-if-empty) a session it made (New
+  session, "+", "/clear", the move) when the user leaves it — another session
+  opened, New session again, the view closed — unless something was put in
+  it (`lib/emptySessions.noteSessionUsed`: words, a file, an "@" file, a
+  skill, a reply). A window closed outright cleans nothing up. A repository that can branch asks "Work on a new branch" there
   (v1.375.0's switch, moved). `IjHarnessView.pickFrom` = the folder in front,
   else the last one, else Build's — where Choose… opens. The native model
   menu already asks the account (v1.376.0: account entries before models).
@@ -4265,6 +4295,15 @@ does not need a bump, stop and bump it.
   `ij-harness-phase7-review-v1378`, `ij-harness-sidebar-v1369`,
   `ij-harness-slash-nofolder-review-v1379` and the e2e openers
   (`build-app-view`, `ij-harness`, `ij-harness-attempts`, `ij-harness-git`).
+  REVIEW pins: `tests/test_build_app_start_review_v1412.py`,
+  `tests/test_build_session_move_v1412.py`,
+  `dashboard/__tests__/{build-code-start-review,ij-harness-start-review,ij-harness-abandoned}-v1412.test.tsx`,
+  the 390 px Chat › Code folder-chip case in `e2e/build-code-start.spec.ts`
+  (its stub now sends what the real daemon sends); moved on purpose:
+  `test_build_app_start_v1412` (archive keeps), `build-code-start-v1412` (a
+  remembered account; the daemon names the folder chip), `ij-harness-start-v1412`
+  (Local only at create, only-if-empty delete), `build-app-view-v1409` (the
+  question open at once).
 
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon

@@ -228,10 +228,14 @@ describe("the folder chip under the composer", () => {
         reasoning: "high",
         approval_mode: "yolo",
         account: "p_work",
+        // v1.412.0 review (moved on purpose): Local only rides the create
+        // itself (a separate PATCH could fail and drop it).
+        local_only: true,
       },
     ]);
-    expect(calls("PATCH", "/build/sessions/new1").map((c) => c.body)).toEqual([{ local_only: true }]);
-    expect(calls("DELETE", "/build/sessions/s1")).toHaveLength(1);
+    expect(calls("PATCH", "/build/sessions/new1")).toEqual([]);
+    // …and the empty session is deleted ONLY while it is still empty.
+    expect(calls("DELETE", "/build/sessions/s1?only_if_empty=1")).toHaveLength(1);
     const [id, draft] = onBranched.mock.calls[0];
     expect(id).toBe("new1");
     expect(draft).toMatchObject({ text: "fix the cart" });

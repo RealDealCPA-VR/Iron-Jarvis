@@ -315,6 +315,10 @@ def _parse(stdout: str) -> dict:
             "default": is_default,
             "effort_levels": _effort_levels(r),
         }
+        if r.get("supportsEffort") is False:
+            # v1.412.0 review: "takes no effort" is a fact of its own — an
+            # empty list alone also means an older CLI that did not say.
+            rows[mid]["no_effort"] = True
     if not rows:
         raise ValueError("the claude CLI's picker named no model we can route")
     return {"models": list(rows.values()), "subscription": subscription, "at": _now_iso(), "error": None}
@@ -544,6 +548,22 @@ def effort_levels(model_id: str) -> tuple[str, ...] | None:
     if not isinstance(levels, list) or not levels:
         return None
     return tuple(str(x) for x in levels if isinstance(x, str))
+
+
+def model_efforts(model_id: str) -> tuple[str, ...] | None:
+    """v1.412.0 review: the effort levels ``model_id`` takes as far as the
+    CACHED picker says — the levels; ``()`` when the picker says the model
+    takes NO effort (``supportsEffort: false``); ``None`` when it is not known
+    (no row, or an older CLI that lists no levels). Never starts the CLI."""
+    if (model_id or "").strip().lower() in DEFAULT_IDS:
+        row = _default_row()
+    else:
+        _canon, row = _lookup(model_id)
+    if row is None:
+        return None
+    if row.get("no_effort") is True:
+        return ()
+    return effort_levels(model_id)
 
 
 def context_window(model_id: str) -> int | None:

@@ -49,6 +49,7 @@ import {
   OWN_SIGN_IN_TITLE,
   accountStatusWords,
   decodeCodeSession,
+  effortsFor,
   ownSignInWords,
   toolUnavailable,
   type CodeSession,
@@ -96,14 +97,25 @@ export function asksForAccount(tool: CodingTool | null): boolean {
 }
 
 /** The account a new session on `tool` starts on: the last one used for it
- *  while it is listed and usable, else the first usable one. "" = the daemon
- *  decides (one login, or none). */
+ *  while it is listed and usable. "" = not chosen yet — with more than one
+ *  login the composer ASKS (v1.412.0 review: the default tool never asked,
+ *  and a session silently went out on the first account); with one login (or
+ *  none) the daemon decides. */
 export function defaultAccount(tool: CodingTool | null, last: string): string {
   const list = accountChoices(tool);
   if (list.length <= 1) return "";
   const usable = list.filter((a) => accountStatusWords(a.status).usable);
   if (last && usable.some((a) => a.id === last)) return last;
-  return usable[0]?.id ?? "";
+  return "";
+}
+
+/** v1.412.0 review: why none of the tool's logins can start a session (all
+ *  signed out, at their limit or turned off), in words; null when one can. */
+export function noUsableAccount(tool: CodingTool | null): string | null {
+  const list = accountChoices(tool);
+  if (list.length <= 1 || list.some((a) => accountStatusWords(a.status).usable)) return null;
+  const why = Array.from(new Set(list.map((a) => accountStatusWords(a.status).words).filter(Boolean)));
+  return `No ${tool?.label ?? ""} account can start a session now: ${why.join(", ") || "none is usable"}.`;
 }
 
 const CHIP_BTN =
@@ -134,6 +146,26 @@ function useInsideWindow(ref: RefObject<HTMLDivElement | null>, open: boolean): 
     setShift(next);
   }, [open, ref]);
   return shift;
+}
+
+/** The chips a refusal can be said on (besides the folder chip). */
+const CHIP_FIELDS = new Set(["tool", "account", "mode", "model", "effort"]);
+
+/** v1.412.0 review: which choice the daemon's refusal is about (`field` in
+ *  its JSON answer), "" when none. */
+export function refusalField(e: unknown): string {
+  if (!(e instanceof ApiError)) return "";
+  const body = e.body as { field?: unknown } | undefined;
+  return body && typeof body.field === "string" ? body.field : "";
+}
+
+function ChipProblem({ field, problem }: { field: string; problem: { field: string; words: string } | null }) {
+  if (!problem || problem.field !== field) return null;
+  return (
+    <span role="alert" data-testid={`code-start-${field}-problem`} className="basis-full px-2 text-[12px] text-tone-danger">
+      {problem.words}
+    </span>
+  );
 }
 
 function errorWords(e: unknown, fallback: string): string {
@@ -175,6 +207,9 @@ export function StartComposer({
   const [effort, setEffort] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.412.0 review: a refusal about one choice is said on THAT chip (the
+  // daemon's `field`), never on the folder chip by default.
+  const [chipProblem, setChipProblem] = useState<{ field: string; words: string } | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const toolMenuRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
@@ -188,13 +223,24 @@ export function StartComposer({
     if (first) setToolId(first);
   }, [tools, toolId]);
   const tool = useMemo(() => tools?.find((t) => t.id === toolId) ?? null, [tools, toolId]);
-  // A tool's own defaults whenever the tool changes.
+  // A tool's own defaults whenever the tool changes. v1.412.0 review: a tool
+  // with several logins and no account remembered for it ASKS at once — the
+  // default tool too (only a tool the user picked used to ask).
   useEffect(() => {
-    setAccount(defaultAccount(tool, tool ? readKept(LAST_ACCOUNT_KEY + tool.id) : ""));
+    const kept = defaultAccount(tool, tool ? readKept(LAST_ACCOUNT_KEY + tool.id) : "");
+    setAccount(kept);
+    if (asksForAccount(tool) && !kept && !noUsableAccount(tool)) setAccountOpen(true);
     setMode({ id: tool?.modes[0]?.id ?? "", confirm: false });
     setModel("");
     setEffort("");
+    setChipProblem(null);
   }, [tool]);
+  // v1.412.0 review: the effort levels are the chosen MODEL's; an effort the
+  // model does not take is dropped (the chip hides when it takes none).
+  const efforts = useMemo(() => effortsFor(tool, model), [tool, model]);
+  useEffect(() => {
+    if (effort && !efforts.includes(effort)) setEffort("");
+  }, [efforts, effort]);
 
   useEffect(() => {
     boxRef.current?.focus({ preventScroll: true });
@@ -202,8 +248,12 @@ export function StartComposer({
 
   const choices = accountChoices(tool);
   const showAccount = asksForAccount(tool);
+  const noAccount = noUsableAccount(tool);
+  // v1.412.0 review: a tool with several logins never starts with none
+  // chosen (the daemon would pick one the user did not choose).
+  const accountMissing = showAccount && !account;
   const unavailable = tool ? toolUnavailable(tool) : null;
-  const ready = !!tool && !unavailable && !!text.trim() && !busy;
+  const ready = !!tool && !unavailable && !accountMissing && !!text.trim() && !busy;
 
   function chooseTool(id: string) {
     setToolOpen(false);
@@ -217,9 +267,14 @@ export function StartComposer({
   async function start() {
     const words = text.trim();
     if (!tool || unavailable || !words || busy) return;
+    if (accountMissing) {
+      if (!noAccount) setAccountOpen(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     setFolderProblem(null);
+    setChipProblem(null);
     try {
       const raw = await post<unknown>("/build/app/sessions", {
         harness: tool.id,
@@ -228,7 +283,7 @@ export function StartComposer({
         ...(mode.id ? { mode: mode.id } : {}),
         ...(mode.confirm ? { confirm: true } : {}),
         ...(model ? { model } : {}),
-        ...(effort ? { effort } : {}),
+        ...(effort && efforts.includes(effort) ? { effort } : {}),
       });
       const made = decodeCodeSession(raw);
       if (!made) throw new Error("The session could not be made.");
@@ -237,8 +292,11 @@ export function StartComposer({
       onStarted(made, words);
     } catch (e) {
       const words2 = errorWords(e, "The session could not be made.");
-      // A folder the daemon refused (400) is said on the folder chip.
-      if (folder && e instanceof ApiError && e.status === 400) setFolderProblem(words2);
+      // v1.412.0 review: each refusal on the chip it is about — the daemon
+      // names it (`field`); one it does not name is said under the composer.
+      const field = refusalField(e);
+      if (field === "folder") setFolderProblem(words2);
+      else if (field && CHIP_FIELDS.has(field)) setChipProblem({ field, words: words2 });
       else setError(words2);
       setBusy(false);
     }
@@ -259,7 +317,9 @@ export function StartComposer({
     : tool
       ? tool.label
       : "No coding tool found";
-  const accountName = choices.find((a) => a.id === account)?.name ?? "Choose an account";
+  const accountName = noAccount
+    ? "No account can start it"
+    : (choices.find((a) => a.id === account)?.name ?? "Choose an account");
 
   return (
     <div data-testid="code-start" className="flex h-full flex-col justify-center overflow-y-auto px-4 py-6">
@@ -291,7 +351,7 @@ export function StartComposer({
               disabled={!ready}
               onClick={() => void start()}
               aria-label="Start the session and send"
-              title={unavailable ?? "Send (Enter)"}
+              title={unavailable ?? noAccount ?? (accountMissing ? "Choose an account first" : "Send (Enter)")}
               className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} aria-hidden="true" />}
@@ -339,6 +399,7 @@ export function StartComposer({
               <span className="truncate">{toolWords}</span>
               <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
             </button>
+            <ChipProblem field="tool" problem={chipProblem} />
             {toolOpen && tools ? (
               <div
                 ref={toolMenuRef}
@@ -400,18 +461,19 @@ export function StartComposer({
                 data-testid="code-start-account"
                 aria-haspopup="menu"
                 aria-expanded={accountOpen}
-                disabled={busy}
+                disabled={busy || !!noAccount}
                 onClick={() => {
                   setAccountOpen((v) => !v);
                   setToolOpen(false);
                 }}
-                title={`The ${tool?.label ?? ""} account this session runs on`}
+                title={noAccount ?? `The ${tool?.label ?? ""} account this session runs on`}
                 className={CHIP_BTN}
               >
                 <UserRound size={13} aria-hidden="true" className="shrink-0" />
                 <span className="truncate">{accountName}</span>
                 <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
               </button>
+              <ChipProblem field="account" problem={chipProblem} />
               {accountOpen ? (
                 <div
                   ref={accountMenuRef}
@@ -467,6 +529,7 @@ export function StartComposer({
               testId="code-start-mode"
             />
           ) : null}
+          <ChipProblem field="mode" problem={chipProblem} />
 
           {tool && tool.models.length ? (
             <select
@@ -475,6 +538,7 @@ export function StartComposer({
               value={model}
               disabled={busy}
               onChange={(e) => setModel(e.target.value)}
+              aria-invalid={chipProblem?.field === "model" || undefined}
               className={CHIP_SELECT}
             >
               {tool.models.some((m) => m.id === "") ? null : <option value="">{tool.label}&apos;s default</option>}
@@ -485,23 +549,26 @@ export function StartComposer({
               ))}
             </select>
           ) : null}
-          {tool && tool.efforts.length ? (
+          <ChipProblem field="model" problem={chipProblem} />
+          {tool && efforts.length ? (
             <select
               aria-label="Effort"
               data-testid="code-start-effort"
               value={effort}
               disabled={busy}
               onChange={(e) => setEffort(e.target.value)}
+              aria-invalid={chipProblem?.field === "effort" || undefined}
               className={CHIP_SELECT}
             >
               <option value="">Default effort</option>
-              {tool.efforts.map((x) => (
+              {efforts.map((x) => (
                 <option key={x} value={x}>
                   {x.charAt(0).toUpperCase() + x.slice(1)} effort
                 </option>
               ))}
             </select>
           ) : null}
+          <ChipProblem field="effort" problem={chipProblem} />
         </div>
 
         {toolsError ? (
@@ -511,6 +578,10 @@ export function StartComposer({
         ) : unavailable ? (
           <p data-testid="code-start-unavailable" className="px-2 text-[12px] text-zinc-500">
             {unavailable}
+          </p>
+        ) : noAccount ? (
+          <p data-testid="code-start-no-account" className="px-2 text-[12px] text-zinc-500">
+            {noAccount}
           </p>
         ) : null}
         {error ? (

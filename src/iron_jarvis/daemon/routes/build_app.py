@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ...hosted import service as S
@@ -64,6 +65,17 @@ def _http(r: S.Refused) -> HTTPException:
     return HTTPException(status_code=r.status, detail=r.sentence)
 
 
+def _refused(r: S.Refused) -> JSONResponse:
+    """v1.412.0 review: a refusal that is about one choice of the start
+    composer says WHICH (``field``) beside the plain sentence (``detail``), so
+    the page puts it on that chip — a refused effort used to land on the
+    folder chip."""
+    content: dict[str, Any] = {"detail": r.sentence}
+    if getattr(r, "field", ""):
+        content["field"] = r.field
+    return JSONResponse(status_code=r.status, content=content)
+
+
 def register(app: FastAPI, d: Any) -> None:
     from .chat import _follow_response
 
@@ -78,11 +90,11 @@ def register(app: FastAPI, d: Any) -> None:
         return {"harnesses": svc().harnesses()}
 
     @app.post("/build/app/sessions", status_code=201)
-    async def app_create(body: AppSessionCreate) -> dict[str, Any]:
+    async def app_create(body: AppSessionCreate) -> Any:
         try:
             return await svc().create(body.model_dump())
         except S.Refused as r:
-            raise _http(r) from None
+            return _refused(r)
 
     @app.get("/build/app/sessions")
     async def app_list(archived: str = "", folder: str = "", disk: str = "", account: str = "") -> dict[str, Any]:

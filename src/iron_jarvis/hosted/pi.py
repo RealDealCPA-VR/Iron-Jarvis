@@ -468,7 +468,12 @@ def model_rows(models: Any) -> list[dict[str, str]]:
         if not provider or not mid:
             continue
         name = str(m.get("name") or mid).strip()
-        out.append({"id": clip(f"{provider}/{mid}", 120), "label": clip(f"{name} ({provider})", 120)})
+        row: dict[str, Any] = {"id": clip(f"{provider}/{mid}", 120), "label": clip(f"{name} ({provider})", 120)}
+        if m.get("reasoning") is False:
+            # v1.412.0 review: Pi says this model has no reasoning — it takes
+            # no thinking level (the effort chip hides for it).
+            row["efforts"] = []
+        out.append(row)
         if len(out) >= MAX_MODELS:
             break
     return out
@@ -1089,11 +1094,15 @@ def cached_models(path: Path | None) -> list[dict[str, str]]:
         if path.is_file() and path.stat().st_size < 2_000_000:
             data = json.loads(path.read_text(encoding="utf-8"))
             rows = data.get("models") if isinstance(data, dict) else None
-            out = [
-                {"id": clip(r.get("id"), 120), "label": clip(r.get("label") or r.get("id"), 120)}
-                for r in (rows or []) if isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("id")
-            ][:MAX_MODELS]
-            return out
+            out = []
+            for r in (rows or []):
+                if not (isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("id")):
+                    continue
+                row: dict[str, Any] = {"id": clip(r.get("id"), 120), "label": clip(r.get("label") or r.get("id"), 120)}
+                if r.get("efforts") == []:
+                    row["efforts"] = []
+                out.append(row)
+            return out[:MAX_MODELS]
     except (OSError, ValueError):
         pass
     return []

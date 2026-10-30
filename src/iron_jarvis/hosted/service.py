@@ -116,10 +116,14 @@ STOPPED_FIX = "Send the message again — the conversation is kept."
 class Refused(Exception):
     """A request the Code view refuses, in one plain sentence."""
 
-    def __init__(self, sentence: str, status: int = 409) -> None:
+    def __init__(self, sentence: str, status: int = 409, field: str = "") -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.status = status
+        #: v1.412.0 review: which choice of the start composer the refusal is
+        #: about ("folder", "tool", "account", "mode", "model", "effort"; ""
+        #: = none in particular) — the page says it on THAT chip.
+        self.field = field
 
 
 def same_folder(a: Any, b: Any) -> bool:
@@ -201,11 +205,39 @@ def check_model(model: Any) -> str:
     return text
 
 
-def check_effort(harness: str, effort: Any) -> str:
+def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | None = None) -> tuple[str, ...]:
+    """v1.412.0 review: the effort levels a session on ``model`` can take, as
+    far as is KNOWN without starting anything — Claude Code's cached picker
+    (``claude_models.model_efforts``: ``()`` when the model takes none), Pi's
+    last model list (a model it says has no reasoning takes none); otherwise
+    the tool's own list. Never a probe."""
+    if harness == CLAUDE:
+        try:
+            from ..providers import claude_models
+
+            known = claude_models.model_efforts(str(model or ""))
+        except Exception:  # noqa: BLE001 — unknown: the tool's own list
+            known = None
+        if known is not None:
+            return tuple(x for x in EFFORTS[CLAUDE] if x in known)
+    if harness == PI and model and pi_rows:
+        for r in pi_rows:
+            if r.get("id") == model and isinstance(r.get("efforts"), list):
+                return tuple(x for x in EFFORTS[PI] if x in r["efforts"])
+    return EFFORTS[harness]
+
+
+def check_effort(harness: str, effort: Any, model: Any = "", pi_rows: list[dict[str, Any]] | None = None) -> str:
     text = str(effort or "").strip().lower()
-    if text and text not in EFFORTS[harness]:
+    if not text:
+        return text
+    offered = efforts_for(harness, model, pi_rows)
+    if not offered:
+        raise Refused(f"That {W.label(harness)} model takes no effort level — leave it on the default.",
+                      400, field="effort")
+    if text not in offered:
         raise Refused(f'"{text}" is not an effort {W.label(harness)} takes — use '
-                      f"{', '.join(EFFORTS[harness])}.", 400)
+                      f"{', '.join(offered)}.", 400, field="effort")
     return text
 
 
@@ -582,7 +614,7 @@ class HostedService:
                 "version": None,
                 "modes": mode_rows(h),
                 "hidden_modes": hidden_mode_rows(h),
-                "models": self._models(h),
+                "models": self._models_with_efforts(h),
                 "efforts": list(EFFORTS[h]),
                 "accounts": accounts,
                 "own_sign_in": h == PI,
@@ -590,7 +622,27 @@ class HostedService:
             })
         return out
 
-    def _models(self, harness: str) -> list[dict[str, str]]:
+    def _models_with_efforts(self, harness: str) -> list[dict[str, Any]]:
+        """v1.412.0 review: the model rows, each with the effort levels THAT
+        model takes when it is known (``efforts``; ``[]`` = none — the chip
+        hides). A row with no ``efforts`` key: the tool's own list applies."""
+        rows: list[dict[str, Any]] = [dict(r) for r in self._models(harness)]
+        if harness == CLAUDE:
+            for r in rows:
+                try:
+                    from ..providers import claude_models
+
+                    known = claude_models.model_efforts(str(r.get("id") or ""))
+                except Exception:  # noqa: BLE001 — unknown: no key
+                    known = None
+                if known is not None:
+                    r["efforts"] = [x for x in EFFORTS[CLAUDE] if x in known]
+        elif harness != PI:
+            for r in rows:
+                r.pop("efforts", None)
+        return rows
+
+    def _models(self, harness: str) -> list[dict[str, Any]]:
         rows = [{"id": "", "label": f"{W.label(harness)}'s default"}]
         if harness == PI:
             # What a Pi process last listed (never a start just to ask).
@@ -649,7 +701,7 @@ class HostedService:
     async def create(self, body: dict[str, Any]) -> dict[str, Any]:
         harness = str(body.get("harness") or "").strip().lower()
         if harness not in HARNESSES:
-            raise Refused('Choose "claude-code", "codex" or "pi".', 400)
+            raise Refused('Choose "claude-code", "codex" or "pi".', 400, field="tool")
         folder = str(body.get("folder") or "").strip()
         resume_id = str(body.get("harness_session_id") or "").strip()
         # v1.412.0: no folder chosen is a session of its own — its first
@@ -658,21 +710,35 @@ class HostedService:
         # folder, so opening one still names it.
         no_folder = not folder
         if no_folder and resume_id:
-            raise Refused(W.NO_FOLDER_RESUME, 400)
+            raise Refused(W.NO_FOLDER_RESUME, 400, field="folder")
         if not no_folder:
             from ..core.fs_policy import root_problem
 
             problem = await asyncio.to_thread(root_problem, folder)
             if problem:
-                raise Refused(problem, 400)
-        mode = check_mode(harness, body.get("mode") or default_mode(harness), bool(body.get("confirm")))
-        model = check_model(body.get("model"))
-        effort = check_effort(harness, body.get("effort"))
+                raise Refused(problem, 400, field="folder")
+        try:
+            mode = check_mode(harness, body.get("mode") or default_mode(harness), bool(body.get("confirm")))
+        except Refused as r:
+            r.field = r.field or "mode"
+            raise
+        try:
+            model = check_model(body.get("model"))
+        except Refused as r:
+            r.field = r.field or "model"
+            raise
+        pi_rows = await asyncio.to_thread(self._models, PI) if harness == PI else None
+        effort = check_effort(harness, body.get("effort"), model, pi_rows)
         title = clip(body.get("title") or "", 120)
         account = str(body.get("account") or "").strip()
         if account and harness == PI:
-            raise Refused(W.PI_OWN_SIGN_IN, 400)
-        acc = await asyncio.to_thread(self._resolve_account, harness, account)
+            raise Refused(W.PI_OWN_SIGN_IN, 400, field="account")
+        try:
+            acc = await asyncio.to_thread(self._resolve_account, harness, account)
+        except Refused as r:
+            if r.status == 400:
+                r.field = r.field or "account"
+            raise
         if resume_id:
             held = await asyncio.to_thread(self._holder, harness, resume_id)
             if held:
@@ -735,23 +801,39 @@ class HostedService:
             return row, ""
         return row, path
 
-    def _take_back_folder(self, sid: str, path: str) -> None:
+    def _take_back_folder(self, sid: str, path: str, *, forget: bool = True) -> None:
         """BLOCKING: the message the folder was made for never started — the
         folder goes again when it is still EMPTY (never anything inside it),
-        and the session has no folder again. Never raises."""
+        and (``forget``: the FIRST message made it) the session has no folder
+        again. A folder made AGAIN at a session's kept path (``forget`` False)
+        is only removed: the session keeps its path. Never raises."""
         try:
             from ..daemon.routes.build import _remove_if_empty
 
             live = self.live.get(sid)
             if live is not None and live.turn is not None and live.turn.running:
                 return  # another message started in it meanwhile
-            if _remove_if_empty(path):
+            if _remove_if_empty(path) and forget:
                 store.clear_folder_if(self.engine, sid, path)
         except Exception:  # noqa: BLE001 — a refusal never fails on this
             log.debug("could not take back session %s's own folder", sid, exc_info=True)
 
+    def _remake_own_folder(self, path: str) -> str:
+        """BLOCKING: a session's OWN folder the user removed is made again at
+        the same path (``routes/build._make_again``, the one rule) — ``path``
+        when it was made now, "" when it is there. Refused in words when it is
+        missing and cannot be made (the folder above it is gone: an unplugged
+        drive or a moved chat files folder is not a removed folder)."""
+        from ..daemon.routes.build import _make_again
+
+        if os.path.isdir(path):
+            return ""
+        if _make_again(path):
+            return path
+        raise Refused(W.NO_FOLDER_GONE.format(folder=path))
+
     def _drop_own_folder(self, row: Any) -> None:
-        """BLOCKING: an archived or deleted session that started with no folder
+        """BLOCKING: a deleted session that started with no folder
         takes its own folder with it when that folder is still EMPTY and no
         other session works in it; one holding files is kept. Only a folder
         inside the chat files folder. Never raises."""
@@ -895,9 +977,12 @@ class HostedService:
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
             fields["mode"] = mode
+        next_model = check_model(body["model"]) if body.get("model") is not None else row.model
+        pi_rows = await asyncio.to_thread(self._models, PI) if row.harness == PI else None
         if row.harness == PI and (
             (body.get("model") is not None and not check_model(body["model"]) and row.model)
-            or (body.get("effort") is not None and not check_effort(row.harness, body["effort"]) and row.effort)
+            or (body.get("effort") is not None
+                and not check_effort(row.harness, body["effort"], next_model, pi_rows) and row.effort)
         ) and await asyncio.to_thread(pi_keeps_last, row):
             # Back to "Pi's default" would change nothing: reopening a
             # conversation with messages, Pi restores its LAST model and
@@ -915,8 +1000,15 @@ class HostedService:
                 if live and live.running and row.harness in (CLAUDE, PI):
                     live.restart = True  # back to the CLI's default: a restart
             fields["model"] = model
+        if body.get("effort") is None and body.get("model") is not None and row.effort \
+                and row.effort not in efforts_for(row.harness, next_model, pi_rows):
+            # v1.412.0 review: the new model does not take the effort kept on
+            # the session — it goes back to the default rather than being
+            # sent to a model that refuses it.
+            body = {**body, "effort": ""}
+            applied["effort_cleared"] = row.effort
         if body.get("effort") is not None:
-            effort = check_effort(row.harness, body["effort"])
+            effort = check_effort(row.harness, body["effort"], next_model, pi_rows)
             applied["effort"] = "next"
             set_effort = getattr(live.driver, "set_effort", None) if live and live.running and live.driver else None
             if set_effort is not None:
@@ -946,9 +1038,11 @@ class HostedService:
             self._claim(live, "being archived")
             try:
                 await self._stop_process(live, why="archived")
+                # v1.412.0 review: an archived session KEEPS its own folder,
+                # empty or not — Claude Code and Pi keep a conversation by
+                # the folder it ran in, so unarchiving must find it at the
+                # same path (only a real delete may remove an empty one).
                 row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=utcnow())
-                await asyncio.to_thread(self._drop_own_folder, row)
-                row = await asyncio.to_thread(store.get, self.engine, sid) or row
             finally:
                 live.claim = ""
         else:
@@ -996,6 +1090,10 @@ class HostedService:
         argv0 = await asyncio.to_thread(binary_for, row.harness)  # a PATH walk: off the loop
         if argv0 is None:
             raise Refused(W.NOT_INSTALLED.format(label=W.label(row.harness)))
+        if row.folder and not await asyncio.to_thread(os.path.isdir, row.folder):
+            # v1.412.0 review: Windows says "The directory name is invalid"
+            # (WinError 267) and that read as the tool's fault.
+            raise Refused(W.FOLDER_MISSING.format(folder=row.folder))
         async with self._lock():
             # Another row's process on this very conversation (a race the
             # turn's own check could miss): never a second process.
@@ -1203,16 +1301,25 @@ class HostedService:
         # with its first message; taken back (while still empty) when this
         # message does not start after all.
         made = ""
+        forget = False
         if not row.folder and getattr(row, "no_folder", False):
             row, made = await asyncio.to_thread(self._own_folder, sid, text)
+            forget = bool(made)
+        elif row.folder and getattr(row, "no_folder", False):
+            # v1.412.0 review: the user removed this session's own folder
+            # between messages — it is made AGAIN at the same path (the
+            # v1.379.0 ``_make_again`` rule): Claude Code and Pi keep the
+            # conversation by that folder, so a new one would lose it.
+            made = await asyncio.to_thread(self._remake_own_folder, row.folder)
         try:
-            return await self._start_turn_in(row, sid, turn_id, text, files)
+            return await self._start_turn_in(row, sid, turn_id, text, files, made, forget)
         except BaseException:
             if made:
-                await asyncio.to_thread(self._take_back_folder, sid, made)
+                await asyncio.to_thread(self._take_back_folder, sid, made, forget=forget)
             raise
 
-    async def _start_turn_in(self, row: Any, sid: str, turn_id: str, text: str, files: list[str]) -> HostedTurn:
+    async def _start_turn_in(self, row: Any, sid: str, turn_id: str, text: str, files: list[str],
+                             made: str = "", forget: bool = False) -> HostedTurn:
         live = self._live(row)
         live.account = row.account
         if live.claim:
@@ -1245,7 +1352,7 @@ class HostedService:
         self.turns[turn_id] = turn
         live.turn = turn
         live.last_active = self.clock()
-        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files))
+        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget))
         # v1.409.0 (found live): a session is titled by its first message, as
         # a chat is — never "New Claude Code session" forever. Only an EMPTY
         # title (a name the user gave is theirs) and only once the turn is
@@ -1271,14 +1378,17 @@ class HostedService:
                 return why or f"Iron Jarvis may not read {clip(os.path.basename(f), 120)}."
         return ""
 
-    async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str]) -> None:
+    async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str],
+                     made: str = "", forget: bool = False) -> None:
         user = make("user", text=clip(text, TEXT_CHARS))
         if files:
             user["files"] = [clip(f, 500) for f in files]
         self._emit(live, user)
+        started = False
         try:
             async with live.lock:
                 await self._ensure_running(live, row)
+            started = True
             if live.driver is None:
                 raise HarnessGone("the coding tool stopped")
             await live.driver.send_user(text, files)
@@ -1310,6 +1420,12 @@ class HostedService:
             if live.turn is turn and not turn.running:
                 live.turn = None
             live.last_active = self.clock()
+            if made and not started:
+                # v1.412.0 review: the folder this message made (or made
+                # again) goes back while EMPTY when the tool never started —
+                # not installed, or Windows could not start it. Once the tool
+                # ran, the conversation belongs to that folder: it stays.
+                await asyncio.shield(asyncio.to_thread(self._take_back_folder, live.sid, made, forget=forget))
 
     def turn(self, turn_id: str) -> HostedTurn | None:
         self._evict_turns()

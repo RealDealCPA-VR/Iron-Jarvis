@@ -140,7 +140,10 @@ async def test_two_first_messages_keep_one_folder(app, files_root):
     assert _made(files_root) == [Path(first)], "the second folder was left behind"
 
 
-async def test_deleting_or_archiving_drops_only_an_empty_own_folder(app, files_root):
+async def test_deleting_drops_only_an_empty_own_folder_and_archiving_drops_none(app, files_root):
+    # v1.412.0 review (moved on purpose): ARCHIVE keeps the own folder even
+    # when empty — Claude Code and Pi keep the conversation by that folder, so
+    # unarchiving must find it at the same path. Only a delete removes one.
     svc = S.service_for(app.state.platform)
     async with client(app) as c:
         a = await _create(c)
@@ -149,7 +152,10 @@ async def test_deleting_or_archiving_drops_only_an_empty_own_folder(app, files_r
         _, fb = await asyncio.to_thread(svc._own_folder, b["id"], "full one")
         (Path(fb) / "made.txt").write_text("x", encoding="utf-8")
         assert (await c.post(f"/build/app/sessions/{a['id']}/archive")).status_code == 200
-        assert not Path(fa).exists(), "an archived session's empty own folder was kept"
+        assert Path(fa).is_dir(), "archive removed the session's own folder"
+        assert store.get(app.state.platform.engine, a["id"]).folder == fa
+        assert (await c.delete(f"/build/app/sessions/{a['id']}")).status_code == 200
+        assert not Path(fa).exists(), "a deleted session's empty own folder was kept"
         assert (await c.delete(f"/build/app/sessions/{b['id']}")).status_code == 200
         assert Path(fb, "made.txt").is_file(), "a folder holding files was removed"
     await stop_all(app)

@@ -222,8 +222,13 @@ export interface CodingTool {
   version: string;
   modes: ToolMode[];
   hiddenModes: HiddenMode[];
-  models: { id: string; label: string }[];
+  /** v1.412.0 review: `efforts` on a model = the levels THAT model takes when
+   *  the daemon knows them (`[]` = none: the effort chip hides); absent = the
+   *  tool's own `efforts` apply (lib/buildApp effortsFor). */
+  models: { id: string; label: string; efforts?: string[] }[];
   efforts: string[];
+  /** v1.412.0 review: the levels the tool's DEFAULT model takes, when known. */
+  defaultEfforts?: string[];
   accounts: ToolAccount[];
   /** The tool's own `/` commands, when the daemon lists them. */
   commands: ToolCommand[];
@@ -260,12 +265,22 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       if (!mo || !mid || modes.some((x) => x.id === mid)) continue;
       hiddenModes.push({ id: mid, label: str(mo.label, 80) || mid, reason: str(mo.reason, 400) });
     }
-    const models: { id: string; label: string }[] = [];
+    const models: { id: string; label: string; efforts?: string[] }[] = [];
+    let defaultEfforts: string[] | undefined;
     for (const m of Array.isArray(r.models) ? r.models : []) {
       const mo = obj(m);
       const mid = mo ? str(mo.id, 200).trim() : typeof m === "string" ? m.trim() : "";
-      if (!mid) continue;
-      models.push({ id: mid, label: (mo && str(mo.label, 120)) || mid });
+      const levels =
+        mo && Array.isArray(mo.efforts)
+          ? mo.efforts.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean)
+          : undefined;
+      if (!mid) {
+        // The tool's default (id ""): never a row of its own (the menus add
+        // it), but the levels it takes are kept.
+        if (mo && levels) defaultEfforts = levels;
+        continue;
+      }
+      models.push(levels ? { id: mid, label: (mo && str(mo.label, 120)) || mid, efforts: levels } : { id: mid, label: (mo && str(mo.label, 120)) || mid });
     }
     const efforts: string[] = [];
     for (const e of Array.isArray(r.efforts) ? r.efforts : []) {
@@ -298,11 +313,22 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       hiddenModes,
       models,
       efforts,
+      ...(defaultEfforts ? { defaultEfforts } : {}),
       accounts,
       commands,
     });
   }
   return out;
+}
+
+/** v1.412.0 review: the effort levels a session on `model` can take — that
+ *  model's own list when the daemon knows it (`[]`: none, the chip hides),
+ *  else the tool's list. */
+export function effortsFor(tool: CodingTool | null | undefined, model: string): string[] {
+  if (!tool) return [];
+  if (!model) return tool.defaultEfforts ?? tool.efforts;
+  const row = tool.models.find((m) => m.id === model);
+  return row && Array.isArray(row.efforts) ? row.efforts : tool.efforts;
 }
 
 /** Why a coding tool cannot start a session, in words; null when it can.

@@ -2278,9 +2278,17 @@ of choices sits under the box:
   starts. With no folder, the session gets a folder of its own in your chat
   files folder (Documents\Iron Jarvis), named by the date and your first
   words, made with your first message — and taken back if that message never
-  starts. In Chat › Code, a folder chosen before the first message moves the
-  new session into that folder (same model, account, effort and approvals;
-  what you typed comes along); a repository asks whether to work on a new
+  starts (or the tool could not start at all). Archiving the session keeps
+  its folder, so unarchiving carries on where it was; deleting it removes the
+  folder only when it is still empty. If you delete that folder yourself, it
+  is made again at the same place with your next message. In Chat › Code, a
+  folder chosen before the first message moves the new session into that
+  folder (same model, account, effort, approvals, Local only, limit and team;
+  what you typed comes along); while it moves, the box says "Moving to …" and
+  sends nothing, and a file still uploading has to finish first. A session
+  that already has a message is never moved or deleted this way. A New
+  session you leave without typing anything is cleaned up, so empty "New
+  session" rows do not pile up; a repository asks whether to work on a new
   branch, as before.
 - **Tool** (Build › Code) — Claude Code, Codex or Pi: the one you used last,
   else the first one installed. One that cannot start is greyed, with the
@@ -2288,11 +2296,15 @@ of choices sits under the box:
 - **Account** — shown only when the tool has more than one login (the
   accounts Iron-Proxy holds for Claude Code or Codex). Choosing such a tool
   asks **which account** straight away; the one you used last for it is the
-  default. A tool with one login, and Pi (it signs in by itself), never asks.
+  default. With none remembered, the box asks before anything starts, even
+  for the tool it opens on; if no account can start a session (all signed
+  out or at their limit), Send stays off and the chip says why. A tool with one login, and Pi (it signs in by itself), never asks.
   In Chat › Code the model menu lists each account under Claude Code and
   Codex, so you choose the account as you choose the model.
-- **Mode**, **model** and **effort** — effort only when the tool or model
-  offers levels.
+- **Mode**, **model** and **effort** — effort only when the chosen model
+  offers levels (a model that takes none hides it, and an effort the new model
+  does not offer goes back to the default). A choice Iron Jarvis refuses is
+  named under that choice.
 
 Sending makes the session with those choices and sends your message in one
 press.

@@ -41,6 +41,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
+import { sessionUsed } from "@/lib/emptySessions";
 import { cachedFolders, dropEndedTurns, keepFolders, viewFor } from "@/lib/turnCache";
 import {
   ONE,
@@ -63,6 +64,7 @@ import {
 import {
   LAST_SESSION_KEY,
   createSession,
+  deleteSession,
   listSessionsWithRoot,
   renameFolder,
   type BuildFolder,
@@ -344,11 +346,47 @@ export function IjHarnessView({
   const [searchRequest, setSearchRequest] = useState(0);
   useHarnessKeys({ onNew: () => setNewRequest((n) => n + 1) }, () => ({ busy: false, asking: false }));
 
+  // v1.412.0 review: New session makes a server row at once, so an abandoned
+  // one piled up as an empty "New session" row. A session THIS view made (New
+  // session, a folder's "+", "/clear", or the folder move) that the user
+  // LEAVES — another session opened, New session again, the view closed —
+  // while nothing was put into it (lib/emptySessions) is deleted with the
+  // daemon's `only_if_empty` guard (a message, a waiting message or a running
+  // reply refuses it). Anything with content stays.
+  const madeEmptyRef = useRef<Set<string>>(new Set());
+  const shownRef = useRef<string[]>([]);
+  const liveRef = useRef(true);
+  const abandon = useCallback(
+    (id: string) => {
+      if (!madeEmptyRef.current.delete(id) || sessionUsed(id)) return;
+      void deleteSession(id, { onlyIfEmpty: true }).then(
+        () => {
+          if (liveRef.current) void refresh();
+        },
+        () => undefined, // refused (it holds something) or gone: it stays as it is
+      );
+    },
+    [refresh],
+  );
+  useEffect(() => {
+    const now = [split.left, split.right].filter((x): x is string => !!x);
+    for (const id of shownRef.current) if (!now.includes(id)) abandon(id);
+    shownRef.current = now;
+  }, [split.left, split.right, abandon]);
+  useEffect(() => {
+    liveRef.current = true;
+    return () => {
+      liveRef.current = false;
+      for (const id of shownRef.current) abandon(id);
+    };
+  }, [abandon]);
+
   async function start(folder: string, extra?: StartExtra): Promise<string | null> {
     try {
       // v1.375.0: New session's branch switch rides only when it was shown.
       const made = await (extra ? createSession(folder, { ...extra }) : createSession(folder));
       if (!made) return "The session could not be started.";
+      madeEmptyRef.current.add(made.id);
       setMiddle("session");
       open(made.id);
       void refresh();
@@ -550,6 +588,12 @@ export function IjHarnessView({
                         void refresh();
                       }}
                       onBranched={(next, draft) => openBranched(side, next, draft)}
+                      onMoved={(next, draft) => {
+                        // The move deleted the old one itself; the new one is
+                        // still an empty session this view made.
+                        if (madeEmptyRef.current.delete(id)) madeEmptyRef.current.add(next);
+                        openBranched(side, next, draft);
+                      }}
                       initialDraft={draftFor && draftFor.id === id ? draftFor.draft : null}
                       onOpenSession={(next) => {
                         pickedRef.current = true;

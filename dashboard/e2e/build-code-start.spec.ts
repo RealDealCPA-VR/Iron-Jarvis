@@ -16,6 +16,12 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  *   - every chip is inside the window, and nothing pans sideways;
  *   - picking a tool with several logins asks which account, and the
  *     question fits the window too.
+ *
+ * v1.412.0 review: the stub sends what the REAL daemon sends — every tool
+ * its full effort list (Codex five levels, Pi seven), and Claude Code's
+ * models each with the levels THAT model takes (one takes none: the effort
+ * chip hides for it). And Chat › Code's folder chip at 390 px, on a real
+ * session of the scratch daemon.
  */
 
 const DAEMON = `http://127.0.0.1:${process.env.IJ_E2E_DAEMON_PORT || 8807}`;
@@ -50,7 +56,7 @@ const TOOLS = {
       modes: MODES,
       hidden_modes: [],
       models: [{ id: "", label: "Codex's default" }],
-      efforts: [],
+      efforts: ["minimal", "low", "medium", "high", "xhigh"],
       accounts: [{ id: "p_one", name: "The only account", status: "ready" }],
     },
     {
@@ -61,8 +67,13 @@ const TOOLS = {
       modes: MODES,
       hidden_modes: [],
       models: [
-        { id: "", label: "Claude Code's default" },
-        { id: "claude-opus-5-5", label: "Opus 5.5 with a rather long model name" },
+        { id: "", label: "Claude Code's default", efforts: ["low", "medium", "high", "xhigh", "max"] },
+        {
+          id: "claude-opus-5-5",
+          label: "Opus 5.5 with a rather long model name",
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+        { id: "claude-fable-5-1", label: "Fable 5.1", efforts: [] },
       ],
       efforts: ["low", "medium", "high", "xhigh", "max"],
       accounts: [
@@ -79,7 +90,7 @@ const TOOLS = {
       modes: [{ id: "own", label: "Pi's own rules", dangerous: false }],
       hidden_modes: [],
       models: [{ id: "", label: "Pi's default" }],
-      efforts: ["low", "high"],
+      efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
       accounts: [],
     },
   ],
@@ -160,5 +171,29 @@ for (const size of [
     await page.waitForTimeout(200);
     expect(await outside(page, '[data-testid="code-start-chips"] > *')).toEqual([]);
     expect(await widest(page)).toBeLessThanOrEqual(1);
+    // v1.412.0 review: a model that takes no effort hides the chip.
+    await page.getByTestId("code-start-model").selectOption("claude-fable-5-1");
+    await expect(page.getByTestId("code-start-effort")).toHaveCount(0);
   });
 }
+
+test.describe("390 px — Chat › Code's folder chip", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+  test("a session with no folder: the chip and Choose… are inside the window, nothing pans", async ({ page }) => {
+    // A real session of the scratch daemon (no folder), opened by its address.
+    const made = await page.request.post(`${DAEMON}/build/sessions`, { data: { folder: "" } });
+    expect(made.status()).toBe(201);
+    const id = ((await made.json()) as { id: string }).id;
+    await page.goto(`/chat?view=code&session=${id}`);
+    const chip = page.getByTestId("harness-start-folder");
+    await expect(chip).toHaveText("No folder", { timeout: 90_000 });
+    await expect(page.getByTestId("harness-start-folder-choose")).toBeVisible();
+    await page.waitForTimeout(400);
+    expect(
+      await outside(page, '[data-testid="harness-start-folder"], [data-testid="harness-start-folder-choose"]'),
+    ).toEqual([]);
+    const pan = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(pan).toBeLessThanOrEqual(0);
+    await page.request.delete(`${DAEMON}/build/sessions/${id}`);
+  });
+});

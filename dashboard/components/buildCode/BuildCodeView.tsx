@@ -89,6 +89,7 @@ import {
   decodeCodeSession,
   decodeCodeSessionView,
   decodeCodeSessions,
+  effortsFor,
   decodeCodingTools,
   foldConversation,
   groupByFolder,
@@ -980,7 +981,7 @@ function SessionPane({
                   </option>
                 ) : null}
               </select>
-              {tool && tool.efforts.length ? (
+              {tool && (effortsFor(tool, session.model).length || session.effort) ? (
                 <select
                   aria-label="Effort"
                   data-testid="code-effort-chip"
@@ -993,7 +994,10 @@ function SessionPane({
                   {!keepsLast || !session.effort ? (
                     <option value="">{defaultEffortWords(keepsLast)}</option>
                   ) : null}
-                  {tool.efforts.map((x) => (
+                  {/* v1.412.0 review: the levels THIS model takes (the
+                      daemon's per-model list, else the tool's); a kept
+                      effort the model no longer lists stays visible. */}
+                  {[...effortsFor(tool, session.model), ...(session.effort && !effortsFor(tool, session.model).includes(session.effort) ? [session.effort] : [])].map((x) => (
                     <option key={x} value={x}>
                       {x.charAt(0).toUpperCase() + x.slice(1)} effort
                     </option>
@@ -1105,6 +1109,12 @@ export function BuildCodeView({
   /** v1.412.0: the words a just-made session sends as its first message. */
   const [firstFor, setFirstFor] = useState<{ id: string; text: string } | null>(null);
   const clearFirst = useCallback(() => setFirstFor(null), []);
+  // v1.412.0 review: words parked for a just-made session are for THAT open
+  // only — the user opening a different session drops them (they used to be
+  // sent later, when the user came back to the made session).
+  useEffect(() => {
+    setFirstFor((cur) => (cur && cur.id !== openId ? null : cur));
+  }, [openId]);
   /** Where a session with no folder keeps its files (the list's answer). */
   const [workRoot, setWorkRoot] = useState("");
 

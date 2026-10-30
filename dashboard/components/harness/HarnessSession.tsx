@@ -242,6 +242,7 @@ import {
 } from "@/lib/buildAccounts";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { HarnessStartFolder } from "@/components/harness/HarnessStartFolder";
+import { noteSessionUsed } from "@/lib/emptySessions";
 import {
   answerQuestion,
   archiveSession,
@@ -252,6 +253,7 @@ import {
   decodeSessionView,
   decodeStepLimit,
   deleteSession,
+  refusedNotEmpty,
   KEEP_GOING_TEXT,
   stepLimitWords,
   getSession,
@@ -394,6 +396,20 @@ export const ACCOUNTS_POLL_MS = 5000;
  *  call (the daemon answers from its cached snapshot: never a vendor call). */
 export const USAGE_POLL_MS = 60_000;
 
+/** v1.412.0 review: a file still going up when "Choose…" is pressed — the
+ *  move waits for nothing and drops nothing: it is refused in words. */
+export const MOVE_WAITS_FOR_UPLOAD =
+  "A file is still uploading — wait for it to finish, then choose the folder.";
+/** v1.412.0 review: a file attached while the session is being moved. */
+export const MOVE_HOLDS_FILES = "The session is moving to its folder — attach the file once it has moved.";
+
+/** "Moving to <folder>…" (the folder's own name); no folder: said so. */
+export function movingWords(folder: string): string {
+  if (!folder) return "Moving the session out of its folder…";
+  const name = folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+  return `Moving to ${name}…`;
+}
+
 export function HarnessSession({
   threadId,
   terminal,
@@ -401,6 +417,7 @@ export function HarnessSession({
   onChanged,
   onGone,
   onBranched,
+  onMoved,
   initialDraft,
   folderPickFrom = null,
   onOpenSession,
@@ -420,6 +437,10 @@ export function HarnessSession({
   /** v1.377.0: "Branch from here" started a NEW session (open it; a question
    *  branch hands its words and files to the new session's box). */
   onBranched?: (id: string, draft: BranchDraft | null) => void;
+  /** v1.412.0 review: "Choose…" MOVED this empty session to a folder — the
+   *  new session `id` replaces it (open it; the box's words go with it).
+   *  Absent: `onBranched` opens it. */
+  onMoved?: (id: string, draft: BranchDraft | null) => void;
   /** v1.377.0: what goes in this session's box when it opens (a session just
    *  branched from a question). */
   initialDraft?: BranchDraft | null;
@@ -464,6 +485,10 @@ export function HarnessSession({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.412.0 review: "Choose…" is moving this empty session to a folder —
+  // nothing is sent (or attached) until the move is done ("Moving to …").
+  const movingRef = useRef<string | null>(null);
+  const [moving, setMoving] = useState<string | null>(null);
   // Harness gaps (fix 2): the live failure's technical text (for its Details
   // fold) and the turn it belongs to — kept for THIS `error` only.
   const [errorTech, setErrorTech] = useState<{ text: string; technical: string; turn: string | null } | null>(null);
@@ -672,6 +697,14 @@ export function HarnessSession({
   const [branchError, setBranchError] = useState<string | null>(null);
   const nextGenRef = useRef(0);
   const busy = sending || stream.streaming;
+  // v1.412.0 review: once the user puts anything into this session — words,
+  // a file, an "@" file, a skill, a message — it is never cleaned up as an
+  // abandoned New session (lib/emptySessions; IjHarnessView).
+  const putSomething =
+    !!input.trim() || att.files.length > 0 || att.uploading || atFiles.length > 0 || !!skill || busy;
+  useEffect(() => {
+    if (putSomething) noteSessionUsed(threadId);
+  }, [putSomething, threadId]);
   // v1.406.0 part 4: the session's branch as the next-step box reads it
   // (the Branch view's own GET, read again when a turn ends; only for a live
   // branch — a removed worktree or a merged branch offers no Commit / PR).
@@ -1353,6 +1386,9 @@ export function HarnessSession({
   async function send(item?: QueuedItem) {
     const fromBox = item === undefined;
     if (!view) return;
+    // v1.412.0 review: the session is being moved to a folder — a message
+    // sent now would land in the session the move deletes.
+    if (movingRef.current !== null) return;
     // v1.371.0: a send never goes without its files — one pressed while a
     // picture is still going up waits for it, then reads the box as it is
     // THEN (the chat page's v1.275.0 rule).
@@ -1644,37 +1680,75 @@ export function HarnessSession({
    *  own branch when `branch` allows), with the same model, account, effort,
    *  approvals, mode and Local only, the words in the box carried over; then
    *  the empty one goes. Answers the daemon's refusal (nothing moved), or
-   *  null. */
+   *  null.
+   *
+   *  v1.412.0 review (the move could delete a session the user had just
+   *  written in): while the move is in flight the box does not send
+   *  (`movingRef`, "Moving to <folder>…"); a file still going up refuses the
+   *  move in words; Local only, the cap and the team ride the CREATE (a
+   *  separate PATCH could fail and drop Local only); the words, files and
+   *  skill are read when the move COMMITS (refs, not this render); and the
+   *  old session is deleted only while EMPTY (`only_if_empty`) — a refused
+   *  delete keeps the user on the old session and takes the new one back. */
   async function moveToFolder(folder: string, branch?: boolean): Promise<string | null> {
-    if (!view || view.messages.length > 0) return "This session has started, so its folder stays.";
-    const s = view.setup;
+    const current = viewRef.current ?? view;
+    if (!current || current.messages.length > 0 || busy || movingRef.current !== null) {
+      return "This session has started, so its folder stays.";
+    }
+    if (att.busyRef.current) return MOVE_WAITS_FOR_UPLOAD;
+    const s = current.setup;
     const carry: Record<string, unknown> = {};
     if (s.provider) carry.provider = s.provider;
     if (s.model) carry.model = s.model;
     if (s.reasoning) carry.reasoning = s.reasoning;
     if (s.approvalMode) carry.approval_mode = s.approvalMode;
-    if (view.mode === "plan") carry.mode = "plan";
+    if (current.mode === "plan") carry.mode = "plan";
     if (s.account) carry.account = s.account;
+    if (s.localOnly) carry.local_only = true;
+    if (s.cap) carry.cap = s.cap;
+    if (s.team) carry.team = s.team;
     if (folder && branch !== undefined) carry.branch = branch;
-    let made: BuildSessionView | null;
+    const where = movingWords(folder);
+    movingRef.current = where;
+    setMoving(where);
     try {
-      made = await createSession(folder, carry);
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e);
+      let made: BuildSessionView | null;
+      try {
+        made = await createSession(folder, carry);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+      if (!made) return "The session could not be moved to that folder.";
+      // Read at the moment the move commits — the box may have changed
+      // while the new session was being made.
+      const words = boxRef.current?.value ?? input;
+      const picked = skillRef.current;
+      const draft: BranchDraft = {
+        text: words,
+        attachments: att.filesRef.current.map((f) => f.path).filter(Boolean),
+        pickedFiles: atFilesRef.current.map((f) => f.path),
+        ...(picked ? { skill: picked } : {}),
+      };
+      try {
+        // The empty session goes — ONLY while it is still empty.
+        await deleteSession(threadId, { onlyIfEmpty: true });
+      } catch (e) {
+        // The old session holds something now (a message from another
+        // window, a reply): the user stays on it; the new one goes back.
+        await deleteSession(made.id, { onlyIfEmpty: true }).catch(() => undefined);
+        onChanged();
+        return refusedNotEmpty(e)
+          ? "A message reached this session before the move finished, so it stays in its folder."
+          : `The session could not be moved: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      onChanged();
+      const carries = draft.text || draft.attachments.length || draft.pickedFiles.length || picked;
+      (onMoved ?? onBranched)?.(made.id, carries ? draft : null);
+      return null;
+    } finally {
+      movingRef.current = null;
+      setMoving(null);
     }
-    if (!made) return "The session could not be moved to that folder.";
-    if (s.localOnly) await patchSession(made.id, { local_only: true }).catch(() => undefined);
-    const draft: BranchDraft = {
-      text: input,
-      attachments: att.files.map((f) => f.path).filter(Boolean),
-      pickedFiles: atFiles.map((f) => f.path),
-      ...(skill ? { skill } : {}),
-    };
-    // The empty session goes (nothing was said in it).
-    await deleteSession(threadId).catch(() => undefined);
-    onChanged();
-    onBranched?.(made.id, draft.text || draft.attachments.length || draft.pickedFiles.length || skill ? draft : null);
-    return null;
   }
 
   /** v1.377.0: "Branch from here" — a NEW session with this conversation up
@@ -2328,7 +2402,8 @@ export function HarnessSession({
     !!view &&
     !offline &&
     !compacting &&
-    !elsewhereCompacting;
+    !elsewhereCompacting &&
+    moving === null;
 
   if (loadError && !view) {
     return (
@@ -3073,7 +3148,8 @@ export function HarnessSession({
               const dropped = Array.from(e.dataTransfer?.files ?? []);
               if (!dropped.length) return;
               e.preventDefault();
-              void att.add(dropped);
+              if (movingRef.current !== null) setError(MOVE_HOLDS_FILES);
+              else void att.add(dropped);
             }}
           >
             {/* v1.373.0: "/" and "@" — above the box, never over it. */}
@@ -3161,7 +3237,8 @@ export function HarnessSession({
                 const pasted = pastedFiles(e.clipboardData);
                 if (!pasted.length) return;
                 e.preventDefault();
-                void att.add(pasted, { pasted: true });
+                if (movingRef.current !== null) setError(MOVE_HOLDS_FILES);
+                else void att.add(pasted, { pasted: true });
               }}
               onKeyDown={(e) => {
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -3194,7 +3271,7 @@ export function HarnessSession({
               data-testid="harness-composer-toolbar"
               className="group/fit flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2 data-[fit-row]:flex-nowrap"
             >
-              <AttachButton onPick={(picked) => void att.add(picked)} disabled={offline} />
+              <AttachButton onPick={(picked) => void att.add(picked)} disabled={offline || moving !== null} />
               <PermissionChip
                 value={view.setup.approvalMode || "approve_for_me"}
                 onChange={(mode) => void patchSetup({ approval_mode: asPermissionMode(mode) })}
@@ -3333,6 +3410,11 @@ export function HarnessSession({
           </div>
           {/* v1.412.0: before the first message — the folder chip ("No
               folder" / Choose…). Choosing moves the empty session there. */}
+          {moving !== null ? (
+            <p data-testid="harness-moving" role="status" className="px-3 pt-1.5 text-[12px] text-zinc-500">
+              {moving}
+            </p>
+          ) : null}
           {view.messages.length === 0 && !busy && !view.archived && !asking && !view.running ? (
             <HarnessStartFolder
               folder={view.noFolder ? null : view.git?.checkout || view.folder}

@@ -199,6 +199,21 @@ class BuildSessionCreate(BaseModel):
     #: solo session. OMITTED = the folder's saved team
     #: (``BuildFolderRecord.team_json``), when it has one.
     team: dict[str, Any] | None = None
+    #: v1.412.0 review: carried AT CREATE when Chat › Code's "Choose…" moves
+    #: an empty session to a folder — Local only (true = on; false/omitted =
+    #: off) and the reply cap (checked exactly as the PATCH checks it). A
+    #: separate PATCH after the create could fail silently and drop Local
+    #: only; now a carry that cannot be kept refuses the whole create.
+    local_only: bool | None = None
+    cap: dict[str, Any] | None = None
+
+
+#: v1.412.0 review: ``DELETE /build/sessions/{id}?only_if_empty=1`` refused —
+#: the session holds a message, a waiting message, or a reply (the move of an
+#: empty session to a folder never deletes one the user already used).
+NOT_EMPTY_SENTENCE = (
+    "This session already has a message in it, so it was kept."
+)
 
 
 class BuildFolderTeam(BaseModel):
@@ -2262,6 +2277,20 @@ def make_work_folder(platform: Any, thread_id: str, text: str) -> tuple[str, boo
     return path, True
 
 
+def _has_content(row: Any) -> bool:
+    """v1.412.0 review: the session holds something the user made — a
+    message, or a message waiting to be sent."""
+    import json as _json
+
+    if S._messages(row):
+        return True
+    try:
+        queued = _json.loads(getattr(row, "queued_json", "") or "[]")
+    except ValueError:
+        return True  # unreadable: never assume it is empty
+    return bool(queued)
+
+
 def _remove_if_empty(path: str) -> bool:
     """Remove ``path`` when it is an EMPTY folder (never anything inside it).
     True when it was removed. Never raises."""
@@ -4125,6 +4154,18 @@ def register(app: FastAPI, d: Any) -> None:
                     team = None
         if team is not None:
             setup[_team.SETUP_KEY] = team
+        if body.local_only:
+            setup["local_only"] = True
+        if body.cap is not None:
+            # v1.412.0 review: the cap is kept EXACTLY as sent or the create is
+            # refused (the PATCH's rule, v1.392.0 review) — never half-kept.
+            from ...harness.reply_cap import SETUP_KEY as _CAP_KEY
+            from ...harness.reply_cap import strict as _strict_cap
+
+            cleaned = _strict_cap(body.cap)
+            if cleaned is None:
+                raise HTTPException(status_code=400, detail=CAP_REFUSED)
+            setup[_CAP_KEY] = cleaned
         if folderless:
             row = await asyncio.to_thread(
                 S.create, engine_of(), "", body.title, {**setup, S.NO_FOLDER_KEY: True},
@@ -4314,9 +4355,14 @@ def register(app: FastAPI, d: Any) -> None:
         return out
 
     @app.delete("/build/sessions/{thread_id}")
-    def delete_build_session(thread_id: str) -> Any:
+    def delete_build_session(thread_id: str, only_if_empty: str = "") -> Any:
         """Delete a session (its transcript; its programs are stopped). A
-        session still answering is refused: stop it first."""
+        session still answering is refused: stop it first. v1.412.0 review:
+        ``only_if_empty=1`` deletes only a session nobody used yet — no
+        message, no waiting message, no reply running or starting — and
+        answers 409 ``{detail, code: "not_empty"}`` otherwise (the move of an
+        empty session to a folder, and the clean-up of an abandoned New
+        session, never delete a session the user wrote in)."""
         from .chat import delete_thread
 
         row = _session_or_404(thread_id)
@@ -4324,7 +4370,10 @@ def register(app: FastAPI, d: Any) -> None:
 
         if thread_id in _GIT_ACTING:
             return JSONResponse(status_code=409, content={"detail": GIT_BUSY})
-        if TURNS.thread_states().get(thread_id, {}).get("running") or thread_id in _STARTING:
+        busy = bool(TURNS.thread_states().get(thread_id, {}).get("running")) or thread_id in _STARTING
+        if only_if_empty in ("1", "true", "yes") and (busy or _has_content(row)):
+            return JSONResponse(status_code=409, content={"detail": NOT_EMPTY_SENTENCE, "code": "not_empty"})
+        if busy:
             return JSONResponse(status_code=409, content={"detail": RUNNING_SENTENCE})
         # v1.375.0 (part 2, Phase 4) DECISION: deleting a session on its own
         # branch never silently destroys work that is not merged — its

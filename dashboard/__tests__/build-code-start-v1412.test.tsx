@@ -21,17 +21,19 @@ const H = vi.hoisted(() => ({
   gets: {} as Record<string, unknown>,
   posts: [] as { path: string; body: unknown }[],
   postReply: {} as Record<string, unknown>,
-  postFail: {} as Record<string, { status: number; message: string }>,
+  postFail: {} as Record<string, { status: number; message: string; body?: unknown }>,
   streams: [] as { path: string; body: unknown }[],
 }));
 
 vi.mock("@/lib/api", () => {
   class FakeApiError extends Error {
     status: number;
-    constructor(message: string, status = 0) {
+    body?: unknown;
+    constructor(message: string, status = 0, _c = false, body?: unknown) {
       super(message);
       this.status = status;
       this.name = "ApiError";
+      if (body !== undefined) this.body = body;
     }
   }
   return {
@@ -45,7 +47,7 @@ vi.mock("@/lib/api", () => {
     post: (path: string, body?: unknown) => {
       H.posts.push({ path, body });
       const fail = H.postFail[path];
-      if (fail) return Promise.reject(new FakeApiError(fail.message, fail.status));
+      if (fail) return Promise.reject(new FakeApiError(fail.message, fail.status, false, fail.body));
       return Promise.resolve(H.postReply[path] ?? {});
     },
     patch: () => Promise.resolve({}),
@@ -167,6 +169,10 @@ beforeEach(() => {
   H.streams = [];
   seed();
   window.localStorage.clear();
+  // v1.412.0 review (moved on purpose): a tool with several logins and NO
+  // account remembered asks before anything starts (build-code-start-review
+  // pins that); these pins start from a remembered one.
+  window.localStorage.setItem(LAST_ACCOUNT_KEY + "claude-code", "p_work");
 });
 
 afterEach(() => {
@@ -295,7 +301,7 @@ describe("the tool and its account", () => {
     willMake("n4", { account: "p_home" });
     await ready();
     expect(screen.getByTestId("code-start-account").textContent).toContain("Home");
-    // Not asked at the start (only a tool the user picks asks).
+    // Not asked at the start: one is remembered for it.
     expect(screen.queryByTestId("code-start-account-menu")).toBeNull();
     type("go");
     fireEvent.click(screen.getByTestId("code-start-send"));
@@ -356,7 +362,12 @@ describe("Choose… for the folder", () => {
 
   it("a folder the daemon refuses is said on the chip, and nothing is started", async () => {
     bridge({ path: "C:\\Windows" });
-    H.postFail["/build/app/sessions"] = { status: 400, message: "Iron Jarvis may not work in C:\\Windows." };
+    // v1.412.0 review (moved on purpose): the daemon NAMES the chip.
+    H.postFail["/build/app/sessions"] = {
+      status: 400,
+      message: "Iron Jarvis may not work in C:\\Windows.",
+      body: { detail: "Iron Jarvis may not work in C:\\Windows.", field: "folder" },
+    };
     await ready();
     fireEvent.click(screen.getByTestId("code-start-folder-choose"));
     await waitFor(() => expect(screen.getByTestId("code-start-folder").textContent).toBe("Windows"));
