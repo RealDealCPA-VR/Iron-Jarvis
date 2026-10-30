@@ -206,3 +206,60 @@ stay in Chat's Code view. Phone answers for App approvals — later.
   nothing, so Auto edits (and Plan) are not offered for Codex on Windows.
 - A message sent while a turn runs is refused in words (409): Codex would not
   queue it and a queued Claude message would have no turn of its own to follow.
+
+## Pi (v1.411.0) — what the daemon measured on pi 1.3.0
+
+The user's staged plan: Claude Code + Codex first, then Pi, then OpenCode.
+Pi is the third tool (`hosted/pi.py`); no new event kind was needed.
+
+- Started as `pi --mode rpc --session-id <uuid> [--model provider/id]
+  [--thinking level]` in the session's folder, through `core/procs` exactly
+  like the other two (a Build terminal's env; a parent Pi session's
+  `PI_SESSION_*` markers dropped). `--session-id` opens that project session
+  and CREATES it when missing, so one argv starts and resumes; the id is
+  minted before the start and recorded at once. Nothing that turns the
+  user's own Pi down is ever passed (`--no-session`, `--no-tools`,
+  `--no-extensions`, `--no-skills`, `--no-context-files`, `--offline` …).
+- Protocol (JSON lines): a command `{id, type, …}` gets one `{id, type:
+  "response", command, success, data|error}`; events carry no id. A
+  `prompt` answers at once: `started` (a run follows; `agent_settled` ends it,
+  `agent_end` does not), or `handled` (an extension command such as `/plan`;
+  the turn ends after a short grace unless a run begins). Its answer may come
+  only after its own dialog was answered, so it is never waited on. A prompt
+  during a run is refused by Pi, and by the Code view (409, as for the other
+  tools). `abort` → the message ends `aborted`, `agent_settled {aborted:
+  true}`, then the abort's response.
+- Text: `message_update` text/thinking deltas → `text` / `thinking`
+  (`text_end` → `text_done`). Tools: `tool_execution_start/update/end` →
+  `tool` rows (an edit's diff from its arguments, then Pi's own
+  `details.patch`; a running command's output at most once a second).
+  Usage: each assistant message's `usage` summed per turn; the cost is Pi's
+  own price-table figure (`list_price: true`).
+- Errors: a model that answers with an error ends its message `stopReason:
+  "error"` (recorded: a gateway 400; "model not supported with a ChatGPT
+  account"); a provider with no sign-in FAILS the prompt response ("No API
+  key found for anthropic … Use /login"). Words are Pi's own: sign-in →
+  "type /login in Pi", never another tool's Sign in or account press.
+- Permissions: Pi asks nothing before a tool. ONE mode, `own` ("Pi's own
+  rules"); Ask first, Auto edits, Plan and Full access are `hidden_modes`
+  with the reason. Pi's plan mode is an extension (`--plan` / `/plan`) whose
+  state it restores from the session and turns off by itself when the plan
+  runs — so it is a `/` command, not a chip. Only extensions ask
+  (`extension_ui_request`): `confirm` → approval (the running tool's card,
+  `once_only`, answered `confirmed`); `select` / `input` / `editor` →
+  question (`value`, or `cancelled` on Skip); `notify` → `notice`;
+  `setStatus` / `setWidget` / `setTitle` / `set_editor_text` are not drawn.
+  A dialog with `timeout` is answered by Pi itself; its card closes then.
+  The user's own extensions on this PC gate no tool; plan mode asks "what
+  next?" (`select`) and subagent asks before project-local agents
+  (`confirm`).
+- Sign-in and accounts: Pi signs in by itself, per model provider
+  (`/login`, its own auth file). Iron-Proxy's accounts are Claude Code /
+  Codex / Grok homes and do not apply: no account chip choice ("Pi's own
+  sign-in"), `signed_in: null`, Continue on another account refused.
+- Sessions: `<sessions dir>/--<folder>--/<timestamp>_<id>.jsonl` (header
+  `{type: "session", id, cwd, timestamp}`), the sessions dir being
+  `PI_CODING_AGENT_SESSION_DIR`, else the `sessionDir` setting, else
+  `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions`. The disk listing reads it
+  read-only and matches ids from file names. In a terminal, `pi --session
+  <id>` opens the same conversation (live-verified).

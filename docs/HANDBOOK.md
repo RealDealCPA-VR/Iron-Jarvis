@@ -2135,7 +2135,7 @@ same switch as the chat page's Chat | Code, in the same place on the page.
 
 - **Terminal** is Build as you know it: your live terminals, the folder
   tree, Shell and New terminal. It is what Build opens on.
-- **Code** runs the real **Claude Code** or **Codex** in a window instead of
+- **Code** runs the real **Claude Code**, **Codex** or **Pi** in a window instead of
   a terminal. The coding tool does everything itself, exactly as it would in
   a terminal: its own tools, its own settings, your CLAUDE.md / AGENTS.md,
   its MCP servers, its slash commands and its permission rules. Iron Jarvis
@@ -2190,7 +2190,36 @@ same switch as the chat page's Chat | Code, in the same place on the page.
   `claude --resume` and `codex resume` keep working wherever you started.
 - **The address** is `/terminals?view=code`, with `&code=<id>` for one
   session. Build remembers the view you last chose.
-- **Next**: Pi, then OpenCode, as coding tools for the Code view.
+- **Pi** (v1.411.0) is the third coding tool. The Code view starts your own
+  Pi (the `pi` you run in a terminal) with everything it has there: its
+  tools, your extensions, skills and prompt templates, AGENTS.md and
+  CLAUDE.md, and its settings. What is different about Pi:
+  - **Pi does not ask before it runs a tool.** That is Pi's own rule, so a Pi
+    session has one mode, **Pi's own rules**; the mode menu lists the other
+    four and says why each is not offered. Only one of your Pi extensions can
+    ask, and its question comes here as a card: a yes-or-no question is an
+    Allow / Deny card (shown with the step it is about, such as the edit and
+    its changes, and Enter never allows it), a choice lists its options, and a
+    question that wants words has a box. A message an extension shows (such
+    as "Plan mode enabled") is a quiet line in the conversation.
+  - **Plan mode** comes from Pi's plan extension, if you have it: type
+    `/plan` in the box (it is in the `/` list with your other Pi commands,
+    prompt templates and skills). It is not a mode chip, because the
+    extension turns itself off when you choose to run the plan.
+  - **Pi signs in by itself**, per model provider, so a Pi session has no
+    account to choose: the chip says "Pi's own sign-in". If the model's
+    provider is not signed in, the reply says so: open Pi in a terminal and
+    type `/login`, or choose another model. Continue on another account is
+    not offered for Pi.
+  - **The model** list is the one Pi itself lists (shown once a Pi session
+    has started on this PC), and the **effort** is Pi's thinking level (off
+    to max). Both change at once, even while Pi runs. The usage line's cost
+    is Pi's own figure from its price table, so it reads "at list price".
+  - **Saved sessions**: Pi saves every session in its own sessions folder,
+    so a session started here is listed by Pi itself, and **Open in
+    terminal** types `pi --session <id>` to carry it on there. A terminal
+    where Pi has finished offers **Open in Code view**.
+- **Next**: OpenCode, as a coding tool for the Code view.
 
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 

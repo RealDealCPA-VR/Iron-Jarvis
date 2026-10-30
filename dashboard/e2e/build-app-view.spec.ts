@@ -71,6 +71,24 @@ const TOOLS = {
     efforts: [],
     accounts: [],
   },
+  // v1.411.0: Pi — one mode (its own rules), its own sign-in.
+  {
+    id: "pi",
+    label: "Pi",
+    installed: true,
+    signed_in: null,
+    own_sign_in: true,
+    modes: [{ id: "own", label: "Pi's own rules", dangerous: false }],
+    hidden_modes: [
+      { id: "ask", label: "Ask first", reason: "Pi does not ask before it runs a tool. Only an extension of yours can ask, and its question comes here as a card." },
+      { id: "edits", label: "Auto edits", reason: "Pi has no setting that lets edits run while commands still ask." },
+      { id: "plan", label: "Plan", reason: "Pi's plan mode comes from an extension that switches itself off when you run the plan, so this menu could not stay in step with it. If you have it, type /plan instead." },
+      { id: "full", label: "Full access", reason: "Pi already runs every tool without asking (Pi's own rules)." },
+    ],
+    models: [{ id: "", label: "Pi's default" }],
+    efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    accounts: [],
+  },
   ],
 };
 
@@ -127,7 +145,13 @@ async function stubCodeView(page: Page): Promise<void> {
             },
           ],
         });
-      return json(r, { sessions: [SESSION, { ...SESSION, id: "a2", harness: "codex", account: "", title: "Lint" }] });
+      return json(r, {
+        sessions: [
+          SESSION,
+          { ...SESSION, id: "a2", harness: "codex", account: "", title: "Lint" },
+          { ...SESSION, id: "a4", harness: "pi", account: "", mode: "own", model: "", title: "Pi: rename the helper" },
+        ],
+      });
     },
   );
   // A settled session (nothing asked): its composer and chips are on show.
@@ -139,6 +163,34 @@ async function stubCodeView(page: Page): Promise<void> {
       turn_id: null,
       pending: [],
       commands: [],
+    }),
+  );
+  // v1.411.0: a Pi session waiting on an EXTENSION's confirm (the shape the
+  // real parser writes: the running edit's card, asked every time).
+  await page.route(`${DAEMON}/build/app/sessions/a4`, (r) =>
+    json(r, {
+      session: { ...SESSION, id: "a4", harness: "pi", account: "", mode: "own", model: "" },
+      events: [
+        EVENTS[0],
+        { type: "tool", at: "2026-10-30T10:00:03Z", item: "call_1", kind: "edit", name: "edit", title: "Edit cart.py", status: "running" },
+        {
+          type: "approval",
+          at: "2026-10-30T10:00:04Z",
+          request_id: "req-pi",
+          kind: "edit",
+          title: "Edit cart.py",
+          detail: "Allow this change?\nTool: edit\nPath: cart.py",
+          path: "cart.py",
+          diff: EVENTS[2].diff,
+          can_session: false,
+          once_only: true,
+          tool: "edit",
+        },
+      ],
+      running: null,
+      turn_id: null,
+      pending: [],
+      commands: [{ name: "plan", description: "Toggle plan mode (read-only exploration)" }],
     }),
   );
   await page.route(`${DAEMON}/build/app/sessions/a1`, (r) =>
@@ -228,12 +280,40 @@ for (const size of [
       await expect(page.getByTestId("code-dropped")).toBeVisible();
       await page.waitForTimeout(300);
       expect(await widest(page)).toBeLessThanOrEqual(1);
+      await expect(page.getByTestId("code-row-line-a4")).toHaveText("Pi · Pi's own sign-in");
       // New session too (the folder tree and the tool list).
       await page.getByTestId("code-new").click();
       await expect(page.getByTestId("code-new-tool-codex")).toHaveAttribute("data-available", "false");
       await page.waitForTimeout(300);
       expect(await widest(page)).toBeLessThanOrEqual(1);
     });
+  });
+}
+
+for (const size of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+]) {
+  test(`${size.width} px — a Pi session: its own rules, its own sign-in, an extension's card that fits`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await stubCodeView(page);
+    await page.goto("/terminals?view=code&code=a4");
+    const card = page.getByTestId("code-ask");
+    await expect(card).toBeVisible({ timeout: 90_000 });
+    await expect(card.getByTestId("code-ask-diff")).toBeVisible();
+    await expect(card.getByTestId("code-ask-allow-session")).toHaveCount(0);
+    await expect(card.getByTestId("code-ask-keys")).toHaveText("Click Allow once to allow it · Esc to deny");
+    await page.waitForTimeout(300);
+    expect(await widest(page)).toBeLessThanOrEqual(1);
+    // New session for Pi: no account to choose, Pi's own rules.
+    await page.getByTestId("code-new").click();
+    await page.getByTestId("code-new-tool-pi").getByRole("radio").check();
+    await expect(page.getByTestId("code-new-account-own")).toHaveText("Account: Pi's own sign-in");
+    await expect(page.getByTestId("code-new-mode-button")).toContainText("Pi's own rules");
+    await page.getByTestId("code-new-mode-button").click();
+    await expect(page.getByTestId("code-new-mode-hidden-full")).toContainText("without asking");
+    await page.waitForTimeout(300);
+    expect(await widest(page)).toBeLessThanOrEqual(1);
   });
 }
 
@@ -262,15 +342,16 @@ test("360 px: the mode menu fits inside the stage", async ({ page }) => {
 // read the daemon's own answers. Nothing here starts Claude Code or Codex
 // (the daemon lists the tools from cached reads; a session's process starts
 // only with its first message, which this never sends).
-test("the real daemon: an empty list, New session lists Claude Code and Codex by name", async ({ page }) => {
+test("the real daemon: an empty list, New session lists Claude Code, Codex and Pi by name", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/terminals?view=code");
   await expect(page.getByTestId("code-list-empty")).toBeVisible({ timeout: 90_000 });
   await page.getByTestId("code-new").click();
   await expect(page.getByTestId("code-new-tool-claude-code")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("code-new-tool-codex")).toBeVisible();
+  await expect(page.getByTestId("code-new-tool-pi")).toBeVisible();
   // A tool that cannot start says why; one that can is offered.
-  for (const id of ["claude-code", "codex"]) {
+  for (const id of ["claude-code", "codex", "pi"]) {
     const row = page.getByTestId(`code-new-tool-${id}`);
     if ((await row.getAttribute("data-available")) === "false") {
       await expect(page.getByTestId(`code-new-tool-why-${id}`)).not.toHaveText("");

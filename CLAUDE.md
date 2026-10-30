@@ -4128,7 +4128,7 @@ does not need a bump, stop and bump it.
   REAL-parser fixture `dashboard/__tests__/fixtures/build-app-events-v1409.json`
   (`IJ_REGEN_BUILD_APP=1`); Enter never allows a once-only card or anything
   in Full access; Full access is two presses with a repeat guard; streamed
-  frames draw once a frame with memo'd rows. NEXT: Pi, then OpenCode. Pins:
+  frames draw once a frame with memo'd rows. NEXT: OpenCode (Pi below). Pins:
   `tests/test_build_app_{,routes_,pool_,review_,title_}v1409.py`,
   `dashboard/__tests__/build-app-{view,switch,bell,path-pick}-v1409.test.tsx`,
   e2e `dashboard/e2e/build-app-view.spec.ts`. Live-proven on this PC
@@ -4136,6 +4136,42 @@ does not need a bump, stop and bump it.
   its diff → Allow once → the edit landed; Open in terminal resumed the same
   conversation and Open in Code view came back to the same row; Codex asked
   once-only before a command and ran it after Allow once.
+  PI (v1.411.0, `hosted/pi.py`, pi 1.3.0 measured): `pi --mode rpc
+  --session-id <uuid>` (the id minted before the start; the same argv
+  creates AND resumes; never `--no-session` or any tool/extension/skill/
+  context-off flag — pinned) + `--model provider/id` / `--thinking`, both
+  changed LIVE (`set_model`, `set_thinking_level`). Commands carry `id` and
+  get ONE `response`; a `prompt` answers at once (`started` | `handled`, an
+  extension command — the turn ends after `HANDLED_GRACE_S` if no run begins;
+  its answer is read when it comes, never awaited: `/rpc-input` answers only
+  after its dialog); `agent_settled` (never `agent_end`) ends a turn; a model
+  error is an assistant `stopReason: "error"`, a missing sign-in a FAILED
+  prompt response. Pi asks NOTHING before a tool: ONE mode `own` ("Pi's own
+  rules", not dangerous), the other four `hidden_modes` with the reason (plan
+  is an extension that turns itself off — `/plan` stays a `/` command). Only
+  an extension asks (`extension_ui_request`): `confirm` → an approval drawn
+  as the RUNNING tool's card (its diff/command), `once_only`, answered
+  `confirmed`; `select`/`input`/`editor` → a question (`value` /
+  `cancelled`); a dialog's `timeout` closes the card (`forget_ask`);
+  `notify` → `notice`; the rest is ignored. Pi signs in by itself: no
+  Iron-Proxy account (`W.PROXY` has no `pi`; create with an account → 400,
+  continue-on refused), `own_sign_in: true`, `signed_in: null`; its failures
+  are `P.failure_event` (sign-in → `/login`, never the other tools'
+  presses). A parent Pi session's `PI_SESSION_*` markers are dropped from the
+  child env. Models: what a Pi process listed (`get_available_models`),
+  kept in `<home>/hosted/pi_models.json`; never a start to ask. Disk rows:
+  Pi's own sessions folder (`PI_CODING_AGENT_SESSION_DIR` → `sessionDir`
+  setting → `<PI_CODING_AGENT_DIR or ~/.pi/agent>/sessions`), id read from
+  the file NAME and matched, header `cwd` = the folder. Open in terminal types
+  `pi --session <id>`; from-terminal finds the one session written since the
+  pane started. No new event kind. Pins: `tests/test_build_app_pi_v1411.py`
+  (recordings `tests/fixtures/build_app_v1411`, contract
+  `dashboard/__tests__/fixtures/build-app-events-v1411.json`,
+  `IJ_REGEN_BUILD_APP_PI=1`), `dashboard/__tests__/build-app-pi-v1411.test.tsx`.
+  Live-proven (scratch home + scratch Pi session folder, real pi 1.3.0 on
+  openai-codex/gpt-6-luna): a read, an edit that landed, the user's own
+  plan extension's "what next?" answered as a question card, and `pi
+  --session <id>` reopening the same conversation.
 
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon

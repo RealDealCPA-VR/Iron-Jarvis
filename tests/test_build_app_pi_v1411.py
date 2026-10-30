@@ -602,3 +602,62 @@ async def test_a_waiting_pi_card_is_on_the_bell_by_name_only(app, work, tmp_path
     assert rows == [{"id": f"build_app:{s['id']}", "kind": "chat", "thread_id": s["id"], "tool": "edit",
                      "requested_at": rows[0]["requested_at"], "mission_id": None, "project_id": None,
                      "surface": "build_app", "app_session": s["id"], "harness": "pi"}]
+
+
+# --------------------------------------------------------------------------- #
+# The parser's own pieces
+# --------------------------------------------------------------------------- #
+def _driver(emitted: list) -> P.PiDriver:
+    async def write(obj):
+        return None
+
+    return P.PiDriver(write=write, emit=emitted.append, ask=lambda a: None, on_session_id=lambda s: None,
+                      mode="own")
+
+
+async def test_a_restarted_pi_never_joins_an_earlier_turns_reply():
+    """Pi names no message id on the wire: a later PROCESS's first answer must
+    not share an item with an earlier one's (the screen joins text by item)."""
+    first, second = [], []
+    for out in (first, second):
+        d = _driver(out)
+        d.on_message({"type": "message_start", "message": {"role": "assistant", "content": []}})
+        d.on_message({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0,
+                                                                          "delta": "hi"}})
+    assert first[0]["item"] != second[0]["item"]
+
+
+async def test_a_running_commands_output_is_redrawn_at_most_once_a_second():
+    out: list = []
+    d = _driver(out)
+    d.on_message({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "bash", "args": {"command": "x"}})
+    for i in range(5):
+        d.on_message({"type": "tool_execution_update", "toolCallId": "c1", "toolName": "bash",
+                      "partialResult": {"content": [{"type": "text", "text": f"line {i}"}]}})
+    assert [e["status"] for e in out] == ["running", "running"]
+    assert out[1]["output"] == "line 0"
+
+
+def test_the_driver_itself_refuses_a_session_wide_allow():
+    """The service refuses first (the card offers none); the driver refuses too,
+    before anything is sent."""
+    from iron_jarvis.hosted.driver import Ask, AskRefused
+
+    d = _driver([])
+    for method in ("confirm", "select"):
+        ask = Ask("ask_1", "approval" if method == "confirm" else "question", "edit", "pi-dialog-1",
+                  {"method": method, "question": "Q?"})
+        with pytest.raises(AskRefused):
+            d.prepare_answer(ask, "allow_session", "", {"Q?": "A"})
+
+
+async def test_iron_proxy_accounts_never_reach_pis_row(app, monkeypatch):
+    from iron_jarvis.harness import build_accounts as BA
+
+    monkeypatch.setattr(S, "binary_for", lambda h: ["x"])
+    monkeypatch.setattr(BA, "snapshot", lambda svc: ([{"id": "p1"}], {}))
+    monkeypatch.setattr(BA, "vendor_rows", lambda snap, vendor: [{"id": f"{vendor}-1", "name": "Work", "status": "ready"}])
+    async with client(app) as c:
+        rows = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
+    assert rows["pi"]["accounts"] == []
+    assert rows["codex"]["accounts"] == [{"id": "codex-1", "name": "Work", "status": "ready"}]
