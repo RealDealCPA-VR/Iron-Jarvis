@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.409.0 (2026-10-29).*
+holds itself to. Current as of v1.409.1 (2026-10-29).*
 
 ---
 
@@ -1897,6 +1897,14 @@ reads; it never writes, runs commands, or starts work on its own.
   terminals. If Iron Jarvis ever freezes again, it now writes where it is
   stuck in its log (Settings › System › Open logs) before it is restarted:
   look for a line starting "event loop frozen for".
+  Since v1.409.1 a freeze that stops every part of Iron Jarvis at once (it
+  happened again on the first start after the v1.409.0 update, and nothing
+  was written) is still recorded: the stack of every part of the app goes to
+  **daemon-freeze.txt** beside the log, about 30 seconds into a freeze, and
+  again every 30 seconds while it lasts. The file holds Iron Jarvis's own
+  program file names (which include your Windows user folder), nothing you
+  typed. Iron Jarvis also reports when every worker that answers requests is
+  busy.
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and

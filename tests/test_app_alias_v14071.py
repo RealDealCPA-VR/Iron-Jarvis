@@ -363,4 +363,4 @@ def test_the_daemons_loop_task_beats_the_watch():
     start = src.index("async def _loop_lag_loop")
     body = src[start : start + 400]
     assert "_loop_watch.beat()" in body
-    assert "LoopWatch().start()" in src and "_loop_watch.stop()" in src
+    assert "LoopWatch(trace_path=_trace_path, pool_full=_pool_full).start()" in src and "_loop_watch.stop()" in src

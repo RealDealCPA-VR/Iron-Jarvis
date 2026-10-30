@@ -10764,6 +10764,26 @@ does not need a bump, stop and bump it.
   attempt. Pins: `tests/test_app_alias_v14071.py` (15 mutations, 14 red; the
   survivor — handing a packaged spawn `self._job` — is equivalent, the job is
   `None` there), including real Store-pwsh and cmd ConPTY spawns.
+  v1.409.1 (a USER BUG, the SAME freeze on the first start after the v1.409.0
+  update): both panes were still not started at the 8 s mark, ~1 s after the
+  dashboard opened every request stopped, and the daemon wrote NOTHING for
+  94 s, LoopWatch included. Windows' AppModel log shows no pwsh activation in
+  that window, so both CreateProcessW calls never reached activation. A scratch
+  daemon whose pane spawns never return (ctypes releases the GIL) stayed fully
+  responsive, so a stuck spawn ALONE does not freeze it: the silence means the
+  interpreter lock, a log handler's lock, or every request worker was taken.
+  THE CAUSE IS NOT FOUND. LoopWatch now (a) arms `faulthandler.
+  dump_traceback_later(TRACE_AFTER_S=30, repeat=True)` into
+  `<userData>/logs/daemon-freeze.txt` (`trace_path_for`; never inside the
+  state home), re-armed from its own thread every TRACE_REARM_S=10 while
+  Python runs — the C watchdog needs neither lock; ONLY a frozen build or
+  `IRONJARVIS_FREEZE_TRACE=1` arms it (the process has one such dump), and
+  `stop()` cancels it; (b) writes its reports to that file BEFORE the log;
+  (c) reports at 20/45/75 s when anyio's default limiter has every token
+  borrowed (`pool_full`: loop alive, /health — a sync route — waiting).
+  READ `logs/daemon-freeze.txt` after the next "isn't responding"; it names
+  the place. Pins: `tests/test_freeze_trace_v14091.py` (a real held GIL via
+  `PyDLL("kernel32").Sleep` in a child; 7 mutations, all red).
 
 - **Build (`app/terminals/page.tsx`)**: since v1.409.0 a "</> Code | Terminal"
   switch (Code = `components/buildCode/*`, see the v1.409.0 hard rule). The

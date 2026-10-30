@@ -19,9 +19,11 @@ boot summary line (v1.250.0). It never raises into the boot.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 log = logging.getLogger("ironjarvis.daemon")
@@ -150,6 +152,27 @@ class BootWatch:
 #: When a frozen event loop is reported (v1.407.1). The desktop watchdog kills
 #: the daemon after ~90 s of missed /health, so all three land before it.
 FREEZE_AFTER_S: tuple[float, ...] = (20.0, 45.0, 75.0)
+#: The C-level stack dump fires when the watch's own thread has not re-armed
+#: it for this long (v1.409.1): a freeze that holds the interpreter lock or a
+#: log handler's lock silences every Python-level report, this one included.
+TRACE_AFTER_S = 30.0
+#: How often the watch's thread re-arms that dump while Python still runs.
+TRACE_REARM_S = 10.0
+#: The file freeze traces go to, beside daemon.log — never inside the state
+#: home, which the backup walks (the v1.337.1 rule for files held open).
+TRACE_FILE = "daemon-freeze.txt"
+
+
+def trace_path_for(home: str | os.PathLike[str]) -> str:
+    """Where a freeze trace is written: the desktop's logs folder beside the
+    state home when it exists (``<userData>/logs``), else the home."""
+    home_path = Path(home)
+    logs = home_path.parent / "logs"
+    return str((logs if logs.is_dir() else home_path) / TRACE_FILE)
+
+
+def _stamp() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class LoopWatch:
@@ -163,7 +186,26 @@ class LoopWatch:
     once a second (the loop-lag task); when the last beat is older than each
     of :data:`FREEZE_AFTER_S`, ONE warning per threshold per freeze names
     where the loop thread and the other busy threads are (``where``: module
-    names and line numbers only). A beat ends the freeze. Never raises."""
+    names and line numbers only). A beat ends the freeze. Never raises.
+
+    v1.409.1 (a USER BUG: the same freeze, on the first start after the
+    v1.409.0 update): the whole daemon went silent and THIS watch wrote
+    nothing either, so the stop held something every Python thread needs
+    (the interpreter lock, a log handler's lock) or left no worker free to
+    answer. Three more reports, each written straight to the trace file
+    before the log is tried:
+
+    * ``trace_path``: :mod:`faulthandler`'s C watchdog thread, which needs
+      neither the interpreter lock nor a log lock, dumps every thread's stack
+      when this thread has not re-armed it for :data:`TRACE_AFTER_S` (it
+      re-arms every :data:`TRACE_REARM_S` while Python runs), and again every
+      :data:`TRACE_AFTER_S` while it stays stuck. The process has ONE such
+      dump, so only the frozen daemon passes a path — never a test's app.
+    * a frozen loop's words go to that file first, then to the log.
+    * ``pool_full``: when every worker that answers a plain route is busy
+      (the loop alive, /health waiting for a worker) past each threshold,
+      the same words and stacks are reported.
+    """
 
     def __init__(
         self,
@@ -172,6 +214,10 @@ class LoopWatch:
         clock: Callable[[], float] = time.monotonic,
         report: Callable[[str], None] | None = None,
         poll_s: float = 1.0,
+        trace_path: str | None = None,
+        pool_full: Callable[[], bool] | None = None,
+        trace_after_s: float = TRACE_AFTER_S,
+        trace_rearm_s: float = TRACE_REARM_S,
     ) -> None:
         self.freeze_after_s = tuple(sorted(freeze_after_s))
         self._clock = clock
@@ -181,6 +227,14 @@ class LoopWatch:
         self._said: set[float] = set()
         self._stop = threading.Event()
         self._loop_thread: int | None = None
+        self._trace_path = trace_path
+        self._trace = None
+        self._trace_after_s = trace_after_s
+        self._trace_rearm_s = trace_rearm_s
+        self._armed_at: float | None = None
+        self._pool_full = pool_full
+        self._pool_since: float | None = None
+        self._pool_said: set[float] = set()
         self.reports = 0
 
     def start(self) -> "LoopWatch":
@@ -188,6 +242,7 @@ class LoopWatch:
         try:
             self._loop_thread = threading.get_ident()
             self._last = self._clock()
+            self._open_trace()
             threading.Thread(target=self._run, name="loop-watch", daemon=True).start()
         except Exception:  # noqa: BLE001
             log.debug("loop watch could not start", exc_info=True)
@@ -200,21 +255,98 @@ class LoopWatch:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._trace is None:
+            return
+        try:
+            import faulthandler
+
+            faulthandler.cancel_dump_traceback_later()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._trace.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._trace = None
+
+    def _open_trace(self) -> None:
+        if not self._trace_path:
+            return
+        try:
+            self._trace = open(self._trace_path, "a", encoding="utf-8")  # noqa: SIM115
+        except OSError:
+            self._trace = None
+            return
+        self._write(f"--- {_stamp()} watching for freezes (pid {os.getpid()}) ---\n")
+        self._arm()
+
+    def _arm(self) -> None:
+        """(Re-)arm the C watchdog's dump. Never raises."""
+        if self._trace is None:
+            return
+        try:
+            import faulthandler
+
+            faulthandler.dump_traceback_later(self._trace_after_s, repeat=True, file=self._trace)
+            self._armed_at = self._clock()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _write(self, text: str) -> None:
+        if self._trace is None:
+            return
+        try:
+            self._trace.write(text)
+            self._trace.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _say(self, text: str) -> None:
+        """A report goes to the trace file FIRST (a blocked log lock cannot
+        stop that), then to the log."""
+        self._write(f"{_stamp()} {text}\n")
+        self.reports += 1
+        self._report(text)
 
     def check(self) -> None:
         """One look (the thread calls this every ``poll_s``; tests call it)."""
         try:
-            frozen = self._clock() - self._last
+            now = self._clock()
+            if self._armed_at is not None and now - self._armed_at >= self._trace_rearm_s:
+                self._arm()
+            frozen = now - self._last
             for after in self.freeze_after_s:
                 if frozen >= after and after not in self._said:
                     self._said.add(after)
-                    self._report(
+                    self._say(
                         f"event loop frozen for {frozen:.0f} s (nothing has answered since). "
                         f"Where it is waiting: {where(self._loop_thread).replace('boot thread', 'loop thread', 1)}"
                     )
-                    self.reports += 1
+            self._check_pool(now)
         except Exception:  # noqa: BLE001 — the watch never adds a failure
             pass
+
+    def _check_pool(self, now: float) -> None:
+        if self._pool_full is None:
+            return
+        try:
+            full = bool(self._pool_full())
+        except Exception:  # noqa: BLE001
+            full = False
+        if not full:
+            self._pool_since = None
+            self._pool_said.clear()
+            return
+        if self._pool_since is None:
+            self._pool_since = now
+        busy = now - self._pool_since
+        for after in self.freeze_after_s:
+            if busy >= after and after not in self._pool_said:
+                self._pool_said.add(after)
+                self._say(
+                    f"every worker that answers requests has been busy for {busy:.0f} s, "
+                    f"so /health and most pages wait. Where they are waiting: {where(None)}"
+                )
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):

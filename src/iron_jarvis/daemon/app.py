@@ -1544,9 +1544,31 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # no trace. Sleep 1 s and log any overshoot past 250 ms.
         # v1.407.1: a freeze that never ends is reported from ANOTHER thread
         # (daemon/boot_watch.LoopWatch) before the desktop watchdog's kill.
-        from .boot_watch import LoopWatch
+        # v1.409.1: the frozen daemon also arms a C-level stack dump into
+        # logs/daemon-freeze.txt (a freeze that silenced every Python report
+        # left nothing to read) and reports every request worker being busy.
+        # The process has ONE such dump, so a test's app never arms it.
+        from .boot_watch import LoopWatch, trace_path_for
 
-        _loop_watch = LoopWatch().start()
+        _trace_path = None
+        if getattr(sys, "frozen", False) or os.environ.get("IRONJARVIS_FREEZE_TRACE") == "1":
+            try:
+                _trace_path = trace_path_for(platform.config.home)
+            except Exception:  # noqa: BLE001
+                _trace_path = None
+        _pool_full = None
+        try:
+            import anyio.to_thread
+
+            _limiter = anyio.to_thread.current_default_thread_limiter()
+
+            def _workers_full() -> bool:
+                return _limiter.borrowed_tokens >= _limiter.total_tokens
+
+            _pool_full = _workers_full
+        except Exception:  # noqa: BLE001
+            log.debug("request workers cannot be watched", exc_info=True)
+        _loop_watch = LoopWatch(trace_path=_trace_path, pool_full=_pool_full).start()
 
         async def _loop_lag_loop() -> None:
             loop = asyncio.get_running_loop()
