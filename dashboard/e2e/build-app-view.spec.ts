@@ -281,9 +281,10 @@ for (const size of [
       await page.waitForTimeout(300);
       expect(await widest(page)).toBeLessThanOrEqual(1);
       await expect(page.getByTestId("code-row-line-a4")).toHaveText("Pi · Pi's own sign-in");
-      // New session too (the folder tree and the tool list).
+      // New session too (v1.412.0: the start composer and its tool list).
       await page.getByTestId("code-new").click();
-      await expect(page.getByTestId("code-new-tool-codex")).toHaveAttribute("data-available", "false");
+      await page.getByTestId("code-start-tool").click();
+      await expect(page.getByTestId("code-start-tool-codex")).toHaveAttribute("data-available", "false");
       await page.waitForTimeout(300);
       expect(await widest(page)).toBeLessThanOrEqual(1);
     });
@@ -305,13 +306,16 @@ for (const size of [
     await expect(card.getByTestId("code-ask-keys")).toHaveText("Click Allow once to allow it · Esc to deny");
     await page.waitForTimeout(300);
     expect(await widest(page)).toBeLessThanOrEqual(1);
-    // New session for Pi: no account to choose, Pi's own rules.
+    // New session for Pi: no account to choose, Pi's own rules (v1.412.0:
+    // the start composer's chips).
     await page.getByTestId("code-new").click();
-    await page.getByTestId("code-new-tool-pi").getByRole("radio").check();
-    await expect(page.getByTestId("code-new-account-own")).toHaveText("Account: Pi's own sign-in");
-    await expect(page.getByTestId("code-new-mode-button")).toContainText("Pi's own rules");
-    await page.getByTestId("code-new-mode-button").click();
-    await expect(page.getByTestId("code-new-mode-hidden-full")).toContainText("without asking");
+    await page.getByTestId("code-start-tool").click();
+    await page.getByTestId("code-start-tool-pi").click();
+    await expect(page.getByTestId("code-start-account-own")).toHaveText("Pi's own sign-in");
+    await expect(page.getByTestId("code-start-account")).toHaveCount(0);
+    await expect(page.getByTestId("code-start-mode-button")).toContainText("Pi's own rules");
+    await page.getByTestId("code-start-mode-button").click();
+    await expect(page.getByTestId("code-start-mode-hidden-full")).toContainText("without asking");
     await page.waitForTimeout(300);
     expect(await widest(page)).toBeLessThanOrEqual(1);
   });
@@ -342,19 +346,23 @@ test("360 px: the mode menu fits inside the stage", async ({ page }) => {
 // read the daemon's own answers. Nothing here starts Claude Code or Codex
 // (the daemon lists the tools from cached reads; a session's process starts
 // only with its first message, which this never sends).
-test("the real daemon: an empty list, New session lists Claude Code, Codex and Pi by name", async ({ page }) => {
+test("the real daemon: an empty list, the start composer lists Claude Code, Codex and Pi by name", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/terminals?view=code");
   await expect(page.getByTestId("code-list-empty")).toBeVisible({ timeout: 90_000 });
-  await page.getByTestId("code-new").click();
-  await expect(page.getByTestId("code-new-tool-claude-code")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("code-new-tool-codex")).toBeVisible();
-  await expect(page.getByTestId("code-new-tool-pi")).toBeVisible();
+  // v1.412.0: the composer is there at once, no folder chosen.
+  await expect(page.getByTestId("code-start-box")).toBeVisible();
+  await expect(page.getByTestId("code-start-folder")).toHaveText("No folder");
+  await expect(page.getByTestId("code-start-tool")).toBeEnabled({ timeout: 30_000 });
+  await page.getByTestId("code-start-tool").click();
+  await expect(page.getByTestId("code-start-tool-claude-code")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("code-start-tool-codex")).toBeVisible();
+  await expect(page.getByTestId("code-start-tool-pi")).toBeVisible();
   // A tool that cannot start says why; one that can is offered.
   for (const id of ["claude-code", "codex", "pi"]) {
-    const row = page.getByTestId(`code-new-tool-${id}`);
+    const row = page.getByTestId(`code-start-tool-${id}`);
     if ((await row.getAttribute("data-available")) === "false") {
-      await expect(page.getByTestId(`code-new-tool-why-${id}`)).not.toHaveText("");
+      await expect(page.getByTestId(`code-start-tool-why-${id}`)).not.toHaveText("");
     }
   }
 });

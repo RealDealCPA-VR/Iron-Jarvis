@@ -95,12 +95,34 @@ async function openHarness(page: Page) {
   await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
 }
 
+/** v1.412.0: New session starts AT ONCE with no folder; the folder is chosen
+ *  under the composer (Choose… → in a browser, the folder tree in a dialog:
+ *  its typed path, then "Use this folder"), which moves the empty session
+ *  into that folder. `branch`: for a repository, what the branch switch is
+ *  left at (null: no switch expected). */
+async function startInFolder(page: Page, folder: string, branch: boolean | null = null): Promise<void> {
+  await page.getByTestId("harness-new-session").click();
+  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 30_000 });
+  const first = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
+  await page.getByTestId("harness-start-folder-choose").click();
+  const typed = page.getByTestId("harness-start-folder-tree").getByLabel("Go to root path");
+  await typed.fill(folder);
+  await typed.press("Enter");
+  await page.getByTestId("harness-start-folder-tree-use").click();
+  if (branch !== null) {
+    const sw = page.getByTestId("harness-start-branch-switch");
+    await expect(sw).toBeVisible({ timeout: 20_000 });
+    await expect(sw).toBeChecked();
+    if (!branch) await sw.uncheck();
+    await page.getByTestId("harness-start-branch-use").click();
+  }
+  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", first, { timeout: 30_000 });
+  await expect(page.getByTestId("harness-session")).toBeVisible();
+}
+
 test("Chat › Code → a session → a reply with a change, and Undo", async ({ page }) => {
   await openHarness(page);
-  await page.getByTestId("harness-new-session").click();
-  await page.getByTestId("harness-new-folder").fill(work);
-  await page.getByTestId("harness-new-start").click();
-  await expect(page.getByTestId("harness-session")).toBeVisible();
+  await startInFolder(page, work);
   await expect(page.getByTestId("harness-folder")).toContainText(work.split(/[\\/]/).pop() as string);
   sessionId = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
   expect(sessionId).not.toBe("");
@@ -786,11 +808,12 @@ test("Phase 6: the keys inside the harness only, the search, and Branch from her
   await expect(page.getByTestId("harness-session")).toHaveAttribute("data-session", sessionId, { timeout: 30_000 });
   await expect(page.getByTestId("harness-reply")).toHaveCount(before, { timeout: 30_000 });
 
-  // Ctrl+N with the focus in the harness: New session opens, ready to type.
+  // Ctrl+N with the focus in the harness: a new session starts at once
+  // (v1.412.0), with no folder, ready to type.
   await box.click();
   await page.keyboard.press("Control+n");
-  await expect(page.getByTestId("harness-new-session-form")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("harness-new-folder")).toBeFocused();
+  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", sessionId, { timeout: 10_000 });
+  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 10_000 });
 });
 
 // v1.379.0: a typed "/name words" runs like Claude Code's "/": a skill rides
@@ -852,13 +875,14 @@ test("v1.379.0: a session with no folder makes its own folder with its first mes
     const put = await page.request.put(`${DAEMON}/settings`, { data: { values: { chat_files_root: chatFiles } } });
     expect(put.ok()).toBe(true);
     await openHarness(page);
+    // v1.412.0: New session starts with no folder at once; its folder chip
+    // says where its files go.
     await page.getByTestId("harness-new-session").click();
-    const form = page.getByTestId("harness-new-session-form");
-    await expect(form.getByTestId("harness-new-no-folder-line")).toContainText(
-      `No folder: the session keeps its files in a new folder in ${chatFiles}`,
-    );
-    await form.getByTestId("harness-new-no-folder").click();
     await expect(page.getByTestId("harness-session")).toBeVisible();
+    await expect(page.getByTestId("harness-start-folder")).toHaveAttribute(
+      "title",
+      new RegExp(`a new folder in ${chatFiles.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}`),
+    );
     const folderLine = page.getByTestId("harness-folder");
     await expect(folderLine).toHaveAttribute("data-no-folder", "true");
     await expect(folderLine).toContainText("its files get a folder of their own with your first message");

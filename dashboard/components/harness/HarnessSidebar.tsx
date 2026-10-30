@@ -3,13 +3,14 @@
 /**
  * The IJ harness view's LEFT PANE (v1.369.0, plan Phase 6).
  *
- *  - New session: in the folder last worked in, or one picked here (the
- *    Folders picker, or a pasted path). A folder Iron Jarvis cannot use is
- *    refused by the daemon in words, shown under the box. v1.379.0: the
- *    folder is OPTIONAL ("Start with no folder", or Start with the box
- *    empty): such a session keeps its files in a folder of its own under the
- *    chat files folder, made with its first message — one line says where.
- *    All of them share one plain "No folder" group.
+ *  - New session (v1.412.0): a session starts AT ONCE, with no folder, and
+ *    opens on its composer — no form first (the user: "it should start
+ *    automatically with a no folder chosen in the chat bar"). The folder is
+ *    chosen there, under the composer (components/harness/HarnessStartFolder:
+ *    "Choose…" opens Windows' own folder picker), before the first message.
+ *    A session with no folder keeps its files in a folder of its own under
+ *    the chat files folder, made with its first message (v1.379.0). All of
+ *    them share one plain "No folder" group.
  *  - Sessions grouped by folder (GET /build/sessions, newest first). A group
  *    is named by its DISPLAY name; renaming it changes the display name only
  *    (a folder that is a Jarvis project's root shows and renames the
@@ -20,16 +21,14 @@
  *    in Build (v1.406.0: Build is the terminals; this list is in Chat › Code).
  */
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Columns2, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
-import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
-import { noFolderLine, type BuildFolder } from "@/lib/buildSessions";
-import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
+import type { BuildFolder } from "@/lib/buildSessions";
 import { SESSION_DRAG_TYPE } from "@/lib/codeSplit";
 
 /** v1.406.0 part 7: the "Open beside" button's words. */
@@ -51,174 +50,6 @@ const GHOST =
 function SessionDot({ running, waiting }: { running: boolean; waiting: boolean }) {
   const cls = waiting ? "bg-tone-warn animate-pulse" : running ? "bg-accent animate-pulse" : "bg-zinc-600";
   return <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${cls}`} />;
-}
-
-/** How long New session waits after the folder changes before it asks the
- *  daemon whether the folder is in a git repository. */
-export const FOLDER_GIT_DEBOUNCE_MS = 300;
-
-function NewSessionForm({
-  defaultFolder,
-  onStart,
-  onClose,
-  workRoot,
-  startWithNoFolder = false,
-}: {
-  defaultFolder: string | null;
-  /** v1.379.0 review: the session in front has no folder — the form opens
-   *  that way (no folder in the box, the folder list closed). */
-  startWithNoFolder?: boolean;
-  onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
-  onClose: () => void;
-  /** v1.379.0: where a session with no folder keeps its files. */
-  workRoot: string;
-}) {
-  const [folder, setFolder] = useState(defaultFolder ?? "");
-  const [picking, setPicking] = useState(!defaultFolder && !startWithNoFolder);
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  // v1.375.0 (part 2, Phase 4): is the folder in a git repository? Then the
-  // session works on its own branch by default — the switch says so and
-  // turns it off ("work in the folder directly").
-  const [gitInfo, setGitInfo] = useState<{ folder: string; info: FolderGit | null } | null>(null);
-  const [onBranch, setOnBranch] = useState(true);
-  useEffect(() => {
-    const f = folder.trim();
-    if (!f) {
-      setGitInfo(null);
-      return;
-    }
-    let live = true;
-    const t = setTimeout(() => {
-      void fetchFolderGit(f).then((info) => {
-        if (live) setGitInfo({ folder: f, info });
-      });
-    }, FOLDER_GIT_DEBOUNCE_MS);
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
-  }, [folder]);
-  const info = gitInfo && gitInfo.folder === folder.trim() ? gitInfo.info : null;
-  const showSwitch = !!info && info.repo && info.canBranch;
-  const gitLine = folderGitLine(info);
-
-  async function begin(f: string) {
-    setBusy(true);
-    setProblem(null);
-    // `branch` rides only when the switch was shown for THIS folder; else the
-    // daemon decides (a branch when the folder can have one). v1.379.0: an
-    // empty folder is a session with NO folder (no branch: no repository).
-    const err = await (f && showSwitch ? onStart(f, { branch: onBranch }) : onStart(f));
-    setBusy(false);
-    if (err) setProblem(err);
-  }
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    await begin(folder.trim());
-  }
-
-  return (
-    <form
-      data-testid="harness-new-session-form"
-      onSubmit={submit}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
-      className="space-y-2 rounded-xl bg-white/[0.03] p-2"
-    >
-      <label htmlFor="harness-new-folder" className="block text-[12px] text-zinc-500">
-        Folder to work in (optional)
-      </label>
-      <input
-        id="harness-new-folder"
-        data-testid="harness-new-folder"
-        // v1.377.0: the form opens ready to type (New session, Ctrl+N).
-        autoFocus
-        value={folder}
-        onChange={(e) => setFolder(e.target.value)}
-        placeholder="Paste a folder path"
-        className="w-full rounded-lg border hairline bg-transparent px-2 py-1.5 font-mono text-[12px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/50"
-      />
-      {showSwitch ? (
-        <label data-testid="harness-new-branch" className="flex items-start gap-2 text-[12px] text-zinc-300">
-          <input
-            type="checkbox"
-            data-testid="harness-new-branch-switch"
-            checked={onBranch}
-            onChange={(e) => setOnBranch(e.target.checked)}
-            className="mt-0.5 accent-accent"
-          />
-          <span className="min-w-0">
-            Work on a new branch
-            <span className="block text-[11px] text-zinc-500">
-              {onBranch
-                ? `A worktree beside the repository, on its own ij/ branch from ${info?.branch || "the current commit"}. Your checkout is not touched.`
-                : "Off: the session works in the folder directly, on the branch checked out there."}
-            </span>
-          </span>
-        </label>
-      ) : gitLine ? (
-        <p data-testid="harness-new-git-note" className="text-[11px] text-zinc-500">
-          {gitLine}
-        </p>
-      ) : null}
-      {/* v1.379.0: a session needs no folder (Claude Code's own rule: attach
-          one, or not) — this line says where such a session keeps its files. */}
-      <p data-testid="harness-new-no-folder-line" className="break-words text-[11px] leading-snug text-zinc-500">
-        {noFolderLine(workRoot)}
-      </p>
-      {problem ? (
-        <p role="alert" className="text-[12px] text-tone-danger">
-          {problem}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button type="submit" data-testid="harness-new-start" disabled={busy} className="btn-accent text-xs">
-          {busy ? <Loader2 size={12} className="animate-spin" /> : null}
-          Start
-        </button>
-        <button
-          type="button"
-          onClick={() => setPicking((v) => !v)}
-          aria-expanded={picking}
-          className="rounded-md px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100"
-        >
-          {picking ? "Hide folders" : "Choose a folder"}
-        </button>
-        <button
-          type="button"
-          data-testid="harness-new-no-folder"
-          disabled={busy}
-          onClick={() => void begin("")}
-          className="rounded-md px-2 py-1 text-[12px] text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-40"
-        >
-          Start with no folder
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
-        >
-          <X size={13} />
-        </button>
-      </div>
-      {picking ? (
-        <div className="max-h-72 overflow-y-auto">
-          <DirectoryTree
-            variant="calm"
-            selectedPath={folder || null}
-            onSelect={(p) => setFolder(p)}
-            hideAction
-            hideHeaderCollapse
-            showProjects
-          />
-        </div>
-      ) : null}
-    </form>
-  );
 }
 
 function FolderGroup({
@@ -422,13 +253,10 @@ export function HarnessSidebar({
   onOpenBeside,
   onStart,
   onRename,
-  defaultFolder,
   terminals,
   onOpenTerminal,
   newRequest = 0,
   searchRequest = 0,
-  workRoot = "",
-  startWithNoFolder = false,
   tonightOpen = false,
   onTonight,
   lastNightOpen = false,
@@ -442,15 +270,11 @@ export function HarnessSidebar({
   lastNightOpen?: boolean;
   /** v1.399.0: open Last night (absent: no Last night row). */
   onLastNight?: () => void;
-  /** v1.379.0 review: the session in front has no folder (New session opens
-   *  with none). */
-  startWithNoFolder?: boolean;
-  /** v1.377.0: Ctrl+N — each change opens New session. */
+  /** v1.377.0: Ctrl+N — each change starts a new session (v1.412.0: at once,
+   *  with no folder). */
   newRequest?: number;
   /** v1.379.0: "/resume" — each change puts the caret in the session search. */
   searchRequest?: number;
-  /** v1.379.0: where a session with no folder keeps its files. */
-  workRoot?: string;
   /** null while the first read is out. */
   folders: BuildFolder[] | null;
   listError: string | null;
@@ -465,16 +289,32 @@ export function HarnessSidebar({
    *  v1.375.0: `extra.branch` — New session's branch switch, when shown. */
   onStart: (folder: string, extra?: StartExtra) => Promise<string | null>;
   onRename: (path: string, name: string) => Promise<string | null>;
-  defaultFolder: string | null;
   terminals: RailPane[];
   onOpenTerminal: (id: string) => void;
 }) {
-  const [creating, setCreating] = useState(false);
   const [busyFolder, setBusyFolder] = useState<string | null>(null);
   const [groupProblem, setGroupProblem] = useState<string | null>(null);
-  // v1.377.0 (Phase 6): Ctrl+N opens New session (lib/harnessKeys).
+  // v1.412.0: New session starts one at once, with no folder (its composer
+  // chooses one); a second press while it starts does nothing.
+  const startingRef = useRef(false);
+  const [startingBlank, setStartingBlank] = useState(false);
+  async function startBlank() {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStartingBlank(true);
+    setGroupProblem(null);
+    try {
+      const err = await onStart("");
+      if (err) setGroupProblem(err);
+    } finally {
+      startingRef.current = false;
+      setStartingBlank(false);
+    }
+  }
+  // v1.377.0 (Phase 6): Ctrl+N starts a new session (lib/harnessKeys).
   useEffect(() => {
-    if (newRequest > 0) setCreating(true);
+    if (newRequest > 0) void startBlank();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newRequest]);
   // v1.377.0: search the sessions by title and folder name (the chat list's
   // search as the model: a quiet box, Escape clears it first).
@@ -498,29 +338,17 @@ export function HarnessSidebar({
   return (
     // Harness gaps (fix 4): the view's everyday name (lib/buildWords).
     <nav aria-label={CODING_SESSIONS_LIST} data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
-      {creating ? (
-        <NewSessionForm
-          defaultFolder={startWithNoFolder ? "" : defaultFolder}
-          startWithNoFolder={startWithNoFolder}
-          workRoot={workRoot}
-          onStart={async (folder, extra) => {
-            const err = await (extra ? onStart(folder, extra) : onStart(folder));
-            if (!err) setCreating(false);
-            return err;
-          }}
-          onClose={() => setCreating(false)}
-        />
-      ) : (
-        <button
-          type="button"
-          data-testid="harness-new-session"
-          onClick={() => setCreating(true)}
-          className="flex h-8 w-full shrink-0 items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
-        >
-          <Plus size={14} className="shrink-0" />
-          New session
-        </button>
-      )}
+      <button
+        type="button"
+        data-testid="harness-new-session"
+        onClick={() => void startBlank()}
+        disabled={startingBlank}
+        title="A new session, ready to type — choose its folder under the box, or keep none"
+        className="flex h-8 w-full shrink-0 items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
+      >
+        {startingBlank ? <Loader2 size={14} className="shrink-0 animate-spin" /> : <Plus size={14} className="shrink-0" />}
+        New session
+      </button>
       {onTonight ? (
         // v1.398.0 (night shift N1): the night's queue, one row under New
         // session (the session rows' own look).

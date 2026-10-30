@@ -76,7 +76,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
   DirectoryTree: () => <div data-testid="tree" />,
 }));
 
-import { HarnessSidebar } from "@/components/harness/HarnessSidebar";
+import { HarnessStartFolder } from "@/components/harness/HarnessStartFolder";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
@@ -174,75 +174,70 @@ const posted = (path: string) => api.calls.filter((c) => c.method === "POST" && 
 
 /* ------------------------------------------------------------ New session */
 
-describe("New session asks the folder and shows the branch switch only for a repository", () => {
-  function renderSidebar(onStart = vi.fn(async () => null)) {
-    render(
-      <HarnessSidebar
-        folders={[]}
-        listError={null}
-        selectedId={null}
-        onSelect={() => {}}
-        onStart={onStart}
-        onRename={async () => null}
-        defaultFolder={REPO}
-        terminals={[]}
-        onOpenTerminal={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("harness-new-session"));
-    return onStart;
+// v1.412.0 (moved on purpose): New session starts at once with no folder;
+// the folder is chosen under the composer (components/harness/
+// HarnessStartFolder), and the branch switch is asked THERE, for a repository.
+describe("choosing a folder asks about the branch only for a repository", () => {
+  function renderChip(onMove = vi.fn(async (_f: string, _b?: boolean) => null as string | null)) {
+    (window as unknown as { ironjarvis?: unknown }).ironjarvis = {
+      isDesktop: true,
+      dialog: { pickFolder: async () => ({ path: REPO }) },
+    };
+    render(<HarnessStartFolder folder={null} workRoot="" onMove={onMove} />);
+    fireEvent.click(screen.getByTestId("harness-start-folder-choose"));
+    return onMove;
   }
+  afterEach(() => {
+    delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
+  });
   const folderPath = (p: string) => `/build/git/folder?path=${encodeURIComponent(p)}`;
 
   it("a repository: the switch is on by default, and turning it off works in the folder directly", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: true, branch: "main", can_branch: true, note: "", worktrees_dir: `${REPO}.ij-worktrees` };
-    const onStart = renderSidebar();
-    const sw = (await screen.findByTestId("harness-new-branch-switch")) as HTMLInputElement;
+    const onMove = renderChip();
+    const sw = (await screen.findByTestId("harness-start-branch-switch")) as HTMLInputElement;
     expect(sw.checked).toBe(true);
-    expect(screen.getByTestId("harness-new-branch")).toHaveTextContent("on its own ij/ branch from main");
-    expect(screen.getByTestId("harness-new-branch")).toHaveTextContent("Your checkout is not touched.");
+    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("on its own ij/ branch from main");
+    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("Your checkout is not touched.");
+    expect(onMove).not.toHaveBeenCalled();
     fireEvent.click(sw);
-    expect(screen.getByTestId("harness-new-branch")).toHaveTextContent("works in the folder directly");
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalledWith(REPO, { branch: false }));
+    expect(screen.getByTestId("harness-start-branch")).toHaveTextContent("works in the folder directly");
+    fireEvent.click(screen.getByTestId("harness-start-branch-use"));
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, false));
   });
 
   it("the switch left on sends branch: true", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: true, branch: "main", can_branch: true, note: "", worktrees_dir: "" };
-    const onStart = renderSidebar();
-    await screen.findByTestId("harness-new-branch-switch");
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalledWith(REPO, { branch: true }));
+    const onMove = renderChip();
+    await screen.findByTestId("harness-start-branch-switch");
+    fireEvent.click(screen.getByTestId("harness-start-branch-use"));
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, true));
   });
 
   it("a folder outside a repository: no switch, no line, the folder alone is sent (exactly as before)", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: false, branch: "", can_branch: false, note: "not in a repository", worktrees_dir: "" };
-    const onStart = renderSidebar();
-    await waitFor(() => expect(api.calls.some((c) => c.path === folderPath(REPO))).toBe(true));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    expect(screen.queryByTestId("harness-new-branch")).toBeNull();
-    expect(screen.queryByTestId("harness-new-git-note")).toBeNull();
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalled());
-    expect(onStart.mock.calls[0]).toEqual([REPO]);
+    const onMove = renderChip();
+    await waitFor(() => expect(onMove).toHaveBeenCalled());
+    expect(onMove.mock.calls[0]).toEqual([REPO, undefined]);
+    expect(screen.queryByTestId("harness-start-branch")).toBeNull();
+    expect(screen.queryByTestId("harness-start-folder-note")).toBeNull();
   });
 
-  it("no git on this PC: the switch is hidden and a line says why", async () => {
+  it("no git on this PC: no switch, and a line says why", async () => {
     api.gets[folderPath(REPO)] = { git: false, repo: false, branch: "", can_branch: false, note: "", worktrees_dir: "" };
-    renderSidebar();
-    expect(await screen.findByTestId("harness-new-git-note")).toHaveTextContent(
+    const onMove = renderChip();
+    expect(await screen.findByTestId("harness-start-folder-note")).toHaveTextContent(
       "Git is not installed on this PC, so the session works in the folder directly.",
     );
-    expect(screen.queryByTestId("harness-new-branch")).toBeNull();
+    expect(screen.queryByTestId("harness-start-branch")).toBeNull();
+    await waitFor(() => expect(onMove).toHaveBeenCalledWith(REPO, undefined));
   });
 
   it("a repository that cannot branch says why in the daemon's words", async () => {
     api.gets[folderPath(REPO)] = { git: true, repo: true, branch: "main", can_branch: false, note: "This repository has no commits yet, so a branch cannot start from it.", worktrees_dir: "" };
-    renderSidebar();
-    expect(await screen.findByTestId("harness-new-git-note")).toHaveTextContent("no commits yet");
-    expect(screen.queryByTestId("harness-new-branch")).toBeNull();
+    renderChip();
+    expect(await screen.findByTestId("harness-start-folder-note")).toHaveTextContent("no commits yet");
+    expect(screen.queryByTestId("harness-start-branch")).toBeNull();
   });
 });
 

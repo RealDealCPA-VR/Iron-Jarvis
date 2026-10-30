@@ -286,6 +286,31 @@ function isTrustedDashboardSender(event) {
     return false; // frame already gone → not trusted
   }
 }
+
+/**
+ * v1.412.0: Windows' own folder picker (the user: "a popup modal that is the
+ * generic windows file selector … navigate all the drives available to me and
+ * select the specific drive and folder"). Parented to the window that ASKED
+ * (`owner`, the sender's window — a pop-out's picker sits over the pop-out),
+ * modal there. Answers `{path}` or `{cancelled: true}`; never throws. Only a
+ * folder can be chosen; the dashboard sends the path on to the daemon, whose
+ * own folder checks decide whether it can be used. `raw.defaultPath` (a
+ * string) is where the picker opens.
+ */
+async function pickFolder(owner, raw) {
+  const opts = { title: "Choose a folder to work in", properties: ["openDirectory"] };
+  const start = raw && typeof raw === "object" && typeof raw.defaultPath === "string" ? raw.defaultPath.trim() : "";
+  if (start && start.length <= 4096) opts.defaultPath = start;
+  try {
+    const live = owner && typeof owner.isDestroyed === "function" && !owner.isDestroyed() ? owner : null;
+    const res = live ? await dialog.showOpenDialog(live, opts) : await dialog.showOpenDialog(opts);
+    const first = res && !res.canceled && Array.isArray(res.filePaths) ? res.filePaths[0] : "";
+    if (!first || typeof first !== "string") return { cancelled: true };
+    return { path: first };
+  } catch {
+    return { cancelled: true };
+  }
+}
 // Packaged cold boots are slow the first time (AV scans the PyInstaller-frozen
 // daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
 const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
@@ -2630,6 +2655,19 @@ function installSpotlightIpc() {
   ipcMain.handle("shell:restartDaemon", (event) => {
     if (!isTrustedDashboardSender(event)) return null;
     return restartDaemonFromShell();
+  });
+  // v1.412.0: the folder picker (Windows' own). Sender-checked like every
+  // privileged handler: a page that is not the dashboard gets nothing and opens
+  // no dialog. Parented to the SENDER's window.
+  ipcMain.handle("dialog:pickFolder", (event, raw) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    let owner = null;
+    try {
+      owner = BrowserWindow.fromWebContents(event.sender);
+    } catch {
+      owner = null;
+    }
+    return pickFolder(owner, raw);
   });
   // POP-OUT WINDOWS (v1.283.0). Sender-checked like every privileged handler:
   // a page that is not the dashboard must not open windows on the user's desk.

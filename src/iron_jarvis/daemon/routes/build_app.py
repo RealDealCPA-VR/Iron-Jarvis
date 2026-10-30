@@ -20,7 +20,9 @@ from ...hosted import service as S
 
 class AppSessionCreate(BaseModel):
     harness: str
-    folder: str
+    #: v1.412.0: "" (or absent) = no folder chosen: the session's first
+    #: message makes it a folder of its own under the chat files folder.
+    folder: str = ""
     account: str | None = None
     model: str | None = None
     effort: str | None = None

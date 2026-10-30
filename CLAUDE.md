@@ -4203,6 +4203,69 @@ does not need a bump, stop and bump it.
   plan extension's "what next?" answered as a question card, and `pi
   --session <id>` reopening the same conversation.
 
+- **A coding session STARTS AT THE COMPOSER: no form, no folder until one is
+  chosen; Choose… is Windows' own folder picker; a tool with several logins
+  asks which account** (v1.412.0; the user: "it should start automatically
+  with a no folder chosen in the chat bar with a simple choose selector for
+  folder as well as a choose selector for the harness … it should ask which
+  account … the generic windows file selector … Effort levels should also be
+  displayed"). BUILD › CODE: `components/buildCode/StartComposer.tsx` is the
+  empty stage AND New session (the v1.409.0 form is gone): the box, and under
+  it ONE row of chips — Folder (`components/folders/FolderChip`), Tool (last
+  used `ij.code.lastTool`, else the first that `toolUnavailable` passes),
+  Account ONLY when `accountChoices(tool).length > 1` (Iron-Proxy rows; Pi's
+  own sign-in never asks; picking such a tool OPENS the account menu at once;
+  default `ij.code.lastAccount.<tool>` while listed and usable), Mode
+  (`components/buildCode/ModeChip.tsx`, lifted out of BuildCodeView, which
+  re-exports it and the two-press timings), Model, Effort only when
+  `tool.efforts` is non-empty. Send = `POST /build/app/sessions` (the one
+  create path) then the SessionPane sends the words as the first message
+  (`firstMessage`, once). A folder heading's "+" starts on that folder; New
+  session on NONE (the session in front's folder is only where Choose… opens).
+  A 400 from the create with a folder chosen is said ON the chip
+  (`code-start-folder-problem`), nothing started, the words kept. DAEMON:
+  `AppSessionCreate.folder` may be "" → `HostedSessionRecord.no_folder`
+  (additive; NULL = False); a saved conversation (`harness_session_id`) still
+  needs its folder (400). `start_turn` makes the OWN folder after the input
+  checks (`_own_folder`: `documents/workfolder.make_chat_workfolder` +
+  `routes/build._work_folder_title`, `root_problem`-checked, kept by
+  `store.set_folder_if_empty` — first wins) and every refusal or exception
+  before the turn exists takes it back while EMPTY (`_take_back_folder`, never
+  while a turn of that session runs); archive and delete drop an empty own
+  folder inside the chat files folder that no other row uses
+  (`_drop_own_folder`). Views carry `no_folder` + `work_root`; the list
+  answers `work_root` too. The dashboard groups every no-folder session under
+  ONE "No folder" heading (its "+" starts another). CHAT › CODE: the sidebar's
+  New session (and Ctrl+N) `onStart("")` AT ONCE — `NewSessionForm` is gone;
+  `components/harness/HarnessStartFolder` sits under the composer while the
+  session has NO messages (not in the one-row toolbar: the v1.400.0 fit is
+  untouched) and a chosen folder MOVES the empty session (`moveToFolder`:
+  `createSession(folder, carry)` with provider/model/reasoning/approval_mode/
+  plan mode/account + `branch` only when the switch was shown, `local_only`
+  patched after, THEN the old one deleted, THEN `onBranched(new, draft)` with
+  the box's words, files and skill — a refused folder moves and deletes
+  nothing). A repository that can branch asks "Work on a new branch" there
+  (v1.375.0's switch, moved). `IjHarnessView.pickFrom` = the folder in front,
+  else the last one, else Build's — where Choose… opens. The native model
+  menu already asks the account (v1.376.0: account entries before models).
+  THE PICKER: `desktop/main.js` `pickFolder(owner, raw)` +
+  `ipcMain.handle("dialog:pickFolder")` (sender-checked FIRST, parented to
+  `BrowserWindow.fromWebContents(event.sender)`, `openDirectory` only,
+  `{path}` | `{cancelled: true}`, never throws), `preload.js`
+  `dialog.pickFolder(defaultPath)`, `lib/desktopShell.folderPickerBridge()`;
+  no bridge (a browser) → the FolderChip's dialog with the real DirectoryTree
+  (`pickTypedPath`; no form, every button `type="button"`). Pins:
+  `tests/test_build_app_start_v1412.py`, `tests/test_desktop_pick_folder_v1412.py`,
+  `dashboard/__tests__/{build-code-start,ij-harness-start}-v1412.test.tsx`,
+  e2e `dashboard/e2e/build-code-start.spec.ts`; moved on purpose: the
+  New-session pins of `build-app-view-v1409`, `build-app-pi-v1411`,
+  `harness-folder-picker-v1370-1`, `ij-harness-git-v1375`,
+  `ij-harness-new-folder-v1378`, `ij-harness-new-folder-nofolder-review-v1379`,
+  `ij-harness-no-folder-v1379`, `ij-harness-phase6-v1377`,
+  `ij-harness-phase7-review-v1378`, `ij-harness-sidebar-v1369`,
+  `ij-harness-slash-nofolder-review-v1379` and the e2e openers
+  (`build-app-view`, `ij-harness`, `ij-harness-attempts`, `ij-harness-git`).
+
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon
   builds the editor's URL, never a client** (v1.405.0; the user: "Live where

@@ -27,7 +27,12 @@ class HostedSessionRecord(SQLModel, table=True):
     #: ``claude-code`` | ``codex``.
     harness: str = Field(default="", index=True)
     #: The folder the harness runs in (validated by ``fs_policy.root_problem``).
+    #: "" until the first message when the session started with NO folder.
     folder: str = Field(default="", index=True)
+    #: v1.412.0: the session started with no folder chosen: its first message
+    #: makes it a folder of its own under the chat files folder (the v1.379.0
+    #: rule) and ``folder`` names it from then on. NULL on older rows = False.
+    no_folder: bool | None = Field(default=False)
     title: str = ""
     #: Iron-Proxy profile id the session runs on; "" = this PC's own login.
     account: str = ""

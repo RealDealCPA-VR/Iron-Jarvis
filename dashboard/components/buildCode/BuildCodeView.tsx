@@ -12,9 +12,11 @@
  *
  * LEFT: the sessions, grouped by folder; each row names its tool and the
  * account it runs on (a row the daemon found in the tool's own saved
- * sessions says so). New session: the tool by name (greyed with the reason
- * when it is not installed or signed out), the folder (the existing folder
- * tree), the account, the mode.
+ * sessions says so). v1.412.0: New session (and an empty stage) is the
+ * composer at once — components/buildCode/StartComposer: type, and the chips
+ * under it choose the folder (none by default; Windows' own picker), the tool,
+ * the account (asked only when the tool has more than one login), the mode,
+ * the model and the effort. Send makes the session and sends the words.
  *
  * CENTRE: the conversation (components/buildCode/CodeConversation), and the
  * composer — or, while the tool waits on the user, its question in the
@@ -35,7 +37,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,23 +48,20 @@ import {
   ArrowUp,
   ChevronDown,
   History,
-  Code2,
   FolderOpen,
   Loader2,
   MoreHorizontal,
   Plus,
-  Shield,
   ShieldAlert,
   Square,
   UserRound,
-  X,
 } from "lucide-react";
 import { ApiError, get, patch, post } from "@/lib/api";
 import { streamSSE } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { matchProjectEntries, useProjectFilesState, type ProjectEntry } from "@/lib/atMenuFiles";
-import { DirectoryTree } from "@/components/terminal/DirectoryTree";
+import { StartComposer } from "@/components/buildCode/StartComposer";
 import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
@@ -73,7 +71,6 @@ import {
   OPEN_IN_TERMINAL,
   KEEPS_LAST_TITLE,
   OWN_SIGN_IN_TITLE,
-  accountStatusWords,
   accountWords,
   appliedNextWords,
   defaultEffortWords,
@@ -97,13 +94,11 @@ import {
   groupByFolder,
   keepsLastOf,
   modeIsDangerous,
-  modeLabel,
-  ownSignInWords,
+  sessionFolderWords,
   sessionRowLine,
   signsInItself,
   sessionTitle,
   toolLabel,
-  toolUnavailable,
   type CodeEvent,
   type CodeSession,
   type CodingTool,
@@ -125,11 +120,10 @@ export const CODE_RUNNING_REREAD_MS = 2_000;
 /** While Iron Jarvis is not answering mid-reply: how often to look again
  *  (the reply is followed again once it is back). */
 export const CODE_LOST_REREAD_MS = 3_000;
-/** Full access: a second press this soon after the first does not count (a
- *  held or doubled Enter must never give full access by itself). */
-export const FULL_ARM_GUARD_MS = 400;
-/** Full access: an armed press that is not followed up is forgotten. */
-export const FULL_DISARM_MS = 3_000;
+// v1.412.0: the mode chip lives in its own file (the start composer uses it
+// too); its two-press timings are re-exported here, where tests read them.
+export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
+import { ModeChip } from "@/components/buildCode/ModeChip";
 /** "At the bottom" for the transcript, in pixels. */
 const BOTTOM_SLACK_PX = 48;
 
@@ -179,145 +173,6 @@ function errorWords(e: unknown, fallback: string): string {
   return fallback;
 }
 
-// ── the mode chip: Full access takes two presses ────────────────────────────
-
-/** The mode menu. Choosing an ordinary mode is one press; a DANGEROUS one
- *  (Full access) arms first ("Press again…") and only the second press
- *  chooses it, reported with `confirm: true`. */
-export function ModeChip({
-  tool,
-  value,
-  onChange,
-  disabled,
-  testId = "code-mode-chip",
-}: {
-  tool: CodingTool | null;
-  value: string;
-  onChange: (mode: string, confirm: boolean) => void;
-  disabled?: boolean;
-  testId?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [armed, setArmed] = useState<string | null>(null);
-  const armedAt = useRef(0);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const [shift, setShift] = useState(0);
-  const modes = tool?.modes ?? [];
-  const dangerous = isFullAccess(value, tool);
-  useEffect(() => {
-    if (!open) setArmed(null);
-  }, [open]);
-  // An armed Full access that is not pressed again is forgotten.
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(null), FULL_DISARM_MS);
-    return () => clearTimeout(t);
-  }, [armed]);
-  // The menu stays inside the stage (a 360 px phone): moved left or right
-  // by however much it would stick out.
-  useLayoutEffect(() => {
-    if (!open) {
-      setShift(0);
-      return;
-    }
-    const el = menuRef.current;
-    if (!el) return;
-    const box = el.closest("[data-code-fit]")?.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    const left = Math.max(box ? box.left : 0, 0) + 8;
-    const right = Math.min(box ? box.right : window.innerWidth, window.innerWidth) - 8;
-    const base = r.left - shift;
-    let next = 0;
-    if (base + r.width > right) next = right - (base + r.width);
-    if (base + next < left) next = left - base;
-    if (next !== shift) setShift(next);
-    // Measured once per opening.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  return (
-    <div className="relative" data-testid={testId}>
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled || modes.length === 0}
-        data-testid={`${testId}-button`}
-        onClick={() => setOpen((v) => !v)}
-        className={`${QUIET_BTN} ${dangerous ? "text-tone-warn" : ""}`}
-        title="What the tool may do without asking you"
-      >
-        {dangerous ? <ShieldAlert size={13} aria-hidden="true" /> : <Shield size={13} aria-hidden="true" />}
-        {modeLabel(value, tool)}
-      </button>
-      {open ? (
-        <div
-          ref={menuRef}
-          role="menu"
-          data-testid={`${testId}-menu`}
-          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
-          className="absolute bottom-full left-0 z-20 mb-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl bg-ink-800 p-1 shadow-card"
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              setOpen(false);
-            }
-          }}
-        >
-          {(tool?.hiddenModes ?? []).length ? (
-            <div data-testid={`${testId}-hidden`} className="border-b border-white/[0.06] px-2.5 pb-1.5 pt-1">
-              {(tool?.hiddenModes ?? []).map((h) => (
-                <p key={h.id} data-testid={`${testId}-hidden-${h.id}`} className="text-[12px] text-zinc-500">
-                  <span className="text-zinc-400">{h.label}</span> is not offered here. {h.reason}
-                </p>
-              ))}
-            </div>
-          ) : null}
-          {modes.map((m) => {
-            const isArmed = armed === m.id;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={m.id === value}
-                data-testid={`${testId}-option-${m.id}`}
-                data-armed={isArmed ? "true" : undefined}
-                onKeyDown={(e) => {
-                  // A held key repeats its press: never let that be the second.
-                  if (e.repeat && (e.key === "Enter" || e.key === " ")) e.preventDefault();
-                }}
-                onClick={() => {
-                  if (m.dangerous && !isArmed) {
-                    armedAt.current = Date.now();
-                    setArmed(m.id);
-                    return;
-                  }
-                  // The second press must be a second, deliberate press.
-                  if (m.dangerous && Date.now() - armedAt.current < FULL_ARM_GUARD_MS) return;
-                  setOpen(false);
-                  onChange(m.id, m.dangerous);
-                }}
-                className={`flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
-                  m.dangerous ? "text-tone-warn" : m.id === value ? "text-zinc-100" : "text-zinc-300"
-                }`}
-              >
-                <span>{m.label}</span>
-                {isArmed ? (
-                  <span className="text-[12px] text-tone-warn">
-                    Press again to let it do anything without asking.
-                  </span>
-                ) : m.dangerous ? (
-                  <span className="text-[12px] text-zinc-500">Runs everything without asking. Two presses.</span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 // ── one session ─────────────────────────────────────────────────────────────
 
 type MenuRow = { kind: "command"; cmd: ToolCommand } | { kind: "file"; entry: ProjectEntry };
@@ -328,12 +183,18 @@ function SessionPane({
   onChanged,
   onOpenedTerminal,
   onArchived,
+  firstMessage = null,
+  onFirstSent,
 }: {
   sessionId: string;
   tools: readonly CodingTool[];
   onChanged: (s: CodeSession) => void;
   onOpenedTerminal: (terminalId: string) => void;
   onArchived: (id: string) => void;
+  /** v1.412.0: the start composer's words — sent as this session's first
+   *  message as soon as it is read (one press: make + send). */
+  firstMessage?: string | null;
+  onFirstSent?: () => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
   const [events, setEvents] = useState<CodeEvent[]>([]);
@@ -601,8 +462,9 @@ function SessionPane({
     pinToBottom(sentinelRef.current);
   }, []);
 
-  const send = useCallback(async () => {
-    const words = text.trim();
+  const send = useCallback(async (handed?: string) => {
+    const typedNow = handed ?? text;
+    const words = typedNow.trim();
     if (!words || running || !session) return;
     const gen = genRef.current;
     const turnId = mintTurnId();
@@ -610,18 +472,33 @@ function SessionPane({
     const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files };
     optimisticRef.current = mine;
     setEvents((prev) => [...prev, mine]);
-    const typed = text;
+    const typed = typedNow;
     // The daemon titles an untitled session by its first message (the
     // chat's rule); the list says so at once, before its next read.
     if (!session.title.trim()) {
       const echo = firstMessageTitle(words);
       if (echo) onChanged({ ...session, title: echo });
     }
-    setText("");
-    const sent = files;
-    setFiles([]);
+    if (handed === undefined) setText("");
+    const sent = handed === undefined ? files : [];
+    if (handed === undefined) setFiles([]);
     setNote(null);
     setRunning(true);
+    // v1.412.0: a session with no folder gets its own folder with this first
+    // message — its header names it as soon as the daemon has made it.
+    if (session.noFolder && !session.folder) {
+      const sid = session.id;
+      setTimeout(() => {
+        get<unknown>(`${SESSIONS}/${encodeURIComponent(sid)}?limit=1`)
+          .then((raw) => {
+            const v = decodeCodeSessionView(raw);
+            if (v && v.session.folder) {
+              setSession((cur) => (cur && cur.id === sid ? { ...cur, folder: v.session.folder } : cur));
+            }
+          })
+          .catch(() => undefined);
+      }, 800);
+    }
     // Sending shows the newest again.
     atBottomRef.current = true;
     setJump(false);
@@ -641,6 +518,16 @@ function SessionPane({
       },
     );
   }, [text, files, running, session, follow, onChanged]);
+
+  // v1.412.0: the start composer's words go as the first message, once.
+  const firstRef = useRef<string | null>(firstMessage);
+  useEffect(() => {
+    const words = firstRef.current;
+    if (!words || !session || running) return;
+    firstRef.current = null;
+    onFirstSent?.();
+    void send(words);
+  }, [session, running, send, onFirstSent]);
 
   const stop = useCallback(() => {
     if (!session) return;
@@ -890,7 +777,7 @@ function SessionPane({
               {sessionTitle(session, tools)}
             </p>
             <p className="truncate text-[12px] text-zinc-500" title={session.folder}>
-              {sessionRowLine(session, tools)} · {session.folder}
+              {sessionRowLine(session, tools)} · {sessionFolderWords(session)}
             </p>
           </div>
           <div className="relative">
@@ -949,7 +836,9 @@ function SessionPane({
               <p data-testid="code-empty" className="py-10 text-center text-[13px] text-zinc-500">
                 {session.source === "disk"
                   ? `This conversation was saved by ${toolName}. Send a message to carry it on here.`
-                  : `Ask ${toolName} to do something in ${session.folder || "this folder"}.`}
+                  : session.noFolder && !session.folder
+                    ? `Ask ${toolName} to do something. Its files go in a folder of its own, made with your first message.`
+                    : `Ask ${toolName} to do something in ${session.folder || "this folder"}.`}
               </p>
             ) : (
               <CodeConversation
@@ -1164,189 +1053,6 @@ function SessionPane({
   );
 }
 
-// ── New session ─────────────────────────────────────────────────────────────
-
-function NewSession({
-  tools,
-  toolsError,
-  startFolder,
-  onCreated,
-  onCancel,
-}: {
-  tools: readonly CodingTool[] | null;
-  toolsError: string | null;
-  startFolder: string | null;
-  onCreated: (s: CodeSession) => void;
-  onCancel: () => void;
-}) {
-  const firstOk = tools?.find((t) => !toolUnavailable(t))?.id ?? "";
-  const [toolId, setToolId] = useState(firstOk);
-  const [folder, setFolder] = useState<string | null>(startFolder);
-  const [account, setAccount] = useState("");
-  const [mode, setMode] = useState<{ id: string; confirm: boolean }>({ id: "", confirm: false });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!toolId && firstOk) setToolId(firstOk);
-  }, [toolId, firstOk]);
-  const tool = tools?.find((t) => t.id === toolId) ?? null;
-  useEffect(() => {
-    setAccount("");
-    setMode({ id: tool?.modes[0]?.id ?? "", confirm: false });
-  }, [tool]);
-
-  const start = async () => {
-    if (!tool || !folder || toolUnavailable(tool)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const raw = await post<unknown>(SESSIONS, {
-        harness: tool.id,
-        folder,
-        ...(account ? { account } : {}),
-        ...(mode.id ? { mode: mode.id } : {}),
-        ...(mode.confirm ? { confirm: true } : {}),
-      });
-      const s = decodeCodeSession(raw);
-      if (!s) throw new Error("The session could not be made.");
-      onCreated(s);
-    } catch (e) {
-      setError(errorWords(e, "The session could not be made."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div data-testid="code-new-session" className="h-full overflow-y-auto px-4 py-4">
-      <div className={`${HARNESS_COLUMN} space-y-5`}>
-        <div className="flex items-center gap-2">
-          <h2 className="flex-1 text-[15px] text-zinc-100">New session</h2>
-          <button type="button" onClick={onCancel} aria-label="Close" className="rounded-md p-1 text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200">
-            <X size={15} />
-          </button>
-        </div>
-
-        <fieldset className="space-y-1.5">
-          <legend className="mb-1 text-[13px] text-zinc-400">Coding tool</legend>
-          {toolsError ? (
-            <p role="alert" className="text-[13px] text-tone-danger">
-              {toolsError}
-            </p>
-          ) : !tools ? (
-            <p className="text-[13px] text-zinc-500">Looking for coding tools on this PC…</p>
-          ) : (
-            tools.map((t) => {
-              const why = toolUnavailable(t);
-              return (
-                <label
-                  key={t.id}
-                  data-testid={`code-new-tool-${t.id}`}
-                  data-available={why ? "false" : "true"}
-                  className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-[13px] ${why ? "opacity-50" : "cursor-pointer hover:bg-white/[0.04]"}`}
-                >
-                  <input
-                    type="radio"
-                    name="code-tool"
-                    value={t.id}
-                    checked={toolId === t.id}
-                    disabled={!!why}
-                    onChange={() => setToolId(t.id)}
-                    className="mt-0.5"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-zinc-200">
-                      {t.label}
-                      {t.version ? <span className="ml-1.5 text-[12px] text-zinc-500">{t.version}</span> : null}
-                    </span>
-                    {why ? (
-                      <span data-testid={`code-new-tool-why-${t.id}`} className="block text-[12px] text-zinc-500">
-                        {why}
-                      </span>
-                    ) : null}
-                  </span>
-                </label>
-              );
-            })
-          )}
-        </fieldset>
-
-        <div className="space-y-1.5">
-          <p className="text-[13px] text-zinc-400">
-            Folder:{" "}
-            <span data-testid="code-new-folder" className="text-zinc-200">
-              {folder ?? "pick one below"}
-            </span>
-          </p>
-          <div className="max-h-72 overflow-y-auto rounded-xl bg-ink-900/40 p-1">
-            <DirectoryTree variant="calm" hideAction showProjects pickTypedPath selectedPath={folder} onSelect={setFolder} />
-          </div>
-        </div>
-
-        {tool ? (
-          <div className="flex flex-wrap items-center gap-3">
-            {tool.ownSignIn ? (
-              // v1.411.0: Pi signs in by itself, per model provider: there is
-              // no account to choose, and the line says so.
-              <span data-testid="code-new-account-own" title={OWN_SIGN_IN_TITLE} className="text-[13px] text-zinc-400">
-                Account: <span className="text-zinc-200">{ownSignInWords(tool.id, tools)}</span>
-              </span>
-            ) : (
-              <label className="flex items-center gap-1.5 text-[13px] text-zinc-400">
-                Account
-                <select
-                  data-testid="code-new-account"
-                  value={account}
-                  onChange={(e) => setAccount(e.target.value)}
-                  className={CHIP_SELECT}
-                >
-                  <option value="">This PC&apos;s sign-in</option>
-                  {tool.accounts.map((a) => {
-                    // The account's state in words; one that cannot start a
-                    // session (signed out, at its limit, turned off) is greyed.
-                    const st = accountStatusWords(a.status);
-                    return (
-                      <option key={a.id} value={a.id} disabled={!st.usable}>
-                        {a.name}
-                        {st.words ? ` (${st.words})` : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
-            )}
-            <span className="flex items-center gap-1.5 text-[13px] text-zinc-400">
-              Mode
-              <ModeChip
-                tool={tool}
-                value={mode.id}
-                onChange={(id, confirm) => setMode({ id, confirm })}
-                testId="code-new-mode"
-              />
-            </span>
-          </div>
-        ) : null}
-
-        {error ? (
-          <p role="alert" data-testid="code-new-error" className="text-[13px] text-tone-danger">
-            {error}
-          </p>
-        ) : null}
-        <button
-          type="button"
-          data-testid="code-new-start"
-          disabled={busy || !tool || !folder || !!(tool && toolUnavailable(tool))}
-          onClick={() => void start()}
-          className="inline-flex h-9 items-center gap-2 rounded-lg bg-accent px-4 text-[13px] font-medium text-ink-950 disabled:opacity-40"
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Code2 size={14} aria-hidden="true" />}
-          Start session
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ── the view ────────────────────────────────────────────────────────────────
 
 /** What one folder's saved conversations are, while they are read. */
@@ -1388,17 +1094,19 @@ export function BuildCodeView({
   const [diskOpen, setDiskOpen] = useState<Set<string>>(() => new Set());
   const diskAsked = useRef<Set<string>>(new Set());
   const [openSessionFolder, setOpenSessionFolder] = useState<string | null>(null);
-  /** The folder New session starts on: a folder heading's "+", else the
-   *  folder of the session in front (the v1.378.0 rule), else Build's. */
+  /** v1.412.0: the folder a start is on — a folder heading's "+"; New session
+   *  starts with NO folder (the user's choice, "Choose…" on the composer). */
   const [newOn, setNewOn] = useState<{ folder: string | null; n: number }>({ folder: null, n: 0 });
-  const startNew = useCallback(
-    (folder: string | null) => {
-      setNewOn((cur) => ({ folder: folder ?? openSessionFolder ?? startFolder, n: cur.n + 1 }));
-      setCreating(true);
-      setRowMenu(null);
-    },
-    [openSessionFolder, startFolder],
-  );
+  const startNew = useCallback((folder: string | null) => {
+    setNewOn((cur) => ({ folder, n: cur.n + 1 }));
+    setCreating(true);
+    setRowMenu(null);
+  }, []);
+  /** v1.412.0: the words a just-made session sends as its first message. */
+  const [firstFor, setFirstFor] = useState<{ id: string; text: string } | null>(null);
+  const clearFirst = useCallback(() => setFirstFor(null), []);
+  /** Where a session with no folder keeps its files (the list's answer). */
+  const [workRoot, setWorkRoot] = useState("");
 
   useEffect(() => {
     if (initialSession) {
@@ -1411,6 +1119,8 @@ export function BuildCodeView({
     get<unknown>(SESSIONS)
       .then((raw) => {
         setSessions(decodeCodeSessions(raw));
+        const root = (raw as { work_root?: unknown } | null)?.work_root;
+        if (typeof root === "string") setWorkRoot(root);
         setListError(null);
       })
       .catch((e) => setListError(errorWords(e, "The sessions could not be read.")));
@@ -1726,7 +1436,7 @@ export function BuildCodeView({
             <p className="px-2 py-2 text-[12px] text-zinc-500">Reading your sessions…</p>
           ) : groups.length === 0 ? (
             <p data-testid="code-list-empty" className="px-2 py-2 text-[12px] text-zinc-500">
-              No sessions yet. Press New session to start Claude Code, Codex or Pi in a folder.
+              No sessions yet. Type a task to start Claude Code, Codex or Pi.
             </p>
           ) : (
             groups.map((g) => (
@@ -1734,20 +1444,21 @@ export function BuildCodeView({
                 <h3 className="flex items-center gap-1.5 px-2 text-[12px] text-zinc-500" title={g.folder}>
                   <FolderOpen size={12} aria-hidden="true" />
                   <span className="min-w-0 flex-1 truncate">{g.name}</span>
-                  {/* New session on THIS folder (the v1.378.0 rule). */}
+                  {/* New session on THIS folder (the v1.378.0 rule); the
+                      "No folder" group's starts with none (v1.412.0). */}
                   <button
                     type="button"
-                    aria-label={`New session in ${g.name}`}
-                    title={`New session in ${g.folder}`}
-                    data-testid={`code-new-in-${folderKey(g.folder)}`}
-                    onClick={() => startNew(g.folder)}
+                    aria-label={g.noFolder ? "New session with no folder" : `New session in ${g.name}`}
+                    title={g.noFolder ? "New session with no folder" : `New session in ${g.folder}`}
+                    data-testid={g.noFolder ? "code-new-in-no-folder" : `code-new-in-${folderKey(g.folder)}`}
+                    onClick={() => startNew(g.noFolder ? null : g.folder)}
                     className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
                   >
                     <Plus size={12} aria-hidden="true" />
                   </button>
                 </h3>
                 <ul className="mt-0.5">{g.sessions.map((s) => row(s, false))}</ul>
-                {savedFor(g.folder)}
+                {g.noFolder ? null : savedFor(g.folder)}
               </section>
             ))
           )}
@@ -1781,19 +1492,23 @@ export function BuildCodeView({
         className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
         style={{ height: "calc(100vh - 12rem - var(--ij-strip-h, 0px))", minHeight: 480 }}
       >
-        {creating ? (
-          <NewSession
-            key={newOn.n}
+        {creating || !openId ? (
+          // v1.412.0: the composer at once — no form first. A folder
+          // heading's "+" starts on that folder; New session on none.
+          <StartComposer
+            key={creating ? `new-${newOn.n}` : "empty"}
             tools={tools}
             toolsError={toolsError}
-            startFolder={newOn.folder ?? openSessionFolder ?? startFolder}
-            onCancel={() => setCreating(false)}
-            onCreated={(s) => {
+            startFolder={creating ? newOn.folder : null}
+            workRoot={workRoot}
+            startAt={openSessionFolder ?? startFolder}
+            onStarted={(s, words) => {
               noteChanged(s);
+              setFirstFor({ id: s.id, text: words });
               open(s.id);
             }}
           />
-        ) : openId ? (
+        ) : (
           <SessionPane
             key={openId}
             sessionId={openId}
@@ -1801,22 +1516,9 @@ export function BuildCodeView({
             onChanged={noteOpen}
             onOpenedTerminal={onOpenedTerminal}
             onArchived={archived}
+            firstMessage={firstFor && firstFor.id === openId ? firstFor.text : null}
+            onFirstSent={clearFirst}
           />
-        ) : (
-          <div className="grid h-full place-items-center px-6 text-center">
-            <div className="max-w-sm space-y-3">
-              <Code2 size={24} className="mx-auto text-zinc-600" aria-hidden="true" />
-              <p className="text-[14px] text-zinc-200">Build&apos;s Code view: Claude Code, Codex or Pi, in a window</p>
-              <p className="text-[13px] text-zinc-500">
-                The real coding tool runs here with its own settings and its own saved conversations. Iron Jarvis
-                shows what it does and asks you whenever it asks.
-              </p>
-              <button type="button" data-testid="code-new-empty" onClick={() => startNew(null)} className={QUIET_BTN}>
-                <Plus size={13} aria-hidden="true" />
-                New session
-              </button>
-            </div>
-          </div>
         )}
       </section>
     </div>

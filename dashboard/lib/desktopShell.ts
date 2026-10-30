@@ -139,6 +139,31 @@ export function cappedSentence(crashes: number | null, windowMin: number | null)
   );
 }
 
+/** v1.412.0: what Windows' own folder picker answered. */
+export type PickedFolder = { path: string } | { cancelled: true };
+
+/** The desktop shell's folder picker (Windows' own dialog, desktop/preload.js
+ *  `dialog.pickFolder`), or null in a browser or an older shell — the caller
+ *  then shows the in-app folder tree instead. */
+export function folderPickerBridge(): ((defaultPath?: string) => Promise<PickedFolder>) | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const fn = (window as unknown as { ironjarvis?: { dialog?: { pickFolder?: unknown } } }).ironjarvis?.dialog
+      ?.pickFolder;
+    if (typeof fn !== "function") return null;
+    return async (defaultPath?: string) => {
+      const raw = (await (fn as (p: string) => Promise<unknown>)(defaultPath ?? "")) as
+        | { path?: unknown; cancelled?: unknown }
+        | null
+        | undefined;
+      const path = raw && typeof raw.path === "string" ? raw.path.trim() : "";
+      return path ? { path } : { cancelled: true };
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** The desktop shell's pop-out bridge (v1.283.0) — see desktop/preload.js. */
 export interface PopoutBridge {
   isPopout: boolean;

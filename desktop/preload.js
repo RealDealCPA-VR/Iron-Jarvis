@@ -117,6 +117,14 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // Pop-out windows (v1.283.0): a module in its own window — on another screen
   // when the desk has one. `isPopout`/`path` say whether THIS window is one.
   // Every call is sender-checked in main.js and resolves null when refused.
+  // v1.412.0: Windows' own folder picker, parented to this window. Resolves
+  // {path} or {cancelled: true}; null when the shell refused the sender.
+  dialog: {
+    pickFolder: (defaultPath) =>
+      ipcRenderer.invoke("dialog:pickFolder", {
+        defaultPath: typeof defaultPath === "string" ? defaultPath : "",
+      }),
+  },
   popout: {
     isPopout: POPOUT_PATH !== "",
     path: POPOUT_PATH,

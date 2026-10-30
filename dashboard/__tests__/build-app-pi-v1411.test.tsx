@@ -315,19 +315,24 @@ describe("the view", () => {
     expect(within(menu).getByTestId("code-mode-chip-hidden-plan").textContent).toContain("/plan");
   });
 
-  it("New session for Pi: no account to choose, Pi's own rules, and Start sends exactly that", async () => {
+  // v1.412.0 (moved on purpose): the start composer's chips, not a form.
+  it("New session for Pi: no account to choose, Pi's own rules, and Send sends exactly that", async () => {
     H.postReply["/build/app/sessions"] = sess("n1");
     H.gets["/build/app/sessions/n1"] = { session: sess("n1"), events: [], running: false, pending: [] };
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
-    const row = await screen.findByTestId("code-new-tool-pi");
+    fireEvent.click(await screen.findByTestId("code-start-tool"));
+    const row = await screen.findByTestId("code-start-tool-pi");
     expect(row.dataset.available).toBe("true");
-    fireEvent.click(within(row).getByRole("radio"));
-    await waitFor(() => expect(screen.getByTestId("code-new-account-own").textContent).toBe("Account: Pi's own sign-in"));
-    expect(screen.queryByTestId("code-new-account")).toBeNull();
-    expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Pi's own rules");
-    fireEvent.click(screen.getByTestId("stub-pick-folder"));
-    fireEvent.click(screen.getByTestId("code-new-start"));
+    fireEvent.click(row);
+    await waitFor(() => expect(screen.getByTestId("code-start-account-own").textContent).toBe("Pi's own sign-in"));
+    expect(screen.queryByTestId("code-start-account")).toBeNull();
+    expect(screen.queryByTestId("code-start-account-menu")).toBeNull();
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Pi's own rules");
+    fireEvent.click(screen.getByTestId("code-start-folder-choose"));
+    fireEvent.click(await screen.findByTestId("stub-pick-folder"));
+    fireEvent.click(screen.getByTestId("code-start-folder-tree-use"));
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
     await screen.findByTestId("code-session");
     expect(H.posts.find((p) => p.path === "/build/app/sessions")?.body).toEqual({
       harness: "pi",

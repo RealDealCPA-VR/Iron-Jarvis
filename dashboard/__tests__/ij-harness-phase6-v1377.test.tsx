@@ -368,7 +368,6 @@ describe("Search sessions in the left pane", () => {
         onSelect={() => {}}
         onStart={async () => null}
         onRename={async () => null}
-        defaultFolder={null}
         terminals={[]}
         onOpenTerminal={() => {}}
       />,
@@ -497,7 +496,8 @@ describe("the keys: inside the IJ harness only", () => {
     stream.end();
   });
 
-  it("Ctrl+N opens New session in the view; outside the harness it does not", async () => {
+  // v1.412.0 (moved on purpose): Ctrl+N STARTS a session at once (no form).
+  it("Ctrl+N starts a new session in the view; outside the harness it does not", async () => {
     api.gets["/build/sessions"] = { folders: [] };
     render(
       <div>
@@ -515,10 +515,17 @@ describe("the keys: inside the IJ harness only", () => {
     const outside = screen.getByTestId("app-outside");
     outside.focus();
     fireEvent.keyDown(outside, { key: "n", ctrlKey: true });
-    expect(screen.queryByTestId("harness-new-session-form")).toBeNull();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions")).toHaveLength(0);
     newBtn.focus();
     fireEvent.keyDown(newBtn, { key: "n", ctrlKey: true });
-    expect(await screen.findByTestId("harness-new-session-form")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions").map((c) => c.body)).toEqual([
+        { folder: "" },
+      ]),
+    );
   });
 
   it("a page with no IJ harness (the chat page) keeps every key: nothing of the harness answers", () => {

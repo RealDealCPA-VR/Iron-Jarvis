@@ -121,12 +121,34 @@ async function withCard(page: Page): Promise<void> {
   });
 }
 
+/** v1.412.0: New session starts AT ONCE with no folder; the folder is chosen
+ *  under the composer (Choose… → in a browser, the folder tree in a dialog:
+ *  its typed path, then "Use this folder"), which moves the empty session
+ *  into that folder. `branch`: for a repository, what the branch switch is
+ *  left at (null: no switch expected). */
+async function startInFolder(page: Page, folder: string, branch: boolean | null = null): Promise<void> {
+  await page.getByTestId("harness-new-session").click();
+  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 30_000 });
+  const first = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
+  await page.getByTestId("harness-start-folder-choose").click();
+  const typed = page.getByTestId("harness-start-folder-tree").getByLabel("Go to root path");
+  await typed.fill(folder);
+  await typed.press("Enter");
+  await page.getByTestId("harness-start-folder-tree-use").click();
+  if (branch !== null) {
+    const sw = page.getByTestId("harness-start-branch-switch");
+    await expect(sw).toBeVisible({ timeout: 20_000 });
+    await expect(sw).toBeChecked();
+    if (!branch) await sw.uncheck();
+    await page.getByTestId("harness-start-branch-use").click();
+  }
+  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", first, { timeout: 30_000 });
+  await expect(page.getByTestId("harness-session")).toBeVisible();
+}
+
 test("a session to show the card in", async ({ page }) => {
   await openHarness(page);
-  await page.getByTestId("harness-new-session").click();
-  await page.getByTestId("harness-new-folder").fill(work);
-  await page.getByTestId("harness-new-start").click();
-  await expect(page.getByTestId("harness-session")).toBeVisible();
+  await startInFolder(page, work);
   sessionId = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
   expect(sessionId).not.toBe("");
 });

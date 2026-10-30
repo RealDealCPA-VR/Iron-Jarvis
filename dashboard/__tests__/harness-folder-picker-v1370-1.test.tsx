@@ -12,9 +12,9 @@
  * form with the folder just clicked. The tree's own tests passed (no form
  * around them) and the sidebar's tests mocked the tree away.
  *
- * Driven here through the REAL NewSessionForm with the REAL DirectoryTree:
- * opening `Users` then `VR` posts nothing, shows VR's folders, and fills
- * the folder box; only Start starts the session.
+ * Driven here (v1.412.0) through the REAL folder chip's dialog with the
+ * REAL DirectoryTree: opening `Users` then `VR` chooses nothing and shows
+ * VR's folders; only "Use this folder" chooses.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -61,32 +61,25 @@ vi.mock("@/lib/useApi", () => ({
   }),
 }));
 
-import { HarnessSidebar } from "@/components/harness/HarnessSidebar";
+import { FolderChip } from "@/components/folders/FolderChip";
 
 afterEach(() => cleanup());
 
-function renderSidebar() {
-  const onStart = vi.fn(async () => null);
-  render(
-    <HarnessSidebar
-      folders={[]}
-      listError={null}
-      selectedId={null}
-      onSelect={() => {}}
-      onStart={onStart}
-      onRename={async () => null}
-      defaultFolder={null}
-      terminals={[]}
-      onOpenTerminal={() => {}}
-    />,
-  );
-  fireEvent.click(screen.getByTestId("harness-new-session"));
-  return { onStart, form: screen.getByTestId("harness-new-session-form") };
+// v1.412.0 (MOVED ON PURPOSE): there is no New session form any more — the
+// folder is chosen with the folder chip's "Choose…", which (in a browser, no
+// desktop picker) opens the REAL folder tree in a dialog. The rule this file
+// pins still holds there: opening folders picks nothing by itself; only
+// "Use this folder" chooses, and no button the tree draws submits anything.
+function renderChip() {
+  const onPick = vi.fn();
+  render(<FolderChip folder={null} onPick={onPick} testId="chip" />);
+  fireEvent.click(screen.getByTestId("chip-choose"));
+  return { onPick, dialog: screen.getByTestId("chip-tree") };
 }
 
-async function openRow(form: HTMLElement, path: string) {
+async function openRow(box: HTMLElement, path: string) {
   const row = await waitFor(() => {
-    const el = within(form).getByTitle(path);
+    const el = within(box).getByTitle(path);
     expect(el.tagName).toBe("BUTTON");
     return el;
   });
@@ -94,33 +87,28 @@ async function openRow(form: HTMLElement, path: string) {
   return row;
 }
 
-describe("the New session folder picker", () => {
-  it("drills down Users > VR > Projects without starting a session, and Start uses the folder picked", async () => {
-    const { onStart, form } = renderSidebar();
-    await openRow(form, "C:\\Users");
-    await openRow(form, "C:\\Users\\VR");
-    await openRow(form, "C:\\Users\\VR\\Projects");
-    // VR opened: its folder is listed and pickable, three levels down.
-    await waitFor(() => expect(within(form).getByTitle("C:\\Users\\VR\\Projects\\Iron-Jarvis")).toBeTruthy());
-    expect(onStart).not.toHaveBeenCalled();
-    // The box follows the clicks; nothing was refused on the way down.
-    await openRow(form, "C:\\Users\\VR\\Projects\\Iron-Jarvis");
-    expect((within(form).getByRole("textbox", { name: /folder/i }) as HTMLInputElement).value)
-      .toBe("C:\\Users\\VR\\Projects\\Iron-Jarvis");
-    expect(onStart).not.toHaveBeenCalled();
-    // Only Start starts it, in the folder picked.
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalledWith("C:\\Users\\VR\\Projects\\Iron-Jarvis"));
-    expect(onStart).toHaveBeenCalledTimes(1);
+describe("the folder chip's folder tree", () => {
+  it("drills down Users > VR > Projects without choosing anything, and Use this folder chooses the folder picked", async () => {
+    const { onPick, dialog } = renderChip();
+    await openRow(dialog, "C:\\Users");
+    await openRow(dialog, "C:\\Users\\VR");
+    await openRow(dialog, "C:\\Users\\VR\\Projects");
+    await waitFor(() => expect(within(dialog).getByTitle("C:\\Users\\VR\\Projects\\Iron-Jarvis")).toBeTruthy());
+    expect(onPick).not.toHaveBeenCalled();
+    await openRow(dialog, "C:\\Users\\VR\\Projects\\Iron-Jarvis");
+    expect(onPick).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("chip-tree-use"));
+    await waitFor(() => expect(onPick).toHaveBeenCalledWith("C:\\Users\\VR\\Projects\\Iron-Jarvis"));
+    expect(onPick).toHaveBeenCalledTimes(1);
   });
 
-  it("every button the tree draws inside the form is a plain button, never a submit", async () => {
-    const { form } = renderSidebar();
-    await openRow(form, "C:\\Users");
-    await waitFor(() => expect(within(form).getByTitle("C:\\Users\\VR")).toBeTruthy());
-    const start = screen.getByTestId("harness-new-start");
-    const submits = Array.from(form.querySelectorAll("button")).filter(
-      (b) => b !== start && (b.getAttribute("type") ?? "submit") === "submit",
+  it("every button in the dialog is a plain button, never a submit, and there is no form", async () => {
+    const { dialog } = renderChip();
+    await openRow(dialog, "C:\\Users");
+    await waitFor(() => expect(within(dialog).getByTitle("C:\\Users\\VR")).toBeTruthy());
+    expect(dialog.querySelector("form")).toBeNull();
+    const submits = Array.from(dialog.querySelectorAll("button")).filter(
+      (b) => (b.getAttribute("type") ?? "submit") === "submit",
     );
     expect(submits.map((b) => b.getAttribute("title") || b.textContent)).toEqual([]);
   });

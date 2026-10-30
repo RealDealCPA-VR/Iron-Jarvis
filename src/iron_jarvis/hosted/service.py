@@ -651,17 +651,23 @@ class HostedService:
         if harness not in HARNESSES:
             raise Refused('Choose "claude-code", "codex" or "pi".', 400)
         folder = str(body.get("folder") or "").strip()
-        if not folder:
-            raise Refused("Choose a folder for the session.", 400)
-        from ..core.fs_policy import root_problem
+        resume_id = str(body.get("harness_session_id") or "").strip()
+        # v1.412.0: no folder chosen is a session of its own — its first
+        # message makes it a folder under the chat files folder (the v1.379.0
+        # rule; :meth:`_own_folder`). A saved conversation belongs to ITS
+        # folder, so opening one still names it.
+        no_folder = not folder
+        if no_folder and resume_id:
+            raise Refused(W.NO_FOLDER_RESUME, 400)
+        if not no_folder:
+            from ..core.fs_policy import root_problem
 
-        problem = await asyncio.to_thread(root_problem, folder)
-        if problem:
-            raise Refused(problem, 400)
+            problem = await asyncio.to_thread(root_problem, folder)
+            if problem:
+                raise Refused(problem, 400)
         mode = check_mode(harness, body.get("mode") or default_mode(harness), bool(body.get("confirm")))
         model = check_model(body.get("model"))
         effort = check_effort(harness, body.get("effort"))
-        resume_id = str(body.get("harness_session_id") or "").strip()
         title = clip(body.get("title") or "", 120)
         account = str(body.get("account") or "").strip()
         if account and harness == PI:
@@ -681,8 +687,90 @@ class HostedService:
             store.create, self.engine, harness=harness, folder=folder, title=title,
             account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
             model=model, effort=effort, mode=mode, harness_session_id=resume_id,
+            no_folder=no_folder,
         )
-        return store.view(row)
+        return self._with_root(store.view(row))
+
+    def _with_root(self, view: dict[str, Any]) -> dict[str, Any]:
+        """A session with no folder chosen says where its own folder goes
+        (``work_root``: the chat files folder)."""
+        if view.get("no_folder"):
+            cfg = getattr(self.platform, "config", None)
+            try:
+                view["work_root"] = str(cfg.chat_files_dir) if cfg is not None else ""
+            except Exception:  # noqa: BLE001 — a view never fails on this
+                view["work_root"] = ""
+        return view
+
+    # -- a session with no folder chosen (v1.412.0) --------------------------------
+    def _own_folder(self, sid: str, text: str) -> tuple[Any, str]:
+        """BLOCKING: make the OWN folder of a session started with no folder
+        — ``<chat files>/<YYYY-MM-DD> <first words>`` through the chat's own
+        work-folder helper (``documents/workfolder``, the v1.379.0 title rule)
+        — and keep it on the row (first wins: a folder another message made
+        meanwhile is used and this one removed). Answers ``(row, made_now)``
+        where ``made_now`` is the path THIS call made ("" when it used one
+        already kept). Refused in words when it cannot be made or used."""
+        from ..core.fs_policy import root_problem
+        from ..daemon.routes.build import _remove_if_empty, _work_folder_title
+        from ..documents.workfolder import make_chat_workfolder
+
+        cfg = self.platform.config
+        root = cfg.chat_files_dir
+        try:
+            made = make_chat_workfolder(root, _work_folder_title(text), [], cfg.home / "uploads")
+        except OSError as exc:
+            raise Refused(W.NO_FOLDER_MADE.format(root=root, why=exc.strerror or exc)) from None
+        path = str(made["path"])
+        problem = root_problem(path)
+        if problem:
+            _remove_if_empty(path)
+            raise Refused(W.NO_FOLDER_UNUSABLE.format(why=problem))
+        row = store.set_folder_if_empty(self.engine, sid, path)
+        if row is None:
+            _remove_if_empty(path)
+            raise Refused("No such session.", 404)
+        if row.folder != path:
+            _remove_if_empty(path)
+            return row, ""
+        return row, path
+
+    def _take_back_folder(self, sid: str, path: str) -> None:
+        """BLOCKING: the message the folder was made for never started — the
+        folder goes again when it is still EMPTY (never anything inside it),
+        and the session has no folder again. Never raises."""
+        try:
+            from ..daemon.routes.build import _remove_if_empty
+
+            live = self.live.get(sid)
+            if live is not None and live.turn is not None and live.turn.running:
+                return  # another message started in it meanwhile
+            if _remove_if_empty(path):
+                store.clear_folder_if(self.engine, sid, path)
+        except Exception:  # noqa: BLE001 — a refusal never fails on this
+            log.debug("could not take back session %s's own folder", sid, exc_info=True)
+
+    def _drop_own_folder(self, row: Any) -> None:
+        """BLOCKING: an archived or deleted session that started with no folder
+        takes its own folder with it when that folder is still EMPTY and no
+        other session works in it; one holding files is kept. Only a folder
+        inside the chat files folder. Never raises."""
+        try:
+            if not getattr(row, "no_folder", False) or not row.folder:
+                return
+            from ..core.fs_policy import _canonical, _within
+            from ..daemon.routes.build import _remove_if_empty
+
+            root = _canonical(str(self.platform.config.chat_files_dir))
+            if not _within(_canonical(row.folder), root):
+                return
+            if any(r.id != row.id and same_folder(r.folder, row.folder)
+                   for r in store.list_rows(self.engine, archived=True)):
+                return
+            if _remove_if_empty(row.folder):
+                store.clear_folder_if(self.engine, row.id, row.folder)
+        except Exception:  # noqa: BLE001 — archive and delete never fail on this
+            log.debug("could not drop session %s's empty own folder", getattr(row, "id", ""), exc_info=True)
 
     def _resolve_account(self, harness: str, account: str) -> dict[str, Any]:
         """BLOCKING: the account record a session starts on (a pane's rules:
@@ -719,8 +807,11 @@ class HostedService:
     async def list_sessions(self, *, archived: bool = False, folder: str = "", disk: bool = False,
                             account: str = "") -> dict[str, Any]:
         rows = await asyncio.to_thread(store.list_rows, self.engine, archived=archived, folder=folder)
-        out = [self._with_live(store.view(r)) for r in rows]
+        out = [self._with_root(self._with_live(store.view(r))) for r in rows]
         result: dict[str, Any] = {"sessions": out}
+        # v1.412.0: where a session started with no folder keeps its files
+        # (the start composer's folder chip says so before one exists).
+        result["work_root"] = self._with_root({"no_folder": True}).get("work_root", "")
         if disk:
             if not folder:
                 raise Refused("Name the folder whose saved sessions to list.", 400)
@@ -769,7 +860,7 @@ class HostedService:
         live = self.live.get(sid)
         running = live.turn.id if live and live.turn and live.turn.running else None
         out: dict[str, Any] = {
-            "session": self._with_live(store.view(row)),
+            "session": self._with_root(self._with_live(store.view(row))),
             "events": events,
             "events_total": total,
             "dropped": dropped,
@@ -856,6 +947,8 @@ class HostedService:
             try:
                 await self._stop_process(live, why="archived")
                 row = await asyncio.to_thread(store.update, self.engine, sid, archived_at=utcnow())
+                await asyncio.to_thread(self._drop_own_folder, row)
+                row = await asyncio.to_thread(store.get, self.engine, sid) or row
             finally:
                 live.claim = ""
         else:
@@ -871,6 +964,7 @@ class HostedService:
             self.live.pop(sid, None)
             await asyncio.to_thread(live.log.close)
             await asyncio.to_thread(store.delete, self.engine, sid)
+            await asyncio.to_thread(self._drop_own_folder, row)
             moved = await asyncio.to_thread(self._trash_events, sid)
         finally:
             live.claim = ""
@@ -1105,6 +1199,20 @@ class HostedService:
         problems = await asyncio.to_thread(self._file_problems, files)
         if problems:
             raise Refused(problems, 400)
+        # v1.412.0: a session started with no folder gets its OWN folder now,
+        # with its first message; taken back (while still empty) when this
+        # message does not start after all.
+        made = ""
+        if not row.folder and getattr(row, "no_folder", False):
+            row, made = await asyncio.to_thread(self._own_folder, sid, text)
+        try:
+            return await self._start_turn_in(row, sid, turn_id, text, files)
+        except BaseException:
+            if made:
+                await asyncio.to_thread(self._take_back_folder, sid, made)
+            raise
+
+    async def _start_turn_in(self, row: Any, sid: str, turn_id: str, text: str, files: list[str]) -> HostedTurn:
         live = self._live(row)
         live.account = row.account
         if live.claim:

@@ -31,6 +31,11 @@ BUSY = (
     "or press Stop."
 )
 ARCHIVED = "This session is archived — unarchive it to send a message."
+#: v1.412.0: a session started with no folder (its own folder is made with
+#: its first message, under the chat files folder).
+NO_FOLDER_RESUME = "A saved conversation belongs to its folder — choose that folder to open it."
+NO_FOLDER_MADE = "This session's own folder could not be made in {root}: {why}"
+NO_FOLDER_UNUSABLE = "This session's own folder cannot be used: {why}"
 NOT_INSTALLED = "{label} is not installed on this PC, so this session cannot start it."
 FULL_NEEDS_CONFIRM = (
     "Full access lets {label} run anything without asking — press it twice to confirm."

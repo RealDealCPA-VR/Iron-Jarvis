@@ -241,9 +241,11 @@ import {
   type BuildAccount,
 } from "@/lib/buildAccounts";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { HarnessStartFolder } from "@/components/harness/HarnessStartFolder";
 import {
   answerQuestion,
   archiveSession,
+  createSession,
   decodeAskResolved,
   decodeAskUser,
   decodeFinish,
@@ -400,6 +402,7 @@ export function HarnessSession({
   onGone,
   onBranched,
   initialDraft,
+  folderPickFrom = null,
   onOpenSession,
   onNewSession,
   onFindSessions,
@@ -420,6 +423,9 @@ export function HarnessSession({
   /** v1.377.0: what goes in this session's box when it opens (a session just
    *  branched from a question). */
   initialDraft?: BranchDraft | null;
+  /** v1.412.0: where "Choose…" opens the folder picker while this session
+   *  has no folder (the folder in front, else Build's last one). */
+  folderPickFrom?: string | null;
   /** v1.377.0: open another session (the "Branched from" line). */
   onOpenSession?: (id: string) => void;
   /** v1.379.0: "/clear" — start a new session on `folder` ("" = no folder);
@@ -1630,6 +1636,45 @@ export function HarnessSession({
     } finally {
       setCapBusy(false);
     }
+  }
+
+  /** v1.412.0: the folder chosen before the first message. A session's folder
+   *  is fixed once it is made, so the EMPTY session moves: a new one in that
+   *  folder ("" = none) through the one create path (its folder checks, its
+   *  own branch when `branch` allows), with the same model, account, effort,
+   *  approvals, mode and Local only, the words in the box carried over; then
+   *  the empty one goes. Answers the daemon's refusal (nothing moved), or
+   *  null. */
+  async function moveToFolder(folder: string, branch?: boolean): Promise<string | null> {
+    if (!view || view.messages.length > 0) return "This session has started, so its folder stays.";
+    const s = view.setup;
+    const carry: Record<string, unknown> = {};
+    if (s.provider) carry.provider = s.provider;
+    if (s.model) carry.model = s.model;
+    if (s.reasoning) carry.reasoning = s.reasoning;
+    if (s.approvalMode) carry.approval_mode = s.approvalMode;
+    if (view.mode === "plan") carry.mode = "plan";
+    if (s.account) carry.account = s.account;
+    if (folder && branch !== undefined) carry.branch = branch;
+    let made: BuildSessionView | null;
+    try {
+      made = await createSession(folder, carry);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+    if (!made) return "The session could not be moved to that folder.";
+    if (s.localOnly) await patchSession(made.id, { local_only: true }).catch(() => undefined);
+    const draft: BranchDraft = {
+      text: input,
+      attachments: att.files.map((f) => f.path).filter(Boolean),
+      pickedFiles: atFiles.map((f) => f.path),
+      ...(skill ? { skill } : {}),
+    };
+    // The empty session goes (nothing was said in it).
+    await deleteSession(threadId).catch(() => undefined);
+    onChanged();
+    onBranched?.(made.id, draft.text || draft.attachments.length || draft.pickedFiles.length || skill ? draft : null);
+    return null;
   }
 
   /** v1.377.0: "Branch from here" — a NEW session with this conversation up
@@ -3286,6 +3331,16 @@ export function HarnessSession({
               </div>
             </div>
           </div>
+          {/* v1.412.0: before the first message — the folder chip ("No
+              folder" / Choose…). Choosing moves the empty session there. */}
+          {view.messages.length === 0 && !busy && !view.archived && !asking && !view.running ? (
+            <HarnessStartFolder
+              folder={view.noFolder ? null : view.git?.checkout || view.folder}
+              workRoot={view.workRoot}
+              startAt={view.noFolder ? folderPickFrom : view.git?.checkout || view.folder}
+              onMove={moveToFolder}
+            />
+          ) : null}
         </div>
       </section>
 

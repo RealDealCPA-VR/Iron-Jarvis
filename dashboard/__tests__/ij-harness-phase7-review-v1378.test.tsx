@@ -62,7 +62,9 @@ vi.mock("@/lib/api", () => {
 vi.mock("@/components/terminal/FilesPanel", () => ({ FilesPanel: () => <div data-testid="files-panel" /> }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => <div data-testid="tree" /> }));
 vi.mock("@/components/harness/HarnessSession", () => ({
-  HarnessSession: ({ threadId }: { threadId: string }) => <div data-testid="session-stub" data-id={threadId} />,
+  HarnessSession: ({ threadId, folderPickFrom }: { threadId: string; folderPickFrom?: string | null }) => (
+    <div data-testid="session-stub" data-id={threadId} data-pick-from={folderPickFrom ?? ""} />
+  ),
 }));
 
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
@@ -148,8 +150,10 @@ describe("Changes' first view follows what the branch still is", () => {
   });
 });
 
+// v1.412.0 (moved on purpose): New session starts with no folder at once;
+// where its "Choose…" opens is the folder the user picked, never the worktree.
 describe("New session in a session on its own branch", () => {
-  it("opens on the folder the user picked, never the worktree", async () => {
+  it("its picker opens on the folder the user picked, never the worktree", async () => {
     // The daemon groups a session on its own branch under the PICKED folder
     // (harness/sessions.checkout_of); the session's own folder is the worktree.
     api.gets = {
@@ -167,10 +171,12 @@ describe("New session in a session on its own branch", () => {
     );
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "s1"));
     await screen.findAllByTestId("harness-folder-group");
+    api.postAnswers["/build/sessions"] = { id: "new1", title: "New session", folder: "", no_folder: true };
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    const box = screen.getByTestId("harness-new-folder") as HTMLInputElement;
-    expect(box.value).toBe(REPO);
-    expect(box.value).not.toContain(".ij-worktrees");
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
+    const from = screen.getByTestId("session-stub").getAttribute("data-pick-from") ?? "";
+    expect(from).toBe(REPO);
+    expect(from).not.toContain(".ij-worktrees");
   });
 });
 

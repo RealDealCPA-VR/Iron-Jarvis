@@ -69,16 +69,37 @@ async function noSidewaysPan(page: Page): Promise<void> {
   expect(pan).toBeLessThanOrEqual(0);
 }
 
+/** v1.412.0: New session starts AT ONCE with no folder; the folder is chosen
+ *  under the composer (Choose… → in a browser, the folder tree in a dialog:
+ *  its typed path, then "Use this folder"), which moves the empty session
+ *  into that folder. `branch`: for a repository, what the branch switch is
+ *  left at (null: no switch expected). */
+async function startInFolder(page: Page, folder: string, branch: boolean | null = null): Promise<void> {
+  await page.getByTestId("harness-new-session").click();
+  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 30_000 });
+  const first = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
+  await page.getByTestId("harness-start-folder-choose").click();
+  const typed = page.getByTestId("harness-start-folder-tree").getByLabel("Go to root path");
+  await typed.fill(folder);
+  await typed.press("Enter");
+  await page.getByTestId("harness-start-folder-tree-use").click();
+  if (branch !== null) {
+    const sw = page.getByTestId("harness-start-branch-switch");
+    await expect(sw).toBeVisible({ timeout: 20_000 });
+    await expect(sw).toBeChecked();
+    if (!branch) await sw.uncheck();
+    await page.getByTestId("harness-start-branch-use").click();
+  }
+  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", first, { timeout: 30_000 });
+  await expect(page.getByTestId("harness-session")).toBeVisible();
+}
+
 test("a session on its own branch: commit, push, merge, remove the worktree", async ({ page }) => {
   const mainBefore = git(["rev-parse", "main"], repo);
   await openHarness(page);
-  await page.getByTestId("harness-new-session").click();
-  await page.getByTestId("harness-new-folder").fill(repo);
-  const sw = page.getByTestId("harness-new-branch-switch");
-  await expect(sw).toBeVisible({ timeout: 20_000 });
-  await expect(sw).toBeChecked();
-  await page.getByTestId("harness-new-start").click();
-  await expect(page.getByTestId("harness-session")).toBeVisible();
+  // v1.412.0: the folder is chosen under the composer; a repository asks
+  // about the branch there (on by default).
+  await startInFolder(page, repo, true);
   const branchLine = page.getByTestId("harness-branch");
   await expect(branchLine).toContainText(/ij\/session-[0-9a-f]{4} from main/);
   const branch = ((await branchLine.textContent()) ?? "").match(/ij\/session-[0-9a-f]{4}/)?.[0] ?? "";

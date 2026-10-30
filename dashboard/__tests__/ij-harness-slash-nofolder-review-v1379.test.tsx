@@ -257,7 +257,9 @@ describe("New session in front of a session with no folder (the merge with v1.37
     },
   ];
 
-  it("opens with no folder — the box empty, the folder list closed — and Start makes one with no folder", async () => {
+  // v1.412.0 (moved on purpose): no form — New session makes one with no
+  // folder at once, here as in front of any session.
+  it("makes one with no folder at once — no form, no folder list", async () => {
     const onStart = vi.fn(async () => null);
     render(
       <HarnessSidebar
@@ -267,18 +269,13 @@ describe("New session in front of a session with no folder (the merge with v1.37
         onSelect={() => {}}
         onStart={onStart}
         onRename={async () => null}
-        defaultFolder={""}
-        startWithNoFolder
         terminals={[]}
         onOpenTerminal={() => {}}
-        workRoot="C:\\Users\\me\\Documents\\Iron Jarvis"
       />,
     );
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    expect((screen.getByTestId("harness-new-folder") as HTMLInputElement).value).toBe("");
-    expect(screen.queryByTestId("tree")).toBeNull();
-    expect(screen.getByTestId("harness-new-no-folder-line")).toHaveTextContent("No folder");
-    fireEvent.submit(screen.getByTestId("harness-new-session-form"));
     await waitFor(() => expect(onStart).toHaveBeenCalledWith(""), NET);
+    expect(screen.queryByTestId("harness-new-session-form")).toBeNull();
+    expect(screen.queryByTestId("tree")).toBeNull();
   });
 });

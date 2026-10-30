@@ -163,7 +163,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function sidebar(onStart = vi.fn(async (_folder: string) => null as string | null), defaultFolder: string | null = "C:\\work\\shop") {
+function sidebar(onStart = vi.fn(async (_folder: string) => null as string | null)) {
   render(
     <HarnessSidebar
       folders={decodeFolders(LIST)}
@@ -172,43 +172,23 @@ function sidebar(onStart = vi.fn(async (_folder: string) => null as string | nul
       onSelect={() => {}}
       onStart={onStart}
       onRename={async () => null}
-      defaultFolder={defaultFolder}
       terminals={[]}
       onOpenTerminal={() => {}}
-      workRoot={decodeWorkRoot(LIST)}
     />,
   );
   return onStart;
 }
 
-describe("New session: a folder is optional", () => {
-  it("says where a session with no folder keeps its files, and starts one with no folder", async () => {
+// v1.412.0 (moved on purpose): there is no form — New session starts a
+// session with NO folder at once; its folder chip (HarnessStartFolder) says
+// where its files go and chooses one (ij-harness-start-v1412.test.tsx).
+describe("New session: no folder until one is chosen", () => {
+  it("starts a session with no folder at once", async () => {
     const onStart = sidebar();
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    const form = await screen.findByTestId("harness-new-session-form");
-    expect(within(form).getByText("Folder to work in (optional)")).toBeTruthy();
-    expect(within(form).getByTestId("harness-new-no-folder-line")).toHaveTextContent(
-      `No folder: the session keeps its files in a new folder in ${ROOT}, made with your first message.`,
-    );
-    fireEvent.click(within(form).getByTestId("harness-new-no-folder"));
     await waitFor(() => expect(onStart).toHaveBeenCalledWith(""));
-  });
-
-  it("Start with the folder box emptied starts a session with no folder too (no refusal)", async () => {
-    const onStart = sidebar();
-    fireEvent.click(screen.getByTestId("harness-new-session"));
-    fireEvent.change(screen.getByTestId("harness-new-folder"), { target: { value: "  " } });
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalledWith(""));
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("a folder typed in still starts a session in that folder", async () => {
-    const onStart = sidebar();
-    fireEvent.click(screen.getByTestId("harness-new-session"));
-    fireEvent.change(screen.getByTestId("harness-new-folder"), { target: { value: "C:\\work\\shop" } });
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenCalledWith("C:\\work\\shop"));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("harness-new-session-form")).toBeNull();
   });
 });
 

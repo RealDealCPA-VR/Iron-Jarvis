@@ -133,6 +133,9 @@ def view(row: HostedSessionRecord) -> dict[str, Any]:
         "id": row.id,
         "harness": row.harness,
         "folder": row.folder,
+        # v1.412.0: started with no folder chosen (its own folder is made
+        # with its first message; ``folder`` names it once made).
+        "no_folder": bool(getattr(row, "no_folder", False)),
         "title": row.title,
         "account": row.account,
         "account_name": str(acc.get("title") or "") if acc else "",
@@ -147,3 +150,35 @@ def view(row: HostedSessionRecord) -> dict[str, Any]:
         "last_error": row.last_error,
         "source": "app",
     }
+
+
+def set_folder_if_empty(engine: Any, sid: str, path: str) -> HostedSessionRecord | None:
+    """v1.412.0: keep ``path`` as the session's OWN folder unless one is kept
+    already (first wins). Answers the row as it is after; None when gone."""
+    ensure_table(engine)
+    with session_scope(engine) as db:
+        row = db.get(HostedSessionRecord, str(sid or ""))
+        if row is None:
+            return None
+        if not row.folder:
+            row.folder = str(path)
+            row.updated_at = utcnow()
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+        db.expunge(row)
+        return row
+
+
+def clear_folder_if(engine: Any, sid: str, path: str) -> bool:
+    """v1.412.0: forget the session's own folder when it is still ``path``
+    (it was taken back). True when it was cleared."""
+    ensure_table(engine)
+    with session_scope(engine) as db:
+        row = db.get(HostedSessionRecord, str(sid or ""))
+        if row is None or row.folder != str(path) or not getattr(row, "no_folder", False):
+            return False
+        row.folder = ""
+        db.add(row)
+        db.commit()
+        return True

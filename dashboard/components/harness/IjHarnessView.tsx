@@ -311,22 +311,22 @@ export function IjHarnessView({
     },
     [folders],
   );
-  // v1.378.0 (part 2, Phase 7, the walkthrough): New session opens on the
-  // folder of the session in front — its group's folder, the one the user
-  // picked (a session on its own branch is grouped there too). The Terminals
-  // view's folder was the default before, so a second session in the same
-  // folder meant pasting the folder again. No session open: as before.
-  // v1.379.0 review (the merge with v1.378.0): the session in front has NO
-  // folder — New session opens the same way, with no folder (the box empty,
-  // the folder list closed: Start makes another session with no folder); it
-  // never falls back to the Terminals view's folder. v1.406.0 part 7: "in
-  // front" is the FOCUSED column's session.
+  // v1.412.0: New session starts with NO folder (the user's choice); the
+  // folder of the session in front (v1.378.0) — else Build's last folder — is
+  // only where "Choose…" opens the folder picker. "In front" is the FOCUSED
+  // column's session (v1.406.0 part 7).
   const frontGroup = useMemo(
     () => folders?.find((f) => f.sessions.some((s) => s.id === front)) ?? null,
     [folders, front],
   );
-  const sessionFolder = frontGroup ? (frontGroup.noFolder ? "" : frontGroup.path) : null;
-  const frontHasNoFolder = frontGroup?.noFolder === true;
+  const frontFolder = frontGroup && !frontGroup.noFolder ? frontGroup.path : null;
+  // The last folder a session in front worked in: a New session (no folder)
+  // in front still opens the picker where the user just was.
+  const [lastFront, setLastFront] = useState<string | null>(null);
+  useEffect(() => {
+    if (frontFolder) setLastFront(frontFolder);
+  }, [frontFolder]);
+  const pickFrom = frontFolder ?? lastFront ?? defaultFolder;
 
   // v1.377.0 (part 2, Phase 6): a session just BRANCHED from a question opens
   // with that question in its box (handed over once, for that session only).
@@ -439,13 +439,10 @@ export function IjHarnessView({
       }}
       onStart={start}
       onRename={rename}
-      defaultFolder={sessionFolder ?? defaultFolder}
-      startWithNoFolder={frontHasNoFolder}
       terminals={terminals}
       onOpenTerminal={onOpenTerminal}
       newRequest={newRequest}
       searchRequest={searchRequest}
-      workRoot={workRoot}
     />
   );
 
@@ -562,6 +559,7 @@ export function IjHarnessView({
                       // with no folder), "/resume" puts the caret in the search.
                       onNewSession={(folder) => start(folder)}
                       onFindSessions={() => setSearchRequest((n) => n + 1)}
+                      folderPickFrom={pickFrom}
                       onScreen={!hiddenTab}
                       panesInto={two && !tabs ? (focused ? paneSlot : null) : hiddenTab ? null : undefined}
                     />

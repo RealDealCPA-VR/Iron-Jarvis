@@ -38,7 +38,9 @@ vi.mock("@/lib/api", () => {
 });
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => <div data-testid="tree" /> }));
 vi.mock("@/components/harness/HarnessSession", () => ({
-  HarnessSession: ({ threadId }: { threadId: string }) => <div data-testid="session-stub" data-id={threadId} />,
+  HarnessSession: ({ threadId, folderPickFrom }: { threadId: string; folderPickFrom?: string | null }) => (
+    <div data-testid="session-stub" data-id={threadId} data-pick-from={folderPickFrom ?? ""} />
+  ),
 }));
 
 import { IjHarnessView } from "@/components/harness/IjHarnessView";
@@ -73,7 +75,10 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-async function openFormInFrontOf(id: string) {
+// v1.412.0 (moved on purpose): there is no New session form any more —
+// New session starts a session with no folder AT ONCE, in front of any
+// session; only where its "Choose…" opens follows the session in front.
+async function startInFrontOf(id: string) {
   render(
     <IjHarnessView
       initialSession={id}
@@ -86,21 +91,19 @@ async function openFormInFrontOf(id: string) {
   await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", id));
   await screen.findAllByTestId("harness-folder-group");
   fireEvent.click(screen.getByTestId("harness-new-session"));
-  return screen.getByTestId("harness-new-folder") as HTMLInputElement;
+  await waitFor(() => expect(api.posts.find((p) => p.path === "/build/sessions")).toBeTruthy());
+  return api.posts.find((p) => p.path === "/build/sessions")?.body;
 }
 
 describe("New session in front of a session with no folder", () => {
-  it("opens with no folder — never the Terminals view's folder — and Start makes another", async () => {
-    const box = await openFormInFrontOf("n1");
-    expect(box.value).toBe("");
+  it("makes another with no folder — never the Terminals view's folder", async () => {
+    expect(await startInFrontOf("n1")).toEqual({ folder: "" });
     expect(screen.queryByTestId("tree")).toBeNull();
-    fireEvent.submit(screen.getByTestId("harness-new-session-form"));
-    await waitFor(() => expect(api.posts.find((p) => p.path === "/build/sessions")).toBeTruthy());
-    expect(api.posts.find((p) => p.path === "/build/sessions")?.body).toMatchObject({ folder: "" });
   });
 
-  it("in front of a folder session, v1.378.0's rule stands", async () => {
-    const box = await openFormInFrontOf("a1");
-    expect(box.value).toBe("C:\\work\\shop");
+  it("in front of a folder session it ALSO starts with no folder (v1.412.0: the user's choice)", async () => {
+    expect(await startInFrontOf("a1")).toEqual({ folder: "" });
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
+    expect(screen.getByTestId("session-stub")).toHaveAttribute("data-pick-from", "C:\\work\\shop");
   });
 });

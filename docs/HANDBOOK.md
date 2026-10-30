@@ -2180,9 +2180,8 @@ same switch as the chat page's Chat | Code, in the same place on the page.
   a press. Opening one carries that conversation on here. **Archived
   sessions** at the bottom lists what you archived, and **Bring back** (in a
   row's ⋯) returns one to the list.
-- **New session**: pick the tool by name (one that is not installed or is
-  signed out is greyed, with the reason), the folder, the account and the
-  mode, then Start.
+- **New session** (and the Code view with nothing open) is the message box
+  itself, ready to type — see "Start a session by typing" below.
 - **The conversation** reads like a chat: your messages, the tool's replies,
   each step it took (open a step to see what went in and what came out), an
   edit's changes with Open in VS Code / Cursor, its plan as a checklist, and
@@ -2263,6 +2262,40 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     (`/quit`) first. A terminal
     where Pi has finished offers **Open in Code view**.
 - **Next**: OpenCode, as a coding tool for the Code view.
+
+## Start a session by typing (v1.412.0)
+
+A new coding session no longer starts with a form. In **Build › Code** (with
+no session open, or after **New session**) and in **Chat › Code**, the
+message box is there at once: type what you want and press Enter. A quiet row
+of choices sits under the box:
+
+- **Folder** — "No folder" until you choose one. Press **Choose…** to pick a
+  folder: in the desktop app this opens Windows' own folder window, where you
+  can go to any drive and any folder; in a browser it opens Iron Jarvis's own
+  folder list. Iron Jarvis checks the folder when the session is made, and a
+  folder it cannot use is named under the chip, with the reason, and nothing
+  starts. With no folder, the session gets a folder of its own in your chat
+  files folder (Documents\Iron Jarvis), named by the date and your first
+  words, made with your first message — and taken back if that message never
+  starts. In Chat › Code, a folder chosen before the first message moves the
+  new session into that folder (same model, account, effort and approvals;
+  what you typed comes along); a repository asks whether to work on a new
+  branch, as before.
+- **Tool** (Build › Code) — Claude Code, Codex or Pi: the one you used last,
+  else the first one installed. One that cannot start is greyed, with the
+  reason.
+- **Account** — shown only when the tool has more than one login (the
+  accounts Iron-Proxy holds for Claude Code or Codex). Choosing such a tool
+  asks **which account** straight away; the one you used last for it is the
+  default. A tool with one login, and Pi (it signs in by itself), never asks.
+  In Chat › Code the model menu lists each account under Claude Code and
+  Codex, so you choose the account as you choose the model.
+- **Mode**, **model** and **effort** — effort only when the tool or model
+  offers levels.
+
+Sending makes the session with those choices and sends your message in one
+press.
 
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 

@@ -338,6 +338,12 @@ export interface CodeSession {
   running: boolean;
   /** An approval or question is waiting on the user right now. */
   waiting: boolean;
+  /** v1.412.0: started with no folder chosen — its own folder is made with
+   *  its first message (`folder` names it once made). */
+  noFolder: boolean;
+  /** v1.412.0: where such a session's own folder goes (the chat files
+   *  folder); "" otherwise. */
+  workRoot: string;
 }
 
 /** Archived: the daemon's flag, or a stamp. */
@@ -369,6 +375,8 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     source: r.source === "disk" ? "disk" : "",
     running: r.running === true || (typeof r.running === "string" && r.running.trim() !== ""),
     waiting: r.waiting === true,
+    noFolder: r.no_folder === true,
+    workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
   };
 }
 
@@ -394,6 +402,18 @@ export interface FolderGroup {
   folder: string;
   name: string;
   sessions: CodeSession[];
+  /** v1.412.0: the sessions started with no folder (one group, "No folder";
+   *  each keeps its files in a folder of its own). */
+  noFolder?: boolean;
+}
+
+/** v1.412.0: the group of sessions started with no folder. */
+export const NO_FOLDER_GROUP = "No folder";
+
+/** The folder a session works in, in words, for its header. */
+export function sessionFolderWords(s: Pick<CodeSession, "folder" | "noFolder">): string {
+  if (s.noFolder) return s.folder ? `its own folder, ${s.folder}` : "no folder yet: one is made with your first message";
+  return s.folder;
 }
 
 function newestStamp(s: CodeSession): string {
@@ -414,10 +434,14 @@ export function groupByFolder(sessions: readonly CodeSession[], opts: { archived
   const live = opts.archived ? [...sessions] : sessions.filter((s) => !s.archivedAt);
   const sorted = [...live].sort((a, b) => (newestStamp(b) > newestStamp(a) ? 1 : newestStamp(b) < newestStamp(a) ? -1 : 0));
   for (const s of sorted) {
-    const k = key(s.folder);
+    // v1.412.0: every session started with no folder shares ONE group (the
+    // native harness's v1.379.0 rule), its own folder made or not.
+    const k = s.noFolder ? "\u0000no-folder" : key(s.folder);
     let g = groups.get(k);
     if (!g) {
-      g = { folder: s.folder, name: folderName(s.folder), sessions: [] };
+      g = s.noFolder
+        ? { folder: "", name: NO_FOLDER_GROUP, sessions: [], noFolder: true }
+        : { folder: s.folder, name: folderName(s.folder), sessions: [] };
       groups.set(k, g);
     }
     g.sessions.push(s);

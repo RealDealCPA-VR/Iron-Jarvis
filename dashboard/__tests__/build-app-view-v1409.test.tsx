@@ -8,8 +8,10 @@
  *   - the sessions list: grouped by folder, each row its tool and account,
  *     a session found in the tool's own saved sessions says so;
  *   - New session: a tool not installed / signed out is greyed with the
- *     reason; Start sends the choice; Full access needs two presses and
- *     `confirm: true`;
+ *     reason; Send sends the choice; Full access needs two presses and
+ *     `confirm: true` (v1.412.0: moved on purpose to the start composer —
+ *     the composer is there at once, no form first; its own pins are
+ *     build-code-start-v1412.test.tsx);
  *   - every event kind of THE CONTRACT draws (the contract fixture — the
  *     daemon's real one when present, else the hand-written draft);
  *   - approvals and questions answered from the composer's place; Enter
@@ -294,55 +296,61 @@ describe("the sessions list", () => {
 
 /* ======================================================= New session */
 
-describe("New session", () => {
+describe("New session (v1.412.0: the start composer, moved on purpose)", () => {
   it("greys a tool that is not installed or signed out, with the reason", async () => {
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
-    const codex = await screen.findByTestId("code-new-tool-codex");
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    fireEvent.click(screen.getByTestId("code-start-tool"));
+    const codex = await screen.findByTestId("code-start-tool-codex");
     expect(codex.dataset.available).toBe("false");
-    expect(within(codex).getByRole("radio")).toBeDisabled();
-    expect(screen.getByTestId("code-new-tool-why-codex").textContent).toBe("Codex is not installed on this PC.");
-    expect(screen.getByTestId("code-new-tool-why-grok").textContent).toContain("Grok is signed out.");
-    const claude = screen.getByTestId("code-new-tool-claude-code");
+    expect(codex).toBeDisabled();
+    expect(screen.getByTestId("code-start-tool-why-codex").textContent).toBe("Codex is not installed on this PC.");
+    expect(screen.getByTestId("code-start-tool-why-grok").textContent).toContain("Grok is signed out.");
+    const claude = screen.getByTestId("code-start-tool-claude-code");
     expect(claude.dataset.available).toBe("true");
-    expect(within(claude).getByRole("radio")).toBeChecked();
-    // No folder yet: Start waits.
-    expect(screen.getByTestId("code-new-start")).toBeDisabled();
+    expect(claude.getAttribute("aria-checked")).toBe("true");
+    // Nothing typed yet: Send waits.
+    expect(screen.getByTestId("code-start-send")).toBeDisabled();
   });
 
-  it("Start sends the tool, the folder, the account and the mode, then opens the session", async () => {
-    H.postReply["/build/app/sessions"] = sess("n1", { account: "prof_work" });
-    openSession("n1", { session: sess("n1", { account: "prof_work" }), events: [], running: false, pending: [] });
+  it("Send sends the tool, the folder and the mode, opens the session and sends the words", async () => {
+    H.postReply["/build/app/sessions"] = sess("n1");
+    openSession("n1", { session: sess("n1"), events: [], running: false, pending: [] });
+    H.scripts.push([]);
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
-    await screen.findByTestId("code-new-tool-claude-code");
-    fireEvent.click(screen.getByTestId("stub-pick-folder"));
-    fireEvent.change(screen.getByTestId("code-new-account"), { target: { value: "prof_work" } });
-    fireEvent.click(screen.getByTestId("code-new-start"));
+    await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    fireEvent.click(screen.getByTestId("code-start-folder-choose"));
+    fireEvent.click(await screen.findByTestId("stub-pick-folder"));
+    fireEvent.click(screen.getByTestId("code-start-folder-tree-use"));
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "fix the cart" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
     await screen.findByTestId("code-session");
     const made = H.posts.find((p) => p.path === "/build/app/sessions");
-    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", account: "prof_work", mode: "ask" });
+    // One login (Work): no account question, the daemon decides.
+    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", mode: "ask" });
+    await waitFor(() => expect(H.streams.map((s) => s.path)).toEqual(["/build/app/sessions/n1/turn"]));
+    expect((H.streams[0].body as { text?: string }).text).toBe("fix the cart");
   });
 
-  it("Full access takes two presses in the form, and is sent with confirm: true", async () => {
+  it("Full access takes two presses on the chip, and is sent with confirm: true", async () => {
     H.postReply["/build/app/sessions"] = sess("n2", { mode: "full" });
     openSession("n2", { session: sess("n2", { mode: "full" }), events: [], running: false, pending: [] });
+    H.scripts.push([]);
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
-    await screen.findByTestId("code-new-tool-claude-code");
-    fireEvent.click(screen.getByTestId("stub-pick-folder"));
-    fireEvent.click(screen.getByTestId("code-new-mode-button"));
-    fireEvent.click(screen.getByTestId("code-new-mode-option-full"));
+    await waitFor(() => expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Ask first"));
+    fireEvent.click(screen.getByTestId("code-start-mode-button"));
+    fireEvent.click(screen.getByTestId("code-start-mode-option-full"));
     await pause(FULL_ARM_GUARD_MS + 50);
     // One press only arms it.
-    expect(screen.getByTestId("code-new-mode-option-full").dataset.armed).toBe("true");
-    expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Ask first");
-    fireEvent.click(screen.getByTestId("code-new-mode-option-full"));
-    expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Full access");
-    fireEvent.click(screen.getByTestId("code-new-start"));
+    expect(screen.getByTestId("code-start-mode-option-full").dataset.armed).toBe("true");
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Ask first");
+    fireEvent.click(screen.getByTestId("code-start-mode-option-full"));
+    expect(screen.getByTestId("code-start-mode-button").textContent).toContain("Full access");
+    fireEvent.change(screen.getByTestId("code-start-box"), { target: { value: "go" } });
+    fireEvent.click(screen.getByTestId("code-start-send"));
     await screen.findByTestId("code-session");
     const made = H.posts.find((p) => p.path === "/build/app/sessions");
-    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", mode: "full", confirm: true });
+    expect(made?.body).toEqual({ harness: "claude-code", mode: "full", confirm: true });
   });
 });
 
@@ -1271,14 +1279,16 @@ describe("review: words", () => {
     seed();
     H.gets["/build/app/harnesses"] = tools;
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
-    const select = (await screen.findByTestId("code-new-account")) as HTMLSelectElement;
-    const opts = Array.from(select.options).map((o) => [o.textContent, o.disabled]);
+    // v1.412.0 (moved on purpose): the start composer's account chip.
+    fireEvent.click(await screen.findByTestId("code-start-account"));
+    const menu = screen.getByTestId("code-start-account-menu");
+    const opts = within(menu)
+      .getAllByRole("menuitemradio")
+      .map((o) => [o.textContent, (o as HTMLButtonElement).disabled]);
     expect(opts).toEqual([
-      ["This PC's sign-in", false],
       ["Work", false],
-      ["Personal (needs to sign in again)", true],
-      ["Team (at its limit)", true],
+      ["Personalneeds to sign in again", true],
+      ["Teamat its limit", true],
     ]);
   });
 });
@@ -1422,30 +1432,34 @@ describe("found live: titles, the folder New session starts on, the path box", (
     expect(firstMessageTitle("w ".repeat(50)).length).toBeLessThanOrEqual(60);
   });
 
-  it("New session starts on the folder of the session in front", async () => {
+  // v1.412.0 (moved on purpose): New session starts with NO folder — the
+  // user's choice; "Choose…" picks one.
+  it("New session starts with no folder, whatever the session in front", async () => {
     seed([sess("a1"), sess("a2", { folder: "C:\\work\\api", updated_at: "2026-10-29T08:00:00Z" })]);
     openSession("a2", { session: sess("a2", { folder: "C:\\work\\api" }), events: [], running: null, pending: [] });
     render(<BuildCodeView initialSession="a2" startFolder="C:\\elsewhere" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
     fireEvent.click(screen.getByTestId("code-new"));
-    expect((await screen.findByTestId("code-new-folder")).textContent).toBe("C:\\work\\api");
+    const chip = await screen.findByTestId("code-start-folder");
+    expect(chip.dataset.folder).toBe("");
+    expect(chip.textContent).toBe("No folder");
   });
 
-  it("a folder heading's + opens New session on THAT folder", async () => {
+  it("a folder heading's + starts on THAT folder", async () => {
     seed([sess("a1"), sess("a2", { folder: "C:\\work\\api", updated_at: "2026-10-29T08:00:00Z" })]);
     openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
     fireEvent.click(screen.getByTestId("code-new-in-c:/work/api"));
-    expect((await screen.findByTestId("code-new-folder")).textContent).toBe("C:\\work\\api");
-    // And on the other folder: the form starts over on it.
+    expect((await screen.findByTestId("code-start-folder")).dataset.folder).toBe("C:\\work\\api");
+    // And on the other folder: the start begins again on it.
     fireEvent.click(screen.getByTestId("code-new-in-c:/work/shop"));
-    await waitFor(() => expect(screen.getByTestId("code-new-folder").textContent).toBe("C:\\work\\shop"));
+    await waitFor(() => expect(screen.getByTestId("code-start-folder").dataset.folder).toBe("C:\\work\\shop"));
   });
 
-  it("New session's folder tree picks a pasted path (the opt-in)", async () => {
+  it("the in-app folder tree (no desktop picker) picks a pasted path (the opt-in)", async () => {
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-new"));
+    fireEvent.click(await screen.findByTestId("code-start-folder-choose"));
     expect((await screen.findByTestId("stub-pick-folder")).dataset.pickTyped).toBe("true");
   });
 });

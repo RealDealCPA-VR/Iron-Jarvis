@@ -116,7 +116,6 @@ function sidebar(over: Partial<React.ComponentProps<typeof HarnessSidebar>> = {}
     onSelect: vi.fn(),
     onStart: vi.fn(async () => null as string | null),
     onRename: vi.fn(async () => null as string | null),
-    defaultFolder: "C:\\work\\shop",
     terminals: panes,
     onOpenTerminal: vi.fn(),
     ...over,
@@ -157,21 +156,15 @@ describe("sessions grouped by folder", () => {
     await waitFor(() => expect(p.onStart).toHaveBeenCalledWith("C:\\work\\tools"));
   });
 
-  it("New session starts in the folder typed or picked, and shows a refusal in the daemon's words", async () => {
-    const onStart = vi.fn(async (f: string) => (f === "C:\\Windows" ? "This folder cannot be used: it is protected" : null));
+  // v1.412.0 (moved on purpose): no form — New session starts one at once
+  // with no folder; a refusal is said in the daemon's words.
+  it("New session starts one at once with no folder, and shows a refusal in the daemon's words", async () => {
+    const onStart = vi.fn(async () => "Sessions cannot be made right now.");
     sidebar({ onStart });
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    const input = screen.getByTestId("harness-new-folder") as HTMLInputElement;
-    expect(input.value).toBe("C:\\work\\shop");
-    fireEvent.change(input, { target: { value: "C:\\Windows" } });
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("This folder cannot be used: it is protected");
-    fireEvent.click(screen.getByRole("button", { name: "Choose a folder" }));
-    fireEvent.click(screen.getByTestId("tree-pick"));
-    expect(input.value).toBe("C:\\picked");
-    fireEvent.click(screen.getByTestId("harness-new-start"));
-    await waitFor(() => expect(onStart).toHaveBeenLastCalledWith("C:\\picked"));
-    await waitFor(() => expect(screen.queryByTestId("harness-new-session-form")).toBeNull());
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith(""));
+    expect(screen.queryByTestId("harness-new-session-form")).toBeNull();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sessions cannot be made right now.");
   });
 });
 
@@ -249,14 +242,12 @@ describe("the view", () => {
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={"C:\\work"} terminal={terminal} />);
     await screen.findByTestId("session-stub");
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    fireEvent.click(screen.getByTestId("harness-new-start"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
     // The folder only: the daemon chooses the account (its Default, even at
     // its limit — v1.368.0); the screen never picks one for a new session.
-    // (v1.378.0, moved on purpose: the folder is the session in front's —
-    // a1 in C:\work\shop — not the Terminals view's C:\work;
-    // ij-harness-new-folder-v1378.test.tsx.)
-    expect(api.posts).toContainEqual(["/build/sessions", { folder: "C:\\work\\shop" }]);
+    // (v1.412.0, moved on purpose: New session starts with NO folder at
+    // once; ij-harness-new-folder-v1378.test.tsx.)
+    expect(api.posts).toContainEqual(["/build/sessions", { folder: "" }]);
   });
 
   it("reads the list again on a timer while the window is visible, and not while it is hidden", async () => {
