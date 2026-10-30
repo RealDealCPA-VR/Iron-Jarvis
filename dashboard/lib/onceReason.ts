@@ -11,15 +11,19 @@
  * - "command" (v1.381.0): a shell step a project's or a plugin's Claude Code
  *   slash command asked for (src/iron_jarvis/harness/command_shell.py);
  * - "memory" (v1.406.0): archiving, deleting, renaming or moving a note in
- *   the Brain Profile's memory base (src/iron_jarvis/brain/tools.py).
+ *   the Brain Profile's memory base (src/iron_jarvis/brain/tools.py);
+ * - "guarded" (v1.407.2): an edit of Git's own files (.git/**, .gitconfig…),
+ *   Iron Jarvis's own rules (.ironjarvis/**) or Claude Code's (.claude/**) —
+ *   src/iron_jarvis/core/auto_approve.py `guarded_edit`. A safety card:
+ *   Enter never allows it.
  *
  * Kept OUT of lib/useChatStream.ts on purpose: ~50 test files mock that
  * module with a fixed list of exports, and lib/buildHelpers reads this too.
  */
 
-export type OnceReason = "git" | "page" | "command" | "memory";
+export type OnceReason = "git" | "page" | "command" | "memory" | "guarded";
 
-const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory"]);
+const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory", "guarded"]);
 
 /** The reason as a card reads it, or undefined for anything else. */
 export function onceReasonOf(raw: unknown): OnceReason | undefined {

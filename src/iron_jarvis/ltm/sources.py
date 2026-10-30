@@ -79,6 +79,10 @@ class LTMSourceRecord(SQLModel, table=True):
     # Offsite HTTP RAG source:
     endpoint_url: str = ""  # query URL of an external RAG service (http_rag)
     config_json: str = ""  # JSON blob of HttpRagConfig overrides (http_rag)
+    #: v1.408.0 (mcp): the tools the USER confirmed per role (``mcp_roles``);
+    #: "" = never confirmed — nothing writes through the brain tools.
+    #: Written only by ``PUT /ltm/sources/{name}/roles``. Additive column.
+    roles_json: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -129,6 +133,13 @@ class CustomSourceStore:
             record = self._fetch(db, name)
             if record is None:
                 record = LTMSourceRecord(name=name)
+            elif (record.kind, record.endpoint_url, record.config_json) != (
+                kind, endpoint_url, config_json
+            ):
+                # v1.408.0 review: re-added under the same name with ANOTHER
+                # server: the tools the user confirmed were for the old one,
+                # and a same-named tool elsewhere may do something else.
+                record.roles_json = ""
             record.kind = kind
             record.path = path
             record.database_id = database_id
@@ -270,11 +281,18 @@ def connector_from_record(
             command=str(cfg.get("command") or ""),
             args=list(cfg.get("args") or []),
             env=dict(cfg.get("env") or {}),
+            roles=_decode_roles(getattr(rec, "roles_json", "")),
         )
     else:  # pragma: no cover — add() validates kind, but stay defensive
         raise ValueError(f"unknown LTM source kind {rec.kind!r}")
     conn.name = rec.name
     return conn
+
+
+def _decode_roles(raw: Any) -> "dict[str, Any] | None":
+    from .mcp_roles import decode
+
+    return decode(raw)
 
 
 def load_custom_sources(

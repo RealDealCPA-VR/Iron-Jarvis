@@ -145,3 +145,77 @@ class BootWatch:
                 self.reports += 1
             except Exception:  # noqa: BLE001 — a report never breaks a boot
                 pass
+
+
+#: When a frozen event loop is reported (v1.407.1). The desktop watchdog kills
+#: the daemon after ~90 s of missed /health, so all three land before it.
+FREEZE_AFTER_S: tuple[float, ...] = (20.0, 45.0, 75.0)
+
+
+class LoopWatch:
+    """A frozen event loop says WHERE it is stuck (v1.407.1).
+
+    On 2026-10-29 the daemon stopped answering everything ~90 s after a boot
+    whose Build panes were stuck starting, and the log said nothing: the
+    v1.245.0 loop-lag line is written by the loop itself, AFTER a stall ends,
+    so a stall that never ends leaves no trace before the watchdog's kill.
+    This runs on its own daemon thread. The loop calls :meth:`beat` about
+    once a second (the loop-lag task); when the last beat is older than each
+    of :data:`FREEZE_AFTER_S`, ONE warning per threshold per freeze names
+    where the loop thread and the other busy threads are (``where``: module
+    names and line numbers only). A beat ends the freeze. Never raises."""
+
+    def __init__(
+        self,
+        *,
+        freeze_after_s: tuple[float, ...] = FREEZE_AFTER_S,
+        clock: Callable[[], float] = time.monotonic,
+        report: Callable[[str], None] | None = None,
+        poll_s: float = 1.0,
+    ) -> None:
+        self.freeze_after_s = tuple(sorted(freeze_after_s))
+        self._clock = clock
+        self._report = report or (lambda text: log.warning("%s", text))
+        self._poll_s = poll_s
+        self._last = clock()
+        self._said: set[float] = set()
+        self._stop = threading.Event()
+        self._loop_thread: int | None = None
+        self.reports = 0
+
+    def start(self) -> "LoopWatch":
+        """Watch from now. Call it ON the loop's thread."""
+        try:
+            self._loop_thread = threading.get_ident()
+            self._last = self._clock()
+            threading.Thread(target=self._run, name="loop-watch", daemon=True).start()
+        except Exception:  # noqa: BLE001
+            log.debug("loop watch could not start", exc_info=True)
+        return self
+
+    def beat(self) -> None:
+        """The loop is alive (call from the loop)."""
+        self._last = self._clock()
+        self._said.clear()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def check(self) -> None:
+        """One look (the thread calls this every ``poll_s``; tests call it)."""
+        try:
+            frozen = self._clock() - self._last
+            for after in self.freeze_after_s:
+                if frozen >= after and after not in self._said:
+                    self._said.add(after)
+                    self._report(
+                        f"event loop frozen for {frozen:.0f} s (nothing has answered since). "
+                        f"Where it is waiting: {where(self._loop_thread).replace('boot thread', 'loop thread', 1)}"
+                    )
+                    self.reports += 1
+        except Exception:  # noqa: BLE001 — the watch never adds a failure
+            pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._poll_s):
+            self.check()

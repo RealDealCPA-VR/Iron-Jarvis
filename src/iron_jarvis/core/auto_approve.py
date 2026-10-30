@@ -525,29 +525,164 @@ def _target_parts(path: Any, workspace: "Path | None") -> "list[str] | None":
         return None
 
 
+#: v1.407.2: the family of each sensitive name — the card's words say plainly
+#: WHY it asks (``GUARD_WHY``). One table for both readers.
+_GIT_PARTS: frozenset[str] = frozenset({".git"}) | SENSITIVE_NAMES
+_DIR_KIND: dict[str, str] = {".git": "git", ".ironjarvis": "jarvis", ".claude": "claude"}
+#: v1.407.2 (the user's words: "CLAUDE.md/AGENTS.md rules files"): the rules
+#: files Iron Jarvis (``projects/folder_rules.CHAT_RULE_FILES``,
+#: ``scheduling/knobs.FOLDER_RULES_FILES``), Claude Code and Codex read as
+#: instructions — at any depth, because Claude Code and Codex read nested
+#: ones too. A FILE name only (the last part), lower case.
+RULES_FILE_NAMES: frozenset[str] = frozenset(
+    {"agents.md", "claude.md", "agents.local.md", "claude.local.md", "agents.override.md", ".ironjarvis.md"}
+)
+
+
+def _part_kind(part: str, nxt: str) -> str:
+    """The family of ONE cleaned path part (with the part after it), or ""."""
+    if part in _GIT_PARTS:
+        return "git"
+    if not nxt and part in RULES_FILE_NAMES:
+        return "rules"
+    if part in SENSITIVE_DIRS:
+        return _DIR_KIND.get(part, "unknown")
+    if _SHORT_NAME.match(part):
+        return "unknown"
+    if part in SENSITIVE_FILES_IN and nxt in SENSITIVE_FILES_IN[part]:
+        return "editor"
+    for top, sub in SENSITIVE_SUBDIRS:
+        if part == top and nxt == sub:
+            return "ci"
+    return ""
+
+
+def _parts_kind(parts: "list[str]") -> str:
+    for i, part in enumerate(parts):
+        kind = _part_kind(part, parts[i + 1] if i + 1 < len(parts) else "")
+        if kind:
+            return kind
+    return ""
+
+
+def _written_parts(path: Any, workspace: "Path | None") -> "list[str]":
+    """The path AS WRITTEN, cleaned (a short name or a stream the resolve
+    kept). For an absolute path only the part BELOW the folder counts, so the
+    folder's own name (``C:\\Users\\RUNNER~1\\…`` on a CI runner, a checkout
+    under ``.claude/worktrees``) never reads as the edit's target; an
+    absolute path whose written form does not start with the folder leaves
+    the decision to its resolved parts."""
+    text = str(path or "").strip()
+    if Path(text).is_absolute():
+        low = text.replace("/", "\\").lower()
+        rest = None
+        for base in ([] if workspace is None else [Path(workspace), Path(workspace).resolve()]):
+            b = str(base).replace("/", "\\").lower().rstrip("\\")
+            if low.startswith(b + "\\"):
+                rest = text[len(b) + 1:]
+                break
+        if rest is None:
+            return []
+        text = rest
+    return [cp for cp in (_clean_part(x) for x in re.split(r"[\\/]", text)) if cp]
+
+
+def sensitive_kind(path: Any, workspace: "Path | None") -> str:
+    """WHICH kind of file an edit of ``path`` inside ``workspace`` touches:
+    ``git`` (``.git/**``, ``.gitattributes``, ``.gitconfig``,
+    ``.gitmodules``), ``jarvis`` (``.ironjarvis/**``), ``claude``
+    (``.claude/**``), ``rules`` (an ``AGENTS.md`` / ``CLAUDE.md`` /
+    ``.ironjarvis.md`` rules file, :data:`RULES_FILE_NAMES`), ``editor``
+    (``.vscode/tasks.json|settings.json``),
+    ``ci`` (``.github/workflows/**``), ``unknown`` (a part still shaped like
+    an 8.3 short name) — "" for an ordinary file AND for a path not inside the
+    folder (the caller decides what outside means).
+
+    THE ONE reading (v1.407.2) both the eased postures' ``sensitive_path``
+    rule and Ask first's guard (:func:`guarded_edit`) use: parts are compared
+    after resolve (``..``, an existing 8.3 name, a link), lower case, with a
+    stream name (``x:s``) and trailing dots / spaces dropped; the path as
+    written is read too. Blocking (resolve): call off the event loop."""
+    parts = _target_parts(path, workspace)
+    if parts is None:
+        return ""
+    kind = _parts_kind(parts)
+    if kind:
+        return kind
+    try:
+        return _parts_kind(_written_parts(path, workspace))
+    except Exception:  # noqa: BLE001 — cannot read the written form ⇒ fail safe
+        return "unknown"
+
+
 def sensitive_path(path: Any, workspace: "Path | None") -> bool:
     """Does an edit of ``path`` touch a file that steers git, the editor, CI or
     the agent (the rule ``sensitive_path``)? Cannot tell ⇒ True."""
-    parts = _target_parts(path, workspace)
-    if parts is None:
+    if _target_parts(path, workspace) is None:
         return True
-    for i, part in enumerate(parts):
-        if part in SENSITIVE_DIRS or part in SENSITIVE_NAMES:
-            return True
-        if _SHORT_NAME.match(part):
-            return True
-        nxt = parts[i + 1] if i + 1 < len(parts) else ""
-        if part in SENSITIVE_FILES_IN and nxt in SENSITIVE_FILES_IN[part]:
-            return True
-        for top, sub in SENSITIVE_SUBDIRS:
-            if part == top and nxt == sub:
-                return True
-    # The path as WRITTEN too (a short name or a stream the resolve kept).
-    for part in re.split(r"[\\/]", str(path)):
-        cp = _clean_part(part)
-        if cp in SENSITIVE_DIRS or cp in SENSITIVE_NAMES or (cp and _SHORT_NAME.match(cp)):
-            return True
-    return False
+    return bool(sensitive_kind(path, workspace))
+
+
+# --------------------------------------------------------------------------- #
+# v1.407.2: Ask first asks before an edit of those files
+# --------------------------------------------------------------------------- #
+
+#: The approval's ``once_reason`` for this guard (``dashboard/lib/
+#: onceReason``): a SAFETY card — Enter never allows it, it never goes to the
+#: phone (``harness/stall.SAFETY_REASONS``).
+GUARD_REASON = "guarded"
+
+#: WHY the card asks, per kind — the card's own line (its ``cost_note``).
+GUARD_WHY: dict[str, str] = {
+    "git": "it changes Git's own settings, which Git can run as programs",
+    "jarvis": "it changes Iron Jarvis's own safety rules for this folder",
+    "claude": "it changes Claude Code's own settings and rules",
+    "rules": "it changes the instructions Iron Jarvis and other coding agents follow in this folder",
+    "editor": "it changes your editor's settings, which can run programs",
+    "ci": "it changes what runs automatically when the code is pushed",
+    "unknown": "its real name cannot be read, so it may be one of Git's or Iron Jarvis's own files",
+}
+
+#: The tool's verb on the card, before the file.
+_GUARD_VERB: dict[str, str] = {
+    "write_file": "Write", "edit_file": "Edit", "multi_edit": "Edit",
+    "notebook_edit": "Edit", "write_document": "Write", PATCH_TOOL: "Patch",
+}
+
+
+def guarded_edit(name: Any, args: Any, workspace: Any) -> "tuple[str, str] | None":
+    """``(kind, words)`` when ``name`` is a FILE EDIT (``EDIT_TOOLS`` or
+    ``apply_patch``) whose target is a sensitive file inside the folder, else
+    None (v1.407.2, the user's decision 2026-10-29).
+
+    The file tools are allow-tier, so under Ask first (the default) and Ask
+    before every action an agent could write ``.git/config`` (a
+    ``core.fsmonitor`` then runs on Iron Jarvis's own ``git status``),
+    ``.git/hooks/*``, ``.ironjarvis/**`` (its own permission rules and
+    harness layer) or ``.claude/**`` with no card. ``tools/base.
+    spend_checks_for`` turns this answer into a once-only card in EVERY lane
+    (the stream lane cards it; the POST lane refuses it in words; the agent
+    runtime pauses an attended run and refuses an unattended one) — except
+    under "Don't ask", which the user chose. A path outside the folder is not
+    read here: the file tools refuse it themselves (``safe_path``).
+    Blocking (resolve): call off the event loop. Never raises."""
+    try:
+        edit = edit_paths(str(name or ""), args)
+        if edit is None or not workspace:
+            return None
+        ws = Path(workspace)
+        for path in edit[0]:
+            kind = sensitive_kind(path, ws)
+            if kind:
+                shown = str(path).strip().replace("\\", "/")
+                if len(shown) > 120:
+                    shown = "…" + shown[-119:]
+                verb = _GUARD_VERB.get(str(name), "Edit")
+                return kind, f"{verb} {shown}: {GUARD_WHY[kind]}"
+        return None
+    except Exception:  # noqa: BLE001 — cannot read ⇒ the old path (the tool's own checks)
+        log.debug("guarded edit: could not read %s", name, exc_info=True)
+        return None
 
 
 #: v1.406.0 part 2 follow-ups: files a test run executes as SETUP. A turn that

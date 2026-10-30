@@ -32,6 +32,8 @@ import { useFocusRef } from "@/lib/useFocusRef";
 import type { LtmResult, LtmSource } from "@/lib/types";
 import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
 import { ImportFromAI } from "./ImportFromAI";
+import { McpBaseRoles } from "./McpBaseRoles";
+import { memoryBaseKindWords, memoryServerWhere } from "@/lib/memoryBaseKinds";
 
 /** Catalogue icon name -> component (the catalogue stays free of JSX imports). */
 const BASE_ICON = {
@@ -215,8 +217,18 @@ export function LongTerm() {
   const {
     data: sourcesData,
     reload: reloadSources,
-  } = useApi<{ sources: LtmSource[]; active: string[] }>("/ltm/sources");
+  } = useApi<{
+    sources: LtmSource[];
+    active: string[];
+    bases?: { name: string; tools_set_up?: unknown }[];
+  }>("/ltm/sources");
   const customSources = sourcesData?.sources ?? [];
+  // v1.408.0 review: an MCP base's "Tools set up" badge is the listing's own
+  // word (no live tool listing per row per visit); undefined = not said.
+  const toolsSetUp = (base: string): boolean | undefined => {
+    const v = sourcesData?.bases?.find((b) => b?.name === base)?.tools_set_up;
+    return typeof v === "boolean" ? v : undefined;
+  };
   // The active source names power the filter/append dropdowns; fall back to the
   // built-in defaults when the daemon is unreachable.
   const sourceOptions = sourcesData?.active?.length
@@ -1378,12 +1390,14 @@ export function LongTerm() {
                     {customSources.map((s) => (
                       <li
                         key={s.name}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5"
+                        data-testid={`ltm-source-row-${s.name}`}
+                        className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-2.5"
                       >
+                        <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-semibold text-zinc-100">{s.name}</span>
-                            <Badge value={s.kind} tone={sourceTone(s.kind)} />
+                            <Badge value={memoryBaseKindWords(s.kind)} keepCase tone={sourceTone(s.kind)} />
                           </div>
                           <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
                             {s.kind === "notion"
@@ -1392,6 +1406,8 @@ export function LongTerm() {
                                 ? `${s.username ? s.username + "@" : ""}${s.host || "—"}:${s.path || ""}`
                                 : s.kind === "http_rag"
                                   ? String(s.endpoint_url || "—")
+                                  : s.kind === "mcp"
+                                  ? memoryServerWhere(s.endpoint_url)
                                   : DRIVE_KINDS.includes(s.kind as Kind)
                                     ? s.path
                                       ? String(s.path)
@@ -1404,6 +1420,11 @@ export function LongTerm() {
                           label="Remove"
                           title={`Remove memory base "${s.name}"`}
                         />
+                        </div>
+                        {/* v1.408.0: an MCP memory base's tools are matched to
+                            the note work Jarvis does; it writes to the server
+                            only through what the user confirms here. */}
+                        {s.kind === "mcp" && <McpBaseRoles name={s.name} setUp={toolsSetUp(s.name)} />}
                       </li>
                     ))}
                   </ul>

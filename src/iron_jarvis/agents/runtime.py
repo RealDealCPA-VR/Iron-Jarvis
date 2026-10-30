@@ -3026,6 +3026,30 @@ class AgentRuntime:
         approvals = getattr(self.p, "approvals", None)
         if approvals is None:  # bare-platform tests: no registry, no pause
             return "", set()
+        if (
+            spend is not None
+            and spend.ask
+            and getattr(spend, "attended_only", False)
+            and not str(getattr(session, "origin", None) or "").startswith(ATTENDED_ORIGINS)
+        ):
+            # v1.407.2 (Ask first's guard for Git's and Iron Jarvis's own
+            # files — tools/base.guarded_edit_check): an UNATTENDED run (a
+            # schedule, a goal, a rule, the phone, a delegated child with no
+            # origin) never parks this for a phone answer; it is refused in
+            # words through the deny seam a declined card uses. A base deny is
+            # left to ``invoke`` (its own words).
+            _t = self.p.registry.get(tc.name)
+            _pk = _t.perm_key() if _t is not None else tc.name
+            if self.p.permissions.mode_for(
+                _pk, self._trust_overrides(session, agent_def)
+            ) is not PermissionMode.DENY:
+                words = str(getattr(spend, "words", "") or "").strip() or tc.name
+                return (
+                    f"{words}. Iron Jarvis asks the user before this every time, and nobody "
+                    "is watching this run to answer, so it was not done. Ask the user to do "
+                    "it from chat.",
+                    set(),
+                )
         perm = self._pause_needed(session, tc, agent_def, session_allow, spend=spend)
         if not perm:
             if (
@@ -3954,7 +3978,15 @@ class AgentRuntime:
             # in one step: the test is judged).
             self._note_auto_changes(session, resp.tool_calls)
             spend_by_call: dict[int, SpendCheck] = (
-                await spend_checks_for(self.p.registry, resp.tool_calls, ctx, armed_names)
+                await spend_checks_for(
+                    self.p.registry, resp.tool_calls, ctx, armed_names,
+                    # v1.407.2: the run's posture (yolo never reaches a run —
+                    # ``inherited_approval_mode`` — so Ask first's guard for
+                    # Git's and Iron Jarvis's own files always applies here).
+                    approval_mode=inherited_approval_mode(
+                        getattr(session, "approval_mode", ""), getattr(session, "origin", None)
+                    ),
+                )
                 if getattr(self.p, "approvals", None) is not None
                 else {}
             )

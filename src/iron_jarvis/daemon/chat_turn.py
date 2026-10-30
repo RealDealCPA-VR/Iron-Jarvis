@@ -9770,8 +9770,12 @@ async def run_chat_turn(
             # finish-check test run joins it). MIRROR NOTE (lock-step): the
             # stream lane's `_turn_tools`.
             _gate_now = round_gate(set(armed), _finish, calls)
+            # v1.407.2: the posture rides along — Ask first's guard for Git's
+            # and Iron Jarvis's own files is dropped under "Don't ask"; under
+            # any other posture this lane, which cannot card, REFUSES it.
+            # MIRROR NOTE (lock-step): the stream lane passes its own.
             _spend = await _spend_checks_for(
-                d.platform.registry, calls, ctx, _gate_now
+                d.platform.registry, calls, ctx, _gate_now, approval_mode=_auto_mode,
             )
             # ACCEPT EDITS / AUTO (v1.406.0 part 2): a call the stream lane would
             # card (its permission asks once this turn's arming is set aside)

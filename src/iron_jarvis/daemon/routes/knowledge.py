@@ -326,10 +326,18 @@ def register(app: FastAPI, d) -> None:
 
         deadline = _time.monotonic() + _LTM_PROBE_BUDGET
         bases: list[dict[str, Any]] = []
+        # v1.408.0: a custom base's KIND is its record's kind — the connector's
+        # ``name`` is the base's own name (``conn.name = rec.name``), so the
+        # listing used to say a base named "hermes-brain" was of kind
+        # "hermes-brain". Built-ins (brain, obsidian, notion) are their name.
+        _records = CustomSourceStore(d.platform.engine).list()
+        _kinds = {r.name: r.kind for r in _records}
         for base_name in d.platform.ltm.sources():
             conn = d.platform.ltm.get(base_name)
             health = getattr(conn, "health", None)
-            info: dict[str, Any] = {"name": base_name, "kind": getattr(conn, "name", "")}
+            info: dict[str, Any] = {"name": base_name, "kind": _kinds.get(base_name, base_name)}
+            if _kinds.get(base_name) == "mcp":
+                info["tools_set_up"] = bool(getattr(conn, "roles", None))
             if callable(health):
                 cached = getattr(conn, "cached_health", None)
                 try:
@@ -371,7 +379,7 @@ def register(app: FastAPI, d) -> None:
                 info.update({"available": None, "detail": ""})
             bases.append(info)
         return {
-            "sources": [s.model_dump() for s in CustomSourceStore(d.platform.engine).list()],
+            "sources": [s.model_dump() for s in _records],
             "active": d.platform.ltm.sources(),
             "bases": bases,
         }
@@ -445,6 +453,97 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/ltm/sources/{name}")
     def remove_ltm_source(name: str) -> dict[str, Any]:
+        """Remove a custom memory base — from the LIVE set too (v1.408.0).
+        Only the record was deleted before, so the base kept answering
+        searches (and took saves) until the next restart. A built-in base
+        has no record and is left alone."""
         from ...ltm.sources import CustomSourceStore
 
-        return {"removed": CustomSourceStore(d.platform.engine).remove(name)}
+        removed = CustomSourceStore(d.platform.engine).remove(name)
+        unloaded = False
+        if removed:
+            conn = d.platform.ltm.get(name)
+            unloaded = bool(d.platform.ltm.deregister(name))
+            close = getattr(getattr(conn, "_client", None), "close", None)
+            if callable(close):
+                try:
+                    from ...ltm.mcp_brain import _resolve_maybe_async
+
+                    _resolve_maybe_async(close())
+                except Exception:  # noqa: BLE001 — the base is gone either way
+                    pass
+        return {"removed": removed, "unloaded": unloaded}
+
+    # -- v1.408.0: which tool of an MCP memory base does what ---------------
+    def _mcp_record(name: str):
+        from ...ltm.sources import CustomSourceStore
+
+        rec = CustomSourceStore(d.platform.engine).get(name)
+        if rec is None or rec.kind != "mcp":
+            raise HTTPException(status_code=404, detail=f"{name} is not an MCP memory base.")
+        return rec
+
+    def _roles_view(name: str, rec) -> dict[str, Any]:
+        from ...ltm import mcp_roles
+
+        conn = d.platform.ltm.get(name)
+        saved = mcp_roles.decode(getattr(rec, "roles_json", ""))
+        view: dict[str, Any] = {
+            "tools": [], "roles": list(mcp_roles.ROLES), "proposed": {r: None for r in mcp_roles.ROLES},
+            "saved": saved, "problems": {}, "sources": list(mcp_roles.SOURCES),
+        }
+        try:
+            tools = conn.tool_list() if conn is not None and hasattr(conn, "tool_list") else []
+        except Exception as exc:  # noqa: BLE001 — said, never a 500
+            view["error"] = f"could not list {name}'s tools: {str(exc)[:300]}"
+            return view
+        view["tools"] = [mcp_roles.tool_view(t) for t in tools]
+        view["proposed"] = mcp_roles.propose(tools)
+        shown = saved or view["proposed"]
+        view["problems"] = {
+            r: mcp_roles.problems(r, (shown or {}).get(r), tools) for r in mcp_roles.ROLES
+        }
+        return view
+
+    @app.get("/ltm/sources/{name}/roles")
+    def ltm_source_roles(name: str) -> dict[str, Any]:
+        """The server's tools, the app's PROPOSED role for each (a suggestion
+        only), what the user CONFIRMED, and each role's problems. Sync: the
+        tool listing is a network call, run in the threadpool."""
+        return _roles_view(name, _mcp_record(name))
+
+    @app.put("/ltm/sources/{name}/roles")
+    def ltm_source_roles_save(name: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Confirm which tool does what. Validated against the server's own
+        schemas (a required setting with no value, a write tool as the reader
+        and an unknown tool are each a 400 sentence); the live base uses it at
+        once."""
+        import json as _json
+
+        from ...core.db import session_scope
+        from ...ltm import mcp_roles
+        from ...ltm.sources import LTMSourceRecord
+
+        rec = _mcp_record(name)
+        conn = d.platform.ltm.get(name)
+        try:
+            tools = conn.tool_list() if conn is not None and hasattr(conn, "tool_list") else []
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=409, detail=f"Could not reach {name} to check its tools: {str(exc)[:200]}"
+            ) from None
+        try:
+            roles = mcp_roles.clean((body or {}).get("roles"), tools)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        with session_scope(d.platform.engine) as db:
+            row = db.get(LTMSourceRecord, rec.id)
+            row.roles_json = _json.dumps(roles) if roles else ""
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            rec = row
+            db.expunge(row)
+        if conn is not None:
+            conn.roles = roles or None
+        return _roles_view(name, rec)

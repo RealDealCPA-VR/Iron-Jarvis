@@ -3954,6 +3954,60 @@ does not need a bump, stop and bump it.
   with a deadline — the old shape fails in seconds instead of hanging pytest;
   all three old drains and a helper without the final turn go red).
 
+- **An MCP memory base WRITES only through tools the user CONFIRMED;
+  a refusal is never "unavailable"; a save that landed is never sent twice**
+  (v1.408.0, the four open points of v1.406.0, found against the user's REAL
+  wiki server hermes-brain — read-only calls, schemas and reply shapes
+  recorded in `tests/test_memory_profile_fixes_v1408.py`). `ltm/mcp_roles.py`
+  (pure): ROLES search/read/create/append/archive/delete/rename/move, a
+  mapping `{tool, args: {param: query|ref|title|content|to|{const}}}`;
+  `propose(tools)` is a SUGGESTION (verb order, a note noun, server order);
+  `problems()`/`clean()` refuse an unknown tool, a write-like tool as a reader,
+  an unfilled REQUIRED param, a comment field (`note`/`reason`/…) as the text,
+  a role missing what it needs; `build_args` splits a list-typed fixed value on
+  commas. Confirmed roles live in `LTMSourceRecord.roles_json` (additive),
+  written ONLY by `PUT /ltm/sources/{name}/roles` (validated against the live
+  `tools/list`; GET answers tools + proposed + saved + problems).
+  `McpBrainConnector(roles=)`: search/read use a confirmed role else the
+  read-only safe pick; `update`/`change` raise `NoteOpUnsupported` with
+  `setup_sentence` until confirmed (the v1.406.0 name-word picks for writes
+  are gone); `append` uses a confirmed `create` else the LEGACY picker (kept
+  for `ltm_append`); `brain/tools.write_note` refuses up front via
+  `setup_needed("create")` (kind "setup": nothing sent, nothing queued).
+  REPLY SHAPES: a Python MCP SDK server sends a list as `structuredContent
+  {"result": [...]}` + one text block PER ITEM (`_result_items`; joined they
+  are not JSON and the reply collapsed into one 80-char hit), a read as JSON
+  (`note_text` → `content`/`body`/`text`). `write_note` kinds: saved |
+  setup | unconfirmed | refused | unreachable; ONLY `unreachable()`
+  (transport/timeout/5xx/429/OSError/MCPServerStopped/"did not answer"…,
+  walking causes) queues a `BrainPendingWrite`; a raised write is first
+  checked with `already_saved` (same-title note already holding the text →
+  saved), and Retry checks it BEFORE re-sending. `DELETE /ltm/sources/{name}`
+  deregisters the live base (+ closes its client); `/ltm/sources` `bases[].kind`
+  is the record's kind (+ `tools_set_up` for mcp). `NotionConnector` on a 400
+  reads `GET /databases/{id}` ONCE for the real title column and retries.
+  `POST /brain/profiles/{id}/check` (read-only steps reach/search/guide/save)
+  and `/test-save` (one real save via `write_note`, never queued). The UI name
+  is **Memory profile** (vocabulary canon; both ALLOW entries removed; ids,
+  `brain_profile` and `brain_*` unchanged; "brain profile" stays a search
+  alias). Dashboard: `components/memory/McpBaseRoles.tsx` (Set up tools),
+  Check / Try a test save on each profile. REVIEW (9 defects, each red
+  first): `unreachable(exc, sent=)` ignores any word/code that appears in
+  what was SENT (a FastMCP refusal echoes the note in `input_value=`, so a
+  note saying "connection" was queued forever; codes match whole numbers
+  only); `already_saved` needs the WHOLE text at word boundaries (an 80-char
+  prefix made a refused correction "saved"); a prose create reply is
+  looked up by title; `health()` honours a confirmed search tool;
+  `tool_list` reads a FRESH list on a throwaway thread, 20 s bound; an
+  empty required value is refused before sending; re-adding a base for
+  another server clears `roles_json`; Notion's schema read is remembered
+  only once it succeeds; `mcp_roles.writes()` (edit/modify/…/store +
+  `readOnlyHint: false` / `destructiveHint`) keeps a writer from reading.
+  NOT DONE: Notion's hosted MCP
+  (OAuth) cannot be a memory base; the REST connector searches titles in one
+  database. Pins: `tests/test_memory_profile_fixes_v1408.py` (14 mutations
+  red), `dashboard/__tests__/memory-profile-v1408.test.tsx`.
+
 - **A BRAIN PROFILE names the durable memory base; ONE resolve rule; the
   guide is trusted, every retrieved note is DATA; a save is "saved" only
   when read back; a structural change asks every time** (v1.406.0; the user:
@@ -4584,6 +4638,63 @@ does not need a bump, stop and bump it.
   chat's own Continue on a cut-off reply and RunResultCard's Keep going stay
   where they were (not in the box); a failed chat turn shows no box (its
   Retry line is the one place); an older reply's offer is never read.
+
+- **Ask first asks before an edit of Git's and Jarvis's own files; a closing
+  offer is the user's when ANY clause of it is** (v1.408.1, built as v1.407.2; the user's
+  decision 2026-10-29, both found by v1.407.0's reviews; supersedes part 2's
+  OPEN note and part 4's `asksFirst`). FIX A: `core/auto_approve.
+  sensitive_kind(path, ws)` is THE one reading (`sensitive_path` = it, and
+  "outside / cannot tell ⇒ True" kept for the eased rule); families `git`
+  (`.git/**`, `.gitattributes|.gitconfig|.gitmodules`), `jarvis`
+  (`.ironjarvis/**`), `claude` (`.claude/**`), `rules` (review: the
+  user named "CLAUDE.md/AGENTS.md rules files" — `RULES_FILE_NAMES`
+  agents.md, claude.md, their .local.md, agents.override.md, .ironjarvis.md
+  as the LAST part, any depth, any case; this also widens the eased
+  postures' `sensitive_path`), `editor`, `ci`, `unknown`
+  (an 8.3-shaped part); the path AS WRITTEN is read only BELOW the folder for
+  an absolute path (`_written_parts`: a CI runner's `RUNNER~1` TEMP or a
+  checkout under `.claude/worktrees` must not guard every edit).
+  `guarded_edit(name, args, ws)` → `(kind, words)` for the file edit tools
+  (`EDIT_TOOLS` + `apply_patch` heads) inside the folder; outside is left to
+  `safe_path`. `tools/base.spend_checks_for(..., approval_mode=)` — the ONE
+  helper both chat lanes and the runtime call — adds it for an edit tool with
+  no check of its own (`guarded_edit_check`, off the loop): `SpendCheck(ask,
+  once_only, reason="guarded", dont_ask_skips, attended_only)`, words in
+  `cost_note` ("Write .git/config: it changes Git's own settings…"). So: the
+  stream lane cards it Allow-once-only in every posture past every grant
+  (Accept edits/Auto too — forced, never the judge); the POST lane refuses it
+  via `spend_not_asked_invoke_kwargs` (ONCE tail); the runtime pauses an
+  ATTENDED origin (`ATTENDED_ORIGINS`) and refuses any other in words at the
+  top of `_pause_for_approval` (new `attended_only`; a schedule never parks it
+  for a phone answer); a night turn cards it and its card wait declines it;
+  YOLO drops it (`dont_ask_skips`; every lane passes its posture — MIRROR
+  NOTE). `"guarded"` is in `harness/stall.SAFETY_REASONS` (never the phone)
+  and `lib/onceReason` (Enter never allows; ApprovalCard
+  `approval-guarded-once`). OPEN: a shell command writing those paths, a
+  workspace that is ITSELF inside such a folder, and edits outside the folder
+  (refused by the tool) are not read. FIX B: `harness/closing_offer._owned`
+  reads each CLAUSE of an offered action (`_CLAUSE_SPLIT_RX` , ; — && and
+  then plus; `_CLAUSE_LEAD_RX`; a `run …` wrapper and a CLI prefix git/npm/gh…
+  stripped as a second reading) against `_USER_OWNS_RX`, `_CLAUSE_OWNS_RX`
+  (push/force-push, deploy, release, publish, ship, tag vN, delete, wipe,
+  erase, purge, truncate, empty, reset, overwrite, rm/del, `clean -f`, text
+  her, pay, charge, refund, transfer, wire money, place an order, buy,
+  subscribe, cancel, sign, revoke, rotate keys, file the …) and
+  `_STAGING_MIGRATION_RX` — a split clause whose verb is a NOUN in front of
+  a piece of the app (`_CLAUSE_NOUN_RX`: "the save and cancel buttons",
+  "sign up pages", "empty states", "sign-out code"; the noun follows the
+  verb with no article) is skipped (review); `user_owns`, `offer_kind`, `offered_action` all
+  call it, so the NUDGE and the box agree. The TS twin's `owned`/`clauses`
+  repeat it over GENERATED patterns (`scripts/gen_closing_offer_ts.py` NAMES
+  gained seven); `nextStep.asksFirst` is GONE (pinned). No v1.402.0/v1.406.0
+  table row flipped (the fixture diff was insertions only); words the box's
+  old list had and the daemon does not (clear, archive, revert, accept,
+  approve, book, `merge`/`commit`/`migration` anywhere) read as work again.
+  Pins: `tests/test_guarded_edits_v14072.py` (real stream/POST lanes,
+  harness turn, night turn, full runtime runs, real `write_file` on disk),
+  `tests/test_closing_offer_clauses_v14072.py`, the v1.407.2 rows of
+  `tests/test_closing_offer_v1402.py` (+ fixture `closing-offer-v1406.json`),
+  `dashboard/__tests__/{next-step-user-owned,guarded-edit-card}-v1407-2.test.ts(x)`.
 
 - **The coding sessions are the CHAT page's Code view; Build is the
   terminals; the sidebar is five rooms** (v1.407.0 part 1 + 5; the user's
@@ -10567,6 +10678,39 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
+- **A Store program is never asked into the pane job, and starts one at a
+  time; a frozen loop says where it is stuck** (v1.407.1, a USER BUG on
+  v1.407.0: Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
+  responding", across restarts). The panes run the Store pwsh
+  (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE`, an App Execution Alias,
+  reparse tag 0x8000001B). v1.407.0 stopped the BOOT waiting on stuck pane
+  restores, but ~90 s later NOTHING answered (even the 25 s audit polls) until
+  the desktop watchdog killed it: a stuck process creation is not contained
+  by a bounded wait. THE REVIEW CORRECTED THE FIRST CUT: starting the real
+  `C:\Program Files\WindowsApps\<pkg>\pwsh.exe` goes through the SAME package
+  activation as the alias (AppModel 8001/219/211/201, same identity); every
+  hang the boot watch caught was in `ConPtyBackend.start`'s FIRST `_spawn`,
+  the one with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, which Windows always refuses
+  for a packaged program (AppModel 212/208, 0x80070005 "Cannot add process to
+  Desktop AppX container") before the no-job retry — two activations per pane,
+  two panes at once, and these panes have had NO job since v1.333.0 anyway.
+  Now `start` resolves argv once (`terminals/app_alias.direct_argv`: reads the
+  alias's reparse data, desktop app type "0" only, target must be an existing
+  absolute `.exe`; the saved argv keeps the alias), never creates a job when
+  `is_packaged(argv[0])` (an alias, or a path under `\WindowsApps\`), and
+  holds `_PACKAGED_SPAWN` (one packaged spawn at a time); pywinpty and pipe
+  backends get `direct_argv` too. `daemon/boot_watch.LoopWatch` (armed in the
+  lifespan beside the v1.245.0 loop-lag task, which calls `beat()` each
+  second; stopped at shutdown) reports from its own thread at 20/45/75 s of
+  a frozen loop where the loop thread and busy threads wait — the loop-lag
+  line is written by the loop AFTER a stall ends, so a stall that never ended
+  left no trace. A NEXT FREEZE NAMES ITS PLACE: read daemon.log for "event
+  loop frozen for". OPEN: the Windows-side cause is still not reproduced on
+  demand; other spawns of Store programs (`core/procs`) keep their job
+  attempt. Pins: `tests/test_app_alias_v14071.py` (15 mutations, 14 red; the
+  survivor — handing a packaged spawn `self._job` — is equivalent, the job is
+  `None` there), including real Store-pwsh and cmd ConPTY spawns.
+
 - **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.407.0
   part 1; it had two views from v1.369.0, and the free-form react-rnd
   CANVAS of v1.218.0 is long gone — a saved `ij.build.shape` of "harness"

@@ -614,12 +614,12 @@ SETTINGS: tuple[SettingDef, ...] = (
     # project may choose its own (Project.brain_profile). Choosing where
     # Jarvis SAVES what it learns (a cloud brain, a work vs personal one) is a
     # privacy decision, so from chat it asks first.
-    S("brain_profile", "Brain profile", "memory", "string",
+    S("brain_profile", "Memory profile", "memory", "string",
       "Which memory base holds your durable memory, and how Jarvis treats it: searched before "
       "it answers, where new knowledge is saved, and the operating guide it follows. Empty = "
       "none (memory is still used as before).",
       tier="ask", check=_brain_profile_shape,
-      aliases=("brain", "durable brain", "primary brain", "memory profile", "notion brain",
+      aliases=("brain profile", "brain", "durable brain", "primary brain", "notion brain",
                "second brain", "operating guide")),
     S("chat_folder_rules", "Follow a project folder's own instructions in chat", "memory", "bool",
       "When a chat is in a project that has a folder, it reads the instruction files kept in "

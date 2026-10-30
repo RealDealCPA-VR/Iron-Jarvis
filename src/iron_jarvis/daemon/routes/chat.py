@@ -5280,8 +5280,13 @@ async def chat_stream(
                 # tool; ``round_gate``). Every reader below uses it.
                 # MIRROR NOTE (lock-step): chat_turn.
                 _turn_tools = _chat_turn.round_gate({*armed, *ask_armed}, _finish, calls)
+                # v1.407.2: the posture rides along — Ask first's guard for
+                # Git's and Iron Jarvis's own files is dropped under "Don't
+                # ask" (tools/base.guarded_edit_check). MIRROR NOTE
+                # (lock-step): chat_turn's POST lane and the runtime pass theirs.
                 _spend = await spend_checks_for(
-                    d.platform.registry, calls, ctx, _turn_tools
+                    d.platform.registry, calls, ctx, _turn_tools,
+                    approval_mode=approval_mode,
                 )
 
                 def _spend_once(_c) -> bool:

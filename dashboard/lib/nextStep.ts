@@ -27,7 +27,7 @@
  *    the next step there, never drawn twice.
  */
 
-import { lastSentence, offerKind, offeredAction, type OfferKind } from "@/lib/closingOffer";
+import { offerKind, offeredAction, type OfferKind } from "@/lib/closingOffer";
 import { finishWarn, type FinishRecord } from "@/lib/stepWords";
 import { KEEP_GOING_TEXT, decodeFinish, decodeStepLimit } from "@/lib/buildSessions";
 import { decodeCapMet } from "@/lib/buildLongJobs";
@@ -137,34 +137,15 @@ function shortLabel(action: string): string {
   return `${(sp > 10 ? cut.slice(0, sp) : cut).trim()}…`;
 }
 
-/**
- * Review (v1.406.0 part 4): words that make an offer the USER'S call on the
- * box even when the daemon's reading calls it plain "work". The daemon's
- * `user_owns` list was written for the closing NUDGE, where a miss only
- * means the model may carry on by itself; here a "work" offer is ONE press
- * that sends "Yes, go ahead." — consent in the user's own words — so
- * "Want me to git push --force?", "…transfer the funds?", "…rm -rf the build
- * folder?" and "…wipe the logs?" must only be named, like a send. Read over
- * the offer's whole last sentence; a false hit only costs one more press
- * (the words go in the box, the user presses Send). The daemon's reading,
- * and so its nudge, is unchanged.
- */
-const ASKS_FIRST_ANYWHERE =
-  /(?:\b(?:push(?:es|ed|ing)?|force[- ]?push\w*|deploy\w*|publish\w*|releas(?:e|es|ed|ing)\b(?!\s+notes?)|merg(?:e|es|ed|ing)|commit(?:s|ted|ting)?|delet\w*|wip(?:e|es|ed|ing)|eras(?:e|es|ed|ing)|purg\w*|destroy\w*|truncat\w*|drop(?:s|ped|ping)?\s+(?:the\s+|that\s+|this\s+)?(?:\w+\s+)?(?:tables?|databases?|db|schemas?|columns?|collections?)|pay(?:s|ing|ments?)?|charg(?:e|es|ed|ing)|refund\w*|purchas\w*|transfer\w*|wire\s+(?:the\s+)?(?:money|funds|payments?|cash)|revok\w*|uninstall\w*|unsubscrib\w*|overwrit\w*|production|prod|migrations?|rm|del)\b|--force\b|--hard\b)/i;
-/** …and these only as the VERB of a clause ("text her", not "the text"). */
-const ASKS_FIRST_VERB =
-  /(?:\b(?:me\s+to|shall\s+(?:i|we)|should\s+i|(?:can|could|may)\s+i|happy\s+to|glad\s+to|and|then|also)\s+|[,;]\s*)(?:go\s+ahead\s+and\s+)?(?:send|e-?mail|text|message|post|share|upload|notify|invite|tweet|reply|respond|forward|submit|file|sign|approve|accept|book|order|place\s+the\s+order|buy|cancel|reset|clear|empty|archive|revert|rotate|ship)\b/i;
-
-function asksFirst(content: string): boolean {
-  const s = lastSentence(content);
-  return !!s && (ASKS_FIRST_ANYWHERE.test(s) || ASKS_FIRST_VERB.test(s));
-}
-
-/** The offer the reply ended on, as a press (or null). */
+/** The offer the reply ended on, as a press (or null). v1.407.2: whether it
+ *  is the USER'S call ("run the tests and then push", "transfer the funds",
+ *  "rm -rf the build folder", "cancel the subscription") is the daemon's
+ *  reading alone — `harness/closing_offer.user_owns`, read clause by clause,
+ *  through the generated twin (lib/closingOffer). The box's own `asksFirst`
+ *  list (v1.406.0 part 4 review) moved there, so the nudge and the box agree. */
 function offerAction(content: string, git: GitFacts | null): { action: NextAction; recap: string } | null {
-  let kind: OfferKind = offerKind(content);
+  const kind: OfferKind = offerKind(content);
   if (!kind) return null;
-  if (kind === "work" && asksFirst(content)) kind = "user";
   const words = offeredAction(content);
   if (kind === "work") {
     return {

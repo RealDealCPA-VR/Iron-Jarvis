@@ -83,8 +83,10 @@ STOPPED_LEDGER_NOTE = (
 
 #: A once-only card's reasons that are SAFETY cards (``lib/onceReason``): a
 #: project's or a plugin's command line, a commit / push on a session's
-#: branch, a page click that pays or sends. Never sent to the phone.
-SAFETY_REASONS = frozenset({"command", "git", "page"})
+#: branch, a page click that pays or sends; v1.407.2: an edit of Git's or
+#: Iron Jarvis's own files ("guarded", core/auto_approve.GUARD_REASON).
+#: Never sent to the phone.
+SAFETY_REASONS = frozenset({"command", "git", "page", "guarded"})
 
 
 def now() -> float:

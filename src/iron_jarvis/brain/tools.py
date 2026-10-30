@@ -187,17 +187,44 @@ def _plan_target(platform: Any, active: ActiveBrain, title: str) -> "dict[str, A
     return None
 
 
-def _verify(conn: Any, ref: str, content: str) -> "bool | None":
-    """True = read back and found; False = read back and NOT found; None = this
-    base cannot read a note back. Blocking."""
+def _read_back(conn: Any, ref: str, content: str, *, whole: bool = False) -> str:
+    """found | missing | failed (the read raised) | unsupported. Blocking.
+    ``whole`` (v1.408.0 review): the WHOLE text must be there, at word
+    boundaries — what ``already_saved`` needs, because it turns a FAILED
+    write into "saved": the 80-character probe called "Gate code: 1234"
+    saved over "Gate code: 12345", and a revised paragraph saved over the
+    old one it starts like, while the base had refused both."""
     try:
         text = conn.read(ref)
     except NoteOpUnsupported:
-        return None
+        return "unsupported"
     except Exception:  # noqa: BLE001 — could not read back: not confirmed
-        return None
+        return "failed"
+    if whole:
+        return "found" if _holds_whole(_flat(text), _flat(content)) else "missing"
     probe = _flat(content)[:80]
-    return bool(probe) and probe in _flat(text)
+    return "found" if probe and probe in _flat(text) else "missing"
+
+
+def _holds_whole(text: str, part: str) -> bool:
+    if not part:
+        return False
+    start = text.find(part)
+    while start != -1:
+        end = start + len(part)
+        before_ok = not (part[0].isalnum() and start > 0 and text[start - 1].isalnum())
+        after_ok = not (part[-1].isalnum() and end < len(text) and text[end].isalnum())
+        if before_ok and after_ok:
+            return True
+        start = text.find(part, start + 1)
+    return False
+
+
+def _verify(conn: Any, ref: str, content: str) -> "bool | None":
+    """True = read back and found; False = read back and NOT found; None = this
+    base cannot read a note back. Blocking."""
+    seen = _read_back(conn, ref, content)
+    return True if seen == "found" else False if seen == "missing" else None
 
 
 def _update_undo(conn: Any, ref: str, content: str, ctx: ToolContext, tool: str) -> "dict[str, Any]":
@@ -237,29 +264,149 @@ def record_pending(platform: Any, active: ActiveBrain, title: str, content: str,
         return row.id
 
 
+#: Words a memory base's error carries when it was not REACHED (v1.408.0):
+#: only these mean "keep it and retry later"; anything else the base said is
+#: a refusal, said as such and never queued.
+_UNREACHABLE_WORDS = (
+    "timed out", "timeout", "did not answer", "could not connect", "connection",
+    "unreachable", "name resolution", "getaddrinfo", "network", "folder not found",
+    "isn't available right now", "is not available right now", "temporarily",
+    "without answering",
+)
+#: A status code only as a WHOLE number (v1.408.0 review): "429" inside
+#: "page 4290" or an invoice number is not a rate limit.
+_UNREACHABLE_CODE_RX = re.compile(r"(?<!\d)(?:429|502|503|504)(?!\d)")
+
+
+def unreachable(exc: BaseException, sent: "tuple[str, ...] | list[str]" = ()) -> bool:
+    """Was the memory base simply NOT REACHED (keep the note, retry later),
+    as opposed to reached and refusing (say why, never queue)? v1.406.0
+    queued every failure as "unavailable" — measured on the user's real wiki
+    server, a save its own rules refused (a missing ``type``) sat in the
+    Memory page's queue forever with Retry failing the same way each time.
+
+    ``sent`` (v1.408.0 review): the values the call carried. A server's
+    refusal often ECHOES its input (a FastMCP validation error carries
+    ``input_value={...}``), so a word or number that is in what was SENT never
+    decides — a note about "the network" or "the 429 club" that the base
+    refused is a refusal, not an outage. The server's own words still count."""
+    from ..ltm.base import NoteOpUnsupported
+
+    sent_low = " ".join(str(s or "") for s in [*sent, *getattr(exc, "sent", ())]).lower()
+    words = tuple(w for w in _UNREACHABLE_WORDS if w not in sent_low)
+    sent_codes = set(_UNREACHABLE_CODE_RX.findall(sent_low))
+    seen = 0
+    while exc is not None and seen < 4:
+        if isinstance(exc, NoteOpUnsupported):
+            return False
+        if isinstance(exc, (TimeoutError, ConnectionError)):
+            return True
+        try:
+            import httpx
+
+            if isinstance(exc, httpx.TransportError):
+                return True
+            if isinstance(exc, httpx.HTTPStatusError):
+                code = exc.response.status_code
+                return code in (408, 429) or code >= 500
+        except Exception:  # noqa: BLE001 — no httpx: judge by words
+            pass
+        if type(exc).__name__ == "MCPServerStopped":
+            return True
+        if isinstance(exc, OSError) and not isinstance(exc, PermissionError):
+            return True
+        text = str(exc).lower()
+        if any(w in text for w in words):
+            return True
+        if set(_UNREACHABLE_CODE_RX.findall(text)) - sent_codes:
+            return True
+        exc = exc.__cause__ or exc.__context__  # type: ignore[assignment]
+        seen += 1
+    return False
+
+
+def already_saved(platform: Any, active: ActiveBrain, conn: Any, title: str, content: str) -> str:
+    """The ref of a note with this title that ALREADY holds this text, else
+    "" (v1.408.0) — so a save whose answer was lost after it landed (a
+    timeout on the reply) is recognised instead of sent twice. Blocking;
+    never raises."""
+    try:
+        hits = platform.ltm.search(title, 5, active.base, expand=False)
+    except Exception:  # noqa: BLE001 — cannot look: not known to be there
+        return ""
+    for h in hits or []:
+        ref = str(h.get("ref") or "")
+        if ref and _same_title(str(h.get("title") or ""), title) and (
+            _read_back(conn, ref, content, whole=True) == "found"
+        ):
+            return ref
+    return ""
+
+
+def _update(conn: Any, ref: str, content: str, title: str) -> str:
+    """``conn.update`` with the note's title when the base takes one (an MCP
+    base's confirmed "add to a note" tool may need a heading)."""
+    import inspect
+
+    try:
+        takes_title = "title" in inspect.signature(conn.update).parameters
+    except (TypeError, ValueError):
+        takes_title = False
+    return conn.update(ref, content, title=title) if takes_title else conn.update(ref, content)
+
+
 def write_note(platform: Any, active: ActiveBrain, conn: Any, title: str, content: str) -> dict[str, Any]:
     """The ONE save path (the tool and the Retry route). Blocking. Returns
-    ``{ok, action, ref, verified, error}``; raises nothing."""
+    ``{ok, kind, action, ref, verified, error}``; raises nothing. ``kind``:
+    saved | setup (an MCP base whose tools the user has not confirmed —
+    nothing was sent) | unconfirmed (it answered, the note is not there) |
+    refused (it answered no) | unreachable (not reached — keep it)."""
+    setup = getattr(conn, "setup_needed", None)
+    if callable(setup):
+        sentence = setup("create")
+        if sentence:
+            return {"ok": False, "kind": "setup", "action": "", "ref": "", "verified": False,
+                    "error": sentence}
     target = _plan_target(platform, active, title)
     action = "created"
+    trying = "updated" if target is not None else "created"
     try:
         if target is not None:
             try:
-                ref = conn.update(str(target["ref"]), content)
+                ref = _update(conn, str(target["ref"]), content, title)
                 action = "updated"
             except NoteOpUnsupported:
+                trying = "created"
                 ref = platform.ltm.append(title, content, active.base)
         else:
             ref = platform.ltm.append(title, content, active.base)
-    except Exception as exc:  # noqa: BLE001 — the caller keeps it as unsaved
-        return {"ok": False, "action": "", "ref": "", "verified": False,
+    except Exception as exc:  # noqa: BLE001 — classified below
+        # It may have LANDED before the error (a lost reply): look first, so
+        # a Retry never adds the same text twice.
+        landed = already_saved(platform, active, conn, title, content)
+        if landed:
+            return {"ok": True, "kind": "saved", "action": trying, "ref": landed,
+                    "verified": True, "error": ""}
+        return {"ok": False,
+                "kind": "unreachable" if unreachable(exc, sent=(title, content)) else "refused",
+                "action": "", "ref": "", "verified": False,
                 "error": str(exc)[:400] or exc.__class__.__name__}
     ref = str(ref or (target or {}).get("ref") or title)
-    verified = _verify(conn, ref, content)
+    seen = _read_back(conn, ref, content)
+    if seen in ("missing", "failed") and action == "created":
+        # v1.408.0 review: a create reply with no JSON ref is used by its first
+        # line ("Created page 'Lunch' at concepts/lunch.md"), which reads back
+        # as nothing — the note landed and was called not confirmed. Find it
+        # by its title before saying so.
+        found = already_saved(platform, active, conn, title, content)
+        if found:
+            ref, seen = found, "found"
+    verified = True if seen == "found" else False if seen == "missing" else None
     if verified is False:
-        return {"ok": False, "action": action, "ref": ref, "verified": False,
+        return {"ok": False, "kind": "unconfirmed", "action": action, "ref": ref, "verified": False,
                 "error": "the memory base said it saved the note, but reading it back did not find it"}
-    return {"ok": True, "action": action, "ref": ref, "verified": bool(verified), "error": ""}
+    return {"ok": True, "kind": "saved", "action": action, "ref": ref,
+            "verified": bool(verified), "error": ""}
 
 
 class BrainSaveTool(_BrainTool, LTMAppendTool):
@@ -355,13 +502,30 @@ class BrainSaveTool(_BrainTool, LTMAppendTool):
                     "action": res["action"], "verified": bool(res["verified"]), "base": label,
                 }},
             )
-        if res.get("action"):
+        kind = res.get("kind") or ("unconfirmed" if res.get("action") else "unreachable")
+        if kind == "unconfirmed":
             # The base answered but the note is not there: never "saved", and
             # never queued (it may have landed — a second copy would duplicate).
             return ToolResult(
                 ok=False, error=f"Not confirmed: {res['error']} ({label}). Check it there.",
                 data={"brain": {"kind": "unsaved", "title": title, "base": label,
                                 "reason": "could not be confirmed"}},
+            )
+        if kind == "setup":
+            # v1.408.0: an MCP base whose tools the user has not confirmed —
+            # nothing was sent, so nothing is queued either.
+            return ToolResult(
+                ok=False, error=f"Not saved: {res['error']}",
+                data={"brain": {"kind": "unsaved", "title": title, "base": label,
+                                "reason": f"{label}'s tools are not set up yet"}},
+            )
+        if kind == "refused":
+            # v1.408.0: the base was REACHED and said no — its own reason,
+            # never "unavailable", never queued (a Retry would fail the same).
+            return ToolResult(
+                ok=False, error=f"Not saved: {label} refused it ({res['error']}).",
+                data={"brain": {"kind": "unsaved", "title": title, "base": label,
+                                "reason": f"{label} refused it"}},
             )
         try:
             pid = await asyncio.to_thread(record_pending, self.platform, active, title, content, res["error"])
@@ -425,6 +589,9 @@ class BrainChangeTool(_BrainTool):
         if self._blocked_by_local_only(conn):
             return ToolResult(ok=False, error=_local_refusal(label, "changed"))
         ref = str(args.get("ref") or "")
+        _setup = getattr(conn, "setup_needed", None)
+        if callable(_setup) and _setup(action):
+            return ToolResult(ok=False, error=f"Nothing was changed: {_setup(action)}")
         try:
             out = await asyncio.to_thread(conn.change, action, ref, str(args.get("to") or ""))
         except Exception as exc:  # noqa: BLE001 — refused or failed: said, never claimed

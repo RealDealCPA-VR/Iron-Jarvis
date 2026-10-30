@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.407.0 (2026-10-29).*
+holds itself to. Current as of v1.408.2 (2026-10-29).*
 
 ---
 
@@ -571,9 +571,10 @@ with the request typed in.
   `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
   other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
   Long-term memory** that opens it.
-- **Brain Profiles** (v1.406.0): choose where your durable memory lives
-  and how Jarvis searches, saves to and trusts it — see "Your durable
-  brain: Brain Profiles" below.
+- **Memory profiles** (v1.406.0; called Brain profiles until v1.408.0):
+  choose where your durable memory lives and how Jarvis searches, saves to
+  and trusts it — see "Your durable brain: Brain Profiles" and "Memory
+  profiles: set up a memory server's tools, and check it" below.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
 - **Preferences you approve** (v1.305.0; the idea comes from
@@ -1884,6 +1885,18 @@ reads; it never writes, runs commands, or starts work on its own.
   seconds Iron Jarvis is ready, and that terminal joins the Build page by
   itself the moment its shell starts. (It used to hold the whole start, and
   on some updates the app restarted itself after 90 s because of it.)
+- **Build stuck at "Attaching to sessions…", then "Iron Jarvis isn't
+  responding"** (fixed in v1.407.1) → with PowerShell installed from the
+  Microsoft Store, each terminal used to make one start attempt that Windows
+  always refuses for a Store program (putting it in a group Iron Jarvis uses
+  to tidy up what a terminal leaves running), then try again; with two
+  terminals doing that at once, Windows sometimes never finished, and Iron
+  Jarvis stopped answering until the desktop app restarted it. Terminals now
+  skip the refused attempt for Store programs and start them one at a time.
+  Nothing you could see changes: Windows never allowed that group for these
+  terminals. If Iron Jarvis ever freezes again, it now writes where it is
+  stuck in its log (Settings › System › Open logs) before it is restarted:
+  look for a line starting "event loop frozen for".
 - **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
   → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
   installed or not where the app looks (PATH, then the usual per-user Node and
@@ -1957,6 +1970,44 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## Memory profiles: set up a memory server's tools, and check it (v1.408.0)
+
+Brain profiles are now called **Memory profiles** (Settings › Memory & you ›
+Memory profile); everything they do is unchanged. Four things got more
+dependable:
+
+- **A memory server does only what you confirmed.** A memory server's tools
+  have names of its own, and guessing from the names went wrong on a real
+  server: "save a note" picked a tool that needed a type and tags it was never
+  given, and "add to a note" left out the section heading the server requires.
+  Now each memory server has **Set up tools** on its row (Memory ›
+  Long-term): for each job — find notes, read one, save a new one, add to one,
+  archive, delete, rename, move — Jarvis suggests a tool and where each of its
+  settings comes from (the note's title, its text, the search words…), and you
+  can give a setting a fixed value (say, type "concept" and tags "inbox").
+  Until you press **Use these**, Jarvis can search and read it but never
+  saves, adds to or changes a note there, and it says so instead of trying.
+- **A refusal is not an outage.** When it answers "no" (its own
+  rules turned the note down), the reply says the base refused it and why. Only
+  a base that could not be reached keeps the note as an unsaved change for
+  Retry.
+- **No double notes.** If a save reached the base but the answer was lost on
+  the way back, Jarvis checks before it saves again — in the same turn and when
+  you press Retry — and finds the note already there.
+- **Removing one from Long-term takes effect at once**, not after a restart, and the
+  Long-term list shows each base's real kind.
+- **Notion databases with their own title column.** A Notion database whose
+  title column is not called "Name" (it may be "Title", "Page" or a word in
+  your language) works: Jarvis reads the database's columns and uses the right
+  one.
+
+**Check** on a Memory profile runs a read-only check against the real base —
+can it be reached, does a search answer, can the operating guide be read, and
+can it save — and **Try a test save** (two presses) saves one note called
+"Iron Jarvis test note" through the same path a chat uses and reads it back,
+so you can see it work on your own Notion, vault or server. The test note is
+left for you to delete.
 
 ## Your durable brain: Brain Profiles (v1.406.0)
 
@@ -2238,6 +2289,29 @@ first, as Don't ask does.
   when an account's limit resets, on another account, the work of a plan you
   approved, the night shift) runs as Ask first: nobody is watching it start.
 
+**Edits to Git's own files and Jarvis's own rules ask under Ask first too
+(v1.408.1).** File edits run on their own under Ask first, but an edit of a
+file that steers Git, your editor, CI or Iron Jarvis itself — the same list
+as above: anything under `.git` (its settings and hooks, which Git can run as
+programs), `.ironjarvis` (this folder's own permission rules and harness),
+`.claude` (Claude Code's settings and commands), the coding agents' own
+instructions files (`AGENTS.md`, `CLAUDE.md`, their `.local.md` versions,
+`AGENTS.override.md` and `.ironjarvis.md`, in any folder), `.vscode/tasks.json` and
+`.vscode/settings.json`, `.github/workflows`, `.gitattributes`,
+`.gitconfig`, `.gitmodules` — now stops for a card under **Ask first** and
+**Ask before every action**, in a chat, a coding session and the helpers it
+starts. The card says why in plain words ("it changes Git's own settings",
+"it changes Iron Jarvis's own safety rules for this folder") and offers
+**Allow once** and Deny only: it asks every time, no "for this chat" answer
+or standing grant covers it, and Enter never allows it (click Allow once).
+A chat sent through the API (no card) refuses it and says so; a schedule, a
+goal, a rule, the phone or anything else running with nobody there refuses
+it with a sentence instead of waiting for an answer; a night-shift task's
+card waits the night's card wait and is then declined, like any other card
+at night. Under **Don't ask** it runs without a card, as everything does —
+you chose that level. Not covered yet: a shell command that writes into
+those files (`echo … > .git/config`) follows the command's own card.
+
 ## Chat | Code: coding sessions moved to the chat page, Build is the terminals (v1.407.0)
 
 The chat page now has one switch at the top, in the middle: **Chat | Code**.
@@ -2308,6 +2382,17 @@ quiet style as the lines around it.
   the existing Commit / Create PR form), and nothing happens until you press
   Send. A button never skips an approval card, a grant or an "Allow once"
   rule: it is the same as typing or pressing that thing yourself.
+  Since v1.408.1 every PART of the offer is read: "run the tests and then
+  push", "git push --force", "rm -rf the build folder", "wipe the logs",
+  "empty the trash", "transfer the funds", "charge the card", "place the
+  order", "cancel the subscription", "sign the contract", "revoke the token",
+  "reset the database", "run the deploy script", "tag v2 and publish the
+  release", "run the migration on staging" are all yours to decide. The same
+  reading decides whether Jarvis, at the end of a coding reply, carries on by
+  itself with something it offered: it never does for these — it keeps the
+  question for you. Words that only name a piece of the app ("the save and
+  cancel buttons", "the sign up pages", "the empty states") stay ordinary
+  work.
 - **It gets out of the way.** The line and buttons step aside as soon as
   you type, and the box is gone while a reply runs. It is never saved as a
   message: reopening a conversation shows it again under the newest reply

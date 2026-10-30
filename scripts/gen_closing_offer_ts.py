@@ -48,6 +48,14 @@ NAMES = {
     "explainStart": "_EXPLAIN_START_RX",
     "declineAlt": "_DECLINE_ALT_RX",
     "actionEnd": "_ACTION_END_RX",
+    # v1.407.2: the clause-by-clause reading of an offered action.
+    "clauseSplit": "_CLAUSE_SPLIT_RX",
+    "clauseLead": "_CLAUSE_LEAD_RX",
+    "clauseRun": "_CLAUSE_RUN_RX",
+    "clauseCmd": "_CLAUSE_CMD_RX",
+    "clauseOwns": "_CLAUSE_OWNS_RX",
+    "stagingMigration": "_STAGING_MIGRATION_RX",
+    "clauseNoun": "_CLAUSE_NOUN_RX",
 }
 
 
