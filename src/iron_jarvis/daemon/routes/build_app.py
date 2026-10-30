@@ -50,6 +50,13 @@ class AppTurn(BaseModel):
     files: list[str] | None = None
 
 
+class AppSteer(BaseModel):
+    """v1.413.0: a note for the RUNNING reply (typed while it works)."""
+
+    text: str = ""
+    files: list[str] | None = None
+
+
 class AppAnswer(BaseModel):
     request_id: str
     decision: str
@@ -73,6 +80,8 @@ def _refused(r: S.Refused) -> JSONResponse:
     content: dict[str, Any] = {"detail": r.sentence}
     if getattr(r, "field", ""):
         content["field"] = r.field
+    if getattr(r, "code", ""):
+        content["code"] = r.code
     return JSONResponse(status_code=r.status, content=content)
 
 
@@ -153,6 +162,16 @@ def register(app: FastAPI, d: Any) -> None:
         except S.Refused as r:
             raise _http(r) from None
         return _follow_response(turn.follow())
+
+    @app.post("/build/app/sessions/{sid}/steer")
+    async def app_steer(sid: str, body: AppSteer) -> Any:
+        """v1.413.0: a note for the reply that is RUNNING, through the tool's
+        own way of taking one; ``{ok, id, state, how}``. 409 ``code:
+        not_working`` = no reply runs (send it as a message instead)."""
+        try:
+            return await svc().steer(sid, body.text, body.files)
+        except S.Refused as r:
+            return _refused(r)
 
     @app.get("/build/app/sessions/{sid}/turns/{turn_id}/stream")
     async def app_rejoin(sid: str, turn_id: str):

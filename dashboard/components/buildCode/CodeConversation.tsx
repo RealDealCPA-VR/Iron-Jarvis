@@ -33,12 +33,15 @@ import { StepOpenInEditor } from "@/components/harness/OpenInEditor";
 import { resolveInFolder } from "@/lib/codeEditor";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
+import { SentAttachments } from "@/components/harness/HarnessAttachments";
 import {
   CONTINUE_ON_ANOTHER,
   doneWords,
   signInProvider,
   planChecklistSteps,
   resolvedWords,
+  steerWords,
+  toolLabel,
   usageWords,
   type ConvItem,
   type ToolKind,
@@ -129,18 +132,41 @@ interface FailurePresses {
 
 // A row draws again only when ITS item changed (the fold keeps unchanged
 // items' objects — lib/buildApp reuseItems) or its press did.
-const Item = memo(function Item({ item, folder, press }: { item: ConvItem; folder: string; press: FailurePresses | null }) {
+const Item = memo(function Item({
+  item,
+  folder,
+  press,
+  toolName,
+}: {
+  item: ConvItem;
+  folder: string;
+  press: FailurePresses | null;
+  toolName: string;
+}) {
   codeRowDraws.items += 1;
   switch (item.kind) {
     case "user":
+      // v1.413.0: the pictures a message carried, as thumbnails (the chat's
+      // own SentAttachments); other files by name. A picture alone is a
+      // message (no empty bubble).
       return (
-        <div data-testid="code-user" className="flex justify-end">
-          <div className={HARNESS_USER_BUBBLE}>
+        <div data-testid="code-user" className="flex flex-col items-end gap-1.5">
+          {item.text.trim() ? <div className={HARNESS_USER_BUBBLE}>{item.text}</div> : null}
+          {item.files.length ? <SentAttachments paths={item.files} /> : null}
+        </div>
+      );
+    case "steer":
+      // v1.413.0: a note typed while the tool worked, where it was sent.
+      return (
+        <div data-testid="code-steer" data-state={item.state} className="flex flex-col items-end gap-1">
+          <div className={`${HARNESS_USER_BUBBLE} opacity-90`}>
+            <span className="mr-1.5 text-[11px] uppercase tracking-wide text-zinc-400">Note</span>
             {item.text}
-            {item.files.length ? (
-              <span className="mt-1 block text-[12px] text-zinc-400">{item.files.join(", ")}</span>
-            ) : null}
           </div>
+          {item.files.length ? <SentAttachments paths={item.files} /> : null}
+          <p data-testid="code-steer-state" className={`text-[11px] ${item.state === "returned" ? "text-tone-warn" : "text-zinc-500"}`}>
+            {steerWords(item.state, item.how, toolName)}
+          </p>
         </div>
       );
     case "text":
@@ -253,6 +279,7 @@ export const CodeConversation = memo(function CodeConversation({
           item={item}
           folder={folder}
           press={newest && i === lastError ? { tool, onContinueOn, continuing } : null}
+          toolName={toolLabel(tool)}
         />
       ))}
     </div>

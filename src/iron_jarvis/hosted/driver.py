@@ -79,6 +79,11 @@ class Driver:
         #: True while a turn the user started has not ended.
         self.turn_open = False
         self.commands: list[dict[str, str]] = []
+        #: v1.413.0: the service's way to say a note sent while the tool works
+        #: (a STEER) reached it — called with the note's ref.
+        self.steer_read: Callable[[str], None] | None = None
+        #: ref -> "sent" | "read" | "cancelled": the notes of the open turn.
+        self.steers: dict[str, str] = {}
 
     async def write(self, obj: dict[str, Any]) -> None:
         await self._write(obj)
@@ -108,6 +113,26 @@ class Driver:
 
     async def set_model(self, model: str) -> str:  # pragma: no cover
         raise NotImplementedError
+
+    async def steer(self, ref: str, text: str, files: list[str]) -> str:
+        """v1.413.0: give the RUNNING turn a note the user typed while it
+        works, through the tool's OWN way of taking one (Claude Code: a user
+        message written mid-turn; Codex: ``turn/steer``; Pi: ``steer``).
+        Answers how it arrives ("step": the tool reads it at its next step).
+        Raises ControlRefused (said in words) when it cannot take one now."""
+        raise ControlRefused("This coding tool takes no notes while it works — wait for it, or press Stop.")
+
+    def note_read(self, ref: str) -> None:
+        """A note reached the tool: said once."""
+        if self.steers.get(ref) == "sent":
+            self.steers[ref] = "read"
+            if self.steer_read is not None:
+                self.steer_read(ref)
+
+    def unread_steers(self) -> list[str]:
+        """The notes of the open turn the tool never read (the service hands
+        them back to the box when the turn ends — never dropped)."""
+        return [ref for ref, state in self.steers.items() if state != "read"]
 
     def on_exit(self) -> None:
         """The process ended: fail every pending control request."""

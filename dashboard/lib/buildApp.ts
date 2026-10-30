@@ -189,6 +189,9 @@ export interface ToolMode {
   label: string;
   /** Full access: two presses in the menu, and `confirm: true` on the wire. */
   dangerous: boolean;
+  /** v1.413.0: what the mode does, in the daemon's plain words ("" = an
+   *  older daemon said nothing). */
+  about?: string;
 }
 
 /** A mode the tool does NOT offer here, and why (Codex on Windows: no
@@ -256,7 +259,8 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       const mo = obj(m);
       const mid = mo ? str(mo.id, 64).trim() : "";
       if (!mo || !mid) continue;
-      modes.push({ id: mid, label: str(mo.label, 80) || mid, dangerous: mo.dangerous === true });
+      const about = str(mo.about, 300).trim();
+      modes.push({ id: mid, label: str(mo.label, 80) || mid, dangerous: mo.dangerous === true, ...(about ? { about } : {}) });
     }
     const hiddenModes: HiddenMode[] = [];
     for (const m of Array.isArray(r.hidden_modes) ? r.hidden_modes : []) {
@@ -632,7 +636,13 @@ type CodeEventBody =
     }
   | { type: "notice"; at: string; text: string }
   | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string; account: string }
-  | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string };
+  | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string }
+  /** v1.413.0: a NOTE the user typed while the tool worked (a steer): one
+   *  event per state — sent (with `how` it arrives), read (the tool took it),
+   *  returned (never read: it goes back to the message box). */
+  | { type: "steer"; at: string; id: string; state: SteerState; text: string; files: string[]; how: string };
+
+export type SteerState = "sent" | "read" | "returned";
 
 export type CodeEventType = CodeEvent["type"];
 
@@ -786,6 +796,20 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         fixKind: str(r.fix_kind, 40),
         account: str(r.account, 200),
       };
+    case "steer": {
+      const id = str(r.id, 200);
+      const state = r.state === "read" || r.state === "returned" ? r.state : r.state === "sent" ? "sent" : null;
+      if (!id || !state) return null;
+      return {
+        type,
+        at,
+        id,
+        state,
+        text: str(r.text, 100_000),
+        files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
+        how: str(r.how, 300),
+      };
+    }
     case "done": {
       const stop =
         r.stop === "interrupted" || r.stop === "failed" || r.stop === "max_turns" ? r.stop : "completed";
@@ -917,7 +941,10 @@ export type ConvItem =
       listPrice: boolean;
       costReportedBy: string;
     }
-  | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string };
+  | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string }
+  /** v1.413.0: a note sent while it worked, at the place it was sent, with
+   *  its newest state. */
+  | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string };
 
 export interface Conversation {
   items: ConvItem[];
@@ -939,6 +966,7 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
   const textAt = new Map<string, number>();
   const thinkAt = new Map<string, number>();
   const toolAt = new Map<string, number>();
+  const steerAt = new Map<string, number>();
   let planAt: number | null = null;
   const asks = new Map<string, OpenAsk>();
   const askTitle = new Map<string, string>();
@@ -1066,6 +1094,17 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
           costReportedBy: ev.costReportedBy,
         });
         break;
+      case "steer": {
+        const i = steerAt.get(ev.id);
+        if (i === undefined) {
+          steerAt.set(ev.id, items.length);
+          items.push({ kind: "steer", key: key("s"), id: ev.id, text: ev.text, files: ev.files, state: ev.state, how: ev.how });
+        } else {
+          const it = items[i] as Extract<ConvItem, { kind: "steer" }>;
+          items[i] = { ...it, state: ev.state, text: it.text || ev.text, files: it.files.length ? it.files : ev.files, how: it.how || ev.how };
+        }
+        break;
+      }
       case "done":
         items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result });
         // A turn that ended asks nothing any more.
@@ -1189,6 +1228,23 @@ export function resolvedWords(decision: string, question = false): string {
   if (decision === "allow_session") return "Allowed for this session";
   if (decision === "answered") return "Answered";
   return "Allowed";
+}
+
+/** v1.413.0: what became of a note sent while the tool worked. */
+export function steerWords(state: SteerState, how: string, toolName: string): string {
+  if (state === "read") return `Read by ${toolName}.`;
+  if (state === "returned") return STEER_RETURNED_WORDS(toolName);
+  return how || `Sent — ${toolName} reads it at its next step.`;
+}
+
+/** v1.413.0: a note the tool never read (said under it AND above the box). */
+export function STEER_RETURNED_WORDS(toolName: string): string {
+  return `${toolName} did not read this note before it stopped — it is back in your message box.`;
+}
+
+/** v1.413.0: the box's placeholder while the tool works (Enter steers it). */
+export function steerPlaceholder(toolName: string): string {
+  return `${toolName} is working — type a note to steer it (Enter), or press Stop.`;
 }
 
 /** How a turn ended, said under it (nothing for an ordinary finish). */

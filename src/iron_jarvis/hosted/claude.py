@@ -33,12 +33,37 @@ MEASURED on this PC (claude 2.1.311, live, in a scratch folder):
 * A signed-out home answers each message with an assistant frame
   ``error: "authentication_failed"`` and the text ``Not logged in · Please run
   /login``, then a ``result`` with ``is_error: true``.
+
+MEASURED for v1.413.0 (claude 2.1.311, live, haiku):
+
+* ``set_permission_mode bypassPermissions`` on a process started WITHOUT
+  ``--allow-dangerously-skip-permissions`` is REFUSED ("Cannot set permission
+  mode to bypassPermissions because the session was not launched with
+  --dangerously-skip-permissions", ``error_code: bypass_not_launched``) — the
+  reason Full access could not be chosen once a session had started. With the
+  flag the process still starts in the mode ``--permission-mode`` names (the
+  flag only makes Full access AVAILABLE) and every mode switches live,
+  ``auto`` included ("Use a model classifier to approve/deny permission
+  prompts"; Claude Code calls it "Auto").
+* A user message whose ``content`` holds an ``{"type": "image", "source":
+  {"type": "base64", "media_type", "data"}}`` block is SEEN (the model read a
+  word drawn only in the picture's pixels).
+* A user message written WHILE a turn runs is Claude Code's own steer: with a
+  client ``uuid`` on each message it says ``command_lifecycle`` {command_uuid,
+  state queued|started|completed|cancelled}. During a tool call the note is
+  absorbed into the running turn at the next step ("The user sent a new
+  message while you were working"); with no tool call left it runs right
+  after the turn (a SECOND ``result``). ``interrupt`` with ``cancel_queued:
+  true`` cancels a note not yet read (``cancelled``) instead of running it
+  after the stop.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
+import uuid
 from typing import Any
 
 from . import words as W
@@ -64,6 +89,7 @@ MODES: dict[str, str] = {
     "ask": "default",
     "edits": "acceptEdits",
     "plan": "plan",
+    "auto": "auto",
     "full": "bypassPermissions",
 }
 MODE_OF: dict[str, str] = {v: k for k, v in MODES.items()}
@@ -71,8 +97,27 @@ MODE_LABELS: dict[str, str] = {
     "ask": "Ask first",
     "edits": "Auto edits",
     "plan": "Plan",
+    "auto": "Auto",
     "full": "Full access",
 }
+#: v1.413.0: what each of Claude Code's modes does, in plain words (the menu
+#: says it under each one).
+MODE_ABOUT: dict[str, str] = {
+    "ask": "Asks before it changes a file or runs a command.",
+    "edits": "Changes files without asking; asks before it runs a command.",
+    "plan": "Reads and plans only; changes nothing until you approve its plan.",
+    "auto": "Claude Code's own safety check allows or refuses each action without asking you; "
+            "a few risky ones still ask.",
+    "full": "Runs everything without asking.",
+}
+#: Every process may be switched to Full access later (the flag only makes it
+#: AVAILABLE; the mode still starts as ``--permission-mode`` says).
+ALLOW_FULL_FLAG = "--allow-dangerously-skip-permissions"
+#: Pictures Claude Code takes as image blocks, and the most one may weigh.
+IMAGE_TYPES: dict[str, str] = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                               ".gif": "image/gif", ".webp": "image/webp"}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGES = 8
 
 #: The `/` list Claude Code last answered ``initialize`` with (this process):
 #: the harnesses listing shows it without starting anything.
@@ -80,6 +125,13 @@ LAST_COMMANDS: dict[str, list[dict[str, str]]] = {}
 
 #: How long a control request (initialize, set_model …) may take.
 CONTROL_TIMEOUT_S = 30.0
+#: v1.413.0: how long a reply's end waits for Claude Code to say it QUEUED a
+#: note sent while it worked (it says so at once, measured); past it the note
+#: goes back to the box and the reply ends.
+HOLD_FOR_NOTE_S = 15.0
+#: How long a note waits for Claude Code's first ``command_lifecycle`` (the
+#: sign it reports when it reads a message) before it is refused.
+LIFECYCLE_WAIT_S = 5.0
 
 _COMMAND_TOOLS = {"Bash", "PowerShell", "BashOutput", "KillShell", "KillBash"}
 _EDIT_TOOLS = {"Edit", "MultiEdit", "NotebookEdit"}
@@ -300,6 +352,54 @@ def answers_for(inp: dict[str, Any], answers: Any) -> dict[str, str]:
     return out
 
 
+def user_content(text: str, files: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """BLOCKING (reads the pictures): a user message's ``content`` and the
+    notes the user should read. Each picture Claude Code takes (png, jpeg,
+    gif, webp; at most :data:`MAX_IMAGE_BYTES`, :data:`MAX_IMAGES` of them)
+    rides as an image block AND is listed by its path (so the model can also
+    use the file); any other file is listed by its path (Claude Code reads
+    files itself). A picture that cannot go as a picture is said — never
+    dropped without a word."""
+    body = str(text or "")
+    images: list[dict[str, Any]] = []
+    pictures: list[str] = []
+    others: list[str] = []
+    notes: list[str] = []
+    for f in files:
+        mime = IMAGE_TYPES.get(os.path.splitext(f)[1].lower())
+        if mime is None:
+            others.append(f)
+            continue
+        name = os.path.basename(f)
+        try:
+            size = os.path.getsize(f)
+        except OSError:
+            size = -1
+        if size < 0 or size > MAX_IMAGE_BYTES or len(images) >= MAX_IMAGES:
+            why = (f"more than {MAX_IMAGES} pictures in one message" if len(images) >= MAX_IMAGES and size >= 0
+                   else "larger than the 5 MB Claude Code takes as a picture" if size > MAX_IMAGE_BYTES
+                   else "could not be read")
+            notes.append(W.PICTURE_AS_PATH.format(name=name, why=why, label=W.label(HARNESS)))
+            others.append(f)
+            continue
+        try:
+            with open(f, "rb") as fh:
+                data = base64.b64encode(fh.read()).decode("ascii")
+        except OSError:
+            notes.append(W.PICTURE_AS_PATH.format(name=name, why="could not be read", label=W.label(HARNESS)))
+            others.append(f)
+            continue
+        images.append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}})
+        pictures.append(f)
+    parts = [body] if body.strip() else []
+    if pictures:
+        parts.append("Pictures I attached (each is also shown to you):\n" + "\n".join(pictures))
+    if others:
+        parts.append("Files I attached:\n" + "\n".join(f"@{f}" for f in others))
+    content: list[dict[str, Any]] = [{"type": "text", "text": "\n\n".join(parts) or body}]
+    return content + images, notes
+
+
 class ClaudeDriver(Driver):
     harness = HARNESS
 
@@ -318,6 +418,16 @@ class ClaudeDriver(Driver):
         self._tools: dict[str, tuple[str, dict[str, Any]]] = {}
         #: The account limit the harness reported (``terminals.limit_state``).
         self.limit: Any = None
+        #: v1.413.0: the uuid each message went out with -> the note's ref
+        #: ("" = the turn's own message), and whether Claude Code says
+        #: ``command_lifecycle`` at all (an older one does not: no notes).
+        self._uuids: dict[str, str] = {}
+        self._lifecycle = False
+        #: The uuids Claude Code said it QUEUED (it will run them).
+        self._queued: set[str] = set()
+        #: A reply's end held back while a note waits to run (see _on_result).
+        self._held: dict[str, Any] | None = None
+        self._hold_timer: asyncio.TimerHandle | None = None
 
     # -- the command line ------------------------------------------------------
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
@@ -326,6 +436,10 @@ class ClaudeDriver(Driver):
             "--include-partial-messages", "--permission-prompts", "host",
             "--permission-prompt-tool", "stdio",
             "--permission-mode", MODES.get(self.mode, "default"),
+            # v1.413.0: Full access can be CHOSEN later in the session (the
+            # mode chip's two presses); without this Claude Code refuses the
+            # live switch (`bypass_not_launched`). It switches nothing on.
+            ALLOW_FULL_FLAG,
         ]
         if self.model:
             out += ["--model", self.model]
@@ -361,20 +475,50 @@ class ClaudeDriver(Driver):
             LAST_COMMANDS[HARNESS] = list(self.commands)
 
     # -- the user's side --------------------------------------------------------
+    async def _user_message(self, text: str, files: list[str], ref: str) -> dict[str, Any]:
+        """One stream-json user message: the words, each picture as an image
+        block (read off the loop), any other file by its path — and a uuid,
+        so Claude Code says when it read it (``command_lifecycle``)."""
+        content, notes = await asyncio.to_thread(user_content, text, files)
+        for note in notes:
+            self.emit(make("notice", text=note))
+        mid = str(uuid.uuid4())
+        self._uuids[mid] = ref
+        return {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+            "session_id": self.session_id,
+            "uuid": mid,
+        }
+
     async def send_user(self, text: str, files: list[str]) -> None:
-        body = str(text or "")
-        if files:
-            listed = "\n".join(f"@{f}" for f in files)
-            body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
+        msg = await self._user_message(text, files, "")
         self.turn_open = True
         self._errored = False
         self._interrupting = False
-        await self.write({
-            "type": "user",
-            "message": {"role": "user", "content": [{"type": "text", "text": body}]},
-            "parent_tool_use_id": None,
-            "session_id": self.session_id,
-        })
+        await self.write(msg)
+
+    async def steer(self, ref: str, text: str, files: list[str]) -> str:
+        """v1.413.0: Claude Code's own steer — a user message written while
+        the turn runs. It reads it at the next step of this turn, or runs it
+        right after (the turn stays open until it has)."""
+        if not self.turn_open:
+            raise ControlRefused(W.STEER_TOO_LATE.format(label=W.label(HARNESS)))
+        for _ in range(int(LIFECYCLE_WAIT_S / 0.05)):
+            # It says "queued" for the turn's own message at once (measured);
+            # a note typed in that first instant waits for it.
+            if self._lifecycle or not self.turn_open:
+                break
+            await asyncio.sleep(0.05)
+        if not self._lifecycle:
+            # An older Claude Code that never says when it read a message: the
+            # note could run as a turn nobody follows.
+            raise ControlRefused(W.STEER_UNSUPPORTED.format(label=W.label(HARNESS)))
+        msg = await self._user_message(text, files, ref)
+        self.steers[ref] = "sent"
+        await self.write(msg)
+        return "step"
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
         await self.write(self.prepare_answer(ask, decision, message, answers))
@@ -414,9 +558,20 @@ class ClaudeDriver(Driver):
     async def interrupt(self) -> None:
         self._interrupting = True
         try:
-            await self.control("interrupt")
+            # v1.413.0: a note not read yet is CANCELLED with the stop (it
+            # would otherwise run on its own after it) and goes back to the
+            # box; `cancelled` names it.
+            res = await self.control("interrupt", cancel_queued=True)
         except asyncio.TimeoutError:
-            pass
+            return
+        for mid in (res.get("cancelled") if isinstance(res, dict) else None) or []:
+            ref = self._uuids.get(str(mid))
+            if ref and self.steers.get(ref) == "sent":
+                self.steers[ref] = "cancelled"
+        if self._held is not None and not any(s == "sent" for s in self.steers.values()):
+            # The reply had ended and only waited for a note the stop just
+            # cancelled: nothing more will come from Claude Code.
+            self._finish(make("done", stop="interrupted"))
 
     async def set_mode(self, mode: str) -> str:
         try:
@@ -440,6 +595,10 @@ class ClaudeDriver(Driver):
         from .process import HarnessGone
 
         self._controls.fail_all(HarnessGone("Claude Code stopped"))
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+            self._hold_timer = None
+        self._held = None
 
     # -- the harness's side (ON THE LOOP) ---------------------------------------
     def on_message(self, obj: dict[str, Any]) -> None:
@@ -472,6 +631,28 @@ class ClaudeDriver(Driver):
             return
         if kind == "result":
             self._on_result(obj)
+            return
+        if kind == "command_lifecycle":
+            self._on_lifecycle(obj)
+
+    def _on_lifecycle(self, obj: dict[str, Any]) -> None:
+        """v1.413.0: Claude Code says what became of each message it was sent
+        (the client's uuid). A note it STARTED (absorbed into the turn, or run
+        right after it) was read; one it CANCELLED goes back to the box."""
+        mid = str(obj.get("command_uuid") or obj.get("uuid") or "")
+        if mid not in self._uuids:
+            return
+        self._lifecycle = True
+        ref = self._uuids[mid]
+        state = str(obj.get("state") or "")
+        if state == "queued":
+            self._queued.add(mid)
+        if not ref:
+            return
+        if state in ("started", "completed"):
+            self.note_read(ref)
+        elif state == "cancelled" and self.steers.get(ref) == "sent":
+            self.steers[ref] = "cancelled"
 
     def _on_control_request(self, obj: dict[str, Any]) -> None:
         req = obj.get("request") or {}
@@ -698,6 +879,42 @@ class ClaudeDriver(Driver):
         done = make("done", stop=stop)
         if stop == "completed" and obj.get("result"):
             done["result"] = clip(obj["result"], 4000)
+        if stop != "interrupted" and any(s == "sent" for s in self.steers.values()):
+            # v1.413.0: a note the user sent while it worked has not been read
+            # yet — Claude Code runs it right after this result, as part of the
+            # same reply: the turn stays open until it has (or, if Claude Code
+            # never even queued it, until HOLD_FOR_NOTE_S says so).
+            self._held = done
+            self._errored = False
+            self._arm_hold()
+            return
+        self._finish(done)
+
+    def _finish(self, done: dict[str, Any]) -> None:
+        self._held = None
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+            self._hold_timer = None
         self._interrupting = False
         self.turn_open = False
         self.emit(done)
+
+    def _arm_hold(self) -> None:
+        if self._hold_timer is not None:
+            self._hold_timer.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # no loop (a unit test of the parser): nothing to wait for
+            return
+        self._hold_timer = loop.call_later(HOLD_FOR_NOTE_S, self._hold_expired)
+
+    def _hold_expired(self) -> None:
+        """Claude Code never said it queued the note: the reply ends, and the
+        note goes back to the box (unread) rather than hold the turn forever."""
+        self._hold_timer = None
+        if self._held is None:
+            return
+        if any(self.steers.get(self._uuids.get(m, ""), "") == "sent" for m in self._queued):
+            self._arm_hold()  # queued: it will run — keep waiting for it
+            return
+        self._finish(self._held)

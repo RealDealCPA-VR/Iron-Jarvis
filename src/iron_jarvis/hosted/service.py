@@ -16,7 +16,13 @@ then the ``done`` reaches the log and every follower.
 
 ONE TURN AT A TIME: a message sent while one runs is refused in words
 (:data:`hosted.words.BUSY`) — Claude Code would queue it, Codex would not, and
-a queued message would have no turn of its own to follow.
+a queued message would have no turn of its own to follow. v1.413.0: what the
+user types WHILE it works is a NOTE (:meth:`HostedService.steer`) — part of
+the running turn, given through each tool's own way of taking one (Claude
+Code: a user message mid-turn, read at its next step or right after; Codex:
+``turn/steer``; Pi: ``steer``). A ``steer`` event says it in order (sent →
+read); a note the tool never read when the turn ends goes back to the box
+(``returned``) — never dropped. Stop cancels notes not yet read.
 
 ONE HARNESS SESSION, ONE PROCESS: two processes resuming one Claude Code
 session (or one Codex thread) corrupt it. A create, an open-from-terminal and
@@ -61,11 +67,13 @@ from ..core.ids import utcnow
 from . import store
 from . import words as W
 from .claude import HARNESS as CLAUDE
+from .claude import MODE_ABOUT as CLAUDE_ABOUT
 from .claude import MODE_LABELS
 from .claude import ClaudeDriver
 from .claude import MODES as CLAUDE_MODES
 from .codex import HARNESS as CODEX
 from .codex import HIDDEN_MODES as CODEX_HIDDEN
+from .codex import MODE_ABOUT as CODEX_ABOUT
 from .codex import MODES as CODEX_MODES
 from .codex import CodexDriver
 from .driver import DECISIONS, Ask, AskRefused, ControlRefused, Driver
@@ -95,6 +103,9 @@ MAX_TURN_CHARS = 8_000_000
 #: The interrupt route answers within this (the harness is told; the turn
 #: ends when it says so, or when its process goes).
 INTERRUPT_WAIT_S = 5.0
+#: v1.413.0: a note sent while the tool is still STARTING its turn waits this
+#: long for the turn to be open before it is refused in words.
+STEER_WAIT_S = 20.0
 #: Disk listings read at most this many conversation files (newest first).
 DISK_FILES = 500
 
@@ -116,7 +127,7 @@ STOPPED_FIX = "Send the message again — the conversation is kept."
 class Refused(Exception):
     """A request the Code view refuses, in one plain sentence."""
 
-    def __init__(self, sentence: str, status: int = 409, field: str = "") -> None:
+    def __init__(self, sentence: str, status: int = 409, field: str = "", code: str = "") -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.status = status
@@ -124,6 +135,9 @@ class Refused(Exception):
         #: about ("folder", "tool", "account", "mode", "model", "effort"; ""
         #: = none in particular) — the page says it on THAT chip.
         self.field = field
+        #: v1.413.0: a machine word for a refusal the page acts on
+        #: ("not_working": a note with no reply running — send it as a message).
+        self.code = code
 
 
 def same_folder(a: Any, b: Any) -> bool:
@@ -139,8 +153,19 @@ def modes_for(harness: str) -> dict[str, Any]:
     return CLAUDE_MODES if harness == CLAUDE else CODEX_MODES
 
 
-#: Every preset in the menu's order (the four shared ones, then Pi's own).
-MODE_ORDER: tuple[str, ...] = ("ask", "edits", "plan", "full", P.OWN)
+#: Every preset in the menu's order (the shared ones, Claude Code's own Auto
+#: (v1.413.0), Full access, then Pi's own).
+MODE_ORDER: tuple[str, ...] = ("ask", "edits", "plan", "auto", "full", P.OWN)
+
+
+def mode_about(harness: str, mode: str) -> str:
+    """v1.413.0: what a preset does for THIS tool, in plain words (the mode
+    menu says it under each one)."""
+    if harness == PI:
+        return P.MODE_ABOUT.get(mode, "")
+    if harness == CODEX:
+        return CODEX_ABOUT.get(mode, "")
+    return CLAUDE_ABOUT.get(mode, "")
 
 
 def mode_label(harness: str, mode: str) -> str:
@@ -173,7 +198,7 @@ def first_message_title(text: str) -> str:
 
 def mode_rows(harness: str) -> list[dict[str, Any]]:
     return [
-        {"id": m, "label": mode_label(harness, m), "dangerous": m == "full"}
+        {"id": m, "label": mode_label(harness, m), "dangerous": m == "full", "about": mode_about(harness, m)}
         for m in MODE_ORDER if m in modes_for(harness)
     ]
 
@@ -514,6 +539,9 @@ class LiveSession:
         #: What holds the session right now ("" = nothing): continue-on,
         #: delete, archive. A message during a claim is refused in words.
         self.claim = ""
+        #: v1.413.0: the notes sent to the running turn (ref -> {text, files,
+        #: shown, read}); what was never read goes back to the box at its end.
+        self.steers: dict[str, dict[str, Any]] = {}
 
     @property
     def running(self) -> bool:
@@ -976,6 +1004,11 @@ class HostedService:
                 applied["mode"] = "next"
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
+            elif applied["mode"] == "now" and live is not None and live.asks and mode != row.mode:
+                # v1.413.0: the mode changed while the tool waited on a card —
+                # that card was asked under the old mode and still needs YOU.
+                self._emit(live, make("notice", text=W.MODE_CARD_STILL_OPEN.format(
+                    label=W.label(row.harness), mode=mode_label(row.harness, mode))))
             fields["mode"] = mode
         next_model = check_model(body["model"]) if body.get("model") is not None else row.model
         pi_rows = await asyncio.to_thread(self._models, PI) if row.harness == PI else None
@@ -1140,6 +1173,7 @@ class HostedService:
         if isinstance(driver, PiDriver):
             driver.catalog_path = self._pi_catalog
             driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
+        driver.steer_read = lambda ref: self._steer_read(live, ref)
         proc = HarnessProcess(
             argv0 + driver.argv(session_id=sid, resume=resume), env=env, cwd=row.folder,
             name=f"hosted-{row.id}",
@@ -1247,6 +1281,7 @@ class HostedService:
                 live.log.append(done)
             return
         turn.ending = True
+        self._return_steers(live)
         error = live.last_error
         try:
             await asyncio.to_thread(store.update, self.engine, live.sid, last_error=error)
@@ -1277,6 +1312,84 @@ class HostedService:
     def _ask(self, live: LiveSession, ask: Ask) -> None:
         live.asks[ask.id] = ask
         self._emit(live, ask.event)
+
+    # -- notes sent while it works (v1.413.0) -------------------------------------
+    def _steer_event(self, live: LiveSession, ref: str, state: str) -> None:
+        note = live.steers.get(ref) or {}
+        ev = make("steer", id=ref, state=state, text=clip(note.get("text") or "", TEXT_CHARS))
+        if note.get("files"):
+            ev["files"] = [clip(f, 500) for f in note["files"]]
+        if state == "sent":
+            ev["how"] = W.STEER_HOW.get(live.harness, "")
+        self._emit(live, ev)
+
+    def _steer_read(self, live: LiveSession, ref: str) -> None:
+        """The tool took a note (its own signal): said once, in order."""
+        note = live.steers.get(ref)
+        if note is None or note.get("read"):
+            return
+        note["read"] = True
+        if note.get("shown"):
+            self._steer_event(live, ref, "read")
+
+    def _return_steers(self, live: LiveSession) -> None:
+        """The turn is ending: every note the tool never read goes BACK to the
+        box (the v1.287.0 rule — a note is never dropped without a word)."""
+        drv = live.driver
+        unread = set(drv.unread_steers()) if drv is not None else set(live.steers)
+        for ref, note in list(live.steers.items()):
+            if note.get("shown") and not note.get("read") and ref in unread:
+                self._steer_event(live, ref, "returned")
+        live.steers.clear()
+        if drv is not None:
+            drv.steers.clear()
+
+    async def steer(self, sid: str, text: str, files: list[str] | None = None) -> dict[str, Any]:
+        """A note for the RUNNING turn, through the tool's own way of taking
+        one (``Driver.steer``). Refused with ``code: not_working`` when no
+        reply runs (the page then sends it as a message)."""
+        row = await self._row(sid)
+        live = self.live.get(sid)
+        label = W.label(row.harness)
+        text = str(text or "")
+        files = [str(f) for f in (files or []) if str(f).strip()]
+        if not text.strip() and not files:
+            raise Refused("Type a note first.", 400)
+        if live is None or live.turn is None or not live.turn.running or live.turn.ending:
+            raise Refused(W.STEER_NOT_WORKING.format(label=label), 409, code="not_working")
+        problems = await asyncio.to_thread(self._file_problems, files)
+        if problems:
+            raise Refused(problems, 400)
+        turn = live.turn
+        # The tool may still be starting (its process, its first message):
+        # the note waits for the turn to be open, a short while.
+        deadline = time.monotonic() + STEER_WAIT_S
+        while (live.driver is None or not live.driver.turn_open) and turn.running and not turn.ending:
+            if time.monotonic() > deadline:
+                raise Refused(W.STEER_TOO_LATE.format(label=label))
+            await asyncio.sleep(0.05)
+        driver = live.driver
+        if driver is None or not turn.running or turn.ending or live.turn is not turn:
+            raise Refused(W.STEER_NOT_WORKING.format(label=label), 409, code="not_working")
+        ref = f"note-{uuid.uuid4().hex[:12]}"
+        live.steers[ref] = {"text": text, "files": files, "shown": False, "read": False}
+        try:
+            how = await driver.steer(ref, text, files)
+        except ControlRefused as exc:
+            live.steers.pop(ref, None)
+            raise Refused(str(exc)) from None
+        except HarnessGone:
+            live.steers.pop(ref, None)
+            raise Refused(W.STEER_TOO_LATE.format(label=label)) from None
+        note = live.steers.get(ref)
+        if note is None:  # the turn ended while the note went out: said by its end
+            return {"ok": True, "id": ref, "state": "returned", "how": how}
+        note["shown"] = True
+        self._steer_event(live, ref, "sent")
+        if note.get("read"):  # the tool took it before the line above was written
+            self._steer_event(live, ref, "read")
+        live.last_active = self.clock()
+        return {"ok": True, "id": ref, "state": "read" if note.get("read") else "sent", "how": how}
 
     # -- turns -------------------------------------------------------------------
     async def start_turn(self, sid: str, text: str, turn_id: str, files: list[str] | None = None) -> HostedTurn:

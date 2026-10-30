@@ -6,6 +6,8 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
 
 * ``session`` {harness, harness_session_id, model, cwd, mode}
 * ``user`` {text, files?}
+* ``steer`` {id, state: sent|read|returned, text, files?, how?} (v1.413.0: a
+  note the user typed while the turn ran; one event per state, in order)
 * ``text`` {item, delta} · ``text_done`` {item, text}
 * ``thinking`` {item, delta}
 * ``tool`` {item, kind, name, title, input, status, output?, path?, line?, diff?}
@@ -49,7 +51,7 @@ log = logging.getLogger(__name__)
 #: The event types (the contract).
 TYPES: tuple[str, ...] = (
     "session", "user", "text", "text_done", "thinking", "tool", "plan", "approval",
-    "question", "resolved", "usage", "notice", "error", "done",
+    "question", "resolved", "usage", "notice", "error", "done", "steer",
 )
 TOOL_KINDS: tuple[str, ...] = (
     "read", "edit", "write", "command", "search", "web", "mcp", "task", "todo", "other",

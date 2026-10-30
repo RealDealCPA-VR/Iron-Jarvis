@@ -28,6 +28,17 @@ MEASURED on this PC (codex 0.157.0, Windows 11, live, in scratch folders):
 * A signed-out home: ``error`` notifications with ``willRetry: true`` and
   ``httpStatusCode: 401`` five times, then one with ``willRetry: false`` and
   the turn ``failed``.
+
+MEASURED for v1.413.0 (codex 0.157.0, live; ``generate-json-schema``):
+
+* ``turn/steer`` {threadId, expectedTurnId, input, clientUserMessageId}
+  answers ``{turnId}`` and the note joins the RUNNING turn: a ``userMessage``
+  item whose ``clientId`` is the one sent appears at the next step, and the
+  model followed it in that turn's answer. A turn that already ended refuses
+  it (``expectedTurnId`` no longer matches).
+* ``localImage`` {path} input is SEEN (the model read a word drawn only in a
+  PNG's pixels). The approval policy is a per-TURN setting (``turn/start``):
+  a mode chosen mid-turn applies from the next message.
 """
 
 from __future__ import annotations
@@ -60,6 +71,12 @@ HIDDEN_MODES: dict[str, str] = {
     "plan": "Codex has no plan mode.",
     **({"edits": "Codex cannot run commands in its sandbox on Windows, so edits cannot run on their own "
                  "while commands still ask."} if _WINDOWS else {}),
+}
+#: v1.413.0: what each preset does, in plain words (the mode menu says it).
+MODE_ABOUT: dict[str, str] = {
+    "ask": "Asks before every command and every file change.",
+    "edits": "Changes files in this folder without asking; asks before it runs a command.",
+    "full": "Runs everything without asking.",
 }
 _SANDBOX_POLICY = {
     "danger-full-access": {"type": "dangerFullAccess"},
@@ -138,6 +155,29 @@ def _error_info(error: Any) -> tuple[str, int | None]:
     return "", None
 
 
+#: The pictures Codex takes as ``localImage`` input (measured: it read a word
+#: drawn only in a PNG's pixels).
+PICTURE_EXTS: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def user_input(text: str, files: list[str]) -> list[dict[str, Any]]:
+    """A message's ``input`` items: the words, each picture as a
+    ``localImage`` (Codex reads the file itself), any other file by path."""
+    items: list[dict[str, Any]] = []
+    others: list[str] = []
+    for f in files:
+        if os.path.splitext(f)[1].lower() in PICTURE_EXTS:
+            items.append({"type": "localImage", "path": f})
+        else:
+            others.append(f)
+    body = str(text or "")
+    if others:
+        listed = "\n".join(others)
+        body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
+    items.insert(0, {"type": "text", "text": body})
+    return items
+
+
 class CodexDriver(Driver):
     harness = HARNESS
 
@@ -209,18 +249,7 @@ class CodexDriver(Driver):
 
     # -- the user's side --------------------------------------------------------
     async def send_user(self, text: str, files: list[str]) -> None:
-        items: list[dict[str, Any]] = []
-        others: list[str] = []
-        for f in files:
-            if os.path.splitext(f)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
-                items.append({"type": "localImage", "path": f})
-            else:
-                others.append(f)
-        body = str(text or "")
-        if others:
-            listed = "\n".join(others)
-            body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
-        items.insert(0, {"type": "text", "text": body})
+        items = user_input(text, files)
         approval, sandbox = self._policy()
         params: dict[str, Any] = {
             "threadId": self.session_id, "input": items, "approvalPolicy": approval,
@@ -238,6 +267,28 @@ class CodexDriver(Driver):
         res = await self.request("turn/start", params)
         turn = (res or {}).get("turn") if isinstance(res, dict) else None
         self.turn_id = str((turn or {}).get("id") or self.turn_id)
+
+    async def steer(self, ref: str, text: str, files: list[str]) -> str:
+        """v1.413.0: Codex's own ``turn/steer`` — the note joins the RUNNING
+        turn (its ``clientUserMessageId`` is the note's ref; Codex says it read
+        it with a ``userMessage`` item carrying that ``clientId``, measured)."""
+        if not (self.turn_open and self.session_id and self.turn_id):
+            raise ControlRefused(W.STEER_TOO_LATE.format(label=W.label(HARNESS)))
+        self.steers[ref] = "sent"
+        try:
+            await self.request("turn/steer", {
+                "threadId": self.session_id, "expectedTurnId": self.turn_id,
+                "input": user_input(text, files), "clientUserMessageId": ref,
+            })
+        except ControlRefused as exc:
+            # Codex had finished this turn (its expectedTurnId no longer
+            # matches): nothing reached it.
+            self.steers.pop(ref, None)
+            raise ControlRefused(W.STEER_TOO_LATE.format(label=W.label(HARNESS))) from exc
+        except BaseException:
+            self.steers.pop(ref, None)
+            raise
+        return "step"
 
     async def answer(self, ask: Ask, decision: str, message: str, answers: Any) -> str:
         await self.write(self.prepare_answer(ask, decision, message, answers))
@@ -443,6 +494,12 @@ class CodexDriver(Driver):
     def _item_started(self, item: dict[str, Any]) -> None:
         iid = str(item.get("id") or "")
         t = item.get("type")
+        if t == "userMessage":
+            # v1.413.0: a note joined the turn (Codex echoes its clientId).
+            ref = str(item.get("clientId") or "")
+            if ref:
+                self.note_read(ref)
+            return
         self._items[iid] = item
         ev = self._tool_event(item, "running")
         if ev is not None:

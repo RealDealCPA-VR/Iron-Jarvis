@@ -104,6 +104,8 @@ HARNESS = "pi"
 OWN = "own"
 MODES: dict[str, str] = {OWN: ""}
 MODE_LABELS: dict[str, str] = {OWN: "Pi's own rules"}
+#: v1.413.0: what Pi's one mode does (the mode menu says it).
+MODE_ABOUT: dict[str, str] = {OWN: "Pi asks nothing before a tool; only an extension of yours can ask."}
 #: The presets Pi does not have, and why (said in the mode menu).
 HIDDEN_MODES: dict[str, str] = {
     "ask": "Pi does not ask before it runs a tool. Only an extension of yours can ask, "
@@ -458,6 +460,14 @@ def failure_event(said: str) -> dict[str, Any]:
     return W.error("Pi's model answered with an error", OTHER_FIX, text)
 
 
+def takes_pictures(model: Any) -> bool | None:
+    """Pi's model record says what it reads (``input``: ["text", "image"]):
+    False when it lists input WITHOUT "image", None when it does not say."""
+    if not isinstance(model, dict) or not isinstance(model.get("input"), list):
+        return None
+    return "image" in model["input"]
+
+
 def model_rows(models: Any) -> list[dict[str, str]]:
     """``get_available_models`` -> the composer's rows (``provider/id``)."""
     out: list[dict[str, str]] = []
@@ -473,6 +483,9 @@ def model_rows(models: Any) -> list[dict[str, str]]:
             # v1.412.0 review: Pi says this model has no reasoning — it takes
             # no thinking level (the effort chip hides for it).
             row["efforts"] = []
+        if takes_pictures(m) is False:
+            # v1.413.0: Pi says this model reads no pictures (its `input`).
+            row["pictures"] = False
         out.append(row)
         if len(out) >= MAX_MODELS:
             break
@@ -528,6 +541,12 @@ class PiDriver(Driver):
         self.forget_ask: Any = None
         #: Where the service keeps the model list (set before ``open``).
         self.catalog_path: Path | None = None
+        #: v1.413.0: this turn's notes in the order Pi queued them.
+        self._steer_order: list[str] = []
+        self._clearing = False
+        #: Does the model in use take pictures? (Pi's model ``input``; None =
+        #: not known — sent as pictures.)
+        self.takes_pictures: bool | None = None
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         out = ["--mode", "rpc", "--session-id", session_id]
@@ -556,6 +575,7 @@ class PiDriver(Driver):
         self.on_session_id(sid)
         model = state.get("model") if isinstance(state.get("model"), dict) else {}
         shown = f"{model.get('provider')}/{model.get('id')}" if model.get("id") else self.model
+        self.takes_pictures = takes_pictures(model)
         self.emit(make("session", harness=HARNESS, harness_session_id=sid, model=clip(shown, 120),
                        cwd=clip(self.cwd, 500), mode=self.mode))
         # The `/` list and the model list: a failure here never fails a start.
@@ -590,14 +610,39 @@ class PiDriver(Driver):
         message would be refused by Pi ("Agent is already processing")."""
         return self._run_open and (self._run_owner is None or not self.turn_open or self._run_owner != self._turn_n)
 
-    async def send_user(self, text: str, files: list[str]) -> None:
-        if self.busy_alone:
-            raise PiStillWorking(W.PI_STILL_WORKING)
-        images, others = await asyncio.to_thread(_read_images, files)
+    async def _message(self, text: str, files: list[str]) -> dict[str, Any]:
+        """A prompt's / note's fields: the words, each picture as one of Pi's
+        base64 images, any other file by path. A model Pi says takes no
+        pictures (its ``input`` lacks "image") gets the picture's PATH, and the
+        user is told so — never dropped without a word."""
+        pictures = self.takes_pictures is not False
+        images, others = await asyncio.to_thread(_read_images, files if pictures else [])
+        if pictures:
+            for f in others:
+                if os.path.splitext(f)[1].lower() in IMAGE_TYPES:
+                    self.emit(make("notice", text=W.PICTURE_AS_PATH.format(
+                        name=os.path.basename(f), label="Pi",
+                        why=f"over the {MAX_IMAGE_BYTES // (1024 * 1024)} MB or {MAX_IMAGES} pictures Pi takes "
+                            "in one message")))
+        else:
+            shown = [f for f in files if os.path.splitext(f)[1].lower() in IMAGE_TYPES]
+            others = list(files)
+            for f in shown:
+                self.emit(make("notice", text=W.PICTURE_AS_PATH.format(
+                    name=os.path.basename(f), why="this Pi model takes no pictures", label="Pi")))
         body = str(text or "")
         if others:
             listed = "\n".join(others)
             body = f"{body}\n\nFiles I attached:\n{listed}" if body.strip() else f"Files I attached:\n{listed}"
+        msg: dict[str, Any] = {"message": body}
+        if images:
+            msg["images"] = images
+        return msg
+
+    async def send_user(self, text: str, files: list[str]) -> None:
+        if self.busy_alone:
+            raise PiStillWorking(W.PI_STILL_WORKING)
+        msg = await self._message(text, files)
         if self.busy_alone:  # it began while the files were read
             raise PiStillWorking(W.PI_STILL_WORKING)
         self._turn_n += 1
@@ -609,9 +654,6 @@ class PiDriver(Driver):
         self._usage = {"input": 0, "output": 0, "cache_read": 0}
         self._cost = 0.0
         self._waiting_run = True
-        msg: dict[str, Any] = {"message": body}
-        if images:
-            msg["images"] = images
         # The prompt's answer is read when it comes, never waited on here: an
         # extension command answers only after ITS dialog was answered (measured
         # with `/rpc-input`), which may take the user any time.
@@ -620,6 +662,40 @@ class PiDriver(Driver):
         fut = self._replies.make(rid)
         fut.add_done_callback(self._prompt_answered)
         await self.write({"id": rid, "type": "prompt", **msg})
+
+    async def steer(self, ref: str, text: str, files: list[str]) -> str:
+        """v1.413.0: Pi's own ``steer`` command — the note is QUEUED and Pi
+        delivers it "after the current assistant turn finishes executing its
+        tool calls, before the next LLM call" (docs/rpc-commands.md). Pi says
+        when it took it: its steering queue (``queue_update``) gets shorter."""
+        mine = self._run_open and self._run_owner == self._turn_n
+        if not (self.turn_open and (mine or self._waiting_run)):
+            # This message's run ended (or another run is going): a queued
+            # note would wait for the NEXT message.
+            raise ControlRefused(W.STEER_TOO_LATE.format(label="Pi"))
+        msg = await self._message(text, files)
+        self.steers[ref] = "sent"
+        self._steer_order.append(ref)
+        try:
+            got = await self.request("steer", **msg)
+        except BaseException:
+            self.steers.pop(ref, None)
+            if ref in self._steer_order:
+                self._steer_order.remove(ref)
+            raise
+        if isinstance(got, dict) and got.get("disposition") == "handled":
+            self.note_read(ref)  # an input handler took it at once
+        return "step"
+
+    def _queue_changed(self, steering: Any) -> None:
+        """Pi's steering queue holds ``len(steering)`` notes: the oldest of
+        ours beyond that were delivered (Pi takes them in order)."""
+        if self._clearing:
+            return  # the queue emptied by OUR clear_queue: nothing was delivered
+        waiting = [r for r in self._steer_order if self.steers.get(r) == "sent"]
+        n = len(steering) if isinstance(steering, list) else 0
+        for ref in waiting[: max(0, len(waiting) - n)]:
+            self.note_read(ref)
 
     def _prompt_answered(self, fut: asyncio.Future) -> None:
         if fut.cancelled() or not self.turn_open:
@@ -697,10 +773,38 @@ class PiDriver(Driver):
 
     async def interrupt(self) -> None:
         self._interrupting = True
+        if any(s == "sent" for s in self.steers.values()):
+            # v1.413.0: Pi's abort RUNS notes still queued (docs: "send
+            # clear_queue before abort, then restore the returned text in the
+            # client editor") — they are taken out first and go back to the box.
+            await self._clear_notes()
         try:
             await self.request("abort")
         except (asyncio.TimeoutError, ControlRefused):
             pass
+
+    async def _clear_notes(self) -> None:
+        """Take this turn's unread notes out of Pi's queue (they go back to
+        the box: never delivered later with another message). Pi says the
+        emptied queue BEFORE it answers (measured), so that ``queue_update`` is
+        not read as delivery; the answer lists what was still queued — the
+        newest of ours; any older one had been delivered."""
+        self._clearing = True
+        try:
+            got = await self.request("clear_queue")
+            left = got.get("steering") if isinstance(got, dict) else None
+            n = len(left) if isinstance(left, list) else None
+        except Exception:  # noqa: BLE001 — a gone process holds no queue
+            n = None
+        finally:
+            self._clearing = False
+        waiting = [r for r in self._steer_order if self.steers.get(r) == "sent"]
+        if n is not None:
+            for ref in waiting[: max(0, len(waiting) - n)]:
+                self.note_read(ref)
+        for ref in waiting:
+            if self.steers.get(ref) == "sent":
+                self.steers[ref] = "cancelled"
 
     async def _abort_again(self) -> None:
         try:
@@ -718,6 +822,8 @@ class PiDriver(Driver):
             raise ControlRefused("Name the model as provider/model, the way Pi lists it.")
         await self.request("set_model", provider=provider, modelId=mid)
         self.model = model
+        self.takes_pictures = next(
+            (r.get("pictures") is not False for r in LAST_MODELS if r.get("id") == model), None)
         return "now"
 
     async def set_effort(self, effort: str) -> str:
@@ -803,6 +909,9 @@ class PiDriver(Driver):
             where = _base(obj.get("extensionPath"))
             self.emit(make("notice", text=clip(f"A Pi extension failed ({where}): {one_line(obj.get('error'), 200)}",
                                                500)))
+            return
+        if kind == "queue_update":
+            self._queue_changed(obj.get("steering"))
             return
 
     def _item(self, idx: Any) -> str:
@@ -1010,6 +1119,15 @@ class PiDriver(Driver):
         if not self.turn_open:
             return
         self.turn_open = False
+        if any(s == "sent" for s in self.steers.values()):
+            # v1.413.0: a note still in Pi's queue when the reply ended would
+            # ride the NEXT message (the box gets it back instead) — marked
+            # unread NOW, the queue cleared right after.
+            for ref, state in list(self.steers.items()):
+                if state == "sent":
+                    self.steers[ref] = "cancelled"
+            asyncio.ensure_future(self._clear_notes())
+        self._steer_order = []
         self._interrupting = False
         self._running.clear()
         if self._handled is not None:

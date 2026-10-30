@@ -4203,6 +4203,77 @@ does not need a bump, stop and bump it.
   plan extension's "what next?" answered as a question card, and `pi
   --session <id>` reopening the same conversation.
 
+- **Build › Code takes PICTURES, changes MODE at any time, and a note typed
+  while it works STEERS the running reply** (v1.413.0; the user: "I cant copy
+  and past images into the build modules </> code … the permission blocker
+  does not allow change to auto-- allow all, should be changeable mid session
+  and the ability to steer work"). PICTURES: SessionPane and StartComposer
+  use the chat's own `components/harness/HarnessAttachments`
+  (`useHarnessAttachments`, paste via `pastedFiles` — pasted pictures renamed
+  —, drop, `AttachButton`, `AttachmentChips`; a send WAITS for an upload via
+  `whenSettled` and reads the box from refs; a picture alone is a message;
+  `onStarted(session, words, files)` → SessionPane `firstFiles`); the sent
+  message draws `SentAttachments` (in the events log, so a rejoin shows them).
+  Each tool gets the picture its own measured way: Claude Code an
+  `{"type":"image","source":{"type":"base64",…}}` block (`claude.user_content`,
+  png/jpeg/gif/webp ≤ 5 MB, ≤ 8; listed by path too), Codex `localImage`
+  (`codex.user_input`), Pi `images` (a model whose `input` lacks "image" —
+  `pi.takes_pictures`, model rows `pictures: false` — gets the PATH); a
+  picture that cannot go as one is a `notice` (`W.PICTURE_AS_PATH`), never
+  silent. MODE — ROOT CAUSE: Claude Code REFUSES a live `set_permission_mode
+  bypassPermissions` on a process started without
+  `--allow-dangerously-skip-permissions` ("bypass_not_launched", measured on
+  2.1.311), so Full access could never be chosen once a session had started;
+  every Claude process now starts with that flag (`claude.ALLOW_FULL_FLAG`;
+  it only makes Full access AVAILABLE — the mode is still `--permission-mode`'s)
+  — and the composer (with its mode chip) was HIDDEN while a card waited:
+  `code-ask-mode-row` puts a `ModeChip` beside the card. Claude Code's own
+  `auto` ("Auto": its classifier allows/refuses) is offered (`MODE_ORDER`
+  ask, edits, plan, auto, full); every mode row carries `about` (plain words;
+  `claude.MODE_ABOUT`, `codex.MODE_ABOUT`, `pi.MODE_ABOUT`), the chip shows
+  it. A mode changed while a card waits says the card still needs the user
+  (`W.MODE_CARD_STILL_OPEN`). Full access keeps its two presses. STEER:
+  `POST /build/app/sessions/{id}/steer {text, files}` → `HostedService.steer`
+  → `Driver.steer(ref, …)` (409 `code: not_working` when no reply runs — the
+  page then sends a message; a note during the tool's start waits
+  `STEER_WAIT_S`). Measured mechanisms: Claude Code — a user message written
+  mid-turn, with a client `uuid` on EVERY message so it says
+  `command_lifecycle` {command_uuid, queued|started|completed|cancelled};
+  absorbed at the next tool step, or run right after the turn as a second
+  `result` — the driver HOLDS the turn's end while a note is unread
+  (`HOLD_FOR_NOTE_S` 15 if never queued), Stop sends `interrupt` with
+  `cancel_queued: true`, an older CLI with no lifecycle refuses notes in words
+  (`LIFECYCLE_WAIT_S`); Codex — `turn/steer` {threadId, expectedTurnId,
+  input, clientUserMessageId}, read when a `userMessage` item echoes that
+  `clientId`; Pi — `steer`, read when its `queue_update` steering list
+  shrinks, `clear_queue` BEFORE `abort` (Pi's abort RUNS queued notes) with
+  `_clearing` so that emptied queue is not read as delivery, and unread notes
+  are cleared at the turn's end (they would ride the next message). Event
+  `steer` {id, state sent|read|returned, text, files?, how?} (in
+  `events.TYPES`, the turn's log, a rejoin replays it); `_end_turn` →
+  `_return_steers` hands every unread note back BEFORE the done; the page puts
+  a returned note THIS window sent back in the box once (`giveNoteBack`) with
+  `STEER_RETURNED_WORDS`. Enter while running = a note (placeholder
+  `steerPlaceholder`), the arrow `code-steer-send` beside Stop. Pins:
+  `tests/test_build_app_steer_v1413.py` (the fake harness gains `{{uuid:N}}`,
+  `{{steer_ref}}` and `IJ_FAKE_CLAUDE_MODES=1` = claude 2.1.311's own answer to
+  `set_permission_mode`), `dashboard/__tests__/build-code-pictures-steer-v1413.test.tsx`,
+  `dashboard/__tests__/ij-harness-paste-start-v1413.test.tsx` (Chat › Code
+  checked: paste already worked at its start and in an open session), e2e
+  `dashboard/e2e/build-code-paste.spec.ts` (a real ClipboardEvent, the real
+  upload, 1280 × 800 and 390 × 844). Moved on purpose:
+  `test_build_app_routes_v1409` (auto in the mode list), `test_build_app_pi_v1411`
+  (`about`). Live-proven on a scratch daemon (claude 2.1.311 sonnet/haiku,
+  codex 0.157.0, pi 1.3.0 openai-codex/gpt-6-luna): each read ZEBRAFIG drawn
+  only in a PNG's pixels; Full access then Auto switched mid-reply ("now"),
+  Codex said "from your next message"; a note mid-reply was read and the
+  answer ended "BANANA" in all three; a Claude note after its last step ran
+  as part of the same reply; Stop with a queued note brought it back. OPEN:
+  Auto's classifier answered once "gave no verdict" for an action asked before
+  the switch (Claude retried it by itself); a note's pictures on Claude Code
+  are read only when the note is absorbed or run; the model and effort chips
+  are still disabled while a reply runs.
+
 - **A coding session STARTS AT THE COMPOSER: no form, no folder until one is
   chosen; Choose… is Windows' own folder picker; a tool with several logins
   asks which account** (v1.412.0; the user: "it should start automatically

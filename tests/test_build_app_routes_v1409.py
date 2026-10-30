@@ -66,7 +66,10 @@ async def test_harnesses_are_read_from_cached_answers_only(app, monkeypatch):
     assert set(by) == {"claude-code", "codex", "pi"}
     assert by["claude-code"]["installed"] is True and by["codex"]["installed"] is False
     assert by["codex"]["signed_in"] is None
-    assert [m["id"] for m in by["claude-code"]["modes"]] == ["ask", "edits", "plan", "full"]
+    # v1.413.0: Claude Code's own Auto is offered (moved on purpose), and every
+    # mode says what it does.
+    assert [m["id"] for m in by["claude-code"]["modes"]] == ["ask", "edits", "plan", "auto", "full"]
+    assert all(m["about"] for m in by["claude-code"]["modes"])
     assert [m["id"] for m in by["claude-code"]["modes"] if m["dangerous"]] == ["full"]
     codex_modes = [m["id"] for m in by["codex"]["modes"]]
     assert "plan" not in codex_modes and "ask" in codex_modes and "full" in codex_modes

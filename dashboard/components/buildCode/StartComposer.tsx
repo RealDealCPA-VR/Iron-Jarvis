@@ -29,6 +29,11 @@
  * message (`<chat files>/<date> <first words>`, the v1.379.0 rule) and takes it
  * back when the message never starts. A folder the daemon refuses is said on
  * the folder chip and nothing is started.
+ *
+ * v1.413.0: pictures and files go with the first message — paste, drop or
+ * the paperclip (components/harness/HarnessAttachments, the chat's own
+ * upload contract); Send waits for an upload still going up, and a picture
+ * alone is a first message.
  */
 
 import {
@@ -45,6 +50,12 @@ import { ApiError, post } from "@/lib/api";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import {
+  AttachButton,
+  AttachmentChips,
+  pastedFiles,
+  useHarnessAttachments,
+} from "@/components/harness/HarnessAttachments";
 import {
   OWN_SIGN_IN_TITLE,
   accountStatusWords,
@@ -192,8 +203,9 @@ export function StartComposer({
   startAt?: string | null;
   /** Where a session with no folder keeps its files (the chat files folder). */
   workRoot?: string;
-  /** The session was made: open it and send `text` as its first message. */
-  onStarted: (session: CodeSession, text: string) => void;
+  /** The session was made: open it and send `text` (and `files`, the
+   *  uploaded pictures' paths) as its first message. */
+  onStarted: (session: CodeSession, text: string, files?: string[]) => void;
 }) {
   const [text, setText] = useState("");
   const [folder, setFolder] = useState<string | null>(startFolder);
@@ -211,6 +223,10 @@ export function StartComposer({
   // daemon's `field`), never on the folder chip by default.
   const [chipProblem, setChipProblem] = useState<{ field: string; words: string } | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  /** v1.413.0: pictures and files for the first message (uploaded). */
+  const att = useHarnessAttachments();
+  // A start held for an upload runs this render's `start` when it settles.
+  const startRef = useRef<() => Promise<void>>(async () => undefined);
   const toolMenuRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const toolShift = useInsideWindow(toolMenuRef, toolOpen);
@@ -253,7 +269,7 @@ export function StartComposer({
   // chosen (the daemon would pick one the user did not choose).
   const accountMissing = showAccount && !account;
   const unavailable = tool ? toolUnavailable(tool) : null;
-  const ready = !!tool && !unavailable && !accountMissing && !!text.trim() && !busy;
+  const ready = !!tool && !unavailable && !accountMissing && (!!text.trim() || att.files.length > 0) && !busy;
 
   function chooseTool(id: string) {
     setToolOpen(false);
@@ -265,8 +281,14 @@ export function StartComposer({
   }
 
   async function start() {
-    const words = text.trim();
-    if (!tool || unavailable || !words || busy) return;
+    // v1.413.0: a picture still going up holds the start (it goes WITH it).
+    if (att.busyRef.current) {
+      att.whenSettled(() => void startRef.current());
+      return;
+    }
+    const words = (boxRef.current?.value ?? text).trim();
+    const files = att.filesRef.current.map((f) => f.path);
+    if (!tool || unavailable || (!words && !files.length) || busy) return;
     if (accountMissing) {
       if (!noAccount) setAccountOpen(true);
       return;
@@ -289,7 +311,7 @@ export function StartComposer({
       if (!made) throw new Error("The session could not be made.");
       keep(LAST_TOOL_KEY, tool.id);
       if (account) keep(LAST_ACCOUNT_KEY + tool.id, account);
-      onStarted(made, words);
+      onStarted(made, words, files);
     } catch (e) {
       const words2 = errorWords(e, "The session could not be made.");
       // v1.412.0 review: each refusal on the chip it is about — the daemon
@@ -301,6 +323,8 @@ export function StartComposer({
       setBusy(false);
     }
   }
+
+  startRef.current = start;
 
   const onKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -331,7 +355,22 @@ export function StartComposer({
         <div
           data-testid="code-start-composer"
           className="relative rounded-[20px] bg-ink-800 shadow-[0_0_0_0.5px_rgb(var(--white)/0.12)]"
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            const dropped = Array.from(e.dataTransfer?.files ?? []);
+            if (!dropped.length) return;
+            e.preventDefault();
+            void att.add(dropped);
+          }}
         >
+          <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+          {att.problem ? (
+            <p data-testid="code-start-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
+              {att.problem}
+            </p>
+          ) : null}
           <textarea
             ref={boxRef}
             data-testid="code-start-box"
@@ -342,9 +381,17 @@ export function StartComposer({
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}
+            onPaste={(e) => {
+              // A pasted picture is attached; pasted text is typed.
+              const pasted = pastedFiles(e.clipboardData);
+              if (!pasted.length) return;
+              e.preventDefault();
+              void att.add(pasted, { pasted: true });
+            }}
             className={HARNESS_COMPOSER_BOX}
           />
-          <div className="flex items-center justify-end px-2 pb-2">
+          <div className="flex items-center justify-between px-2 pb-2">
+            <AttachButton onPick={(picked) => void att.add(picked)} disabled={busy} />
             <button
               type="button"
               data-testid="code-start-send"

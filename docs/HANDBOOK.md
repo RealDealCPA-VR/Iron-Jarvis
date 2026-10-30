@@ -2263,6 +2263,36 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     where Pi has finished offers **Open in Code view**.
 - **Next**: OpenCode, as a coding tool for the Code view.
 
+### Pictures, the mode at any time, and notes while it works (v1.413.0)
+
+- **Paste a picture** into the message box (a screenshot, a copied image),
+  drop one on it, or press the paperclip: it shows as a thumbnail with a ×
+  to take it off, and goes with your next message — in an open session and
+  in the box that starts a new one. A picture alone is a message. The tool
+  sees the picture itself: Claude Code and Pi as an image, Codex as a local
+  picture file. A picture the tool cannot take as a picture (larger than it
+  takes, or a Pi model that reads no pictures) goes as the file's path, and
+  the conversation says so. Other files go by their path. Send waits for a
+  picture that is still going up. **Chat › Code** works the same way (it
+  already did).
+- **The mode can change at any time**, also while the tool is working and
+  while it waits on a card: the mode chip sits beside the card then. Claude
+  Code changes at once; Codex keeps its mode for the message it is working on
+  and uses the new one from your next message (it says so). Each mode in the
+  menu says what it does. Claude Code now also offers its own **Auto**: its
+  own safety check allows or refuses each action without asking you, and a
+  few risky ones still ask. **Full access** still takes two presses. A mode
+  changed while a card waits leaves that card for you to answer (it was asked
+  under the old mode).
+- **Steer it while it works.** Type while the tool is working and press
+  Enter (or the arrow beside Stop): your words go to the RUNNING reply as a
+  note, not as a new message. Each tool takes it its own way — Claude Code
+  reads it at its next step (or right after the reply, still as part of it),
+  Codex at its next step, Pi after its current step. The note shows in the
+  conversation where you sent it, and says when the tool read it. A note the
+  tool never read before it stopped (Stop, or the reply ending first) comes
+  back into your message box, with a line saying so — it is never lost.
+
 ## Start a session by typing (v1.412.0)
 
 A new coding session no longer starts with a form. In **Build › Code** (with

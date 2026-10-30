@@ -26,6 +26,19 @@
  * `confirm: true`), account. `/` lists the tool's own commands, `@` the
  * folder's files. Stop interrupts the tool. ⋯ → Open in terminal.
  *
+ * v1.413.0 (the user: "I cant copy and past images into the build modules
+ * </> code … the permission blocker does not allow change to auto-- allow
+ * all, should be changeable mid session and the ability to steer work"):
+ * PICTURES — paste, drop or the paperclip, through the chat's own upload
+ * contract (components/harness/HarnessAttachments: POST /documents/upload,
+ * pasted pictures renamed, thumbnails, a send waits for its uploads); a
+ * picture alone is a message. THE MODE — the chip stays reachable while the
+ * tool waits on a card (it sits beside the card), and the daemon starts every
+ * Claude Code able to switch to Full access later. NOTES — Enter while it
+ * works sends a NOTE (POST …/steer) through the tool's own way of taking one;
+ * the note is drawn in order, and one the tool never read comes back to the
+ * box with words.
+ *
  * THE TURN IS IRON JARVIS'S (the durable-turn rule): closing the page never
  * stops it; opening a session whose turn still runs follows it again
  * (`GET …/turns/{turn_id}/stream`).
@@ -68,6 +81,13 @@ import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harne
 import { CodeConversation } from "@/components/buildCode/CodeConversation";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
+  AttachButton,
+  AttachmentChips,
+  pastedFiles,
+  useHarnessAttachments,
+  type HarnessFile,
+} from "@/components/harness/HarnessAttachments";
+import {
   OPEN_IN_TERMINAL,
   KEEPS_LAST_TITLE,
   OWN_SIGN_IN_TITLE,
@@ -99,6 +119,8 @@ import {
   sessionRowLine,
   signsInItself,
   sessionTitle,
+  steerPlaceholder,
+  STEER_RETURNED_WORDS,
   toolLabel,
   type CodeEvent,
   type CodeSession,
@@ -185,6 +207,7 @@ function SessionPane({
   onOpenedTerminal,
   onArchived,
   firstMessage = null,
+  firstFiles = null,
   onFirstSent,
 }: {
   sessionId: string;
@@ -195,6 +218,8 @@ function SessionPane({
   /** v1.412.0: the start composer's words — sent as this session's first
    *  message as soon as it is read (one press: make + send). */
   firstMessage?: string | null;
+  /** v1.413.0: the start composer's files (pictures already uploaded). */
+  firstFiles?: string[] | null;
   onFirstSent?: () => void;
 }) {
   const [session, setSession] = useState<CodeSession | null>(null);
@@ -236,8 +261,29 @@ function SessionPane({
   const answeredRef = useRef<Set<string>>(new Set());
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** v1.413.0: pictures and files pasted, dropped or picked (uploaded). */
+  const att = useHarnessAttachments();
+  /** The box and its "@" picks, read when a send runs (a send held for an
+   *  upload runs later, from an older render). */
+  const textRef = useRef(text);
+  textRef.current = text;
+  const picksRef = useRef(files);
+  picksRef.current = files;
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  /** The notes THIS window sent (only those come back to its box), and the
+   *  ones already put back (never twice). */
+  const notesMineRef = useRef<Map<string, { text: string; files: string[]; uploads: HarnessFile[] }>>(new Map());
+  const notesBackRef = useRef<Set<string>>(new Set());
+  const [steering, setSteering] = useState(false);
+  const attRestoreRef = useRef(att.restore);
+  attRestoreRef.current = att.restore;
+  const sessionToolRef = useRef("");
+  const toolsRef = useRef(tools);
+  toolsRef.current = tools;
 
   const tool = useMemo(() => tools.find((t) => t.id === session?.tool) ?? null, [tools, session?.tool]);
+  sessionToolRef.current = session?.tool ?? "";
   const toolName = toolLabel(session?.tool ?? "", tools);
   // Rows whose item did not change keep their object (they do not draw
   // again; the v1.250.0 rule).
@@ -260,12 +306,25 @@ function SessionPane({
     setEvents((prev) => applyEvents(prev, arrived, optimisticRef));
   }, []);
 
+  /** v1.413.0: a note this window sent that the tool never read: its words
+   *  and files go back in the box (beside anything typed since), said once. */
+  const giveNoteBack = useCallback((id: string) => {
+    const note = notesMineRef.current.get(id);
+    if (!note || notesBackRef.current.has(id)) return;
+    notesBackRef.current.add(id);
+    setText((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")}\n${note.text}` : note.text));
+    if (note.files.length) setFiles((cur) => [...cur, ...note.files.filter((f) => !cur.includes(f))]);
+    if (note.uploads.length) attRestoreRef.current(note.uploads);
+    setInfo(STEER_RETURNED_WORDS(toolLabel(sessionToolRef.current, toolsRef.current)));
+  }, []);
+
   /** An event arrived: drawn with the others of this frame (at most one
    *  redraw a frame, however fast the words stream). */
   const append = useCallback(
     (gen: number, ev: CodeEvent) => {
       if (gen !== genRef.current) return;
       if (ev.type === "resolved" && answeredRef.current.has(ev.requestId)) return;
+      if (ev.type === "steer" && ev.state === "returned") giveNoteBack(ev.id);
       pendingRef.current.push(ev);
       if (!cancelFrameRef.current) {
         cancelFrameRef.current = nextFrame(() => {
@@ -419,6 +478,7 @@ function SessionPane({
     setRunning(false);
     setText("");
     setFiles([]);
+    att.clear();
     setNote(null);
     setAskError(null);
     setFetchedCommands(null);
@@ -463,14 +523,74 @@ function SessionPane({
     pinToBottom(sentinelRef.current);
   }, []);
 
-  const send = useCallback(async (handed?: string) => {
-    const typedNow = handed ?? text;
+  /** v1.413.0: a note for the reply that is running (Enter while it works):
+   *  through the tool's own way of taking one. No reply running after all
+   *  (409 `not_working`) → it goes as a message. */
+  const steer = useCallback(async () => {
+    if (!session || steering) return;
+    const words = textRef.current.trim();
+    const uploads: HarnessFile[] = att.filesRef.current.slice();
+    const picks = picksRef.current.slice();
+    const all = [...uploads.map((f) => f.path), ...picks];
+    if (!words && !all.length) return;
+    setSteering(true);
+    setNote(null);
+    setText("");
+    setFiles([]);
+    att.clear();
+    try {
+      const res = await post<{ id?: string; state?: string }>(`${SESSIONS}/${encodeURIComponent(session.id)}/steer`, {
+        text: words,
+        ...(all.length ? { files: all } : {}),
+      });
+      const id = typeof res?.id === "string" ? res.id : "";
+      if (id) {
+        notesMineRef.current.set(id, { text: words, files: picks, uploads });
+        // It ended while the note went out: nothing reached the tool.
+        if (res?.state === "returned") giveNoteBack(id);
+      }
+    } catch (e) {
+      const body = e instanceof ApiError ? (e as ApiError & { body?: unknown }).body : null;
+      const code = body && typeof body === "object" ? (body as { code?: unknown }).code : undefined;
+      if (code === "not_working") {
+        // The reply had ended: the words (and files) go as a message now —
+        // a refused message puts them back in the box itself.
+        setRunning(false);
+        runningRef.current = false;
+        void sendRef.current?.(words, all);
+        return;
+      }
+      setText((cur) => (cur.trim() ? cur : words));
+      setFiles((cur) => (cur.length ? cur : picks));
+      att.restore(uploads);
+      setNote(errorWords(e, "Your note did not reach the coding tool."));
+    } finally {
+      setSteering(false);
+    }
+  }, [session, steering, att, giveNoteBack]);
+
+  const send = useCallback(async (handed?: string, handedFiles?: string[]) => {
+    if (!session) return;
+    // v1.413.0: a send waits for the pictures still going up (never goes
+    // without them — the v1.275.0 rule); it reads the box when it runs.
+    if (handed === undefined && att.busyRef.current) {
+      att.whenSettled(() => void sendRef.current?.());
+      return;
+    }
+    if (handed === undefined && runningRef.current) {
+      void steer();
+      return;
+    }
+    const typedNow = handed ?? textRef.current;
     const words = typedNow.trim();
-    if (!words || running || !session) return;
+    const uploads: HarnessFile[] = handed === undefined ? att.filesRef.current.slice() : [];
+    const picks = handed === undefined ? picksRef.current.slice() : [];
+    const sent = handed === undefined ? [...uploads.map((f) => f.path), ...picks] : (handedFiles ?? []);
+    if ((!words && !sent.length) || runningRef.current) return;
     const gen = genRef.current;
     const turnId = mintTurnId();
     sendSeqRef.current += 1;
-    const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files };
+    const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files: sent };
     optimisticRef.current = mine;
     setEvents((prev) => [...prev, mine]);
     const typed = typedNow;
@@ -480,11 +600,14 @@ function SessionPane({
       const echo = firstMessageTitle(words);
       if (echo) onChanged({ ...session, title: echo });
     }
-    if (handed === undefined) setText("");
-    const sent = handed === undefined ? files : [];
-    if (handed === undefined) setFiles([]);
+    if (handed === undefined) {
+      setText("");
+      setFiles([]);
+      att.clear();
+    }
     setNote(null);
     setRunning(true);
+    runningRef.current = true;
     // v1.412.0: a session with no folder gets its own folder with this first
     // message — its header names it as soon as the daemon has made it.
     if (session.noFolder && !session.folder) {
@@ -514,20 +637,27 @@ function SessionPane({
         optimisticRef.current = null;
         setEvents((prev) => prev.filter((e) => e !== mine));
         setText((cur) => (cur.trim() ? cur : typed));
-        setFiles((cur) => (cur.length ? cur : sent));
+        // A handed message's files come back by path (they went up already).
+        setFiles((cur) => (cur.length ? cur : handed === undefined ? picks : (handedFiles ?? [])));
+        att.restore(uploads);
         setNote(words2);
       },
     );
-  }, [text, files, running, session, follow, onChanged]);
+  }, [session, follow, onChanged, att, steer]);
+  const sendRef = useRef<typeof send | null>(null);
+  sendRef.current = send;
 
   // v1.412.0: the start composer's words go as the first message, once.
   const firstRef = useRef<string | null>(firstMessage);
+  const firstFilesRef = useRef<string[]>(firstFiles ?? []);
   useEffect(() => {
     const words = firstRef.current;
-    if (!words || !session || running) return;
+    const withFiles = firstFilesRef.current;
+    if ((words === null || (!words && !withFiles.length)) || !session || running) return;
     firstRef.current = null;
+    firstFilesRef.current = [];
     onFirstSent?.();
-    void send(words);
+    void send(words, withFiles);
   }, [session, running, send, onFirstSent]);
 
   const stop = useCallback(() => {
@@ -890,14 +1020,26 @@ function SessionPane({
             </p>
           ) : null}
           {asking ? (
-            <CodeAskCard
-              asks={conv.asks}
-              toolName={toolName}
-              dangerousMode={dangerous}
-              onAnswer={answer}
-              onStop={running ? stop : undefined}
-              error={askError}
-            />
+            <>
+              <CodeAskCard
+                asks={conv.asks}
+                toolName={toolName}
+                dangerousMode={dangerous}
+                onAnswer={answer}
+                onStop={running ? stop : undefined}
+                error={askError}
+              />
+              {/* v1.413.0: the mode can change while a card waits (the
+                  composer, and its chip, are hidden under the card). */}
+              <div data-testid="code-ask-mode-row" className="mt-1 flex items-center gap-1 px-1">
+                <ModeChip
+                  tool={tool}
+                  value={session.mode}
+                  testId="code-ask-mode"
+                  onChange={(mode, confirm) => void change(confirm ? { mode, confirm: true } : { mode })}
+                />
+              </div>
+            </>
           ) : null}
           <div
             data-testid="code-composer"
@@ -905,6 +1047,15 @@ function SessionPane({
             hidden={asking}
             inert={asking}
             className="relative rounded-[20px] bg-ink-800 shadow-[0_0_0_0.5px_rgb(var(--white)/0.12)]"
+            onDragOver={(e) => {
+              if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              const dropped = Array.from(e.dataTransfer?.files ?? []);
+              if (!dropped.length) return;
+              e.preventDefault();
+              void att.add(dropped);
+            }}
           >
             {menuOpen && menuRows.length > 0 ? (
               <ul
@@ -943,18 +1094,32 @@ function SessionPane({
                 {filesState.failed ? "This folder's files could not be read." : "Reading this folder's files…"}
               </p>
             ) : null}
+            <AttachmentChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+            {att.problem ? (
+              <p data-testid="code-attach-problem" role="alert" className="px-3 pt-1 text-[12px] text-tone-warn">
+                {att.problem}
+              </p>
+            ) : null}
             <textarea
               ref={boxRef}
               data-testid="code-box"
               aria-label={`Message ${toolName}`}
-              placeholder={running ? `${toolName} is working. Press Stop to interrupt it.` : `Message ${toolName} — / for commands, @ for files`}
+              placeholder={running ? steerPlaceholder(toolName) : `Message ${toolName} — / for commands, @ for files`}
               rows={2}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={onBoxKey}
+              onPaste={(e) => {
+                // A pasted picture is attached; pasted text is typed.
+                const pasted = pastedFiles(e.clipboardData);
+                if (!pasted.length) return;
+                e.preventDefault();
+                void att.add(pasted, { pasted: true });
+              }}
               className={HARNESS_COMPOSER_BOX}
             />
             <div className="flex flex-wrap items-center gap-1 px-2 pb-2">
+              <AttachButton onPick={(picked) => void att.add(picked)} />
               <span className="sr-only">Coding tool: {toolName}</span>
               <select
                 aria-label={`${toolName} model`}
@@ -1022,6 +1187,19 @@ function SessionPane({
                 <span className="truncate">{accountName}</span>
               </span>
               <span className="ml-auto" />
+              {running && (text.trim() || att.files.length || files.length) ? (
+                <button
+                  type="button"
+                  data-testid="code-steer-send"
+                  disabled={steering}
+                  onClick={() => void send()}
+                  aria-label={`Send a note to ${toolName}`}
+                  title={`Send a note to ${toolName} while it works (Enter)`}
+                  className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
+                >
+                  <ArrowUp size={15} aria-hidden="true" />
+                </button>
+              ) : null}
               {running ? (
                 <button
                   type="button"
@@ -1036,7 +1214,7 @@ function SessionPane({
                 <button
                   type="button"
                   data-testid="code-send"
-                  disabled={!text.trim()}
+                  disabled={!text.trim() && !att.files.length && !files.length}
                   onClick={() => void send()}
                   aria-label="Send"
                   className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
@@ -1107,7 +1285,7 @@ export function BuildCodeView({
     setRowMenu(null);
   }, []);
   /** v1.412.0: the words a just-made session sends as its first message. */
-  const [firstFor, setFirstFor] = useState<{ id: string; text: string } | null>(null);
+  const [firstFor, setFirstFor] = useState<{ id: string; text: string; files: string[] } | null>(null);
   const clearFirst = useCallback(() => setFirstFor(null), []);
   // v1.412.0 review: words parked for a just-made session are for THAT open
   // only — the user opening a different session drops them (they used to be
@@ -1512,9 +1690,9 @@ export function BuildCodeView({
             startFolder={creating ? newOn.folder : null}
             workRoot={workRoot}
             startAt={openSessionFolder ?? startFolder}
-            onStarted={(s, words) => {
+            onStarted={(s, words, files) => {
               noteChanged(s);
-              setFirstFor({ id: s.id, text: words });
+              setFirstFor({ id: s.id, text: words, files: files ?? [] });
               open(s.id);
             }}
           />
@@ -1527,6 +1705,7 @@ export function BuildCodeView({
             onOpenedTerminal={onOpenedTerminal}
             onArchived={archived}
             firstMessage={firstFor && firstFor.id === openId ? firstFor.text : null}
+            firstFiles={firstFor && firstFor.id === openId ? firstFor.files : null}
             onFirstSent={clearFirst}
           />
         )}

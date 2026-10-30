@@ -20,6 +20,19 @@ real harness spoke it:
 Every line the host sends is appended to ``IJ_FAKE_LOG`` (JSON lines), after a
 first line with the argv, the folder and the account-related environment, so
 the tests assert on what really reached the harness. Ends on stdin EOF.
+
+v1.413.0 (pictures, notes while it works, modes mid-session):
+
+* an ``out`` frame may hold ``{{uuid:N}}`` — the ``uuid`` of the Nth user
+  message the host sent (Claude Code's ``command_lifecycle`` names it) — and
+  ``{{steer_ref}}`` — the ``clientUserMessageId`` of the host's last Codex
+  ``turn/steer``;
+* ``IJ_FAKE_CLAUDE_MODES=1``: a ``set_permission_mode`` control request is
+  answered AT ONCE, the way claude 2.1.311 answers it (measured): refused with
+  ``bypass_not_launched`` for ``bypassPermissions`` unless the process was
+  started with ``--allow-dangerously-skip-permissions`` (or in that mode);
+  anything else is applied. It never waits on the script (which may still
+  ``await`` it, to go on only after the mode changed).
 """
 
 import json
@@ -67,6 +80,30 @@ RECORDED = RECORDED or next((((s["out"].get("data") or {}).get("sessionId") or "
 NOT_PI = {"user", "control_request", "control_response", "extension_ui_response"}
 
 inbox: "queue.Queue" = queue.Queue()
+OUT_LOCK = threading.Lock()
+USER_UUIDS: list = []
+STEER_REFS: list = []
+CLAUDE_MODES = os.environ.get("IJ_FAKE_CLAUDE_MODES") == "1"
+LIVE_MODES = ("acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan")
+
+
+def answer_mode(obj):
+    """claude 2.1.311's own answer to ``set_permission_mode`` (measured)."""
+    mode = (obj.get("request") or {}).get("mode")
+    rid = obj.get("request_id")
+    allowed = ("--allow-dangerously-skip-permissions" in sys.argv or "--dangerously-skip-permissions" in sys.argv
+               or ("--permission-mode" in sys.argv
+                   and sys.argv[sys.argv.index("--permission-mode") + 1] == "bypassPermissions"))
+    if mode not in LIVE_MODES:
+        resp = {"subtype": "error", "request_id": rid,
+                "error": "Cannot set permission mode: must be one of " + ", ".join(LIVE_MODES)}
+    elif mode == "bypassPermissions" and not allowed:
+        resp = {"subtype": "error", "request_id": rid, "error_code": "bypass_not_launched",
+                "error": "Cannot set permission mode to bypassPermissions because the session was not "
+                         "launched with --dangerously-skip-permissions"}
+    else:
+        resp = {"subtype": "success", "request_id": rid, "response": {"mode": mode}}
+    out({"type": "control_response", "response": resp})
 
 
 def read_stdin():
@@ -79,6 +116,13 @@ def read_stdin():
         except ValueError:
             continue
         log({"in": obj})
+        if obj.get("type") == "user" and obj.get("uuid"):
+            USER_UUIDS.append(obj["uuid"])
+        if obj.get("method") == "turn/steer":
+            STEER_REFS.append((obj.get("params") or {}).get("clientUserMessageId") or "")
+        if CLAUDE_MODES and obj.get("type") == "control_request" \
+                and (obj.get("request") or {}).get("subtype") == "set_permission_mode":
+            answer_mode(obj)  # at once; a script may still await it
         inbox.put(obj)
     inbox.put(None)
 
@@ -142,6 +186,16 @@ def out(obj):
     text = json.dumps(obj, ensure_ascii=False)
     if WANTED and RECORDED:
         text = text.replace(RECORDED, WANTED)
+    if "{{" in text:
+        for i, u in enumerate(USER_UUIDS, start=1):
+            text = text.replace("{{uuid:%d}}" % i, u)
+        if STEER_REFS:
+            text = text.replace("{{steer_ref}}", STEER_REFS[-1])
+    with OUT_LOCK:
+        _write(text)
+
+
+def _write(text):
     sys.stdout.buffer.write(text.encode("utf-8") + b"\n")
     sys.stdout.buffer.flush()
 
