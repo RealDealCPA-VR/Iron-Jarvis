@@ -39,6 +39,7 @@ import { agentsPath, missionPath } from "@/lib/mission";
 import { MISSION_ORIGIN, sessionHref } from "@/lib/missionLinks";
 import {
   announceBuildSessionLink,
+  announceBuildTerminalLink,
   BUILD_STALLED_HEADLINE,
   buildFinishedBody,
   buildFinishedHeadline,
@@ -2525,6 +2526,9 @@ export function NotificationBell() {
             // named) pressed while that page is open switches its view —
             // behind Code, a chat row changed only the address.
             if (announceBuildCodeLink(href)) return;
+            // A terminal's row (`/terminals?focus=<id>`) pressed while Build
+            // shows its Code view: Build switches to Terminal on it.
+            if (announceBuildTerminalLink(href)) return;
             if (!announceBuildSessionLink(href)) announceChatViewLink(href);
           }}
         >

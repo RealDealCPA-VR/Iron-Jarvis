@@ -438,9 +438,42 @@ export function sessionTitle(s: Pick<CodeSession, "title" | "tool">, tools?: rea
   return s.title.trim() || `New ${toolLabel(s.tool, tools)} session`;
 }
 
-/** A mode's words (the tool's own list, else its id). */
+const MODE_WORDS: Record<string, string> = {
+  ask: "Ask first",
+  edits: "Auto edits",
+  plan: "Plan",
+  full: "Full access",
+};
+
+/** A mode's words: the tool's own list, else the daemon's four names —
+ *  never the raw id a user cannot read. */
 export function modeLabel(modeId: string, tool?: CodingTool | null): string {
-  return tool?.modes.find((m) => m.id === modeId)?.label || modeId || "Ask first";
+  const own = tool?.modes.find((m) => m.id === modeId)?.label || tool?.hiddenModes.find((m) => m.id === modeId)?.label;
+  if (own) return own;
+  return MODE_WORDS[modeId] ?? (modeId ? "Another mode" : "Ask first");
+}
+
+/** Is this mode Full access (the daemon's id, whatever the tool list says). */
+export function isFullAccess(modeId: string, tool?: CodingTool | null): boolean {
+  return modeId === "full" || modeIsDangerous(modeId, tool);
+}
+
+/** An account's state in words, and whether a new session can start on it
+ *  (the cached Iron-Proxy statuses: ready | usage | limit | needs_sign_in |
+ *  off). */
+export function accountStatusWords(status: string): { words: string; usable: boolean } {
+  switch (status) {
+    case "needs_sign_in":
+      return { words: "needs to sign in again", usable: false };
+    case "limit":
+      return { words: "at its limit", usable: false };
+    case "off":
+      return { words: "turned off", usable: false };
+    case "usage":
+      return { words: "in use", usable: true };
+    default:
+      return { words: "", usable: true };
+  }
 }
 
 export function modeIsDangerous(modeId: string, tool?: CodingTool | null): boolean {
@@ -464,7 +497,11 @@ export interface QuestionItem {
   multi: boolean;
 }
 
-export type CodeEvent =
+/** Every event may name the turn it belongs to (the daemon's `turn`): a
+ *  rejoin cuts the saved list by it. */
+export type CodeEvent = CodeEventBody & { turn?: string };
+
+type CodeEventBody =
   | { type: "session"; at: string; harness: string; harnessSessionId: string; model: string; cwd: string; mode: string }
   | { type: "user"; at: string; text: string; files: string[] }
   | { type: "text"; at: string; item: string; delta: string }
@@ -514,6 +551,13 @@ export type CodeEventType = CodeEvent["type"];
 /** One event by whitelist; null for an unknown type or a missing key. The
  *  type is the event's own `type`, else the SSE frame's name (`hint`). */
 export function decodeCodeEvent(raw: unknown, hint = ""): CodeEvent | null {
+  const ev = decodeEventBody(raw, hint);
+  if (!ev) return null;
+  const turn = str(obj(raw)?.turn, 200).trim();
+  return turn ? { ...ev, turn } : ev;
+}
+
+function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
   const r = obj(raw);
   if (!r) return null;
   const type = str(r.type, 40) || hint;
@@ -921,11 +965,22 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
 /**
  * Rejoining a running turn: the turn's stream REPLAYS the turn from its
  * start, while the session read already holds what was saved of it. So the
- * saved list is cut back to before the last `user` event (the turn's own
- * question), and the replay draws the turn again. When the replay does not
- * begin with that `user` event, the cut one is put back first (`carry`).
+ * saved list loses every event of THAT turn (`turn === runningTurn`), and the
+ * replay draws the turn again; its question is kept aside (`carry`) and put
+ * back first when the replay does not begin with it. Only when no saved
+ * event names a turn (an older record) is the cut made at the last `user`.
  */
-export function cutForRejoin(events: readonly CodeEvent[]): { base: CodeEvent[]; carry: CodeEvent | null } {
+export function cutForRejoin(
+  events: readonly CodeEvent[],
+  runningTurn: string | null = null,
+): { base: CodeEvent[]; carry: CodeEvent | null } {
+  if (runningTurn && events.some((e) => e.turn)) {
+    const mine = events.filter((e) => e.turn === runningTurn);
+    return {
+      base: events.filter((e) => e.turn !== runningTurn),
+      carry: mine.find((e) => e.type === "user") ?? null,
+    };
+  }
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === "user") return { base: events.slice(0, i), carry: events[i] };
   }
@@ -1094,3 +1149,31 @@ export function signInProvider(tool: string): string {
 
 /** "Continue on another account": the words of the press. */
 export const CONTINUE_ON_ANOTHER = "Continue on another account";
+
+// ── drawing only what changed (the v1.250.0 rule) ───────────────────────────
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => sameValue(x, b[i]));
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a as object);
+    const kb = Object.keys(b as object);
+    return (
+      ka.length === kb.length &&
+      ka.every((k) => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+    );
+  }
+  return false;
+}
+
+/** The new fold's items, with every item whose content did not change
+ *  replaced by the PREVIOUS object (same key, same content), so a memoised
+ *  row draws again only when its own item changed. */
+export function reuseItems(prev: readonly ConvItem[] | null, next: ConvItem[]): ConvItem[] {
+  if (!prev || !prev.length) return next;
+  const byKey = new Map(prev.map((it) => [it.key, it]));
+  return next.map((it) => {
+    const old = byKey.get(it.key);
+    return old && sameValue(old, it) ? old : it;
+  });
+}

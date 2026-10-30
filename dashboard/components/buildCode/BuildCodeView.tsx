@@ -32,11 +32,20 @@
  * lib/useChatStream's `streamSSE` (frames read by its `onFrame` tap).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   AlertTriangle,
   Archive,
   ArrowUp,
+  ChevronDown,
   History,
   Code2,
   FolderOpen,
@@ -56,11 +65,13 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { matchProjectEntries, useProjectFilesState, type ProjectEntry } from "@/lib/atMenuFiles";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
+import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { CodeConversation } from "@/components/buildCode/CodeConversation";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
   OPEN_IN_TERMINAL,
+  accountStatusWords,
   accountWords,
   appliedNextWords,
   cutForRejoin,
@@ -70,6 +81,8 @@ import {
   droppedWords,
   folderKey,
   isArchived,
+  isFullAccess,
+  reuseItems,
   decodeCodeEvent,
   decodeCodeSession,
   decodeCodeSessionView,
@@ -86,6 +99,7 @@ import {
   type CodeEvent,
   type CodeSession,
   type CodingTool,
+  type ConvItem,
   type DiskSession,
   type OpenAsk,
   type ToolCommand,
@@ -100,6 +114,51 @@ const TOOLS = `${API}/harnesses`;
 export const CODE_LIST_REREAD_MS = 15_000;
 /** How often a session whose running turn is not named is read again. */
 export const CODE_RUNNING_REREAD_MS = 2_000;
+/** While Iron Jarvis is not answering mid-reply: how often to look again
+ *  (the reply is followed again once it is back). */
+export const CODE_LOST_REREAD_MS = 3_000;
+/** Full access: a second press this soon after the first does not count (a
+ *  held or doubled Enter must never give full access by itself). */
+export const FULL_ARM_GUARD_MS = 400;
+/** Full access: an armed press that is not followed up is forgotten. */
+export const FULL_DISARM_MS = 3_000;
+/** "At the bottom" for the transcript, in pixels. */
+const BOTTOM_SLACK_PX = 48;
+
+/** One frame later (or as soon as possible where there are no frames). */
+function nextFrame(fn: () => void): () => void {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    const id = window.requestAnimationFrame(fn);
+    return () => window.cancelAnimationFrame(id);
+  }
+  const id = setTimeout(fn, 16);
+  return () => clearTimeout(id);
+}
+
+/** The bottom of a transcript, if the browser can scroll to it. */
+function pinToBottom(sentinel: Element | null): void {
+  if (sentinel && typeof (sentinel as HTMLElement).scrollIntoView === "function") scrollToLatest(sentinel);
+}
+
+/** Merge events that arrived into the list: the tool's echo of a question
+ *  takes the place of the one drawn when it was sent; an ask settled twice
+ *  (the stream's line and the page's own) is drawn once. */
+function applyEvents(prev: CodeEvent[], arrived: readonly CodeEvent[], optimistic: { current: CodeEvent | null }): CodeEvent[] {
+  let out = prev;
+  for (const ev of arrived) {
+    if (ev.type === "resolved" && out.some((e) => e.type === "resolved" && e.requestId === ev.requestId)) continue;
+    if (ev.type === "user" && optimistic.current) {
+      const i = out.indexOf(optimistic.current);
+      optimistic.current = null;
+      if (i >= 0) {
+        out = [...out.slice(0, i), ev, ...out.slice(i + 1)];
+        continue;
+      }
+    }
+    out = [...out, ev];
+  }
+  return out;
+}
 
 const QUIET_BTN =
   "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-50";
@@ -132,10 +191,40 @@ export function ModeChip({
 }) {
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState<string | null>(null);
+  const armedAt = useRef(0);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [shift, setShift] = useState(0);
   const modes = tool?.modes ?? [];
-  const dangerous = modeIsDangerous(value, tool);
+  const dangerous = isFullAccess(value, tool);
   useEffect(() => {
     if (!open) setArmed(null);
+  }, [open]);
+  // An armed Full access that is not pressed again is forgotten.
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), FULL_DISARM_MS);
+    return () => clearTimeout(t);
+  }, [armed]);
+  // The menu stays inside the stage (a 360 px phone): moved left or right
+  // by however much it would stick out.
+  useLayoutEffect(() => {
+    if (!open) {
+      setShift(0);
+      return;
+    }
+    const el = menuRef.current;
+    if (!el) return;
+    const box = el.closest("[data-code-fit]")?.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const left = Math.max(box ? box.left : 0, 0) + 8;
+    const right = Math.min(box ? box.right : window.innerWidth, window.innerWidth) - 8;
+    const base = r.left - shift;
+    let next = 0;
+    if (base + r.width > right) next = right - (base + r.width);
+    if (base + next < left) next = left - base;
+    if (next !== shift) setShift(next);
+    // Measured once per opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   return (
     <div className="relative" data-testid={testId}>
@@ -154,8 +243,10 @@ export function ModeChip({
       </button>
       {open ? (
         <div
+          ref={menuRef}
           role="menu"
           data-testid={`${testId}-menu`}
+          style={shift ? { transform: `translateX(${shift}px)` } : undefined}
           className="absolute bottom-full left-0 z-20 mb-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl bg-ink-800 p-1 shadow-card"
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -183,11 +274,18 @@ export function ModeChip({
                 aria-checked={m.id === value}
                 data-testid={`${testId}-option-${m.id}`}
                 data-armed={isArmed ? "true" : undefined}
+                onKeyDown={(e) => {
+                  // A held key repeats its press: never let that be the second.
+                  if (e.repeat && (e.key === "Enter" || e.key === " ")) e.preventDefault();
+                }}
                 onClick={() => {
                   if (m.dangerous && !isArmed) {
+                    armedAt.current = Date.now();
                     setArmed(m.id);
                     return;
                   }
+                  // The second press must be a second, deliberate press.
+                  if (m.dangerous && Date.now() - armedAt.current < FULL_ARM_GUARD_MS) return;
                   setOpen(false);
                   onChange(m.id, m.dangerous);
                 }}
@@ -248,6 +346,18 @@ function SessionPane({
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
+  /** Iron Jarvis stopped answering while a reply ran: looked for again. */
+  const [lost, setLost] = useState(false);
+  /** The reader scrolled up while something new arrived. */
+  const [jump, setJump] = useState(false);
+  const atBottomRef = useRef(true);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  /** Events that arrived and are not drawn yet (flushed once a frame). */
+  const pendingRef = useRef<CodeEvent[]>([]);
+  const cancelFrameRef = useRef<(() => void) | null>(null);
+  /** Bumped by each send: a read started before it never undoes it. */
+  const sendSeqRef = useRef(0);
+  const prevItemsRef = useRef<ConvItem[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
   const optimisticRef = useRef<CodeEvent | null>(null);
@@ -257,29 +367,56 @@ function SessionPane({
 
   const tool = useMemo(() => tools.find((t) => t.id === session?.tool) ?? null, [tools, session?.tool]);
   const toolName = toolLabel(session?.tool ?? "", tools);
-  const conv = useMemo(() => foldConversation(events, extra), [events, extra]);
-  const dangerous = modeIsDangerous(session?.mode ?? "", tool);
+  // Rows whose item did not change keep their object (they do not draw
+  // again; the v1.250.0 rule).
+  const conv = useMemo(() => {
+    const c = foldConversation(events, extra);
+    const items = reuseItems(prevItemsRef.current, c.items);
+    prevItemsRef.current = items;
+    return { ...c, items };
+  }, [events, extra]);
+  // Full access by the session's own mode id, whatever the tool list says.
+  const dangerous = isFullAccess(session?.mode ?? "", tool);
 
-  const append = useCallback((gen: number, ev: CodeEvent) => {
-    if (gen !== genRef.current) return;
-    if (ev.type === "resolved" && answeredRef.current.has(ev.requestId)) return;
-    setEvents((prev) => {
-      if (ev.type === "user" && optimisticRef.current) {
-        const i = prev.indexOf(optimisticRef.current);
-        optimisticRef.current = null;
-        if (i >= 0) return [...prev.slice(0, i), ev, ...prev.slice(i + 1)];
-      }
-      return [...prev, ev];
-    });
+  /** Draw what arrived, now (a stream's end, before reading the record). */
+  const flushNow = useCallback(() => {
+    cancelFrameRef.current?.();
+    cancelFrameRef.current = null;
+    const arrived = pendingRef.current;
+    if (!arrived.length) return;
+    pendingRef.current = [];
+    setEvents((prev) => applyEvents(prev, arrived, optimisticRef));
   }, []);
+
+  /** An event arrived: drawn with the others of this frame (at most one
+   *  redraw a frame, however fast the words stream). */
+  const append = useCallback(
+    (gen: number, ev: CodeEvent) => {
+      if (gen !== genRef.current) return;
+      if (ev.type === "resolved" && answeredRef.current.has(ev.requestId)) return;
+      pendingRef.current.push(ev);
+      if (!cancelFrameRef.current) {
+        cancelFrameRef.current = nextFrame(() => {
+          cancelFrameRef.current = null;
+          flushNow();
+        });
+      }
+    },
+    [flushNow],
+  );
 
   /** Read the session from the daemon; follow its running turn. */
   const load = useCallback(
     async (opts: { follow: boolean }) => {
       const gen = genRef.current;
+      const seq = sendSeqRef.current;
       try {
         const raw = await get<unknown>(`${SESSIONS}/${encodeURIComponent(sessionId)}`);
         if (gen !== genRef.current) return;
+        // A message sent while this read was out: the read is older than
+        // what is on screen, so it decides nothing about the reply.
+        if (seq !== sendSeqRef.current) return;
+        setLost(false);
         const view = decodeCodeSessionView(raw);
         if (!view) {
           setLoadError("This session could not be read.");
@@ -292,7 +429,7 @@ function SessionPane({
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
         if (view.running && view.runningTurn && opts.follow) {
-          const { base, carry } = cutForRejoin(view.events);
+          const { base, carry } = cutForRejoin(view.events, view.runningTurn);
           setEvents(base);
           setRunning(true);
           void follow(gen, `${SESSIONS}/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(view.runningTurn)}/stream`, undefined, carry);
@@ -308,22 +445,33 @@ function SessionPane({
         }
       } catch (e) {
         if (gen !== genRef.current) return;
+        // Still not answering: keep looking (the lost-reply re-read).
+        if (lost) return;
         setLoadError(errorWords(e, "This session could not be read."));
       }
     },
     // `follow` is stable (declared below with useCallback and no deps).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId, onChanged],
+    [sessionId, onChanged, lost],
   );
 
-  /** Follow one turn's events (a new turn: `body`; a rejoin: none). */
+  /** Follow one turn's events (a new turn: `body`; a rejoin: none).
+   *  `onRefused`: a new turn the daemon refused before any frame (409, any
+   *  status of 400 or more) — the caller puts the message back. */
   const follow = useCallback(
-    async (gen: number, path: string, body: unknown, carry: CodeEvent | null = null) => {
+    async (
+      gen: number,
+      path: string,
+      body: unknown,
+      carry: CodeEvent | null = null,
+      onRefused?: (words: string) => void,
+    ) => {
       abortRef.current?.abort();
       const ctl = new AbortController();
       abortRef.current = ctl;
       setFollowing(true);
       let first = true;
+      let refused = false;
       // A frame named "error" is also yielded by the generator (decoded for
       // the chat); only an error with no frame before it is the TRANSPORT's.
       let tappedError = false;
@@ -345,7 +493,20 @@ function SessionPane({
             tappedError = false;
             continue;
           }
-          if (gen === genRef.current) {
+          if (gen !== genRef.current) continue;
+          const status = typeof ev.status === "number" ? ev.status : 0;
+          if (first && status >= 400 && onRefused) {
+            onRefused(ev.title || ev.detail || "That message was not sent.");
+            refused = true;
+            continue;
+          }
+          if (ev.offline) {
+            // Iron Jarvis went away mid-reply: the reply goes on there; it is
+            // followed again once Iron Jarvis answers.
+            setLost(true);
+            continue;
+          }
+          {
             append(gen, {
               type: "error",
               at: "",
@@ -360,15 +521,17 @@ function SessionPane({
       } finally {
         if (abortRef.current === ctl) abortRef.current = null;
         if (gen === genRef.current) {
+          flushNow();
           setFollowing(false);
           setRunning(false);
           // The saved record is the truth (titles, trimmed frames): read it
-          // again once the turn is over, unless the user left this session.
-          if (!ctl.signal.aborted) void load({ follow: false });
+          // again once the turn is over, unless the user left this session
+          // or the message never went.
+          if (!ctl.signal.aborted && !refused) void load({ follow: false });
         }
       }
     },
-    [append, load],
+    [append, load, flushNow],
   );
 
   // A new session id: start over.
@@ -393,37 +556,72 @@ function SessionPane({
     return () => {
       genRef.current += 1;
       abortRef.current?.abort();
+      cancelFrameRef.current?.();
+      cancelFrameRef.current = null;
+      pendingRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // A turn that runs but was not named (an older daemon): read again.
-  useVisibleInterval(() => void load({ follow: true }), CODE_RUNNING_REREAD_MS, running && !following);
+  useVisibleInterval(() => void load({ follow: true }), CODE_RUNNING_REREAD_MS, running && !following && !lost);
+  // Iron Jarvis stopped answering mid-reply: look again until it is back,
+  // then follow the reply again (the read rejoins a running turn).
+  useVisibleInterval(() => void load({ follow: true }), CODE_LOST_REREAD_MS, lost && !following);
 
-  // Keep the newest at the bottom.
-  useEffect(() => {
+  // The newest stays in view only for a reader who is AT the bottom (the
+  // chat's rule); one who scrolled up is left where they are, with "Jump to
+  // latest".
+  const onScroll = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [conv.items.length, events.length]);
+    if (!el) return;
+    const at = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK_PX;
+    atBottomRef.current = at;
+    if (at) setJump(false);
+  }, []);
+  useEffect(() => {
+    if (atBottomRef.current) pinToBottom(sentinelRef.current);
+    else setJump(true);
+  }, [conv.items]);
+  const jumpToLatest = useCallback(() => {
+    atBottomRef.current = true;
+    setJump(false);
+    pinToBottom(sentinelRef.current);
+  }, []);
 
   const send = useCallback(async () => {
     const words = text.trim();
     if (!words || running || !session) return;
     const gen = genRef.current;
     const turnId = mintTurnId();
+    sendSeqRef.current += 1;
     const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files };
     optimisticRef.current = mine;
     setEvents((prev) => [...prev, mine]);
+    const typed = text;
     setText("");
     const sent = files;
     setFiles([]);
     setNote(null);
     setRunning(true);
-    await follow(gen, `${SESSIONS}/${encodeURIComponent(session.id)}/turn`, {
-      text: words,
-      turn_id: turnId,
-      ...(sent.length ? { files: sent } : {}),
-    });
+    // Sending shows the newest again.
+    atBottomRef.current = true;
+    setJump(false);
+    await follow(
+      gen,
+      `${SESSIONS}/${encodeURIComponent(session.id)}/turn`,
+      { text: words, turn_id: turnId, ...(sent.length ? { files: sent } : {}) },
+      null,
+      (words2) => {
+        // Refused before anything ran: no bubble for a message that never
+        // went; the words and files go back in the box, with the reason.
+        optimisticRef.current = null;
+        setEvents((prev) => prev.filter((e) => e !== mine));
+        setText((cur) => (cur.trim() ? cur : typed));
+        setFiles((cur) => (cur.length ? cur : sent));
+        setNote(words2);
+      },
+    );
   }, [text, files, running, session, follow]);
 
   const stop = useCallback(() => {
@@ -445,20 +643,29 @@ function SessionPane({
           ...(a.answers ? { answers: a.answers } : {}),
         });
         answeredRef.current.add(ask.requestId);
-        setEvents((prev) => [
-          ...prev,
-          {
-            type: "resolved",
-            at: new Date().toISOString(),
-            requestId: ask.requestId,
-            decision: ask.type === "question" ? (a.decision === "deny" ? "deny" : "answered") : a.decision,
-          },
-        ]);
+        // The stream's own line may have landed first: one line, never two.
+        setEvents((prev) =>
+          prev.some((e) => e.type === "resolved" && e.requestId === ask.requestId)
+            ? prev
+            : [
+                ...prev,
+                {
+                  type: "resolved",
+                  at: new Date().toISOString(),
+                  requestId: ask.requestId,
+                  decision: ask.type === "question" ? (a.decision === "deny" ? "deny" : "answered") : a.decision,
+                },
+              ],
+        );
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           // Answered elsewhere, or the tool stopped asking.
           answeredRef.current.add(ask.requestId);
-          setEvents((prev) => [...prev, { type: "resolved", at: "", requestId: ask.requestId, decision: "cancelled" }]);
+          setEvents((prev) =>
+            prev.some((e) => e.type === "resolved" && e.requestId === ask.requestId)
+              ? prev
+              : [...prev, { type: "resolved", at: "", requestId: ask.requestId, decision: "cancelled" }],
+          );
           return;
         }
         setAskError(errorWords(e, "The answer did not reach the coding tool. Try again."));
@@ -550,8 +757,12 @@ function SessionPane({
     if (tool && tool.commands.length) return tool.commands;
     return fetchedCommands ?? [];
   }, [viewCommands, tool, fetchedCommands]);
+  // Keyed on the TEXT a regex found (a new match object each render would
+  // re-run these on every key press).
+  const slashKey = slash ? slash[0] : null;
+  const atKey = at ? at[0] : null;
   useEffect(() => {
-    if (!slash || !session || (viewCommands && viewCommands.length) || (tool && tool.commands.length) || fetchedCommands !== null)
+    if (slashKey === null || !session || (viewCommands && viewCommands.length) || (tool && tool.commands.length) || fetchedCommands !== null)
       return;
     get<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/commands`)
       .then((raw) => {
@@ -565,7 +776,7 @@ function SessionPane({
         setFetchedCommands(out);
       })
       .catch(() => setFetchedCommands([]));
-  }, [slash, session, viewCommands, tool, fetchedCommands]);
+  }, [slashKey, session, viewCommands, tool, fetchedCommands]);
   const menuRows: MenuRow[] = useMemo(() => {
     if (slash) {
       const q = slash[1].toLowerCase();
@@ -580,9 +791,9 @@ function SessionPane({
     return [];
   }, [slash, at, commands, filesState.listing, files]);
   useEffect(() => {
-    setMenuOpen(!!(slash || at));
+    setMenuOpen(slashKey !== null || atKey !== null);
     setMenuIndex(0);
-  }, [text, slash, at]);
+  }, [text, slashKey, atKey]);
 
   const pick = (row: MenuRow) => {
     if (row.kind === "command") {
@@ -618,6 +829,18 @@ function SessionPane({
       void send();
     }
   };
+
+  // The last question answered: the caret goes back to the message box (the
+  // card held it, and it is gone).
+  const askingNow = conv.asks.length > 0;
+  const wasAsking = useRef(false);
+  useEffect(() => {
+    if (wasAsking.current && !askingNow) {
+      const ae = document.activeElement;
+      if (!ae || ae === document.body || ae === document.documentElement) boxRef.current?.focus();
+    }
+    wasAsking.current = askingNow;
+  }, [askingNow]);
 
   if (loadError && !session) {
     return (
@@ -690,7 +913,12 @@ function SessionPane({
           </div>
         </div>
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          data-testid="code-transcript"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+        >
           <div className={HARNESS_COLUMN}>
             {dropped > 0 ? (
               <p data-testid="code-dropped" className="mb-3 text-center text-[11px] text-zinc-600">
@@ -718,10 +946,29 @@ function SessionPane({
                 {toolName} is working…
               </p>
             ) : null}
+            {lost ? (
+              <p role="status" data-testid="code-lost" className="mt-3 text-[12px] text-zinc-500">
+                Iron Jarvis isn&apos;t answering right now. The reply keeps going there and shows here again once
+                it&apos;s back.
+              </p>
+            ) : null}
+            {/* The bottom: every "show the newest" scroll aims here. */}
+            <div ref={sentinelRef} aria-hidden="true" className="h-px scroll-mb-4" />
           </div>
         </div>
 
-        <div className={`shrink-0 px-4 pb-4 ${HARNESS_COLUMN}`}>
+        <div className={`relative shrink-0 px-4 pb-4 ${HARNESS_COLUMN}`}>
+          {jump ? (
+            <button
+              type="button"
+              data-testid="code-jump-to-latest"
+              onClick={jumpToLatest}
+              title="Scroll to the latest step"
+              className="absolute bottom-full left-1/2 z-10 mb-2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border border-white/[0.1] bg-ink-850/95 px-3 py-1 text-[12px] text-zinc-300 backdrop-blur transition-colors hover:border-white/[0.16] hover:bg-ink-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+            >
+              <ChevronDown size={13} aria-hidden="true" /> Jump to latest
+            </button>
+          ) : null}
           {note ? (
             <p role="alert" data-testid="code-note" className="mb-2 text-[12px] text-tone-danger">
               {note}
@@ -1015,12 +1262,17 @@ function NewSession({
                 className={CHIP_SELECT}
               >
                 <option value="">This PC&apos;s sign-in</option>
-                {tool.accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                    {a.status && a.status !== "ready" ? ` (${a.status})` : ""}
-                  </option>
-                ))}
+                {tool.accounts.map((a) => {
+                  // The account's state in words; one that cannot start a
+                  // session (signed out, at its limit, turned off) is greyed.
+                  const st = accountStatusWords(a.status);
+                  return (
+                    <option key={a.id} value={a.id} disabled={!st.usable}>
+                      {a.name}
+                      {st.words ? ` (${st.words})` : ""}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <span className="flex items-center gap-1.5 text-[13px] text-zinc-400">
@@ -1466,6 +1718,7 @@ export function BuildCodeView({
       <section
         aria-label="Session"
         data-testid="code-stage"
+        data-code-fit=""
         className="min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/[0.06] bg-ink-900/40"
         style={{ height: "calc(100vh - 12rem - var(--ij-strip-h, 0px))", minHeight: 480 }}
       >
@@ -1493,7 +1746,7 @@ export function BuildCodeView({
           <div className="grid h-full place-items-center px-6 text-center">
             <div className="max-w-sm space-y-3">
               <Code2 size={24} className="mx-auto text-zinc-600" aria-hidden="true" />
-              <p className="text-[14px] text-zinc-200">Claude Code or Codex, in a window</p>
+              <p className="text-[14px] text-zinc-200">Build&apos;s Code view: Claude Code or Codex, in a window</p>
               <p className="text-[13px] text-zinc-500">
                 The real coding tool runs here with its own settings and its own saved conversations. Iron Jarvis
                 shows what it does and asks you whenever it asks.

@@ -80,7 +80,11 @@ function toolWords(t: ToolEvent): string {
   }
 }
 
-function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
+/** How many times a row drew (tests count these; never read by the app). */
+export const codeRowDraws = { items: 0, tools: 0 };
+
+const ToolStep = memo(function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
+  codeRowDraws.tools += 1;
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const hasDetail = !!(tool.input || tool.output);
@@ -113,7 +117,7 @@ function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
       ) : null}
     </div>
   );
-}
+});
 
 /** What the newest failure can offer (only the newest: older ones are
  *  history). */
@@ -123,7 +127,10 @@ interface FailurePresses {
   continuing?: boolean;
 }
 
-function Item({ item, folder, press }: { item: ConvItem; folder: string; press: FailurePresses | null }) {
+// A row draws again only when ITS item changed (the fold keeps unchanged
+// items' objects — lib/buildApp reuseItems) or its press did.
+const Item = memo(function Item({ item, folder, press }: { item: ConvItem; folder: string; press: FailurePresses | null }) {
+  codeRowDraws.items += 1;
   switch (item.kind) {
     case "user":
       return (
@@ -216,7 +223,7 @@ function Item({ item, folder, press }: { item: ConvItem; folder: string; press: 
       );
     }
   }
-}
+});
 
 export const CodeConversation = memo(function CodeConversation({
   items,

@@ -130,6 +130,17 @@ async function stubCodeView(page: Page): Promise<void> {
       return json(r, { sessions: [SESSION, { ...SESSION, id: "a2", harness: "codex", account: "", title: "Lint" }] });
     },
   );
+  // A settled session (nothing asked): its composer and chips are on show.
+  await page.route(`${DAEMON}/build/app/sessions/a3`, (r) =>
+    json(r, {
+      session: { ...SESSION, id: "a3", title: "Settled" },
+      events: [EVENTS[0], EVENTS[1], { type: "done", stop: "completed" }],
+      running: null,
+      turn_id: null,
+      pending: [],
+      commands: [],
+    }),
+  );
   await page.route(`${DAEMON}/build/app/sessions/a1`, (r) =>
     json(r, {
       session: SESSION,
@@ -225,6 +236,27 @@ for (const size of [
     });
   });
 }
+
+// The review (v1.409.0): on a 360 px phone the mode menu stays inside the
+// stage, whatever the chip's place in the row.
+test("360 px: the mode menu fits inside the stage", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  await stubCodeView(page);
+  await page.goto("/terminals?view=code&code=a3");
+  await expect(page.getByTestId("code-mode-chip-button")).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId("code-mode-chip-button").click();
+  const menu = page.getByTestId("code-mode-chip-menu");
+  await expect(menu).toBeVisible();
+  await page.waitForTimeout(200);
+  const fit = await page.evaluate(() => {
+    const m = document.querySelector('[data-testid="code-mode-chip-menu"]')!.getBoundingClientRect();
+    const st = document.querySelector('[data-testid="code-stage"]')!.getBoundingClientRect();
+    return { left: m.left - st.left, right: st.right - m.right, pan: document.documentElement.scrollWidth - window.innerWidth };
+  });
+  expect(fit.left).toBeGreaterThanOrEqual(0);
+  expect(fit.right).toBeGreaterThanOrEqual(0);
+  expect(fit.pan).toBeLessThanOrEqual(0);
+});
 
 // Against the REAL scratch daemon (nothing stubbed): the list and New session
 // read the daemon's own answers. Nothing here starts Claude Code or Codex

@@ -23,7 +23,7 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const H = vi.hoisted(() => ({
   gets: {} as Record<string, unknown>,
@@ -33,8 +33,11 @@ const H = vi.hoisted(() => ({
   postReply: {} as Record<string, unknown>,
   postFail: {} as Record<string, { status: number; message: string }>,
   streams: [] as { path: string; body: unknown }[],
-  /** Frames each stream sends (in order of the streams opened). */
-  scripts: [] as { event: string; data: Record<string, unknown> }[][],
+  /** Frames each stream sends (in order of the streams opened); a
+   *  `{yield}` entry is what the reader itself yields (a refusal, a drop). */
+  scripts: [] as ({ event: string; data: Record<string, unknown> } | { yield: Record<string, unknown> })[][],
+  /** The newest stream's tap: a test sends a frame "later" through it. */
+  lastWatch: null as null | { onFrame?: (event: string, data: Record<string, unknown>) => void },
   /** While set, an open stream waits here before it ends. */
   hold: null as Promise<void> | null,
   release: null as (() => void) | null,
@@ -81,14 +84,19 @@ vi.mock("@/lib/useChatStream", () => ({
     watch?: { onFrame?: (event: string, data: Record<string, unknown>) => void },
   ) {
     H.streams.push({ path, body });
+    H.lastWatch = watch ?? null;
     const frames = H.scripts.shift() ?? [];
     for (const f of frames) {
       if (signal?.aborted) return;
+      if ("yield" in f) {
+        // The real reader ends its stream after every error it yields.
+        yield f.yield;
+        return;
+      }
       watch?.onFrame?.(f.event, f.data);
       await Promise.resolve();
     }
     if (H.hold) await H.hold;
-    yield* [];
   },
   useLiveText: (s: { text?: string }) => s?.text ?? "",
 }));
@@ -101,8 +109,12 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
   ),
 }));
 
-import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
+import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
+import { codeRowDraws } from "@/components/buildCode/CodeConversation";
 import {
+  accountStatusWords,
+  cutForRejoin,
+  modeLabel,
   codeAskKeyHint,
   decodeCodeEvent,
   enterAllowsCodeAsk,
@@ -220,6 +232,7 @@ beforeEach(() => {
   H.scripts = [];
   H.hold = null;
   H.release = null;
+  H.lastWatch = null;
   seed();
 });
 
@@ -229,6 +242,8 @@ afterEach(() => {
 });
 
 const ARM_MS = 450; // the card's key guard (DOCK_KEY_ARM_MS = 400) plus slack
+
+const pause = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
 
 /* ======================================================= the list */
 
@@ -306,6 +321,7 @@ describe("New session", () => {
     fireEvent.click(screen.getByTestId("stub-pick-folder"));
     fireEvent.click(screen.getByTestId("code-new-mode-button"));
     fireEvent.click(screen.getByTestId("code-new-mode-option-full"));
+    await pause(FULL_ARM_GUARD_MS + 50);
     // One press only arms it.
     expect(screen.getByTestId("code-new-mode-option-full").dataset.armed).toBe("true");
     expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Ask first");
@@ -612,7 +628,7 @@ describe("the composer", () => {
     H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "full" });
     fireEvent.click(screen.getByTestId("code-mode-chip-button"));
     fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    await pause(FULL_ARM_GUARD_MS + 50);
     expect(H.patches).toHaveLength(1);
     fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
     await waitFor(() => expect(H.patches).toHaveLength(2));
@@ -965,5 +981,364 @@ describe("archived sessions", () => {
     expect(screen.getByTestId("code-archived-empty")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("code-archived-toggle"));
     expect(await screen.findByTestId("code-row-z9")).not.toHaveAttribute("data-archived");
+  });
+});
+
+/* ======================================================= the review's fixes */
+
+function settledSession(over: Record<string, unknown> = {}, events: Record<string, unknown>[] = SC.claude_deny) {
+  seed([sess("a1", over)]);
+  openSession("a1", { session: sess("a1", over), events, running: null, pending: [] });
+}
+
+describe("review: the '/' and '@' menus answer the arrow keys", () => {
+  it("'/' then ArrowDown then Enter inserts the SECOND command", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "/" } });
+    const menu = await screen.findByTestId("code-slash-menu");
+    expect(within(menu).getAllByRole("option").map((o) => o.dataset.testid)).toEqual([
+      "code-command-review",
+      "code-command-compact",
+    ]);
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    await waitFor(() => expect(screen.getByTestId("code-command-compact")).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((box as HTMLTextAreaElement).value).toBe("/compact ");
+  });
+});
+
+describe("review: the transcript stays where the reader put it", () => {
+  const spy = vi.fn();
+  beforeEach(() => {
+    spy.mockReset();
+    (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = spy;
+  });
+  afterEach(() => {
+    delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+  /** The transcript reports a scroll position (jsdom lays nothing out). */
+  function scrollTo(el: HTMLElement, top: number) {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(el, "scrollTop", { configurable: true, value: top, writable: true });
+    fireEvent.scroll(el);
+  }
+
+  it("a reader at the bottom follows the newest step; one who scrolled up is left there, with Jump to latest", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-ask");
+    const scroller = screen.getByTestId("code-transcript");
+    scrollTo(scroller, 1500); // at the bottom
+    spy.mockClear();
+    act(() => H.lastWatch?.onFrame?.("notice", { type: "notice", text: "Compacted.", turn: "turn-1" }));
+    await waitFor(() => expect(screen.getByText("Compacted.")).toBeInTheDocument());
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // Scrolled up: a new step does not move the reader.
+    scrollTo(scroller, 200);
+    spy.mockClear();
+    act(() => H.lastWatch?.onFrame?.("notice", { type: "notice", text: "Still working.", turn: "turn-1" }));
+    // Wait for the step itself to be drawn, THEN check nothing moved.
+    await waitFor(() => expect(screen.getByText("Still working.")).toBeInTheDocument());
+    await pause(30);
+    expect(spy).not.toHaveBeenCalled();
+    const jump = await screen.findByTestId("code-jump-to-latest");
+    fireEvent.click(jump);
+    expect(spy).toHaveBeenCalled();
+    expect(screen.queryByTestId("code-jump-to-latest")).toBeNull();
+  });
+});
+
+describe("review: a refused send leaves no message behind", () => {
+  it("a 409 before the first frame: no bubble, the words and the file back in the box, the reason said", async () => {
+    settledSession();
+    H.scripts = [[{ yield: { type: "error", detail: "Claude Code is still answering the last message.", status: 409 } }]];
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = (await screen.findByTestId("code-box")) as HTMLTextAreaElement;
+    const before = screen.getAllByTestId("code-user").length;
+    fireEvent.change(box, { target: { value: "Run the tests" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((await screen.findByTestId("code-note")).textContent).toBe("Claude Code is still answering the last message.");
+    expect(screen.getAllByTestId("code-user")).toHaveLength(before);
+    expect(box.value).toBe("Run the tests");
+    // Nothing was sent, so nothing is read back as if it had been.
+    expect(screen.queryByTestId("code-stop")).toBeNull();
+  });
+
+  it("CONTROL: an error frame after the turn began stays in the conversation", async () => {
+    settledSession();
+    H.scripts = [
+      [
+        { event: "user", data: { type: "user", text: "Run the tests", turn: "t9" } },
+        { yield: { type: "error", detail: "The reply could not be followed.", status: 500 } },
+      ],
+    ];
+    H.gets["/build/app/sessions/a1"] = () => ({
+      session: sess("a1"),
+      events: H.streams.length ? [...SC.claude_deny, { type: "user", text: "Run the tests", turn: "t9" }] : SC.claude_deny,
+      running: null,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Run the tests" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(screen.getAllByTestId("code-user").at(-1)?.textContent).toBe("Run the tests"));
+  });
+});
+
+describe("review: an ask settled once is drawn once", () => {
+  it("the stream's own line lands before the answer returns: ONE 'Allowed' line", async () => {
+    waitingOnEdit();
+    let finish: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => {
+      finish = r;
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    H.postReply["/build/app/sessions/a1/answer"] = slow;
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    // The tool's resolved frame arrives first...
+    act(() => H.lastWatch?.onFrame?.("resolved", { type: "resolved", request_id: "ask-1", decision: "allow", turn: "turn-1" }));
+    await waitFor(() => expect(screen.getAllByTestId("code-resolved")).toHaveLength(1));
+    // ...then the answer returns.
+    await act(async () => {
+      finish({ ok: true });
+      await slow;
+    });
+    await pause(40);
+    expect(screen.getAllByTestId("code-resolved")).toHaveLength(1);
+  });
+});
+
+describe("review: drawing only what changed (the v1.250.0 rule)", () => {
+  it("twenty streamed words redraw only the reply that grows, at most once a frame", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
+    await pause(40);
+    const rows = screen.getAllByTestId("code-tool").length + screen.getAllByTestId("code-user").length;
+    expect(rows).toBeGreaterThan(2);
+    const before = { ...codeRowDraws };
+    // Twenty frames, each in its own read (as a real stream delivers them),
+    // all well inside one animation frame.
+    for (let i = 0; i < 20; i += 1) {
+      act(() => H.lastWatch?.onFrame?.("text", { type: "text", item: "m-live", delta: `word${i} `, turn: "turn-1" }));
+      await act(() => Promise.resolve());
+    }
+    await waitFor(() => expect(screen.getAllByTestId("code-text").at(-1)?.textContent).toContain("word19"));
+    await pause(40);
+    // One new row, drawn once for the twenty words (one frame); no other row
+    // drew again.
+    expect(codeRowDraws.items - before.items).toBeLessThanOrEqual(2);
+    expect(codeRowDraws.tools - before.tools).toBe(0);
+  });
+});
+
+describe("review: Full access cannot be given by a held or doubled key", () => {
+  it("a second press right after arming does not count; a later one does", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    const full = screen.getByTestId("code-mode-chip-option-full");
+    fireEvent.click(full);
+    fireEvent.click(full);
+    await pause(20);
+    expect(H.patches).toHaveLength(0);
+    await pause(FULL_ARM_GUARD_MS);
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    await waitFor(() => expect(H.patches[0]?.body).toEqual({ mode: "full", confirm: true }));
+  });
+
+  it("a held key's repeat is swallowed", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    const full = screen.getByTestId("code-mode-chip-option-full");
+    const repeat = createEvent.keyDown(full, { key: "Enter", repeat: true });
+    fireEvent(full, repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    const first = createEvent.keyDown(full, { key: "Enter" });
+    fireEvent(full, first);
+    expect(first.defaultPrevented).toBe(false);
+  });
+
+  it("an armed press is forgotten after a few seconds", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    expect(screen.getByTestId("code-mode-chip-option-full").dataset.armed).toBe("true");
+    await pause(FULL_DISARM_MS + 100);
+    expect(screen.getByTestId("code-mode-chip-option-full").dataset.armed).toBeUndefined();
+    // The next press arms again; nothing was given.
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    expect(H.patches).toHaveLength(0);
+  });
+
+  it("Enter is refused in Full access by the session's own mode, even with no tool list", async () => {
+    const upTo = SC.claude_tool_approval_edit.findIndex((e) => e.type === "approval");
+    seed([sess("a1", { mode: "full" })]);
+    H.gets["/build/app/harnesses"] = { harnesses: [] };
+    openSession("a1", {
+      session: sess("a1", { mode: "full" }),
+      events: SC.claude_tool_approval_edit.slice(0, upTo + 1),
+      running: true,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-ask");
+    (document.activeElement as HTMLElement | null)?.blur();
+    await pause(ARM_MS);
+    expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
+    fireEvent.keyDown(window, { key: "Enter" });
+    await pause(30);
+    expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
+  });
+});
+
+describe("review: words", () => {
+  it("a mode is never shown by its raw id", () => {
+    expect(modeLabel("full")).toBe("Full access");
+    expect(modeLabel("edits")).toBe("Auto edits");
+    expect(modeLabel("bypassPermissions")).toBe("Another mode");
+    expect(modeLabel("")).toBe("Ask first");
+  });
+
+  it("an account says its state, and one that cannot start a session is greyed", async () => {
+    expect(accountStatusWords("needs_sign_in")).toEqual({ words: "needs to sign in again", usable: false });
+    expect(accountStatusWords("limit").usable).toBe(false);
+    expect(accountStatusWords("off").usable).toBe(false);
+    expect(accountStatusWords("ready")).toEqual({ words: "", usable: true });
+    const tools = JSON.parse(JSON.stringify(TOOLS)) as typeof TOOLS;
+    tools.harnesses[0].accounts = [
+      { id: "p1", name: "Work", status: "ready" },
+      { id: "p2", name: "Personal", status: "needs_sign_in" },
+      { id: "p3", name: "Team", status: "limit" },
+    ];
+    seed();
+    H.gets["/build/app/harnesses"] = tools;
+    render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
+    fireEvent.click(await screen.findByTestId("code-new"));
+    const select = (await screen.findByTestId("code-new-account")) as HTMLSelectElement;
+    const opts = Array.from(select.options).map((o) => [o.textContent, o.disabled]);
+    expect(opts).toEqual([
+      ["This PC's sign-in", false],
+      ["Work", false],
+      ["Personal (needs to sign in again)", true],
+      ["Team (at its limit)", true],
+    ]);
+  });
+});
+
+describe("review: the rejoin cut follows the running turn", () => {
+  const ev = (type: string, turn: string, extra: Record<string, unknown> = {}) =>
+    decodeCodeEvent({ type, turn, ...extra })!;
+
+  it("cuts every event of the running turn (a queued second message included), keeps its question aside", () => {
+    const events = [
+      ev("user", "t1", { text: "first" }),
+      ev("text_done", "t1", { item: "a", text: "done" }),
+      ev("done", "t1", { stop: "completed" }),
+      ev("user", "t2", { text: "second" }),
+      ev("tool", "t2", { item: "x", kind: "read", status: "done" }),
+      ev("user", "t2", { text: "and also this" }),
+    ];
+    const { base, carry } = cutForRejoin(events, "t2");
+    expect(base.map((e) => e.turn)).toEqual(["t1", "t1", "t1"]);
+    expect(carry && carry.type === "user" ? carry.text : "").toBe("second");
+  });
+
+  it("an older record with no turns falls back to the last question", () => {
+    const events = [decodeCodeEvent({ type: "user", text: "q" })!, decodeCodeEvent({ type: "notice", text: "n" })!];
+    const { base, carry } = cutForRejoin(events, "t9");
+    expect(base).toHaveLength(0);
+    expect(carry?.type).toBe("user");
+  });
+});
+
+describe("review: polish", () => {
+  it("after the last card is answered, the caret is back in the message box", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("code-box")));
+  });
+
+  it("a reply whose stream dropped while Iron Jarvis was away is followed again once it is back", async () => {
+    settledSession();
+    H.scripts = [
+      [
+        { event: "user", data: { type: "user", text: "Go", turn: "t5" } },
+        { yield: { type: "error", detail: "Iron Jarvis isn't responding.", status: 0, offline: true } },
+      ],
+      [{ event: "user", data: { type: "user", text: "Go", turn: "t5" } }],
+    ];
+    let back = false;
+    H.gets["/build/app/sessions/a1"] = () => {
+      if (H.streams.length && !back) return Promise.reject(new Error("offline"));
+      return {
+        session: sess("a1"),
+        events: H.streams.length ? [...SC.claude_deny, { type: "user", text: "Go", turn: "t5" }] : SC.claude_deny,
+        running: H.streams.length === 1 ? "t5" : null,
+        pending: [],
+      };
+    };
+    holdStreams();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Go" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByTestId("code-lost")).toBeInTheDocument();
+    back = true;
+    await waitFor(() => expect(H.streams).toHaveLength(2), { timeout: 8_000 });
+    expect(H.streams[1].path).toBe("/build/app/sessions/a1/turns/t5/stream");
+    await waitFor(() => expect(screen.queryByTestId("code-lost")).toBeNull());
+    // The replay draws the question again (once a frame): wait for IT.
+    await waitFor(() => expect(screen.getAllByTestId("code-user").filter((u) => u.textContent === "Go")).toHaveLength(1));
+    await pause(60);
+    expect(screen.getAllByTestId("code-user").filter((u) => u.textContent === "Go")).toHaveLength(1);
+  });
+
+  it("a session read that lands after a newer send never ends that send's reply", async () => {
+    settledSession();
+    // Turn A ends at once; its closing read is held back.
+    let releaseRead: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      releaseRead = r;
+    });
+    let reads = 0;
+    H.gets["/build/app/sessions/a1"] = () => {
+      reads += 1;
+      if (reads === 2) return held.then(() => ({ session: sess("a1"), events: SC.claude_deny, running: null, pending: [] }));
+      return { session: sess("a1"), events: SC.claude_deny, running: null, pending: [] };
+    };
+    H.scripts = [[{ event: "done", data: { type: "done", stop: "completed", turn: "tA" } }], []];
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "A" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(reads).toBe(2));
+    // B goes out (its stream stays open) while A's read is still out.
+    holdStreams();
+    fireEvent.change(box, { target: { value: "B" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByTestId("code-stop")).toBeInTheDocument();
+    await act(async () => {
+      releaseRead();
+      await held;
+    });
+    await pause(40);
+    expect(screen.getByTestId("code-stop")).toBeInTheDocument();
+    expect(screen.getAllByTestId("code-user").map((u) => u.textContent)).toContain("B");
   });
 });

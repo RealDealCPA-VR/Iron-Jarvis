@@ -209,7 +209,20 @@ export default function TerminalsPage() {
   // fresh load, exactly as the server renders it), else Terminal. Right
   // after: the address (`?view=code`, `&code=<id>`; a `?focus=` link is a
   // terminal link), else the saved choice (`ij.build.view`).
-  const [buildView, setBuildView] = useState<BuildView>(() => cachedBuildView() ?? "terminal");
+  // A terminal link (`?focus=`) is Terminal from the very FIRST frame, even
+  // when this window last showed Code (the v1.388.1 lesson: never a flash
+  // of the other view). On the server there is no address and no memory:
+  // Terminal, so the first client frame of a fresh load matches it.
+  const [buildView, setBuildView] = useState<BuildView>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (buildViewFromSearch(window.location.search) === "terminal") return "terminal";
+      } catch {
+        /* no address */
+      }
+    }
+    return cachedBuildView() ?? "terminal";
+  });
   const [codeLink, setCodeLink] = useState<{ id: string | null; seq: number }>({ id: null, seq: 0 });
   const [offerNote, setOfferNote] = useState<string | null>(null);
   const chooseView = useCallback((next: BuildView) => {
@@ -711,14 +724,14 @@ export default function TerminalsPage() {
         const raw = await post<unknown>(`/build/app/from-terminal/${encodeURIComponent(paneId)}`);
         const made = decodeCodeSession(raw);
         if (!made) {
-          setOfferNote("The conversation could not be opened in the Code view.");
+          setOfferNote("The conversation could not be opened in Build's Code view.");
           return;
         }
         setCodeLink((cur) => ({ id: made.id, seq: cur.seq + 1 }));
         chooseView("code");
         writeBuildViewToAddress("code", made.id);
       } catch (e) {
-        setOfferNote(e instanceof Error && e.message ? e.message : "The conversation could not be opened in the Code view.");
+        setOfferNote(e instanceof Error && e.message ? e.message : "The conversation could not be opened in Build's Code view.");
       }
     },
     [chooseView],

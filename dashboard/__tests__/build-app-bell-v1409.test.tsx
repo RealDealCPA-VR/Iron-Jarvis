@@ -15,7 +15,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 const { getMock, notifyMock, H } = vi.hoisted(() => ({
   getMock: vi.fn(),
   notifyMock: vi.fn(),
-  H: { pending: [] as unknown[] },
+  H: { pending: [] as unknown[], panes: [] as unknown[] },
 }));
 
 vi.mock("@/lib/api", () => {
@@ -54,6 +54,7 @@ vi.mock("@/lib/useDesktopNotifications", () => ({
 
 import { NotificationBell, chatAskHref, chatAskRowWords, parseChatAsk } from "@/components/NotificationBell";
 import { BUILD_CODE_EVENT } from "@/lib/buildApp";
+import { BUILD_TERMINAL_EVENT } from "@/lib/buildLinks";
 import { __resetApiCache } from "@/lib/apiCache";
 
 /** The row exactly as the daemon lists it (hosted/service.py pending rows). */
@@ -75,11 +76,13 @@ beforeEach(() => {
   getMock.mockReset();
   notifyMock.mockReset();
   H.pending = [];
+  H.panes = [];
   window.localStorage.clear();
   getMock.mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.startsWith("/audit")) return { entries: [], next_cursor: null, total: 0 };
     if (p === "/chat/approvals/pending") return { approvals: H.pending };
+    if (p === "/terminals/activity") return { panes: H.panes };
     return {};
   });
 });
@@ -140,6 +143,26 @@ describe("a Build Code view session waiting on an approval", () => {
       expect(heard).toEqual(["a7"]);
     } finally {
       window.removeEventListener(BUILD_CODE_EVENT, on);
+    }
+  });
+});
+
+describe("review: a terminal's row pressed while Build shows its Code view", () => {
+  it("announces the terminal, so Build switches to Terminal on it", async () => {
+    window.history.replaceState({}, "", "/terminals");
+    const heard: string[] = [];
+    const on = (e: Event) => heard.push(String((e as CustomEvent<{ id: string }>).detail.id));
+    window.addEventListener(BUILD_TERMINAL_EVENT, on);
+    try {
+      H.panes = [{ id: "p7", name: null, agent_cli: "claude", state: "blocked", state_line: "", alive: true }];
+      render(<NotificationBell />);
+      await screen.findByRole("button", { name: "1 notifications" });
+      fireEvent.click(screen.getByRole("button", { name: /notification/i }));
+      const row = await screen.findByTestId("bell-pane-waiting");
+      fireEvent.click(within(row).getByRole("link"));
+      expect(heard).toEqual(["p7"]);
+    } finally {
+      window.removeEventListener(BUILD_TERMINAL_EVENT, on);
     }
   });
 });
