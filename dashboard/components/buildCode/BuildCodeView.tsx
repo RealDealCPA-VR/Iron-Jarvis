@@ -78,6 +78,7 @@ import {
   decodeDiskSessions,
   diskListPath,
   diskRowLine,
+  firstMessageTitle,
   droppedWords,
   folderKey,
   isArchived,
@@ -599,6 +600,12 @@ function SessionPane({
     optimisticRef.current = mine;
     setEvents((prev) => [...prev, mine]);
     const typed = text;
+    // The daemon titles an untitled session by its first message (the
+    // chat's rule); the list says so at once, before its next read.
+    if (!session.title.trim()) {
+      const echo = firstMessageTitle(words);
+      if (echo) onChanged({ ...session, title: echo });
+    }
     setText("");
     const sent = files;
     setFiles([]);
@@ -622,7 +629,7 @@ function SessionPane({
         setNote(words2);
       },
     );
-  }, [text, files, running, session, follow]);
+  }, [text, files, running, session, follow, onChanged]);
 
   const stop = useCallback(() => {
     if (!session) return;
@@ -1247,7 +1254,7 @@ function NewSession({
             </span>
           </p>
           <div className="max-h-72 overflow-y-auto rounded-xl bg-ink-900/40 p-1">
-            <DirectoryTree variant="calm" hideAction showProjects selectedPath={folder} onSelect={setFolder} />
+            <DirectoryTree variant="calm" hideAction showProjects pickTypedPath selectedPath={folder} onSelect={setFolder} />
           </div>
         </div>
 
@@ -1348,6 +1355,17 @@ export function BuildCodeView({
   const [diskOpen, setDiskOpen] = useState<Set<string>>(() => new Set());
   const diskAsked = useRef<Set<string>>(new Set());
   const [openSessionFolder, setOpenSessionFolder] = useState<string | null>(null);
+  /** The folder New session starts on: a folder heading's "+", else the
+   *  folder of the session in front (the v1.378.0 rule), else Build's. */
+  const [newOn, setNewOn] = useState<{ folder: string | null; n: number }>({ folder: null, n: 0 });
+  const startNew = useCallback(
+    (folder: string | null) => {
+      setNewOn((cur) => ({ folder: folder ?? openSessionFolder ?? startFolder, n: cur.n + 1 }));
+      setCreating(true);
+      setRowMenu(null);
+    },
+    [openSessionFolder, startFolder],
+  );
 
   useEffect(() => {
     if (initialSession) {
@@ -1640,10 +1658,7 @@ export function BuildCodeView({
             <button
               type="button"
               data-testid="code-new"
-              onClick={() => {
-                setCreating(true);
-                setRowMenu(null);
-              }}
+              onClick={() => startNew(null)}
               className={QUIET_BTN}
             >
               <Plus size={13} aria-hidden="true" />
@@ -1685,7 +1700,18 @@ export function BuildCodeView({
               <section key={g.folder} data-testid="code-folder-group" className="mt-2">
                 <h3 className="flex items-center gap-1.5 px-2 text-[12px] text-zinc-500" title={g.folder}>
                   <FolderOpen size={12} aria-hidden="true" />
-                  <span className="truncate">{g.name}</span>
+                  <span className="min-w-0 flex-1 truncate">{g.name}</span>
+                  {/* New session on THIS folder (the v1.378.0 rule). */}
+                  <button
+                    type="button"
+                    aria-label={`New session in ${g.name}`}
+                    title={`New session in ${g.folder}`}
+                    data-testid={`code-new-in-${folderKey(g.folder)}`}
+                    onClick={() => startNew(g.folder)}
+                    className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+                  >
+                    <Plus size={12} aria-hidden="true" />
+                  </button>
                 </h3>
                 <ul className="mt-0.5">{g.sessions.map((s) => row(s, false))}</ul>
                 {savedFor(g.folder)}
@@ -1724,9 +1750,10 @@ export function BuildCodeView({
       >
         {creating ? (
           <NewSession
+            key={newOn.n}
             tools={tools}
             toolsError={toolsError}
-            startFolder={startFolder}
+            startFolder={newOn.folder ?? openSessionFolder ?? startFolder}
             onCancel={() => setCreating(false)}
             onCreated={(s) => {
               noteChanged(s);
@@ -1751,7 +1778,7 @@ export function BuildCodeView({
                 The real coding tool runs here with its own settings and its own saved conversations. Iron Jarvis
                 shows what it does and asks you whenever it asks.
               </p>
-              <button type="button" data-testid="code-new-empty" onClick={() => setCreating(true)} className={QUIET_BTN}>
+              <button type="button" data-testid="code-new-empty" onClick={() => startNew(null)} className={QUIET_BTN}>
                 <Plus size={13} aria-hidden="true" />
                 New session
               </button>

@@ -102,8 +102,13 @@ vi.mock("@/lib/useChatStream", () => ({
 }));
 
 vi.mock("@/components/terminal/DirectoryTree", () => ({
-  DirectoryTree: ({ onSelect }: { onSelect: (p: string) => void }) => (
-    <button type="button" data-testid="stub-pick-folder" onClick={() => onSelect("C:\\work\\shop")}>
+  DirectoryTree: ({ onSelect, pickTypedPath }: { onSelect: (p: string) => void; pickTypedPath?: boolean }) => (
+    <button
+      type="button"
+      data-testid="stub-pick-folder"
+      data-pick-typed={pickTypedPath ? "true" : "false"}
+      onClick={() => onSelect("C:\\work\\shop")}
+    >
       pick
     </button>
   ),
@@ -112,6 +117,7 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
 import { codeRowDraws } from "@/components/buildCode/CodeConversation";
 import {
+  firstMessageTitle,
   accountStatusWords,
   cutForRejoin,
   modeLabel,
@@ -1340,5 +1346,67 @@ describe("review: polish", () => {
     await pause(40);
     expect(screen.getByTestId("code-stop")).toBeInTheDocument();
     expect(screen.getAllByTestId("code-user").map((u) => u.textContent)).toContain("B");
+  });
+});
+
+/* ======================================================= found live */
+
+describe("found live: titles, the folder New session starts on, the path box", () => {
+  it("an untitled session is titled by its first message, in the list at once", async () => {
+    seed([sess("a1", { title: "" })]);
+    openSession("a1", { session: sess("a1", { title: "" }), events: [], running: null, pending: [] });
+    holdStreams();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    expect((await screen.findByTestId("code-row-a1")).textContent).toContain("New Claude Code session");
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Fix the loop in cart.py\nthen run the tests" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(screen.getByTestId("code-row-a1").textContent).toContain("Fix the loop in cart.py"));
+    expect(screen.getByTestId("code-row-a1").textContent).not.toContain("then run the tests");
+  });
+
+  it("CONTROL: a session with a title keeps it", async () => {
+    seed([sess("a1", { title: "Mine" })]);
+    openSession("a1", { session: sess("a1", { title: "Mine" }), events: [], running: null, pending: [] });
+    holdStreams();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Something else" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(H.streams).toHaveLength(1));
+    expect(screen.getByTestId("code-row-a1").textContent).toContain("Mine");
+  });
+
+  it("the echo never shows a line that looks like it holds a key", () => {
+    expect(firstMessageTitle("use sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX please")).toBe("");
+    expect(firstMessageTitle("  \n  Fix   it  ")).toBe("Fix it");
+    expect(firstMessageTitle("w ".repeat(50)).length).toBeLessThanOrEqual(60);
+  });
+
+  it("New session starts on the folder of the session in front", async () => {
+    seed([sess("a1"), sess("a2", { folder: "C:\\work\\api", updated_at: "2026-10-29T08:00:00Z" })]);
+    openSession("a2", { session: sess("a2", { folder: "C:\\work\\api" }), events: [], running: null, pending: [] });
+    render(<BuildCodeView initialSession="a2" startFolder="C:\\elsewhere" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-new"));
+    expect((await screen.findByTestId("code-new-folder")).textContent).toBe("C:\\work\\api");
+  });
+
+  it("a folder heading's + opens New session on THAT folder", async () => {
+    seed([sess("a1"), sess("a2", { folder: "C:\\work\\api", updated_at: "2026-10-29T08:00:00Z" })]);
+    openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-new-in-c:/work/api"));
+    expect((await screen.findByTestId("code-new-folder")).textContent).toBe("C:\\work\\api");
+    // And on the other folder: the form starts over on it.
+    fireEvent.click(screen.getByTestId("code-new-in-c:/work/shop"));
+    await waitFor(() => expect(screen.getByTestId("code-new-folder").textContent).toBe("C:\\work\\shop"));
+  });
+
+  it("New session's folder tree picks a pasted path (the opt-in)", async () => {
+    render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
+    fireEvent.click(await screen.findByTestId("code-new"));
+    expect((await screen.findByTestId("stub-pick-folder")).dataset.pickTyped).toBe("true");
   });
 });

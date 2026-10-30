@@ -261,6 +261,7 @@ export function DirectoryTree({
   onCollapse,
   showProjects = false,
   hideHeaderCollapse = false,
+  pickTypedPath = false,
   variant = "card",
   collapseLabel = "Close",
 }: {
@@ -290,6 +291,10 @@ export function DirectoryTree({
    *  Opt-in: chat passes onCollapse WITHOUT this, and there the header button
    *  is its only collapse / back-to-files control. */
   hideHeaderCollapse?: boolean;
+  /** v1.409.0 (Build's Code view, found live): a pasted path + Enter / Go
+   *  also PICKS that folder (`onSelect`), not only browses to it. Opt-in:
+   *  every other picker keeps browsing only. */
+  pickTypedPath?: boolean;
 }) {
   const { data, error, loading } = useApi<{ drives: Drive[] }>("/fs/drives");
   const drives = data?.drives ?? [];
@@ -310,7 +315,9 @@ export function DirectoryTree({
   const [typedRoot, setTypedRoot] = useState("");
   function goTypedRoot() {
     const p = typedRoot.trim().replace(/[“”"]/g, "");
-    if (p) setRoot(p);
+    if (!p) return;
+    setRoot(p);
+    if (pickTypedPath) onSelect(p);
   }
 
   // Default the root to the first drive once they load.

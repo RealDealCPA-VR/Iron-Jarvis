@@ -1177,3 +1177,26 @@ export function reuseItems(prev: readonly ConvItem[] | null, next: ConvItem[]): 
     return old && sameValue(old, it) ? old : it;
   });
 }
+
+/** How long a title from the first message may be (the daemon's
+ *  hosted/service.TITLE_CHARS). */
+export const TITLE_CHARS = 60;
+
+/** A long run of key-like characters (a pasted key or token). */
+const KEYISH = /[A-Za-z0-9_\-]{24,}/;
+
+/** The list's echo of the title the daemon gives an untitled session from
+ *  its first message (hosted/service.first_message_title): the first line
+ *  with words, spaces collapsed, cut to TITLE_CHARS with an ellipsis. The
+ *  daemon also masks secrets; this file stays import-free (the bell reads
+ *  it), so a line that looks like it holds a key is never echoed ("") — the
+ *  list's next read brings the daemon's masked title. */
+export function firstMessageTitle(text: string): string {
+  for (const line of String(text ?? "").split("\n")) {
+    const words = line.split(/\s+/).filter(Boolean).join(" ");
+    if (!words) continue;
+    if (KEYISH.test(words)) return "";
+    return words.length <= TITLE_CHARS ? words : `${words.slice(0, TITLE_CHARS - 1)}…`;
+  }
+  return "";
+}

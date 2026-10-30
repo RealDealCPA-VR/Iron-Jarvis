@@ -129,6 +129,21 @@ def modes_for(harness: str) -> dict[str, Any]:
     return CLAUDE_MODES if harness == CLAUDE else CODEX_MODES
 
 
+#: How long a session's title from its first message may be.
+TITLE_CHARS = 60
+
+
+def first_message_title(text: str) -> str:
+    """A session's title from its first message: the first line with words,
+    spaces collapsed, masked and cut to :data:`TITLE_CHARS` (an ellipsis marks
+    a cut). "" when the message has no words (files only)."""
+    for line in str(text or "").splitlines():
+        words = " ".join(line.split())
+        if words:
+            return clip(words, TITLE_CHARS)
+    return ""
+
+
 def mode_rows(harness: str) -> list[dict[str, Any]]:
     return [
         {"id": m, "label": MODE_LABELS[m], "dangerous": m == "full"}
@@ -982,6 +997,17 @@ class HostedService:
         live.turn = turn
         live.last_active = self.clock()
         turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files))
+        # v1.409.0 (found live): a session is titled by its first message, as
+        # a chat is — never "New Claude Code session" forever. Only an EMPTY
+        # title (a name the user gave is theirs) and only once the turn is
+        # really running (a refused send titles nothing).
+        if not (row.title or "").strip():
+            title = first_message_title(text)
+            if title:
+                try:
+                    await asyncio.to_thread(store.update, self.engine, sid, title=title)
+                except Exception:  # noqa: BLE001 — a title never fails a turn
+                    log.debug("could not title session %s", sid, exc_info=True)
         return turn
 
     def _file_problems(self, files: list[str]) -> str:
