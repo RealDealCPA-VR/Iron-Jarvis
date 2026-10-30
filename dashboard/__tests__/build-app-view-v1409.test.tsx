@@ -20,20 +20,24 @@
  */
 
 import React from "react";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const H = vi.hoisted(() => ({
   gets: {} as Record<string, unknown>,
+  getLog: [] as string[],
   posts: [] as { path: string; body: unknown }[],
   patches: [] as { path: string; body: unknown }[],
   postReply: {} as Record<string, unknown>,
   postFail: {} as Record<string, { status: number; message: string }>,
   streams: [] as { path: string; body: unknown }[],
-  /** Frames each stream sends (in order of the streams opened). */
-  scripts: [] as { event: string; data: Record<string, unknown> }[][],
+  /** Frames each stream sends (in order of the streams opened); a
+   *  `{yield}` entry is what the reader itself yields (a refusal, a drop). */
+  scripts: [] as ({ event: string; data: Record<string, unknown> } | { yield: Record<string, unknown> })[][],
+  /** The newest stream's tap: a test sends a frame "later" through it. */
+  lastWatch: null as null | { onFrame?: (event: string, data: Record<string, unknown>) => void },
   /** While set, an open stream waits here before it ends. */
   hold: null as Promise<void> | null,
   release: null as (() => void) | null,
@@ -51,6 +55,7 @@ vi.mock("@/lib/api", () => {
   return {
     ApiError: FakeApiError,
     get: (path: string) => {
+      H.getLog.push(path);
       const r = H.gets[path];
       if (r === undefined) return Promise.reject(new FakeApiError(`unmocked GET ${path}`, 404));
       return Promise.resolve(typeof r === "function" ? (r as () => unknown)() : r);
@@ -79,14 +84,19 @@ vi.mock("@/lib/useChatStream", () => ({
     watch?: { onFrame?: (event: string, data: Record<string, unknown>) => void },
   ) {
     H.streams.push({ path, body });
+    H.lastWatch = watch ?? null;
     const frames = H.scripts.shift() ?? [];
     for (const f of frames) {
       if (signal?.aborted) return;
+      if ("yield" in f) {
+        // The real reader ends its stream after every error it yields.
+        yield f.yield;
+        return;
+      }
       watch?.onFrame?.(f.event, f.data);
       await Promise.resolve();
     }
     if (H.hold) await H.hold;
-    yield* [];
   },
   useLiveText: (s: { text?: string }) => s?.text ?? "",
 }));
@@ -99,8 +109,12 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
   ),
 }));
 
-import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
+import { BuildCodeView, FULL_ARM_GUARD_MS, FULL_DISARM_MS } from "@/components/buildCode/BuildCodeView";
+import { codeRowDraws } from "@/components/buildCode/CodeConversation";
 import {
+  accountStatusWords,
+  cutForRejoin,
+  modeLabel,
   codeAskKeyHint,
   decodeCodeEvent,
   enterAllowsCodeAsk,
@@ -111,16 +125,18 @@ import {
 /* ---- the contract fixture ---------------------------------------------- */
 
 const FIX_DIR = join(process.cwd(), "__tests__", "fixtures");
+// Written by the REAL daemon parser from recorded Claude Code / Codex output
+// (tests/test_build_app_v1409.py, IJ_REGEN_BUILD_APP=1).
 const REAL = join(FIX_DIR, "build-app-events-v1409.json");
-const DRAFT = join(FIX_DIR, "build-app-events-draft-v1409.json");
-const fixture = JSON.parse(readFileSync(existsSync(REAL) ? REAL : DRAFT, "utf8")) as {
+const fixture = JSON.parse(readFileSync(REAL, "utf8")) as {
   scenarios: Record<string, Record<string, unknown>[]>;
 };
 const SC = fixture.scenarios;
 
 /* ---- the daemon --------------------------------------------------------- */
 
-const TOOLS = [
+const TOOLS = {
+  harnesses: [
   {
     id: "claude-code",
     label: "Claude Code",
@@ -128,12 +144,16 @@ const TOOLS = [
     signed_in: true,
     version: "2.1.311",
     modes: [
-      { id: "default", label: "Ask first", dangerous: false },
-      { id: "acceptEdits", label: "Auto edits", dangerous: false },
+      { id: "ask", label: "Ask first", dangerous: false },
+      { id: "edits", label: "Auto edits", dangerous: false },
       { id: "plan", label: "Plan", dangerous: false },
-      { id: "bypassPermissions", label: "Full access", dangerous: true },
+      { id: "full", label: "Full access", dangerous: true },
     ],
-    models: [{ id: "claude-opus-5-5", label: "Opus 5.5" }],
+    hidden_modes: [],
+    models: [
+      { id: "", label: "Claude Code's default" },
+      { id: "claude-opus-5-5", label: "Opus 5.5" },
+    ],
     efforts: ["low", "medium", "high"],
     accounts: [{ id: "prof_work", name: "Work", status: "ready" }],
     commands: [
@@ -141,9 +161,28 @@ const TOOLS = [
       { name: "compact", description: "Summarize the conversation" },
     ],
   },
-  { id: "codex", label: "Codex", installed: false, signed_in: null, version: "", modes: [], models: [], efforts: [], accounts: [] },
-  { id: "grok", label: "Grok", installed: true, signed_in: false, version: "", modes: [], models: [], efforts: [], accounts: [] },
-];
+  {
+    id: "codex",
+    label: "Codex",
+    installed: false,
+    signed_in: null,
+    version: null,
+    modes: [
+      { id: "ask", label: "Ask first", dangerous: false },
+      { id: "full", label: "Full access", dangerous: true },
+    ],
+    hidden_modes: [
+      { id: "plan", label: "Plan", reason: "Codex has no plan mode." },
+      { id: "edits", label: "Auto edits", reason: "Codex cannot run commands in its sandbox on Windows." },
+    ],
+    models: [{ id: "", label: "Codex's default" }],
+    efforts: [],
+    accounts: [],
+    commands: [],
+  },
+  { id: "grok", label: "Grok", installed: true, signed_in: false, version: null, modes: [], models: [], efforts: [], accounts: [] },
+  ],
+};
 
 const sess = (id: string, over: Record<string, unknown> = {}) => ({
   id,
@@ -153,7 +192,7 @@ const sess = (id: string, over: Record<string, unknown> = {}) => ({
   account: "",
   model: "",
   effort: "",
-  mode: "default",
+  mode: "ask",
   harness_session_id: "",
   created_at: "2026-10-29T09:00:00Z",
   updated_at: "2026-10-29T09:00:00Z",
@@ -184,6 +223,7 @@ function holdStreams() {
 }
 
 beforeEach(() => {
+  H.getLog = [];
   H.posts = [];
   H.patches = [];
   H.postReply = {};
@@ -192,6 +232,7 @@ beforeEach(() => {
   H.scripts = [];
   H.hold = null;
   H.release = null;
+  H.lastWatch = null;
   seed();
 });
 
@@ -201,6 +242,8 @@ afterEach(() => {
 });
 
 const ARM_MS = 450; // the card's key guard (DOCK_KEY_ARM_MS = 400) plus slack
+
+const pause = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
 
 /* ======================================================= the list */
 
@@ -266,27 +309,28 @@ describe("New session", () => {
     fireEvent.click(screen.getByTestId("code-new-start"));
     await screen.findByTestId("code-session");
     const made = H.posts.find((p) => p.path === "/build/app/sessions");
-    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", account: "prof_work", mode: "default" });
+    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", account: "prof_work", mode: "ask" });
   });
 
   it("Full access takes two presses in the form, and is sent with confirm: true", async () => {
-    H.postReply["/build/app/sessions"] = sess("n2", { mode: "bypassPermissions" });
-    openSession("n2", { session: sess("n2", { mode: "bypassPermissions" }), events: [], running: false, pending: [] });
+    H.postReply["/build/app/sessions"] = sess("n2", { mode: "full" });
+    openSession("n2", { session: sess("n2", { mode: "full" }), events: [], running: false, pending: [] });
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
     fireEvent.click(await screen.findByTestId("code-new"));
     await screen.findByTestId("code-new-tool-claude-code");
     fireEvent.click(screen.getByTestId("stub-pick-folder"));
     fireEvent.click(screen.getByTestId("code-new-mode-button"));
-    fireEvent.click(screen.getByTestId("code-new-mode-option-bypassPermissions"));
+    fireEvent.click(screen.getByTestId("code-new-mode-option-full"));
+    await pause(FULL_ARM_GUARD_MS + 50);
     // One press only arms it.
-    expect(screen.getByTestId("code-new-mode-option-bypassPermissions").dataset.armed).toBe("true");
+    expect(screen.getByTestId("code-new-mode-option-full").dataset.armed).toBe("true");
     expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Ask first");
-    fireEvent.click(screen.getByTestId("code-new-mode-option-bypassPermissions"));
+    fireEvent.click(screen.getByTestId("code-new-mode-option-full"));
     expect(screen.getByTestId("code-new-mode-button").textContent).toContain("Full access");
     fireEvent.click(screen.getByTestId("code-new-start"));
     await screen.findByTestId("code-session");
     const made = H.posts.find((p) => p.path === "/build/app/sessions");
-    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", mode: "bypassPermissions", confirm: true });
+    expect(made?.body).toEqual({ harness: "claude-code", folder: "C:\\work\\shop", mode: "full", confirm: true });
   });
 });
 
@@ -299,58 +343,95 @@ describe("every event kind draws (the contract fixture)", () => {
     }
   });
 
-  it("a whole settled session: question, thinking, plan, steps, diff, reply, settled asks, usage, notices, errors", async () => {
-    const events = [...SC.claude_edit, ...SC.interrupt, ...SC.codex_command, ...SC.sign_in];
+  it("a whole settled session from the real parser: steps, diffs, replies, settled asks, usage, notices, errors", async () => {
+    const events = [
+      ...SC.claude_tool_approval_edit,
+      ...SC.claude_interrupt,
+      ...SC.codex_command_and_file_change,
+      ...SC.claude_ask_user_question,
+      ...SC.claude_sign_in,
+    ];
     seed([sess("a1")]);
-    openSession("a1", { session: sess("a1"), events, running: false, pending: [] });
+    openSession("a1", { session: sess("a1"), events, running: null, turn_id: null, pending: [] });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-conversation");
-    expect(screen.getAllByTestId("code-user").map((u) => u.textContent)).toEqual([
-      "Fix the off-by-one in cart.py",
-      "Refactor the whole project",
-      "Run the linter",
-      "Hello",
-    ]);
-    expect(screen.getByTestId("code-thinking")).toBeInTheDocument();
-    // One plan per turn, its NEWEST steps.
-    const plan = screen.getByTestId("code-plan");
-    expect(screen.getAllByTestId("code-plan")).toHaveLength(1);
-    expect(plan.querySelector('[data-state="running"]')?.textContent).toContain("Run the tests");
-    // Steps: one row per item (running → done merged), each kind.
+    expect(screen.getAllByTestId("code-user")).toHaveLength(5);
+    // Steps: one row per item (running -> done merged), each kind.
     const tools = screen.getAllByTestId("code-tool");
     expect(tools.map((t) => `${t.dataset.kind}:${t.dataset.status}`)).toEqual([
       "read:done",
       "edit:done",
       "command:done",
-      "search:running",
-      "command:failed",
+      "write:done",
+      "other:done",
     ]);
-    expect(screen.getAllByTestId("code-tool-diff")).toHaveLength(1);
+    expect(screen.getAllByTestId("code-tool-diff").length).toBeGreaterThanOrEqual(2);
     // A step opens to its input and output.
-    fireEvent.click(within(tools[2]).getByTestId("work-row"));
-    expect(within(tools[2]).getByTestId("step-detail").textContent).toContain("3 passed");
-    // The reply is the finished text (not the deltas twice).
+    fireEvent.click(within(tools[0]).getByTestId("work-row"));
+    expect(within(tools[0]).getByTestId("step-detail").textContent).toContain("hi");
+    // The reply is the finished text, once (not the deltas twice).
     const texts = screen.getAllByTestId("code-text").map((t) => t.textContent);
-    expect(texts[0]).toContain("Fixed the loop in cart.py. All three tests pass.");
-    expect(screen.getAllByTestId("code-resolved").map((r) => r.dataset.decision)).toEqual(["allow", "allow_session"]);
-    expect(screen.getAllByTestId("code-usage")[0].textContent).toBe("12,400 in · 310 out · about $0.04 at list price");
-    expect(screen.getByTestId("code-notice").textContent).toContain("compacted");
+    expect(texts[0]).toBe('I replaced "hi" with "hello" in hello.txt.');
+    expect(texts.filter((t) => t?.includes("I replaced"))).toHaveLength(1);
+    // Settled asks: an approval reads Allowed; the question reads Answered.
+    const resolved = screen.getAllByTestId("code-resolved");
+    expect(resolved.map((r) => r.dataset.decision)).toEqual(["allow", "allow", "allow", "allow"]);
+    expect(resolved[3].textContent).toContain("Answered: Which colour do you prefer?");
+    expect(screen.getAllByTestId("code-usage")[0].textContent).toBe("109,870 in · 239 out · about $0.18 at list price");
     expect(screen.getAllByTestId("code-done").find((d) => d.dataset.stop === "interrupted")?.textContent).toBe("Stopped.");
     const err = screen.getByTestId("code-error");
     expect(err.dataset.fixKind).toBe("sign_in");
-    expect(err.textContent).toContain("Claude Code is signed out.");
+    expect(err.textContent).toContain("Claude Code isn't signed in");
+    // The newest failure offers the ONE sign-in press.
+    expect(within(err).getByTestId("code-sign-in-claude-cli")).toBeInTheDocument();
     // Nothing is asked: every ask was settled.
     expect(screen.queryByTestId("code-ask")).toBeNull();
     expect(screen.getByTestId("code-composer")).not.toHaveAttribute("hidden");
+  });
+
+  it("thinking and the plan (in the contract; no recording carried them) draw too", async () => {
+    const events = [
+      { type: "user", text: "Plan it", turn: "t" },
+      { type: "thinking", item: "k1", delta: "Think ", turn: "t" },
+      { type: "thinking", item: "k1", delta: "first.", turn: "t" },
+      { type: "plan", steps: [{ text: "Read", status: "in_progress" }, { text: "Fix", status: "pending" }], turn: "t" },
+      { type: "plan", steps: [{ text: "Read", status: "completed" }, { text: "Fix", status: "in_progress" }], turn: "t" },
+      { type: "done", stop: "completed", turn: "t" },
+    ];
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events, running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-conversation");
+    expect(screen.getByTestId("code-thinking")).toBeInTheDocument();
+    // One plan per turn, its NEWEST steps.
+    expect(screen.getAllByTestId("code-plan")).toHaveLength(1);
+    expect(screen.getByTestId("code-plan").querySelector('[data-state="running"]')?.textContent).toContain("Fix");
+  });
+
+  it("a Codex deny and a Codex interrupt from the real parser draw as Denied and Stopped", async () => {
+    seed([sess("a1", { harness: "codex" })]);
+    openSession("a1", {
+      session: sess("a1", { harness: "codex" }),
+      events: [...SC.codex_deny, ...SC.codex_interrupt, ...SC.codex_sign_in],
+      running: null,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-conversation");
+    expect(screen.getByTestId("code-resolved").textContent).toContain("Denied");
+    expect(screen.getAllByTestId("code-tool").map((t) => t.dataset.status)).toEqual(["failed"]);
+    expect(screen.getAllByTestId("code-done").find((d) => d.dataset.stop === "interrupted")?.textContent).toBe("Stopped.");
+    expect(screen.getByTestId("code-notice").textContent).toContain("retrying");
+    expect(within(screen.getByTestId("code-error")).getByTestId("code-sign-in-codex-cli")).toBeInTheDocument();
   });
 });
 
 /* ======================================================= approvals */
 
-/** The claude_edit scenario up to (and with) its approval: a turn waiting. */
+/** The real Claude edit scenario up to (and with) its approval: a turn waiting. */
 function waitingOnEdit(id = "a1", over: Record<string, unknown> = {}) {
-  const upTo = SC.claude_edit.findIndex((e) => e.type === "approval");
-  const events = SC.claude_edit.slice(0, upTo + 1);
+  const upTo = SC.claude_tool_approval_edit.findIndex((e) => e.type === "approval");
+  const events = SC.claude_tool_approval_edit.slice(0, upTo + 1);
   seed([sess(id, over)]);
   openSession(id, { session: sess(id, over), events, running: "turn_7", pending: [] });
   // The rejoin replays the turn from its question and stays open.
@@ -374,7 +455,7 @@ describe("an approval, in the composer's place", () => {
     fireEvent.click(within(card).getByTestId("code-ask-allow"));
     await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
     expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/answer")?.body).toEqual({
-      request_id: "req-edit-1",
+      request_id: "ask-1",
       decision: "allow",
     });
     expect(screen.getByTestId("code-resolved").dataset.decision).toBe("allow");
@@ -386,20 +467,24 @@ describe("an approval, in the composer's place", () => {
     fireEvent.click(await screen.findByTestId("code-ask-allow-session"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/answer")?.body).toEqual({
-        request_id: "req-edit-1",
+        request_id: "ask-1",
         decision: "allow_session",
       }),
     );
   });
 
   it("no session-wide allow when the tool offers none", async () => {
-    const events = SC.deny.slice(0, SC.deny.findIndex((e) => e.type === "approval") + 1);
+    // The real once-only command card (no session-wide allow offered).
+    const two = SC.claude_two_approvals;
+    const events = two.slice(0, two.findIndex((e) => e.type === "approval") + 1);
     seed([sess("a1")]);
     openSession("a1", { session: sess("a1"), events, running: true, pending: [] });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     const card = await screen.findByTestId("code-ask");
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
-    expect(within(card).getByTestId("code-ask-command").textContent).toContain("rm -rf build");
+    expect(within(card).getByTestId("code-ask-command").textContent).toContain("Get-ChildItem -Force");
+    // Asked once every time: Enter never allows it.
+    expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
   });
 
   it("Enter allows an ordinary card (after the first moment); Esc denies", async () => {
@@ -414,7 +499,7 @@ describe("an approval, in the composer's place", () => {
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
     fireEvent.keyDown(window, { key: "Enter" });
     await waitFor(() =>
-      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "req-edit-1", decision: "allow" }),
+      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "ask-1", decision: "allow" }),
     );
   });
 
@@ -426,12 +511,12 @@ describe("an approval, in the composer's place", () => {
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
-      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "req-edit-1", decision: "deny" }),
+      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "ask-1", decision: "deny" }),
     );
   });
 
   it("Enter NEVER allows while the session runs in Full access; Esc still denies", async () => {
-    waitingOnEdit("a1", { mode: "bypassPermissions" });
+    waitingOnEdit("a1", { mode: "full" });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     const card = await screen.findByTestId("code-ask");
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
@@ -444,7 +529,7 @@ describe("an approval, in the composer's place", () => {
     expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
-      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "req-edit-1", decision: "deny" }),
+      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "ask-1", decision: "deny" }),
     );
   });
 
@@ -456,7 +541,7 @@ describe("an approval, in the composer's place", () => {
     expect(enterAllowsCodeAsk(plain, false)).toBe(true);
     expect(enterAllowsCodeAsk(plain, true)).toBe(false);
     // A question keeps Enter = Send in every mode.
-    const q = decodeCodeEvent(SC.question.find((e) => e.type === "question"));
+    const q = decodeCodeEvent(SC.claude_ask_user_question.find((e) => e.type === "question"));
     expect(enterAllowsCodeAsk(q as Extract<CodeEvent, { type: "question" }>, true)).toBe(true);
   });
 
@@ -483,7 +568,8 @@ describe("an approval, in the composer's place", () => {
 
 describe("a question from the tool", () => {
   function waitingOnQuestion() {
-    const events = SC.question.slice(0, SC.question.findIndex((e) => e.type === "question") + 1);
+    const qs = SC.claude_ask_user_question;
+    const events = qs.slice(0, qs.findIndex((e) => e.type === "question") + 1);
     seed([sess("a1")]);
     openSession("a1", { session: sess("a1"), events, running: true, pending: [] });
   }
@@ -500,9 +586,9 @@ describe("a question from the tool", () => {
     fireEvent.click(within(card).getByTestId("code-ask-send"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({
-        request_id: "req-q-1",
+        request_id: "ask-1",
         decision: "allow",
-        answers: { "Which test runner should I use?": "pytest" },
+        answers: { "Which colour do you prefer?": "Red" },
       }),
     );
   });
@@ -517,7 +603,7 @@ describe("a question from the tool", () => {
     expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
     fireEvent.click(within(card).getByTestId("code-ask-skip"));
     await waitFor(() =>
-      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "req-q-1", decision: "deny" }),
+      expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "ask-1", decision: "deny" }),
     );
   });
 });
@@ -527,26 +613,26 @@ describe("a question from the tool", () => {
 describe("the composer", () => {
   function settled(over: Record<string, unknown> = {}) {
     seed([sess("a1", over)]);
-    openSession("a1", { session: sess("a1", over), events: SC.deny, running: false, pending: [] });
+    openSession("a1", { session: sess("a1", over), events: SC.claude_deny, running: false, pending: [] });
   }
 
   it("Full access on the mode chip takes two presses and is sent with confirm: true; an ordinary mode is one press", async () => {
     settled();
-    H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "acceptEdits" });
+    H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "edits" });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-session");
     fireEvent.click(screen.getByTestId("code-mode-chip-button"));
-    fireEvent.click(screen.getByTestId("code-mode-chip-option-acceptEdits"));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-edits"));
     await waitFor(() => expect(H.patches).toHaveLength(1));
-    expect(H.patches[0]).toEqual({ path: "/build/app/sessions/a1", body: { mode: "acceptEdits" } });
-    H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "bypassPermissions" });
+    expect(H.patches[0]).toEqual({ path: "/build/app/sessions/a1", body: { mode: "edits" } });
+    H.postReply["PATCH /build/app/sessions/a1"] = sess("a1", { mode: "full" });
     fireEvent.click(screen.getByTestId("code-mode-chip-button"));
-    fireEvent.click(screen.getByTestId("code-mode-chip-option-bypassPermissions"));
-    await act(() => new Promise((r) => setTimeout(r, 20)));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    await pause(FULL_ARM_GUARD_MS + 50);
     expect(H.patches).toHaveLength(1);
-    fireEvent.click(screen.getByTestId("code-mode-chip-option-bypassPermissions"));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
     await waitFor(() => expect(H.patches).toHaveLength(2));
-    expect(H.patches[1].body).toEqual({ mode: "bypassPermissions", confirm: true });
+    expect(H.patches[1].body).toEqual({ mode: "full", confirm: true });
     await waitFor(() => expect(screen.getByTestId("code-mode-chip-button").textContent).toContain("Full access"));
   });
 
@@ -572,7 +658,7 @@ describe("the composer", () => {
     // Once the turn ran, the saved record holds it too.
     H.gets["/build/app/sessions/a1"] = () => ({
       session: sess("a1"),
-      events: H.streams.length ? [...SC.deny, ...turn] : SC.deny,
+      events: H.streams.length ? [...SC.claude_deny, ...turn] : SC.claude_deny,
       running: false,
       pending: [],
     });
@@ -643,28 +729,616 @@ describe("a running turn is followed again on open", () => {
     await screen.findByTestId("code-ask");
     expect(H.streams[0]).toEqual({ path: "/build/app/sessions/a1/turns/turn_7/stream", body: undefined });
     expect(screen.getAllByTestId("code-user")).toHaveLength(1);
-    expect(screen.getAllByTestId("code-tool")).toHaveLength(1);
+    // The read and the edit, each once (running and done are one row).
+    expect(screen.getAllByTestId("code-tool")).toHaveLength(2);
   });
 
   it("a replay that does not begin with the question puts the saved question back first", () => {
-    const evs = SC.claude_edit.map((e) => decodeCodeEvent(e)!).filter(Boolean);
+    const evs = SC.claude_tool_approval_edit.map((e) => decodeCodeEvent(e)!).filter(Boolean);
     const conv = foldConversation(evs);
     expect(conv.items.filter((i) => i.kind === "user")).toHaveLength(1);
     expect(conv.settled).toBe(true);
-    expect(conv.toolSessionId).toBe("5f0c2a1e-1111-4a6b-9f00-000000000001");
+    expect(conv.toolSessionId).toBe("f97030e3-5154-4f15-a6b0-d1d68826e569");
   });
 
   it("an ask the session read lists (its event trimmed) is still asked", async () => {
-    const pendingAsk = SC.codex_command.find((e) => e.type === "approval")!;
+    const pendingAsk = SC.codex_command_and_file_change.find((e) => e.type === "approval")!;
     seed([sess("a1")]);
     openSession("a1", {
       session: sess("a1"),
-      events: [{ type: "user", at: "x", text: "Run the linter" }],
+      events: [{ type: "user", at: "x", text: "do it" }],
       running: true,
       pending: [pendingAsk],
     });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     const card = await screen.findByTestId("code-ask");
-    expect(within(card).getByTestId("code-ask-command").textContent).toContain("ruff check .");
+    expect(within(card).getByTestId("code-ask-command").textContent).toContain("Get-ChildItem -Force");
+  });
+});
+
+/* ======================================================= the daemon's shapes */
+
+describe("what the real daemon sends", () => {
+  it("Codex on Windows: the modes it does not offer are listed with the reason, never choosable", async () => {
+    seed([sess("c1", { harness: "codex" })]);
+    openSession("c1", { session: sess("c1", { harness: "codex" }), events: [], running: null, pending: [], commands: [] });
+    render(<BuildCodeView initialSession="c1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    const menu = screen.getByTestId("code-mode-chip-menu");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-edits").textContent).toBe(
+      "Auto edits is not offered here. Codex cannot run commands in its sandbox on Windows.",
+    );
+    expect(within(menu).getByTestId("code-mode-chip-hidden-plan").textContent).toContain("Codex has no plan mode.");
+    expect(within(menu).queryByTestId("code-mode-chip-option-edits")).toBeNull();
+    expect(within(menu).queryByTestId("code-mode-chip-option-plan")).toBeNull();
+    expect(within(menu).getAllByRole("menuitemradio").map((b) => b.dataset.testid)).toEqual([
+      "code-mode-chip-option-ask",
+      "code-mode-chip-option-full",
+    ]);
+  });
+
+  it("older steps left out of the read are said in one quiet line", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: SC.claude_deny, events_total: 1240, dropped: 1223, running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    expect((await screen.findByTestId("code-dropped")).textContent).toBe(
+      "1,223 older steps were left out here to keep this quick.",
+    );
+  });
+
+  it("nothing left out: no line", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: SC.claude_deny, dropped: 0, running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-conversation");
+    expect(screen.queryByTestId("code-dropped")).toBeNull();
+  });
+
+  it("'/' lists the commands the SESSION read names (what the tool's own process said)", async () => {
+    seed([sess("a1")]);
+    openSession("a1", {
+      session: sess("a1"),
+      events: SC.claude_deny,
+      running: null,
+      pending: [],
+      commands: [{ name: "init", description: "Write a CLAUDE.md" }],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "/" } });
+    const menu = await screen.findByTestId("code-slash-menu");
+    expect(within(menu).getByTestId("code-command-init")).toBeInTheDocument();
+    expect(within(menu).queryByTestId("code-command-review")).toBeNull();
+  });
+
+  it("a change applied 'next' says it applies from the next message", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: SC.claude_deny, running: null, pending: [] });
+    H.postReply["PATCH /build/app/sessions/a1"] = { session: sess("a1", { effort: "high" }), applied: { effort: "next" } };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.change(screen.getByTestId("code-effort-chip"), { target: { value: "high" } });
+    expect((await screen.findByTestId("code-info")).textContent).toBe("The effort applies from your next message.");
+    expect((screen.getByTestId("code-effort-chip") as HTMLSelectElement).value).toBe("high");
+  });
+
+  it("a change applied now says nothing more", async () => {
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events: SC.claude_deny, running: null, pending: [] });
+    H.postReply["PATCH /build/app/sessions/a1"] = { session: sess("a1", { mode: "edits" }), applied: { mode: "now" } };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-edits"));
+    await waitFor(() => expect(screen.getByTestId("code-mode-chip-button").textContent).toContain("Auto edits"));
+    expect(screen.queryByTestId("code-info")).toBeNull();
+  });
+
+  it("an ask the tool stopped asking (decision 'expired') reads 'No longer asked' and asks nothing", async () => {
+    const two = SC.claude_two_approvals;
+    const events = [
+      ...two.slice(0, two.findIndex((e) => e.type === "approval") + 1),
+      { type: "resolved", request_id: "ask-1", decision: "expired", turn: "turn-1" },
+    ];
+    seed([sess("a1")]);
+    openSession("a1", { session: sess("a1"), events, running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    expect((await screen.findByTestId("code-resolved")).textContent).toContain("No longer asked");
+    expect(screen.queryByTestId("code-ask")).toBeNull();
+  });
+});
+
+describe("an account at its limit", () => {
+  function atLimit() {
+    seed([sess("a1", { account: "p1", account_name: "Work" })]);
+    openSession("a1", {
+      session: sess("a1", { account: "p1", account_name: "Work" }),
+      events: SC.claude_account_limit_synthesized,
+      running: null,
+      pending: [],
+    });
+  }
+
+  it("offers Continue on another account; the press moves the session and says where", async () => {
+    atLimit();
+    H.postReply["/build/app/sessions/a1/continue-on"] = {
+      session: sess("a1", { account: "p2", account_name: "Personal" }),
+      account: "p2",
+      account_name: "Personal",
+      note: "The conversation was copied to Personal.",
+    };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const err = await screen.findByTestId("code-error");
+    expect(err.dataset.fixKind).toBe("account_limit");
+    fireEvent.click(within(err).getByTestId("code-continue-on"));
+    await waitFor(() =>
+      expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/continue-on")?.body).toEqual({}),
+    );
+    expect((await screen.findByTestId("code-info")).textContent).toBe(
+      "Now on Personal. The conversation was copied to Personal. Send your message again to carry on.",
+    );
+    expect(screen.getByTestId("code-account-chip").textContent).toBe("Personal");
+  });
+
+  it("no other account: the refusal is said in its words", async () => {
+    atLimit();
+    H.postFail["/build/app/sessions/a1/continue-on"] = { status: 409, message: "There is no other Claude account to move to." };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    fireEvent.click(within(await screen.findByTestId("code-error")).getByTestId("code-continue-on"));
+    expect((await screen.findByTestId("code-note")).textContent).toBe("There is no other Claude account to move to.");
+  });
+
+  it("an older failure (the conversation went on after it) offers no press", async () => {
+    seed([sess("a1")]);
+    openSession("a1", {
+      session: sess("a1"),
+      events: [...SC.claude_account_limit_synthesized, ...SC.claude_deny],
+      running: null,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-error");
+    expect(screen.queryByTestId("code-continue-on")).toBeNull();
+  });
+});
+
+describe("the tool's own saved conversations", () => {
+  const SHOP = "C:\\work\\shop";
+  const API_DIR = "C:\\work\\api";
+  const diskPath = (f: string) => `/build/app/sessions?folder=${encodeURIComponent(f)}&disk=1`;
+
+  function withDisk() {
+    seed([sess("a1"), sess("a2", { folder: API_DIR, harness: "codex", updated_at: "2026-10-29T08:00:00Z" })]);
+    openSession("a1", { session: sess("a1"), events: [], running: null, pending: [] });
+    H.gets[diskPath(SHOP)] = {
+      sessions: [sess("a1")],
+      disk: [
+        { source: "disk", harness: "claude-code", harness_session_id: "c-old", title: "Earlier work", folder: SHOP, started: "", ended: "" },
+      ],
+    };
+    H.gets[diskPath(API_DIR)] = {
+      sessions: [],
+      disk: [{ source: "disk", harness: "codex", harness_session_id: "x-1", title: "Lint run", folder: API_DIR, started: "", ended: "" }],
+    };
+  }
+  const asked = () => H.getLog.filter((p) => p.includes("disk=1"));
+
+  it("the folder in front lists them by itself; another folder only when opened", async () => {
+    withDisk();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const row = await screen.findByTestId("code-disk-c-old");
+    expect(screen.getByTestId("code-disk-line-c-old").textContent).toBe("saved by Claude Code");
+    expect(row.textContent).toContain("Earlier work");
+    expect(asked()).toEqual([diskPath(SHOP)]);
+    expect(screen.queryByTestId("code-disk-x-1")).toBeNull();
+    fireEvent.click(screen.getByTestId("code-saved-toggle-c:/work/api"));
+    expect(await screen.findByTestId("code-disk-line-x-1")).toHaveTextContent("saved by Codex");
+    expect(asked()).toEqual([diskPath(SHOP), diskPath(API_DIR)]);
+  });
+
+  it("opening one makes a session on that saved conversation and opens it", async () => {
+    withDisk();
+    H.postReply["/build/app/sessions"] = sess("n9", { title: "Earlier work", harness_session_id: "c-old" });
+    openSession("n9", { session: sess("n9", { title: "Earlier work" }), events: [], running: null, pending: [] });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    fireEvent.click(await screen.findByTestId("code-disk-c-old"));
+    await waitFor(() => expect(screen.getByTestId("code-session").dataset.session).toBe("n9"));
+    expect(H.posts.find((p) => p.path === "/build/app/sessions")?.body).toEqual({
+      harness: "claude-code",
+      folder: SHOP,
+      harness_session_id: "c-old",
+    });
+    expect(screen.queryByTestId("code-disk-c-old")).toBeNull();
+  });
+});
+
+describe("archived sessions", () => {
+  it("the archived list shows them, and Bring back unarchives one", async () => {
+    seed([sess("a1")]);
+    H.gets["/build/app/sessions?archived=1"] = {
+      sessions: [sess("a1"), sess("z9", { archived: true, archived_at: "2026-10-28T09:00:00Z", title: "Old" })],
+    };
+    H.postReply["/build/app/sessions/z9/unarchive"] = sess("z9", { archived: false, title: "Old" });
+    // Once brought back, the daemon lists it with the others again.
+    H.gets["/build/app/sessions"] = () => ({
+      sessions: H.posts.some((p) => p.path.endsWith("/unarchive"))
+        ? [sess("a1"), sess("z9", { archived: false, title: "Old" })]
+        : [sess("a1")],
+    });
+    render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-row-a1");
+    expect(screen.queryByTestId("code-row-z9")).toBeNull();
+    fireEvent.click(screen.getByTestId("code-archived-toggle"));
+    const z9 = await screen.findByTestId("code-row-z9");
+    expect(z9.dataset.archived).toBe("true");
+    // Only the archived ones are in the archived list.
+    expect(screen.queryByTestId("code-row-a1")).toBeNull();
+    fireEvent.click(screen.getByTestId("code-row-more-z9"));
+    fireEvent.click(screen.getByTestId("code-row-unarchive-z9"));
+    await waitFor(() => expect(screen.queryByTestId("code-row-z9")).toBeNull());
+    expect(H.posts.map((p) => p.path)).toContain("/build/app/sessions/z9/unarchive");
+    expect(screen.getByTestId("code-archived-empty")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("code-archived-toggle"));
+    expect(await screen.findByTestId("code-row-z9")).not.toHaveAttribute("data-archived");
+  });
+});
+
+/* ======================================================= the review's fixes */
+
+function settledSession(over: Record<string, unknown> = {}, events: Record<string, unknown>[] = SC.claude_deny) {
+  seed([sess("a1", over)]);
+  openSession("a1", { session: sess("a1", over), events, running: null, pending: [] });
+}
+
+describe("review: the '/' and '@' menus answer the arrow keys", () => {
+  it("'/' then ArrowDown then Enter inserts the SECOND command", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "/" } });
+    const menu = await screen.findByTestId("code-slash-menu");
+    expect(within(menu).getAllByRole("option").map((o) => o.dataset.testid)).toEqual([
+      "code-command-review",
+      "code-command-compact",
+    ]);
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    await waitFor(() => expect(screen.getByTestId("code-command-compact")).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((box as HTMLTextAreaElement).value).toBe("/compact ");
+  });
+});
+
+describe("review: the transcript stays where the reader put it", () => {
+  const spy = vi.fn();
+  beforeEach(() => {
+    spy.mockReset();
+    (Element.prototype as unknown as { scrollIntoView: unknown }).scrollIntoView = spy;
+  });
+  afterEach(() => {
+    delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+  /** The transcript reports a scroll position (jsdom lays nothing out). */
+  function scrollTo(el: HTMLElement, top: number) {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(el, "scrollTop", { configurable: true, value: top, writable: true });
+    fireEvent.scroll(el);
+  }
+
+  it("a reader at the bottom follows the newest step; one who scrolled up is left there, with Jump to latest", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-ask");
+    const scroller = screen.getByTestId("code-transcript");
+    scrollTo(scroller, 1500); // at the bottom
+    spy.mockClear();
+    act(() => H.lastWatch?.onFrame?.("notice", { type: "notice", text: "Compacted.", turn: "turn-1" }));
+    await waitFor(() => expect(screen.getByText("Compacted.")).toBeInTheDocument());
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // Scrolled up: a new step does not move the reader.
+    scrollTo(scroller, 200);
+    spy.mockClear();
+    act(() => H.lastWatch?.onFrame?.("notice", { type: "notice", text: "Still working.", turn: "turn-1" }));
+    // Wait for the step itself to be drawn, THEN check nothing moved.
+    await waitFor(() => expect(screen.getByText("Still working.")).toBeInTheDocument());
+    await pause(30);
+    expect(spy).not.toHaveBeenCalled();
+    const jump = await screen.findByTestId("code-jump-to-latest");
+    fireEvent.click(jump);
+    expect(spy).toHaveBeenCalled();
+    expect(screen.queryByTestId("code-jump-to-latest")).toBeNull();
+  });
+});
+
+describe("review: a refused send leaves no message behind", () => {
+  it("a 409 before the first frame: no bubble, the words and the file back in the box, the reason said", async () => {
+    settledSession();
+    H.scripts = [[{ yield: { type: "error", detail: "Claude Code is still answering the last message.", status: 409 } }]];
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = (await screen.findByTestId("code-box")) as HTMLTextAreaElement;
+    const before = screen.getAllByTestId("code-user").length;
+    fireEvent.change(box, { target: { value: "Run the tests" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect((await screen.findByTestId("code-note")).textContent).toBe("Claude Code is still answering the last message.");
+    expect(screen.getAllByTestId("code-user")).toHaveLength(before);
+    expect(box.value).toBe("Run the tests");
+    // Nothing was sent, so nothing is read back as if it had been.
+    expect(screen.queryByTestId("code-stop")).toBeNull();
+  });
+
+  it("CONTROL: an error frame after the turn began stays in the conversation", async () => {
+    settledSession();
+    H.scripts = [
+      [
+        { event: "user", data: { type: "user", text: "Run the tests", turn: "t9" } },
+        { yield: { type: "error", detail: "The reply could not be followed.", status: 500 } },
+      ],
+    ];
+    H.gets["/build/app/sessions/a1"] = () => ({
+      session: sess("a1"),
+      events: H.streams.length ? [...SC.claude_deny, { type: "user", text: "Run the tests", turn: "t9" }] : SC.claude_deny,
+      running: null,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Run the tests" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(screen.getAllByTestId("code-user").at(-1)?.textContent).toBe("Run the tests"));
+  });
+});
+
+describe("review: an ask settled once is drawn once", () => {
+  it("the stream's own line lands before the answer returns: ONE 'Allowed' line", async () => {
+    waitingOnEdit();
+    let finish: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => {
+      finish = r;
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    H.postReply["/build/app/sessions/a1/answer"] = slow;
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    // The tool's resolved frame arrives first...
+    act(() => H.lastWatch?.onFrame?.("resolved", { type: "resolved", request_id: "ask-1", decision: "allow", turn: "turn-1" }));
+    await waitFor(() => expect(screen.getAllByTestId("code-resolved")).toHaveLength(1));
+    // ...then the answer returns.
+    await act(async () => {
+      finish({ ok: true });
+      await slow;
+    });
+    await pause(40);
+    expect(screen.getAllByTestId("code-resolved")).toHaveLength(1);
+  });
+});
+
+describe("review: drawing only what changed (the v1.250.0 rule)", () => {
+  it("twenty streamed words redraw only the reply that grows, at most once a frame", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
+    await pause(40);
+    const rows = screen.getAllByTestId("code-tool").length + screen.getAllByTestId("code-user").length;
+    expect(rows).toBeGreaterThan(2);
+    const before = { ...codeRowDraws };
+    // Twenty frames, each in its own read (as a real stream delivers them),
+    // all well inside one animation frame.
+    for (let i = 0; i < 20; i += 1) {
+      act(() => H.lastWatch?.onFrame?.("text", { type: "text", item: "m-live", delta: `word${i} `, turn: "turn-1" }));
+      await act(() => Promise.resolve());
+    }
+    await waitFor(() => expect(screen.getAllByTestId("code-text").at(-1)?.textContent).toContain("word19"));
+    await pause(40);
+    // One new row, drawn once for the twenty words (one frame); no other row
+    // drew again.
+    expect(codeRowDraws.items - before.items).toBeLessThanOrEqual(2);
+    expect(codeRowDraws.tools - before.tools).toBe(0);
+  });
+});
+
+describe("review: Full access cannot be given by a held or doubled key", () => {
+  it("a second press right after arming does not count; a later one does", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    const full = screen.getByTestId("code-mode-chip-option-full");
+    fireEvent.click(full);
+    fireEvent.click(full);
+    await pause(20);
+    expect(H.patches).toHaveLength(0);
+    await pause(FULL_ARM_GUARD_MS);
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    await waitFor(() => expect(H.patches[0]?.body).toEqual({ mode: "full", confirm: true }));
+  });
+
+  it("a held key's repeat is swallowed", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    const full = screen.getByTestId("code-mode-chip-option-full");
+    const repeat = createEvent.keyDown(full, { key: "Enter", repeat: true });
+    fireEvent(full, repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    const first = createEvent.keyDown(full, { key: "Enter" });
+    fireEvent(full, first);
+    expect(first.defaultPrevented).toBe(false);
+  });
+
+  it("an armed press is forgotten after a few seconds", async () => {
+    settledSession();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-session");
+    fireEvent.click(screen.getByTestId("code-mode-chip-button"));
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    expect(screen.getByTestId("code-mode-chip-option-full").dataset.armed).toBe("true");
+    await pause(FULL_DISARM_MS + 100);
+    expect(screen.getByTestId("code-mode-chip-option-full").dataset.armed).toBeUndefined();
+    // The next press arms again; nothing was given.
+    fireEvent.click(screen.getByTestId("code-mode-chip-option-full"));
+    expect(H.patches).toHaveLength(0);
+  });
+
+  it("Enter is refused in Full access by the session's own mode, even with no tool list", async () => {
+    const upTo = SC.claude_tool_approval_edit.findIndex((e) => e.type === "approval");
+    seed([sess("a1", { mode: "full" })]);
+    H.gets["/build/app/harnesses"] = { harnesses: [] };
+    openSession("a1", {
+      session: sess("a1", { mode: "full" }),
+      events: SC.claude_tool_approval_edit.slice(0, upTo + 1),
+      running: true,
+      pending: [],
+    });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-ask");
+    (document.activeElement as HTMLElement | null)?.blur();
+    await pause(ARM_MS);
+    expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
+    fireEvent.keyDown(window, { key: "Enter" });
+    await pause(30);
+    expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
+  });
+});
+
+describe("review: words", () => {
+  it("a mode is never shown by its raw id", () => {
+    expect(modeLabel("full")).toBe("Full access");
+    expect(modeLabel("edits")).toBe("Auto edits");
+    expect(modeLabel("bypassPermissions")).toBe("Another mode");
+    expect(modeLabel("")).toBe("Ask first");
+  });
+
+  it("an account says its state, and one that cannot start a session is greyed", async () => {
+    expect(accountStatusWords("needs_sign_in")).toEqual({ words: "needs to sign in again", usable: false });
+    expect(accountStatusWords("limit").usable).toBe(false);
+    expect(accountStatusWords("off").usable).toBe(false);
+    expect(accountStatusWords("ready")).toEqual({ words: "", usable: true });
+    const tools = JSON.parse(JSON.stringify(TOOLS)) as typeof TOOLS;
+    tools.harnesses[0].accounts = [
+      { id: "p1", name: "Work", status: "ready" },
+      { id: "p2", name: "Personal", status: "needs_sign_in" },
+      { id: "p3", name: "Team", status: "limit" },
+    ];
+    seed();
+    H.gets["/build/app/harnesses"] = tools;
+    render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
+    fireEvent.click(await screen.findByTestId("code-new"));
+    const select = (await screen.findByTestId("code-new-account")) as HTMLSelectElement;
+    const opts = Array.from(select.options).map((o) => [o.textContent, o.disabled]);
+    expect(opts).toEqual([
+      ["This PC's sign-in", false],
+      ["Work", false],
+      ["Personal (needs to sign in again)", true],
+      ["Team (at its limit)", true],
+    ]);
+  });
+});
+
+describe("review: the rejoin cut follows the running turn", () => {
+  const ev = (type: string, turn: string, extra: Record<string, unknown> = {}) =>
+    decodeCodeEvent({ type, turn, ...extra })!;
+
+  it("cuts every event of the running turn (a queued second message included), keeps its question aside", () => {
+    const events = [
+      ev("user", "t1", { text: "first" }),
+      ev("text_done", "t1", { item: "a", text: "done" }),
+      ev("done", "t1", { stop: "completed" }),
+      ev("user", "t2", { text: "second" }),
+      ev("tool", "t2", { item: "x", kind: "read", status: "done" }),
+      ev("user", "t2", { text: "and also this" }),
+    ];
+    const { base, carry } = cutForRejoin(events, "t2");
+    expect(base.map((e) => e.turn)).toEqual(["t1", "t1", "t1"]);
+    expect(carry && carry.type === "user" ? carry.text : "").toBe("second");
+  });
+
+  it("an older record with no turns falls back to the last question", () => {
+    const events = [decodeCodeEvent({ type: "user", text: "q" })!, decodeCodeEvent({ type: "notice", text: "n" })!];
+    const { base, carry } = cutForRejoin(events, "t9");
+    expect(base).toHaveLength(0);
+    expect(carry?.type).toBe("user");
+  });
+});
+
+describe("review: polish", () => {
+  it("after the last card is answered, the caret is back in the message box", async () => {
+    waitingOnEdit();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const card = await screen.findByTestId("code-ask");
+    fireEvent.click(within(card).getByTestId("code-ask-allow"));
+    await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("code-box")));
+  });
+
+  it("a reply whose stream dropped while Iron Jarvis was away is followed again once it is back", async () => {
+    settledSession();
+    H.scripts = [
+      [
+        { event: "user", data: { type: "user", text: "Go", turn: "t5" } },
+        { yield: { type: "error", detail: "Iron Jarvis isn't responding.", status: 0, offline: true } },
+      ],
+      [{ event: "user", data: { type: "user", text: "Go", turn: "t5" } }],
+    ];
+    let back = false;
+    H.gets["/build/app/sessions/a1"] = () => {
+      if (H.streams.length && !back) return Promise.reject(new Error("offline"));
+      return {
+        session: sess("a1"),
+        events: H.streams.length ? [...SC.claude_deny, { type: "user", text: "Go", turn: "t5" }] : SC.claude_deny,
+        running: H.streams.length === 1 ? "t5" : null,
+        pending: [],
+      };
+    };
+    holdStreams();
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "Go" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByTestId("code-lost")).toBeInTheDocument();
+    back = true;
+    await waitFor(() => expect(H.streams).toHaveLength(2), { timeout: 8_000 });
+    expect(H.streams[1].path).toBe("/build/app/sessions/a1/turns/t5/stream");
+    await waitFor(() => expect(screen.queryByTestId("code-lost")).toBeNull());
+    // The replay draws the question again (once a frame): wait for IT.
+    await waitFor(() => expect(screen.getAllByTestId("code-user").filter((u) => u.textContent === "Go")).toHaveLength(1));
+    await pause(60);
+    expect(screen.getAllByTestId("code-user").filter((u) => u.textContent === "Go")).toHaveLength(1);
+  });
+
+  it("a session read that lands after a newer send never ends that send's reply", async () => {
+    settledSession();
+    // Turn A ends at once; its closing read is held back.
+    let releaseRead: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      releaseRead = r;
+    });
+    let reads = 0;
+    H.gets["/build/app/sessions/a1"] = () => {
+      reads += 1;
+      if (reads === 2) return held.then(() => ({ session: sess("a1"), events: SC.claude_deny, running: null, pending: [] }));
+      return { session: sess("a1"), events: SC.claude_deny, running: null, pending: [] };
+    };
+    H.scripts = [[{ event: "done", data: { type: "done", stop: "completed", turn: "tA" } }], []];
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    const box = await screen.findByTestId("code-box");
+    fireEvent.change(box, { target: { value: "A" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(reads).toBe(2));
+    // B goes out (its stream stays open) while A's read is still out.
+    holdStreams();
+    fireEvent.change(box, { target: { value: "B" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByTestId("code-stop")).toBeInTheDocument();
+    await act(async () => {
+      releaseRead();
+      await held;
+    });
+    await pause(40);
+    expect(screen.getByTestId("code-stop")).toBeInTheDocument();
+    expect(screen.getAllByTestId("code-user").map((u) => u.textContent)).toContain("B");
   });
 });

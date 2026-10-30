@@ -23,6 +23,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
+  // (codeViewRenders: every draw of the Code view stand-in, a one-frame
+  // flash included.)
   class FakeApiError extends Error {
     status: number;
     constructor(message: string, status = 0) {
@@ -32,6 +34,7 @@ const api = vi.hoisted(() => {
   }
   return {
     responses: {} as Record<string, unknown>,
+    codeViewRenders: 0,
     posts: [] as { path: string; body: unknown }[],
     postReply: {} as Record<string, unknown>,
     postFail: {} as Record<string, string>,
@@ -60,6 +63,7 @@ vi.mock("next/dynamic", () => ({
     function DynamicStub(props: Record<string, unknown>) {
       if (typeof props.onOpenedTerminal === "function") {
         // The Code view: what the page hands it is what is asserted.
+        api.codeViewRenders += 1;
         const opened = props.onOpenedTerminal as (id: string) => void;
         return (
           <div
@@ -315,7 +319,9 @@ describe("Open in Code view (from a terminal)", () => {
     });
     expect(codeViewOfferFor(t, { agent_cli: "claude", state: "working", can_open_in_code: true } as never)).toBeNull();
     expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown" })).toEqual({ paneId: "t1", toolName: "Codex" });
-    expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown", harness_exited: false } as never)).toBeNull();
+    expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown", can_open_in_code: false } as never)).toBeNull();
+    // Only the daemon's exact name counts (never an invented one).
+    expect(codeViewOfferFor(t, { agent_cli: "claude", state: "idle", harness_exited: true } as never)).toBeNull();
     expect(codeViewOfferFor({ ...t, resume_cli: "aider" }, { state: "unknown" })).toBeNull();
     expect(codeViewOfferFor({ ...t, alive: false, resume_cli: "claude" }, null)).toBeNull();
   });
@@ -341,5 +347,25 @@ describe("a Code view link pressed while Build is open", () => {
     expect(buildViewFromSearch("?view=code")).toBe("code");
     expect(buildViewFromSearch("?focus=t1")).toBe("terminal");
     expect(buildViewFromSearch("")).toBeNull();
+  });
+});
+
+// The v1.388.1 lesson: window-scoped module state must be tested WITHOUT the
+// reset the other cases use. The window last showed Code; a terminal link
+// must open Terminal from the very first frame (never a flash of Code).
+describe("review: a terminal link with the window's memory on Code", () => {
+  it("?focus= opens Terminal on the FIRST frame, with no reset of the memory", async () => {
+    render(<TerminalsPage />);
+    await screen.findByTestId("terminal-pane-t1");
+    fireEvent.click(screen.getByTestId("build-view-code"));
+    await screen.findByTestId("stub-code-view");
+    cleanup();
+    // NO resetBuildViewMemory() here: the module still says "code".
+    api.codeViewRenders = 0;
+    at("/terminals?focus=t2");
+    render(<TerminalsPage />);
+    expect(await screen.findByTestId("pane-rail")).toBeInTheDocument();
+    expect(api.codeViewRenders).toBe(0);
+    expect(screen.getByTestId("build-view-terminal")).toHaveAttribute("aria-selected", "true");
   });
 });

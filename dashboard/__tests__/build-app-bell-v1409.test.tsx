@@ -15,7 +15,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 const { getMock, notifyMock, H } = vi.hoisted(() => ({
   getMock: vi.fn(),
   notifyMock: vi.fn(),
-  H: { pending: [] as unknown[] },
+  H: { pending: [] as unknown[], panes: [] as unknown[] },
 }));
 
 vi.mock("@/lib/api", () => {
@@ -54,15 +54,21 @@ vi.mock("@/lib/useDesktopNotifications", () => ({
 
 import { NotificationBell, chatAskHref, chatAskRowWords, parseChatAsk } from "@/components/NotificationBell";
 import { BUILD_CODE_EVENT } from "@/lib/buildApp";
+import { BUILD_TERMINAL_EVENT } from "@/lib/buildLinks";
 import { __resetApiCache } from "@/lib/apiCache";
 
+/** The row exactly as the daemon lists it (hosted/service.py pending rows). */
 const APP_ROW = {
-  id: "app:a7:req-1",
+  id: "build_app:a7",
   kind: "chat",
-  surface: "build_app",
-  session_id: "a7",
-  harness: "claude-code",
+  thread_id: "a7",
   tool: "Bash",
+  requested_at: "2026-10-29T10:00:00Z",
+  mission_id: null,
+  project_id: null,
+  surface: "build_app",
+  app_session: "a7",
+  harness: "claude-code",
 };
 
 beforeEach(() => {
@@ -70,11 +76,13 @@ beforeEach(() => {
   getMock.mockReset();
   notifyMock.mockReset();
   H.pending = [];
+  H.panes = [];
   window.localStorage.clear();
   getMock.mockImplementation(async (path: unknown) => {
     const p = String(path);
     if (p.startsWith("/audit")) return { entries: [], next_cursor: null, total: 0 };
     if (p === "/chat/approvals/pending") return { approvals: H.pending };
+    if (p === "/terminals/activity") return { panes: H.panes };
     return {};
   });
 });
@@ -101,7 +109,7 @@ describe("a Build Code view session waiting on an approval", () => {
   });
 
   it("a row of ANOTHER kind is still never read as an agent's ask (no Approve that would post elsewhere)", async () => {
-    H.pending = [{ ...APP_ROW, kind: "approval" }];
+    H.pending = [{ ...APP_ROW, id: "build_app:a8", kind: "approval" }];
     render(<NotificationBell />);
     await screen.findByRole("button", { name: "1 notifications" });
     fireEvent.click(screen.getByRole("button", { name: /notification/i }));
@@ -110,7 +118,7 @@ describe("a Build Code view session waiting on an approval", () => {
   });
 
   it("parseChatAsk reads the row whatever its kind; Codex by name; the session from the row", () => {
-    expect(parseChatAsk(APP_ROW)).toEqual({ id: "app:a7:req-1", threadId: "a7", app: { tool: "Claude Code" } });
+    expect(parseChatAsk(APP_ROW)).toEqual({ id: "build_app:a7", threadId: "a7", app: { tool: "Claude Code" } });
     const codex = parseChatAsk({ id: "x", kind: "build_app", surface: "build_app", session_id: "a9", harness: "codex" })!;
     expect(chatAskRowWords(codex).title).toBe("Codex is waiting for your OK");
     expect(chatAskHref(codex)).toBe("/terminals?view=code&code=a9");
@@ -135,6 +143,26 @@ describe("a Build Code view session waiting on an approval", () => {
       expect(heard).toEqual(["a7"]);
     } finally {
       window.removeEventListener(BUILD_CODE_EVENT, on);
+    }
+  });
+});
+
+describe("review: a terminal's row pressed while Build shows its Code view", () => {
+  it("announces the terminal, so Build switches to Terminal on it", async () => {
+    window.history.replaceState({}, "", "/terminals");
+    const heard: string[] = [];
+    const on = (e: Event) => heard.push(String((e as CustomEvent<{ id: string }>).detail.id));
+    window.addEventListener(BUILD_TERMINAL_EVENT, on);
+    try {
+      H.panes = [{ id: "p7", name: null, agent_cli: "claude", state: "blocked", state_line: "", alive: true }];
+      render(<NotificationBell />);
+      await screen.findByRole("button", { name: "1 notifications" });
+      fireEvent.click(screen.getByRole("button", { name: /notification/i }));
+      const row = await screen.findByTestId("bell-pane-waiting");
+      fireEvent.click(within(row).getByRole("link"));
+      expect(heard).toEqual(["p7"]);
+    } finally {
+      window.removeEventListener(BUILD_TERMINAL_EVENT, on);
     }
   });
 });

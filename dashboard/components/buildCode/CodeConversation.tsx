@@ -31,9 +31,12 @@ import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { DiffBody } from "@/components/chat/DiffView";
 import { StepOpenInEditor } from "@/components/harness/OpenInEditor";
 import { resolveInFolder } from "@/lib/codeEditor";
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import {
+  CONTINUE_ON_ANOTHER,
   doneWords,
+  signInProvider,
   planChecklistSteps,
   resolvedWords,
   usageWords,
@@ -77,7 +80,11 @@ function toolWords(t: ToolEvent): string {
   }
 }
 
-function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
+/** How many times a row drew (tests count these; never read by the app). */
+export const codeRowDraws = { items: 0, tools: 0 };
+
+const ToolStep = memo(function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
+  codeRowDraws.tools += 1;
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const hasDetail = !!(tool.input || tool.output);
@@ -110,9 +117,20 @@ function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
       ) : null}
     </div>
   );
+});
+
+/** What the newest failure can offer (only the newest: older ones are
+ *  history). */
+interface FailurePresses {
+  tool: string;
+  onContinueOn?: () => void;
+  continuing?: boolean;
 }
 
-function Item({ item, folder }: { item: ConvItem; folder: string }) {
+// A row draws again only when ITS item changed (the fold keeps unchanged
+// items' objects — lib/buildApp reuseItems) or its press did.
+const Item = memo(function Item({ item, folder, press }: { item: ConvItem; folder: string; press: FailurePresses | null }) {
+  codeRowDraws.items += 1;
   switch (item.kind) {
     case "user":
       return (
@@ -150,7 +168,7 @@ function Item({ item, folder }: { item: ConvItem; folder: string }) {
         <p data-testid="code-resolved" data-decision={item.decision} className="flex items-center gap-2 text-[12px] text-zinc-500">
           <CheckSquare size={13} aria-hidden="true" className="shrink-0" />
           <span className="min-w-0 truncate">
-            {resolvedWords(item.decision)}
+            {resolvedWords(item.decision, item.question)}
             {item.about ? `: ${item.about}` : ""}
           </span>
         </p>
@@ -166,6 +184,20 @@ function Item({ item, folder }: { item: ConvItem; folder: string }) {
         <div data-testid="code-error" data-fix-kind={item.fixKind} role="alert" className="text-[13px]" title={item.technical || undefined}>
           <p className="text-tone-danger">{item.title}</p>
           {item.fix ? <p className="text-zinc-400">{item.fix}</p> : null}
+          {press && item.fixKind === "account_limit" && press.onContinueOn ? (
+            <button
+              type="button"
+              data-testid="code-continue-on"
+              disabled={press.continuing}
+              onClick={press.onContinueOn}
+              className="mt-1 inline-flex h-7 items-center rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              {CONTINUE_ON_ANOTHER}
+            </button>
+          ) : null}
+          {press && item.fixKind === "sign_in" && signInProvider(press.tool) ? (
+            <CliSignInPress provider={signInProvider(press.tool)} testIdPrefix="code" />
+          ) : null}
           {item.technical ? (
             <details className="mt-0.5 text-[12px] text-zinc-500">
               <summary className="cursor-pointer">Details</summary>
@@ -191,19 +223,37 @@ function Item({ item, folder }: { item: ConvItem; folder: string }) {
       );
     }
   }
-}
+});
 
 export const CodeConversation = memo(function CodeConversation({
   items,
   folder,
+  tool = "",
+  onContinueOn,
+  continuing = false,
 }: {
   items: readonly ConvItem[];
   folder: string;
+  /** The session's coding tool (the Sign in press names it). */
+  tool?: string;
+  onContinueOn?: () => void;
+  continuing?: boolean;
 }) {
+  let lastError = -1;
+  items.forEach((it, i) => {
+    if (it.kind === "error") lastError = i;
+  });
+  // A failure is worth a press only while it is the newest thing said.
+  const newest = lastError >= 0 && !items.slice(lastError + 1).some((it) => it.kind === "user" || it.kind === "text");
   return (
     <div data-testid="code-conversation" className="grid gap-3">
-      {items.map((item) => (
-        <Item key={item.key} item={item} folder={folder} />
+      {items.map((item, i) => (
+        <Item
+          key={item.key}
+          item={item}
+          folder={folder}
+          press={newest && i === lastError ? { tool, onContinueOn, continuing } : null}
+        />
       ))}
     </div>
   );

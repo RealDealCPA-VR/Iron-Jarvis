@@ -2033,8 +2033,12 @@ same switch as the chat page's Chat | Code, in the same place on the page.
   the work and the model only thinks.)
 - **The list** on the left holds your sessions, grouped by folder. Each row
   says which tool it runs (Claude Code or Codex) and which account it runs
-  on. A session the tool saved on this PC by itself can be listed too ("saved
-  by Claude Code").
+  on. Under each folder, **Show the tool's saved conversations** lists the
+  conversations Claude Code or Codex saved there by themselves ("saved by
+  Claude Code"); the folder of the session you have open shows them without
+  a press. Opening one carries that conversation on here. **Archived
+  sessions** at the bottom lists what you archived, and **Bring back** (in a
+  row's ⋯) returns one to the list.
 - **New session**: pick the tool by name (one that is not installed or is
   signed out is greyed, with the reason), the folder, the account and the
   mode, then Start.
@@ -2050,9 +2054,19 @@ same switch as the chat page's Chat | Code, in the same place on the page.
   every time: those take a click. Your draft is kept underneath.
 - **The chips under the box**: the tool and its model, the effort, the mode
   and the account. The modes are the tool's own (Ask first, Auto edits, Plan
-  for Claude Code, and Full access). **Full access** lets the tool do
-  anything without asking, so it takes two presses. `/` lists the tool's own
-  commands; `@` lists the folder's files. **Stop** interrupts the tool.
+  for Claude Code, and Full access). Codex on Windows offers only Ask first
+  and Full access: its sandbox cannot run commands there, and it has no plan
+  mode; the mode menu says so. **Full access** lets the tool do anything
+  without asking, so it takes two presses. A change the tool can only pick
+  up when it starts again (the effort, for example) says it applies from
+  your next message. `/` lists the tool's own commands; `@` lists the
+  folder's files. **Stop** interrupts the tool.
+- **When something goes wrong** the reply says what and what to do. A tool
+  that is signed out offers **Sign in**; an account that hit its limit offers
+  **Continue on another account**, which moves the session (and a copy of
+  the conversation) to your next account for that tool, or says why it
+  cannot. A long session shows its newest steps, with one quiet line saying
+  how many older ones were left out.
 - **A reply keeps going when you leave.** Closing the page or switching to
   Terminal does not stop it; opening the session again picks the reply up
   where it is. If it is waiting for your OK while nobody is looking, the bell

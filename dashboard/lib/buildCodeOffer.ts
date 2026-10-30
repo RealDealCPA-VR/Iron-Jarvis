@@ -7,8 +7,8 @@
  *
  * WHAT COUNTS AS EXITED, in order:
  *  - the daemon says so on the terminal's activity row or the terminal
- *    itself (`can_open_in_code: true`, or `harness_exited: true` — read as
- *    given, never guessed; `false` hides the offer);
+ *    itself (`can_open_in_code: true` — added ONLY when true; read as
+ *    given, never guessed; an explicit `false` hides the offer);
  *  - else a terminal reopened after a restart whose tool died with the old
  *    Iron Jarvis (`resume_cli` names claude or codex: the shell is fresh).
  * A plain terminal, or one whose tool may still be running, shows nothing:
@@ -34,10 +34,8 @@ function toolOf(cli: unknown): string | null {
 
 function flag(row: Record<string, unknown> | null | undefined): boolean | null {
   if (!row) return null;
-  for (const k of ["can_open_in_code", "harness_exited"]) {
-    if (row[k] === true) return true;
-    if (row[k] === false) return false;
-  }
+  if (row.can_open_in_code === true) return true;
+  if (row.can_open_in_code === false) return false;
   return null;
 }
 

@@ -191,6 +191,14 @@ export interface ToolMode {
   dangerous: boolean;
 }
 
+/** A mode the tool does NOT offer here, and why (Codex on Windows: no
+ *  Auto edits, no Plan). Listed in the mode menu, never chosen. */
+export interface HiddenMode {
+  id: string;
+  label: string;
+  reason: string;
+}
+
 export interface ToolAccount {
   id: string;
   name: string;
@@ -210,6 +218,7 @@ export interface CodingTool {
   signedIn: boolean | null;
   version: string;
   modes: ToolMode[];
+  hiddenModes: HiddenMode[];
   models: { id: string; label: string }[];
   efforts: string[];
   accounts: ToolAccount[];
@@ -239,6 +248,13 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       const mid = mo ? str(mo.id, 64).trim() : "";
       if (!mo || !mid) continue;
       modes.push({ id: mid, label: str(mo.label, 80) || mid, dangerous: mo.dangerous === true });
+    }
+    const hiddenModes: HiddenMode[] = [];
+    for (const m of Array.isArray(r.hidden_modes) ? r.hidden_modes : []) {
+      const mo = obj(m);
+      const mid = mo ? str(mo.id, 64).trim() : "";
+      if (!mo || !mid || modes.some((x) => x.id === mid)) continue;
+      hiddenModes.push({ id: mid, label: str(mo.label, 80) || mid, reason: str(mo.reason, 400) });
     }
     const models: { id: string; label: string }[] = [];
     for (const m of Array.isArray(r.models) ? r.models : []) {
@@ -274,6 +290,7 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       signedIn: r.signed_in === true ? true : r.signed_in === false ? false : null,
       version: str(r.version, 60),
       modes,
+      hiddenModes,
       models,
       efforts,
       accounts,
@@ -314,6 +331,13 @@ export interface CodeSession {
    *  here). "" otherwise. */
   source: "disk" | "";
   running: boolean;
+  /** An approval or question is waiting on the user right now. */
+  waiting: boolean;
+}
+
+/** Archived: the daemon's flag, or a stamp. */
+export function isArchived(s: Pick<CodeSession, "archivedAt"> & { archived?: boolean }): boolean {
+  return !!s.archivedAt || s.archived === true;
 }
 
 export function decodeCodeSession(raw: unknown): CodeSession | null {
@@ -335,10 +359,11 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     toolSessionId: str(r.harness_session_id, 200),
     createdAt: str(r.created_at, 64),
     updatedAt: str(r.updated_at, 64),
-    archivedAt: str(r.archived_at, 64),
+    archivedAt: str(r.archived_at, 64) || (r.archived === true ? "archived" : ""),
     lastError: str(r.last_error, 1_000),
     source: r.source === "disk" ? "disk" : "",
     running: r.running === true || (typeof r.running === "string" && r.running.trim() !== ""),
+    waiting: r.waiting === true,
   };
 }
 
@@ -370,13 +395,18 @@ function newestStamp(s: CodeSession): string {
   return s.updatedAt || s.createdAt;
 }
 
+/** One folder's key: case- and slash-blind. */
+export function folderKey(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
 /** Sessions grouped by folder (case- and slash-blind), the group with the
  *  newest session first, newest first inside a group. Archived ones are
- *  left out. */
-export function groupByFolder(sessions: readonly CodeSession[]): FolderGroup[] {
-  const key = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+ *  left out, unless the list IS the archived list (`archived`). */
+export function groupByFolder(sessions: readonly CodeSession[], opts: { archived?: boolean } = {}): FolderGroup[] {
+  const key = folderKey;
   const groups = new Map<string, FolderGroup>();
-  const live = sessions.filter((s) => !s.archivedAt);
+  const live = opts.archived ? [...sessions] : sessions.filter((s) => !s.archivedAt);
   const sorted = [...live].sort((a, b) => (newestStamp(b) > newestStamp(a) ? 1 : newestStamp(b) < newestStamp(a) ? -1 : 0));
   for (const s of sorted) {
     const k = key(s.folder);
@@ -408,9 +438,42 @@ export function sessionTitle(s: Pick<CodeSession, "title" | "tool">, tools?: rea
   return s.title.trim() || `New ${toolLabel(s.tool, tools)} session`;
 }
 
-/** A mode's words (the tool's own list, else its id). */
+const MODE_WORDS: Record<string, string> = {
+  ask: "Ask first",
+  edits: "Auto edits",
+  plan: "Plan",
+  full: "Full access",
+};
+
+/** A mode's words: the tool's own list, else the daemon's four names —
+ *  never the raw id a user cannot read. */
 export function modeLabel(modeId: string, tool?: CodingTool | null): string {
-  return tool?.modes.find((m) => m.id === modeId)?.label || modeId || "Ask first";
+  const own = tool?.modes.find((m) => m.id === modeId)?.label || tool?.hiddenModes.find((m) => m.id === modeId)?.label;
+  if (own) return own;
+  return MODE_WORDS[modeId] ?? (modeId ? "Another mode" : "Ask first");
+}
+
+/** Is this mode Full access (the daemon's id, whatever the tool list says). */
+export function isFullAccess(modeId: string, tool?: CodingTool | null): boolean {
+  return modeId === "full" || modeIsDangerous(modeId, tool);
+}
+
+/** An account's state in words, and whether a new session can start on it
+ *  (the cached Iron-Proxy statuses: ready | usage | limit | needs_sign_in |
+ *  off). */
+export function accountStatusWords(status: string): { words: string; usable: boolean } {
+  switch (status) {
+    case "needs_sign_in":
+      return { words: "needs to sign in again", usable: false };
+    case "limit":
+      return { words: "at its limit", usable: false };
+    case "off":
+      return { words: "turned off", usable: false };
+    case "usage":
+      return { words: "in use", usable: true };
+    default:
+      return { words: "", usable: true };
+  }
 }
 
 export function modeIsDangerous(modeId: string, tool?: CodingTool | null): boolean {
@@ -434,7 +497,11 @@ export interface QuestionItem {
   multi: boolean;
 }
 
-export type CodeEvent =
+/** Every event may name the turn it belongs to (the daemon's `turn`): a
+ *  rejoin cuts the saved list by it. */
+export type CodeEvent = CodeEventBody & { turn?: string };
+
+type CodeEventBody =
   | { type: "session"; at: string; harness: string; harnessSessionId: string; model: string; cwd: string; mode: string }
   | { type: "user"; at: string; text: string; files: string[] }
   | { type: "text"; at: string; item: string; delta: string }
@@ -466,15 +533,17 @@ export type CodeEvent =
       path: string;
       diff: string;
       canSession: boolean;
-      /** Not in the contract today: an approval the tool asks ONCE, every
-       *  time (honoured when the daemon sends it). */
+      /** An approval the tool asks ONCE, every time (no session-wide
+       *  allow): Enter never allows it. */
       onceOnly: boolean;
+      /** The tool's own name for what it wants to use ("PowerShell"). */
+      tool: string;
     }
   | { type: "question"; at: string; requestId: string; questions: QuestionItem[] }
   | { type: "resolved"; at: string; requestId: string; decision: string }
   | { type: "usage"; at: string; input: number; output: number; cacheRead: number; costUsd: number | null; listPrice: boolean }
   | { type: "notice"; at: string; text: string }
-  | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string }
+  | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string };
 
 export type CodeEventType = CodeEvent["type"];
@@ -482,6 +551,13 @@ export type CodeEventType = CodeEvent["type"];
 /** One event by whitelist; null for an unknown type or a missing key. The
  *  type is the event's own `type`, else the SSE frame's name (`hint`). */
 export function decodeCodeEvent(raw: unknown, hint = ""): CodeEvent | null {
+  const ev = decodeEventBody(raw, hint);
+  if (!ev) return null;
+  const turn = str(obj(raw)?.turn, 200).trim();
+  return turn ? { ...ev, turn } : ev;
+}
+
+function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
   const r = obj(raw);
   if (!r) return null;
   const type = str(r.type, 40) || hint;
@@ -563,6 +639,7 @@ export function decodeCodeEvent(raw: unknown, hint = ""): CodeEvent | null {
         diff: str(r.diff, 20_000),
         canSession: r.can_session === true,
         onceOnly: r.once_only === true,
+        tool: str(r.tool, 120),
       };
     }
     case "question": {
@@ -612,6 +689,7 @@ export function decodeCodeEvent(raw: unknown, hint = ""): CodeEvent | null {
         fix: str(r.fix, 600),
         technical: str(r.technical, 2_000),
         fixKind: str(r.fix_kind, 40),
+        account: str(r.account, 200),
       };
     case "done": {
       const stop =
@@ -643,6 +721,24 @@ export interface CodeSessionView {
   runningTurn: string | null;
   /** Open approvals and questions (in case their events were trimmed). */
   pending: CodeEvent[];
+  /** How many of the oldest events were left out of this read. */
+  dropped: number;
+  /** The tool's own `/` commands (what its process said). */
+  commands: ToolCommand[] | null;
+}
+
+/** The `/` commands an answer lists (null when the answer has no list). */
+export function decodeCommands(raw: unknown): ToolCommand[] | null {
+  const list = Array.isArray(raw) ? raw : obj(raw) && Array.isArray(obj(raw)!.commands) ? (obj(raw)!.commands as unknown[]) : null;
+  if (!list) return null;
+  const out: ToolCommand[] = [];
+  for (const c of list) {
+    const co = obj(c);
+    const name = co ? str(co.name, 80).trim().replace(/^\//, "") : "";
+    if (!co || !name || out.some((x) => x.name === name)) continue;
+    out.push({ name, description: str(co.description, 300) });
+  }
+  return out;
 }
 
 export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
@@ -664,7 +760,16 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
     const ev = decodeCodeEvent(p, hint);
     if (ev && (ev.type === "approval" || ev.type === "question")) pending.push(ev);
   }
-  return { session, events: decodeCodeEvents(r.events), running, runningTurn, pending };
+  const dropped = num(r.dropped);
+  return {
+    session,
+    events: decodeCodeEvents(r.events),
+    running,
+    runningTurn,
+    pending,
+    dropped: dropped !== null && dropped > 0 ? Math.floor(dropped) : 0,
+    commands: decodeCommands(r.commands),
+  };
 }
 
 // ── the conversation ────────────────────────────────────────────────────────
@@ -680,9 +785,9 @@ export type ConvItem =
   | { kind: "thinking"; key: string; text: string }
   | { kind: "tool"; key: string; tool: ToolEvent }
   | { kind: "plan"; key: string; steps: { text: string; status: PlanStatus }[] }
-  | { kind: "resolved"; key: string; requestId: string; decision: string; about: string }
+  | { kind: "resolved"; key: string; requestId: string; decision: string; about: string; question: boolean }
   | { kind: "notice"; key: string; text: string }
-  | { kind: "error"; key: string; title: string; fix: string; technical: string; fixKind: string }
+  | { kind: "error"; key: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | { kind: "usage"; key: string; input: number; output: number; costUsd: number | null; listPrice: boolean }
   | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string };
 
@@ -709,6 +814,7 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
   let planAt: number | null = null;
   const asks = new Map<string, OpenAsk>();
   const askTitle = new Map<string, string>();
+  const askWasQuestion = new Set<string>();
   const resolved = new Set<string>();
   let toolSessionId = "";
   let settled = true;
@@ -793,6 +899,7 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
       case "question":
         if (!resolved.has(ev.requestId)) asks.set(ev.requestId, ev);
         askTitle.set(ev.requestId, ev.type === "approval" ? ev.title : ev.questions[0]?.question ?? "");
+        if (ev.type === "question") askWasQuestion.add(ev.requestId);
         break;
       case "resolved":
         resolved.add(ev.requestId);
@@ -803,13 +910,22 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
           requestId: ev.requestId,
           decision: ev.decision,
           about: askTitle.get(ev.requestId) ?? "",
+          question: askWasQuestion.has(ev.requestId),
         });
         break;
       case "notice":
         items.push({ kind: "notice", key: key("n"), text: ev.text });
         break;
       case "error":
-        items.push({ kind: "error", key: key("e"), title: ev.title, fix: ev.fix, technical: ev.technical, fixKind: ev.fixKind });
+        items.push({
+          kind: "error",
+          key: key("e"),
+          title: ev.title,
+          fix: ev.fix,
+          technical: ev.technical,
+          fixKind: ev.fixKind,
+          account: ev.account,
+        });
         break;
       case "usage":
         items.push({ kind: "usage", key: key("g"), input: ev.input, output: ev.output, costUsd: ev.costUsd, listPrice: ev.listPrice });
@@ -849,11 +965,22 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
 /**
  * Rejoining a running turn: the turn's stream REPLAYS the turn from its
  * start, while the session read already holds what was saved of it. So the
- * saved list is cut back to before the last `user` event (the turn's own
- * question), and the replay draws the turn again. When the replay does not
- * begin with that `user` event, the cut one is put back first (`carry`).
+ * saved list loses every event of THAT turn (`turn === runningTurn`), and the
+ * replay draws the turn again; its question is kept aside (`carry`) and put
+ * back first when the replay does not begin with it. Only when no saved
+ * event names a turn (an older record) is the cut made at the last `user`.
  */
-export function cutForRejoin(events: readonly CodeEvent[]): { base: CodeEvent[]; carry: CodeEvent | null } {
+export function cutForRejoin(
+  events: readonly CodeEvent[],
+  runningTurn: string | null = null,
+): { base: CodeEvent[]; carry: CodeEvent | null } {
+  if (runningTurn && events.some((e) => e.turn)) {
+    const mine = events.filter((e) => e.turn === runningTurn);
+    return {
+      base: events.filter((e) => e.turn !== runningTurn),
+      carry: mine.find((e) => e.type === "user") ?? null,
+    };
+  }
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === "user") return { base: events.slice(0, i), carry: events[i] };
   }
@@ -912,12 +1039,14 @@ export function questionAnswers(
   return out;
 }
 
-/** "Allowed" / "Denied" for a settled ask's quiet line. */
-export function resolvedWords(decision: string): string {
+/** "Allowed" / "Denied" for a settled ask's quiet line ("Answered" /
+ *  "Skipped" for a question). "expired": the tool stopped asking. */
+export function resolvedWords(decision: string, question = false): string {
+  if (decision === "cancelled" || decision === "expired") return "No longer asked";
+  if (question) return decision === "deny" || decision === "denied" ? "Skipped" : "Answered";
   if (decision === "deny" || decision === "denied") return "Denied";
   if (decision === "allow_session") return "Allowed for this session";
   if (decision === "answered") return "Answered";
-  if (decision === "cancelled" || decision === "expired") return "No longer asked";
   return "Allowed";
 }
 
@@ -937,4 +1066,114 @@ export function usageWords(u: { input: number; output: number; costUsd: number |
     parts.push(u.listPrice ? `about ${dollars} at list price` : dollars);
   }
   return parts.join(" · ");
+}
+
+// ── the folder's saved sessions (GET /build/app/sessions?folder=&disk=1) ─────
+
+/** A conversation the coding tool saved on this PC by itself, for a folder
+ *  (Claude Code's / Codex's own session files; read-only, names only). */
+export interface DiskSession {
+  tool: string;
+  toolSessionId: string;
+  title: string;
+  folder: string;
+  started: string;
+  ended: string;
+}
+
+export function decodeDiskSessions(raw: unknown): DiskSession[] {
+  const o = obj(raw);
+  const list = o && Array.isArray(o.disk) ? o.disk : Array.isArray(raw) ? raw : [];
+  const out: DiskSession[] = [];
+  const seen = new Set<string>();
+  for (const d of list) {
+    const r = obj(d);
+    if (!r) continue;
+    const id = str(r.harness_session_id, 200).trim();
+    const tool = str(r.harness, 64).trim();
+    if (!id || !tool || seen.has(`${tool}:${id}`)) continue;
+    seen.add(`${tool}:${id}`);
+    out.push({
+      tool,
+      toolSessionId: id,
+      title: str(r.title, 300),
+      folder: str(r.folder, 1_000),
+      started: str(r.started, 64),
+      ended: str(r.ended, 64),
+    });
+  }
+  return out;
+}
+
+/** A saved conversation's row words ("saved by Claude Code"). */
+export function diskRowLine(d: DiskSession, tools?: readonly CodingTool[] | null): string {
+  return `saved by ${toolLabel(d.tool, tools)}`;
+}
+
+/** The address that lists a folder's saved conversations. */
+export function diskListPath(folder: string): string {
+  return `/build/app/sessions?folder=${encodeURIComponent(folder)}&disk=1`;
+}
+
+// ── a change that waits for the next message (PATCH … `applied`) ────────────
+
+const FIELD_WORDS: Record<string, string> = { model: "The model", effort: "The effort", mode: "The mode" };
+
+/** "The effort applies from your next message." for every field the daemon
+ *  applied `next` (a running tool reads it when it starts again); "" when
+ *  everything applied now. */
+export function appliedNextWords(raw: unknown): string {
+  const o = obj(raw);
+  const applied = o && obj(o.applied) ? obj(o.applied)! : null;
+  if (!applied) return "";
+  const later = Object.keys(applied).filter((k) => applied[k] === "next" && FIELD_WORDS[k]);
+  if (!later.length) return "";
+  const names = later.map((k, i) => (i === 0 ? FIELD_WORDS[k] : FIELD_WORDS[k].toLowerCase()));
+  const subject = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `${subject} ${names.length === 1 ? "applies" : "apply"} from your next message.`;
+}
+
+/** The quiet line when older events were left out of a session read. */
+export function droppedWords(n: number): string {
+  return n === 1
+    ? "1 older step was left out here to keep this quick."
+    : `${n.toLocaleString("en-US")} older steps were left out here to keep this quick.`;
+}
+
+/** The /health provider id of a coding tool (the Sign in press reads it). */
+export function signInProvider(tool: string): string {
+  if (tool === "claude-code") return "claude-cli";
+  if (tool === "codex") return "codex-cli";
+  return "";
+}
+
+/** "Continue on another account": the words of the press. */
+export const CONTINUE_ON_ANOTHER = "Continue on another account";
+
+// ── drawing only what changed (the v1.250.0 rule) ───────────────────────────
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => sameValue(x, b[i]));
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const ka = Object.keys(a as object);
+    const kb = Object.keys(b as object);
+    return (
+      ka.length === kb.length &&
+      ka.every((k) => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+    );
+  }
+  return false;
+}
+
+/** The new fold's items, with every item whose content did not change
+ *  replaced by the PREVIOUS object (same key, same content), so a memoised
+ *  row draws again only when its own item changed. */
+export function reuseItems(prev: readonly ConvItem[] | null, next: ConvItem[]): ConvItem[] {
+  if (!prev || !prev.length) return next;
+  const byKey = new Map(prev.map((it) => [it.key, it]));
+  return next.map((it) => {
+    const old = byKey.get(it.key);
+    return old && sameValue(old, it) ? old : it;
+  });
 }
