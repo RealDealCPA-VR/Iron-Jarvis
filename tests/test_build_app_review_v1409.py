@@ -263,15 +263,20 @@ async def test_r3_a_message_during_continue_on_is_refused_and_a_stop_ends_its_tu
 
     monkeypatch.setattr(S.HostedService, "_continue_blocking", slow_plan)
     monkeypatch.setattr(S.HostedService, "_carry", lambda self, *a: None)
+    svc = S.service_for(app.state.platform)
     async with client(app) as c:
         cont = asyncio.ensure_future(c.post(f"/build/app/sessions/{row.id}/continue-on", json={}))
-        await asyncio.sleep(0.2)
-        r = await c.post(f"/build/app/sessions/{row.id}/turn", json={"text": "x", "turn_id": "t1"})
+        # Wait for the CLAIM itself, never a fixed sleep (v1.409.2): on a loaded
+        # runner continue-on had not claimed yet at 0.2 s, the message really
+        # started Claude, and this POST read an SSE body that waits forever on
+        # an unanswered card (a 300 s xdist crash). The wait_for bounds it too.
+        await until(lambda: getattr(svc.live.get(row.id), "claim", "") == "moving to another account")
+        r = await asyncio.wait_for(
+            c.post(f"/build/app/sessions/{row.id}/turn", json={"text": "x", "turn_id": "t1"}), 15)
         assert r.status_code == 409 and "moving to another account" in r.json()["detail"]
         gate.set()
         assert (await cont).status_code == 200
     # A stop ALWAYS ends the running turn and closes its cards.
-    svc = S.service_for(app.state.platform)
     async with client(app) as c:
         task = asyncio.ensure_future(c.post(f"/build/app/sessions/{row.id}/turn", json={"text": "x", "turn_id": "t2"}))
         await wait_pending(c, row.id)

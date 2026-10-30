@@ -40,6 +40,10 @@ const H = vi.hoisted(() => ({
   lastWatch: null as null | { onFrame?: (event: string, data: Record<string, unknown>) => void },
   /** While set, an open stream waits here before it ends. */
   hold: null as Promise<void> | null,
+  /** >0: each frame arrives in its own macrotask after this many ms (a real
+   *  stream arrives in network chunks; v1.409.2 — the same-tick delivery
+   *  let React fold a doubled question away and hid it). */
+  frameMs: 0,
   release: null as (() => void) | null,
 }));
 
@@ -94,7 +98,8 @@ vi.mock("@/lib/useChatStream", () => ({
         return;
       }
       watch?.onFrame?.(f.event, f.data);
-      await Promise.resolve();
+      if (H.frameMs > 0) await new Promise((r) => setTimeout(r, H.frameMs));
+      else await Promise.resolve();
     }
     if (H.hold) await H.hold;
   },
@@ -229,6 +234,7 @@ function holdStreams() {
 }
 
 beforeEach(() => {
+  H.frameMs = 0;
   H.getLog = [];
   H.posts = [];
   H.patches = [];
@@ -435,11 +441,11 @@ describe("every event kind draws (the contract fixture)", () => {
 /* ======================================================= approvals */
 
 /** The real Claude edit scenario up to (and with) its approval: a turn waiting. */
-function waitingOnEdit(id = "a1", over: Record<string, unknown> = {}) {
+function waitingOnEdit(id = "a1", over: Record<string, unknown> = {}, running = "turn_7") {
   const upTo = SC.claude_tool_approval_edit.findIndex((e) => e.type === "approval");
   const events = SC.claude_tool_approval_edit.slice(0, upTo + 1);
   seed([sess(id, over)]);
-  openSession(id, { session: sess(id, over), events, running: "turn_7", pending: [] });
+  openSession(id, { session: sess(id, over), events, running, pending: [] });
   // The rejoin replays the turn from its question and stays open.
   const turnStart = events.findIndex((e) => e.type === "user");
   H.scripts = [frames(events.slice(turnStart))];
@@ -730,13 +736,46 @@ describe("the composer", () => {
 
 describe("a running turn is followed again on open", () => {
   it("follows the named turn (a GET of its stream) and draws its question once", async () => {
+    H.frameMs = 5;
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-ask");
     expect(H.streams[0]).toEqual({ path: "/build/app/sessions/a1/turns/turn_7/stream", body: undefined });
-    expect(screen.getAllByTestId("code-user")).toHaveLength(1);
+    // Once, and it STAYS once (v1.409.2: the record named the turn "turn-1"
+    // while the running turn is "turn_7"; the old cut kept the saved question
+    // and the replay drew it again, for good).
+    for (let k = 0; k < 8; k++) {
+      expect(screen.getAllByTestId("code-user")).toHaveLength(1);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
+    }
     // The read and the edit, each once (running and done are one row).
     expect(screen.getAllByTestId("code-tool")).toHaveLength(2);
+  });
+
+  it("a record that names the running turn is cut by that turn, its question once (frames in their own macrotasks)", async () => {
+    H.frameMs = 5;
+    waitingOnEdit("a1", {}, "turn-1");
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-ask");
+    expect(H.streams[0]?.path).toBe("/build/app/sessions/a1/turns/turn-1/stream");
+    for (let k = 0; k < 8; k++) {
+      expect(screen.getAllByTestId("code-user")).toHaveLength(1);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
+    }
+    expect(screen.getAllByTestId("code-tool")).toHaveLength(2);
+  });
+
+  it("cutForRejoin: a running turn the record does not name falls back to the last question", () => {
+    const evs = SC.claude_tool_approval_edit.map((e) => decodeCodeEvent(e)!).filter(Boolean);
+    const named = cutForRejoin(evs, "turn-1");
+    expect(named.base.filter((e) => e.type === "user")).toHaveLength(0);
+    const other = cutForRejoin(evs, "turn_7");
+    expect(other.base.filter((e) => e.type === "user")).toHaveLength(0);
+    expect(other.carry?.type).toBe("user");
   });
 
   it("a replay that does not begin with the question puts the saved question back first", () => {
