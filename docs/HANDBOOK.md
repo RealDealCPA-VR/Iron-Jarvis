@@ -2360,22 +2360,30 @@ asks into a card you answer.
 - **Modes** are OpenCode's own permission rules, set for that one OpenCode
   process; your OpenCode config files are read, never changed:
   - **Ask first**: OpenCode asks before it changes a file, runs a command or
-    uses the web. Reading files runs without asking.
+    uses the web. Reading files runs without asking, except a `.env` file
+    (where keys and passwords live): OpenCode asks before it reads one, as it
+    does on its own.
   - **Auto edits**: file changes run without asking; commands and the web
     still ask.
   - **Plan**: OpenCode's own plan agent. It looks around and plans, and
-    changes no file.
+    changes no file: in Plan, OpenCode is not allowed to edit at all (not
+    even a plan file), and it still asks before it runs a command.
   - **Full access**: everything runs without asking. Press it twice to
     confirm, as for the other tools.
   - **Auto** is not offered: OpenCode has no mode that decides each step for
     you.
-  - Changing between Ask first, Auto edits and Full access applies from your
-    next message (OpenCode is restarted on the same conversation, which takes
-    a moment). Plan changes straight away.
+  - Changing the mode applies from your next message (OpenCode is restarted
+    on the same conversation, which takes a moment); a reply already running
+    finishes in the mode it started in.
 - **Your own permission rules come first.** If your OpenCode config (or a
   project's own `opencode.json`) has a rule for a tool, that rule stays as you
   wrote it, whatever mode you choose, and the session says which tools keep
-  your rules. A mode never loosens a rule of yours: a `deny` stays a `deny`.
+  your rules. A mode never loosens a rule of yours: a `deny` stays a `deny`
+  (that includes the older `"tools": {"bash": false}` switches and an
+  admin's settings in `C:\ProgramData\opencode`). When a rule of yours is
+  stricter than the mode, the mode names only OpenCode's built-in tools, so
+  tools from the MCP servers and plugins in your OpenCode config run without
+  asking unless a rule of yours says otherwise; the session says so.
 - **Cards**: a card shows what OpenCode wants to do (the command, or the file
   and its changes). **Allow once** allows that one step; **Allow for this
   session** is OpenCode's own "Always allow" (it lasts until this OpenCode
@@ -2410,7 +2418,10 @@ asks into a card you answer.
   stopped after 15 minutes idle (the next message reopens the same
   conversation), when you archive or delete the session, and when Iron Jarvis
   quits; everything it started goes with it. OpenCode talks to Iron Jarvis
-  over its own input and output, not over a network port.
+  over its own input and output, not over a network port. OpenCode also runs
+  a small server of its own inside that process; Iron Jarvis starts it on
+  this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
+  config say.
 
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 

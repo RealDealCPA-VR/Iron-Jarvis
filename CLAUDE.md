@@ -4416,9 +4416,11 @@ does not need a bump, stop and bump it.
   opencode 1.18.18 measured). WHY ACP, NOT `opencode serve`: both are
   OpenCode's own long-lived machine-readable ways in; ACP rides the process's
   own stdin/stdout (`hosted.process`, tree kill) and opens no port of ours —
-  OpenCode's internal server stays on `--port 0` (a free ephemeral port, never
-  8787/8788/8765) at 127.0.0.1, neither passed. argv is `["acp"]` ONLY (the
-  folder is the process cwd: npm's `opencode.cmd` would run through cmd.exe;
+  OpenCode's internal server is started with `--hostname 127.0.0.1 --port 0
+  --mdns=false` (`O.ACP_ARGV`; REVIEW: with no flag the user's global
+  `server.hostname/port/mdns` decide — measured, `"0.0.0.0"` listened on every
+  interface, unauthenticated; port 0 gives 4096 first, then a free one).
+  argv is `O.ACP_ARGV` ONLY (the folder is the process cwd: npm's `opencode.cmd` would run through cmd.exe;
   never `--pure`, it switches the user's plugins off — pinned), and
   `process.npm_program` starts `node_modules/opencode-ai/bin/opencode.exe`
   directly when the found program is npm's `.cmd`. USED (the evidence is the
@@ -4440,9 +4442,16 @@ does not need a bump, stop and bump it.
   the prompt answers cancelled), `session/load` (REPLAYS the conversation as
   updates before it answers — `_loading` draws none; keeps the session's last
   model and effort → `keeps_last` from its DB). MODES (`O.MODES`: preset →
-  (posture, agent)): ask = `{"*": "ask"}` + the read-only tools allowed,
-  edits = + edit allow, plan = ask + OpenCode's plan agent, full = `{"*":
-  "allow"}` (two presses), auto hidden. OpenCode's own default asks NOTHING
+  (posture, agent)): ask = `{"*": "ask"}` + the read-only tools allowed
+  (`read` = `O.READ_RULE`: OpenCode's own `.env` ask kept — REVIEW: a plain
+  `"read": "allow"` landed after that default and read `.env` files with no
+  card, live-proven), edits = + edit allow, plan = ask + OpenCode's plan agent
+  + `"edit": "deny"` (REVIEW: OpenCode puts the config's — so the env's —
+  rules AFTER the plan agent's own edit deny, so `"*": "ask"` made Plan's
+  refusal a card; with a user `edit` key the deny replaces it IN PLACE and no
+  `"*"` is used, which would land after it), full = `{"*": "allow"}` (two
+  presses), auto hidden. EVERY mode change is a new process (`set_mode`,
+  nothing switched live). OpenCode's own default asks NOTHING
   (measured), so a posture is always set: through `OPENCODE_PERMISSION` (JSON)
   in the child env (`O.child_env`, off the loop), merged by OpenCode OVER the
   user's config. MERGE ORDER WIDENS (measured: a project's `"bash": "deny"` +
@@ -4450,9 +4459,15 @@ does not need a bump, stop and bump it.
   own rules set (global config via `opencode_config_paths`, `OPENCODE_CONFIG`,
   `OPENCODE_CONFIG_DIR`, `OPENCODE_CONFIG_CONTENT`, a pre-existing
   `OPENCODE_PERMISSION`, and `opencode.json(c)` / `.opencode/` in the folder
-  and every folder above — all READ-ONLY), uses `"*"` only when no rule of
+  and every folder above; REVIEW added the global `config.json`,
+  `~/.opencode`, the managed `%ProgramData%\opencode`
+  (`OPENCODE_TEST_MANAGED_CONFIG_DIR`) — skipped while
+  `IRONJARVIS_OPENCODE_CONFIG_DIR` is set — and the legacy `tools` map
+  (`O.legacy_tool_rules`: OpenCode places it BEFORE the permission object) —
+  all READ-ONLY), uses `"*"` only when no rule of
   theirs is stricter, else names `ACTING_TOOLS` one by one and says so
-  (`W.OPENCODE_RULES_KEPT`); one string rule for everything decides alone
+  (`W.OPENCODE_RULES_KEPT` / `W.OPENCODE_UNNAMED_UNASKED`: then MCP-server and
+  plugin tools run on OpenCode's own default, no card — said in words); one string rule for everything decides alone
   (`W.OPENCODE_RULES_DECIDE`). A posture change is a NEW process before the
   next message (`driver.restart_needed` → `live.restart`; "next"); the agent
   changes live. SAME RELEASE, a pre-existing bug the mode-change pin found:
@@ -4488,6 +4503,10 @@ does not need a bump, stop and bump it.
   v1413.json`, `IJ_REGEN_BUILD_APP_OPENCODE=1`),
   `dashboard/__tests__/build-app-opencode-v1413.test.tsx`; moved on purpose:
   `test_build_app_routes_v1409` (four tools; the from-terminal words),
+  REVIEW pins `tests/test_build_app_opencode_review_v1413.py` (judged by a
+  model of OpenCode 1.18.18's OWN merge + `findLast` evaluation read from the
+  installed program; the Claude Code / Pi restart-before-the-next-message
+  pins live there too),
   `build-code-start-v1412` (the heading). Live-proven on a scratch daemon
   (real opencode 1.18.18, opencode/glm-5.3-flash-free): see the Handbook.
 

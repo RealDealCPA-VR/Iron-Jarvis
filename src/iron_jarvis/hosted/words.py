@@ -130,8 +130,15 @@ SIGN_IN_HINTS: dict[str, str] = {
 }
 #: v1.413.0: the user's own OpenCode permission rules, said once per start.
 OPENCODE_RULES_KEPT = (
-    "Your own OpenCode permission rules for {tools} apply in this session as you wrote them; "
-    "any other tool this mode does not name follows OpenCode's own defaults."
+    "Your own OpenCode permission rules for {tools} apply in this session as you wrote them. "
+    "So that they still apply, this mode names only OpenCode's built-in tools: tools from the MCP "
+    "servers and plugins in your OpenCode config run without asking unless a rule of yours says otherwise."
+)
+#: v1.413.0 review: the same, when no rule of the user's is kept word for word
+#: (Plan replaced their edit rule with a refusal) but "*" still could not be used.
+OPENCODE_UNNAMED_UNASKED = (
+    "In this session, tools from the MCP servers and plugins in your OpenCode config run without "
+    "asking unless a rule of yours says otherwise."
 )
 OPENCODE_RULES_DECIDE = (
     "Your OpenCode config sets one permission rule for every tool, so that rule decides in this "

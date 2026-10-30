@@ -199,7 +199,8 @@ async def test_opencode_starts_its_own_acp_with_nothing_switched_off(app, work, 
         row = (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]
     await stop_all(app)
     start = starts(log)[0]
-    assert start["argv"] == ["acp"], "the folder is the process's own; nothing of the user's is switched off"
+    # (review, moved on purpose: OpenCode's internal server is pinned to loopback.)
+    assert start["argv"] == list(O.ACP_ARGV), "the folder is the process's own; nothing of the user's is switched off"
     assert not set(start["argv"]) & set(TOOL_OFF_FLAGS)
     assert start["cwd"] == str(work)
     assert start["env"].get("OPENAI_API_KEY") == "sk-users-own-key-0000", "the user's own keys are a terminal's"
@@ -225,7 +226,8 @@ async def test_ask_first_is_opencodes_own_permission_rules_for_this_process_only
     await stop_all(app)
     perm = json.loads(starts(log)[0]["env"]["OPENCODE_PERMISSION"])
     assert perm["*"] == "ask"
-    assert all(perm[t] == "allow" for t in O.READ_ONLY_TOOLS)
+    # (review, moved on purpose: reading a .env file still asks, OpenCode's own default.)
+    assert all(perm[t] == "allow" for t in O.READ_ONLY_TOOLS if t != "read") and perm["read"] == O.READ_RULE
     assert "edit" not in perm or perm["edit"] == "ask"
 
 
@@ -300,13 +302,13 @@ async def test_plan_is_opencodes_plan_agent(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_each_mode_is_a_permission_posture():
     ask, kept = O.permission_env("ask", {})
-    assert ask["*"] == "ask" and kept == [] and ask["read"] == "allow" and "edit" not in ask
+    assert ask["*"] == "ask" and kept == [] and ask["read"] == O.READ_RULE and "edit" not in ask
     edits, _ = O.permission_env("edits", {})
     assert edits["*"] == "ask" and edits["edit"] == "allow"
     full, _ = O.permission_env("full", {})
     assert full == {"*": "allow"}
     plan, _ = O.permission_env("plan", {})
-    assert plan == ask
+    assert plan == {**ask, "edit": "deny"}, "(review, moved on purpose) Plan refuses every edit"
 
 
 def test_a_stricter_rule_of_the_users_is_never_widened():

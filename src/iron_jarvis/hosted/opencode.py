@@ -10,12 +10,13 @@ machine-readable ways in (``opencode --help``: "acp — start ACP (Agent Client
 Protocol) server"; "serve — starts a headless opencode server"). ACP speaks
 over the process's own stdin/stdout, so it fits the Code view's process
 plumbing (``hosted.process``: one child, its tree killed on stop) and opens
-NO listening port at all. OpenCode still runs its internal server inside
-the process on a port it picks (``--port`` default 0 = any free port the
-system hands out, on ``--hostname`` default 127.0.0.1); Iron Jarvis passes
-neither, so it is never 8787 / 8788 / 8765 (those are taken, and a free
-port the system hands out is an ephemeral one) and nothing of it is reached
-from outside this PC.
+NO listening port of Iron Jarvis's. OpenCode still runs its internal server
+inside the process; with no flag the user's global ``server.hostname`` /
+``server.port`` / ``server.mdns`` decide (review, measured: ``"0.0.0.0"``
+listened on every interface, unauthenticated), so Iron Jarvis passes
+``--hostname 127.0.0.1 --port 0 --mdns=false`` (:data:`ACP_ARGV`; explicit
+flags win over the config): this PC only, and never a port the config
+names (port 0 takes 4096 first, else a free one — never 8787 / 8788 / 8765).
 
 MEASURED on this PC (opencode 1.18.18, live, in scratch folders; masked
 recordings in ``tests/fixtures/build_app_v1413``):
@@ -141,6 +142,11 @@ ACTING_TOOLS: tuple[str, ...] = (
     "edit", "bash", "webfetch", "websearch", "codesearch", "task", "external_directory", "doom_loop",
 )
 _POSTURE_STAR = {"ask": "ask", "edits": "ask", "full": "allow"}
+#: Reading in every posture but Full access: free, except a ``.env`` file —
+#: OpenCode's OWN default asks before it reads one (keys and passwords live
+#: there), and a plain ``"read": "allow"`` landed after that default and
+#: silently dropped it (v1.413.0 review).
+READ_RULE: dict[str, str] = {"*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow"}
 _RANK = {"allow": 0, "ask": 1, "deny": 2}
 
 #: OpenCode's effort ("variant") names seen across models — a model's own
@@ -149,6 +155,9 @@ EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 #: An OpenCode session id as Iron Jarvis would ever type it into a terminal.
 SESSION_ID_RX = re.compile(r"^ses_[A-Za-z0-9]{10,60}$")
+
+#: How Iron Jarvis starts OpenCode: ACP, its internal server on loopback only.
+ACP_ARGV: tuple[str, ...] = ("acp", "--hostname", "127.0.0.1", "--port", "0", "--mdns=false")
 
 REQUEST_TIMEOUT_S = 60.0
 #: A running command's output is redrawn at most this often.
@@ -289,11 +298,26 @@ def config_files(folder: str, environ: Any = None) -> list[Path]:
     every folder above it."""
     from ..providers.opencode import opencode_config_paths
 
+    from ..providers.opencode import CONFIG_DIR_ENV
+
     env = os.environ if environ is None else environ
+    merged = {**os.environ, **dict(env)}
     # The global files the way Iron Jarvis reads OpenCode's config everywhere
     # (``CONFIG_DIR_ENV``: the daemon's own override, which a child's
     # environment no longer carries).
-    out = list(opencode_config_paths({**os.environ, **dict(env)}))
+    out = list(opencode_config_paths(merged))
+    # v1.413.0 review: OpenCode merges more than that (its own loader): the
+    # global ``config.json`` beside them, ``~/.opencode`` and an admin's
+    # managed folder (``%ProgramData%\opencode``) — a deny in any of them
+    # must keep this mode's ``"*"`` out. The override names the ONLY global
+    # folder (the test suite's isolation).
+    out += [p.with_name("config.json") for p in list(out) if p.name == "opencode.json"]
+    if not str(merged.get(CONFIG_DIR_ENV) or "").strip():
+        home = Path.home()
+        out += [home / ".opencode" / "opencode.jsonc", home / ".opencode" / "opencode.json"]
+        managed = str(merged.get("OPENCODE_TEST_MANAGED_CONFIG_DIR") or "").strip() or os.path.join(
+            str(merged.get("ProgramData") or merged.get("PROGRAMDATA") or "C:\\ProgramData"), "opencode")
+        out += [Path(managed) / "opencode.json", Path(managed) / "opencode.jsonc"]
     one = str(env.get("OPENCODE_CONFIG") or "").strip()
     if one:
         out.append(Path(one))
@@ -308,6 +332,18 @@ def config_files(folder: str, environ: Any = None) -> list[Path]:
             if here.parent == here:
                 break
             here = here.parent
+    return out
+
+
+def legacy_tool_rules(tools: dict[str, Any]) -> dict[str, str]:
+    """OpenCode's own reading of the legacy ``tools`` map (its config loader:
+    a true tool is ``allow``, anything else ``deny``)."""
+    out: dict[str, str] = {}
+    for name, on in tools.items():
+        key = "edit" if str(name) in ("write", "edit", "patch") else str(name)
+        rule = "allow" if on else "deny"
+        if key not in out or _RANK[rule] > _RANK[out[key]]:
+            out[key] = rule
     return out
 
 
@@ -344,6 +380,11 @@ def user_rules(folder: str, environ: Any = None) -> dict[str, Any] | str:
     whole: list[str] = []
     for path in config_files(folder, env):
         data = _read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("tools"), dict):
+            # v1.413.0 review: OpenCode's older ``"tools": {"bash": false}``
+            # becomes a rule placed BEFORE the permission object: a deny of
+            # the user's own all the same (write / edit / patch -> edit).
+            _merge_rules(found, legacy_tool_rules(data["tools"]))
         if isinstance(data, dict) and "permission" in data:
             got = _merge_rules(found, data["permission"])
             if got is not None:
@@ -380,10 +421,13 @@ def permission_env(mode: str, rules: dict[str, Any] | str) -> tuple[dict[str, st
     ``None``: the user has ONE rule for everything — it decides alone."""
     if isinstance(rules, str):
         return None, ["*"]
-    posture = MODES.get(mode, MODES["ask"])[0]
+    posture, agent = MODES.get(mode, MODES["ask"])
     star = _POSTURE_STAR[posture]
     out: dict[str, str] = {}
-    if all(_rank(v) <= _RANK[star] for v in rules.values()):
+    # Plan with an ``edit`` rule of the user's: that key keeps its place and
+    # is set to deny below; a "*" of ours would land AFTER it and undo it.
+    plan_edit_in_place = agent == "plan" and "edit" in rules
+    if all(_rank(v) <= _RANK[star] for v in rules.values()) and not plan_edit_in_place:
         out["*"] = star
     else:
         for name in ACTING_TOOLS:
@@ -392,10 +436,17 @@ def permission_env(mode: str, rules: dict[str, Any] | str) -> tuple[dict[str, st
     if posture != "full":
         for name in READ_ONLY_TOOLS:
             if name not in rules:
-                out[name] = "allow"
+                out[name] = dict(READ_RULE) if name == "read" else "allow"
         if posture == "edits" and "edit" not in rules:
             out["edit"] = "allow"
-    kept = sorted(k for k in rules if k != "*" or "*" not in out)
+    if agent == "plan":
+        # v1.413.0 review: OpenCode puts the config's rules (and so these)
+        # AFTER its plan agent's own ``edit`` deny, so a ``"*": "ask"`` here
+        # turned Plan's refusal into a card (an Allow changed the file). A
+        # deny never widens anything: it replaces a key of the user's in
+        # place, or is added last.
+        out["edit"] = "deny"
+    kept = sorted(k for k in rules if (k != "*" or "*" not in out) and not (k == "edit" and agent == "plan"))
     if "*" in out:
         # Our "*" lands after the user's own keys and wins over them: every
         # rule of theirs is looser than it (or equal), so nothing is widened,
@@ -416,6 +467,8 @@ def child_env(env: dict[str, str], mode: str, folder: str) -> tuple[dict[str, st
     out["OPENCODE_PERMISSION"] = json.dumps(perm, separators=(",", ":"))
     if kept:
         return out, W.OPENCODE_RULES_KEPT.format(tools=", ".join(kept[:12]))
+    if "*" not in perm:
+        return out, W.OPENCODE_UNNAMED_UNASKED
     return out, ""
 
 
@@ -684,7 +737,12 @@ class OpenCodeDriver(Driver):
         # The folder is the process's own working folder (never an argument:
         # npm's opencode.cmd runs through cmd.exe, which reads & and % in one).
         # Never --pure (it switches the user's own plugins off).
-        return ["acp"]
+        # v1.413.0 review: OpenCode runs an HTTP server inside this process,
+        # and with no flag the user's global ``server.hostname`` /
+        # ``server.port`` / ``server.mdns`` decide (measured: "0.0.0.0"
+        # listened on every interface, unauthenticated). Explicit flags win
+        # over the config: this PC only, a port the system hands out.
+        return list(ACP_ARGV)
 
     # -- JSON-RPC ---------------------------------------------------------------
     def _next(self) -> int:
@@ -934,18 +992,17 @@ class OpenCodeDriver(Driver):
         await self.notify("session/cancel", {"sessionId": self.session_id})
 
     async def set_mode(self, mode: str) -> str:
-        """The AGENT (build / plan) changes live; the permission posture is the
-        process's environment, so a posture change needs a restart before the
-        next message (``restart_needed``)."""
-        old = MODES.get(self.mode, MODES["ask"])
-        new = MODES.get(mode, MODES["ask"])
-        if new[1] != old[1] and self.session_id:
-            await self._set_option("mode", new[1])
-        self.mode = mode
-        if new[0] != old[0]:
+        """Every mode is the process's own environment — the permission posture
+        and (v1.413.0 review) Plan's edit refusal (``permission_env``) — so any
+        change is a NEW process before the next message (``restart_needed``),
+        where ``open`` sets the agent. Nothing switches live: a running reply
+        goes on under the mode it started with, as the notice says (switching
+        only the agent live put OpenCode's plan agent on the old process's
+        rules, where an edit was a card, not a refusal)."""
+        if MODES.get(mode, MODES["ask"]) != MODES.get(self.mode, MODES["ask"]):
             self.restart_needed = True
-            return "next"
-        return "next" if self.turn_open else "now"
+        self.mode = mode
+        return "next" if self.restart_needed or self.turn_open else "now"
 
     async def set_model(self, model: str) -> str:
         values = _values(_config(self.options, "model"))
