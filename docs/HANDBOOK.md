@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.409.1 (2026-10-29).*
+holds itself to. Current as of v1.410.0 (2026-10-30).*
 
 ---
 
@@ -1978,6 +1978,58 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## An animated background behind the app (v1.410.0)
+
+Your own themes can have a moving background. In **Settings → Appearance**,
+press **Make your own** (or the pencil beside one of your themes) and pick
+one under **Animated background**:
+
+- **Aurora** — soft bands of colour drifting slowly.
+- **Drift** — a quiet field of drifting points.
+- **Waves** — thin lines rolling slowly across.
+- **Grid** — a faint grid with beams of light moving along it.
+- **Reactor** — a calm glow with slowly turning rings.
+
+Each one draws only in your theme's colours (the main colour, the second
+colour and the page colour), in both the dark and the light version.
+
+**Nothing extra is installed.** The backgrounds are not part of Iron Jarvis's
+installer. The one you pick is downloaded then — a single small file (7–10 KB)
+from Iron Jarvis's own release on GitHub, the exact release you are running —
+and checked against the fingerprint this version carries. A file that does
+not match is refused ("did not match the one this version of Iron Jarvis
+expects") and nothing is saved. It is kept on this PC until you delete it;
+picking it again later downloads nothing. **Backgrounds on this PC** under
+your themes lists what is kept and its size, and **Delete** frees the space
+(a theme that used it simply shows its plain colours). After an update, a
+background that did not change is kept as it is; one that did is downloaded
+again the next time it is shown. The files live beside Iron Jarvis's data
+folder, not in it, so backups do not carry them.
+
+**Sealed off.** The background runs in a sealed frame behind the app. It
+cannot read anything in Iron Jarvis (your sign-in, your chats, the page), it
+cannot reach the internet or Iron Jarvis itself, it takes no clicks or
+keyboard focus, and screen readers skip it.
+
+**Every word stays readable.** A layer of your page colour lies over the
+background, and the theme maker measures text over that layer and the
+background, in both versions; the line under the preview then reads **Easy to
+read in both versions, over the background too**. To keep that true, a theme
+with a background may draw its hint text a little brighter (dark version) or
+deeper (light version) than the same theme without one.
+
+**Light on your PC.** Choose **Animated** or **Still**. It holds still on its
+own on battery power and when Windows is set to show less motion (Settings ›
+Accessibility › Visual effects › Animation effects), and it stops completely
+while the window is hidden or minimised. A popped-out window shows the same
+background. Measured on this PC (a 1440 × 900 window, idle, the browser's own
+processes): the plain theme 15–24% of one CPU core and 2.0% GPU (its own slowly
+drifting glow is what costs that; it is switched off while a background
+shows); Reactor 10% and 0.7%, Grid 13% and 0.7%, Waves 14% and 0.8%, Drift
+18% and 1.2%, Aurora 22% and 1.3%; any background on **Still** 2% and 0.1%.
+Each figure is 20 seconds of the browser's own processes, measured between
+two plain-theme readings.
 
 ## Memory profiles: set up a memory server's tools, and check it (v1.408.0)
 

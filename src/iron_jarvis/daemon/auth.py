@@ -550,6 +550,15 @@ def _is_exempt(path: str) -> bool:
     # door token, verified fail-closed in the handler. Exactly this leaf.
     if path == TASK_DOOR_PATH:
         return True
+    # An animated background (v1.410.0) drawn in a sandboxed <iframe>, which
+    # cannot send the bearer header — and the token must never ride a URL the
+    # sandboxed page can read. Exactly ``/backgrounds/<catalog id>/view``: the
+    # saved, catalog-verified file under a no-network CSP; listing, download
+    # and delete stay guarded.
+    from .routes.backgrounds import is_view_path
+
+    if is_view_path(path):
+        return True
     return False
 
 

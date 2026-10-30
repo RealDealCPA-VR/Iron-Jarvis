@@ -1,3 +1,8 @@
 # v1.301.0: the vendored Iron-Proxy bundle is checked byte-for-byte against
 # SOURCE.txt's sha256 — never let autocrlf rewrite it on checkout.
 desktop/vendor/iron-proxy/** -text
+
+# v1.410.0: the animated backgrounds are downloaded byte for byte from the
+# release tag and checked against the sha256 in both catalogs. Never let a
+# checkout rewrite their line endings (CI's Windows runners set autocrlf=true).
+backgrounds/** -text

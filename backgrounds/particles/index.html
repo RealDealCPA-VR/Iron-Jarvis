@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drift</title>
+<!--
+  Drift: a sparse field of small soft dots drifting slowly, with faint lines
+  joining near neighbours.
+  Contract: one self-contained file, no network. Colours come ONLY from
+  location.hash (bg, accent, second, mode) and are drawn with plain source-over
+  alpha. One requestAnimationFrame loop capped at 30 fps; paused / still by a
+  {type:"ij-bg"} message from the parent, by reduced motion, or a hidden tab.
+-->
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #070809; }
+canvas { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var ID = "particles";
+  var SCALE = 1;     // backing store at CSS pixels
+  var STILL_T = 30;  // seconds: the moment a still frame shows
+  var TAU = Math.PI * 2;
+
+  /* ---------- parameters: ONLY from location.hash ---------- */
+  var HEX = /^[0-9a-fA-F]{6}$/;
+  var P = null;
+  function hexRGB(h) {
+    var n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function readParams() {
+    var raw = {};
+    String(location.hash || "").replace(/^#/, "").split("&").forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i < 1) return;
+      var v = pair.slice(i + 1);
+      try { v = decodeURIComponent(v); } catch (err) { /* keep it as typed */ }
+      raw[pair.slice(0, i)] = v.replace(/^%23/i, "").replace(/^#/, "");
+    });
+    function pick(k, d) {
+      var v = Object.prototype.hasOwnProperty.call(raw, k) ? raw[k] : "";
+      return HEX.test(v) ? v : d;
+    }
+    var accent = pick("accent", "22d3ee");
+    var light = raw.mode === "light";
+    P = {
+      accent: hexRGB(accent),
+      second: hexRGB(pick("second", accent)),
+      bg: hexRGB(pick("bg", "070809")),
+      light: light,
+      gain: light ? 1.15 : 1
+    };
+    var bg = rgba(P.bg, 1);
+    document.documentElement.style.background = bg;
+    document.body.style.background = bg;
+  }
+  function rgba(c, a) {
+    a = a < 0 ? 0 : a > 1 ? 1 : a;
+    return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a.toFixed(3) + ")";
+  }
+  function mix(a, b, f) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * f),
+      Math.round(a[1] + (b[1] - a[1]) * f),
+      Math.round(a[2] + (b[2] - a[2]) * f)
+    ];
+  }
+  // A tiny seeded PRNG so every frame (and the still frame) is reproducible.
+  function prng(seed) {
+    return function () {
+      seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ---------- canvas ---------- */
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var W = 1, H = 1, K = 1;  // backing size, backing pixels per CSS pixel
+  function resize() {
+    K = Math.min(window.devicePixelRatio || 1, 1) * SCALE;
+    W = Math.max(1, Math.round(window.innerWidth * K));
+    H = Math.max(1, Math.round(window.innerHeight * K));
+    canvas.width = W;
+    canvas.height = H;
+    layout();
+  }
+
+  /* ---------- the effect ---------- */
+  // Dots are a pure function of time: a slow drift plus a gentle wobble,
+  // wrapped round the window, so any moment can be drawn on its own.
+  var dots = [];
+  var xs = [], ys = [];
+
+  function layout() {
+    var r = prng(424242);
+    var area = (W / K) * (H / K);  // in CSS pixels
+    var n = Math.max(40, Math.min(130, Math.round(area / 11000)));
+    dots = [];
+    for (var i = 0; i < n; i++) {
+      dots.push({
+        x0: r(), y0: r(),
+        vx: (r() - 0.5) * 16,          // CSS px per second
+        vy: (r() - 0.5) * 10 - 3,
+        amp: 4 + r() * 12,             // wobble, CSS px
+        w: 0.08 + r() * 0.22,          // wobble speed, rad per second
+        p: r() * TAU,
+        size: 1.6 + r() * 1.8,         // radius, CSS px
+        a: 0.65 + r() * 0.35,
+        alt: r() < 0.3                 // drawn in the second colour
+      });
+    }
+  }
+
+  function wrap(v, m) {
+    v %= m;
+    return v < 0 ? v + m : v;
+  }
+
+  function draw(t) {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = rgba(P.bg, 1);
+    ctx.fillRect(0, 0, W, H);
+
+    var pad = 30 * K, ww = W + pad * 2, hh = H + pad * 2;
+    var n = dots.length, i, j, d;
+    for (i = 0; i < n; i++) {
+      d = dots[i];
+      xs[i] = wrap(d.x0 * ww + (d.vx * t + d.amp * Math.sin(d.w * t + d.p)) * K, ww) - pad;
+      ys[i] = wrap(d.y0 * hh + (d.vy * t + d.amp * Math.cos(d.w * 0.8 * t + d.p * 1.7)) * K, hh) - pad;
+    }
+
+    // Faint lines between near neighbours, batched into four strengths.
+    var D = 130 * K, D2 = D * D;
+    var buckets = [new Path2D(), new Path2D(), new Path2D(), new Path2D()];
+    for (i = 0; i < n; i++) {
+      for (j = i + 1; j < n; j++) {
+        var dx = xs[i] - xs[j], dy = ys[i] - ys[j], q = dx * dx + dy * dy;
+        if (q >= D2) continue;
+        var f = 1 - Math.sqrt(q) / D;
+        var k = Math.min(3, Math.floor(f * 4));
+        buckets[k].moveTo(xs[i], ys[i]);
+        buckets[k].lineTo(xs[j], ys[j]);
+      }
+    }
+    ctx.lineWidth = Math.max(1, 1.2 * K);
+    ctx.strokeStyle = rgba(mix(P.accent, P.second, 0.35), 1);
+    for (k = 0; k < 4; k++) {
+      ctx.globalAlpha = 0.8 * ((k + 0.5) / 4) * P.gain;
+      ctx.stroke(buckets[k]);
+    }
+    ctx.globalAlpha = 1;
+
+    // The dots: a soft halo, then the small core.
+    for (i = 0; i < n; i++) {
+      d = dots[i];
+      var tw = 0.8 + 0.2 * Math.sin(t * 0.7 + d.p * 3);
+      var c = d.alt ? P.second : P.accent;
+      var r = d.size * K;
+      ctx.fillStyle = rgba(c, d.a * tw * 0.3 * P.gain);
+      ctx.beginPath();
+      ctx.arc(xs[i], ys[i], r * 3.2, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = rgba(c, d.a * tw * P.gain);
+      ctx.beginPath();
+      ctx.arc(xs[i], ys[i], r, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  /* ---------- motion control ---------- */
+  var FRAME_MS = 1000 / 30;
+  var time = STILL_T, last = 0, raf = 0, state = "", readySent = false;
+  var run = true, still = false;
+  var mq = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  function frame(t) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    draw(t);
+    if (!readySent) {
+      readySent = true;
+      try { window.parent.postMessage({ type: "ij-bg-ready", id: ID }, "*"); } catch (err) { /* no parent */ }
+    }
+  }
+  function loop(now) {
+    raf = requestAnimationFrame(loop);
+    if (last && now - last < FRAME_MS - 4) return;  // cap at ~30 fps
+    var dt = last ? Math.min(now - last, 100) : 0;
+    last = now;
+    time += dt / 1000;
+    frame(time);
+  }
+  function setState(s) {
+    if (s === state) return;
+    state = s;
+    document.documentElement.dataset.state = s;
+  }
+  function decide() {
+    var paused = !run || document.hidden;
+    var holdStill = still || !!(mq && mq.matches);
+    var animate = !paused && !holdStill;
+    if (animate) {
+      if (!raf) { last = 0; raf = requestAnimationFrame(loop); }
+    } else if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    var next = animate ? "running" : paused ? "paused" : "still";
+    if (next === "still" && state !== "still") { time = STILL_T; frame(STILL_T); }
+    setState(next);
+  }
+  function redraw() {
+    if (state !== "running") frame(state === "still" ? STILL_T : time);
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent) return;
+    var m = e.data;
+    if (!m || m.type !== "ij-bg") return;
+    if (typeof m.run === "boolean") run = m.run;
+    if (typeof m.still === "boolean") still = m.still;
+    decide();
+  });
+  document.addEventListener("visibilitychange", decide);
+  if (mq) {
+    if (mq.addEventListener) mq.addEventListener("change", decide);
+    else if (mq.addListener) mq.addListener(decide);
+  }
+  window.addEventListener("hashchange", function () { readParams(); layout(); redraw(); });
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { resize(); redraw(); }, 150);
+  });
+
+  readParams();
+  resize();
+  frame(STILL_T);
+  decide();
+})();
+</script>
+</body>
+</html>

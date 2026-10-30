@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reactor</title>
+<!--
+  Reactor: a calm arc-reactor glow, low and to the right, with concentric
+  rings and segments turning slowly and a gentle pulse.
+  Contract: one self-contained file, no network. Colours come ONLY from
+  location.hash (bg, accent, second, mode) and are drawn with plain source-over
+  alpha. One requestAnimationFrame loop capped at 30 fps; paused / still by a
+  {type:"ij-bg"} message from the parent, by reduced motion, or a hidden tab.
+-->
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #070809; }
+canvas { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var ID = "reactor";
+  var SCALE = 0.5;   // half-resolution backing store, smoothed up by CSS
+  var STILL_T = 30;  // seconds: the moment a still frame shows
+  var TAU = Math.PI * 2;
+
+  /* ---------- parameters: ONLY from location.hash ---------- */
+  var HEX = /^[0-9a-fA-F]{6}$/;
+  var P = null;
+  function hexRGB(h) {
+    var n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function readParams() {
+    var raw = {};
+    String(location.hash || "").replace(/^#/, "").split("&").forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i < 1) return;
+      var v = pair.slice(i + 1);
+      try { v = decodeURIComponent(v); } catch (err) { /* keep it as typed */ }
+      raw[pair.slice(0, i)] = v.replace(/^%23/i, "").replace(/^#/, "");
+    });
+    function pick(k, d) {
+      var v = Object.prototype.hasOwnProperty.call(raw, k) ? raw[k] : "";
+      return HEX.test(v) ? v : d;
+    }
+    var accent = pick("accent", "22d3ee");
+    var light = raw.mode === "light";
+    P = {
+      accent: hexRGB(accent),
+      second: hexRGB(pick("second", accent)),
+      bg: hexRGB(pick("bg", "070809")),
+      light: light,
+      gain: light ? 1.15 : 1
+    };
+    var bg = rgba(P.bg, 1);
+    document.documentElement.style.background = bg;
+    document.body.style.background = bg;
+  }
+  function rgba(c, a) {
+    a = a < 0 ? 0 : a > 1 ? 1 : a;
+    return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a.toFixed(3) + ")";
+  }
+  function mix(a, b, f) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * f),
+      Math.round(a[1] + (b[1] - a[1]) * f),
+      Math.round(a[2] + (b[2] - a[2]) * f)
+    ];
+  }
+  // A tiny seeded PRNG so every frame (and the still frame) is reproducible.
+  function prng(seed) {
+    return function () {
+      seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ---------- canvas ---------- */
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var W = 1, H = 1, K = 1;  // backing size, backing pixels per CSS pixel
+  function resize() {
+    K = Math.min(window.devicePixelRatio || 1, 1) * SCALE;
+    W = Math.max(1, Math.round(window.innerWidth * K));
+    H = Math.max(1, Math.round(window.innerHeight * K));
+    canvas.width = W;
+    canvas.height = H;
+    layout();
+  }
+
+  /* ---------- the effect ---------- */
+  // A calm arc reactor sitting low and to the right (away from the text in
+  // the middle): a breathing glow, thin rings, and segmented rings turning
+  // slowly in opposite directions around a bright core.
+  var cx = 0, cy = 0, R = 1;
+
+  function layout() {
+    if (W < H) {  // a narrow, tall window: keep it in view
+      cx = W * 0.62; cy = H * 0.74; R = W * 0.34;
+    } else {
+      cx = W * 0.72; cy = H * 0.66; R = Math.min(W, H) * 0.30;
+    }
+  }
+
+  function ring(r, a, col, lw) {
+    ctx.strokeStyle = rgba(col, a);
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, TAU);
+    ctx.stroke();
+  }
+  // n arcs around radius r, each covering `fill` of its slot, turned by rot.
+  function segments(r, n, fill, rot, a, col, lw) {
+    var slot = TAU / n;
+    ctx.strokeStyle = rgba(col, a);
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    for (var k = 0; k < n; k++) {
+      var a0 = rot + k * slot;
+      ctx.moveTo(cx + r * Math.cos(a0), cy + r * Math.sin(a0));
+      ctx.arc(cx, cy, r, a0, a0 + slot * fill);
+    }
+    ctx.stroke();
+  }
+  // n radial ticks starting at radius r; every sixth one longer.
+  function ticks(r, n, rot, a, col, lw, short, long) {
+    ctx.strokeStyle = rgba(col, a);
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    for (var k = 0; k < n; k++) {
+      var ang = rot + k * TAU / n;
+      var c = Math.cos(ang), s = Math.sin(ang);
+      var l = k % 6 === 0 ? long : short;
+      ctx.moveTo(cx + r * c, cy + r * s);
+      ctx.lineTo(cx + (r + l) * c, cy + (r + l) * s);
+    }
+    ctx.stroke();
+  }
+
+  function draw(t) {
+    var gn = P.gain;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = rgba(P.bg, 1);
+    ctx.fillRect(0, 0, W, H);
+    ctx.lineCap = "butt";
+
+    var pf = 0.82 + 0.18 * (0.5 + 0.5 * Math.sin(t * 0.9));  // gentle pulse
+
+    // The glow.
+    var glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 2);
+    glow.addColorStop(0, rgba(P.accent, 0.75 * pf * gn));
+    glow.addColorStop(0.12, rgba(P.accent, 0.55 * pf * gn));
+    glow.addColorStop(0.35, rgba(P.second, 0.25 * pf * gn));
+    glow.addColorStop(0.7, rgba(P.second, 0.07 * pf * gn));
+    glow.addColorStop(1, rgba(P.second, 0));
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, W, H);
+
+    // Thin still rings.
+    var lw = Math.max(1, R * 0.006);
+    ring(R * 0.20, 0.90 * gn, P.accent, lw);
+    ring(R * 0.34, 0.65 * gn, P.accent, lw);
+    ring(R * 0.58, 0.50 * gn, P.second, lw);
+    ring(R * 0.79, 0.42 * gn, P.accent, lw);
+    ring(R * 1.00, 0.32 * gn, P.second, lw);
+    ring(R * 1.18, 0.20 * gn, P.accent, lw);
+
+    // Turning rings.
+    segments(R * 0.27, 8, 0.62, t * 0.16, 0.85 * gn, P.second, Math.max(1, R * 0.03));
+    segments(R * 0.46, 12, 0.70, -t * 0.09, 0.62 * gn * pf, P.accent, Math.max(1, R * 0.07));
+    ticks(R * 0.66, 72, t * 0.035, 0.75 * gn, P.second, lw, R * 0.025, R * 0.055);
+    segments(R * 0.88, 3, 0.26, t * 0.022, 0.85 * gn, P.accent, Math.max(1, R * 0.018));
+    segments(R * 0.93, 6, 0.06, -t * 0.03, 0.9 * gn, P.second, Math.max(1, R * 0.012));
+
+    // The core.
+    var core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.2);
+    core.addColorStop(0, rgba(P.accent, pf * gn));
+    core.addColorStop(0.45, rgba(P.second, 0.75 * pf * gn));
+    core.addColorStop(1, rgba(P.accent, 0));
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 0.2, 0, TAU);
+    ctx.fill();
+  }
+
+  /* ---------- motion control ---------- */
+  var FRAME_MS = 1000 / 30;
+  var time = STILL_T, last = 0, raf = 0, state = "", readySent = false;
+  var run = true, still = false;
+  var mq = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  function frame(t) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    draw(t);
+    if (!readySent) {
+      readySent = true;
+      try { window.parent.postMessage({ type: "ij-bg-ready", id: ID }, "*"); } catch (err) { /* no parent */ }
+    }
+  }
+  function loop(now) {
+    raf = requestAnimationFrame(loop);
+    if (last && now - last < FRAME_MS - 4) return;  // cap at ~30 fps
+    var dt = last ? Math.min(now - last, 100) : 0;
+    last = now;
+    time += dt / 1000;
+    frame(time);
+  }
+  function setState(s) {
+    if (s === state) return;
+    state = s;
+    document.documentElement.dataset.state = s;
+  }
+  function decide() {
+    var paused = !run || document.hidden;
+    var holdStill = still || !!(mq && mq.matches);
+    var animate = !paused && !holdStill;
+    if (animate) {
+      if (!raf) { last = 0; raf = requestAnimationFrame(loop); }
+    } else if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    var next = animate ? "running" : paused ? "paused" : "still";
+    if (next === "still" && state !== "still") { time = STILL_T; frame(STILL_T); }
+    setState(next);
+  }
+  function redraw() {
+    if (state !== "running") frame(state === "still" ? STILL_T : time);
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent) return;
+    var m = e.data;
+    if (!m || m.type !== "ij-bg") return;
+    if (typeof m.run === "boolean") run = m.run;
+    if (typeof m.still === "boolean") still = m.still;
+    decide();
+  });
+  document.addEventListener("visibilitychange", decide);
+  if (mq) {
+    if (mq.addEventListener) mq.addEventListener("change", decide);
+    else if (mq.addListener) mq.addListener(decide);
+  }
+  window.addEventListener("hashchange", function () { readParams(); layout(); redraw(); });
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { resize(); redraw(); }, 150);
+  });
+
+  readParams();
+  resize();
+  frame(STILL_T);
+  decide();
+})();
+</script>
+</body>
+</html>

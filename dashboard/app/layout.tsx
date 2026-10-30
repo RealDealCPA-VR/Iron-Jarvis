@@ -19,6 +19,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
+import { BackgroundLayer } from "@/components/BackgroundLayer";
 import { PRE_PAINT_SCRIPT } from "@/lib/theme";
 // ONE /events socket per window (v1.230.0, FP6): every useEvents hook in
 // the tree fans out of this provider instead of opening its own.
@@ -84,6 +85,10 @@ export default function RootLayout({
           Skip to main content
         </a>
         <DaemonProvider>
+          {/* v1.410.0: the user's animated background (when their theme has
+              one), fixed behind everything, sealed off in a sandboxed frame.
+              Renders nothing otherwise — or when the file is missing. */}
+          <BackgroundLayer />
           <EventsProvider>
           <FaceStylesProvider>
           <MotionProvider>

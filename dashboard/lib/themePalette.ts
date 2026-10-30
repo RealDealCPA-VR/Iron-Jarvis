@@ -41,6 +41,7 @@ import {
   toTriplet,
   type RGB,
 } from "./color";
+import { isBackgroundId } from "./backgroundCatalog";
 
 export const PALETTE_VERSION = 1;
 export const PALETTES_KEY = "ij_palettes";
@@ -59,7 +60,30 @@ export interface PaletteSpec {
   accent: string;
   second?: string | null;
   surface: Surface;
+  /** v1.410.0: an animated background is drawn behind the app, so the text
+   *  inks are also fitted against it (see `backgroundComposites`). */
+  withBackground?: boolean;
 }
+
+/* ------------------------------------------------ animated background (v1.410.0)
+ * A palette can carry one of the downloadable backgrounds
+ * (lib/backgroundCatalog.ts). It is drawn in a sandboxed iframe fixed behind
+ * the app (components/BackgroundLayer.tsx) at `BACKGROUND_PEAK` opacity, with
+ * a scrim of the palette's own page colour (`SCRIM_ALPHA`) over it. Every
+ * background draws only mixes of three colours the app hands it — the main
+ * colour, the second colour and the page colour (backgrounds/README.md) — so
+ * the brightest (dark version) or deepest (light version) thing text can sit
+ * on is known: `backgroundComposites` samples it, `buildScheme` fits the text
+ * inks against it, and `readabilityProblems(…, true)` measures it. */
+export type BackgroundMotion = "animated" | "still";
+export interface PaletteBackground {
+  id: string;
+  motion: BackgroundMotion;
+}
+/** The background iframe's opacity: the most of its colours that reach the page. */
+export const BACKGROUND_PEAK = 0.6;
+/** How much of the page colour lies over the background (the scrim). */
+export const SCRIM_ALPHA: Record<"dark" | "light", number> = { dark: 0.75, light: 0.85 };
 
 export interface CustomPalette extends PaletteSpec {
   id: string;
@@ -68,6 +92,8 @@ export interface CustomPalette extends PaletteSpec {
   mode: PaletteMode;
   v: number;
   vars: Record<Scheme, ThemeVars>;
+  /** v1.410.0: absent / null = no animated background. */
+  background?: PaletteBackground | null;
 }
 
 export const SURFACES: { id: Surface; label: string; hint: string }[] = [
@@ -207,11 +233,40 @@ const withL = (rgb: RGB, dl: number, mul = 1): RGB => {
   return fromOklch({ ...o, l: Math.min(0.97, Math.max(0.12, o.l * mul + dl)) });
 };
 
+/**
+ * What text can end up drawn over when a background is on: each background
+ * colour (main, second, their mix) at several strengths over the page colour,
+ * then the iframe's opacity, then the scrim. Light text (dark version) is
+ * worst over the brightest of these, dark text (light version) over the
+ * deepest; luminance is convex in each channel, so the corners and the
+ * in-between samples bound it.
+ */
+export function backgroundComposites(
+  vars: Record<string, RGB> | ThemeVars,
+  scheme: Scheme,
+): RGB[] {
+  const rgb = (k: string): RGB => {
+    const v = (vars as Record<string, RGB | string>)[k];
+    return typeof v === "string" ? (fromTriplet(v) ?? [128, 128, 128]) : v;
+  };
+  const ground = rgb("ink-950");
+  const a = rgb("accent-rgb");
+  const d = rgb("accent-deep-rgb");
+  const out: RGB[] = [];
+  for (const c of [a, d, over(a, 0.5, d)])
+    for (const w of [0.25, 0.5, 0.75, 1]) {
+      const pixel = over(c, w, ground);
+      out.push(over(ground, SCRIM_ALPHA[scheme], over(pixel, BACKGROUND_PEAK, ground)));
+    }
+  return out;
+}
+
 function buildScheme(
   scheme: Scheme,
   pick: RGB,
   second: RGB | null,
   surface: Surface,
+  withBackground = false,
 ): { vars: ThemeVars; moved: boolean } {
   const base = scheme === "dark" ? BASE_DARK : BASE_LIGHT;
   const dir: 1 | -1 = scheme === "dark" ? 1 : -1;
@@ -244,9 +299,29 @@ function buildScheme(
   out["zinc-600"] = fitLightness(out["zinc-600"], S, AIM, dir);
   out["zinc-500"] = fitLightness(out["zinc-500"], S, AIM, dir);
 
+  // With a background, the same inks must also read over it. Fitting the main
+  // colour moves the background (it is drawn in it), so settle it in a few
+  // rounds; the check below is what says whether it settled.
+  if (withBackground) {
+    for (let round = 0; round < 4; round++) {
+      const S2 = [...S, ...backgroundComposites(out, scheme)];
+      out["accent-rgb"] = fitLightness(out["accent-rgb"], S2, AIM, dir);
+      out["accent-soft-rgb"] = fitLightness(out["accent-soft-rgb"], S2, AIM, dir);
+      out["zinc-600"] = fitLightness(out["zinc-600"], S2, AIM, dir);
+      out["zinc-500"] = fitLightness(out["zinc-500"], S2, AIM, dir);
+      out["zinc-400"] = fitLightness(out["zinc-400"], S2, AIM, dir);
+      if (!second)
+        out["accent-deep-rgb"] = withL(
+          out["accent-rgb"],
+          scheme === "dark" ? 0 : -0.05,
+          scheme === "dark" ? 0.74 : 1,
+        );
+    }
+  }
+
   const vars: ThemeVars = {};
   for (const k of THEME_VAR_KEYS) vars[k] = toTriplet(out[k]);
-  const moved = toHex(accent) !== toHex(pick);
+  const moved = toHex(out["accent-rgb"]) !== toHex(pick);
   return { vars, moved };
 }
 
@@ -262,8 +337,9 @@ export function generatePalette(spec: PaletteSpec): GeneratedPalette {
   // "Tinted" with a grey main colour has no hue to tint with.
   const surface: Surface =
     spec.surface === "tinted" && toOklch(pick).c < 0.02 ? "neutral" : spec.surface;
-  const dark = buildScheme("dark", pick, second, surface);
-  const light = buildScheme("light", pick, second, surface);
+  const withBg = !!spec.withBackground;
+  const dark = buildScheme("dark", pick, second, surface, withBg);
+  const light = buildScheme("light", pick, second, surface, withBg);
   const notes: string[] = [];
   if (dark.moved)
     notes.push("In the dark version your main colour is a little brighter, so text in it stays easy to read.");
@@ -276,9 +352,28 @@ export function generatePalette(spec: PaletteSpec): GeneratedPalette {
  * The same readability checks the theme tests apply to the built-in palettes,
  * as sentences. Empty = every check passes.
  */
-export function readabilityProblems(vars: ThemeVars, scheme: Scheme): string[] {
+export function readabilityProblems(
+  vars: ThemeVars,
+  scheme: Scheme,
+  withBackground = false,
+): string[] {
   const c = (a: string, b: string) => contrast(rgbOf(vars, a), rgbOf(vars, b));
   const out: string[] = [];
+  if (withBackground) {
+    // Text drawn straight on the page, over the scrim and the background.
+    const inks: [string, string][] = [
+      ["accent-rgb", "main colour"],
+      ["accent-soft-rgb", "link colour"],
+      ["zinc-300", "body text"],
+      ["zinc-400", "secondary text"],
+      ["zinc-500", "helper text"],
+      ["zinc-600", "hint text"],
+      ...TONES.map((t): [string, string] => [`tone-${t}`, `${t} colour`]),
+    ];
+    const comps = backgroundComposites(vars, scheme);
+    for (const [k, words] of inks)
+      if (comps.some((s) => contrast(rgbOf(vars, k), s) < AA)) out.push(`${words} over the background`);
+  }
   for (const s of TEXT_SURFACES) {
     if (c("accent-rgb", s) < AA) out.push(`main colour on ${s}`);
     if (c("accent-soft-rgb", s) < AA) out.push(`link colour on ${s}`);
@@ -325,6 +420,19 @@ function varsOk(v: unknown): v is ThemeVars {
   return THEME_VAR_KEYS.every((k) => typeof rec[k] === "string" && fromTriplet(rec[k] as string) !== null);
 }
 
+const MOTIONS = new Set<BackgroundMotion>(["animated", "still"]);
+
+/** A stored background choice, checked; null for none or one this app does
+ *  not know (a catalog entry removed in a later version). The FILE may still
+ *  be missing — the layer behind the app falls back to the plain theme then. */
+export function normalizeBackground(raw: unknown): PaletteBackground | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== "string" || !isBackgroundId(r.id)) return null;
+  const motion = MOTIONS.has(r.motion as BackgroundMotion) ? (r.motion as BackgroundMotion) : "animated";
+  return { id: r.id, motion };
+}
+
 /** A stored entry, checked; null when it cannot be a palette. */
 export function normalizePalette(raw: unknown): CustomPalette | null {
   if (!raw || typeof raw !== "object") return null;
@@ -338,11 +446,12 @@ export function normalizePalette(raw: unknown): CustomPalette | null {
     (typeof r.name === "string" ? r.name.trim().slice(0, MAX_NAME) : "") || "My theme";
   const accent = toHex(parseHex(r.accent)!);
   const vars = r.vars as Record<string, unknown> | undefined;
+  const background = normalizeBackground(r.background);
   const fresh =
     r.v === PALETTE_VERSION && vars && varsOk(vars.dark) && varsOk(vars.light)
       ? { dark: vars.dark as ThemeVars, light: vars.light as ThemeVars }
-      : generatePalette({ accent, second, surface }).vars;
-  return { id: r.id, name, accent, second, surface, mode, v: PALETTE_VERSION, vars: fresh };
+      : generatePalette({ accent, second, surface, withBackground: !!background }).vars;
+  return { id: r.id, name, accent, second, surface, mode, v: PALETTE_VERSION, vars: fresh, background };
 }
 
 export function loadPalettes(): CustomPalette[] {
@@ -377,10 +486,16 @@ export function savePalettes(list: CustomPalette[]): boolean {
 
 /** Build a stored palette from picks (computes both versions). */
 export function makePalette(
-  input: PaletteSpec & { id?: string; name: string; mode: PaletteMode },
+  input: PaletteSpec & {
+    id?: string;
+    name: string;
+    mode: PaletteMode;
+    background?: PaletteBackground | null;
+  },
 ): CustomPalette {
   const accent = toHex(parseHex(input.accent) ?? [34, 211, 238]);
   const second = input.second && parseHex(input.second) ? toHex(parseHex(input.second)!) : null;
+  const background = normalizeBackground(input.background);
   return {
     id: input.id && ID.test(input.id) ? input.id : newPaletteId(),
     name: input.name.trim().slice(0, MAX_NAME) || "My theme",
@@ -389,7 +504,8 @@ export function makePalette(
     surface: input.surface,
     mode: input.mode,
     v: PALETTE_VERSION,
-    vars: generatePalette({ accent, second, surface: input.surface }).vars,
+    vars: generatePalette({ accent, second, surface: input.surface, withBackground: !!background }).vars,
+    background,
   };
 }
 

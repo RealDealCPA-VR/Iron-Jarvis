@@ -18,6 +18,8 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Check, Palette, Pencil, Plus } from "lucide-react";
 import { ConfirmButton, Field } from "@/components/ui";
+import { BackgroundPicker, DownloadedBackgrounds } from "@/components/BackgroundPicker";
+import { backgroundEntry } from "@/lib/backgroundCatalog";
 import { parseHex } from "@/lib/color";
 import { DEFAULT_THEME, applyTheme } from "@/lib/theme";
 import {
@@ -37,6 +39,7 @@ import {
   readabilityProblems,
   upsertPalette,
   type CustomPalette,
+  type PaletteBackground,
   type PaletteMode,
   type Scheme,
   type Surface,
@@ -50,9 +53,18 @@ interface Draft {
   second: string | null;
   surface: Surface;
   mode: PaletteMode;
+  /** v1.410.0: an animated background behind the app, or none. */
+  background: PaletteBackground | null;
 }
 
-const BLANK: Draft = { name: "", accent: "#22d3ee", second: null, surface: "cool", mode: "system" };
+const BLANK: Draft = {
+  name: "",
+  accent: "#22d3ee",
+  second: null,
+  surface: "cool",
+  mode: "system",
+  background: null,
+};
 
 /** The palette's variables as inline CSS on the preview box. */
 function varsStyle(vars: ThemeVars): CSSProperties {
@@ -236,12 +248,21 @@ function Editor({
   const [error, setError] = useState("");
   const set = (patch: Partial<Draft>) => setD((prev) => ({ ...prev, ...patch }));
   const valid = !!parseHex(d.accent) && (d.second === null || !!parseHex(d.second));
+  const withBg = d.background !== null;
   const gen = useMemo(
-    () => (valid ? generatePalette({ accent: d.accent, second: d.second, surface: d.surface }) : null),
-    [valid, d.accent, d.second, d.surface],
+    () =>
+      valid
+        ? generatePalette({ accent: d.accent, second: d.second, surface: d.surface, withBackground: withBg })
+        : null,
+    [valid, d.accent, d.second, d.surface, withBg],
   );
+  // With a background on, text is also measured over the scrim plus the
+  // background (lib/themePalette backgroundComposites).
   const problems = gen
-    ? [...readabilityProblems(gen.vars.dark, "dark"), ...readabilityProblems(gen.vars.light, "light")]
+    ? [
+        ...readabilityProblems(gen.vars.dark, "dark", withBg),
+        ...readabilityProblems(gen.vars.light, "light", withBg),
+      ]
     : [];
 
   const save = () => {
@@ -325,6 +346,15 @@ function Editor({
         </p>
       </div>
 
+      <div>
+        <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">Animated background</div>
+        <BackgroundPicker
+          value={d.background}
+          onChange={(background) => set({ background })}
+          vars={gen?.vars.dark}
+        />
+      </div>
+
       {gen && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
           <Preview scheme="dark" vars={gen.vars.dark} />
@@ -337,6 +367,7 @@ function Editor({
           {problems.length === 0 ? (
             <div className="flex items-center gap-1.5 text-tone-success">
               <Check size={13} aria-hidden /> Easy to read in both versions
+              {withBg ? ", over the background too" : ""}
             </div>
           ) : (
             <div className="text-tone-warn">Some text may be hard to read: {problems.join(", ")}.</div>
@@ -427,6 +458,9 @@ export function ThemeMaker() {
                   <span className="block truncate text-[13px] text-zinc-200">{p.name}</span>
                   <span className="block text-[11px] text-zinc-500">
                     {MODES.find((m) => m.id === p.mode)?.label}
+                    {p.background && backgroundEntry(p.background.id)
+                      ? ` · ${backgroundEntry(p.background.id)!.name}${p.background.motion === "still" ? " (still)" : ""}`
+                      : ""}
                   </span>
                 </span>
                 {on ? (
@@ -447,7 +481,15 @@ export function ThemeMaker() {
                   aria-label={`Edit ${p.name}`}
                   title="Edit"
                   onClick={() =>
-                    setEditing({ id: p.id, name: p.name, accent: p.accent, second: p.second, surface: p.surface, mode: p.mode })
+                    setEditing({
+                      id: p.id,
+                      name: p.name,
+                      accent: p.accent,
+                      second: p.second,
+                      surface: p.surface,
+                      mode: p.mode,
+                      background: p.background ?? null,
+                    })
                   }
                   className="rounded-md p-1 text-zinc-400 hover:text-zinc-100"
                 >
@@ -461,6 +503,8 @@ export function ThemeMaker() {
       )}
 
       {editing && <Editor key={editing.id ?? "new"} initial={editing} onDone={() => setEditing(null)} />}
+
+      <DownloadedBackgrounds />
 
       {!editing && palettes.length > 0 && (
         <p className="flex items-center gap-1.5 text-[11px] text-zinc-500">

@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grid</title>
+<!--
+  Grid: a faint square grid with a few soft beams of light travelling along
+  its lines.
+  Contract: one self-contained file, no network. Colours come ONLY from
+  location.hash (bg, accent, second, mode) and are drawn with plain source-over
+  alpha. One requestAnimationFrame loop capped at 30 fps; paused / still by a
+  {type:"ij-bg"} message from the parent, by reduced motion, or a hidden tab.
+-->
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #070809; }
+canvas { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var ID = "grid-beams";
+  var SCALE = 1;     // backing store at CSS pixels
+  var STILL_T = 23;  // seconds: the moment a still frame shows
+  var TAU = Math.PI * 2;
+
+  /* ---------- parameters: ONLY from location.hash ---------- */
+  var HEX = /^[0-9a-fA-F]{6}$/;
+  var P = null;
+  function hexRGB(h) {
+    var n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function readParams() {
+    var raw = {};
+    String(location.hash || "").replace(/^#/, "").split("&").forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i < 1) return;
+      var v = pair.slice(i + 1);
+      try { v = decodeURIComponent(v); } catch (err) { /* keep it as typed */ }
+      raw[pair.slice(0, i)] = v.replace(/^%23/i, "").replace(/^#/, "");
+    });
+    function pick(k, d) {
+      var v = Object.prototype.hasOwnProperty.call(raw, k) ? raw[k] : "";
+      return HEX.test(v) ? v : d;
+    }
+    var accent = pick("accent", "22d3ee");
+    var light = raw.mode === "light";
+    P = {
+      accent: hexRGB(accent),
+      second: hexRGB(pick("second", accent)),
+      bg: hexRGB(pick("bg", "070809")),
+      light: light,
+      gain: light ? 1.15 : 1
+    };
+    var bg = rgba(P.bg, 1);
+    document.documentElement.style.background = bg;
+    document.body.style.background = bg;
+  }
+  function rgba(c, a) {
+    a = a < 0 ? 0 : a > 1 ? 1 : a;
+    return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + a.toFixed(3) + ")";
+  }
+  function mix(a, b, f) {
+    return [
+      Math.round(a[0] + (b[0] - a[0]) * f),
+      Math.round(a[1] + (b[1] - a[1]) * f),
+      Math.round(a[2] + (b[2] - a[2]) * f)
+    ];
+  }
+  // A tiny seeded PRNG so every frame (and the still frame) is reproducible.
+  function prng(seed) {
+    return function () {
+      seed = (seed + 0x6D2B79F5) | 0;
+      var t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ---------- canvas ---------- */
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var W = 1, H = 1, K = 1;  // backing size, backing pixels per CSS pixel
+  function resize() {
+    K = Math.min(window.devicePixelRatio || 1, 1) * SCALE;
+    W = Math.max(1, Math.round(window.innerWidth * K));
+    H = Math.max(1, Math.round(window.innerHeight * K));
+    canvas.width = W;
+    canvas.height = H;
+    layout();
+  }
+
+  /* ---------- the effect ---------- */
+  // The grid itself never moves, so it is painted once into a second canvas
+  // (on resize or a colour change) and copied in each frame; only the beams
+  // are drawn per frame. Each beam picks its line and direction afresh every
+  // trip from a seed made of (beam, trip number), so any moment is reproducible.
+  var grid = document.createElement("canvas");
+  var gctx = grid.getContext("2d");
+  var cell = 48, ox = 0, oy = 0, cols = 0, rows = 0;
+  var NB = 6;
+
+  function layout() {
+    cell = Math.round(Math.max(40 * K, Math.min(72 * K, Math.min(W, H) / 12)));
+    ox = Math.round(W / 2) % cell;
+    oy = Math.round(H / 2) % cell;
+    cols = Math.floor((W - 1 - ox) / cell) + 1;  // vertical lines at ox + i * cell
+    rows = Math.floor((H - 1 - oy) / cell) + 1;  // horizontal lines at oy + j * cell
+    paintGrid();
+  }
+
+  function paintGrid() {
+    grid.width = W;
+    grid.height = H;
+    gctx.globalCompositeOperation = "source-over";
+    gctx.fillStyle = rgba(P.bg, 1);
+    gctx.fillRect(0, 0, W, H);
+    var i, j;
+    gctx.beginPath();
+    for (i = 0; i < cols; i++) {
+      var x = ox + i * cell + 0.5;
+      gctx.moveTo(x, 0); gctx.lineTo(x, H);
+    }
+    for (j = 0; j < rows; j++) {
+      var y = oy + j * cell + 0.5;
+      gctx.moveTo(0, y); gctx.lineTo(W, y);
+    }
+    gctx.lineWidth = 1;
+    gctx.strokeStyle = rgba(P.accent, P.light ? 0.32 : 0.26);
+    gctx.stroke();
+    // Small marks at every other crossing.
+    gctx.fillStyle = rgba(P.second, 0.5 * P.gain);
+    var m = Math.max(1, Math.round(2 * K));
+    for (i = 0; i < cols; i += 2) {
+      for (j = 0; j < rows; j += 2) {
+        gctx.fillRect(ox + i * cell + 0.5 - m / 2, oy + j * cell + 0.5 - m / 2, m, m);
+      }
+    }
+    // Fade the grid into the background towards the edges.
+    var R = Math.sqrt(W * W + H * H) / 2;
+    var vg = gctx.createRadialGradient(W / 2, H / 2, R * 0.25, W / 2, H / 2, R);
+    vg.addColorStop(0, rgba(P.bg, 0));
+    vg.addColorStop(1, rgba(P.bg, 0.7));
+    gctx.fillStyle = vg;
+    gctx.fillRect(0, 0, W, H);
+  }
+
+  function draw(t) {
+    ctx.globalAlpha = 1;
+    ctx.drawImage(grid, 0, 0);
+    ctx.lineCap = "round";
+    var peak = 0.95;
+    for (var i = 0; i < NB; i++) {
+      var period = 9 + i * 1.8;            // seconds per trip
+      var tt = t + i * 2.9;
+      var trip = Math.floor(tt / period);
+      var u = tt / period - trip;
+      var r = prng(i * 7919 + trip * 104729 + 17);
+      var horiz = r() < 0.5;
+      var count = horiz ? rows : cols;
+      if (count < 1) continue;
+      var idx = count > 2 ? 1 + Math.floor(r() * (count - 2)) : Math.floor(r() * count);
+      var line = (horiz ? oy : ox) + idx * cell + 0.5;
+      var len = horiz ? W : H;
+      var tail = cell * (2.5 + r() * 3);
+      var forward = r() < 0.5;
+      var s = -tail + u * (len + 2 * tail);
+      var head = forward ? s : len - s;
+      var back = forward ? head - tail : head + tail;
+      var hx = horiz ? head : line, hy = horiz ? line : head;
+      var bx = horiz ? back : line, by = horiz ? line : back;
+      var col = i % 2 ? P.second : P.accent;
+
+      var g = ctx.createLinearGradient(bx, by, hx, hy);
+      g.addColorStop(0, rgba(col, 0));
+      g.addColorStop(1, rgba(col, peak));
+      ctx.strokeStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(hx, hy);
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 5 * K;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = Math.max(1, 1.5 * K);
+      ctx.stroke();
+
+      // The head: a small soft light.
+      ctx.fillStyle = rgba(col, 0.3 * P.gain);
+      ctx.beginPath();
+      ctx.arc(hx, hy, 7 * K, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = rgba(col, peak);
+      ctx.beginPath();
+      ctx.arc(hx, hy, 2 * K, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  /* ---------- motion control ---------- */
+  var FRAME_MS = 1000 / 30;
+  var time = STILL_T, last = 0, raf = 0, state = "", readySent = false;
+  var run = true, still = false;
+  var mq = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
+  function frame(t) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    draw(t);
+    if (!readySent) {
+      readySent = true;
+      try { window.parent.postMessage({ type: "ij-bg-ready", id: ID }, "*"); } catch (err) { /* no parent */ }
+    }
+  }
+  function loop(now) {
+    raf = requestAnimationFrame(loop);
+    if (last && now - last < FRAME_MS - 4) return;  // cap at ~30 fps
+    var dt = last ? Math.min(now - last, 100) : 0;
+    last = now;
+    time += dt / 1000;
+    frame(time);
+  }
+  function setState(s) {
+    if (s === state) return;
+    state = s;
+    document.documentElement.dataset.state = s;
+  }
+  function decide() {
+    var paused = !run || document.hidden;
+    var holdStill = still || !!(mq && mq.matches);
+    var animate = !paused && !holdStill;
+    if (animate) {
+      if (!raf) { last = 0; raf = requestAnimationFrame(loop); }
+    } else if (raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+    var next = animate ? "running" : paused ? "paused" : "still";
+    if (next === "still" && state !== "still") { time = STILL_T; frame(STILL_T); }
+    setState(next);
+  }
+  function redraw() {
+    if (state !== "running") frame(state === "still" ? STILL_T : time);
+  }
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent) return;
+    var m = e.data;
+    if (!m || m.type !== "ij-bg") return;
+    if (typeof m.run === "boolean") run = m.run;
+    if (typeof m.still === "boolean") still = m.still;
+    decide();
+  });
+  document.addEventListener("visibilitychange", decide);
+  if (mq) {
+    if (mq.addEventListener) mq.addEventListener("change", decide);
+    else if (mq.addListener) mq.addListener(decide);
+  }
+  window.addEventListener("hashchange", function () { readParams(); layout(); redraw(); });
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { resize(); redraw(); }, 150);
+  });
+
+  readParams();
+  resize();
+  frame(STILL_T);
+  decide();
+})();
+</script>
+</body>
+</html>

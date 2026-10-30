@@ -13,6 +13,9 @@ import { defineConfig } from "@playwright/test";
  */
 const DAEMON = Number(process.env.IJ_E2E_DAEMON_PORT) || 8807;
 const WEB = Number(process.env.IJ_E2E_WEB_PORT) || 8808;
+// v1.410.0: the animated backgrounds are downloaded from this loopback stand-in
+// for GitHub (e2e/serve-backgrounds.mjs), never from the internet.
+const BG = Number(process.env.IJ_E2E_BG_PORT) || 8809;
 
 export default defineConfig({
   testDir: "e2e",
@@ -30,6 +33,13 @@ export default defineConfig({
   },
   webServer: [
     {
+      command: "node e2e/serve-backgrounds.mjs",
+      url: `http://127.0.0.1:${BG}/health`,
+      timeout: 30_000,
+      reuseExistingServer: false,
+      env: { IJ_E2E_BG_PORT: String(BG) },
+    },
+    {
       // A fresh, empty home every run: T3 is "an empty config directory".
       command: `node e2e/fresh-home.mjs && uv run --no-sync ironjarvis serve --root e2e/.home --port ${DAEMON}`,
       url: `http://127.0.0.1:${DAEMON}/health`,
@@ -42,6 +52,7 @@ export default defineConfig({
       env: {
         DOCKER_HOST: "tcp://127.0.0.1:1",
         IRONJARVIS_OPENCODE_CONFIG_DIR: "e2e/.home/no-opencode-config",
+        IRONJARVIS_BACKGROUNDS_BASE: `http://127.0.0.1:${BG}`,
       },
     },
     {

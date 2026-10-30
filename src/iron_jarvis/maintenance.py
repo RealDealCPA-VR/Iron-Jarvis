@@ -88,6 +88,9 @@ def create_backup(
     # library waiting under trash/ — archiving it would put the 700 MB the press
     # was meant to free into every nightly snapshot and its mirror instead.
     trash_dir = (home / TRASH_DIRNAME).resolve()
+    # Downloaded animated backgrounds (v1.410.0) in a dev or test home: they
+    # are re-downloadable copies of repository files, never the user's state.
+    backgrounds_dir = (home / "backgrounds").resolve()
     # The running daemon's one-per-home lock (v1.335.0) is a Windows BYTE lock:
     # any other read of that byte fails with Errno 13, so archiving it failed
     # every backup on every install. Neither file means anything in a restore
@@ -110,7 +113,7 @@ def create_backup(
                     continue  # never archive the backups themselves
                 if workspaces_dir in rp.parents:
                     continue  # skip disposable session scratch (unbounded growth)
-                if any(m in rp.parents for m in media_dirs) or trash_dir in rp.parents:
+                if any(m in rp.parents for m in media_dirs) or trash_dir in rp.parents or backgrounds_dir in rp.parents:
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():
                     continue  # the snapshot temp is added below, not as itself

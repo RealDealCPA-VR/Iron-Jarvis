@@ -276,6 +276,11 @@ body::before {
   filter: blur(48px) saturate(125%);
   animation: liquid-drift 80s ease-in-out infinite alternate;
 }
+:root[data-background="on"] body::before {
+  /* v1.410.0: an animated background is drawn over this layer; stop it. */
+  display: none;
+  animation: none;
+}
 @keyframes liquid-drift {
   0% {
     transform: translate3d(-2%, -1%, 0) scale(1);

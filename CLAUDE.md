@@ -10620,6 +10620,62 @@ does not need a bump, stop and bump it.
   `test_failed_run_rows_settle_v1288.py`, `test_remote_deadline_v1288.py`,
   `test_agent_empty_final_v1288.py`, `test_wave3_leftovers_v1288.py`.
 
+- **An animated background is DOWNLOADED, VERIFIED and SEALED; the app ships
+  only the catalog** (v1.410.0; the user: five backgrounds of our own, written
+  clean room, never in the installer, downloaded on pick, kept until deleted,
+  and downloaded code must never run in the dashboard's origin, which holds the
+  bearer token). FILES: `backgrounds/<id>/index.html` (aurora, particles
+  "Drift", waves, grid-beams "Grid", reactor), each one self-contained canvas
+  page, no network words, colours only from `#accent=&second=&bg=&mode=`,
+  drawn only as source-over mixes of those three (the readability check
+  depends on it), `{type:"ij-bg", run|still}` from `window.parent` only,
+  reduced motion + hidden = no loop, `ij-bg-ready` after the first frame.
+  `.gitattributes` `backgrounds/** -text` (a CRLF checkout would break every
+  sha). CATALOG = what ships: `src/iron_jarvis/backgrounds/catalog.py` + twin
+  `dashboard/lib/backgroundCatalog.ts` (+ CSS `preview` swatches);
+  `tests/test_backgrounds_v1410.py` pins the two equal AND every size +
+  sha256 to the file — EDITING A BACKGROUND MEANS UPDATING BOTH CATALOGS.
+  DOWNLOAD (`backgrounds/store.py`, routes `routes/backgrounds.py`, all sync
+  `def`): only `catalog.source_url` = raw.githubusercontent at tag
+  `v<__version__>`, no redirects, capped at the catalog size, 5/20 s timeouts,
+  sha mismatch refused in words (`MISMATCH`), temp + `os.replace`; a matching
+  saved file is never fetched again; a file that no longer matches reads
+  `outdated` (never served) and the layer fetches it again once.
+  `IRONJARVIS_BACKGROUNDS_BASE` is dev/e2e only and ignored unless a LOOPBACK
+  http address (e2e/serve-backgrounds.mjs stands in for GitHub). Files live in
+  `<userData>/backgrounds` (the freeze trace's "logs folder beside the home"
+  rule), else `<home>/backgrounds`, which `create_backup` skips. SEAL: `GET
+  /backgrounds/{id}/view` is TOKEN-EXEMPT for exactly catalog ids
+  (`auth._is_exempt` → `is_view_path`; an iframe cannot send the header and
+  the token must never ride a URL the page can read), served only while the
+  bytes match, under `VIEW_CSP` (`default-src 'none'`, inline only, `sandbox
+  allow-scripts`). `components/BackgroundLayer.tsx` (in the layout, so pop-outs
+  too): `<iframe sandbox="allow-scripts">` — NEVER allow-same-origin —
+  fixed `-z-[1]`, pointer-events none, aria-hidden, tabIndex -1, invisible
+  until THAT frame posts `ij-bg-ready` (a missing/deleted/unreachable file =
+  nothing, plain theme), opacity `BACKGROUND_PEAK` (0.6) under a scrim of
+  `--ink-950` at `SCRIM_ALPHA` (dark 0.75, light 0.85); posts `run:false`
+  while `document.visibilityState` is hidden, `still` for Still / reduced
+  motion / on battery (`navigator.getBattery`, not charging), and sets
+  `<html data-background="on">` while shown, which stops the liquid layer
+  (`body::before`). MEASURED (headed Edge, 1440 x 900, 20 s each between plain
+  readings): the plain theme's drifting `body::before` glow costs 15-24% of a
+  core + 2% GPU; Reactor 10%, Grid 13%, Waves 14%, Drift 18%, Aurora 22% (GPU
+  0.7-1.3%); Still 2% / 0.1%. READABILITY:
+  `themePalette.backgroundComposites` samples text's worst ground (main,
+  second and their mix at 4 strengths, peak, scrim); `generatePalette(
+  {withBackground})` fits accent/soft/zinc-400/500/600 against it too and
+  `readabilityProblems(vars, scheme, true)` measures it; the alphas were
+  tuned by sweeping 44 picks x 4 feels x 3 second colours x both versions
+  (dark 0.7 and light 0.8 still fail "text ramp order"). A palette without a
+  background is byte-identical. SAVED in `ij_palettes` as `background: {id,
+  motion}` (`normalizeBackground`; an unknown id reads none; no
+  PALETTE_VERSION bump). Pins: `tests/test_backgrounds_v1410.py`,
+  `dashboard/__tests__/background-{palette,layer}-v1410.test.ts(x)` (6 layer
+  mutations, all red), e2e `dashboard/e2e/animated-background.spec.ts` (1280
+  and 390 px: one file downloaded, frame origin "null", storage/parent/fetch
+  all blocked, CSP header, reload keeps it, Delete removes it).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

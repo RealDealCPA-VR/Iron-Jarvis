@@ -3604,6 +3604,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import editor as _editor_routes
 
     _editor_routes.register(app, d)
+    # Animated backgrounds (v1.410.0, backgrounds/): downloaded on pick from
+    # the running version's tag, served sealed off (no network, sandboxed).
+    from .routes import backgrounds as _backgrounds_routes
+
+    _backgrounds_routes.register(app, d)
     # Build's Code view (v1.409.0, hosted/): the user's REAL Claude Code /
     # Codex with all of their own tools on; every permission question they
     # ask becomes a card the user answers.
