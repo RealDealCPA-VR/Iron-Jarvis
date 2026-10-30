@@ -62,8 +62,9 @@ async def test_harnesses_are_read_from_cached_answers_only(app, monkeypatch):
     async with client(app) as c:
         rows = (await c.get("/build/app/harnesses")).json()["harnesses"]
     by = {r["id"]: r for r in rows}
-    # v1.411.0: Pi is the third tool (its own listing: tests/test_build_app_pi_v1411.py).
-    assert set(by) == {"claude-code", "codex", "pi"}
+    # v1.411.0: Pi is the third tool (its own listing: tests/test_build_app_pi_v1411.py);
+    # v1.413.0: OpenCode the fourth (tests/test_build_app_opencode_v1413.py) — moved on purpose.
+    assert set(by) == {"claude-code", "codex", "pi", "opencode"}
     assert by["claude-code"]["installed"] is True and by["codex"]["installed"] is False
     assert by["codex"]["signed_in"] is None
     # v1.412.0: Claude Code's own Auto is offered (moved on purpose), and every
@@ -526,7 +527,7 @@ async def test_from_terminal_needs_the_harness_to_have_exited(app, work, monkeyp
         assert (await c.post("/build/app/from-terminal/nope")).status_code == 404
         panes["p"] = _Pane(work, "PS C:\\work> ", cli=None)
         r = await c.post("/build/app/from-terminal/p")
-        assert r.status_code == 409 and "not running Claude Code, Codex or Pi" in r.json()["detail"]
+        assert r.status_code == 409 and "not running Claude Code, Codex, Pi or OpenCode" in r.json()["detail"]
         panes["p"] = _Pane(work, "────────────────\n> fix it\n? for shortcuts")
         r = await c.post("/build/app/from-terminal/p")
         assert r.status_code == 409 and "/exit" in r.json()["detail"]

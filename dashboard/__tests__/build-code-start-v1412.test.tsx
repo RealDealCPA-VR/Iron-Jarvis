@@ -203,8 +203,8 @@ describe("the composer is there at once", () => {
     expect(box).toHaveFocus();
     expect(box.getAttribute("placeholder")).toBe("Describe a task or ask a question");
     expect(screen.queryByTestId("code-new-session")).toBeNull();
-    // The heading names the tools truthfully.
-    expect(screen.getByTestId("code-start").textContent).toContain("Claude Code, Codex or Pi");
+    // The heading names the tools truthfully (v1.413.0: OpenCode — moved on purpose).
+    expect(screen.getByTestId("code-start").textContent).toContain("Claude Code, Codex, Pi or OpenCode");
     const chips = screen.getByTestId("code-start-chips");
     expect(within(chips).getByTestId("code-start-folder").textContent).toBe("No folder");
     expect(within(chips).getByTestId("code-start-folder-choose").textContent).toBe("Choose…");

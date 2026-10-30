@@ -220,6 +220,9 @@ export interface CodingTool {
   /** v1.411.0: the tool signs in BY ITSELF (Pi: per model provider, its own
    *  `/login`) — no account to choose; the chip says "Pi's own sign-in". */
   ownSignIn: boolean;
+  /** v1.413.0: how THIS tool signs in by itself, in the daemon's words (the
+   *  chip's title) — "" when the daemon did not say. */
+  signInHint?: string;
   /** null = not known (the daemon never starts a check to find out). */
   signedIn: boolean | null;
   version: string;
@@ -244,6 +247,7 @@ export function toolLabel(id: string, tools?: readonly CodingTool[] | null): str
   if (id === "claude-code") return "Claude Code";
   if (id === "codex") return "Codex";
   if (id === "pi") return "Pi";
+  if (id === "opencode") return "OpenCode";
   return id || "Coding tool";
 }
 
@@ -311,6 +315,7 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       label: str(r.label, 80) || toolLabel(id),
       installed: r.installed === true,
       ownSignIn: r.own_sign_in === true,
+      ...(str(r.sign_in_hint, 400).trim() ? { signInHint: str(r.sign_in_hint, 400).trim() } : {}),
       signedIn: r.signed_in === true ? true : r.signed_in === false ? false : null,
       version: str(r.version, 60),
       modes,
@@ -491,7 +496,7 @@ export function accountWords(s: Pick<CodeSession, "account" | "accountName" | "t
  *  Pi by name (a list not read yet). */
 export function signsInItself(tool: string, tools?: readonly CodingTool[] | null): boolean {
   const t = tools?.find((x) => x.id === tool);
-  return t ? t.ownSignIn : tool === "pi";
+  return t ? t.ownSignIn : tool === "pi" || tool === "opencode";
 }
 
 /** "Pi's own sign-in". */
@@ -503,6 +508,19 @@ export function ownSignInWords(tool: string, tools?: readonly CodingTool[] | nul
 export const OWN_SIGN_IN_TITLE =
   "Pi signs in by itself, per model provider: to change it, open Pi in a Build terminal and type /login there. " +
   "Iron Jarvis's accounts do not apply.";
+
+/** v1.413.0: what the chip's title says about THIS tool's own sign-in. */
+export const OPENCODE_SIGN_IN_TITLE =
+  "OpenCode signs in by itself, per provider: to change it, run opencode auth login in a Build terminal. " +
+  "Iron Jarvis's accounts do not apply.";
+
+/** v1.413.0: the own-sign-in title for a tool — the daemon's words when it
+ *  sent them, else the tool's own (Pi's for Pi, OpenCode's for OpenCode). */
+export function ownSignInTitle(tool: string, tools?: readonly CodingTool[] | null): string {
+  const hint = tools?.find((x) => x.id === tool)?.signInHint;
+  if (hint) return hint;
+  return tool === "opencode" ? OPENCODE_SIGN_IN_TITLE : OWN_SIGN_IN_TITLE;
+}
 
 /** A session row's second line: which tool, on which account. */
 export function sessionRowLine(s: CodeSession, tools?: readonly CodingTool[] | null): string {
@@ -905,6 +923,13 @@ export function keepsLastOf(raw: unknown): boolean | null {
 /** Why the model and effort chips offer no "default" for such a conversation. */
 export const KEEPS_LAST_TITLE =
   "This conversation keeps the model and thinking level it last used: Pi restores them when it reopens it.";
+
+/** v1.413.0: the keeps-last title for a tool (Pi's words stay Pi's). */
+export function keepsLastTitle(tool: string): string {
+  return tool === "opencode"
+    ? "This conversation keeps the model and effort it last used: OpenCode keeps them when it reopens it."
+    : KEEPS_LAST_TITLE;
+}
 
 /** The first row of the model chip. */
 export function defaultModelWords(toolName: string, keepsLast: boolean): string {

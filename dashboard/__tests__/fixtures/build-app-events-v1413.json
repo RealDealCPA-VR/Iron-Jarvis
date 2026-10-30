@@ -1,0 +1,742 @@
+{
+ "_about": "v1.413.0 Build Code view, OpenCode: the normalized events the REAL daemon sends for each scenario, produced by tests/test_build_app_opencode_v1413.py from recorded OpenCode output (tests/fixtures/build_app_v1413, masked live runs of opencode 1.18.18 `opencode acp` on this PC). `at` is dropped; request ids are ask-N; item ids are item-N; every turn id is turn-1; a note's id is note-1. Regenerate with IJ_REGEN_BUILD_APP_OPENCODE=1.",
+ "scenarios": {
+  "opencode_read_a_file": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e79018ffeyR0FR9FR2otmch",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "Read",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " the file.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "read",
+    "name": "read",
+    "title": "Read a file",
+    "input": "{}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "read",
+    "name": "read",
+    "title": "Read hello.txt",
+    "input": "{\"filePath\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "read",
+    "name": "read",
+    "title": "Read hello.txt",
+    "input": "{\"filePath\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\hello.txt",
+    "output": "<path>C:\\work\\demo\\hello.txt</path>\n<type>file</type>\n<content>\n1: apple pie\n\n(End of file - total 1 lines)\n</content>",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-3",
+    "delta": "apple",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-3",
+    "text": "apple",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 501,
+    "output": 3,
+    "cache_read": 15232,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_asks_before_an_edit": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e7765affeNPHkRLQvGdDHNX",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "write",
+    "name": "write",
+    "title": "Write a file",
+    "input": "{}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "write",
+    "name": "write",
+    "title": "Write note.txt",
+    "input": "{\"content\": \"ZEBRA\", \"filePath\": \"C:\\\\work\\\\demo\\\\note.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\note.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/note.txt\n@@ -0,0 +1,1 @@\n+ZEBRA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Write note.txt",
+    "detail": "C:\\work\\demo\\note.txt",
+    "can_session": true,
+    "tool": "write",
+    "path": "C:\\work\\demo\\note.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/note.txt\n@@ -0,0 +1,1 @@\n+ZEBRA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "write",
+    "name": "write",
+    "title": "Write note.txt",
+    "input": "{\"content\": \"ZEBRA\", \"filePath\": \"C:\\\\work\\\\demo\\\\note.txt\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\note.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/note.txt\n@@ -0,0 +1,1 @@\n+ZEBRA",
+    "output": "Wrote file successfully.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "DONE",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "DONE",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 429,
+    "output": 3,
+    "cache_read": 15232,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_command_denied": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e75d15ffeA9YG9XnfVdQ29n",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run a command",
+    "input": "{\"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo hi",
+    "input": "{\"command\": \"echo hi\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run echo hi",
+    "detail": "echo hi",
+    "can_session": true,
+    "tool": "bash",
+    "command": "echo hi",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo hi",
+    "input": "{\"command\": \"echo hi\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "failed",
+    "output": "The user rejected permission to use this specific tool call.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 15559,
+    "output": 12,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_command_allowed_for_the_session": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e748f6ffe1AM55p5aaq5m3i",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run a command",
+    "input": "{\"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo one",
+    "input": "{\"command\": \"echo one\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run echo one",
+    "detail": "echo one",
+    "can_session": true,
+    "tool": "bash",
+    "command": "echo one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow_session",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo one",
+    "input": "{\"command\": \"echo one\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "done",
+    "output": "one\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run a command",
+    "input": "{\"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo two",
+    "input": "{\"command\": \"echo two\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run echo two",
+    "input": "{\"command\": \"echo two\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "done",
+    "output": "two\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-3",
+    "delta": "DONE",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-3",
+    "text": "DONE",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 372,
+    "output": 3,
+    "cache_read": 15232,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_stop": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e727d7ffepRiSrrFYWHI9iE",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "The",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " user wants me to run a shell command: `ping -n 20 127.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "0.0.1`. This pings the localhost 20 times on Windows,",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " which takes roughly 19 seconds. There's nothing dangerous about it — it's",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " local loopback. I'll execute it.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run a command",
+    "input": "{\"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run ping -n 20 127.0.0.1",
+    "input": "{\"command\": \"ping -n 20 127.0.0.1\", \"cwd\": \"C:\\\\work\\\\demo\", \"timeout\": 60000}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run ping -n 20 127.0.0.1",
+    "input": "{\"command\": \"ping -n 20 127.0.0.1\", \"cwd\": \"C:\\\\work\\\\demo\", \"timeout\": 60000}",
+    "status": "failed",
+    "output": "Tool execution aborted",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_note_while_it_works": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "The",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " user wants me to run a specific shell command and report back with one line showing",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " how many replies came back. This is a Windows environment, so `ping -n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " 8 127.0.0.1` will ping localhost 8 times",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " and should return 8 replies.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run a command",
+    "input": "{\"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run ping -n 8 127.0.0.1",
+    "input": "{\"command\": \"ping -n 8 127.0.0.1\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "sent",
+    "text": "Also: end your reply with the word BANANA.",
+    "how": "OpenCode reads it at its next step.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "command",
+    "name": "bash",
+    "title": "Run ping -n 8 127.0.0.1",
+    "input": "{\"command\": \"ping -n 8 127.0.0.1\", \"cwd\": \"C:\\\\work\\\\demo\"}",
+    "status": "done",
+    "output": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-3",
+    "delta": "User",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-3",
+    "delta": " wants one line: number of replies, ending with BANANA.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-4",
+    "delta": "8 B",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-4",
+    "delta": "ANANA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "read",
+    "text": "Also: end your reply with the word BANANA.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-4",
+    "text": "8 BANANA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 703,
+    "output": 6,
+    "cache_read": 15232,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_model_answers_an_error": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e6cc27ffezoM4tFfjoNw2MU",
+    "model": "lab/fleet",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "OpenCode's model answered with an error",
+    "fix": "Send the message again. If it happens again, choose another model for this session.",
+    "technical": "Internal error: No connected db.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_reads_a_picture": [
+   {
+    "type": "user",
+    "text": "do it",
+    "files": [
+     "C:\\work\\demo\\zebrafig.png"
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e6be23ffewz7KuX3krrva69",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "The",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " image shows the word \"ZEBRAFIG\" in bold black text.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "ZEB",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "RAFIG",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "ZEBRAFIG",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 15630,
+    "output": 6,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "opencode_plan_mode": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "opencode",
+    "harness_session_id": "ses_e70e6a928ffeH5Rj83PfP4kvkK",
+    "model": "opencode/glm-5.3-flash-free",
+    "cwd": "C:\\work\\demo",
+    "mode": "plan",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "CANNOT — plan mode is active, so I can't create or modify files.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " The task is trivial though: write `Q` to `x.txt`. Exit",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " plan mode and I'll do it immediately.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "CANNOT — plan mode is active, so I can't create or modify files. The task is trivial though: write `Q` to `x.txt`. Exit plan mode and I'll do it immediately.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 15857,
+    "output": 44,
+    "cache_read": 0,
+    "list_price": false,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ]
+ }
+}

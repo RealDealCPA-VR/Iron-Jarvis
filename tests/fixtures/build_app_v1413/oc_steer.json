@@ -1,0 +1,890 @@
+{
+ "harness": "opencode",
+ "source": "recorded live 2026-10-30, opencode 1.18.18 (opencode acp), this PC, through the real Code-view service via a logging proxy, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "promptCapabilities": {
+       "embeddedContext": true,
+       "image": true
+      },
+      "sessionCapabilities": {
+       "close": {},
+       "fork": {},
+       "list": {},
+       "resume": {}
+      }
+     },
+     "authMethods": [
+      {
+       "description": "Run `opencode auth login` in the terminal",
+       "name": "Login with opencode",
+       "id": "opencode-login"
+      }
+     ],
+     "agentInfo": {
+      "name": "OpenCode",
+      "version": "1.18.18"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/new"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "lab/fleet",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        },
+        {
+         "value": "lab/fleet",
+         "name": "lab/fleet"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/new"
+  },
+  {
+   "await": "request",
+   "method": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "opencode/glm-5.3-flash-free",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        }
+       ]
+      },
+      {
+       "id": "effort",
+       "name": "Effort",
+       "description": "Available effort levels for this model",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low"
+        },
+        {
+         "value": "high",
+         "name": "High"
+        },
+        {
+         "value": "max",
+         "name": "Max"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "init",
+        "description": "create/update AGENTS.md",
+        "input": null
+       },
+       {
+        "name": "review",
+        "description": "review changes [commit|branch|pr], defaults to uncommitted",
+        "input": {
+         "hint": "commit"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f18fb4d001Q0D788YV1A7kHY",
+      "content": {
+       "type": "text",
+       "text": "The"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f18fb4d001Q0D788YV1A7kHY",
+      "content": {
+       "type": "text",
+       "text": " user wants me to run a specific shell command and report back with one line showing"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f18fb4d001Q0D788YV1A7kHY",
+      "content": {
+       "type": "text",
+       "text": " how many replies came back. This is a Windows environment, so `ping -n"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f18fb4d001Q0D788YV1A7kHY",
+      "content": {
+       "type": "text",
+       "text": " 8 127.0.0.1` will ping localhost 8 times"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f18fb4d001Q0D788YV1A7kHY",
+      "content": {
+       "type": "text",
+       "text": " and should return 8 replies."
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "title": "bash",
+      "kind": "execute",
+      "status": "pending",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms "
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "in_progress",
+      "kind": "execute",
+      "title": "ping -n 8 127.0.0.1",
+      "locations": [
+       {
+        "path": "C:\\work\\demo"
+       }
+      ],
+      "rawInput": {
+       "command": "ping -n 8 127.0.0.1",
+       "cwd": "C:\\work\\demo"
+      },
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-8a9a295207c55e52",
+      "status": "completed",
+      "title": "ping -n 8 127.0.0.1",
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n"
+        }
+       }
+      ],
+      "rawOutput": {
+       "output": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n",
+       "metadata": {
+        "output": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n",
+        "exit": 0,
+        "truncated": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f19238e001dF6DnDo4td68xp",
+      "content": {
+       "type": "text",
+       "text": "User"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f19238e001dF6DnDo4td68xp",
+      "content": {
+       "type": "text",
+       "text": " wants one line: number of replies, ending with BANANA."
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_18f19238e001dF6DnDo4td68xp",
+      "content": {
+       "type": "text",
+       "text": "8 B"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_18f19238e001dF6DnDo4td68xp",
+      "content": {
+       "type": "text",
+       "text": "ANANA"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 15935,
+      "size": 200000,
+      "cost": {
+       "amount": 0,
+       "currency": "USD"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+     "stopReason": "end_turn",
+     "usage": {
+      "inputTokens": 703,
+      "outputTokens": 6,
+      "totalTokens": 15956,
+      "thoughtTokens": 15,
+      "cachedReadTokens": 15232
+     },
+     "_meta": {}
+    }
+   },
+   "reply_to": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e704f1ffe1sq51XGTq9Q1JA",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 15935,
+      "size": 200000,
+      "cost": {
+       "amount": 0,
+       "currency": "USD"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+     "stopReason": "end_turn",
+     "usage": {
+      "inputTokens": 703,
+      "outputTokens": 6,
+      "totalTokens": 15956,
+      "thoughtTokens": 15,
+      "cachedReadTokens": 15232
+     },
+     "_meta": {}
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

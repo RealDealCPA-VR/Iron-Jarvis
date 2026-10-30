@@ -1,0 +1,318 @@
+{
+ "harness": "opencode",
+ "source": "recorded live 2026-10-30, opencode 1.18.18 (opencode acp), this PC, through the real Code-view service via a logging proxy, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "promptCapabilities": {
+       "embeddedContext": true,
+       "image": true
+      },
+      "sessionCapabilities": {
+       "close": {},
+       "fork": {},
+       "list": {},
+       "resume": {}
+      }
+     },
+     "authMethods": [
+      {
+       "description": "Run `opencode auth login` in the terminal",
+       "name": "Login with opencode",
+       "id": "opencode-login"
+      }
+     ],
+     "agentInfo": {
+      "name": "OpenCode",
+      "version": "1.18.18"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/new"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "lab/fleet",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        },
+        {
+         "value": "lab/fleet",
+         "name": "lab/fleet"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/new"
+  },
+  {
+   "await": "request",
+   "method": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "opencode/glm-5.3-flash-free",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        }
+       ]
+      },
+      {
+       "id": "effort",
+       "name": "Effort",
+       "description": "Available effort levels for this model",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low"
+        },
+        {
+         "value": "high",
+         "name": "High"
+        },
+        {
+         "value": "max",
+         "name": "Max"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "init",
+        "description": "create/update AGENTS.md",
+        "input": null
+       },
+       {
+        "name": "review",
+        "description": "review changes [commit|branch|pr], defaults to uncommitted",
+        "input": {
+         "hint": "commit"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f194231001Onb6MwXK9N6MXS",
+      "content": {
+       "type": "text",
+       "text": "The"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "agent_thought_chunk",
+      "messageId": "msg_18f194231001Onb6MwXK9N6MXS",
+      "content": {
+       "type": "text",
+       "text": " image shows the word \"ZEBRAFIG\" in bold black text."
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_18f194231001Onb6MwXK9N6MXS",
+      "content": {
+       "type": "text",
+       "text": "ZEB"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_18f194231001Onb6MwXK9N6MXS",
+      "content": {
+       "type": "text",
+       "text": "RAFIG"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e6be23ffewz7KuX3krrva69",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 15630,
+      "size": 200000,
+      "cost": {
+       "amount": 0,
+       "currency": "USD"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+     "stopReason": "end_turn",
+     "usage": {
+      "inputTokens": 15630,
+      "outputTokens": 6,
+      "totalTokens": 15652,
+      "thoughtTokens": 16
+     },
+     "_meta": {}
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

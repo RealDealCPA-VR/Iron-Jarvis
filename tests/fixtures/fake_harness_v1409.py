@@ -10,6 +10,7 @@ real harness spoke it:
   ``user`` (a stream-json user message), ``control`` + ``subtype`` (a
   control_request), ``response`` + ``request_id`` (a control_response to the
   harness's own can_use_tool), ``request`` + ``method`` (a JSON-RPC request),
+  ``notify`` + ``method`` (v1.413.0: a JSON-RPC notification, no id),
   ``response`` + ``id`` (a JSON-RPC response to the harness's own request),
   ``command`` + ``command`` (a Pi RPC command of that type), ``ui`` + ``id``
   (Pi: the ``extension_ui_response`` to the dialog Pi sent with that id);
@@ -46,7 +47,7 @@ SCENARIO = os.environ["IJ_FAKE_SCENARIO"]
 LOG = os.environ.get("IJ_FAKE_LOG", "")
 ENV_KEYS = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID",
             "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN",
-            "PI_SESSION_ID", "PI_SESSION_FILE", "PI_CODING_AGENT")
+            "PI_SESSION_ID", "PI_SESSION_FILE", "PI_CODING_AGENT", "OPENCODE_PERMISSION")
 
 
 def log(obj):
@@ -142,6 +143,10 @@ def matches(step, obj):
         return obj.get("type") == "control_request" and (obj.get("request") or {}).get("subtype") == step["subtype"]
     if kind == "request":
         return obj.get("method") == step["method"] and "id" in obj
+    if kind == "notify":
+        # v1.413.0 (OpenCode's ACP): a JSON-RPC notification (no id), e.g.
+        # ``session/cancel``.
+        return obj.get("method") == step["method"] and "id" not in obj
     if kind == "command":
         return obj.get("type") == step["command"] and "method" not in obj
     if kind == "ui":

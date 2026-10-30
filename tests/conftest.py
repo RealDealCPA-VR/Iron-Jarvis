@@ -366,6 +366,28 @@ def _isolate_opencode_config():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_opencode_sessions():
+    """v1.413.0: the Code view lists OpenCode's own saved sessions from its
+    database (``hosted.opencode.data_dir``) — every listing of a folder's saved
+    sessions reads it. A test must never read the developer's real OpenCode
+    database: the folder is an empty scratch one for the session (inherited by
+    a daemon a test starts in another process)."""
+    import tempfile
+
+    from iron_jarvis.hosted import opencode as _hoc
+
+    old = os.environ.get(_hoc.DATA_DIR_ENV)
+    os.environ[_hoc.DATA_DIR_ENV] = tempfile.mkdtemp(prefix="ij-test-no-opencode-data-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_hoc.DATA_DIR_ENV, None)
+        else:
+            os.environ[_hoc.DATA_DIR_ENV] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

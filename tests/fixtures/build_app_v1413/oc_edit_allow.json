@@ -1,0 +1,413 @@
+{
+ "harness": "opencode",
+ "source": "recorded live 2026-10-30, opencode 1.18.18 (opencode acp), this PC, through the real Code-view service via a logging proxy, scratch folder (masked)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "promptCapabilities": {
+       "embeddedContext": true,
+       "image": true
+      },
+      "sessionCapabilities": {
+       "close": {},
+       "fork": {},
+       "list": {},
+       "resume": {}
+      }
+     },
+     "authMethods": [
+      {
+       "description": "Run `opencode auth login` in the terminal",
+       "name": "Login with opencode",
+       "id": "opencode-login"
+      }
+     ],
+     "agentInfo": {
+      "name": "OpenCode",
+      "version": "1.18.18"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/new"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "lab/fleet",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        },
+        {
+         "value": "lab/fleet",
+         "name": "lab/fleet"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/new"
+  },
+  {
+   "await": "request",
+   "method": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "opencode/glm-5.3-flash-free",
+       "options": [
+        {
+         "value": "lab/fleet",
+         "name": "Lab (local)/fleet (local, free)"
+        },
+        {
+         "value": "opencode/big-pickle",
+         "name": "OpenCode/Big Pickle"
+        },
+        {
+         "value": "opencode/glm-5.3-flash-free",
+         "name": "OpenCode/GLM-5.3-Flash Free"
+        }
+       ]
+      },
+      {
+       "id": "effort",
+       "name": "Effort",
+       "description": "Available effort levels for this model",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "low",
+         "name": "Low"
+        },
+        {
+         "value": "high",
+         "name": "High"
+        },
+        {
+         "value": "max",
+         "name": "Max"
+        }
+       ]
+      },
+      {
+       "id": "mode",
+       "name": "Session Mode",
+       "category": "mode",
+       "type": "select",
+       "currentValue": "build",
+       "options": [
+        {
+         "value": "build",
+         "name": "build",
+         "description": "The default agent. Executes tools based on configured permissions."
+        },
+        {
+         "value": "plan",
+         "name": "plan",
+         "description": "Plan mode. Disallows all edit tools."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "init",
+        "description": "create/update AGENTS.md",
+        "input": null
+       },
+       {
+        "name": "review",
+        "description": "review changes [commit|branch|pr], defaults to uncommitted",
+        "input": {
+         "hint": "commit"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "chatcmpl-tool-873f4839cdd8a39b",
+      "title": "write",
+      "kind": "edit",
+      "status": "pending",
+      "locations": [],
+      "rawInput": {}
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-873f4839cdd8a39b",
+      "status": "in_progress",
+      "kind": "edit",
+      "title": "write",
+      "locations": [
+       {
+        "path": "C:\\work\\demo\\note.txt"
+       }
+      ],
+      "rawInput": {
+       "content": "ZEBRA",
+       "filePath": "C:\\work\\demo\\note.txt"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "session/request_permission",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "toolCall": {
+      "toolCallId": "chatcmpl-tool-873f4839cdd8a39b",
+      "title": "C:\\work\\demo\\note.txt",
+      "kind": "edit",
+      "status": "pending",
+      "locations": [
+       {
+        "path": "C:\\work\\demo\\note.txt"
+       }
+      ],
+      "rawInput": {
+       "filepath": "C:\\work\\demo\\note.txt",
+       "diff": "Index: C:\\work\\demo\\note.txt\n===================================================================\n--- C:\\work\\demo\\note.txt\n+++ C:\\work\\demo\\note.txt\n@@ -0,0 +1,1 @@\n+ZEBRA\n\\ No newline at end of file\n"
+      },
+      "content": [
+       {
+        "type": "diff",
+        "path": "C:\\work\\demo\\note.txt",
+        "oldText": "",
+        "newText": "ZEBRA"
+       }
+      ]
+     },
+     "options": [
+      {
+       "optionId": "once",
+       "kind": "allow_once",
+       "name": "Allow once"
+      },
+      {
+       "optionId": "always",
+       "kind": "allow_always",
+       "name": "Always allow"
+      },
+      {
+       "optionId": "reject",
+       "kind": "reject_once",
+       "name": "Reject"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "fs/write_text_file",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "path": "C:\\work\\demo\\note.txt",
+     "content": "ZEBRA"
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 1
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "chatcmpl-tool-873f4839cdd8a39b",
+      "status": "completed",
+      "title": "C:\\work\\demo\\note.txt",
+      "content": [
+       {
+        "type": "content",
+        "content": {
+         "type": "text",
+         "text": "Wrote file successfully."
+        }
+       }
+      ],
+      "rawOutput": {
+       "output": "Wrote file successfully.",
+       "metadata": {
+        "diagnostics": {},
+        "filepath": "C:\\work\\demo\\note.txt",
+        "exists": false,
+        "truncated": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "messageId": "msg_18f1892e3001LeXqcYcql3J6lg",
+      "content": {
+       "type": "text",
+       "text": "DONE"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "ses_e70e7765affeNPHkRLQvGdDHNX",
+     "update": {
+      "sessionUpdate": "usage_update",
+      "used": 15661,
+      "size": 200000,
+      "cost": {
+       "amount": 0,
+       "currency": "USD"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+     "stopReason": "end_turn",
+     "usage": {
+      "inputTokens": 429,
+      "outputTokens": 3,
+      "totalTokens": 15664,
+      "cachedReadTokens": 15232
+     },
+     "_meta": {}
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

@@ -17,14 +17,15 @@ from typing import Any
 from .events import clip, make
 
 #: harness id -> how a person names it.
-LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi"}
+LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi", "opencode": "OpenCode"}
 #: harness id -> the Iron Jarvis provider whose CLI it is.
 PROVIDERS: dict[str, str] = {"claude-code": "claude-cli", "codex": "codex-cli"}
 #: harness id -> the Iron-Proxy provider of its accounts. Pi has none: it
-#: signs in by itself, per model provider (its own `/login`).
+#: signs in by itself, per model provider (its own `/login`); OpenCode too
+#: (`opencode auth login`).
 PROXY: dict[str, str] = {"claude-code": "anthropic", "codex": "openai"}
 #: harness id -> the Build terminal Launch id (``terminals/ai_clis``).
-CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
+CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode"}
 
 BUSY = (
     "This session is still working on your last message — wait for it to finish, "
@@ -42,6 +43,7 @@ STEER_HOW: dict[str, str] = {
     "claude-code": "Claude Code reads it at its next step, or right after this reply.",
     "codex": "Codex reads it at its next step.",
     "pi": "Pi reads it after its current step.",
+    "opencode": "OpenCode reads it at its next step.",
 }
 STEER_READ = "Read by {label}."
 STEER_RETURNED = "{label} did not read this note before it stopped — it is back in your message box."
@@ -109,6 +111,52 @@ PI_KEEPS_LAST = (
     "This Pi conversation keeps the model and thinking level it last used — "
     "choose one from the list instead."
 )
+#: v1.413.0: OpenCode signs in by itself, per provider (`opencode auth login`).
+OPENCODE_OWN_SIGN_IN = (
+    "OpenCode signs in by itself, per provider, so an OpenCode session has no account to choose — "
+    "to change its sign-in, run opencode auth login in a Build terminal."
+)
+OPENCODE_CONTINUE = (
+    "OpenCode signs in by itself, per provider, so it has no other account to continue on — "
+    "choose another model instead."
+)
+#: v1.413.0: how each tool that signs in BY ITSELF does it (the account
+#: chip's title on the page says THIS tool's way, never Pi's for OpenCode).
+SIGN_IN_HINTS: dict[str, str] = {
+    "pi": ("Pi signs in by itself, per model provider: to change it, open Pi in a Build terminal and "
+           "type /login there. Iron Jarvis's accounts do not apply."),
+    "opencode": ("OpenCode signs in by itself, per provider: to change it, run opencode auth login in a "
+                 "Build terminal. Iron Jarvis's accounts do not apply."),
+}
+#: v1.413.0: the user's own OpenCode permission rules, said once per start.
+OPENCODE_RULES_KEPT = (
+    "Your own OpenCode permission rules for {tools} apply in this session as you wrote them; "
+    "any other tool this mode does not name follows OpenCode's own defaults."
+)
+OPENCODE_RULES_DECIDE = (
+    "Your OpenCode config sets one permission rule for every tool, so that rule decides in this "
+    "session, whatever mode is chosen here."
+)
+#: v1.413.0: a note OpenCode took but never reached before Stop: it stays in
+#: OpenCode's conversation (never handed back to be sent twice).
+OPENCODE_NOTE_KEPT = (
+    "OpenCode stopped before it reached your note; the note stays in its conversation and it will "
+    "see it with your next message."
+)
+OPENCODE_NO_SUCH_EFFORT = (
+    'This OpenCode model does not take the effort "{effort}", so it runs on its own default.'
+)
+#: v1.413.0: OpenCode keeps a reopened conversation's last model and effort.
+OPENCODE_KEEPS_LAST = (
+    "This OpenCode conversation keeps the model and effort it last used — "
+    "choose one from the list instead."
+)
+#: v1.413.0: a mode whose permission rules apply from the next message (they
+#: are the OpenCode process's own environment).
+MODE_NEXT = (
+    "{label} keeps its current mode for the message it is working on; {mode} applies from your "
+    "next message."
+)
 PI_CONTINUE = (
     "Pi signs in by itself, per model provider, so it has no other account to continue on — "
     "choose another model instead."
@@ -165,7 +213,7 @@ def label(harness: str) -> str:
 
 
 #: harness id -> the command that quits it in a terminal (Pi's is /quit).
-EXIT_COMMANDS: dict[str, str] = {"pi": "/quit"}
+EXIT_COMMANDS: dict[str, str] = {"pi": "/quit"}  # OpenCode: /exit
 
 
 def exit_command(harness: str) -> str:

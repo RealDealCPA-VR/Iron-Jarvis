@@ -29,6 +29,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable
 
 from ..core import procs
@@ -36,7 +37,7 @@ from ..core import procs
 log = logging.getLogger(__name__)
 
 #: harness id -> the command it is started with.
-BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
+BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode"}
 
 #: How long a graceful stop waits for the harness to exit on its own.
 EXIT_GRACE_S = 3.0
@@ -51,14 +52,29 @@ def binary_for(harness: str) -> list[str] | None:
     installed. THE chokepoint tests replace."""
     name = BINARIES.get(harness)
     exe = shutil.which(name) if name else None
-    if exe is None and name == "pi":
+    if exe is None and name in ("pi", "opencode"):
         # Pi's installer puts pi.cmd in %LOCALAPPDATA%\pi-node\current and
         # adds it to the USER PATH, which a daemon started before the install
         # never sees — the Launch menu's own lookup (``ai_clis._find``).
         from ..terminals.ai_clis import _find
 
         exe = _find(name)
+    if exe and name == "opencode":
+        exe = npm_program(exe)
     return [exe] if exe else None
+
+
+def npm_program(found: str) -> str:
+    """v1.413.0: npm's ``opencode.cmd`` only starts
+    ``node_modules/opencode-ai/bin/opencode.exe`` (measured: the shim's
+    one line). That program is started DIRECTLY when it is there — no cmd.exe
+    between Iron Jarvis and OpenCode reading its arguments, and one process
+    less to stop. Anything else is used as found."""
+    path = Path(found)
+    if path.suffix.lower() != ".cmd":
+        return found
+    exe = path.parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+    return str(exe) if exe.is_file() else found
 
 
 def build_env(accounts: Any) -> dict[str, str]:

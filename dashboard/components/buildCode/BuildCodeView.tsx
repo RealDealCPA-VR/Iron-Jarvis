@@ -89,8 +89,8 @@ import {
 } from "@/components/harness/HarnessAttachments";
 import {
   OPEN_IN_TERMINAL,
-  KEEPS_LAST_TITLE,
-  OWN_SIGN_IN_TITLE,
+  keepsLastTitle,
+  ownSignInTitle,
   accountWords,
   appliedNextWords,
   defaultEffortWords,
@@ -1134,7 +1134,7 @@ function SessionPane({
                 data-testid="code-model-chip"
                 value={session.model}
                 disabled={running}
-                title={keepsLast ? KEEPS_LAST_TITLE : undefined}
+                title={keepsLast ? keepsLastTitle(session.tool) : undefined}
                 onChange={(e) => void change({ model: e.target.value })}
                 className={CHIP_SELECT}
               >
@@ -1160,7 +1160,7 @@ function SessionPane({
                   data-testid="code-effort-chip"
                   value={session.effort}
                   disabled={running}
-                  title={keepsLast ? KEEPS_LAST_TITLE : undefined}
+                  title={keepsLast ? keepsLastTitle(session.tool) : undefined}
                   onChange={(e) => void change({ effort: e.target.value })}
                   className={CHIP_SELECT}
                 >
@@ -1186,7 +1186,7 @@ function SessionPane({
                 data-testid="code-account-chip"
                 title={
                   signsInItself(session.tool, tools)
-                    ? OWN_SIGN_IN_TITLE
+                    ? ownSignInTitle(session.tool, tools)
                     : "The account this session runs on (chosen when it was made)"
                 }
                 className="inline-flex h-7 max-w-[12rem] items-center gap-1.5 truncate px-2 text-[12px] text-zinc-500"
@@ -1632,7 +1632,7 @@ export function BuildCodeView({
             <p className="px-2 py-2 text-[12px] text-zinc-500">Reading your sessions…</p>
           ) : groups.length === 0 ? (
             <p data-testid="code-list-empty" className="px-2 py-2 text-[12px] text-zinc-500">
-              No sessions yet. Type a task to start Claude Code, Codex or Pi.
+              No sessions yet. Type a task to start Claude Code, Codex, Pi or OpenCode.
             </p>
           ) : (
             groups.map((g) => (

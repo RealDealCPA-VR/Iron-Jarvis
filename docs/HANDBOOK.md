@@ -2261,7 +2261,7 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     that conversation open in a terminal, the Code view waits: quit Pi there
     (`/quit`) first. A terminal
     where Pi has finished offers **Open in Code view**.
-- **Next**: OpenCode, as a coding tool for the Code view.
+- **OpenCode** (v1.413.0) is the fourth coding tool: see "OpenCode in Build's Code view" below.
 
 ## Start a session by typing (v1.412.0)
 
@@ -2345,6 +2345,72 @@ press.
   note the tool read just as the reply ended is shown as read and does not
   come back (so it is not sent twice); one that arrives after the reply ended
   goes as an ordinary message instead, or stays in your box with the reason.
+
+## OpenCode in Build's Code view (v1.413.0)
+
+OpenCode is the fourth coding tool in Build's **Code** view, beside Claude
+Code, Codex and Pi. The Code view starts your own OpenCode (the `opencode`
+you run in a terminal) with everything it has there: its tools, its agents,
+your plugins and MCP servers, AGENTS.md, and your OpenCode config. Iron
+Jarvis starts it, shows what it does, and turns every permission question it
+asks into a card you answer.
+
+- **Starting one**: choose **OpenCode** on the Tool chip under the box, pick
+  a folder (or none), and type. A session starts in **Ask first**.
+- **Modes** are OpenCode's own permission rules, set for that one OpenCode
+  process; your OpenCode config files are read, never changed:
+  - **Ask first**: OpenCode asks before it changes a file, runs a command or
+    uses the web. Reading files runs without asking.
+  - **Auto edits**: file changes run without asking; commands and the web
+    still ask.
+  - **Plan**: OpenCode's own plan agent. It looks around and plans, and
+    changes no file.
+  - **Full access**: everything runs without asking. Press it twice to
+    confirm, as for the other tools.
+  - **Auto** is not offered: OpenCode has no mode that decides each step for
+    you.
+  - Changing between Ask first, Auto edits and Full access applies from your
+    next message (OpenCode is restarted on the same conversation, which takes
+    a moment). Plan changes straight away.
+- **Your own permission rules come first.** If your OpenCode config (or a
+  project's own `opencode.json`) has a rule for a tool, that rule stays as you
+  wrote it, whatever mode you choose, and the session says which tools keep
+  your rules. A mode never loosens a rule of yours: a `deny` stays a `deny`.
+- **Cards**: a card shows what OpenCode wants to do (the command, or the file
+  and its changes). **Allow once** allows that one step; **Allow for this
+  session** is OpenCode's own "Always allow" (it lasts until this OpenCode
+  process stops); **Deny** says no, and OpenCode stops that step.
+- **Notes while it works**: type while OpenCode is working and press Enter.
+  OpenCode reads the note at its next step, and the reply goes on with it. If
+  you press Stop before OpenCode reached a note, the note stays in OpenCode's
+  conversation (it sees it with your next message), so it is not put back in
+  your box.
+- **Stop** stops the step it is on; the conversation is kept.
+- **Pictures**: paste or attach a picture. It goes to OpenCode as a picture;
+  a model that cannot read pictures says so.
+- **Model and effort**: the model list is the one OpenCode itself lists
+  (shown once an OpenCode session has started on this PC). The effort is the
+  model's own levels, when it has any. Both change straight away. Once a
+  conversation has messages, OpenCode reopens it on the model and effort it
+  last used, so "OpenCode's default" is no longer offered for it.
+- **Sign-in is OpenCode's own**, per provider: an OpenCode session has no
+  account to choose, and the chip says "OpenCode's own sign-in". To sign in
+  or change it, run `opencode auth login` in a Build terminal. Continue on
+  another account is not offered for OpenCode.
+- **Cost**: the usage line shows what OpenCode reported ("the cost OpenCode
+  reported"). It is never called list price; OpenCode does not say whether a
+  provider is a subscription or pay-per-use.
+- **Saved sessions**: OpenCode keeps every session in its own store, so a
+  session started here can be opened in a terminal (**Open in terminal**
+  types `opencode --session <id>`), and a folder's saved OpenCode sessions
+  are listed with the others. While OpenCode has that conversation open in a
+  terminal, the Code view waits: quit OpenCode there (`/exit`) first. A
+  terminal where OpenCode has finished offers **Open in Code view**.
+- **Processes**: one OpenCode per open session, like the other tools. It is
+  stopped after 15 minutes idle (the next message reopens the same
+  conversation), when you archive or delete the session, and when Iron Jarvis
+  quits; everything it started goes with it. OpenCode talks to Iron Jarvis
+  over its own input and output, not over a network port.
 
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 

@@ -1,5 +1,6 @@
-"""Build's Code view: the user's REAL Claude Code / Codex / Pi, driven from a
-GUI (v1.409.0; Pi v1.411.0; ``docs/BUILD-APP-VIEW-PLAN.md``).
+"""Build's Code view: the user's REAL Claude Code / Codex / Pi / OpenCode,
+driven from a GUI (v1.409.0; Pi v1.411.0; OpenCode v1.413.0;
+``docs/BUILD-APP-VIEW-PLAN.md``).
 
 Chat's Code view runs every tool itself and switches the harness's own tools
 OFF (``providers/adapters/claude_native`` / ``codex_native``). This package
@@ -18,9 +19,10 @@ Modules:
 * :mod:`.events` — the event contract's helpers and the bounded
   ``events.jsonl`` log;
 * :mod:`.process` — one harness child: spawn, reader threads, writes, kill;
-* :mod:`.claude` / :mod:`.codex` / :mod:`.pi` — each harness's protocol and
-  parser (Pi: ``pi --mode rpc``; it asks nothing itself, only its extensions
-  do);
+* :mod:`.claude` / :mod:`.codex` / :mod:`.pi` / :mod:`.opencode` — each
+  harness's protocol and parser (Pi: ``pi --mode rpc``; it asks nothing
+  itself, only its extensions do; OpenCode: ``opencode acp``, the Agent
+  Client Protocol);
 * :mod:`.service` — sessions, turns, asks, the pool (cap + idle reaper),
   continue on the next account, open in a terminal and back.
 """

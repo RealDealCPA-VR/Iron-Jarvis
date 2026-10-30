@@ -57,7 +57,7 @@ import {
   useHarnessAttachments,
 } from "@/components/harness/HarnessAttachments";
 import {
-  OWN_SIGN_IN_TITLE,
+  ownSignInTitle,
   accountStatusWords,
   decodeCodeSession,
   effortsFor,
@@ -350,7 +350,7 @@ export function StartComposer({
       <div className={`${HARNESS_COLUMN} w-full space-y-2`}>
         <p className="flex items-center gap-2 px-1 text-[14px] text-zinc-300">
           <Code2 size={16} aria-hidden="true" className="text-zinc-500" />
-          Start a session with Claude Code, Codex or Pi
+          Start a session with Claude Code, Codex, Pi or OpenCode
         </p>
         <div
           data-testid="code-start-composer"
@@ -494,7 +494,7 @@ export function StartComposer({
           {tool && tool.ownSignIn ? (
             <span
               data-testid="code-start-account-own"
-              title={OWN_SIGN_IN_TITLE}
+              title={ownSignInTitle(tool.id, tools)}
               className="inline-flex h-7 items-center gap-1.5 px-2 text-[12px] text-zinc-500"
             >
               <UserRound size={13} aria-hidden="true" />
