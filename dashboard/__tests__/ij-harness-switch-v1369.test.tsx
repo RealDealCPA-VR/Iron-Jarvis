@@ -156,14 +156,20 @@ afterEach(() => {
 // (components/chat/ChatCodeSurface; pinned in chat-code-switch-v1406). These
 // cases replaced the v1.369.0 switch's, ON PURPOSE.
 describe("Build is the terminals only (v1.406.0)", () => {
-  it("has no view switch and never draws the coding sessions", async () => {
+  // v1.409.0 (moved ON PURPOSE): Build's header centre holds its own
+  // Code | Terminal switch now (the real Claude Code / Codex in a window;
+  // pinned in build-app-switch-v1409). It still never draws Chat › Code's
+  // coding sessions, and Terminal is the default.
+  it("never draws the coding sessions; its centre holds only the Code | Terminal switch", async () => {
     render(<TerminalsPage />);
     await screen.findByTestId("terminal-pane-t1");
-    expect(screen.queryByTestId("build-view-switch")).toBeNull();
     expect(screen.queryByTestId("build-view-harness")).toBeNull();
     expect(screen.queryByTestId("ij-harness-view")).toBeNull();
     expect(screen.getByTestId("pane-rail")).toBeInTheDocument();
-    expect(screen.getByTestId("page-header-center")).toBeEmptyDOMElement();
+    const centre = screen.getByTestId("page-header-center");
+    expect(centre.children).toHaveLength(1);
+    expect(centre.firstElementChild?.getAttribute("data-testid")).toBe("build-view-switch");
+    expect(screen.getByTestId("build-view-terminal")).toHaveAttribute("aria-selected", "true");
     // Its controls stay in the header's right column.
     expect(screen.getByTestId("page-header-actions")).toContainElement(screen.getByTestId("header-new-terminal"));
     expect(screen.getByTestId("header-shell")).toBeInTheDocument();

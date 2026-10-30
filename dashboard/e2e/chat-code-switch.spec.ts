@@ -11,7 +11,7 @@ import { expect, test, type Page } from "@playwright/test";
  *    the view changes (the v1.370.2 rule, in pixels), at 1280 × 800 and on a
  *    390 × 844 phone, where nothing pans sideways in either view;
  *  - an OLD link (`/terminals?session=<id>`) lands in Code with that session;
- *  - Build has no switch;
+ *  - Build opens on its terminals (v1.409.0: Build has its own Code | Terminal switch);
  *  - the sidebar holds the right list: Chats in Chat, the coding sessions in
  *    Code (at 1280 px, where the sidebar is on screen);
  *  - the sidebar's items are Chat, Build, Projects, Everything, Settings.
@@ -101,10 +101,13 @@ test("an old /terminals?session= link lands in Code, on that session", async ({ 
   await expect(page.getByTestId("chat-view-code")).toHaveAttribute("aria-selected", "true");
 });
 
-test("Build is the terminals only: no switch", async ({ page }) => {
+// v1.409.0 (moved ON PURPOSE): Build has its own Code | Terminal switch now
+// (e2e/build-app-view.spec.ts); it opens on Terminal and never draws the
+// chat page's coding sessions.
+test("Build opens on its terminals and never draws the chat's coding sessions", async ({ page }) => {
   await page.goto("/terminals");
   await expect(page.getByTestId("header-new-terminal")).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByTestId("build-view-switch")).toHaveCount(0);
+  await expect(page.getByTestId("build-view-terminal")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("ij-harness-view")).toHaveCount(0);
 });
 

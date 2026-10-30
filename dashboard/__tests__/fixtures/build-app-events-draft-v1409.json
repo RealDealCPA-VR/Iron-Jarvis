@@ -1,0 +1,60 @@
+{
+  "_note": "HAND-WRITTEN DRAFT (dashboard builder, v1.409.0) following docs/BUILD-APP-VIEW-PLAN.md 'Normalized events' exactly. The integrator swaps in build-app-events-v1409.json, written from the real daemon parser (IJ_REGEN_BUILD_APP=1); the dashboard tests read whichever exists, the real one first.",
+  "scenarios": {
+    "claude_edit": [
+      {"type": "session", "at": "2026-10-29T10:00:00Z", "harness": "claude-code", "harness_session_id": "5f0c2a1e-1111-4a6b-9f00-000000000001", "model": "claude-opus-5-5", "cwd": "C:\\work\\shop", "mode": "default"},
+      {"type": "user", "at": "2026-10-29T10:00:01Z", "text": "Fix the off-by-one in cart.py"},
+      {"type": "thinking", "at": "2026-10-29T10:00:02Z", "item": "th1", "delta": "The loop stops one short; "},
+      {"type": "thinking", "at": "2026-10-29T10:00:02Z", "item": "th1", "delta": "range(len(items) - 1) skips the last item."},
+      {"type": "plan", "at": "2026-10-29T10:00:03Z", "steps": [{"text": "Read cart.py", "status": "in_progress"}, {"text": "Fix the loop", "status": "pending"}, {"text": "Run the tests", "status": "pending"}]},
+      {"type": "tool", "at": "2026-10-29T10:00:03Z", "item": "tu1", "kind": "read", "name": "Read", "title": "Read cart.py", "input": "{\"file_path\": \"C:\\\\work\\\\shop\\\\cart.py\"}", "status": "running", "output": "", "path": "C:\\work\\shop\\cart.py"},
+      {"type": "tool", "at": "2026-10-29T10:00:04Z", "item": "tu1", "kind": "read", "name": "Read", "title": "Read cart.py", "status": "done", "output": "1  def total(items):\n2      s = 0\n3      for i in range(len(items) - 1):\n4          s += items[i]\n5      return s"},
+      {"type": "approval", "at": "2026-10-29T10:00:05Z", "request_id": "req-edit-1", "kind": "edit", "title": "Edit cart.py", "detail": "Change the loop to cover every item.", "path": "C:\\work\\shop\\cart.py", "diff": "--- a/cart.py\n+++ b/cart.py\n@@ -3,1 +3,1 @@\n-    for i in range(len(items) - 1):\n+    for i in range(len(items)):\n", "can_session": true},
+      {"type": "resolved", "at": "2026-10-29T10:00:09Z", "request_id": "req-edit-1", "decision": "allow"},
+      {"type": "tool", "at": "2026-10-29T10:00:09Z", "item": "tu2", "kind": "edit", "name": "Edit", "title": "Changed cart.py", "input": "{\"file_path\": \"cart.py\"}", "status": "done", "output": "The file was updated.", "path": "C:\\work\\shop\\cart.py", "line": 3, "diff": "--- a/cart.py\n+++ b/cart.py\n@@ -3,1 +3,1 @@\n-    for i in range(len(items) - 1):\n+    for i in range(len(items)):\n"},
+      {"type": "plan", "at": "2026-10-29T10:00:10Z", "steps": [{"text": "Read cart.py", "status": "completed"}, {"text": "Fix the loop", "status": "completed"}, {"text": "Run the tests", "status": "in_progress"}]},
+      {"type": "tool", "at": "2026-10-29T10:00:10Z", "item": "tu3", "kind": "command", "name": "Bash", "title": "Ran pytest -q", "input": "pytest -q", "status": "done", "output": "3 passed in 0.12s"},
+      {"type": "text", "at": "2026-10-29T10:00:11Z", "item": "msg1", "delta": "Fixed the loop in "},
+      {"type": "text", "at": "2026-10-29T10:00:11Z", "item": "msg1", "delta": "`cart.py`."},
+      {"type": "text_done", "at": "2026-10-29T10:00:12Z", "item": "msg1", "text": "Fixed the loop in `cart.py`. All three tests pass."},
+      {"type": "usage", "at": "2026-10-29T10:00:12Z", "input": 12400, "output": 310, "cache_read": 9000, "cost_usd": 0.04, "list_price": true},
+      {"type": "done", "at": "2026-10-29T10:00:12Z", "stop": "completed", "result": "Fixed the loop in cart.py. All three tests pass."}
+    ],
+    "deny": [
+      {"type": "session", "at": "2026-10-29T11:00:00Z", "harness": "claude-code", "harness_session_id": "5f0c2a1e-2222-4a6b-9f00-000000000002", "model": "", "cwd": "C:\\work\\shop", "mode": "default"},
+      {"type": "user", "at": "2026-10-29T11:00:01Z", "text": "Delete the build folder"},
+      {"type": "approval", "at": "2026-10-29T11:00:02Z", "request_id": "req-cmd-2", "kind": "command", "title": "Run rm -rf build", "detail": "", "command": "rm -rf build", "can_session": false},
+      {"type": "resolved", "at": "2026-10-29T11:00:04Z", "request_id": "req-cmd-2", "decision": "deny"},
+      {"type": "text_done", "at": "2026-10-29T11:00:05Z", "item": "msg2", "text": "Understood, I left the build folder alone."},
+      {"type": "done", "at": "2026-10-29T11:00:05Z", "stop": "completed"}
+    ],
+    "interrupt": [
+      {"type": "user", "at": "2026-10-29T12:00:01Z", "text": "Refactor the whole project"},
+      {"type": "tool", "at": "2026-10-29T12:00:02Z", "item": "tu9", "kind": "search", "name": "Grep", "title": "Searched for TODO", "input": "TODO", "status": "running"},
+      {"type": "notice", "at": "2026-10-29T12:00:03Z", "text": "Claude Code compacted the conversation."},
+      {"type": "done", "at": "2026-10-29T12:00:04Z", "stop": "interrupted"}
+    ],
+    "question": [
+      {"type": "user", "at": "2026-10-29T13:00:01Z", "text": "Set up a test runner"},
+      {"type": "question", "at": "2026-10-29T13:00:02Z", "request_id": "req-q-1", "questions": [{"question": "Which test runner should I use?", "header": "Runner", "options": [{"label": "pytest", "description": "The usual choice"}, {"label": "unittest", "description": "Built in"}], "multi": false}]},
+      {"type": "resolved", "at": "2026-10-29T13:00:06Z", "request_id": "req-q-1", "decision": "answered"},
+      {"type": "text_done", "at": "2026-10-29T13:00:07Z", "item": "msg3", "text": "Set up pytest."},
+      {"type": "done", "at": "2026-10-29T13:00:07Z", "stop": "completed"}
+    ],
+    "codex_command": [
+      {"type": "session", "at": "2026-10-29T14:00:00Z", "harness": "codex", "harness_session_id": "thr_0199aa", "model": "gpt-6-astra", "cwd": "C:\\work\\shop", "mode": "on-request"},
+      {"type": "user", "at": "2026-10-29T14:00:01Z", "text": "Run the linter"},
+      {"type": "approval", "at": "2026-10-29T14:00:02Z", "request_id": "req-codex-3", "kind": "command", "title": "Run ruff check .", "detail": "Codex wants to run a command outside the sandbox.", "command": "ruff check .", "can_session": true},
+      {"type": "resolved", "at": "2026-10-29T14:00:05Z", "request_id": "req-codex-3", "decision": "allow_session"},
+      {"type": "tool", "at": "2026-10-29T14:00:05Z", "item": "cmd1", "kind": "command", "name": "commandExecution", "title": "Ran ruff check .", "input": "ruff check .", "status": "failed", "output": "cart.py:3:5: E501 line too long"},
+      {"type": "text_done", "at": "2026-10-29T14:00:06Z", "item": "msg4", "text": "Ruff found one long line."},
+      {"type": "usage", "at": "2026-10-29T14:00:06Z", "input": 5000, "output": 120, "cache_read": 0, "list_price": true},
+      {"type": "done", "at": "2026-10-29T14:00:06Z", "stop": "completed"}
+    ],
+    "sign_in": [
+      {"type": "user", "at": "2026-10-29T15:00:01Z", "text": "Hello"},
+      {"type": "error", "at": "2026-10-29T15:00:02Z", "title": "Claude Code is signed out.", "fix": "Open a terminal, run claude and sign in, then send your message again.", "technical": "401 authentication_error", "fix_kind": "sign_in"},
+      {"type": "done", "at": "2026-10-29T15:00:02Z", "stop": "failed"}
+    ]
+  }
+}

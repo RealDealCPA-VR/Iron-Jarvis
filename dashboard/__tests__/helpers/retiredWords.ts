@@ -64,6 +64,10 @@ export const RETIRED: readonly Retired[] = [
   // (dashboard/lib/buildWords); "IJ harness" / "harness" were the engine
   // room's words for it and for the coding tool in a terminal.
   { word: "harness", re: /\bharness(?:es)?\b/i, use: "Coding sessions (Build's view), a coding session, or the coding tool" },
+  // v1.409.0: Build's GUI for the real Claude Code / Codex is the "Code
+  // view" (its switch reads Code | Terminal); "App view" was the plan's
+  // working name and is never shown.
+  { word: "app view", re: /\bapp view\b/i, use: "Code view (Build's Code | Terminal switch)" },
 ];
 
 /** The folders whose files a user reads. */
