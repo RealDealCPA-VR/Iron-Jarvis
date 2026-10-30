@@ -6,7 +6,7 @@
  * a DANGEROUS one (Full access) arms first ("Press again…") and only the
  * second press chooses it, reported with `confirm: true`.
  *
- * v1.413.0: each mode says what it does (the daemon's `about`), and the chip
+ * v1.412.0: each mode says what it does (the daemon's `about`), and the chip
  * is never disabled for a reply that runs — the mode changes at any time (the
  * daemon applies it live where the tool can; Codex from the next message),
  * and while the tool waits on a card the chip sits beside the card.
@@ -155,7 +155,7 @@ export function ModeChip({
                 ) : m.dangerous ? (
                   <span className="text-[12px] text-zinc-500">Runs everything without asking. Two presses.</span>
                 ) : m.about ? (
-                  // v1.413.0: what the mode does, in the daemon's words.
+                  // v1.412.0: what the mode does, in the daemon's words.
                   <span data-testid={`${testId}-about-${m.id}`} className="text-[12px] text-zinc-500">
                     {m.about}
                   </span>

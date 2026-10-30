@@ -30,7 +30,7 @@
  * back when the message never starts. A folder the daemon refuses is said on
  * the folder chip and nothing is started.
  *
- * v1.413.0: pictures and files go with the first message — paste, drop or
+ * v1.412.0: pictures and files go with the first message — paste, drop or
  * the paperclip (components/harness/HarnessAttachments, the chat's own
  * upload contract); Send waits for an upload still going up, and a picture
  * alone is a first message.
@@ -223,7 +223,7 @@ export function StartComposer({
   // daemon's `field`), never on the folder chip by default.
   const [chipProblem, setChipProblem] = useState<{ field: string; words: string } | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
-  /** v1.413.0: pictures and files for the first message (uploaded). */
+  /** v1.412.0: pictures and files for the first message (uploaded). */
   const att = useHarnessAttachments();
   // A start held for an upload runs this render's `start` when it settles.
   const startRef = useRef<() => Promise<void>>(async () => undefined);
@@ -281,7 +281,7 @@ export function StartComposer({
   }
 
   async function start() {
-    // v1.413.0: a picture still going up holds the start (it goes WITH it).
+    // v1.412.0: a picture still going up holds the start (it goes WITH it).
     if (att.busyRef.current) {
       att.whenSettled(() => void startRef.current());
       return;

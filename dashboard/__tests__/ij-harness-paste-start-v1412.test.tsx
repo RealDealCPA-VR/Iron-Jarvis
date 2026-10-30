@@ -1,5 +1,5 @@
 /**
- * v1.413.0 — Chat › Code: does a pasted picture reach the turn on the
+ * v1.412.0 — Chat › Code: does a pasted picture reach the turn on the
  * composer-first START (a new session with no folder and no message yet), and
  * in an open session? The user suspected it did not ("I suspect it is the same
  * with the native harness"); checked by hand through the REAL HarnessSession

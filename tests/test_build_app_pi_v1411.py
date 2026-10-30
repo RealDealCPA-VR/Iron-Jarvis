@@ -371,7 +371,7 @@ async def test_pis_row_offers_its_own_rules_only_and_its_own_sign_in(app, work, 
     assert pi["signed_in"] is None, "Pi signs in per provider: never a guessed verdict"
     assert pi["accounts"] == [] and pi["own_sign_in"] is True
     assert rows["claude-code"]["own_sign_in"] is False
-    # v1.413.0: each mode says what it does (moved on purpose).
+    # v1.412.0: each mode says what it does (moved on purpose).
     assert pi["modes"] == [{"id": "own", "label": "Pi's own rules", "dangerous": False,
                             "about": "Pi asks nothing before a tool; only an extension of yours can ask."}]
     assert [h["id"] for h in pi["hidden_modes"]] == ["ask", "edits", "plan", "full"]

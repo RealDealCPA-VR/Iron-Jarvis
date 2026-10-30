@@ -16,7 +16,7 @@ then the ``done`` reaches the log and every follower.
 
 ONE TURN AT A TIME: a message sent while one runs is refused in words
 (:data:`hosted.words.BUSY`) — Claude Code would queue it, Codex would not, and
-a queued message would have no turn of its own to follow. v1.413.0: what the
+a queued message would have no turn of its own to follow. v1.412.0: what the
 user types WHILE it works is a NOTE (:meth:`HostedService.steer`) — part of
 the running turn, given through each tool's own way of taking one (Claude
 Code: a user message mid-turn, read at its next step or right after; Codex:
@@ -103,7 +103,7 @@ MAX_TURN_CHARS = 8_000_000
 #: The interrupt route answers within this (the harness is told; the turn
 #: ends when it says so, or when its process goes).
 INTERRUPT_WAIT_S = 5.0
-#: v1.413.0: a note sent while the tool is still STARTING its turn waits this
+#: v1.412.0: a note sent while the tool is still STARTING its turn waits this
 #: long for the turn to be open before it is refused in words.
 STEER_WAIT_S = 20.0
 #: Disk listings read at most this many conversation files (newest first).
@@ -135,7 +135,7 @@ class Refused(Exception):
         #: about ("folder", "tool", "account", "mode", "model", "effort"; ""
         #: = none in particular) — the page says it on THAT chip.
         self.field = field
-        #: v1.413.0: a machine word for a refusal the page acts on
+        #: v1.412.0: a machine word for a refusal the page acts on
         #: ("not_working": a note with no reply running — send it as a message).
         self.code = code
 
@@ -154,12 +154,12 @@ def modes_for(harness: str) -> dict[str, Any]:
 
 
 #: Every preset in the menu's order (the shared ones, Claude Code's own Auto
-#: (v1.413.0), Full access, then Pi's own).
+#: (v1.412.0), Full access, then Pi's own).
 MODE_ORDER: tuple[str, ...] = ("ask", "edits", "plan", "auto", "full", P.OWN)
 
 
 def mode_about(harness: str, mode: str) -> str:
-    """v1.413.0: what a preset does for THIS tool, in plain words (the mode
+    """v1.412.0: what a preset does for THIS tool, in plain words (the mode
     menu says it under each one)."""
     if harness == PI:
         return P.MODE_ABOUT.get(mode, "")
@@ -539,7 +539,7 @@ class LiveSession:
         #: What holds the session right now ("" = nothing): continue-on,
         #: delete, archive. A message during a claim is refused in words.
         self.claim = ""
-        #: v1.413.0: the notes sent to the running turn (ref -> {text, files,
+        #: v1.412.0: the notes sent to the running turn (ref -> {text, files,
         #: shown, read}); what was never read goes back to the box at its end.
         self.steers: dict[str, dict[str, Any]] = {}
 
@@ -1005,7 +1005,7 @@ class HostedService:
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
             elif applied["mode"] == "now" and live is not None and live.asks and mode != row.mode:
-                # v1.413.0: the mode changed while the tool waited on a card —
+                # v1.412.0: the mode changed while the tool waited on a card —
                 # that card was asked under the old mode and still needs YOU.
                 self._emit(live, make("notice", text=W.MODE_CARD_STILL_OPEN.format(
                     label=W.label(row.harness), mode=mode_label(row.harness, mode))))
@@ -1313,7 +1313,7 @@ class HostedService:
         live.asks[ask.id] = ask
         self._emit(live, ask.event)
 
-    # -- notes sent while it works (v1.413.0) -------------------------------------
+    # -- notes sent while it works (v1.412.0) -------------------------------------
     def _steer_event(self, live: LiveSession, ref: str, state: str) -> None:
         note = live.steers.get(ref) or {}
         ev = make("steer", id=ref, state=state, text=clip(note.get("text") or "", TEXT_CHARS))
@@ -1338,9 +1338,18 @@ class HostedService:
         drv = live.driver
         unread = set(drv.unread_steers()) if drv is not None else set(live.steers)
         for ref, note in list(live.steers.items()):
-            if note.get("shown") and not note.get("read") and ref in unread:
+            if not note.get("shown"):
+                # v1.412.0 review: a note still on its way (its steer() has
+                # not come back): kept, with what the tool did with it, so the
+                # answer says the truth — a note the tool READ must never be
+                # handed back to the box (it would be sent twice).
+                note["ended"] = True
+                if ref not in unread:
+                    note["read"] = True
+                continue
+            if not note.get("read") and ref in unread:
                 self._steer_event(live, ref, "returned")
-        live.steers.clear()
+            del live.steers[ref]
         if drv is not None:
             drv.steers.clear()
 
@@ -1357,7 +1366,7 @@ class HostedService:
             raise Refused("Type a note first.", 400)
         if live is None or live.turn is None or not live.turn.running or live.turn.ending:
             raise Refused(W.STEER_NOT_WORKING.format(label=label), 409, code="not_working")
-        problems = await asyncio.to_thread(self._file_problems, files)
+        problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
             raise Refused(problems, 400)
         turn = live.turn
@@ -1382,7 +1391,17 @@ class HostedService:
             live.steers.pop(ref, None)
             raise Refused(W.STEER_TOO_LATE.format(label=label)) from None
         note = live.steers.get(ref)
-        if note is None:  # the turn ended while the note went out: said by its end
+        if note is None or note.get("ended"):
+            # The turn ended while the note went out. Read by the tool: said
+            # (in order, after the reply); else it goes back to the box.
+            live.steers.pop(ref, None)
+            if note is not None and note.get("read"):
+                note["shown"] = True
+                live.steers[ref] = note
+                self._steer_event(live, ref, "sent")
+                self._steer_event(live, ref, "read")
+                live.steers.pop(ref, None)
+                return {"ok": True, "id": ref, "state": "read", "how": how}
             return {"ok": True, "id": ref, "state": "returned", "how": how}
         note["shown"] = True
         self._steer_event(live, ref, "sent")
@@ -1407,7 +1426,7 @@ class HostedService:
         files = [str(f) for f in (files or []) if str(f).strip()]
         if not text.strip() and not files:
             raise Refused("Type a message first.", 400)
-        problems = await asyncio.to_thread(self._file_problems, files)
+        problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
             raise Refused(problems, 400)
         # v1.412.0: a session started with no folder gets its OWN folder now,
@@ -1479,11 +1498,20 @@ class HostedService:
                     log.debug("could not title session %s", sid, exc_info=True)
         return turn
 
-    def _file_problems(self, files: list[str]) -> str:
-        """BLOCKING: an attached file must exist and pass the app's read policy."""
+    def _file_problems(self, files: list[str], folder: str = "") -> str:
+        """BLOCKING: an attached file must exist and pass the app's read policy.
+        v1.412.0 review: a file spelled as a network share (or a device path)
+        is refused from its TEXT, before anything touches the disk — a stat
+        of a share path is an SMB connection that sends this PC's sign-in
+        hash (the v1.379.0 lesson) — unless the session's own folder is on
+        a share."""
         from ..core.fs_policy import fs_read_ok
+        from ..harness.sessions import _network_spelling
 
+        on_share = _network_spelling(folder)
         for f in files:
+            if _network_spelling(f) and not on_share:
+                return W.ATTACHED_ON_SHARE
             if not os.path.isabs(f) or not os.path.isfile(f):
                 return f"Attached file not found: {clip(os.path.basename(f), 120)}"
             ok, why = fs_read_ok(f)

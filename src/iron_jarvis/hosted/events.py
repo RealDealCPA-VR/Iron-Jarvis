@@ -6,7 +6,7 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
 
 * ``session`` {harness, harness_session_id, model, cwd, mode}
 * ``user`` {text, files?}
-* ``steer`` {id, state: sent|read|returned, text, files?, how?} (v1.413.0: a
+* ``steer`` {id, state: sent|read|returned, text, files?, how?} (v1.412.0: a
   note the user typed while the turn ran; one event per state, in order)
 * ``text`` {item, delta} · ``text_done`` {item, text}
 * ``thinking`` {item, delta}

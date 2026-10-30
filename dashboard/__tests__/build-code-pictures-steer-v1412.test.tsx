@@ -1,5 +1,5 @@
 /**
- * v1.413.0 — Build › Code: pictures, the mode at any time, and a note while
+ * v1.412.0 — Build › Code: pictures, the mode at any time, and a note while
  * it works. The user: "I cant copy and past images into the build modules
  * </> code … the permission blocker does not allow change to auto-- allow
  * all, should be changeable mid session and the ability to steer work."
@@ -395,6 +395,28 @@ describe("a note while it works (steer)", () => {
     fireEvent.change(box, { target: { value: "" } });
     await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-3", state: "returned", text: "then deploy" });
     expect(box.value).toBe("");
+  });
+
+  it("review: a note returned BEFORE its own answer arrived still comes back to the box", async () => {
+    // The daemon writes `sent` then `returned` when the reply ends right after
+    // the note went out; the stream can deliver both before the POST answers.
+    working();
+    let answer: (v: unknown) => void = () => {};
+    H.postReply["/build/app/sessions/a1/steer"] = () => new Promise((res) => { answer = res; });
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    await screen.findByTestId("code-working");
+    const box = screen.getByTestId("code-box") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "then deploy" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(box.value).toBe(""));
+    await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-9", state: "sent", text: "then deploy" });
+    await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-9", state: "returned", text: "then deploy" });
+    await act(async () => {
+      answer({ ok: true, id: "note-9", state: "sent" });
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    await waitFor(() => expect(box.value).toBe("then deploy"));
+    expect(screen.getByTestId("code-info").textContent).toBe(STEER_RETURNED_WORDS("Claude Code"));
   });
 
   it("a returned note's picture comes back to the box too", async () => {

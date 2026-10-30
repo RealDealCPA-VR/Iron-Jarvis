@@ -29,7 +29,7 @@ MEASURED on this PC (codex 0.157.0, Windows 11, live, in scratch folders):
   ``httpStatusCode: 401`` five times, then one with ``willRetry: false`` and
   the turn ``failed``.
 
-MEASURED for v1.413.0 (codex 0.157.0, live; ``generate-json-schema``):
+MEASURED for v1.412.0 (codex 0.157.0, live; ``generate-json-schema``):
 
 * ``turn/steer`` {threadId, expectedTurnId, input, clientUserMessageId}
   answers ``{turnId}`` and the note joins the RUNNING turn: a ``userMessage``
@@ -72,7 +72,7 @@ HIDDEN_MODES: dict[str, str] = {
     **({"edits": "Codex cannot run commands in its sandbox on Windows, so edits cannot run on their own "
                  "while commands still ask."} if _WINDOWS else {}),
 }
-#: v1.413.0: what each preset does, in plain words (the mode menu says it).
+#: v1.412.0: what each preset does, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {
     "ask": "Asks before every command and every file change.",
     "edits": "Changes files in this folder without asking; asks before it runs a command.",
@@ -269,7 +269,7 @@ class CodexDriver(Driver):
         self.turn_id = str((turn or {}).get("id") or self.turn_id)
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
-        """v1.413.0: Codex's own ``turn/steer`` — the note joins the RUNNING
+        """v1.412.0: Codex's own ``turn/steer`` — the note joins the RUNNING
         turn (its ``clientUserMessageId`` is the note's ref; Codex says it read
         it with a ``userMessage`` item carrying that ``clientId``, measured)."""
         if not (self.turn_open and self.session_id and self.turn_id):
@@ -495,7 +495,7 @@ class CodexDriver(Driver):
         iid = str(item.get("id") or "")
         t = item.get("type")
         if t == "userMessage":
-            # v1.413.0: a note joined the turn (Codex echoes its clientId).
+            # v1.412.0: a note joined the turn (Codex echoes its clientId).
             ref = str(item.get("clientId") or "")
             if ref:
                 self.note_read(ref)

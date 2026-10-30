@@ -79,7 +79,7 @@ class Driver:
         #: True while a turn the user started has not ended.
         self.turn_open = False
         self.commands: list[dict[str, str]] = []
-        #: v1.413.0: the service's way to say a note sent while the tool works
+        #: v1.412.0: the service's way to say a note sent while the tool works
         #: (a STEER) reached it — called with the note's ref.
         self.steer_read: Callable[[str], None] | None = None
         #: ref -> "sent" | "read" | "cancelled": the notes of the open turn.
@@ -115,7 +115,7 @@ class Driver:
         raise NotImplementedError
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
-        """v1.413.0: give the RUNNING turn a note the user typed while it
+        """v1.412.0: give the RUNNING turn a note the user typed while it
         works, through the tool's OWN way of taking one (Claude Code: a user
         message written mid-turn; Codex: ``turn/steer``; Pi: ``steer``).
         Answers how it arrives ("step": the tool reads it at its next step).

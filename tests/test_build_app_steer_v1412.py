@@ -1,4 +1,4 @@
-"""v1.413.0 — Build › Code: pictures reach the REAL tool, the mode changes at
+"""v1.412.0 — Build › Code: pictures reach the REAL tool, the mode changes at
 any time, and a note typed while it works STEERS the running reply.
 
 The user: "I cant copy and past images into the build modules </> code …

@@ -51,7 +51,7 @@ class AppTurn(BaseModel):
 
 
 class AppSteer(BaseModel):
-    """v1.413.0: a note for the RUNNING reply (typed while it works)."""
+    """v1.412.0: a note for the RUNNING reply (typed while it works)."""
 
     text: str = ""
     files: list[str] | None = None
@@ -165,7 +165,7 @@ def register(app: FastAPI, d: Any) -> None:
 
     @app.post("/build/app/sessions/{sid}/steer")
     async def app_steer(sid: str, body: AppSteer) -> Any:
-        """v1.413.0: a note for the reply that is RUNNING, through the tool's
+        """v1.412.0: a note for the reply that is RUNNING, through the tool's
         own way of taking one; ``{ok, id, state, how}``. 409 ``code:
         not_working`` = no reply runs (send it as a message instead)."""
         try:

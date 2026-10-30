@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
- * v1.413.0 — a pasted picture, in a real browser: Build › Code (the start
+ * v1.412.0 — a pasted picture, in a real browser: Build › Code (the start
  * composer, then the session it makes) and Chat › Code (the composer-first
  * session). The user: "I cant copy and past images into the build modules
  * </> code. I suspect it is the same with the native harness."

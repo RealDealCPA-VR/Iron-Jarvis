@@ -21,7 +21,7 @@ Every line the host sends is appended to ``IJ_FAKE_LOG`` (JSON lines), after a
 first line with the argv, the folder and the account-related environment, so
 the tests assert on what really reached the harness. Ends on stdin EOF.
 
-v1.413.0 (pictures, notes while it works, modes mid-session):
+v1.412.0 (pictures, notes while it works, modes mid-session):
 
 * an ``out`` frame may hold ``{{uuid:N}}`` — the ``uuid`` of the Nth user
   message the host sent (Claude Code's ``command_lifecycle`` names it) — and

@@ -104,7 +104,7 @@ HARNESS = "pi"
 OWN = "own"
 MODES: dict[str, str] = {OWN: ""}
 MODE_LABELS: dict[str, str] = {OWN: "Pi's own rules"}
-#: v1.413.0: what Pi's one mode does (the mode menu says it).
+#: v1.412.0: what Pi's one mode does (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {OWN: "Pi asks nothing before a tool; only an extension of yours can ask."}
 #: The presets Pi does not have, and why (said in the mode menu).
 HIDDEN_MODES: dict[str, str] = {
@@ -484,7 +484,7 @@ def model_rows(models: Any) -> list[dict[str, str]]:
             # no thinking level (the effort chip hides for it).
             row["efforts"] = []
         if takes_pictures(m) is False:
-            # v1.413.0: Pi says this model reads no pictures (its `input`).
+            # v1.412.0: Pi says this model reads no pictures (its `input`).
             row["pictures"] = False
         out.append(row)
         if len(out) >= MAX_MODELS:
@@ -541,7 +541,7 @@ class PiDriver(Driver):
         self.forget_ask: Any = None
         #: Where the service keeps the model list (set before ``open``).
         self.catalog_path: Path | None = None
-        #: v1.413.0: this turn's notes in the order Pi queued them.
+        #: v1.412.0: this turn's notes in the order Pi queued them.
         self._steer_order: list[str] = []
         self._clearing = False
         #: Does the model in use take pictures? (Pi's model ``input``; None =
@@ -664,7 +664,7 @@ class PiDriver(Driver):
         await self.write({"id": rid, "type": "prompt", **msg})
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
-        """v1.413.0: Pi's own ``steer`` command — the note is QUEUED and Pi
+        """v1.412.0: Pi's own ``steer`` command — the note is QUEUED and Pi
         delivers it "after the current assistant turn finishes executing its
         tool calls, before the next LLM call" (docs/rpc-commands.md). Pi says
         when it took it: its steering queue (``queue_update``) gets shorter."""
@@ -674,6 +674,12 @@ class PiDriver(Driver):
             # note would wait for the NEXT message.
             raise ControlRefused(W.STEER_TOO_LATE.format(label="Pi"))
         msg = await self._message(text, files)
+        mine = self._run_open and self._run_owner == self._turn_n
+        if not (self.turn_open and (mine or self._waiting_run)):
+            # v1.412.0 review: the run ended while the note was prepared (its
+            # pictures read off the loop): queued now, Pi would hand it to the
+            # NEXT message while the box gets it back.
+            raise ControlRefused(W.STEER_TOO_LATE.format(label="Pi"))
         self.steers[ref] = "sent"
         self._steer_order.append(ref)
         try:
@@ -774,7 +780,7 @@ class PiDriver(Driver):
     async def interrupt(self) -> None:
         self._interrupting = True
         if any(s == "sent" for s in self.steers.values()):
-            # v1.413.0: Pi's abort RUNS notes still queued (docs: "send
+            # v1.412.0: Pi's abort RUNS notes still queued (docs: "send
             # clear_queue before abort, then restore the returned text in the
             # client editor") — they are taken out first and go back to the box.
             await self._clear_notes()
@@ -1120,7 +1126,7 @@ class PiDriver(Driver):
             return
         self.turn_open = False
         if any(s == "sent" for s in self.steers.values()):
-            # v1.413.0: a note still in Pi's queue when the reply ended would
+            # v1.412.0: a note still in Pi's queue when the reply ended would
             # ride the NEXT message (the box gets it back instead) — marked
             # unread NOW, the queue cleared right after.
             for ref, state in list(self.steers.items()):

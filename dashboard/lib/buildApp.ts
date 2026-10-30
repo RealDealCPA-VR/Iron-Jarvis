@@ -189,7 +189,7 @@ export interface ToolMode {
   label: string;
   /** Full access: two presses in the menu, and `confirm: true` on the wire. */
   dangerous: boolean;
-  /** v1.413.0: what the mode does, in the daemon's plain words ("" = an
+  /** v1.412.0: what the mode does, in the daemon's plain words ("" = an
    *  older daemon said nothing). */
   about?: string;
 }
@@ -637,7 +637,7 @@ type CodeEventBody =
   | { type: "notice"; at: string; text: string }
   | { type: "error"; at: string; title: string; fix: string; technical: string; fixKind: string; account: string }
   | { type: "done"; at: string; stop: "completed" | "interrupted" | "failed" | "max_turns"; result: string }
-  /** v1.413.0: a NOTE the user typed while the tool worked (a steer): one
+  /** v1.412.0: a NOTE the user typed while the tool worked (a steer): one
    *  event per state — sent (with `how` it arrives), read (the tool took it),
    *  returned (never read: it goes back to the message box). */
   | { type: "steer"; at: string; id: string; state: SteerState; text: string; files: string[]; how: string };
@@ -942,7 +942,7 @@ export type ConvItem =
       costReportedBy: string;
     }
   | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string }
-  /** v1.413.0: a note sent while it worked, at the place it was sent, with
+  /** v1.412.0: a note sent while it worked, at the place it was sent, with
    *  its newest state. */
   | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string };
 
@@ -1230,19 +1230,19 @@ export function resolvedWords(decision: string, question = false): string {
   return "Allowed";
 }
 
-/** v1.413.0: what became of a note sent while the tool worked. */
+/** v1.412.0: what became of a note sent while the tool worked. */
 export function steerWords(state: SteerState, how: string, toolName: string): string {
   if (state === "read") return `Read by ${toolName}.`;
   if (state === "returned") return STEER_RETURNED_WORDS(toolName);
   return how || `Sent — ${toolName} reads it at its next step.`;
 }
 
-/** v1.413.0: a note the tool never read (said under it AND above the box). */
+/** v1.412.0: a note the tool never read (said under it AND above the box). */
 export function STEER_RETURNED_WORDS(toolName: string): string {
   return `${toolName} did not read this note before it stopped — it is back in your message box.`;
 }
 
-/** v1.413.0: the box's placeholder while the tool works (Enter steers it). */
+/** v1.412.0: the box's placeholder while the tool works (Enter steers it). */
 export function steerPlaceholder(toolName: string): string {
   return `${toolName} is working — type a note to steer it (Enter), or press Stop.`;
 }

@@ -26,7 +26,7 @@
  * `confirm: true`), account. `/` lists the tool's own commands, `@` the
  * folder's files. Stop interrupts the tool. ⋯ → Open in terminal.
  *
- * v1.413.0 (the user: "I cant copy and past images into the build modules
+ * v1.412.0 (the user: "I cant copy and past images into the build modules
  * </> code … the permission blocker does not allow change to auto-- allow
  * all, should be changeable mid session and the ability to steer work"):
  * PICTURES — paste, drop or the paperclip, through the chat's own upload
@@ -218,7 +218,7 @@ function SessionPane({
   /** v1.412.0: the start composer's words — sent as this session's first
    *  message as soon as it is read (one press: make + send). */
   firstMessage?: string | null;
-  /** v1.413.0: the start composer's files (pictures already uploaded). */
+  /** v1.412.0: the start composer's files (pictures already uploaded). */
   firstFiles?: string[] | null;
   onFirstSent?: () => void;
 }) {
@@ -261,7 +261,7 @@ function SessionPane({
   const answeredRef = useRef<Set<string>>(new Set());
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  /** v1.413.0: pictures and files pasted, dropped or picked (uploaded). */
+  /** v1.412.0: pictures and files pasted, dropped or picked (uploaded). */
   const att = useHarnessAttachments();
   /** The box and its "@" picks, read when a send runs (a send held for an
    *  upload runs later, from an older render). */
@@ -275,6 +275,10 @@ function SessionPane({
    *  ones already put back (never twice). */
   const notesMineRef = useRef<Map<string, { text: string; files: string[]; uploads: HarnessFile[] }>>(new Map());
   const notesBackRef = useRef<Set<string>>(new Set());
+  /** v1.412.0 review: notes the stream said were RETURNED before this
+   *  window had the note's own answer (the reply ended right after it went
+   *  out) — put back as soon as the answer names them. */
+  const returnedEarlyRef = useRef<Set<string>>(new Set());
   const [steering, setSteering] = useState(false);
   const attRestoreRef = useRef(att.restore);
   attRestoreRef.current = att.restore;
@@ -306,11 +310,15 @@ function SessionPane({
     setEvents((prev) => applyEvents(prev, arrived, optimisticRef));
   }, []);
 
-  /** v1.413.0: a note this window sent that the tool never read: its words
+  /** v1.412.0: a note this window sent that the tool never read: its words
    *  and files go back in the box (beside anything typed since), said once. */
   const giveNoteBack = useCallback((id: string) => {
     const note = notesMineRef.current.get(id);
-    if (!note || notesBackRef.current.has(id)) return;
+    if (!note) {
+      returnedEarlyRef.current.add(id);
+      return;
+    }
+    if (notesBackRef.current.has(id)) return;
     notesBackRef.current.add(id);
     setText((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")}\n${note.text}` : note.text));
     if (note.files.length) setFiles((cur) => [...cur, ...note.files.filter((f) => !cur.includes(f))]);
@@ -523,7 +531,7 @@ function SessionPane({
     pinToBottom(sentinelRef.current);
   }, []);
 
-  /** v1.413.0: a note for the reply that is running (Enter while it works):
+  /** v1.412.0: a note for the reply that is running (Enter while it works):
    *  through the tool's own way of taking one. No reply running after all
    *  (409 `not_working`) → it goes as a message. */
   const steer = useCallback(async () => {
@@ -547,7 +555,7 @@ function SessionPane({
       if (id) {
         notesMineRef.current.set(id, { text: words, files: picks, uploads });
         // It ended while the note went out: nothing reached the tool.
-        if (res?.state === "returned") giveNoteBack(id);
+        if (res?.state === "returned" || returnedEarlyRef.current.has(id)) giveNoteBack(id);
       }
     } catch (e) {
       const body = e instanceof ApiError ? (e as ApiError & { body?: unknown }).body : null;
@@ -571,7 +579,7 @@ function SessionPane({
 
   const send = useCallback(async (handed?: string, handedFiles?: string[]) => {
     if (!session) return;
-    // v1.413.0: a send waits for the pictures still going up (never goes
+    // v1.412.0: a send waits for the pictures still going up (never goes
     // without them — the v1.275.0 rule); it reads the box when it runs.
     if (handed === undefined && att.busyRef.current) {
       att.whenSettled(() => void sendRef.current?.());
@@ -1029,7 +1037,7 @@ function SessionPane({
                 onStop={running ? stop : undefined}
                 error={askError}
               />
-              {/* v1.413.0: the mode can change while a card waits (the
+              {/* v1.412.0: the mode can change while a card waits (the
                   composer, and its chip, are hidden under the card). */}
               <div data-testid="code-ask-mode-row" className="mt-1 flex items-center gap-1 px-1">
                 <ModeChip

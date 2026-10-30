@@ -30,7 +30,7 @@ BUSY = (
     "This session is still working on your last message — wait for it to finish, "
     "or press Stop."
 )
-#: v1.413.0: a note typed while the tool works (a STEER).
+#: v1.412.0: a note typed while the tool works (a STEER).
 STEER_NOT_WORKING = "{label} is not working on anything right now — send it as a message."
 STEER_TOO_LATE = "{label} had already finished, so your note did not reach it — send it as a message."
 STEER_UNSUPPORTED = (
@@ -45,9 +45,14 @@ STEER_HOW: dict[str, str] = {
 }
 STEER_READ = "Read by {label}."
 STEER_RETURNED = "{label} did not read this note before it stopped — it is back in your message box."
-#: v1.413.0: a picture that could not go AS a picture (the tool got its path).
+#: v1.412.0 review: an attachment spelled as a network share (refused before
+#: anything touches it, unless the session's own folder is on a share).
+ATTACHED_ON_SHARE = (
+    "Attach files from this PC's own drives — a file on a network share is not sent."
+)
+#: v1.412.0: a picture that could not go AS a picture (the tool got its path).
 PICTURE_AS_PATH = "{name} went to {label} as a file path, not as a picture: {why}."
-#: v1.413.0: the mode changed while a card was waiting.
+#: v1.412.0: the mode changed while a card was waiting.
 MODE_CARD_STILL_OPEN = (
     "{label} now runs in {mode}. It had already asked about the card above — answer that one yourself."
 )

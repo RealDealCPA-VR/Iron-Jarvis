@@ -146,7 +146,7 @@ const Item = memo(function Item({
   codeRowDraws.items += 1;
   switch (item.kind) {
     case "user":
-      // v1.413.0: the pictures a message carried, as thumbnails (the chat's
+      // v1.412.0: the pictures a message carried, as thumbnails (the chat's
       // own SentAttachments); other files by name. A picture alone is a
       // message (no empty bubble).
       return (
@@ -156,7 +156,7 @@ const Item = memo(function Item({
         </div>
       );
     case "steer":
-      // v1.413.0: a note typed while the tool worked, where it was sent.
+      // v1.412.0: a note typed while the tool worked, where it was sent.
       return (
         <div data-testid="code-steer" data-state={item.state} className="flex flex-col items-end gap-1">
           <div className={`${HARNESS_USER_BUBBLE} opacity-90`}>
