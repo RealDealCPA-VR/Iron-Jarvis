@@ -967,14 +967,19 @@ export function planChecklistSteps(steps: readonly { text: string; status: PlanS
  * start, while the session read already holds what was saved of it. So the
  * saved list loses every event of THAT turn (`turn === runningTurn`), and the
  * replay draws the turn again; its question is kept aside (`carry`) and put
- * back first when the replay does not begin with it. Only when no saved
- * event names a turn (an older record) is the cut made at the last `user`.
+ * back first when the replay does not begin with it. When no saved event
+ * names the RUNNING turn (an older record, or one that names it differently)
+ * the cut is made at the last `user`.
  */
 export function cutForRejoin(
   events: readonly CodeEvent[],
   runningTurn: string | null = null,
 ): { base: CodeEvent[]; carry: CodeEvent | null } {
-  if (runningTurn && events.some((e) => e.turn)) {
+  // Cut by turn only when the record really holds the running turn (v1.409.2):
+  // a turn the record names differently (or not yet) used to keep EVERY event,
+  // its question included, and the replay drew that question a second time,
+  // for good. Otherwise the old rule: cut at the last question.
+  if (runningTurn && events.some((e) => e.turn === runningTurn)) {
     const mine = events.filter((e) => e.turn === runningTurn);
     return {
       base: events.filter((e) => e.turn !== runningTurn),
