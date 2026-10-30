@@ -262,7 +262,13 @@ body {
 /* ---- Liquid layer ---------------------------------------------------------
    Three slow-drifting accent blooms behind the whole app — the depth that the
    glass surfaces refract. Theme-var driven, so every Mark keeps its color;
-   GPU-composited (transform-only animation) and pointer-transparent. */
+   GPU-composited (transform-only animation) and pointer-transparent.
+   STEPPED, NOT SMOOTH (v1.410.1): the blooms move ~1 px a second, so a new
+   frame 60 times a second redrew the layer AND every glass surface's backdrop
+   blur above it for movement nobody can see — 11-15% of a CPU core and ~1.5%
+   GPU with the app sitting idle (headed Edge, 1440 x 900). steps(80) per 40 s
+   leg = two updates a second along the same path: ~2% CPU, ~0% GPU. Do not
+   put a smooth timing function back. */
 body::before {
   content: "";
   position: fixed;
@@ -274,7 +280,7 @@ body::before {
     radial-gradient(30% 26% at 85% 18%, rgb(var(--accent-deep-rgb) / 0.1), transparent 70%),
     radial-gradient(44% 36% at 55% 95%, rgb(var(--accent-dim-rgb) / 0.09), transparent 70%);
   filter: blur(48px) saturate(125%);
-  animation: liquid-drift 80s ease-in-out infinite alternate;
+  animation: liquid-drift 80s steps(80) infinite alternate;
 }
 :root[data-background="on"] body::before {
   /* v1.410.0: an animated background is drawn over this layer; stop it. */
