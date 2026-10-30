@@ -30,7 +30,10 @@ async function json(route: Route, body: unknown): Promise<void> {
   await route.fulfill({ status: 200, headers: { ...CORS, "content-type": "application/json" }, body: JSON.stringify(body) });
 }
 
-const TOOLS = [
+// The daemon's own shapes (hosted/service.py): `{harnesses: [...]}`, mode ids
+// ask | edits | plan | full, Codex's hidden modes with their reason.
+const TOOLS = {
+  harnesses: [
   {
     id: "claude-code",
     label: "Claude Code",
@@ -38,16 +41,38 @@ const TOOLS = [
     signed_in: true,
     version: "2.1.311",
     modes: [
-      { id: "default", label: "Ask first", dangerous: false },
-      { id: "acceptEdits", label: "Auto edits", dangerous: false },
-      { id: "bypassPermissions", label: "Full access", dangerous: true },
+      { id: "ask", label: "Ask first", dangerous: false },
+      { id: "edits", label: "Auto edits", dangerous: false },
+      { id: "plan", label: "Plan", dangerous: false },
+      { id: "full", label: "Full access", dangerous: true },
     ],
-    models: [{ id: "claude-opus-5-5", label: "Opus 5.5" }],
+    hidden_modes: [],
+    models: [
+      { id: "", label: "Claude Code's default" },
+      { id: "claude-opus-5-5", label: "Opus 5.5" },
+    ],
     efforts: ["low", "medium", "high"],
     accounts: [{ id: "prof_work", name: "Work account", status: "ready" }],
   },
-  { id: "codex", label: "Codex", installed: false, signed_in: null, modes: [], models: [], efforts: [], accounts: [] },
-];
+  {
+    id: "codex",
+    label: "Codex",
+    installed: false,
+    signed_in: null,
+    modes: [
+      { id: "ask", label: "Ask first", dangerous: false },
+      { id: "full", label: "Full access", dangerous: true },
+    ],
+    hidden_modes: [
+      { id: "plan", label: "Plan", reason: "Codex has no plan mode." },
+      { id: "edits", label: "Auto edits", reason: "Codex cannot run commands in its sandbox on Windows." },
+    ],
+    models: [{ id: "", label: "Codex's default" }],
+    efforts: [],
+    accounts: [],
+  },
+  ],
+};
 
 const SESSION = {
   id: "a1",
@@ -57,7 +82,7 @@ const SESSION = {
   account: "prof_work",
   model: "claude-opus-5-5",
   effort: "high",
-  mode: "default",
+  mode: "ask",
   harness_session_id: "5f0c2a1e",
   created_at: "2026-10-29T10:00:00Z",
   updated_at: "2026-10-29T10:00:00Z",
@@ -82,11 +107,40 @@ const EVENTS = [
 
 async function stubCodeView(page: Page): Promise<void> {
   await page.route(`${DAEMON}/build/app/harnesses`, (r) => json(r, TOOLS));
-  await page.route(`${DAEMON}/build/app/sessions`, (r) =>
-    json(r, { sessions: [SESSION, { ...SESSION, id: "a2", harness: "codex", account: "", title: "Lint", source: "disk" }] }),
+  // The list, the archived list and a folder's saved conversations.
+  await page.route(
+    (url) => url.href.startsWith(`${DAEMON}/build/app/sessions`) && !url.pathname.includes("/sessions/"),
+    (r) => {
+      const u = new URL(r.request().url());
+      if (u.searchParams.get("disk") === "1")
+        return json(r, {
+          sessions: [],
+          disk: [
+            {
+              source: "disk",
+              harness: "claude-code",
+              harness_session_id: "c-old",
+              title: "An earlier conversation with a fairly long title that must not push the list wider",
+              folder: SESSION.folder,
+              started: "",
+              ended: "",
+            },
+          ],
+        });
+      return json(r, { sessions: [SESSION, { ...SESSION, id: "a2", harness: "codex", account: "", title: "Lint" }] });
+    },
   );
   await page.route(`${DAEMON}/build/app/sessions/a1`, (r) =>
-    json(r, { session: SESSION, events: EVENTS, running: true, pending: [] }),
+    json(r, {
+      session: SESSION,
+      events: EVENTS,
+      events_total: 1203,
+      dropped: 1200,
+      running: null,
+      turn_id: null,
+      pending: [EVENTS[2]],
+      commands: [{ name: "review", description: "Review the changes" }],
+    }),
   );
 }
 
@@ -158,6 +212,9 @@ for (const size of [
       await expect(page.getByTestId("code-ask")).toBeVisible({ timeout: 90_000 });
       await expect(page.getByTestId("code-row-line-a1")).toHaveText("Claude Code · Work account");
       await expect(page.getByTestId("code-row-line-a2")).toContainText("Codex · this PC's sign-in");
+      // The folder in front lists the tool's own saved conversations.
+      await expect(page.getByTestId("code-disk-line-c-old")).toHaveText("saved by Claude Code");
+      await expect(page.getByTestId("code-dropped")).toBeVisible();
       await page.waitForTimeout(300);
       expect(await widest(page)).toBeLessThanOrEqual(1);
       // New session too (the folder tree and the tool list).
@@ -168,3 +225,23 @@ for (const size of [
     });
   });
 }
+
+// Against the REAL scratch daemon (nothing stubbed): the list and New session
+// read the daemon's own answers. Nothing here starts Claude Code or Codex
+// (the daemon lists the tools from cached reads; a session's process starts
+// only with its first message, which this never sends).
+test("the real daemon: an empty list, New session lists Claude Code and Codex by name", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/terminals?view=code");
+  await expect(page.getByTestId("code-list-empty")).toBeVisible({ timeout: 90_000 });
+  await page.getByTestId("code-new").click();
+  await expect(page.getByTestId("code-new-tool-claude-code")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("code-new-tool-codex")).toBeVisible();
+  // A tool that cannot start says why; one that can is offered.
+  for (const id of ["claude-code", "codex"]) {
+    const row = page.getByTestId(`code-new-tool-${id}`);
+    if ((await row.getAttribute("data-available")) === "false") {
+      await expect(page.getByTestId(`code-new-tool-why-${id}`)).not.toHaveText("");
+    }
+  }
+});

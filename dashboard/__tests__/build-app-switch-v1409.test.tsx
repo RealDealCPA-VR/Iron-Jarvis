@@ -315,7 +315,9 @@ describe("Open in Code view (from a terminal)", () => {
     });
     expect(codeViewOfferFor(t, { agent_cli: "claude", state: "working", can_open_in_code: true } as never)).toBeNull();
     expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown" })).toEqual({ paneId: "t1", toolName: "Codex" });
-    expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown", harness_exited: false } as never)).toBeNull();
+    expect(codeViewOfferFor({ ...t, resume_cli: "codex" }, { state: "unknown", can_open_in_code: false } as never)).toBeNull();
+    // Only the daemon's exact name counts (never an invented one).
+    expect(codeViewOfferFor(t, { agent_cli: "claude", state: "idle", harness_exited: true } as never)).toBeNull();
     expect(codeViewOfferFor({ ...t, resume_cli: "aider" }, { state: "unknown" })).toBeNull();
     expect(codeViewOfferFor({ ...t, alive: false, resume_cli: "claude" }, null)).toBeNull();
   });
