@@ -4083,6 +4083,60 @@ does not need a bump, stop and bump it.
   deregister the live base and `/ltm/sources` reports a custom base's kind as
   its name (older than this change).
 
+- **Build's CODE view drives the user's REAL Claude Code / Codex with their
+  OWN tools ON; Iron Jarvis only starts them, draws them and answers their
+  permission questions as cards** (v1.409.0; the user: "a TUI … to control
+  any harness they desire … like t3code … only effect the build module").
+  NOT Chat's Code view: there Iron Jarvis runs every tool and `claude_native`
+  / `codex_native` switch the built-ins OFF — never reuse a tool-off flag
+  here. Build's header centre is the shared `components/ViewSwitch`
+  ("</> Code | Terminal", `ij.build.view`, `?view=code&code=<id>`); Terminal
+  is today's page byte-for-byte; a `?focus=` link always opens Terminal on
+  the first frame. DAEMON `src/iron_jarvis/hosted/` + `routes/build_app.py`
+  (`/build/app/*`): one long-lived process per open session through
+  `core/procs.spawn` with `breakaway_ok=False` (Claude's Bash is Git Bash,
+  and MSYS breaks away from a Job otherwise) and a tree kill; the env is a
+  Build terminal's (`_with_pane_env`: markers dropped, account home applied,
+  the user's own keys KEPT); pool cap 6, idle reaper 15 min, stop at
+  shutdown; `stop()` never waits on a grandchild holding a pipe. Claude:
+  `claude -p` stream-json both ways + `--permission-prompts host` AND
+  `--permission-prompt-tool stdio` (the first alone denied every ask —
+  measured) + `--session-id`/`--resume`; asks are control_request
+  `can_use_tool`; AskUserQuestion is allowed with `updatedInput.answers
+  {question: label}`; a `bypassPermissions` suggestion is never offered, and
+  "allow for this session" that changes the mode updates the row and says
+  so. Codex: `codex app-server`, NOT ephemeral, NONE of BUILTINS_OFF; on
+  Windows `read-only`/`workspace-write` cannot start a command (measured), so
+  Ask first = `untrusted` + `danger-full-access` (every command and file
+  change asks) and Auto edits / Plan are `hidden_modes` with a reason;
+  `acceptForSession` only when that request's `availableDecisions` lists it,
+  else the card is `once_only`. Full access needs `confirm: true` at create
+  AND patch. ONE CONVERSATION = ONE ROW = ONE PROCESS: a create / turn /
+  from-terminal on a `harness_session_id` another row or a live Build
+  terminal holds is refused in words; open-terminal stops the process and
+  marks the row until that terminal's CLI exits (`can_open_in_code` on
+  terminal rows). Sessions live in the tools' OWN stores, so `claude
+  --resume` / `codex resume` keep working; continue-on (Claude) copies via
+  `continue_on.carry_over` and checks the copy BEFORE telling Iron-Proxy.
+  Turns are the daemon's (durable; a rejoin replays from `user`); events
+  `<home>/hosted/<id>/events.jsonl`, masked AFTER coalescing, trimmed to 80%
+  of the bound only when it is exceeded; a crash-cut turn gets its `done`
+  at boot. Asks are claimed before the driver call (one card = one answer).
+  The pending listing names `surface: "build_app"` (names only); main.js
+  and the bell read it. DASHBOARD `components/buildCode/*` +
+  `lib/buildApp.ts` (import-free; the bell reads it): the contract is the
+  REAL-parser fixture `dashboard/__tests__/fixtures/build-app-events-v1409.json`
+  (`IJ_REGEN_BUILD_APP=1`); Enter never allows a once-only card or anything
+  in Full access; Full access is two presses with a repeat guard; streamed
+  frames draw once a frame with memo'd rows. NEXT: Pi, then OpenCode. Pins:
+  `tests/test_build_app_{,routes_,pool_,review_,title_}v1409.py`,
+  `dashboard/__tests__/build-app-{view,switch,bell,path-pick}-v1409.test.tsx`,
+  e2e `dashboard/e2e/build-app-view.spec.ts`. Live-proven on this PC
+  (scratch daemon, real claude 2.1.311 + codex 0.157.0): an edit card with
+  its diff → Allow once → the edit landed; Open in terminal resumed the same
+  conversation and Open in Code view came back to the same row; Codex asked
+  once-only before a command and ran it after Allow once.
+
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon
   builds the editor's URL, never a client** (v1.405.0; the user: "Live where
@@ -10711,7 +10765,9 @@ does not need a bump, stop and bump it.
   survivor — handing a packaged spawn `self._job` — is equivalent, the job is
   `None` there), including real Store-pwsh and cmd ConPTY spawns.
 
-- **Build (`app/terminals/page.tsx`) is the TERMINALS only** (v1.407.0
+- **Build (`app/terminals/page.tsx`)**: since v1.409.0 a "</> Code | Terminal"
+  switch (Code = `components/buildCode/*`, see the v1.409.0 hard rule). The
+  Terminal view below was the TERMINALS only page (v1.407.0
   part 1; it had two views from v1.369.0, and the free-form react-rnd
   CANVAS of v1.218.0 is long gone — a saved `ij.build.shape` of "harness"
   or "canvas" now just opens Terminals): `components/terminal/PaneRail.tsx`
