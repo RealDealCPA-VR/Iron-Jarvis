@@ -212,9 +212,9 @@ async def test_an_account_limit_is_an_error_with_continue_on_and_it_continues(ap
     fake = _Client(profiles, {"p1": {"status": "ready"}, "p2": {"status": "ready"}})
     monkeypatch.setattr(app.state.platform, "iron_proxy", _Svc(fake), raising=False)
     rec = {"id": "p1", "title": "Work", "source": "iron-proxy", "home": str(h1), "unset": []}
-    row = store.create(app.state.platform.engine, harness="claude-code", folder=str(work), account="p1",
-                       account_json=json.dumps(rec))
     sid = "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21"
+    row = store.create(app.state.platform.engine, harness="claude-code", folder=str(work), account="p1",
+                       account_json=json.dumps(rec), harness_session_id=sid)
     conv = h1 / "projects" / "C--work-demo" / f"{sid}.jsonl"
     conv.parent.mkdir(parents=True)
     conv.write_text('{"type":"user"}\n', encoding="utf-8")
@@ -223,7 +223,6 @@ async def test_an_account_limit_is_an_error_with_continue_on_and_it_continues(ap
         err = [e for e in evs if e["type"] == "error"]
         assert len(err) == 1 and err[0]["fix_kind"] == "account_limit" and err[0]["account"] == "p1"
         assert "Continue on another account" in err[0]["fix"]
-        await until(lambda: store.get(app.state.platform.engine, row.id).harness_session_id == sid)
         r = await c.post(f"/build/app/sessions/{row.id}/continue-on", json={})
         assert r.status_code == 200, r.text
         body = r.json()

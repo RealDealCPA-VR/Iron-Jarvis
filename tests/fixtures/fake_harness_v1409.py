@@ -43,6 +43,17 @@ log({"argv": sys.argv[1:], "cwd": os.getcwd(), "pid": os.getpid(),
 with open(SCENARIO, encoding="utf-8") as fh:
     steps = json.load(fh)["steps"]
 
+# Claude Code answers under the session id it was STARTED with (`--session-id`
+# / `--resume`, measured live): the recorded id is swapped for it, so two
+# sessions replaying one recording never share an id.
+WANTED = ""
+for flag in ("--session-id", "--resume"):
+    if flag in sys.argv:
+        WANTED = sys.argv[sys.argv.index(flag) + 1]
+RECORDED = next((s["out"].get("session_id", "") for s in steps
+                 if isinstance(s.get("out"), dict) and s["out"].get("type") == "system"
+                 and s["out"].get("subtype") == "init"), "")
+
 inbox: "queue.Queue" = queue.Queue()
 
 
@@ -103,7 +114,10 @@ def wait_for(step):
 
 def out(obj):
     """UTF-8 bytes, as the real harnesses write (measured)."""
-    sys.stdout.buffer.write(json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n")
+    text = json.dumps(obj, ensure_ascii=False)
+    if WANTED and RECORDED:
+        text = text.replace(RECORDED, WANTED)
+    sys.stdout.buffer.write(text.encode("utf-8") + b"\n")
     sys.stdout.buffer.flush()
 
 

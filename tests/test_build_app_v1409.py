@@ -33,10 +33,11 @@ SCENARIOS: dict[str, tuple[str, str, list]] = {
     "claude_two_approvals": ("claude_allow", "claude-code", [("answer", "allow", None), ("answer", "allow_session", None)]),
     "claude_deny": ("claude_deny", "claude-code", [("answer", "deny", None)]),
     "claude_interrupt": ("claude_interrupt", "claude-code", [("interrupt",)]),
-    "claude_ask_user_question": ("claude_ask", "claude-code", [("answer", "allow", ["Blue"])]),
+    "claude_ask_user_question": ("claude_ask", "claude-code",
+                                 [("answer", "allow", {"Which colour do you prefer?": "Blue"})]),
     "claude_sign_in": ("claude_signin", "claude-code", []),
     "claude_account_limit_synthesized": ("claude_limit", "claude-code", []),
-    "codex_command_and_file_change": ("codex_allow", "codex", [("answer", "allow", None), ("answer", "allow", None)]),
+    "codex_command_and_file_change": ("codex_allow", "codex", [("answer", "allow", None), ("answer", "allow_session", None)]),
     "codex_deny": ("codex_deny", "codex", [("answer", "deny", None)]),
     "codex_interrupt": ("codex_interrupt", "codex", [("interrupt",)]),
     "codex_sign_in": ("codex_signin", "codex", []),
@@ -47,6 +48,7 @@ def canonical(events: list[dict], work: Path) -> list[dict]:
     """``at`` dropped, Iron Jarvis's own ids replaced by stable names, this
     run's folder written as the recordings' masked one."""
     names: dict[str, str] = {}
+    sessions: dict[str, str] = {}
     out = []
     for ev in events:
         ev = json.loads(json.dumps(ev).replace(json.dumps(str(work))[1:-1], r"C:\\work\\demo"))
@@ -57,6 +59,10 @@ def canonical(events: list[dict], work: Path) -> list[dict]:
             ev["request_id"] = names[rid]
         if "turn" in ev:
             ev["turn"] = "turn-1"
+        hid = ev.get("harness_session_id")
+        if hid:
+            sessions.setdefault(hid, f"harness-session-{len(sessions) + 1}")
+            ev["harness_session_id"] = sessions[hid]
         out.append(ev)
     return out
 
@@ -176,8 +182,38 @@ def test_the_log_merges_deltas_and_drops_the_oldest_lines_saying_so(tmp_path, mo
         log.append({"type": "notice", "text": str(i)})
         log.flush()
     events, total, dropped = log.read()
-    assert total == 5 and dropped == 5 and events[-1]["text"] == "7"
+    # 10 lines written; each time the log passed 5 it went back to 4 (80%).
+    assert total <= 5 and dropped == 10 - total and events[-1]["text"] == "7"
     log.close()
+
+
+def test_a_full_log_is_rewritten_once_per_fifth_never_on_every_flush(tmp_path, monkeypatch):
+    """R5: hysteresis — trimmed to 80% only when the bound is passed."""
+    monkeypatch.setattr(E, "MAX_LINES", 50)
+    log_ = E.EventLog(tmp_path, "s1")
+    for i in range(50):
+        log_._pending.append(E.make("notice", text=f"n{i}"))
+    log_.flush()
+    rewrites = []
+    real = os.replace
+    monkeypatch.setattr(E.os, "replace", lambda a, b: (rewrites.append(1), real(a, b)))
+    for i in range(20):
+        log_._pending.append(E.make("notice", text=f"more{i}"))
+        log_.flush()
+    assert len(rewrites) <= 2, f"{len(rewrites)} whole-file rewrites for 20 small flushes"
+    events, total, _ = log_.read()
+    assert total <= 50 and events[-1]["text"] == "more19"
+
+
+def test_a_key_split_across_two_deltas_is_masked_in_the_log(tmp_path):
+    """R7: the merged delta is masked again."""
+    key = "sk-ant-api03-" + "Q" * 40
+    log_ = E.EventLog(tmp_path, "s1")
+    for part in ("here: sk-a", key[4:]):
+        log_._pending.append(E.make("text", item="m:0", delta=E.clip(part, E.TEXT_CHARS), turn="t"))
+    log_.flush()
+    raw = (tmp_path / "hosted" / "s1" / "events.jsonl").read_text(encoding="utf-8")
+    assert "Q" * 30 not in raw
 
 
 def test_claude_todowrite_is_a_plan_and_an_edit_carries_its_diff():

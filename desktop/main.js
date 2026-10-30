@@ -3167,6 +3167,15 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
     // click opens it (v1.406.0: /chat?view=code&session=<id>, Chat › Code) —
     // a session never shows in the Chat view.
     const isBuild = isChat && ask.surface === "build";
+    // v1.409.0: Build's Code view — the user's real Claude Code / Codex
+    // parked on a permission question lists as a chat row with
+    // `surface: "build_app"` + `app_session` + `harness`. It reads as THAT tool
+    // in plain words and its click opens the session in Build's Code view.
+    const isApp = isChat && ask.surface === "build_app";
+    const appId = isApp && typeof ask.app_session === "string" ? ask.app_session : "";
+    const appName = isApp
+      ? ({ "claude-code": "Claude Code", codex: "Codex" })[ask.harness] || "Your coding tool"
+      : "";
     const hasTool = typeof ask.tool === "string" && ask.tool !== "";
     // v1.358.0 (lane 8E): the card's words, then WHICH task is asking —
     // `save a file for “Draft the Q3 letter”` — so a toast on a closed
@@ -3182,11 +3191,13 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
       !isChat && typeof ask.build_session === "string" ? ask.build_session.trim() : "";
     // v1.357.0 (G76): the canon's words — the click opens the RUN that is
     // waiting (the bell's "Open run"), never the retired "job".
-    const where = isBuild || helperOf ? "the session" : isChat ? "the chat" : "the run";
+    const where = isBuild || isApp || helperOf ? "the session" : isChat ? "the chat" : "the run";
     // A chat parked on an app's question names no tool: say what to do, not
     // "use a tool".
     const what = isChat && !hasTool ? "" : `${summary} — `;
-    const target = isBuild
+    const target = isApp
+      ? { href: `/terminals?view=code&code=${encodeURIComponent(appId)}` }
+      : isBuild
       ? { chat: true, build: true, threadId }
       : isChat
         ? { chat: true, threadId }
@@ -3201,7 +3212,9 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           id,
           sessionId,
           ...target,
-          title: isBuild
+          title: isApp
+            ? `${appName} is waiting for your OK`
+            : isBuild
             ? "A coding session is waiting for your OK"
             : isChat
               ? "A chat is waiting for your OK"
@@ -3222,7 +3235,9 @@ function planAskNotifications(seen, approvals, now, windowOpen) {
           id,
           sessionId,
           ...target,
-          title: isBuild
+          title: isApp
+            ? `${appName} is still waiting for your OK`
+            : isBuild
             ? "A coding session is still waiting for your OK"
             : isChat
               ? "A chat is still waiting for your OK"

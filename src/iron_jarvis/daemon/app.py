@@ -1036,6 +1036,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.info("kept %d Build session answer(s) a restart or crash cut off", m)
 
         _rehydrate_step("reconcile_chat_turns", _reconcile_chat_turns)
+        # v1.409.0: a Code-view turn a crash cut off gets its done (interrupted)
+        # appended to its events.jsonl, so a reopened window shows it ended. Off
+        # the loop (a tail read per session), bounded, never blocks boot.
+        try:
+            from ..hosted.service import reconcile_cut_turns as _hosted_reconcile
+
+            _cut = await asyncio.wait_for(
+                asyncio.to_thread(_hosted_reconcile, platform.config.home), timeout=30.0
+            )
+            if _cut:
+                log.info("closed %d Code-view turn(s) a restart or crash cut off", _cut)
+        except Exception:  # noqa: BLE001 — never block boot
+            log.warning("could not close Code-view turns a crash cut off", exc_info=True)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # Assignments (v1.296.0): AFTER the session reconcile by contract —
         # every claimed/running row's session was just settled FAILED on a
