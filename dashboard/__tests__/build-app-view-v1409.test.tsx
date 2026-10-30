@@ -375,7 +375,7 @@ describe("every event kind draws (the contract fixture)", () => {
     expect(texts.filter((t) => t?.includes("I replaced"))).toHaveLength(1);
     // Settled asks: an approval reads Allowed; the question reads Answered.
     const resolved = screen.getAllByTestId("code-resolved");
-    expect(resolved.map((r) => r.dataset.decision)).toEqual(["allow", "allow", "allow", "allow"]);
+    expect(resolved.map((r) => r.dataset.decision)).toEqual(["allow", "allow", "allow_session", "allow"]);
     expect(resolved[3].textContent).toContain("Answered: Which colour do you prefer?");
     expect(screen.getAllByTestId("code-usage")[0].textContent).toBe("109,870 in · 239 out · about $0.18 at list price");
     expect(screen.getAllByTestId("code-done").find((d) => d.dataset.stop === "interrupted")?.textContent).toBe("Stopped.");
@@ -738,7 +738,7 @@ describe("a running turn is followed again on open", () => {
     const conv = foldConversation(evs);
     expect(conv.items.filter((i) => i.kind === "user")).toHaveLength(1);
     expect(conv.settled).toBe(true);
-    expect(conv.toolSessionId).toBe("f97030e3-5154-4f15-a6b0-d1d68826e569");
+    expect(conv.toolSessionId).toBe("harness-session-1");
   });
 
   it("an ask the session read lists (its event trimmed) is still asked", async () => {
