@@ -99,6 +99,20 @@ def _source_repo_root() -> "Path | None":
     return None
 
 
+@app.command("ocr-worker", hidden=True)
+def ocr_worker() -> None:
+    """Answer ONE Windows OCR request on stdin/stdout (v1.410.2, internal).
+
+    The daemon never touches WinRT itself (a stalled WinRT call holds the GIL
+    and froze the whole daemon): ``documents/local_ocr`` starts this as a
+    short-lived child and kills it at its deadline. The frozen exe serves it
+    from ``packaging/ironjarvis_entry._fast_path`` without importing this CLI;
+    keep the two identical (same module, same ``main()``)."""
+    from ..ocr_worker import main as ocr_main
+
+    ocr_main()
+
+
 @app.command("repl-worker", hidden=True)
 def repl_worker() -> None:
     """Run the session-namespace worker on stdin/stdout (v1.159.0, internal).

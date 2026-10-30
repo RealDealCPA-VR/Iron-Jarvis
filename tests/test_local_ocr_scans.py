@@ -87,12 +87,14 @@ def _fake_engine(monkeypatch, results, seen=None):
     """Answer each page in turn with ``results`` (an OcrResult or None)."""
     queue = list(results)
 
-    def fake(data, *, deadline_s=local_ocr.PAGE_DEADLINE_S):
+    # v1.410.2: every page of a document goes to ONE worker process through
+    # `local_ocr_many`; a single image through `local_ocr_bytes`, which calls it.
+    def fake_many(blobs, *, deadline_s=local_ocr.PAGE_DEADLINE_S):
         if seen is not None:
             seen.append(threading.get_ident())
-        return queue.pop(0) if queue else None
+        return [queue.pop(0) if queue else None for _ in blobs]
 
-    monkeypatch.setattr(local_ocr, "local_ocr_bytes", fake)
+    monkeypatch.setattr(local_ocr, "local_ocr_many", fake_many)
 
 
 def _good(text: str = W2_TEXT) -> OcrResult:
@@ -315,36 +317,32 @@ def test_the_words_a_local_read_carries():
 
 
 def test_the_deadline_ends_a_page_that_will_not_finish(monkeypatch):
-    async def _never(png):
-        await asyncio.sleep(30)
-        return "never"
+    """v1.410.2: the engine runs in a worker PROCESS; one that never answers
+    is killed at its deadline and the page reads None."""
+    import sys as _sys
 
-    monkeypatch.setattr(local_ocr, "_recognize_async", _never)
+    monkeypatch.setattr(local_ocr, "_worker_argv", lambda: [_sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(local_ocr, "WORKER_START_S", 1.0)
     monkeypatch.setattr(local_ocr, "available", lambda: True)
     import time as _t
 
     t0 = _t.perf_counter()
     assert local_ocr.recognize_png(b"png", deadline_s=0.2) is None
-    assert _t.perf_counter() - t0 < 10
+    assert _t.perf_counter() - t0 < 30
 
 
 async def test_the_engine_is_never_run_on_the_event_loop(monkeypatch):
-    """Inside a running loop the recogniser REFUSES — it is never started.
+    """Inside a running loop the recogniser REFUSES — no worker is started.
 
-    Asserting only the ``None`` would pass with the guard deleted too: the
-    outer catch swallows the "asyncio.run() cannot be called from a running
-    event loop" error and returns ``None`` all the same. What matters is that
-    a 0.1 s page never runs on the loop, so the spy is the assertion."""
+    The spy is the assertion: ``None`` alone would also come back from a
+    worker that failed."""
     started: list[int] = []
 
-    def _spy(png):
-        # A PLAIN function on purpose: calling it counts. An `async def` spy
-        # would only count on the AWAIT, and `asyncio.run` raises before
-        # awaiting anything — so this test passed with the guard deleted.
+    def _spy(request, timeout):
         started.append(1)
-        return asyncio.sleep(0)
+        return {"texts": ["read"]}
 
-    monkeypatch.setattr(local_ocr, "_recognize_async", _spy)
+    monkeypatch.setattr(local_ocr, "_ask_worker", _spy)
     monkeypatch.setattr(local_ocr, "available", lambda: True)
 
     assert local_ocr.recognize_png(b"png") is None
@@ -393,7 +391,7 @@ def _patient_engine(monkeypatch) -> None:
     Tests runner one read ran past it and came back None. These tests prove
     the engine reads the page, not how fast a runner is."""
     monkeypatch.setattr(local_ocr, "PAGE_DEADLINE_S", 120.0)
-    for fn in (local_ocr.local_ocr_bytes, local_ocr.recognize_png):
+    for fn in (local_ocr.local_ocr_bytes, local_ocr.local_ocr_many, local_ocr.recognize_png, local_ocr.recognize_many):
         monkeypatch.setattr(fn, "__kwdefaults__", {**(fn.__kwdefaults__ or {}), "deadline_s": 120.0})
 
 

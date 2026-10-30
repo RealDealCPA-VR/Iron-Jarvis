@@ -49,6 +49,15 @@ import {
   type CustomPalette,
 } from "@/lib/themePalette";
 
+/** What the page is told (it is in an opaque origin, so the messages carry
+ *  nothing but these two booleans). */
+export function backgroundMessages(still: boolean, run: boolean): { type: "ij-bg"; still?: boolean; run?: boolean }[] {
+  return [
+    { type: "ij-bg", still },
+    { type: "ij-bg", run },
+  ];
+}
+
 /** The iframe's attributes — pinned by test (no allow-same-origin, ever). */
 export const BACKGROUND_SANDBOX = "allow-scripts";
 
@@ -236,10 +245,8 @@ export function BackgroundLayer() {
     () => () => {
       const w = frame.current?.contentWindow;
       if (!w) return;
-      // The page is in an opaque origin, so "*" is the only target; the
-      // message carries nothing but two booleans.
-      w.postMessage({ type: "ij-bg", still }, "*");
-      w.postMessage({ type: "ij-bg", run }, "*");
+      // The page is in an opaque origin, so "*" is the only target.
+      for (const m of backgroundMessages(still, run)) w.postMessage(m, "*");
     },
     [still, run],
   );

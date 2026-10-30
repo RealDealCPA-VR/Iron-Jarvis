@@ -7712,7 +7712,11 @@ async def _prepare_attachments(
             # quietly break the vision-budget accounting C-05 just built.
             from ..documents import local_ocr as _local_ocr
 
-            _local_ready = _local_ocr.local_enabled(cfg) and _local_ocr.available()
+            # v1.410.2: `available()` asks the OCR worker PROCESS on first use
+            # (BLOCKING) — never on the event loop.
+            _local_ready = _local_ocr.local_enabled(cfg) and await asyncio.to_thread(
+                _local_ocr.available
+            )
             for slot, name, path in image_slots:
                 read = (
                     await asyncio.to_thread(_local_ocr.local_ocr_image, path)

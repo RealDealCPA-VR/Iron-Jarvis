@@ -24,6 +24,8 @@ import sys
 #: The fast path below must stay behaviour-identical to the hidden subcommand
 #: in ``daemon/cli.py`` (same module, same ``main([manifest])``).
 INERT_MCP_SUBCOMMAND = "claude-inert-mcp"
+#: v1.410.2: the Windows OCR child (iron_jarvis/ocr_worker.py).
+OCR_WORKER_SUBCOMMAND = "ocr-worker"
 
 #: v1.333.0: the two other self-re-exec children take the same door. Through
 #: the Typer app each one imported the whole daemon (platform, orchestrator,
@@ -47,6 +49,12 @@ def _fast_path(argv: list[str]) -> int | None:
         from iron_jarvis.providers.adapters.claude_native.inert_mcp import main as inert_main
 
         return inert_main([argv[1]])
+    if argv == [OCR_WORKER_SUBCOMMAND]:
+        # v1.410.2: Windows OCR runs in its own short-lived process (a WinRT
+        # call holds the GIL; a stalled one froze the whole daemon).
+        from iron_jarvis.ocr_worker import main as ocr_main
+
+        return ocr_main()
     if argv == [REPL_WORKER_SUBCOMMAND]:
         from iron_jarvis.repl.worker import main as worker_main
 
