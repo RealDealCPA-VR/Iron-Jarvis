@@ -25,7 +25,7 @@ import { createPortal } from "react-dom";
 import { ownsKeys } from "@/lib/codeSplit";
 import {
   ArrowUp,
-  CircleAlert,
+  Check,
   ListChecks,
   FolderOpen,
   FolderX,
@@ -35,6 +35,7 @@ import {
   MoreHorizontal,
   Pencil,
   Square,
+  TriangleAlert,
 } from "lucide-react";
 import { branchLine, getBranchStatus, type BranchStatus } from "@/lib/buildGit";
 // v1.406.0 part 4: the next-step box under the newest settled reply.
@@ -42,10 +43,9 @@ import { NextStepBox } from "@/components/chat/NextStepBox";
 import { codeNextStep, codeReplyFacts, gitFacts, type NextAction } from "@/lib/nextStep";
 import { ApiError, get, post, put } from "@/lib/api";
 // Harness gaps (fix 2, fix 3): the chat's failure line and receipt facts.
-import { FailureDetails, HarnessFailureLine } from "@/components/harness/HarnessFailure";
-import { retryItemFor, retryOffered } from "@/lib/buildRetry";
-import { RESUMED_LINE, carriedOn, carriedOnTurns, resumedFrom } from "@/lib/buildResume";
-import { receiptFacts } from "@/lib/receiptFacts";
+import { FailureDetails } from "@/components/harness/HarnessFailure";
+import { retryItemFor } from "@/lib/buildRetry";
+import { carriedOn, carriedOnTurns } from "@/lib/buildResume";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
@@ -60,26 +60,25 @@ import {
   turnFor,
   viewFor,
 } from "@/lib/turnCache";
-import { useLiveThinking } from "@/lib/liveThinking";
+import { useLiveFinish, useLiveThinking } from "@/lib/liveThinking";
+import type { LiveFinish } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
+// v1.417.0 (C2.7): a session keeps its half-typed words (the chat's drafts).
+import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
-import { answeredModelName } from "@/lib/answeredModel";
 import { composerChipClass, fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit, type FitStep } from "@/lib/toolbarFit";
 import { asPermissionMode } from "@/lib/permissionLevels";
-import { phaseLabel } from "@/lib/stepWords";
+import { finishTitle, finishWarn, finishWords, phaseLabel } from "@/lib/stepWords";
 import { collectDockAsks, dockAskKeyHint } from "@/lib/dockAsk";
 import { answerElicitation, decideSampling } from "@/lib/mcpInteract";
 import { isProviderDefaultModel, machineName, modelGroupName, providerDisplay, providerHeading } from "@/lib/onboarding";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
-import { Markdown, MemoMarkdown } from "@/components/Markdown";
+import { Markdown } from "@/components/Markdown";
 import { WorkLine, LiveToolRows } from "@/components/chat/WorkLine";
 import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
-import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
-import { decodeSuggestion } from "@/lib/preferences";
-import { DoorsStrip } from "@/components/chat/DoorsStrip";
 import { DockAsk } from "@/components/chat/DockAsk";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
@@ -98,31 +97,33 @@ import {
 import { joinUndoByPath, normalizeFsPath, type UndoRowLike } from "@/components/chat/ArtifactsRail";
 import { modelText } from "@/components/ModelRowBits";
 import { companyMenu } from "@/lib/harnessModelMenu";
-import { paneTurnWindow, paneWorkInput } from "@/components/terminal/paneWork";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import type { LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import { createLiveTimeline } from "@/lib/buildTimeline";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
-import { RewindControl } from "@/components/harness/RewindControl";
+// v1.417.0 (C2.1): one memoised row per message (the chat's MessageRow rule).
+import {
+  HarnessMessageRow,
+  prevUserAts as prevUserAtsOf,
+  type HarnessRowHandlers,
+} from "@/components/harness/HarnessMessageRow";
 // v1.373.0: the conversation's own reading look (a centred column, 15 px).
 import {
   HARNESS_COLUMN,
   HARNESS_COMPOSER_BOX,
   HARNESS_REPLY_PROSE,
   HARNESS_TRANSCRIPT_ROWS,
-  HARNESS_USER_BUBBLE,
 } from "@/components/harness/harnessLook";
 import { LibraryCards } from "@/components/harness/LibraryCards";
 // v1.392.0 (long jobs, Phase 3): a reply that made no progress says so (Stop
 // the step / Stop), a reply that summarized itself says so, and the
 // session's optional cap (set in ⋯, met with Keep going).
-import { CapForm, CapMetLine, StallLine, SummarizedLine } from "@/components/harness/HarnessLongJobs";
+import { CapForm, StallLine, SummarizedLine } from "@/components/harness/HarnessLongJobs";
 import {
   STALL_FRAME,
   STEP_STOPPED_NOTE,
   SUMMARY_FRAME,
-  decodeCapMet,
   decodeSessionCap,
   decodeStall,
   decodeSummarized,
@@ -131,17 +132,17 @@ import {
   type StallNotice,
   type Summarized,
 } from "@/lib/buildLongJobs";
-import { LiveHelperRows, SavedHelperRows } from "@/components/harness/HarnessHelpers";
+import { LiveHelperRows } from "@/components/harness/HarnessHelpers";
 import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 // v1.397.0: try one task on several models — the attempts' rows, their card
 // (Keep) and the box's "Try on…" control.
-import { AttemptsCardView, LiveAttemptRows } from "@/components/harness/HarnessAttempts";
+import { LiveAttemptRows } from "@/components/harness/HarnessAttempts";
 import { TryOnControl } from "@/components/harness/HarnessTryOn";
-import { TeamControl, TeamReplyLine } from "@/components/harness/HarnessTeam";
-import { EMPTY_ROSTER, decodeReplyTeam, sessionRoster, type TeamRoster } from "@/lib/sessionTeam";
+import { TeamControl } from "@/components/harness/HarnessTeam";
+import { EMPTY_ROSTER, sessionRoster, type TeamRoster } from "@/lib/sessionTeam";
 // v1.374.0 (part 2, Phase 3): the task list under the reply, how full the
 // conversation is (and Compact), and "the user is looking at this session".
-import { LivePlan, SettledPlan } from "@/components/harness/HarnessPlan";
+import { LivePlan } from "@/components/harness/HarnessPlan";
 import { ContextMeter } from "@/components/harness/ContextMeter";
 import { CompactionCard } from "@/components/chat/CompactionCard";
 import {
@@ -152,7 +153,6 @@ import {
   latestContext,
   offersCompact,
   readingIsBeforeSummary,
-  replyPlan,
 } from "@/lib/buildContext";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { applyHelperFrame, helperCallIds, type HelperView } from "@/lib/buildHelpers";
@@ -160,7 +160,6 @@ import { applyAttemptFrame, tryOnBody, type AttemptView, type TryOnPick } from "
 import {
   AttachButton,
   AttachmentChips,
-  SentAttachments,
   pastedFiles,
   useHarnessAttachments,
   type HarnessFile,
@@ -169,9 +168,6 @@ import { previewAddressFor } from "@/components/harness/BrowserPreview";
 // v1.377.0 (part 2, Phase 6): Next step, Branch from a message, the keys,
 // and what a rewind hands back to the box.
 import {
-  BRANCH_LABEL,
-  BRANCH_TITLE_QUESTION,
-  BRANCH_TITLE_REPLY,
   atFileFromPath,
   branchSession,
   branchedCodeWords,
@@ -190,7 +186,6 @@ import {
   AtMenu,
   PickedChips,
   RewindList,
-  SentPicks,
   SlashInvoking,
   SlashMenu,
 } from "@/components/harness/HarnessComposerMenus";
@@ -225,15 +220,12 @@ import {
   type SlashRow,
 } from "@/lib/buildComposer";
 import {
-  accountMoveLine,
   armResumeWhenReady,
   cancelResumeWhenReady,
   chooseAccountAndContinue,
   decodeAccountLimit,
-  decodeAccountMove,
   decodeAccountWait,
   fetchAccounts,
-  limitCardWords,
   makeDefaultAccount,
   sessionAccount,
   setSessionAccount,
@@ -253,11 +245,9 @@ import {
   decodeAskUser,
   decodeFinish,
   decodeSessionView,
-  decodeStepLimit,
   deleteSession,
   refusedNotEmpty,
   KEEP_GOING_TEXT,
-  stepLimitWords,
   getSession,
   isMissing,
   NO_FOLDER_NAME,
@@ -286,6 +276,34 @@ export const PLAN_RUN_GAP_MS = 300;
 const MAX_QUEUED = 3;
 /** v1.377.0: how often a session read mid-Compact is read again. */
 export const COMPACT_REREAD_MS = 2000;
+/** v1.417.0 (C2.7): a session's draft key in lib/chatDrafts (the chat's own
+ *  store, one map for both: a coding session's id never collides with a
+ *  chat's). */
+export function draftKeyOf(threadId: string): string {
+  return `build:${threadId}`;
+}
+/** v1.417.0 (C2.7): the box grows with its words up to this many lines (the
+ *  chat page's composer grows the same way), then scrolls. */
+export const BOX_MAX_ROWS = 8;
+/** Its line height and padding when the browser does not say (15 px words). */
+const BOX_LINE_PX = 22.5;
+const BOX_PAD_PX = 16;
+/** v1.417.0 (C2.7): the height the box takes for its words, capped at
+ *  BOX_MAX_ROWS lines. Null: leave the box at its own size (no words, or a
+ *  box the browser has not laid out). */
+export function boxHeightFor(scrollHeight: number, style: { lineHeight?: string; fontSize?: string; paddingTop?: string; paddingBottom?: string } | null): number | null {
+  if (!scrollHeight) return null;
+  const font = parseFloat(style?.fontSize ?? "");
+  const lh = parseFloat(style?.lineHeight ?? "");
+  const line = Number.isFinite(lh) && lh > 0 ? lh : Number.isFinite(font) && font > 0 ? font * 1.5 : BOX_LINE_PX;
+  const top = parseFloat(style?.paddingTop ?? "");
+  const bottom = parseFloat(style?.paddingBottom ?? "");
+  const pad = Number.isFinite(top) && Number.isFinite(bottom) ? top + bottom : BOX_PAD_PX;
+  return Math.min(scrollHeight, Math.ceil(line * BOX_MAX_ROWS + pad));
+}
+/** v1.417.0 (C2.2): how close to the bottom a reader counts as following the
+ *  live reply (the chat page's rule). */
+export const FOLLOW_SLACK_PX = 80;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -307,19 +325,34 @@ interface TurnExtras {
   tryOn?: TryOnPick[];
 }
 
-/** The live reply: subscribed HERE, so the session does not re-render per token. */
-function LiveText({ stream }: { stream: ReturnType<typeof useChatStream> }) {
+/** The live reply: subscribed HERE, so the session does not re-render per token.
+ *  v1.417.0 (C2.2): it reports each growth (`onGrow` — the transcript follows
+ *  the newest line while the reader is at the bottom), and while the turn has
+ *  ended but its saved reply is not read back yet (`settling`) it keeps the
+ *  words and drops the "Thinking…" line — the reply never blinks out. */
+function LiveText({
+  stream,
+  onGrow,
+  settling = false,
+}: {
+  stream: ReturnType<typeof useChatStream>;
+  onGrow?: () => void;
+  settling?: boolean;
+}) {
   const text = useLiveText(stream);
   const thinking = useLiveThinking(stream);
+  useEffect(() => {
+    if (text || thinking) onGrow?.();
+  }, [text, thinking, onGrow]);
   return (
     <>
-      {thinking ? <ThinkingDisclosure text={thinking} live /> : null}
+      {thinking ? <ThinkingDisclosure text={thinking} live={!settling} /> : null}
       {text ? (
         <div data-testid="harness-live-text" className={HARNESS_REPLY_PROSE}>
           <Markdown content={text} />
         </div>
       ) : null}
-      {!text && !stream.tools.length ? (
+      {!text && !stream.tools.length && !settling ? (
         <div className="flex items-center gap-2 text-[13px] text-zinc-500">
           <Loader2 size={12} className="animate-spin" />
           {stream.prepStep ? phaseLabel(stream.prepStep) : "Thinking…"}
@@ -330,35 +363,50 @@ function LiveText({ stream }: { stream: ReturnType<typeof useChatStream> }) {
   );
 }
 
-/** v1.377.0 (Phase 6): "Branch from here" on a message — one press starts a
- *  NEW session (nothing of this one changes, so no confirm). Quiet until the
- *  message is hovered or the control has focus, like Rewind. */
-function BranchButton({
-  at,
-  turnId,
-  working,
-  disabled,
-  onBranch,
-}: {
-  at: BranchAt;
-  turnId: string;
-  working: boolean;
-  disabled: boolean;
-  onBranch: (turnId: string, at: BranchAt) => void;
-}) {
+/** v1.417.0 (C2.4): the finish check while it runs, as ONE quiet line. */
+export const FINISH_CHECKING_WORDS = "Checking the work…";
+export const FINISH_TEST_WORDS: Record<NonNullable<LiveFinish["test"]>, string> = {
+  running: "Running the tests…",
+  passed: "The tests passed",
+  failed: "The tests failed",
+};
+
+/** v1.417.0 (C2.4): the finish check's own round (`check: "finish"` frames)
+ *  never streams into the reply — its checklist is bookkeeping the saved
+ *  reply drops, so the reply used to rewrite itself. It is THIS line instead:
+ *  "Checking the work…" while the round runs (its test run under it), then the
+ *  same "Checked: …" sentence the settled reply shows (lib/stepWords) once
+ *  the `done` frame's record arrives. Subscribed here, never on the session. */
+function LiveFinishLine({ stream }: { stream: ReturnType<typeof useChatStream> }) {
+  const fin = useLiveFinish<LiveFinish>(stream);
+  if (!fin || (!fin.running && !fin.record)) return null;
+  const rec = fin.record ? decodeFinish(fin.record) : null;
+  const warn = rec ? finishWarn(rec) : false;
   return (
-    <button
-      type="button"
-      data-testid={`harness-branch-${at}`}
-      data-turn={turnId}
-      disabled={disabled || working}
-      title={at === "reply" ? BRANCH_TITLE_REPLY : BRANCH_TITLE_QUESTION}
-      onClick={() => onBranch(turnId, at)}
-      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:cursor-not-allowed group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100"
-    >
-      {working ? <Loader2 size={12} className="animate-spin" aria-hidden /> : <GitFork size={12} aria-hidden />}
-      {BRANCH_LABEL}
-    </button>
+    <div data-testid="harness-live-finish" role="status" className="space-y-0.5 text-[13px] text-zinc-500">
+      <p
+        data-testid="harness-live-finish-words"
+        data-outcome={rec ? (warn ? "warn" : "ok") : "running"}
+        title={rec ? finishTitle(rec) : undefined}
+        className="flex w-full min-w-0 items-center gap-2"
+      >
+        {!rec ? (
+          <Loader2 size={14} aria-hidden="true" className="shrink-0 animate-spin" />
+        ) : warn ? (
+          <TriangleAlert size={14} aria-hidden="true" className="shrink-0 text-tone-warn" />
+        ) : (
+          <Check size={14} aria-hidden="true" className="shrink-0" />
+        )}
+        <span className={`min-w-0 truncate ${warn ? "text-tone-warn" : ""}`.trim()}>
+          {rec ? finishWords(rec) : FINISH_CHECKING_WORDS}
+        </span>
+      </p>
+      {fin.test ? (
+        <p data-testid="harness-live-finish-test" data-test={fin.test} className="pl-[22px] text-[12px]">
+          {FINISH_TEST_WORDS[fin.test]}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -475,7 +523,9 @@ export function HarnessSession({
   // keyed by the session: these are read once, at mount). Drawn on the
   // FIRST render, then the reply carries on from its last frame.
   const [kept] = useState(() => turnFor(threadId));
-  const stream = useChatStream({ textInState: false, seed: kept?.stream ?? null });
+  // v1.417.0 (C2.1): neither the text nor "when it last moved" lives in this
+  // component's state — a streamed word never redraws the whole session.
+  const stream = useChatStream({ textInState: false, clockInState: false, seed: kept?.stream ?? null });
   // v1.390.0 (the Timeline): the running reply folded from its frames — a
   // store, never React state (the Timeline tab reads it once a second while
   // it is shown); carried on from where this window left it (lib/turnCache).
@@ -484,8 +534,15 @@ export function HarnessSession({
   const viewRef = useRef<BuildSessionView | null>(null);
   viewRef.current = view;
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [input, setInput] = useState("");
+  // v1.417.0 (C2.7): the words this session's box held when it was left.
+  const [input, setInput] = useState(() => readDraft(draftKeyOf(threadId)));
+  const inputLiveRef = useRef(input);
+  inputLiveRef.current = input;
   const [sending, setSending] = useState(false);
+  // v1.417.0 (C2.2): the turn that ENDED and whose saved reply is not read
+  // back yet — its live block stays up until the transcript holds the reply
+  // (or the read gave up), so the answer never blinks out and back in.
+  const [held, setHeld] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // v1.412.0 review: "Choose…" is moving this empty session to a folder —
   // nothing is sent (or attached) until the move is done ("Moving to …").
@@ -971,6 +1028,9 @@ export function HarnessSession({
         if (v.messages.some((m) => m.role === "assistant" && m.turnId === finished)) break;
         if (i < REREAD_TRIES - 1) await sleep(REREAD_GAP_MS);
       }
+      // v1.417.0 (C2.2): the saved reply is in (or the read gave up): the
+      // live block it stood in for goes in the SAME render as the view.
+      setHeld((h) => (h === finished ? null : h));
       // A turn that ended on a limit changed what the account list says:
       // read it again, so the chip says so without opening the list.
       // v1.393.0: every turn — its model calls moved the account's usage,
@@ -1229,6 +1289,8 @@ export function HarnessSession({
           turnRef.current = null;
           setTurnId(null);
           setSending(false);
+          // v1.417.0 (C2.2): the live block waits for the saved reply.
+          if (started) setHeld(id);
           dropTurn(threadId, id);
         }
       }
@@ -1266,7 +1328,8 @@ export function HarnessSession({
   useEffect(() => {
     let live = true;
     leavingRef.current = false;
-    setInput("");
+    // v1.417.0 (C2.7): the box holds what it held when the session was left.
+    setInput(readDraft(draftKeyOf(threadId)));
     setError(null);
     // v1.384.0 review: a kept reply's question stays drawn (it is the kept
     // turn's own; the read below confirms or drops it).
@@ -1343,6 +1406,8 @@ export function HarnessSession({
       // would otherwise blank it for a frame).
       leavingRef.current = true;
       if (inFlightRef.current) stream.abort();
+      // v1.417.0 (C2.7): the half-typed words wait for the return ("" forgets).
+      writeDraft(draftKeyOf(threadId), inputLiveRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
@@ -1482,6 +1547,7 @@ export function HarnessSession({
     const filePaths = picks.map((f) => f.path);
     if (fromBox) {
       setInput("");
+      clearDraft(draftKeyOf(threadId));
       setCaret(0);
       att.clear();
       setAtFiles([]);
@@ -1608,6 +1674,7 @@ export function HarnessSession({
     setQueued(next);
     persistQueue(next);
     setInput("");
+    clearDraft(draftKeyOf(threadId));
     setCaret(0);
     att.clear();
     setAtFiles([]);
@@ -1831,7 +1898,11 @@ export function HarnessSession({
   const model = view?.setup.provider ? view.setup.model : defaultModel;
   // The account decides the vendor (Phase 5): the session view says which.
   const vendor = vendorOf(view?.accountVendor);
-  const currentAccount: BuildAccount | null = sessionAccount(view?.account, vendor, accounts ?? null);
+  // v1.417.0 (C2.1): one object while its inputs stay (the panes are memoised).
+  const currentAccount: BuildAccount | null = useMemo(
+    () => sessionAccount(view?.account, vendor, accounts ?? null),
+    [view?.account, vendor, accounts],
+  );
   // The list is the daemon's cached snapshot: read it again while it is open
   // — the header chip's list, and (v1.376.0) the model menu, which lists the
   // same accounts with their states. An Iron Jarvis with no list (a 404:
@@ -2249,14 +2320,26 @@ export function HarnessSession({
   // kept per session (lib/turnCache): a return is at the bottom when the user
   // left it there, else exactly where they were — before the first paint.
   const atBottomRef = useRef(scrollFor(threadId)?.atBottom ?? true);
+  // v1.417.0 (C2.2): the live reply FOLLOWS the bottom while the reader is
+  // within FOLLOW_SLACK_PX of it (the chat page's rule) — never one who
+  // scrolled up to read.
+  const followRef = useRef(atBottomRef.current);
   const restoredRef = useRef(false);
   const onTranscriptScroll = useCallback(() => {
     const el = transcriptRef.current;
     if (!el) return;
     const at = atBottomOf(el);
     atBottomRef.current = at;
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX;
     keepScroll(threadId, { top: el.scrollTop, atBottom: at });
   }, [threadId]);
+  /** v1.417.0 (C2.2): the streamed reply grew — keep the newest line in view
+   *  (the transcript scrolls, never the page). Stable: the live block calls
+   *  it from its own effect, never re-rendering the session. */
+  const followLive = useCallback(() => {
+    const el = transcriptRef.current;
+    if (el && followRef.current) el.scrollTop = el.scrollHeight;
+  }, []);
   useLayoutEffect(() => {
     const el = transcriptRef.current;
     if (!el || restoredRef.current) return;
@@ -2296,6 +2379,53 @@ export function HarnessSession({
   // never the chat's kept behind the Code view.
   const askingRef = useRef(asking);
   askingRef.current = asking;
+  // v1.417.0 (C2.7): the window is closed or reloaded — the box's words wait
+  // for the return as they do when the session is left.
+  useEffect(() => {
+    const keep = () => writeDraft(draftKeyOf(threadId), inputLiveRef.current);
+    window.addEventListener("pagehide", keep);
+    return () => window.removeEventListener("pagehide", keep);
+  }, [threadId]);
+  // v1.417.0 (C2.7): a session opened with no card up puts the caret in its
+  // box — once, only the column on screen with the keys, never over another
+  // field the user is typing in.
+  const hasView = !!view;
+  const autoFocusedRef = useRef(false);
+  useEffect(() => {
+    if (!hasView || autoFocusedRef.current) return;
+    autoFocusedRef.current = true;
+    if (!onScreen || askingRef.current || !ownsKeys(rootRef.current, null)) return;
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    const typingElsewhere =
+      !!active &&
+      active !== document.body &&
+      !rootRef.current?.contains(active) &&
+      (active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active as HTMLElement).isContentEditable === true);
+    if (typingElsewhere) return;
+    boxRef.current?.focus({ preventScroll: true });
+  }, [hasView, onScreen]);
+  // v1.417.0 (C2.7): the box GROWS with its words (up to BOX_MAX_ROWS lines,
+  // then it scrolls) and shrinks back when they are sent — a pasted block is
+  // never read through a two-line slot.
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    if (!input) {
+      el.style.height = "";
+      return;
+    }
+    el.style.height = "auto";
+    let style: CSSStyleDeclaration | null = null;
+    try {
+      style = window.getComputedStyle(el);
+    } catch {
+      style = null;
+    }
+    const h = boxHeightFor(el.scrollHeight, style);
+    el.style.height = h === null ? "" : `${h}px`;
+  }, [input, hasView]);
   useEffect(() => {
     if (!onScreen) return;
     const onOpen = () => {
@@ -2316,7 +2446,14 @@ export function HarnessSession({
     const dup = base.some((m) => m.role === "user" && m.content === pending.content && m.turnId && m.turnId === turnId);
     return dup ? base : [...base, pending];
   }, [view?.messages, pending, turnId]);
-  const livePlan = planFromCards(stream.tools);
+  // v1.417.0 (C2.1): read off the tool cards ONCE per change of them — the
+  // panes are memoised and must see the same object until a card moves.
+  const livePlan = useMemo(() => planFromCards(stream.tools), [stream.tools]);
+  const rowPrevUserAts = useMemo(() => prevUserAtsOf(shown), [shown]);
+  const teamRoster = useMemo(
+    () => sessionRoster(view?.team, view?.setup.team) ?? EMPTY_ROSTER,
+    [view?.team, view?.setup.team],
+  );
   // v1.390.0: what the Timeline tab reads — a STABLE handle (the tab is
   // memoized; a token never makes a new one), changed only when the reply
   // starts, ends or is rejoined.
@@ -2333,6 +2470,10 @@ export function HarnessSession({
   const summarized = !!compaction && beforeSummary;
   const offerCompact = offersCompact(reading?.context ?? null, beforeSummary);
   const lastReply = [...shown].reverse().find((m) => m.role === "assistant");
+  // v1.417.0 (C2.2): a turn that ended is still drawn live until its saved
+  // reply is in the transcript.
+  const holding =
+    !busy && held !== null && !shown.some((m) => m.role === "assistant" && m.turnId === held);
   // Harness gaps (fix 2): the reply that ENDS the conversation (a question
   // after it — one stopped before a word — means it is no longer the one to
   // retry or to fix).
@@ -2348,6 +2489,42 @@ export function HarnessSession({
     const item = retryItemFor(shown, index, view.messages ?? [], view.folder);
     if (item) void send(item);
   };
+  // v1.417.0 (C2.1): what the rows and the panes hand back — ONE object of
+  // functions stable for the session's life (they call the newest closures
+  // through a ref), so a memoised row or pane is never redrawn for a new
+  // function that does the same thing.
+  const liveHandlers = useRef({
+    retryReply,
+    send,
+    compact,
+    onRewound,
+    branchFrom,
+    load,
+    onChanged,
+  });
+  liveHandlers.current = { retryReply, send, compact, onRewound, branchFrom, load, onChanged };
+  const rowHandlers = useMemo<HarnessRowHandlers>(
+    () => ({
+      onRewound: (q, extras) => void liveHandlers.current.onRewound(q, extras),
+      onBranch: (t, at) => void liveHandlers.current.branchFrom(t, at),
+      onAttemptKept: () => {
+        void liveHandlers.current.load();
+        liveHandlers.current.onChanged();
+      },
+      onKeepGoing: () => void liveHandlers.current.send({ text: KEEP_GOING_TEXT }),
+      onRetry: (index) => liveHandlers.current.retryReply(index),
+      onOpenRewind: () => setRewindOpen(true),
+      onOpenDocument: (path) => {
+        post("/documents/open", { path }).catch(() => {});
+      },
+    }),
+    [],
+  );
+  const onPanesSessionChanged = useCallback(() => {
+    void liveHandlers.current.load();
+    setBranchReads((n) => n + 1);
+  }, []);
+  const onPanesCompact = useCallback(() => void liveHandlers.current.compact(), []);
   // v1.378.0: a message the daemon wrote can be rewound to (the refusal's
   // press opens the "/rewind" list only when there is one).
   const canRewindHere = !view?.archived && shown.some((m) => m.role === "user" && !m.steer && !!m.turnId);
@@ -2443,13 +2620,10 @@ export function HarnessSession({
       busy={busy}
       undoFor={undoFor}
       onUndo={onUndo}
-      onSessionChanged={() => {
-        void load();
-        setBranchReads((n) => n + 1);
-      }}
+      onSessionChanged={onPanesSessionChanged}
       onSessionGone={onGone}
       branchPress={branchPress}
-      onCompact={() => void compact()}
+      onCompact={onPanesCompact}
       compacting={compacting || elsewhereCompacting}
     />
   );
@@ -2713,229 +2887,30 @@ export function HarnessSession({
                 : `Ask for something to build or change in ${view.folderName}.`}
             </p>
           ) : null}
-          {shown.map((m, i) =>
-            m.role === "user" ? (
-              m.steer ? (
-                <div key={i} className="flex justify-end">
-                  <p data-testid="harness-steer-line" className="max-w-[88%] text-right text-[12px] text-zinc-500">
-                    Note while it worked: {m.content}
-                  </p>
-                </div>
-              ) : (
-                <div key={i} className="group group/msg flex flex-col items-end gap-1">
-                  {m.content ? (
-                    <div data-testid="harness-user-bubble" className={HARNESS_USER_BUBBLE}>
-                      {m.content}
-                    </div>
-                  ) : null}
-                  {/* v1.371.0: the pictures and files the message carried. */}
-                  <SentAttachments paths={m.attachmentPaths ?? []} />
-                  {/* v1.373.0: the folder's files picked with "@", and the
-                      skill picked with "/". */}
-                  <SentPicks files={m.filePaths} skill={m.skill} />
-                  {/* v1.370.0: rewind to before this message (two presses;
-                      a refusal is listed in words). Only a message the
-                      daemon wrote has a turn to rewind to. */}
-                  {m.turnId && m !== pending ? (
-                    <RewindControl
-                      threadId={threadId}
-                      turnId={m.turnId}
-                      disabled={busy || view.archived}
-                      onRewound={(q, extras) => void onRewound(q, extras)}
-                      onTouched={() => void onRewound("")}
-                    />
-                  ) : null}
-                  {/* v1.377.0: a new session from before this message (it
-                      goes in that session's box). */}
-                  {m.turnId && m !== pending ? (
-                    <BranchButton
-                      at="question"
-                      turnId={m.turnId}
-                      working={branching === `question:${m.turnId}`}
-                      disabled={!!branching}
-                      onBranch={(t, at) => void branchFrom(t, at)}
-                    />
-                  ) : null}
-                </div>
-              )
-            ) : (
-              <div key={i} data-testid="harness-reply" className="group/msg min-w-0">
-                {/* v1.391.0: this reply carried on one a restart cut off. */}
-                {resumedFrom(m) ? (
-                  <p data-testid="harness-resumed-line" className="mb-1 text-[12px] text-zinc-400">
-                    {RESUMED_LINE}
-                  </p>
-                ) : null}
-                {/* v1.393.0: this reply carried on with another account of
-                    the same group ("<A> reached its limit; carried on with
-                    <B> (same group)."). */}
-                {(() => {
-                  const move = decodeAccountMove(m.accountMove);
-                  return move ? (
-                    <p data-testid="harness-account-move" className="mb-1 text-[12px] text-zinc-400">
-                      {accountMoveLine(move)}
-                    </p>
-                  ) : null;
-                })()}
-                <WorkLine
-                  {...paneWorkInput(m)}
-                  cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
-                  // Part 3, Phase 2: the reply's finish check, in one sentence.
-                  finish={decodeFinish(m.finish)}
-                />
-                {/* v1.403.0: a team reply says who led, worked and reviewed —
-                    and, in the warn tone and never folded away, every time
-                    the lead did a piece itself. */}
-                <TeamReplyLine raw={m.team} />
-                {/* v1.392.0: the reply summarized its own older rounds. */}
-                <SummarizedLine summarized={decodeSummarized(m.summarized)} />
-                {/* v1.372.0: the helper agents this reply's turn started. */}
-                <SavedHelperRows
-                  raw={m.helpers}
-                  models={catalog.models}
-                  // v1.403.0: in a team reply each helper is named by its part.
-                  team={decodeReplyTeam(m.team) ? (sessionRoster(view.team, view.setup.team) ?? EMPTY_ROSTER) : null}
-                />
-                {/* v1.397.0: the attempts on several models, side by side —
-                    and Keep (only while nothing runs). */}
-                {m.turnId && m.attempts ? (
-                  <AttemptsCardView
-                    raw={m.attempts}
-                    threadId={threadId}
-                    turnId={m.turnId}
-                    canKeep={!busy && !view.archived}
-                    onKept={() => {
-                      void load();
-                      onChanged();
-                    }}
-                  />
-                ) : null}
-                {m.content ? (
-                  <div className={HARNESS_REPLY_PROSE}>
-                    <MemoMarkdown content={m.content} />
-                  </div>
-                ) : null}
-                {/* v1.374.0: the turn's task list, folded into its reply. */}
-                <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
-                {/* v1.384.0: the reply met its STEP LIMIT — said plainly.
-                    v1.406.0 part 4: its ONE press to carry on ("Keep going",
-                    the same as typing "continue"; never automatic) is the
-                    next-step box's first button now, under the newest reply
-                    — one place, never twice. */}
-                {(() => {
-                  const sl = decodeStepLimit(m.stepLimit);
-                  if (!sl) return null;
-                  return (
-                    <div data-testid="harness-step-limit" className="mt-2 flex flex-wrap items-center gap-2">
-                      <p className="flex items-center gap-1.5 text-[12px] text-zinc-400">
-                        <CircleAlert size={12} aria-hidden className="shrink-0" />
-                        {stepLimitWords(sl)}
-                      </p>
-                    </div>
-                  );
-                })()}
-                {/* v1.392.0 (decision 8): the session's cap ended the reply —
-                    the step-limit way: said plainly (its Keep going is the
-                    next-step box's, v1.406.0 part 4). */}
-                <CapMetLine
-                  cap={decodeCapMet(m.capMet)}
-                  offer={false}
-                  keepGoingText={KEEP_GOING_TEXT}
-                  onKeepGoing={() => void send({ text: KEEP_GOING_TEXT })}
-                />
-                {(() => {
-                  // Phase 5: the limit card this reply ended on, as one quiet
-                  // line in the transcript (the live card is below).
-                  const lim = decodeAccountLimit(m.accountLimit);
-                  return lim ? (
-                    <p data-testid="harness-reply-limit" className="mt-1 flex items-start gap-1.5 text-[12px] text-tone-warn">
-                      <CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden /> {lim.accountName}:{" "}
-                      {limitCardWords(lim).title}
-                    </p>
-                  ) : null;
-                })()}
-                {/* Harness gaps (fix 2): the chat's failure line at a
-                    session's scale (HarnessFailure) — the sentence (or its
-                    headline beside a press), Sign in / the key link, Retry on
-                    the NEWEST failed or cut-off reply, the server's own words
-                    folded under Details. A safety refusal keeps its rewind
-                    list (v1.378.0), never a Retry. A reply that ended on an
-                    account's limit card says only that it is incomplete (the
-                    card is its way out). */}
-                <HarnessFailureLine
-                  m={m.accountLimit ? { ...m, error: undefined } : m}
-                  newest={m === newestReply}
-                  busy={busy}
-                  health={daemon.health}
-                  turnProvider={m.route?.provider || provider}
-                  retry={retryOffered(m, { newest: m === newestReply, busy, archived: !!view.archived })}
-                  onRetry={() => retryReply(i)}
-                  canRewind={canRewindHere}
-                  onRewind={() => setRewindOpen(true)}
-                  carriedOn={carriedOn(m, carried)}
-                />
-                <ReplyChanges
-                  turn={(() => {
-                    const w = paneTurnWindow(shown, i);
-                    return w ? { ...w, sessionId: view.sessionId } : null;
-                  })()}
-                  undoFor={undoFor}
-                  onUndo={onUndo}
-                />
-                <div className="mt-1 flex min-w-0 flex-wrap items-center empty:hidden">
-                  <TurnReceipt
-                    inline
-                    modelName={answeredModelName(m.route, catalog.models)}
-                    route={m.route}
-                    toolsUsed={m.toolsUsed}
-                    deniedTools={m.deniedTools}
-                    trust={m.trust}
-                    trustReason={m.trustReason}
-                    trustNote={m.trustNote}
-                    usage={m.usage}
-                    steps={m.steps}
-                    timing={m.timing}
-                    documents={m.documents}
-                    onOpenDocument={(path) => {
-                      post("/documents/open", { path }).catch(() => {});
-                    }}
-                    undoFor={undoFor}
-                    onUndo={onUndo}
-                    // Harness gaps (fix 3): every receipt fact the chat page
-                    // passes (app/chat/page.tsx), read off the daemon's reply
-                    // line and decoded the chat's way — the approvals the
-                    // user gave, the older messages left out to fit, the
-                    // envelope's adaptation, a kept preference, the folder's
-                    // rules and the earlier chats read.
-                    {...receiptFacts(m)}
-                  />
-                  {/* v1.377.0: a new session with the conversation up to
-                      and including this reply. */}
-                  {m.turnId ? (
-                    <BranchButton
-                      at="reply"
-                      turnId={m.turnId}
-                      working={branching === `reply:${m.turnId}`}
-                      disabled={!!branching}
-                      onBranch={(t, at) => void branchFrom(t, at)}
-                    />
-                  ) : null}
-                </div>
-                {/* v1.414.0: a repeated correction, offered as a standing
-                    preference — the chat's own quiet Keep · Edit · Not this
-                    line (components/chat/PreferenceSuggestion). Its answer
-                    comes back folded into the line by the daemon on the next
-                    read; the line keeps it meanwhile. */}
-                {(() => {
-                  const sug = decodeSuggestion(m.suggestion);
-                  return sug && sug.state !== "gone" ? (
-                    <PreferenceSuggestion key={sug.id} suggestion={sug} />
-                  ) : null;
-                })()}
-                <DoorsStrip doors={m.doors} />
-              </div>
-            ),
-          )}
+          {shown.map((m, i) => (
+            <HarnessMessageRow
+              key={i}
+              m={m}
+              index={i}
+              threadId={threadId}
+              sessionId={view.sessionId}
+              archived={!!view.archived}
+              busy={busy}
+              isPending={m === pending}
+              branching={branching}
+              newest={m === newestReply}
+              carriedOn={carriedOn(m, carried)}
+              canRewind={canRewindHere}
+              prevUserAt={rowPrevUserAts[i]}
+              teamRoster={teamRoster}
+              models={catalog.models}
+              health={daemon.health}
+              provider={provider}
+              undoFor={undoFor}
+              onUndo={onUndo}
+              h={rowHandlers}
+            />
+          ))}
           {/* v1.406.0 part 4: THE NEXT-STEP BOX under the newest settled
               reply — where things stand (files changed, the finish check's
               tests and the team's review, what is not done) and at most two
@@ -2950,7 +2925,7 @@ export function HarnessSession({
             // (an approved plan's act turn about to start, or a turn this
             // window has not followed yet behind a hidden continuation):
             // the reply above is not where things stand.
-            if (busy || view.archived || view.running || view.planRun || !newestReply) return null;
+            if (busy || holding || view.archived || view.running || view.planRun || !newestReply) return null;
             const step = codeNextStep(codeReplyFacts(newestReply), gitFacts(view.git, branchStatus));
             const chips = nextSteps.length ? (
               <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
@@ -2975,7 +2950,7 @@ export function HarnessSession({
               </NextStepBox>
             );
           })()}
-          {busy ? (
+          {busy || holding ? (
             <div data-testid="harness-live" className="min-w-0 space-y-2">
               {/* v1.372.0: each helper is ONE row (its own tool card is not
                   drawn a second time). */}
@@ -2992,7 +2967,9 @@ export function HarnessSession({
                 const cards = ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;
                 return cards.length ? <LiveToolRows cards={cards} since={stream.startedAt ?? null} /> : null;
               })()}
-              <LiveText stream={stream} />
+              <LiveText stream={stream} onGrow={followLive} settling={!busy} />
+              {/* v1.417.0 (C2.4): the finish check, one quiet line. */}
+              <LiveFinishLine stream={stream} />
               {/* v1.392.0: the reply summarized its own older rounds. */}
               <SummarizedLine summarized={liveSummarized} />
               {/* v1.392.0: ten minutes with no progress — said once per

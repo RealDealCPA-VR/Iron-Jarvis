@@ -32,7 +32,7 @@
  * rules); behind another tab its terminal parks in the host's lot.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ChartGantt,
   FileDiff,
@@ -510,7 +510,7 @@ function SessionChanges({
   );
 }
 
-export function HarnessPanes({
+function HarnessPanesImpl({
   view,
   livePlan,
   terminal,
@@ -751,3 +751,8 @@ export function HarnessPanes({
     </div>
   );
 }
+
+/** v1.417.0 (C2.1): memoised — the session hands it stable props (its
+ *  callbacks through refs, the live plan read once per change of the tool
+ *  cards), so a streamed word or a box keystroke never redraws the panes. */
+export const HarnessPanes = memo(HarnessPanesImpl);

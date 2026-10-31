@@ -28,3 +28,25 @@ export function useLiveThinking(stream: {
   );
   return store ? live : (stream.thinking ?? "");
 }
+
+/** v1.417.0 (C2.4): the finish check's round of the running turn
+ *  (`stream.finishStore`), subscribed at the component that SHOWS it — the
+ *  caller never re-renders for it. Null for a stream with no store (a test
+ *  double built before it existed) or a turn with no finish check. Its own
+ *  module for the same reason as `useLiveThinking`; the shape is
+ *  `LiveFinish` in lib/useChatStream (a type, so importing it costs the
+ *  mocks nothing). */
+export function useLiveFinish<T>(stream: {
+  finishStore?: { get(): T | null; subscribe(cb: () => void): () => void };
+}): T | null {
+  const store = stream.finishStore;
+  const subscribe = useCallback(
+    (cb: () => void) => (store ? store.subscribe(cb) : () => {}),
+    [store],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => (store ? store.get() : null),
+    () => null,
+  );
+}
