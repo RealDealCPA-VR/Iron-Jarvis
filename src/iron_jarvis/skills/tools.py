@@ -51,13 +51,22 @@ class SkillSearchTool(Tool):
                 if self._registry.get(s.name) is None:
                     local._skills[s.name] = s
             hits = hits + local.search(query, k - len(hits))
-        if not hits:
+        # Review (v1.417.0): what the model reads of each hit is the list's
+        # own (``native.shown_entry``) — a description from another program's
+        # folder or the session folder's own is SCANNED, a flagged name left
+        # out. Off the loop (the scan reads the text).
+        from . import native as _native
+
+        shown = await asyncio.to_thread(
+            lambda: [e for e in (_native.shown_entry(s) for s in hits) if e is not None]
+        )
+        if not shown:
             return ToolResult(ok=True, output="(no matching skills)", data={"skills": []})
-        lines = [f"{s.name}: {s.description}" for s in hits]
+        lines = [f"{n}: {desc}" for n, desc in shown]
         return ToolResult(
             ok=True,
             output="\n".join(lines),
-            data={"skills": [{"name": s.name, "description": s.description} for s in hits]},
+            data={"skills": [{"name": n, "description": desc} for n, desc in shown]},
         )
 
 

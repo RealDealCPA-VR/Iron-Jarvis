@@ -5779,19 +5779,23 @@ def skill_invocation_args(body: Any, name: str) -> str:
     return ""
 
 
-def skill_playbook(platform: Any, body: Any, skill: Any) -> str:
+def skill_playbook(platform: Any, body: Any, skill: Any, window_tokens: "int | None" = None) -> str:
     """v1.417.0 (skill parity): what a "/name" skill hands the model — Claude
     Code's own: ``Base directory for this skill: <dir>`` and the body with its
     arguments filled (``skills/native.invocation_text``; scanned first when
-    the skill is not the user's own, cut at ``native.INVOKE_CHARS`` and the
-    cut said). BLOCKING (reads + the scan): the lanes run it off the loop.
-    MIRROR NOTE (lock-step): both lanes call this one function."""
+    the skill is not the user's own). Review: it rides the SYSTEM prompt,
+    which the history planner cannot shrink, so it is cut at
+    ``native.invoke_cap`` of the answering model's window (a quarter of it,
+    between the old 8,000 characters and ``native.INVOKE_CHARS``) and the cut
+    is said. BLOCKING (reads + the scan): the lanes run it off the loop.
+    MIRROR NOTE (lock-step): both lanes call this one function, each with
+    the turn's own ``_context_window``."""
     from ..skills import native as _native
 
     return _native.invocation_text(
         skill, skill_invocation_args(body, getattr(skill, "name", "")),
         event_bus=getattr(platform, "event_bus", None), session_id="chat",
-        cap=_native.INVOKE_CHARS,
+        cap=_native.invoke_cap(window_tokens),
     )
 
 
@@ -9026,7 +9030,10 @@ async def run_chat_turn(
     if _skill_early is not None:
         # v1.417.0: Claude Code's own invocation — the base directory line and
         # the body with its ARGUMENTS filled (``skill_playbook``).
-        _prep.start("skill", asyncio.to_thread(skill_playbook, d.platform, body, _skill_early))
+        _prep.start("skill", asyncio.to_thread(
+            skill_playbook, d.platform, body, _skill_early,
+            _context_window(d, provider_choice, model_choice),
+        ))
     if (getattr(body, "workspace_dir", "") or "").strip():
         _prep.start("workspace", _none_on_error(asyncio.to_thread(
             _resolve_tool_workspace,
@@ -9137,6 +9144,7 @@ async def run_chat_turn(
         _playbook = await (
             _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
                 skill_playbook, d.platform, body, sk,
+                _context_window(d, provider_choice, model_choice),
             )
         )
         _skill_text = (

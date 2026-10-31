@@ -3815,6 +3815,7 @@ async def chat_stream(
         # v1.417.0: Claude Code's own invocation (``skill_playbook``).
         _prep.start("skill", asyncio.to_thread(
             _chat_turn.skill_playbook, d.platform, body, _skill_early,
+            _chat_turn._context_window(d, provider_choice, model_choice),
         ))
     if (getattr(body, "workspace_dir", "") or "").strip():
         _prep.start("workspace", _chat_turn._none_on_error(asyncio.to_thread(
@@ -3932,6 +3933,7 @@ async def chat_stream(
         _playbook = await (
             _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
                 _chat_turn.skill_playbook, d.platform, body, sk,
+                _chat_turn._context_window(d, provider_choice, model_choice),
             )
         )
         _skill_text = (

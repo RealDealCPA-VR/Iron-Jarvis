@@ -85,6 +85,12 @@ LISTING_DEFAULT_WINDOW = 200_000
 #: cap is 25,000 tokens; a real skill on this PC is 37 KB — the chat's old
 #: 8,000-character playbook cut it at a fifth).
 INVOKE_CHARS = 100_000
+#: Review (v1.417.0): the "/name" playbook rides the SYSTEM prompt, which the
+#: history planner cannot shrink — so it gets at most this share of the
+#: answering model's window (4 characters a token), never less than the old
+#: fixed 8,000 characters and never more than :data:`INVOKE_CHARS`.
+INVOKE_WINDOW_SHARE = 0.25
+INVOKE_MIN_CHARS = 8_000
 #: The project skills' source tag (scanned: not the user's own app skills).
 SOURCE_PROJECT = "project"
 
@@ -203,19 +209,84 @@ def _walk_up(folder: Path) -> list[Path]:
     return [start] if home is None or start != home else []
 
 
-def _skill_files(root: Path, how: str, budget: list[int]) -> list[Path]:
+#: A TREE root is walked at most this deep, and at most this many folders.
+MAX_TREE_DEPTH = 8
+MAX_TREE_DIRS = 2000
+
+
+def _is_link(path: "Path | os.DirEntry") -> bool:
+    """A symlink or a junction — read from the link itself (``lstat``), never
+    by opening what it points at (a link to a network share is never
+    touched)."""
     try:
-        if not root.is_dir():
-            return []
+        if isinstance(path, os.DirEntry):
+            return path.is_symlink() or path.is_junction()
+        return path.is_symlink() or os.path.isjunction(path)
+    except OSError:
+        return True
+
+
+def _readable(path: Path) -> bool:
+    from ..core.fs_policy import fs_read_ok
+
+    try:
+        return bool(fs_read_ok(str(path))[0])
+    except Exception:  # noqa: BLE001 — an unreadable verdict is a refusal
+        return False
+
+
+def _tree_files(root: Path) -> list[Path]:
+    """Every ``SKILL.md`` below ``root``, never through a link, bounded."""
+    out: list[Path] = []
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    seen_dirs = 0
+    while stack and seen_dirs < MAX_TREE_DIRS:
+        folder, depth = stack.pop()
+        seen_dirs += 1
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError:
+            continue
+        for entry in entries:
+            if _is_link(entry):
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name != ".archive" and depth < MAX_TREE_DEPTH:
+                        stack.append((Path(entry.path), depth + 1))
+                elif entry.name == SKILL_FILE and entry.is_file(follow_symlinks=False):
+                    out.append(Path(entry.path))
+            except OSError:
+                continue
+    return sorted(out)
+
+
+def _skill_files(base: Path, parts: tuple[str, ...], how: str, budget: list[int]) -> list[Path]:
+    """The ``SKILL.md`` files of ``base/<parts>``. Review (v1.417.0): a
+    session folder's skills stay IN the folder — no part of the way there,
+    no skill folder and no ``SKILL.md`` is a link or junction (none is
+    followed, so none is opened), and each file must pass ``fs_read_ok``
+    (the protected folders and the user's "Folders Jarvis may read": the
+    walk goes UP to the repository root, above the session's folder)."""
+    root = base
+    try:
+        for part in parts:
+            root = root / part
+            if _is_link(root) or not root.is_dir():
+                return []
         if how == ONE:
-            files = sorted(
-                d / SKILL_FILE for d in root.iterdir()
-                if d.is_dir() and not d.name.startswith(".") and (d / SKILL_FILE).is_file()
-            )
+            files = []
+            for d in sorted(root.iterdir()):
+                if d.name.startswith(".") or _is_link(d) or not d.is_dir():
+                    continue
+                md = d / SKILL_FILE
+                if not _is_link(md) and md.is_file():
+                    files.append(md)
         else:
-            files = sorted(f for f in root.rglob(SKILL_FILE) if ".archive" not in f.parts)
+            files = _tree_files(root)
     except OSError:
         return []
+    files = [f for f in files if _readable(f)]
     take = files[: max(0, budget[0])]
     budget[0] -= len(take)
     return take
@@ -236,7 +307,7 @@ def project_skills(folder: Any) -> list[Skill]:
     try:
         for base in _walk_up(Path(raw)):
             for parts, how in PROJECT_SKILL_DIRS:
-                for md in _skill_files(base.joinpath(*parts), how, budget):
+                for md in _skill_files(base, parts, how, budget):
                     try:
                         skill = load_skill(md.parent, source=SOURCE_PROJECT)
                     except Exception:  # noqa: BLE001 — a bad SKILL.md is skipped
@@ -338,21 +409,75 @@ def invocation_text(
     the body with its arguments filled (Claude Code's ``Skill`` tool and its
     ``/name words``; OpenCode's ``skill`` tool names the folder the same
     way). The body is scanned first when the skill did not come from the
-    user (``framework.guarded_instructions``); a cut is said."""
+    user (``framework.guarded_instructions``); a cut is said.
+
+    Review (v1.417.0): ``cap`` bounds the FILLED text too, not only the body
+    — the words a "/name" turn fills in are the user's message, which the
+    conversation already carries (and its planner budgets); a 60,000-
+    character paste must not ride the system prompt a second time whole."""
     from .framework import guarded_instructions
 
     body = guarded_instructions(skill, event_bus=event_bus, session_id=session_id, cap=cap)
     cut = bool(cap and len(getattr(skill, "instructions", "") or "") > cap)
-    text = base_dir_line(skill) + fill(body, skill, args)
+    filled = fill(body, skill, args)
+    args_cut = bool(cap and len(filled) > cap)
+    if args_cut:
+        filled = filled[:cap]
+    text = base_dir_line(skill) + filled
     if cut:
         text += f"\n\n[The rest of SKILL.md is not shown (it is over {cap:,} characters); read it from the base directory.]"
+    elif args_cut:
+        text += (
+            f"\n\n[The rest is not shown (with its arguments filled in it is over {cap:,} "
+            "characters); the arguments are the user's message in this conversation.]"
+        )
     return text
+
+
+def invoke_cap(window_tokens: "int | None") -> int:
+    """How much of a "/name" skill rides a turn whose model has
+    ``window_tokens`` (None = unknown: the history planner's default)."""
+    from ..context.budget import DEFAULT_WINDOW
+
+    try:
+        window = int(window_tokens or DEFAULT_WINDOW)
+    except (TypeError, ValueError):
+        window = DEFAULT_WINDOW
+    return max(INVOKE_MIN_CHARS, min(INVOKE_CHARS, int(window * 4 * INVOKE_WINDOW_SHARE)))
 
 
 def _desc(skill: Skill) -> str:
     desc = " ".join(str(skill.description or "").split())
     when = " ".join(str(getattr(skill, "when_to_use", "") or "").split())
     return f"{desc} - {when}" if desc and when else (desc or when)
+
+
+def shown_entry(skill: Skill, extra: str = "") -> "tuple[str, str] | None":
+    """``(name, description)`` as a model may read them. Review (v1.417.0):
+    the listing and ``skill_search`` put these straight into the model's
+    context, so a skill that did not come from the user
+    (``framework.scans_skill`` — another program's folder, a plugin, a
+    session folder's own) has its description SCANNED (a planted sentence
+    becomes a ``[BLOCKED …]`` placeholder) and is left out altogether when
+    its NAME is flagged. The user's own and the bundled ones are verbatim.
+    ``extra`` (the Codex list's ``(file: …)``) is scanned with the
+    description: a folder's name is the repository's text too. BLOCKING
+    (the scan): callers run it off the loop."""
+    from .framework import scans_skill
+
+    name = " ".join(str(getattr(skill, "name", "") or "").split())
+    if not name:
+        return None
+    desc = (_desc(skill) + extra).strip()
+    if not scans_skill(skill):
+        return name, desc
+    from ..core.promptguard import scan_context
+
+    if scan_context(name, source="a skill's name", cap=None).blocked:
+        return None
+    if desc:
+        desc = " ".join(scan_context(desc, source="a skill's description", cap=None).text.split())
+    return name, desc
 
 
 def listable(skills: Iterable[Skill]) -> list[Skill]:
@@ -380,7 +505,12 @@ def listing(skills: Iterable[Skill], *, dialect: str = "", window_tokens: "int |
     Codex's (with each ``SKILL.md``'s location) for ``gpt``, Claude Code's
     shape naming ``skill_load`` for the rest."""
     shown = listable(skills)
-    if not shown:
+    if dialect == "gpt":
+        rows = [shown_entry(s, f" (file: {base_dir(s).replace(chr(92), '/')}/SKILL.md)") for s in shown]
+    else:
+        rows = [shown_entry(s) for s in shown]
+    entries = [e for e in rows if e is not None]
+    if not entries:
         return ""
     try:
         window = int(window_tokens or LISTING_DEFAULT_WINDOW)
@@ -388,10 +518,6 @@ def listing(skills: Iterable[Skill], *, dialect: str = "", window_tokens: "int |
         window = LISTING_DEFAULT_WINDOW
     budget = max(1, int(window * 4 * LISTING_FRACTION))
     if dialect == "gpt":
-        entries = [
-            (s.name, (_desc(s) + f" (file: {base_dir(s).replace(chr(92), '/')}/SKILL.md)").strip())
-            for s in shown
-        ]
         return (
             "## Skills\nA skill is a set of local instructions to follow that is stored in a "
             "`SKILL.md` file. Below is the list of skills that can be used. Each entry includes a "
@@ -405,7 +531,7 @@ def listing(skills: Iterable[Skill], *, dialect: str = "", window_tokens: "int |
     tool = "the Skill tool" if dialect == "claude" else "skill_load"
     return (
         f"The following skills are available for use with {tool}:\n\n"
-        + "\n".join(_fit([(s.name, _desc(s)) for s in shown], budget))
+        + "\n".join(_fit(entries, budget))
     )
 
 
@@ -417,10 +543,12 @@ __all__ = [
     "base_dir_line",
     "codex_home",
     "fill",
+    "invoke_cap",
     "find",
     "invocation_text",
     "listable",
     "listing",
+    "shown_entry",
     "project_skills",
     "session_skills",
     "user_roots",

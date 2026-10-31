@@ -7634,6 +7634,31 @@ does not need a bump, stop and bump it.
   them as text); synced skills when no account is readable load from every
   bucket. Pins: `tests/test_skill_parity_v1417.py` (28 mutations, all red),
   `dashboard/__tests__/skill-parity-v1417.test.ts` (4 mutations, all red).
+  REVIEW (each red first, `tests/test_skill_parity_review_v1417.py`, 10
+  mutations red): (1) the LIST and `skill_search`'s answer go through
+  `native.shown_entry` — a skill `scans_skill` marks (another program's
+  folder, a plugin, a session folder's own) has its description (and the
+  Codex list's `(file: …)`) promptguard-scanned and is left out when its
+  NAME is flagged; the planted description reached the system prompt
+  verbatim. (2) a session folder's skills stay IN the folder: no part of
+  the way, skill folder or SKILL.md that is a link or junction is followed
+  (never opened, so a link to a share is never touched — a deliberate
+  difference from Claude Code, which follows them), TREE roots are walked
+  by hand (≤ 8 deep, ≤ 2,000 folders), and every file passes `fs_read_ok`
+  (the walk goes UP to the repository root, past "Folders Jarvis may
+  read"). (3) the "/name" playbook rides the SYSTEM prompt, which the
+  planner cannot shrink: `native.invoke_cap(window)` = a quarter of the
+  answering model's window, between the old 8,000 and `INVOKE_CHARS`, both
+  lanes passing their own `_context_window` (lock-step), and the cap bounds
+  the FILLED text (a pasted message filled in as `ARGUMENTS:` is not copied
+  whole a second time). Checked fine: synced skills read the signed-in
+  account through the shared `claude_commands.signed_in_bucket`
+  (`CLAUDE_CODE_*_UUID` ignored, pinned); `codex debug prompt-input` on a
+  scratch CODEX_HOME confirmed `.agents/skills` from the folder up to the
+  repo root, nested. OPEN: blocks in the list publish no `context.blocked`;
+  `user-invocable: false` is only hidden from the menus (a typed API
+  `skill` still runs it); terminal assist's auto skills
+  (`routes/terminals`) still inject `sk.instructions` unscanned (older).
 
 - **Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it;
   Claude Code's own command files are read, never executed; a Build session
