@@ -92,6 +92,20 @@ POOL_FULL = (
 )
 NO_SESSION_YET = "This session has no conversation yet — send a message first."
 RUNNING = "This session is working on a message — stop it or let it finish first."
+#: v1.417.0 review: what runs in the background dies with the process — a
+#: restart (effort, model, tools) waits for it, and "Open in terminal" is refused.
+BACKGROUND_OPEN_TERMINAL = (
+    "{label} still runs {tasks} in this session (helpers or commands), and opening it in a "
+    "terminal would stop them — wait for them to finish, or ask it to stop them, then try again."
+)
+RESTART_WAITS = (
+    "{label} still runs {tasks} in this session, so your change of model, effort or tools "
+    "applies once they finish — restarting it now would stop them."
+)
+
+
+def background_count(n: int) -> str:
+    return f"{n} background task" + ("" if n == 1 else "s")
 ACCOUNT_LIMIT_FIX = "Press Continue on another account, or wait until it resets."
 PI_OWN_SIGN_IN = (
     "Pi signs in by itself, per model provider, so a Pi session has no account to choose — "

@@ -437,6 +437,15 @@ class ClaudeDriver(Driver):
         #: end the reply — the answer to the user's message came after it.
         self._turn_mid = ""
         self._turn_started = False
+        #: v1.417.0 (a USER BUG): the background tasks Claude Code says are
+        #: open (``system`` ``task_started`` .. ``task_notification``; read
+        #: from the 2.1.316 binary): helper agents and background commands
+        #: that outlive the reply which started them. task_id -> task_type.
+        self._tasks: dict[str, str] = {}
+
+    @property
+    def background_tasks(self) -> int:
+        return len(self._tasks)
 
     # -- the command line ------------------------------------------------------
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
@@ -639,6 +648,7 @@ class ClaudeDriver(Driver):
             self._hold_timer.cancel()
             self._hold_timer = None
         self._held = None
+        self._tasks.clear()
 
     # -- the harness's side (ON THE LOOP) ---------------------------------------
     def on_message(self, obj: dict[str, Any]) -> None:
@@ -770,6 +780,12 @@ class ClaudeDriver(Driver):
                 model=clip(obj.get("model") or self.model, 120), cwd=clip(obj.get("cwd") or self.cwd, 500),
                 mode=mode,
             ))
+        elif sub == "task_started":
+            tid = str(obj.get("task_id") or "")
+            if tid:
+                self._tasks[tid] = str(obj.get("task_type") or "")
+        elif sub == "task_notification":
+            self._tasks.pop(str(obj.get("task_id") or ""), None)
         elif sub == "compact_boundary":
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))
         elif sub == "api_retry":

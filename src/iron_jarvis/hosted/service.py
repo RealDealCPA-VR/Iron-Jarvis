@@ -110,6 +110,13 @@ MAX_LIVE = 6
 IDLE_S = 15 * 60.0
 #: How often the reaper looks.
 REAP_EVERY_S = 60.0
+#: v1.417.0 (a USER BUG): a process whose tool still runs BACKGROUND tasks
+#: (Claude Code's helper agents and background commands, which outlive the
+#: reply that started them) is never reaped or evicted — stopping it killed
+#: every helper. Bounded: once the tool has said nothing for this long the
+#: reaper treats the session as idle again (a forgotten dev server must not
+#: hold a process forever).
+BACKGROUND_SILENT_MAX_S = 2 * 60 * 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
 #: v1.414.3: how long a reply's end waits for the tool's session id to be saved.
@@ -619,6 +626,9 @@ class LiveSession:
         self.turn: HostedTurn | None = None
         self.asks: dict[str, Ask] = {}
         self.last_active = time.monotonic()
+        #: v1.417.0: when the running tool last sent anything (any frame,
+        #: owned by a reply or not) — the background-work bound reads it.
+        self.last_heard = self.last_active
         self.lock = asyncio.Lock()
         #: The process must restart before the next message (an effort change).
         self.restart = False
@@ -655,6 +665,21 @@ class LiveSession:
         """The tool is running something no message owns (Pi: a run an
         extension started by itself) — never reaped, never evicted."""
         return bool(self.driver is not None and getattr(self.driver, "busy_alone", False))
+
+    @property
+    def background_tasks(self) -> int:
+        """v1.417.0: how many background tasks the tool says are still open
+        (Claude Code's helper agents and background commands). A new message
+        is still welcome; only the reaper and the pool leave the process be."""
+        try:
+            return int(getattr(self.driver, "background_tasks", 0) or 0) if self.driver is not None else 0
+        except Exception:  # noqa: BLE001 — a driver's count must never break the pool
+            return 0
+
+    def keeps_working(self, now: float) -> bool:
+        """Open background tasks the tool was heard from within
+        :data:`BACKGROUND_SILENT_MAX_S`."""
+        return self.background_tasks > 0 and now - self.last_heard < BACKGROUND_SILENT_MAX_S
 
     @property
     def busy(self) -> bool:
@@ -1135,6 +1160,7 @@ class HostedService:
         view["running"] = bool(live and live.turn and live.turn.running)
         view["process"] = bool(live and live.running)
         view["waiting"] = bool(live and live.asks)
+        view["background"] = live.background_tasks if live and live.running else 0
         return view
 
     def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
@@ -1346,6 +1372,13 @@ class HostedService:
     async def _ensure_running(self, live: LiveSession, row: Any) -> None:
         if live.running and not live.restart:
             return
+        if live.running and live.restart and live.keeps_working(self.clock()):
+            # v1.417.0 review: a restart is a tree kill — it would stop every
+            # helper still working in the background. It waits (``restart``
+            # stays set) and this message runs on the process as it is.
+            self._emit(live, make("notice", text=W.RESTART_WAITS.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks))))
+            return
         if live.running and live.restart:
             # v1.413.0: the old process goes WITHOUT ending the turn that is
             # starting now (it is already ``live.turn``) — this stop used to
@@ -1370,7 +1403,11 @@ class HostedService:
                     raise Refused(W.HELD_BY_ROW)
             others = [lv for lv in self.live.values() if lv is not live and lv.running]
             if len(others) >= MAX_LIVE:
-                idle = sorted((lv for lv in others if not lv.busy), key=lambda lv: lv.last_active)
+                now = self.clock()
+                # v1.417.0 review: least recently HEARD first, like the reaper
+                # (a reply the tool started by itself owns no turn).
+                idle = sorted((lv for lv in others if not lv.busy and not lv.keeps_working(now)),
+                              key=lambda lv: max(lv.last_active, lv.last_heard))
                 if not idle:
                     raise Refused(W.POOL_FULL)
                 await self._stop_process(idle[0])
@@ -1445,6 +1482,7 @@ class HostedService:
             self._on_exit(live, proc, code)
 
         def on_message(obj: dict[str, Any]) -> None:
+            live.last_heard = self.clock()
             # A frame the parser cannot read must never end the session.
             try:
                 driver.on_message(obj)
@@ -2053,7 +2091,8 @@ class HostedService:
         now = self.clock() if now is None else now
         stopped = []
         for live in list(self.live.values()):
-            if live.running and not live.busy and now - live.last_active >= IDLE_S:
+            quiet = now - max(live.last_active, live.last_heard)
+            if live.running and not live.busy and not live.keeps_working(now) and quiet >= IDLE_S:
                 await self._stop_process(live)
                 stopped.append(live.sid)
         return stopped
@@ -2079,6 +2118,9 @@ class HostedService:
         live = self.live.get(sid)
         if live and ((live.turn and live.turn.running) or live.claim):
             raise Refused(W.RUNNING)
+        if live and live.running and live.keeps_working(self.clock()):
+            raise Refused(W.BACKGROUND_OPEN_TERMINAL.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks)))
         hid = row.harness_session_id
         if not hid:
             raise Refused(W.NO_SESSION_YET)

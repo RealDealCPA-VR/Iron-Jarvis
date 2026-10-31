@@ -4204,6 +4204,30 @@ does not need a bump, stop and bump it.
   and Build's Code view (`hosted/`, the real CLI with its own tools) is a
   different path and is untouched. Pin: `tests/test_claude_slash_text_v1416.py`.
 
+- **A Code-view session whose tool still runs BACKGROUND work is never reaped
+  or evicted** (v1.417.0, a USER BUG: seven Claude Code builder teams died
+  together twice in one day, each ~15 min after the reply that said "I'll
+  report as teams finish"). The pool's idle reaper (`IDLE_S`) looked only at
+  whether a reply ran. Claude Code says `system` `task_started` (task_id,
+  task_type local_agent | local_bash …) and `task_notification` (completed |
+  failed | stopped) — measured live on 2.1.316: the reply's `result` comes
+  while the task is open, then the notification, then Claude Code WAKES
+  ITSELF with a second reply. `ClaudeDriver.background_tasks` counts the open
+  ones; `LiveSession.keeps_working(now)` (open tasks AND the tool heard from
+  within `BACKGROUND_SILENT_MAX_S`, 2 h — a forgotten dev server must not
+  hold a process forever) keeps the reaper and the cap-6 evictor off it; idle
+  is measured from the tool's newest frame of ANY kind (`last_heard`, set in
+  the service's `on_message`), so a self-started reply counts. Open tasks
+  never make the session `busy` (that refuses a message — Claude Code takes
+  one while helpers run). The session row carries `background` (count).
+  REVIEW: the reaper was not the only way they died. A restart (effort,
+  model back to default, tools) waits while tasks are open (`restart` stays
+  set, a notice says so) and runs on the first message after; Open in
+  terminal is refused in words (`W.BACKGROUND_OPEN_TERMINAL`); the cap-6
+  evictor sorts by `max(last_active, last_heard)` like the reaper (Claude
+  Code's self-started reply after helpers finish owns no turn). Archive,
+  delete, shutdown and the account move still stop the process as before.
+  Pins: `tests/test_build_app_background_tasks_v1417.py` (12 mutations, all red).
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control
