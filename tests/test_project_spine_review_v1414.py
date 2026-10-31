@@ -251,3 +251,43 @@ async def test_a_different_correction_after_a_failed_reply_still_counts(scene):
     ])
     done = await _turn(scene.app, sid, "no tables please", "new-words-1")
     assert done.get("suggestion") is not None and done["suggestion"]["count"] == 2, done
+
+
+# --------------------------------------------------------------------------- #
+# 5. a Build › Code session on Pi or OpenCode may run on a local model: its
+#    title stays home like a local-only one (Claude Code / Codex keep today's
+#    behaviour — their words already went to that vendor)
+# --------------------------------------------------------------------------- #
+
+
+def _hosted(scene, harness, title, hours_ago):
+    from iron_jarvis.hosted import store as hosted_store
+
+    row = hosted_store.create(scene.platform.engine, harness=harness, folder=str(scene.root / "src"),
+                              title=title)
+    hosted_store.update(scene.platform.engine, row.id, updated_at=utcnow() - timedelta(hours=hours_ago))
+    return row.id
+
+
+def test_a_pi_or_opencode_sessions_title_stays_home_but_claude_code_is_listed(scene):
+    _run(scene, "A run", hours_ago=9)
+    _hosted(scene, "pi", "SECRET-PI-TITLE", 1)
+    _hosted(scene, "opencode", "SECRET-OPENCODE-TITLE", 2)
+    _hosted(scene, "claude-code", "Claude Code work", 3)
+    _hosted(scene, "codex", "Codex work", 4)
+    for system in _both_lanes(scene):
+        block = "\n".join(_block(system))
+        assert "SECRET-PI-TITLE" not in system and "SECRET-OPENCODE-TITLE" not in system
+        assert "Claude Code work" in block and "Codex work" in block
+    runtime = "\n".join(_runtime_block(scene))
+    assert "SECRET-PI" not in runtime and "SECRET-OPENCODE" not in runtime
+    assert "Claude Code work" in runtime and "Codex work" in runtime
+    # Work that stays on this network still sees them.
+    for system in _both_lanes(scene, local_only=True):
+        block = "\n".join(_block(system))
+        assert "SECRET-PI-TITLE" in block and "SECRET-OPENCODE-TITLE" in block
+    # The project page still lists every one (it is the user's own screen),
+    # and the wire says nothing new.
+    rows = scene.client.get(f"/projects/{scene.pid}").json()["coding_sessions"]
+    assert {r["title"] for r in rows} >= {"SECRET-PI-TITLE", "SECRET-OPENCODE-TITLE", "Claude Code work"}
+    assert all(r["local_only"] is False for r in rows if r["view"] == "build_code")

@@ -23,7 +23,10 @@ Rules, each pinned:
   keeps even its title home from work that leaves this network — the fabric
   recall's own rule (``egress.may_recall_local_only_chats``: only a turn whose
   scope is on and that the user has not allowed off the network for this
-  message may see them). The scope is a context variable and
+  message may see them). v1.414.0 review: a Build › Code session on Pi or
+  OpenCode (any tool but Claude Code / Codex) may run on a local model and
+  has no Local only switch, so its title is kept home the same way.
+  The scope is a context variable and
   ``asyncio.to_thread`` copies it, so this reads the CALLER's scope.
 * The turn's OWN conversation (``exclude_thread``) is not listed as recent
   activity of itself.
@@ -176,7 +179,9 @@ def extra_entries(
         for r in rows:
             if r["id"] == exclude or kept >= OTHERS_MAX:
                 continue
-            if withhold and r.get("local_only"):
+            # v1.414.0 review: a Pi / OpenCode session may run on a local
+            # model (coding_sessions.VENDOR_TOOLS) — kept home the same way.
+            if withhold and (r.get("local_only") or r.get("_may_stay_local")):
                 continue
             words = _safe_title(r.get("title"), "coding session title")
             if not words:

@@ -4582,7 +4582,12 @@ does not need a bump, stop and bump it.
   "anywhere", "every day", "forever"…); "our" scopes CODE nouns only ("no
   emoji in our chat" is every chat); (4) a waiting coding session reads "it
   is waiting for your answer" / "Waiting for you" (a question waits too, not
-  only a card). Pins: `tests/test_project_spine_review_v1414.py`,
+  only a card); (5) a Build › Code session on Pi or OpenCode (any tool but
+  `coding_sessions.VENDOR_TOOLS` = claude-code, codex) may run on a local
+  model and that view has no Local only switch, so its title is withheld
+  from work that leaves this network by the same rule (private
+  `_may_stay_local`; the API's `local_only` is unchanged and the project
+  page still lists it). Pins: `tests/test_project_spine_review_v1414.py`,
   `tests/test_{project_coding_sessions,
   project_recent_activity,code_preferences}_v1414.py`,
   `dashboard/__tests__/{project-coding-sessions,project-page-coding-sessions,

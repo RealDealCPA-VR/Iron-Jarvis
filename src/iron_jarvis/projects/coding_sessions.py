@@ -57,6 +57,10 @@ VIEW_BUILD_CODE = "build_code"
 #: dashboard/__tests__/project-coding-sessions-v1414.test.tsx).
 CHAT_CODE_HREF = "/chat?view=code&session="
 BUILD_CODE_HREF = "/terminals?view=code&code="
+#: Build › Code tools that always talk to their own vendor (v1.414.0 review):
+#: a session's words have already left this network. Every other tool (Pi,
+#: OpenCode, an unknown one) may run on a local model.
+VENDOR_TOOLS: frozenset[str] = frozenset({"claude-code", "codex"})
 #: What a row is (the canon word, lib/buildWords CODING_SESSION).
 KIND = "coding_session"
 
@@ -215,6 +219,12 @@ def _build_code_rows(db: Any, scan: int) -> list[dict[str, Any]]:
             "folder": str(folder or ""),
             # The real Claude Code / Codex talk to their vendor: never local.
             "local_only": False,
+            # v1.414.0 review: Pi and OpenCode (or any tool this read does not
+            # know) may run on a model on this network, and this view has no
+            # Local only switch — so their titles are kept home from work that
+            # leaves the network, as a local-only one is (recent_activity).
+            # Private: the API's ``local_only`` keeps saying what was set.
+            "_may_stay_local": str(harness or "") not in VENDOR_TOOLS,
             # The tool said its own session id once a conversation existed:
             # the only "it answered" this view keeps without its event log.
             "_role": "assistant" if str(hsid or "").strip() else "",
@@ -255,6 +265,7 @@ def _view(row: dict[str, Any], live: dict[str, bool] | None) -> dict[str, Any]:
         "local_only": bool(row["local_only"]),
         "folder": row["folder"],
         "_updated": row["updated"],
+        "_may_stay_local": bool(row.get("_may_stay_local")),
     }
 
 

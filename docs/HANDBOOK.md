@@ -2454,7 +2454,10 @@ A project now sees the coding work done in its own folder.
   instructions is left out. A chat or coding session you keep **on this PC
   only** (Local only) is never named to a model that is not on this
   network, and neither is an agent run you kept on this PC only (its task
-  and summary stay out too). A project with no chats and no coding sessions
+  and summary stay out too). A Build › Code session on **Pi** or
+  **OpenCode** may run on a model on your own network, so its title is kept
+  from a model that is not on this network too (Claude Code and Codex
+  sessions are named: their words already go to that company). A project with no chats and no coding sessions
   gets exactly the same lines as before.
 - **Corrections in a coding session become a one-press preference.** When
   you correct how Jarvis works in a coding session in Chat › Code ("stop
