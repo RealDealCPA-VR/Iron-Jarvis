@@ -298,7 +298,23 @@ def test_the_driver_never_picks_an_option_grok_saves():
 
 
 async def test_stop_is_groks_cancel_and_a_command_left_running_closes_grok(tmp_path, monkeypatch):
+    from iron_jarvis.hosted import process as PR
+
+    order: list[str] = []
+    note, interrupt = PR.HarnessProcess.note_started, G.GrokDriver.interrupt
+
+    def noted(self):
+        order.append("noted")
+        return note(self)
+
+    async def told(self):
+        order.append("cancel")
+        return await interrupt(self)
+
+    monkeypatch.setattr(PR.HarnessProcess, "note_started", noted)
+    monkeypatch.setattr(G.GrokDriver, "interrupt", told)
     evs, _s, _w, log, still_running = await run_grok(tmp_path, monkeypatch, "grok_stop")
+    assert order == ["noted", "cancel"], "what Grok started is read BEFORE it is told to stop"
     assert any(m.get("method") == "session/cancel" and "id" not in m for m in sent(log))
     assert evs[-1]["stop"] == "interrupted"
     assert W.GROK_STOP_CLOSED in [e.get("text") for e in evs if e["type"] == "notice"]
@@ -525,3 +541,72 @@ async def test_continue_on_another_account_is_for_claude_code_only(app, work):
     async with client(app) as c:
         r = await c.post(f"/build/app/sessions/{row.id}/continue-on", json={})
         assert r.status_code == 409 and r.json()["detail"] == W.GROK_CONTINUE
+
+
+# --------------------------------------------------------------------------- #
+# A stop ends what the tool started, even a process outside its Job
+# --------------------------------------------------------------------------- #
+def _sleeper():
+    import subprocess
+
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
+def _poll(fn, timeout: float = 15.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while True:
+        got = fn()
+        if got or time.monotonic() > end:
+            return got
+        time.sleep(0.1)
+
+
+def test_descendants_and_kill_left_end_only_the_same_processes():
+    import subprocess
+
+    from iron_jarvis.hosted import process as PR
+
+    parent = subprocess.Popen([sys.executable, "-c",
+                               "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', "
+                               "'import time; time.sleep(60)']); time.sleep(60)"])
+    try:
+        got = _poll(lambda: PR.descendants(parent.pid))
+        assert got, "the grandchild is read"
+        other = _sleeper()
+        try:
+            # A reused pid (another start time) is never touched.
+            assert PR.kill_left([(other.pid, 1.0)]) == []
+            assert other.poll() is None
+        finally:
+            other.kill()
+        assert sorted(PR.kill_left(got)) == sorted(pid for pid, _ in got)
+    finally:
+        parent.kill()
+
+
+def test_a_stop_ends_a_process_the_tool_started_outside_its_job(tmp_path, monkeypatch):
+    """Measured: Grok runs each command as its own `pwsh -Command …` that is
+    NOT a member of the Job Iron Jarvis puts Grok in, so a `ping` outlived the
+    Job's close. The stop reads what the tool started FIRST and ends it after."""
+    import psutil
+
+    from iron_jarvis.hosted import process as PR
+
+    escaped = _sleeper()
+    try:
+        made = psutil.Process(escaped.pid).create_time()
+        monkeypatch.setattr(PR, "descendants", lambda pid: [(escaped.pid, made)])
+        hp = PR.HarnessProcess([sys.executable, "-c", "import sys; sys.stdin.read()"], env=dict(os.environ),
+                               cwd=str(tmp_path), name="t")
+        loop = asyncio.new_event_loop()
+        try:
+            hp.start(loop, lambda m: None, lambda c: None)
+            hp.stop()
+        finally:
+            loop.close()
+        assert escaped.wait(timeout=10) is not None, "the process outside the Job ended with the stop"
+    finally:
+        if escaped.poll() is None:
+            escaped.kill()

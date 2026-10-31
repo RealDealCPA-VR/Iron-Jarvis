@@ -99,6 +99,48 @@ def decode_line(raw: bytes) -> Any:
     return obj if isinstance(obj, dict) else None
 
 
+def descendants(pid: int | None) -> list[tuple[int, float]]:
+    """BLOCKING: ``(pid, start time)`` of every process below ``pid`` now (the
+    parent links as Windows keeps them). [] when it cannot be read."""
+    if not pid:
+        return []
+    try:
+        import psutil
+
+        out = []
+        for child in psutil.Process(pid).children(recursive=True):
+            try:
+                out.append((child.pid, child.create_time()))
+            except (psutil.Error, OSError):
+                continue
+        return out
+    except Exception:  # noqa: BLE001 — nothing known: nothing extra is ended
+        return []
+
+
+def kill_left(started: list[tuple[int, float]]) -> list[int]:
+    """BLOCKING: end each process of ``started`` that is STILL the same
+    process (same pid AND start time — a reused pid is never touched). Returns
+    the pids ended. Never raises."""
+    if not started:
+        return []
+    ended = []
+    try:
+        import psutil
+    except Exception:  # noqa: BLE001
+        return []
+    for pid, created in started:
+        try:
+            p = psutil.Process(pid)
+            if abs(p.create_time() - created) > 0.5:
+                continue
+            p.kill()
+            ended.append(pid)
+        except (psutil.Error, OSError):
+            continue
+    return ended
+
+
 class HarnessGone(RuntimeError):
     """The harness process is not running (it ended, or could not start)."""
 
@@ -119,6 +161,9 @@ class HarnessProcess:
         self._stop_lock = threading.Lock()
         self._threads: list[threading.Thread] = []
         self._stderr: deque[bytes] = deque(maxlen=64)
+        #: v1.416.0: (pid, start time) of what the harness started, noted before
+        #: a Stop (:meth:`note_started`).
+        self._started: list[tuple[int, float]] = []
 
     @property
     def alive(self) -> bool:
@@ -197,6 +242,18 @@ class HarnessProcess:
     def stderr_text(self) -> str:
         return b"".join(self._stderr).decode("utf-8", errors="replace")[-2000:]
 
+    def note_started(self) -> None:
+        """BLOCKING: remember what the harness has started RIGHT NOW (v1.416.0)
+        — read before it is told to stop a turn: Grok's cancel ends the shell
+        it ran a command in and leaves the command itself running with no
+        parent, where a later read of the tree no longer finds it (measured).
+        :meth:`stop` ends whatever of it is still the same process."""
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return
+        seen = {pid for pid, _ in self._started}
+        self._started.extend(p for p in descendants(proc.pid) if p[0] not in seen)
+
     # -- stop (BLOCKING, idempotent) ------------------------------------------
     def stop(self, *, graceful: bool = True) -> None:
         """Stop the harness and everything it started. ``graceful``: its stdin
@@ -209,6 +266,15 @@ class HarnessProcess:
         proc = self.proc
         if proc is None:
             return
+        # v1.416.0: what the harness started, read BEFORE it is told to go (a
+        # child is re-parented away from the tree once its parent exits).
+        # Grok runs each command as its own `pwsh -Command …` that is NOT a
+        # member of the Job (measured: a `ping` outlived the Job's close), so
+        # whatever of it is still alive after the Job is ended by name below.
+        started = list(self._started)
+        if proc.poll() is None:
+            known = {pid for pid, _ in started}
+            started += [p for p in descendants(proc.pid) if p[0] not in known]
         if graceful and self._wlock.acquire(timeout=1.0):
             try:
                 if proc.stdin and not proc.stdin.closed:
@@ -228,6 +294,7 @@ class HarnessProcess:
         except Exception:  # noqa: BLE001 — a wedged reap must not hang a stop
             pass
         procs.release(proc)
+        kill_left(started)
         # Bounded: a reader still blocked means something still holds the pipe;
         # closing a pipe another thread is reading can block on Windows, so
         # only the pipes whose reader has finished are closed.

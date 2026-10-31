@@ -4631,6 +4631,98 @@ does not need a bump, stop and bump it.
   `build-code-start-v1412` (the heading). Live-proven on a scratch daemon
   (real opencode 1.18.18, opencode/glm-5.3-flash-free): see the Handbook.
 
+- **Grok is the FIFTH tool in Build › Code: `grok agent --no-leader stdio`
+  (ACP, the core OpenCode speaks, LIFTED into `hosted/acp.py`); a mode is the
+  session's own `_meta`, ALWAYS stated; Iron Jarvis never picks an option Grok
+  SAVES** (v1.416.0, `hosted/grok.py`, grok 1.0.5 -> 1.0.70 measured — the CLI
+  UPDATED ITSELF during the first scratch run, its own background updater).
+  `AcpDriver` (requests, prompts, cards, the update stream, the turn's end)
+  is shared; `OpenCodeDriver` keeps its behaviour on it (its 74 tests
+  unchanged, green) and `opencode.py` still re-exports the lifted names.
+  START: `G.ARGV` = `agent --no-leader stdio` (Grok's `[cli] use_leader`
+  would hand the session to a SHARED leader that outlives the process and that
+  no tree kill reaches); no port. POSTURE: Grok's ACP `session/new` /
+  `session/resume` take `_meta {yoloMode, autoMode}` (its documented options);
+  with no `_meta` the user's own `[ui] permission_mode` decides — on THIS PC
+  `always-approve`, and a write ran with no card (measured). So
+  `G.session_meta(mode)` is sent on EVERY open and resume: ask = both false,
+  auto = Grok's own safety check, full = yolo (two presses). `session/set_mode`
+  answers `{}` for ANY id, even a made-up one, and changes nothing (measured);
+  the top-level `--permission-mode` / `--allow` are not honoured by `agent
+  stdio` (measured) — so Auto edits and Plan are HIDDEN with reasons
+  (`G.HIDDEN_MODES`). A mode change is a new process before the next message
+  (`restart_needed`, `session/resume` with the new `_meta`). CARDS: an edit
+  offers `allow-edits-session` (in memory, per Grok's docs) / `allow-once` /
+  `reject-once`; a command offers `always-allow` and `reject-always`, which
+  Grok SAVES for the project — `G.SESSION_ONLY_OPTIONS` is the only Allow for
+  this session, Deny is `reject-once` only (a card with none answers
+  cancelled), so a command card is Allow once only. A `reject-once` ENDS the
+  reply (`stopReason cancelled`, `cancellationCategory PermissionRejected`):
+  drawn `completed` + `W.GROK_DECLINED_ENDS`, never the user's Stop. STOP:
+  `session/cancel` ends the reply and LEAVES THE RUNNING COMMAND RUNNING (a
+  `ping` outlived the cancel and Grok itself; `_x.ai/terminal/kill` with the
+  tool call id said "terminal not found") — the driver draws each running tool
+  failed (`G.STOPPED_TOOL`), sets `close_after_stop` when one was a command,
+  and `service._end_turn` stops the process BEFORE the done, with
+  `W.GROK_STOP_CLOSED`; the conversation reopens with the next message. THE
+  JOB DOES NOT REACH GROK'S COMMANDS: Grok runs each one as `pwsh
+  -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <cmd>` — on this
+  PC the Store pwsh (WindowsApps alias), which Windows never puts in our Job
+  (the v1.407.1 AppX lesson) — so the `ping` was in NO job and outlived the
+  Job's close (measured with `IsProcessInJob`, live). And Grok's cancel kills
+  that pwsh, leaving the command with a dead parent, where a tree read at stop
+  time no longer finds it. So `HarnessProcess.note_started()` reads the
+  descendants (psutil, pid + start time) when the service sends a Stop to a
+  driver with `notes_started_on_stop` (Grok only), BEFORE `session/cancel`;
+  `stop()` reads them again and `process.kill_left` ends whatever is still
+  the SAME process (start time checked — a reused pid is never touched).
+  Live-proven: before the fix a ping survived Stop; after, 0 left. NOTES: a second `session/prompt` is QUEUED as its own turn
+  (measured), so a note is Grok's own `_x.ai/interject` {sessionId, text}
+  (answered `{status: queued}`, echoed at once as `_x.ai/session/interjection`
+  — read on that echo; registered BEFORE the request, the echo outruns its
+  answer). RESUME: `session/resume` (no replay; keeps the last model —
+  `keeps_last` from `summary.json` `num_messages`), else `session/load` with
+  the replay hidden. MODELS / EFFORT: `models.availableModels` (each with its
+  own `reasoningEfforts`), `session/set_model`, `session/set_config_option
+  reasoning_effort`; the list is what a Grok process last said
+  (`<home>/hosted/grok_models.json`), else Grok's own `models_cache.json`
+  (names only). USAGE: the prompt answer's `_meta.usage`, `costUsdTicks /
+  10^10` (xAI's unit — NOT cross-checked against a bill), `cost_reported_by:
+  "Grok"`, never list price; context = `_meta.totalTokens` over the model's
+  `totalContextTokens`. Every other `_x.ai/...` notification is DROPPED unread
+  (`_x.ai/mcp/servers_updated` carries the user's MCP config, keys in URLs).
+  SIGN-IN / ACCOUNTS: Grok's own `auth.json` read as a FILE (`G.signed_in`,
+  never a process); an Iron-Proxy `xai` account is its `GROK_HOME`
+  (`W.PROXY`, `BA.proxy_account_rows` on `BA.status_of`, lifted out of
+  `row_of`); `continue-on` refuses (`W.GROK_CONTINUE`). SAVED SESSIONS:
+  `<home>/sessions/*/<uuid>/summary.json` matched by its `cwd` (the encoded
+  folder name is never recomputed); `grok --resume <id>` in a terminal.
+  LISTED ONLY WHEN INSTALLED: the row carries `only_when_installed` and the
+  dashboard's `decodeCodingTools` drops it when not installed;
+  `toolChoiceWords` names the four always plus Grok when listed. TESTS NEVER
+  READ THE USER'S ~/.grok: `tests/conftest.py` `_isolate_grok_home` sets
+  `IRONJARVIS_GROK_HOME` (`G.HOME_ENV`, Iron Jarvis's reads only — the process
+  is never told). OPEN: grok-4.5 did not read an attached picture (it tried
+  `read_file`, then a PowerShell search; grok-4.7 read it) — which models
+  see pictures is not known in advance; a note interjected in a reply's LAST
+  step was not measured (it may run as its own turn); Grok's
+  `x.ai/ask_user_question` / `exit_plan_mode` client requests are answered
+  "not handled"; Grok's subagent permission requests not measured; Iron
+  Jarvis's own MCP tools over Grok's ACP not measured live; the cost tick unit;
+  the CLI auto-updates itself (a recording may stop matching a newer Grok).
+  Pins: `tests/test_build_app_grok_v1416.py` (recordings
+  `tests/fixtures/build_app_v1416`, contract `dashboard/__tests__/fixtures/
+  build-app-events-v1416.json`, `IJ_REGEN_BUILD_APP_GROK=1`),
+  `dashboard/__tests__/build-app-grok-v1416.test.tsx`; moved on purpose:
+  `test_build_app_routes_v1409` (five tools; the from-terminal words).
+  Every guarantee mutation-checked (19 daemon + 4 dashboard, all red).
+  Live-proven on a scratch daemon (8797, scratch root, real grok 1.0.70,
+  grok-4.5 effort low): an answer ("pong", cost reported), an edit card
+  allowed (the file written), a command card (Allow once only) allowed then
+  Stop (no command left running), and the next message resumed the same
+  conversation. NOT driven live: Open in terminal / back (pinned with the
+  fake only), an Iron-Proxy account, Iron Jarvis's MCP tools.
+
 - **Build › Code is part of the app: its running work is seen everywhere,
   its card reaches the phone, and the REAL tool may get Iron Jarvis's own MCP
   connection — per process, behind the same five boxes a terminal has, all

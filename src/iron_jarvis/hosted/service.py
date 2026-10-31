@@ -1986,6 +1986,12 @@ class HostedService:
                     except Exception:  # noqa: BLE001
                         pass
                     self._emit(live, make("resolved", request_id=ask_id, decision="deny"))
+                proc = live.proc
+                if getattr(driver, "notes_started_on_stop", False) and proc is not None:
+                    # v1.416.0: Grok's cancel leaves its command running with
+                    # no parent — what it started is read BEFORE it is told.
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(proc.note_started)
                 try:
                     await driver.interrupt()
                 except Exception:  # noqa: BLE001 — a gone process ends the turn

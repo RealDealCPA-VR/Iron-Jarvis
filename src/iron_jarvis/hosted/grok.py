@@ -71,7 +71,9 @@ one-word prompts on grok-4.5 effort low; masked recordings in
   command it was running KEEPS RUNNING (a ``ping`` outlived the cancel and
   Grok itself); ``_x.ai/terminal/kill`` with the tool call id answered
   "terminal not found". So a Stop that leaves a command running closes the
-  process: its Job takes the command with it (:attr:`close_after_stop`).
+  process, and the command too: Grok runs it in the Store pwsh, which is
+  never in our Job, so its pid (read before the cancel,
+  ``HarnessProcess.note_started``) is ended by name (:attr:`close_after_stop`).
 * A SECOND ``session/prompt`` while a turn runs is QUEUED: it runs as its own
   turn after the first ends. A note while it works is Grok's own
   ``_x.ai/interject`` {sessionId, text} (its Ctrl+Enter): answered ``{result:
@@ -391,7 +393,8 @@ class GrokDriver(AcpDriver):
         #: Notes sent while it works, in order: (ref, text), until Grok echoes them.
         self._notes: list[tuple[str, str]] = []
         #: v1.416.0: a Stop that left a command of Grok's running — the service
-        #: closes the process (its Job ends the command) before the turn's done.
+        #: closes the process and ends the command (read before the cancel)
+        #: before the turn's done.
         self.close_after_stop = False
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
@@ -614,6 +617,11 @@ class GrokDriver(AcpDriver):
 
     #: Set when a change can only apply to a NEW process.
     restart_needed = False
+    #: v1.416.0: the service reads what Grok started BEFORE a Stop is sent —
+    #: Grok's cancel ends the shell (``pwsh -Command …``, the Store pwsh: never
+    #: a member of the Job) and leaves the command in it running with no
+    #: parent (measured), where the stop's own read no longer finds it.
+    notes_started_on_stop = True
 
     # -- Grok's side (ON THE LOOP) -----------------------------------------------------
     def on_extension(self, method: str, params: dict[str, Any]) -> None:
@@ -668,7 +676,7 @@ class GrokDriver(AcpDriver):
     def end_turn_tools(self) -> None:
         """Grok's cancel says nothing more about a tool that was running: each
         is drawn as stopped, and a COMMAND among them keeps running (measured)
-        — the service then closes Grok, whose Job ends it."""
+        — the service then closes Grok and ends the command it noted."""
         from .acp import _input_line
 
         if self._interrupting:
