@@ -112,6 +112,8 @@ REQUEST_TIMEOUT_S = 60.0
 
 _DECISION_V2 = {"allow": "accept", "allow_session": "acceptForSession", "deny": "decline"}
 _DECISION_LEGACY = {"allow": "approved", "allow_session": "approved_for_session", "deny": "denied"}
+#: v1.417.0: the requests that ask to run a command.
+_COMMAND_METHODS = ("item/commandExecution/requestApproval", "execCommandApproval")
 
 
 def _base(path: Any) -> str:
@@ -388,6 +390,13 @@ class CodexDriver(Driver):
         """The JSON-RPC response for the user's answer — or AskRefused,
         before anything is sent."""
         method = ask.data.get("method")
+        if decision == "allow_commands":
+            # v1.417.0 (C1.1): Codex has no whole-tool rule of its own; the
+            # nearest it offers is its session-wide accept for THIS command
+            # (``acceptForSession``) — taken only when the request lists it.
+            if method not in _COMMAND_METHODS or not ask.can_session:
+                raise AskRefused(W.ALL_COMMANDS_NOT_OFFERED.format(label=W.label(HARNESS)))
+            decision = "allow_session"
         if decision == "allow_session" and not ask.can_session:
             raise AskRefused("Codex offers no session-wide allow for this one — allow it once.")
         if method in ("execCommandApproval", "applyPatchApproval"):

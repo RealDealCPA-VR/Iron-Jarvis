@@ -712,6 +712,16 @@ def _generic_name(exc: BaseException | None, provider: str, manager: Any) -> str
     chain); Iron Jarvis's own fault, or Auto, stays "Iron Jarvis". Never
     raises."""
     try:
+        # v1.417.0 (C4.9): a coding tool Build › Code drives names ITSELF
+        # (``hosted.words.HostedToolError.tool_label``): "Claude Code
+        # couldn't finish this answer", never an anonymous "Iron Jarvis".
+        cur, seen = exc, 0
+        while cur is not None and seen < _CHAIN:
+            own = getattr(cur, "tool_label", None)
+            if isinstance(own, str) and own.strip():
+                return " ".join(own.split())[:60]
+            cur = cur.__cause__ or cur.__context__
+            seen += 1
         f = failure_facts(exc)
         who = f.provider
         if not who:

@@ -9984,6 +9984,11 @@ async def run_chat_turn(
             # card (its permission asks once this turn's arming is set aside)
             # runs here only when the RULES pass it; otherwise it is refused in
             # words through the registry's ledgered deny path. Never the judge.
+            # v1.417.0 (C1.4, MIRROR NOTE): the read-only command list is a
+            # `classify` rule, so a `git status` passes here under Accept
+            # edits / Auto exactly as in the stream lane. Under Ask first this
+            # lane needs no pre-pass: it cards nothing, and an ask-tier command
+            # tool is armed here only where the user's permissions allow it.
             _auto_refuse: dict[int, str] = {}
             if _auto_mode in _auto.EASED_MODES and calls:
                 for _atc in calls:

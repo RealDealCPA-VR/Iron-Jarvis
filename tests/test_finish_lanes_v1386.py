@@ -212,7 +212,10 @@ async def test_a_reply_that_changed_files_gets_one_note_and_one_extra_round(env,
         assert note.startswith(NOTE_HEAD)
         return "1. met: app.py says X = 2 and the tests pass.\nNothing needed changing."
 
-    model = wire([_write("app.py", "X = 2\n"), _shell(TEST_CMD), "Set X to 2; the tests pass.", answer])
+    # v1.417.0 (C1.3): the test runs BEFORE the edit, so the check runs it
+    # again (a run that passed AFTER the last edit is not re-run — pinned in
+    # tests/test_finish_skip_rerun_v1417.py).
+    model = wire([_shell(TEST_CMD), _write("app.py", "X = 2\n"), "Set X to 2; the tests pass.", answer])
     done, frames = await _lane(lane, platform, _body(ws), monkeypatch)
     # ONE extra model round: write, shell, the reply, the check's answer.
     assert len(model.calls) == 4, [c["messages"][-1].content[:60] for c in model.calls]
@@ -509,7 +512,8 @@ async def test_under_ask_first_the_test_command_cards_and_a_decline_is_honoured(
         # the model's own command: allowed once; the check's: declined
         return "deny" if _finish_card(frame) else "once"
 
-    model = wire([_write("app.py", "X = 2\n"), _shell(TEST_CMD), "Done.", "1. met."])
+    # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it.
+    model = wire([_shell(TEST_CMD), _write("app.py", "X = 2\n"), "Done.", "1. met."])
     out = await _stream(platform, _body(ws, approval_mode=posture), answer=answer)
     mine = [f for f in seen if _finish_card(f)]
     assert len(mine) == 1 and mine[0]["tool"] == "shell" and mine[0]["args"]["command"] == TEST_CMD
@@ -630,7 +634,8 @@ async def test_a_projects_command_turn_asks_for_its_test_run_too(env):
 
     platform, ws, wire = env
     seen: list[dict] = []
-    wire([_write("app.py", "X = 2\n"), _shell(TEST_CMD), "Done.", "1. met."])
+    # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it.
+    wire([_shell(TEST_CMD), _write("app.py", "X = 2\n"), "Done.", "1. met."])
     entry = K.CommandLines(name="deploy", source="project", plugin="", turn_id="t", lines=("npm run deploy",))
     token = K.set_turn_rule(K.TurnRule(started_by=entry))
     try:
@@ -670,9 +675,10 @@ async def test_under_the_gpt_dialect_it_runs_through_process_start(env):
     check's test run goes through the command tool the turn REALLY arms."""
     platform, ws, wire = env
     patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-X = 1\n+X = 2\n*** End Patch"
+    # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it.
     model = wire([
-        [ToolCall(id="p", name="apply_patch", arguments={"input": patch})],
         [ToolCall(id="e", name="exec_command", arguments={"cmd": TEST_CMD})],
+        [ToolCall(id="p", name="apply_patch", arguments={"input": patch})],
         "Done.", "1. met.",
     ])
     out = await _stream(platform, _body(ws), harness="gpt")

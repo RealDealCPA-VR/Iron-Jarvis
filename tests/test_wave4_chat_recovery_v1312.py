@@ -41,6 +41,9 @@ disconnects. Any stop observed is therefore the registry's doing.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import ast
 import asyncio
 import base64
@@ -592,14 +595,14 @@ def test_a_granted_ask_tier_tool_runs_with_no_card(tmp_path, monkeypatch, grante
         payload["granted_tools"] = ["shell"]
     frames, ran, state = _stream_turn(
         tmp_path, monkeypatch, payload=payload,
-        tool="shell", args={"command": "echo granted-run"},
+        tool="shell", args={"command": "python -c \"print('granted-run')\""},
     )
     kinds = [ev for ev, _ in frames]
     assert "shell" in state["shown"][0], "setup: shell must be ask-armed by the sentence"
     done = next(d for ev, d in frames if ev == "done")
     if granted:
         assert "approval" not in kinds, "a conversation grant still asked again"
-        assert ran == [{"command": "echo granted-run"}], ran
+        assert ran == [{"command": "python -c \"print('granted-run')\""}], ran
         assert _finished(frames, "shell")["ok"] is True
         assert "shell" in (done.get("tools_used") or [])
         assert "shell" not in (done.get("denied_tools") or [])
@@ -653,7 +656,7 @@ def test_control_a_grant_never_arms_a_tool_on_the_stream_lane(tmp_path, monkeypa
             # would pass without the armed-set gate ever being asked.
             "tools": ["read_file"], "auto_tools": True, "granted_tools": ["shell"],
         },
-        tool="shell", args={"command": "echo should-not-run"},
+        tool="shell", args={"command": "python -c \"print('should-not-run')\""},
     )
     assert "read_file" in state["shown"][0], "setup: the turn must have armed tools"
     assert "shell" not in state["shown"][0], "a grant armed the tool"
@@ -670,7 +673,7 @@ def test_control_a_grant_never_arms_a_tool_on_the_post_lane(tmp_path, monkeypatc
     client = TestClient(create_app(str(tmp_path)))
     platform = client.app.state.platform
     ran = _stub_execute(platform, monkeypatch, "shell")
-    fake, state = _one_call_complete("shell", {"command": "echo should-not-run"})
+    fake, state = _one_call_complete("shell", {"command": "python -c \"print('should-not-run')\""})
     monkeypatch.setattr(platform.router, "complete", fake)
     r = client.post("/chat", json={
         "messages": [{"role": "user", "content": "hello there"}],
@@ -698,14 +701,14 @@ def test_control_the_post_lane_runs_an_armed_granted_tool(tmp_path, monkeypatch)
     client = TestClient(create_app(str(tmp_path)))
     platform = client.app.state.platform
     ran = _stub_execute(platform, monkeypatch, "shell")
-    fake, _ = _one_call_complete("shell", {"command": "echo armed-run"})
+    fake, _ = _one_call_complete("shell", {"command": "python -c \"print('armed-run')\""})
     monkeypatch.setattr(platform.router, "complete", fake)
     r = client.post("/chat", json={
         "messages": [{"role": "user", "content": "run it"}],
         "tools": ["shell"], "granted_tools": ["shell"],
     })
     assert r.status_code == 200, r.text
-    assert ran == [{"command": "echo armed-run"}], ran
+    assert ran == [{"command": "python -c \"print('armed-run')\""}], ran
     assert "shell" in (r.json().get("tools_used") or [])
 
 

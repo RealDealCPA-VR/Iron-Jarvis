@@ -28,6 +28,9 @@ Each a defect the first cut shipped, each red on that cut (mutation-checked):
 10. The benchmark counted one ask per CALL where the app shows one card per
     round's same-kind calls; a question was not an ask; a run whose record
     hit its bound left calls out silently.
+
+v1.417.0 (C1.4): the command these pins card on is `python -c "print(1)"`
+(it was `echo hi`, which now runs with no card as a read-only command).
 """
 
 from __future__ import annotations
@@ -378,7 +381,7 @@ async def test_a_mission_teammates_ask_belongs_to_the_mission(tmp_path):
         db.commit()
     runtime = AgentRuntime(p)
     member = SimpleNamespace(id="session_member", origin=MISSION_MEMBER_ORIGIN, options_json="{}")
-    tc = SimpleNamespace(name="shell", arguments={"command": "echo hi"})
+    tc = SimpleNamespace(name="shell", arguments={"command": 'python -c "print(1)"'})
 
     async def answer():
         for _ in range(400):

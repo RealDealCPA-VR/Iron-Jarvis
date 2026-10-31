@@ -1409,6 +1409,75 @@ def _approvals(d) -> ChatApprovals:
     return ap
 
 
+def _attach_session_turn(d, tool_session: str, armed_grant: set, card_grants: set,
+                         overrides: dict, approval_mode: str, trust_state: dict) -> Any:
+    """v1.417.0 (C1.2): register a CODING SESSION's running reply with the
+    session's grants (``harness/session_grants.attach_turn``) — its OWN grant
+    sets, mutated in place. A name joins only when this reply's rules accept
+    it: never under low trust (or once tainted), never under "Ask before
+    every action", never one a folder rule asks about or denies. None for
+    every other turn. Never raises."""
+    if not str(tool_session or "").startswith("build:"):
+        return None
+    try:
+        from ...harness import session_grants as _sg
+        from ...providers import egress as _eg
+
+        if _eg.current_scope().on:
+            # Review (v1.417.0): a Local only reply takes no session grant
+            # mid-turn (as its helpers share none — session_grants.shares);
+            # read here, in the reply's own context (`scoped_frames`).
+            return None
+
+        def _accept(name: str) -> bool:
+            if trust_state.get("low") or trust_state.get("tainted"):
+                return False
+            if str(approval_mode or "") == "always_ask":
+                return False
+            return overrides.get(name) not in ("ask", "deny")
+
+        return _sg.attach_turn(
+            tool_session.split(":", 1)[1], armed_grant, card_grants,
+            accept=_accept, approvals=_approvals(d),
+        )
+    except Exception:  # noqa: BLE001 — the reply runs exactly as before
+        log.debug("could not attach a build turn to its session's grants", exc_info=True)
+        return None
+
+
+def _detach_session_turn(turn: Any) -> None:
+    if turn is None:
+        return
+    try:
+        from ...harness import session_grants as _sg
+
+        _sg.detach_turn(turn)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _watch_session_ask(turn: Any, approval_id: str, names: Any) -> None:
+    if turn is None:
+        return
+    try:
+        from ...harness import session_grants as _sg
+
+        _sg.watch_ask(turn, approval_id, names)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _unwatch_session_ask(turn: Any, approval_id: str) -> None:
+    if turn is None:
+        return
+    try:
+        from ...harness import session_grants as _sg
+
+        _sg.unwatch_ask(turn, approval_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -4688,6 +4757,17 @@ async def chat_stream(
         # there is nothing of this to mirror there.
         _timeline = _harness is not None
         _call_t0 = time.perf_counter()
+        # THE FINISH CHECK'S ROUND, LIVE (v1.417.0, C2.4): while it is on,
+        # every round / token / thinking / tool_call / reset frame the loop
+        # emits carries `check: "finish"` (additive), so the screen keeps
+        # the check's bookkeeping (its test step, the separator, the "N.
+        # met:" answer) out of the live reply. Off for every other frame.
+        _fin_live = {"on": False}
+
+        def _ev(event: str, payload: dict) -> str:
+            if _fin_live["on"]:
+                payload = {**payload, "check": "finish"}
+            return _sse(event, payload)
         tools_used: list[str] = []          # ONLY tools that actually executed
         remembered: list[str] = []          # v1.282.0: preferences kept this turn (lock-step)
         config_cards: list[dict[str, Any]] = []  # redesign S3/S4 (lock-step)
@@ -4914,7 +4994,7 @@ async def chat_stream(
                 # caller with no socket of its own (the chat page) learns it
                 # landed — consumption is still the only signal; an unread
                 # note never appears in any frame.
-                yield _sse(
+                yield _ev(
                     "round", {"round": _round, **({"steer": _note} if _note else {})}
                 )
                 final_resp = None
@@ -4970,7 +5050,7 @@ async def chat_stream(
                         if ftype == "text":
                             txt = frame.get("text") or ""
                             if txt:
-                                yield _sse("token", {"text": txt})
+                                yield _ev("token", {"text": txt})
                         elif ftype == "thinking":
                             # THINKING (v1.323.0): the model's reasoning, as
                             # it streams, from EVERY round. DISPLAY-ONLY: it
@@ -4979,7 +5059,7 @@ async def chat_stream(
                             # reply is built from the final response's text.
                             txt = frame.get("text") or ""
                             if txt:
-                                yield _sse("thinking", {"text": txt})
+                                yield _ev("thinking", {"text": txt})
                         elif ftype == "meta":
                             route_provider = frame.get("provider") or route_provider
                             route_model = frame.get("model") or route_model
@@ -4990,7 +5070,7 @@ async def chat_stream(
                         elif ftype == "reset":
                             # A pre-first-token failover swapped providers — tell the
                             # client to discard any partial text streamed so far.
-                            yield _sse("reset", {"reason": frame.get("reason", "")})
+                            yield _ev("reset", {"reason": frame.get("reason", "")})
                         elif ftype == "final":
                             final_resp = frame.get("response")
                             route_provider = frame.get("provider") or route_provider
@@ -5028,6 +5108,10 @@ async def chat_stream(
                     # The first answer after the finish note is the model's
                     # point-by-point answer (lock-step: chat_turn).
                     _finish.heard(reply_text)
+                    if _fin_live["on"] and _finish.answer_heard:
+                        # v1.417.0 (C2.4): the model's answer to the note
+                        # has streamed (tagged); what follows is its work.
+                        _fin_live["on"] = False
                 _u = final_resp.usage or {}
                 usage_in += int(_u.get("input_tokens", 0) or 0)
                 usage_out += int(_u.get("output_tokens", 0) or 0)
@@ -5070,9 +5154,9 @@ async def chat_stream(
                         # frame the text-call nudge and the language rewrite
                         # use), and the markup is never kept.
                         reply_text = _kept
-                        yield _sse("reset", {"reason": "cut_off"})
+                        yield _ev("reset", {"reason": "cut_off"})
                         if _kept:
-                            yield _sse("token", {"text": _kept})
+                            yield _ev("token", {"text": _kept})
                     if _chat_turn.cut_off_exhausted(_cut_times, _cut_streak) or _round >= _rounds - 1:
                         _cut_end = _chat_turn.cut_off_end(_cut, _cut_times, _cut_streak)
                         break
@@ -5128,7 +5212,7 @@ async def chat_stream(
 
                     msgs.append(LLMMessage(role="assistant", content=reply_text))
                     msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
-                    yield _sse("reset", {"reason": "text_tool_call"})
+                    yield _ev("reset", {"reason": "text_tool_call"})
                     continue
                 # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4) — the
                 # lock-step copy of chat_turn's: ONCE per reply, before the
@@ -5149,7 +5233,7 @@ async def chat_stream(
                         role="user", content=_chat_turn.take_closing_offer(_harness, reply_text),
                     ))
                     await _chat_turn.note_closing_offer(d.platform, body, _tool_session, _round)
-                    yield _sse("token", {"text": _CLOSING_OFFER_SEPARATOR})
+                    yield _ev("token", {"text": _CLOSING_OFFER_SEPARATOR})
                     continue
                 # THE FINISH CHECK (part 3, Phase 2): the model ends a Build
                 # reply that changed files — ONCE, before the reply ends, its
@@ -5167,6 +5251,11 @@ async def chat_stream(
                         low_trust=_chat_turn.finish_low_trust(_trust_state),
                     )
                     if _fin_calls is not None:
+                        # v1.417.0 (C2.4): from here until the model's
+                        # answer to the note has streamed, every round /
+                        # token / thinking / tool_call / reset frame is the
+                        # check's bookkeeping and says so (`check: finish`).
+                        _fin_live["on"] = True
                         if reply_text.strip():
                             msgs.append(LLMMessage(
                                 role="assistant", content=reply_text,
@@ -5177,7 +5266,7 @@ async def chat_stream(
                                 _chat_turn.finish_fence(d, _trust_state, overrides, _finish.carrier),
                             )))
                             if reply_text.strip():
-                                yield _sse("token", {"text": _FINISH_SEPARATOR})
+                                yield _ev("token", {"text": _FINISH_SEPARATOR})
                             continue
                         calls = _fin_calls
                         _finish_round = True
@@ -5450,8 +5539,12 @@ async def chat_stream(
                     # the same kind of call: the APP's command, running a
                     # program the PROJECT supplies. Never on auto-approve's
                     # per-call grant either.
+                    # v1.417.0 (C1.3, decision D1): under "Don't ask" Iron
+                    # Jarvis's own checker runs with no card (the posture is
+                    # the person's standing answer); the folder's own check
+                    # above keeps its card in every posture.
                     _cks = getattr(_harness, "checkers", None) if _harness is not None else None
-                    return _cks is not None and _cks.needs_a_person(_c)
+                    return _cks is not None and _cks.needs_a_person(_c, posture=approval_mode)
 
                 # ACCEPT EDITS / AUTO (v1.406.0 part 2, core/auto_approve). For
                 # each call the DEFAULT posture would card (`_would_card` with
@@ -5462,7 +5555,13 @@ async def chat_stream(
                 # billed below). A forced card (once-only, Local only, the night,
                 # a price) never reaches either. `_auto_ok`: id(call) -> rule.
                 _auto_ok: dict[int, str] = {}
-                if approval_mode in _auto.EASED_MODES and calls:
+                # v1.417.0 (C1.7): the rule that KEPT a card here (its words
+                # ride the card's `why`): id(call) -> rule name.
+                _auto_kept: dict[int, str] = {}
+                # v1.417.0 (C1.4): Ask first runs the same pre-pass for ONE
+                # rule only — the read-only command list (`classify` decides
+                # nothing else for it). "Ask before every action" never.
+                if (approval_mode in _auto.EASED_MODES or approval_mode == _auto.ASK_FIRST) and calls:
                     # v1.406.0 part 2 follow-ups: what THIS turn may have
                     # changed so far — every edit's target and every command's
                     # or code cell's text, this round's included — so a test
@@ -5474,6 +5573,16 @@ async def chat_stream(
                     for _c in calls:
                         if not _would_card(_c):
                             continue
+                        if approval_mode == _auto.ASK_FIRST:
+                            # v1.417.0 review (C1.4): a folder's OWN "ask"
+                            # rule on the tool (plugins.toml [[rules]], the
+                            # one writer of an "ask" override here) is the
+                            # user's — the read-only pass never overrides it
+                            # under the default posture.
+                            _ct0 = d.platform.registry.get(_c.name)
+                            if "ask" in (overrides.get(_c.name),
+                                         overrides.get(_ct0.perm_key() if _ct0 is not None else _c.name)):
+                                continue
                         _sc0 = _spend.get(id(_c))
                         _forced = (
                             "once_only" if (_c.name in _ONCE_ONLY or _spend_once(_c))
@@ -5503,25 +5612,49 @@ async def chat_stream(
 
                         _auto_verdicts = await asyncio.to_thread(_auto_rules)
                         _judge_routes: list[Any] = []
+                        _to_judge: list[Any] = []
                         for (_c, _f, _np, _q), _v in zip(_auto_cands, _auto_verdicts):
                             if _v.kind == _auto.PASS:
                                 _auto_ok[id(_c)] = _v.rule
                             elif _v.kind == _auto.JUDGE and approval_mode == _auto.AUTO:
-                                if _auto_state["judge"] is None:
-                                    _auto_state["judge"] = _auto.AutoJudge(
-                                        router=d.platform.router,
-                                        provider=str(route_provider or provider_choice or ""),
-                                        model=str(route_model or model_choice or ""),
-                                        request=_auto.request_of(getattr(body, "messages", None)),
-                                        # Read at call time (a seam tests set).
-                                        timeout_s=_auto.JUDGE_TIMEOUT_S,
-                                        max_calls=_auto.MAX_JUDGEMENTS_PER_TURN,
-                                    )
-                                _auto_state["judge"].bill = _judge_routes.append
-                                if await _auto_state["judge"].judge(
-                                    _c.name, _redacted(_c), _grant_hash(_c.name, _c.arguments)
-                                ) == "allow":
+                                _to_judge.append(_c)
+                            elif _v.kind == _auto.ASK and _v.rule:
+                                _auto_kept[id(_c)] = _v.rule
+                        if _to_judge:
+                            if _auto_state["judge"] is None:
+                                _jmsgs = getattr(body, "messages", None)
+                                _auto_state["judge"] = _auto.AutoJudge(
+                                    router=d.platform.router,
+                                    provider=str(route_provider or provider_choice or ""),
+                                    model=str(route_model or model_choice or ""),
+                                    request=_auto.request_of(_jmsgs),
+                                    # v1.417.0 (C1.5): the turn's FIRST
+                                    # request beside the newest one.
+                                    first_request=_auto.first_request_of(_jmsgs),
+                                    # Read at call time (a seam tests set).
+                                    timeout_s=_auto.JUDGE_TIMEOUT_S,
+                                    max_calls=_auto.MAX_JUDGEMENTS_PER_TURN,
+                                )
+                            _judge = _auto_state["judge"]
+                            _judge.bill = _judge_routes.append
+                            # v1.417.0 (C1.5): what the assistant last said
+                            # (this round's words before its calls, else the
+                            # previous reply), so a call is judged in context.
+                            _judge.last_reply = _auto.last_reply_of(
+                                msgs, reply_text,
+                            )
+                            # v1.417.0 (C1.5): the round's judgements run
+                            # TOGETHER (one wait, not one per call; each is
+                            # bounded by `JUDGE_TIMEOUT_S` and fails closed).
+                            _answers = await asyncio.gather(*(
+                                _judge.judge(_c.name, _redacted(_c), _grant_hash(_c.name, _c.arguments))
+                                for _c in _to_judge
+                            ))
+                            for _c, _ans in zip(_to_judge, _answers):
+                                if _ans == "allow":
                                     _auto_ok[id(_c)] = _auto.JUDGE_RULE
+                                else:
+                                    _auto_kept[id(_c)] = _auto.JUDGE_ASKED_RULE
                         for _jr in _judge_routes:
                             # Billed to the turn like any other model call.
                             _ju = getattr(getattr(_jr, "response", None), "usage", None) or {}
@@ -5817,6 +5950,41 @@ async def chat_stream(
                                     # so the screen could not treat it as the
                                     # safety card it is (its Enter allowed it).
                                     _frame["once_reason"] = _sc.reason
+                            # v1.417.0 (C1.3/C1.7): WHO asks and WHY — the
+                            # card's one reason line. Iron Jarvis's own call
+                            # (the finish check's test run, a project's
+                            # checker) is said to be Iron Jarvis's, never "the
+                            # assistant's"; otherwise the rule or reason that
+                            # kept the card (a spend check's own sentence, a
+                            # once-only reason, Local only, the night, the
+                            # eased posture's rule, "Ask before every action",
+                            # else "not in this chat's grants yet"). Additive
+                            # keys: an older page ignores them.
+                            _own_finish = _finish is not None and _finish.owns(tc)
+                            _own_cks = getattr(_harness, "checkers", None) if _harness is not None else None
+                            _own_check = _own_cks is not None and _own_cks.owns(tc)
+                            _frame["asker"] = (
+                                _auto.ASKER_IRON_JARVIS if (_own_finish or _own_check) else _auto.ASKER_MODEL
+                            )
+                            _frame["why"] = _auto.card_why(
+                                own=(
+                                    _auto.FINISH_WHY if _own_finish
+                                    else _auto.checker_why(_own_cks.checker_name(tc)) if _own_check
+                                    else ""
+                                ),
+                                plan=tc.name in _ONCE_ONLY,
+                                spend_words=(
+                                    str(getattr(_sc, "words", "") or "")
+                                    if _sc is not None and (_spend_card or _spend_once(tc)) else ""
+                                ),
+                                once_reason=(
+                                    str(getattr(_sc, "reason", "") or "")
+                                    if _sc is not None and _spend_once(tc) else ""
+                                ),
+                                forced="local_only" if _local_ask else "night" if _night_card else "",
+                                rule=_auto_kept.get(id(tc), ""),
+                                strict=approval_mode == "always_ask",
+                            )
                             if _count > 1:
                                 _examples = [
                                     _redacted(_c) for _c in _group[:3]
@@ -5859,6 +6027,12 @@ async def chat_stream(
                                 thread_for=_turn_thread_lookup(d, _step_turn),
                             )
                             _inote.asked()
+                            # v1.417.0 (C1.2): an ORDINARY card (never a
+                            # once-only, priced, Local only or night one) is
+                            # watched, so a grant a helper of this session
+                            # makes meanwhile answers it.
+                            if not (_local_ask or _once_only or _spend_card or _night_card):
+                                _watch_session_ask(_sg_turn, _ap_id, {_c.name for _c in _group})
                             # v1.327.0: the chat reads "waiting on you" from
                             # BEFORE the card goes out until it is answered
                             # (unparked in the `finally` below; the entry
@@ -5953,6 +6127,7 @@ async def chat_stream(
                                 )
                                 if not _m_normal:
                                     _inote.answered("stopped", "app")
+                                _unwatch_session_ask(_sg_turn, _ap_id)
                                 _apr.pop(_ap_id)
                                 if thread_turn is not None:
                                     thread_turn.unpark()
@@ -5995,7 +6170,10 @@ async def chat_stream(
                             _approved = _chat_turn.approved_entry(
                                 tc.name, _decision, _count
                             )
-                            if _approved is not None and len(approved_calls) < _chat_turn.APPROVED_MAX:
+                            # v1.417.0 (C1.2): a card a session grant settled
+                            # (actor "grant") is not one the user answered.
+                            if (_approved is not None and _m_actor != "grant"
+                                    and len(approved_calls) < _chat_turn.APPROVED_MAX):
                                 approved_calls.append(_approved)
                             _round_answers[_card_key] = _decision
                         if _decision == "tab":
@@ -6060,8 +6238,17 @@ async def chat_stream(
                                 from ...harness import session_grants as _sg
 
                                 _sg_thread = _tool_session.split(":", 1)[1]
-                                card_grants.update(
-                                    _sg.note(_sg_thread, {tc.name}, d.platform.registry)
+                                _sg_wide = _sg.note(_sg_thread, {tc.name}, d.platform.registry)
+                                card_grants.update(_sg_wide)
+                                # v1.417.0 (C1.2): and the POSTURE reads the
+                                # same family — `process_start` after a
+                                # "for this session" on `shell` runs in THIS
+                                # turn too (not only `card_grants`, which
+                                # strict mode alone reads). A sibling a
+                                # folder rule asks about or denies keeps it.
+                                armed_grant.update(
+                                    _n for _n in _sg_wide
+                                    if _n == tc.name or overrides.get(_n) not in ("ask", "deny")
                                 )
                                 _sg.release_helpers(
                                     _approvals(d), d.platform.registry, _sg_thread, {tc.name},
@@ -6317,7 +6504,7 @@ async def chat_stream(
                             continue
                         tc = calls[_i]
                         if _kind == "started":
-                            yield _sse("tool_call", {
+                            yield _ev("tool_call", {
                                 "id": tc.id, "name": tc.name,
                                 "status": "started",
                                 "args": _plans[_i]["safe_args"],
@@ -6334,7 +6521,7 @@ async def chat_stream(
                                 # never a tool message of their own (the model
                                 # did not call it); its step shows like any
                                 # command. Lock-step: chat_turn.
-                                yield _sse("tool_call", {
+                                yield _ev("tool_call", {
                                     "id": tc.id, "name": tc.name, "status": "finished",
                                     "ok": ran, "output": str(content)[:2000],
                                     "detail": _chat_turn.step_detail(
@@ -6358,7 +6545,7 @@ async def chat_stream(
                             # Answered, not run (v1.274.0): no counters move.
                             # v1.349.0 (B1d): a refused step opens too — its
                             # input and the refusal sentence, masked.
-                            yield _sse("tool_call", {
+                            yield _ev("tool_call", {
                                 "id": tc.id, "name": tc.name, "status": "finished",
                                 "ok": False, "output": str(content)[:2000],
                                 "detail": _chat_turn.step_detail(
@@ -6566,7 +6753,7 @@ async def chat_stream(
                         # the POST lane (chat_turn.run_chat_turn) sends no
                         # frames, so detail is intentionally absent there —
                         # its response key set is pinned.
-                        yield _sse("tool_call", {
+                        yield _ev("tool_call", {
                             "id": tc.id, "name": tc.name, "status": "finished",
                             "ok": ran, "output": str(content)[:2000],
                             "detail": _chat_turn.step_detail(
@@ -6617,7 +6804,7 @@ async def chat_stream(
                         _chat_turn.finish_fence(d, _trust_state, overrides, _finish.carrier),
                     )))
                     if reply_text.strip():
-                        yield _sse("token", {"text": _FINISH_SEPARATOR})
+                        yield _ev("token", {"text": _FINISH_SEPARATOR})
         except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
             # Completed rounds were still billed — persist BEFORE the error
             # frame (mirrors chat_complete's failure path); the client sees
@@ -7168,11 +7355,20 @@ async def chat_stream(
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404
     # are `_eager_checks`, before the stream exists); the loop's frames follow
     # here, and the loop is closed promptly however the caller leaves.
+    # v1.417.0 (C1.2): a coding session's RUNNING reply is reachable by the
+    # session's grants — a helper's "for this session" answer joins this
+    # turn's `armed_grant` / `card_grants` (the very sets every card decision
+    # below reads) and wakes the card this reply is parked on. Attached here,
+    # right before the loop runs, so the `finally` always detaches it.
+    _sg_turn = _attach_session_turn(
+        d, _tool_session, armed_grant, card_grants, overrides, approval_mode, _trust_state,
+    )
     try:
         async with contextlib.aclosing(gen()) as _loop:
             async for _chunk in _loop:
                 yield _chunk
     finally:
+        _detach_session_turn(_sg_turn)
         # v1.324.0: the turn is over however it ended (done, error, Stop, a
         # dropped connection) — every ask still parked is resolved "stopped"
         # so no pack waits on a card nobody can answer any more.

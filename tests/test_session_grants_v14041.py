@@ -25,6 +25,9 @@ Pinned here:
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these stream-lane pins card on run Python;
+# `echo …` now runs with no card as a read-only command.
+
 import asyncio
 import json
 from types import SimpleNamespace
@@ -302,7 +305,7 @@ async def test_the_sessions_own_card_wakes_a_waiting_helper_and_covers_the_comma
     # ...and a once-only one (a push) that must stay parked.
     push_id, push = platform.approvals.request("shell", {"command": "git push"}, helper, once_only=True,
                                               once_reason="git")
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "Done."]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "Done."]))
     drop, task = await _start(app, sid, "check it", "sg-own")
     card = (await until(lambda: [d for e, d in turn_frames(app, "sg-own") if e == "approval"]))[0]
     assert card["tool"] == "shell"
@@ -456,7 +459,7 @@ async def test_a_low_trust_turns_grant_is_never_the_sessions(rt, trust, monkeypa
 
     monkeypatch.setattr(platform.registry.get("shell"), "execute", ran)
     # The demo model speaks the generic dialect: Jarvis's own tool names.
-    wire(rt.app, Script([[ToolCall(id="l1", name="shell", arguments={"command": "echo hi"})], "Done."],
+    wire(rt.app, Script([[ToolCall(id="l1", name="shell", arguments={"command": 'python -c "print(1)"'})], "Done."],
                         who=("mock", "mock")))
     body = ChatBody(messages=[ChatMessageBody(role="user", content="check")], provider="mock", model="mock",
                     workspace_dir=str(rt.work), approval_mode="approve_for_me")

@@ -21,6 +21,9 @@
 // a risky click in the agent's browser (lib/dockAsk.enterAllows): an Enter
 // typed twice for the composer allowed one in the live check. Esc still
 // declines; "Allow once" is a click there (the keys line says so).
+// v1.417.0 (C1.7): that Enter is no longer SILENT: it puts one brief line in
+// the warn tone under the card ("Click Allow once to run it", role=status)
+// and still allows nothing.
 //
 // LETTERS (v1.348.0): an app's question with one fixed set of choices draws
 // them as rows lettered A, B, C… (components/chat/ElicitationCard), and the
@@ -37,14 +40,21 @@
 // chat about to send a message to a model that would leave this PC asks
 // first. Enter is "Send once", Esc is "Keep it local", like the others.
 
-import { useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { House } from "lucide-react";
 import { ApprovalCard, type ApprovalScope } from "@/components/chat/ApprovalCard";
 import { Button } from "@/components/ui";
 import { ElicitationCard } from "@/components/chat/ElicitationCard";
 import { AskUserCard, type AskAnswer } from "@/components/chat/AskUserCard";
 import { SamplingCard } from "@/components/chat/SamplingCard";
-import { dockKeyAction, enterAllows, withHeadFirst, type DockAskItem } from "@/lib/dockAsk";
+import {
+  dockKeyAction,
+  ENTER_BLOCKED_MS,
+  ENTER_BLOCKED_NOTE,
+  enterAllows,
+  withHeadFirst,
+  type DockAskItem,
+} from "@/lib/dockAsk";
 import { choiceKey, findChoice } from "@/lib/letteredChoices";
 import { columnOf, ownsKeys } from "@/lib/codeSplit";
 import {
@@ -180,6 +190,16 @@ export function DockAsk({
   // v1.381.0 review: read by `press` (a callback the key listeners keep).
   const enterAllowsRef = useRef(true);
   enterAllowsRef.current = enterAllows(head);
+  // v1.417.0 (C1.7): the question an Enter was just refused on (the note
+  // under the card); a new question, or the timer, clears it.
+  const [enterBlockedOn, setEnterBlockedOn] = useState<string | null>(null);
+  const enterBlockedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (enterBlockedTimer.current) clearTimeout(enterBlockedTimer.current);
+    },
+    [],
+  );
 
   // A new question on screen: remember it (it stays first), start the key
   // guard, and take the focus when the composer had it (it is hidden now) or
@@ -217,7 +237,14 @@ export function DockAsk({
     (which: "primary" | "decline"): boolean => {
       if (Date.now() - shownAtRef.current < armDelayMs) return false;
       // v1.381.0 review: a once-only safety card is allowed by a click only.
-      if (which === "primary" && !enterAllowsRef.current) return false;
+      // v1.417.0 (C1.7): and the key says so, briefly, instead of nothing.
+      if (which === "primary" && !enterAllowsRef.current) {
+        const id = headRef.current;
+        setEnterBlockedOn(id);
+        if (enterBlockedTimer.current) clearTimeout(enterBlockedTimer.current);
+        enterBlockedTimer.current = setTimeout(() => setEnterBlockedOn(null), ENTER_BLOCKED_MS);
+        return false;
+      }
       const btn = wrapRef.current?.querySelector<HTMLButtonElement>(`[data-dock-${which}]`);
       if (!btn || btn.disabled) return false;
       btn.click();
@@ -362,6 +389,20 @@ export function DockAsk({
           docked
         />
       )}
+      {/* Review: the live region is mounted with the card and the note is
+          put INTO it — a status region mounted together with its words is
+          often not announced (the v1.352.0 bell lesson). Empty, it takes no
+          space. */}
+      <div role="status" data-testid="dock-ask-enter-live">
+        {enterBlockedOn !== null && enterBlockedOn === head.id && (
+          <p
+            data-testid="dock-ask-enter-blocked"
+            className="-mt-2 px-4 pb-3 text-[12px] font-medium text-tone-warn"
+          >
+            {ENTER_BLOCKED_NOTE}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

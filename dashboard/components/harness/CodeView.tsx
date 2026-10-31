@@ -161,7 +161,10 @@ export function CodeView({
     });
   }, []);
 
-  const terminal: SessionTerminalApi = {
+  // v1.417.0 (C2.1): ONE object while what it reads stays the same — it is
+  // handed to every session and its memoised panes, which redrew for each
+  // new copy of it.
+  const terminal: SessionTerminalApi = useMemo(() => ({
     find: (id) => terminals.find((t) => t.id === id && t.alive !== false) ?? null,
     open: (cwd) => addTerminal(cwd),
     render: (info, { parked, onClose }) => {
@@ -185,7 +188,7 @@ export function CodeView({
       );
     },
     close: (id) => closeTerminal(id),
-  };
+  }), [terminals, addTerminal, closeTerminal, activity, catalog.usable, aiClis]);
 
   return (
     <IjHarnessView

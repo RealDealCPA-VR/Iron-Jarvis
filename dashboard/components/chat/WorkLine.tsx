@@ -1001,7 +1001,7 @@ function FinishLine({ finish }: { finish: FinishRecord }) {
  * timing reads "Answered in 2.1 s" (v1.355.0, nothing to open). Renders
  * nothing for a reply with neither.
  */
-export function WorkLine(props: WorkInput) {
+function WorkLineImpl(props: WorkInput) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   // v1.349.0 (integrate): the steps are read ONCE per change of what they are
@@ -1115,3 +1115,7 @@ export function WorkLine(props: WorkInput) {
     </div>
   );
 }
+
+/** v1.417.0 (C2.1): memoised — a coding session's transcript row and the chat
+ *  page redraw it only when its own props change. */
+export const WorkLine = memo(WorkLineImpl);

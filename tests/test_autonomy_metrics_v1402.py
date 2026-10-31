@@ -26,6 +26,9 @@ What must hold, each pinned and mutation-checked:
 * The bench counts the cards it answered (``facts.asks``) and replays every
   run's calls through the real permission engine (``would_have_asked``),
   agreeing with the REAL stream lane.
+
+v1.417.0 (C1.4): the command these pins card on is `python -c "print(1)"`
+(it was `echo hi`, which now runs with no card as a read-only command).
 """
 
 from __future__ import annotations
@@ -98,7 +101,7 @@ async def _card(app, turn_id: str) -> dict:
 
 async def test_a_card_answered_once_is_one_asked_and_one_answered_event(app, work):
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok"]))
     drop, task = await _start(app, sid, "run it", "am-once")
     card = await _card(app, "am-once")
     await asyncio.sleep(0.05)  # the person reads the card
@@ -118,14 +121,14 @@ async def test_a_card_answered_once_is_one_asked_and_one_answered_event(app, wor
     # every event tagged with its session — it must not grow a second row).
     for e in (*asked, *answered):
         assert e.session_id is None
-        assert "args" not in e.payload and "echo hi" not in json.dumps(e.payload)
+        assert "args" not in e.payload and "print(1)" not in json.dumps(e.payload)
 
 
 async def test_a_phone_answer_is_settled_by_the_phone(app, work):
     from tests.test_comm_approvals_v1200 import ChatMockChannel, CHAT_CFG, _msg, _poller, _register_approval
 
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok"]))
     drop, task = await _start(app, sid, "run it", "am-phone")
     card = await _card(app, "am-phone")
     platform = app.state.platform
@@ -149,7 +152,7 @@ async def test_a_card_cut_off_while_it_waits_is_settled_stopped(tmp_path, monkey
     p = create_app(str(tmp_path / "home")).state.platform
     ws = tmp_path / "ws"
     ws.mkdir()
-    H.wire(p, monkeypatch, [[H.call("shell", "c1", command="echo hi")], "done"])
+    H.wire(p, monkeypatch, [[H.call("shell", "c1", command='python -c "print(1)"')], "done"])
     gen = await H.stream_chat_turn(
         p, H.BUILTIN_PERSONAS, H.body(ws, approval_mode="approve_for_me"), harness="generic",
         session_id=H.SESSION, round_budget=10, stay_in_chat=True,
@@ -174,7 +177,7 @@ async def test_a_card_cut_off_while_it_waits_is_settled_stopped(tmp_path, monkey
 async def test_a_card_nobody_answers_is_settled_by_the_clock(app, work, monkeypatch):
     monkeypatch.setattr(chat_routes, "CHAT_ASK_TIMEOUT_S", 0.3)
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok"]))
     drop, task = await _start(app, sid, "run it", "am-clock")
     await _finish(app, "am-clock", drop, task)
     await flush_interrupt_notes()
@@ -257,7 +260,7 @@ async def _answer_first(platform, decision: str, *, actor: str = "app") -> None:
 async def test_the_agent_runtimes_pause_publishes_the_events(rt):
     session = SimpleNamespace(id="session_metric", origin="chat",
                               options_json=json.dumps({"chat_thread_id": "chat_abc"}))
-    tc = SimpleNamespace(name="shell", arguments={"command": "echo hi"})
+    tc = SimpleNamespace(name="shell", arguments={"command": 'python -c "print(1)"'})
     answerer = asyncio.create_task(_answer_first(rt.platform, "once"))
     deny, _extra = await rt.runtime._pause_for_approval(
         session, tc, get_agent_definition(AgentType.BUILDER), set()
@@ -756,7 +759,7 @@ async def test_would_card_matches_the_real_stream_lane(app, work):
     calls = [
         ToolCall(id="r1", name="Read", arguments={"file_path": str(work / "app.py")}),
         ToolCall(id="w1", name="Write", arguments={"file_path": str(work / "new.py"), "content": "y = 2\n"}),
-        ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"}),
+        ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'}),
     ]
     wire(app, Script([calls[:1], calls[1:2], calls[2:], "ok"]))
     drop, task = await _start(app, sid, "go", "am-agree")

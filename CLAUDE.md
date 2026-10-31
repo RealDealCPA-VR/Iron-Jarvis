@@ -4366,6 +4366,88 @@ does not need a bump, stop and bump it.
   plan extension's "what next?" answered as a question card, and `pi
   --session <id>` reopening the same conversation.
 
+- **Build › Code: "Allow all commands this session" is Iron Jarvis's OWN
+  whole-tool session rule; the plan is on its card; a failure names the tool
+  and has Retry; cards reach the autonomy metrics** (v1.417.0, fix plan wave
+  1: C1.1, C4.1, C1.7 Build half, C4.9, C4.7, C1.11). Live record: 40 command
+  cards in one Auto-edits session, "Allow for this session" pressed 24 times —
+  Claude Code's `permission_suggestions` are PREFIX rules. CONTRACT
+  (additive): `approval` gains `can_all_commands` (Claude Code's Bash /
+  PowerShell card, mode not in `claude.ALL_COMMANDS_NOT_IN` = full / auto /
+  plan) and `plan` (ExitPlanMode's `input.plan`,
+  masked, ≤ `claude.PLAN_CHARS` 20,000; title `words.PLAN_CARD_TITLE`); the
+  route's decisions are `service.ANSWER_DECISIONS` = allow / allow_session /
+  deny + `allow_commands` (`resolved.decision` says it). Claude Code gets
+  `updatedPermissions: [claude.ALL_COMMANDS_RULE]` = `{type: addRules, rules:
+  [{toolName: Bash}, {toolName: PowerShell}], behavior: allow, destination:
+  session}` (shape read from claude 2.1.316's own validator — `ruleContent` is
+  optional; the module docstring says so); its own suggestion stays as "Allow
+  similar commands" (`suggestion_words(button=)`). Codex: `allow_commands`
+  → `acceptForSession` only on a command request that lists it, else 400
+  (`words.ALL_COMMANDS_NOT_OFFERED`); Pi / OpenCode: 400 before anything is
+  sent. A deny's `message` reaches Claude Code verbatim; the card's "No, tell
+  it what to do instead" (`takesWords`, Claude Code only) sends it. ENTER:
+  `lib/buildApp.enterAllowsCodeAsk` = Chat › Code's rule — never in Full
+  access, never on a once-only card whose `once_reason` is a SAFETY reason
+  (`lib/onceReason`; none from a hosted tool yet), Allow once on every other
+  (it was silent on every card without a session allow). FAILURE:
+  `words.generic_error` raises `HostedToolError(tool_label)` and
+  `failure_words._generic_name` reads `tool_label` off the chain first:
+  "<Claude Code|Codex|Pi|OpenCode> couldn't finish this answer" +
+  `GENERIC_FIX_BUILD`; `CodeConversation` puts **Retry** (`code-retry`, the
+  last `user` item's text + files via `send`) on the NEWEST error (never
+  beside `account_limit`, never while running); every `done` carries a
+  `receipt` folded from the turn's own events (`foldConversation`: model of
+  the newest `session` event, `user`→`done` seconds, steps but not todo,
+  edit/write paths that finished) drawn as `code-receipt` ("answered by Opus
+  5.5 on Work · 2 m 14 s · 7 actions · 3 files changed", the usage line
+  `code-usage` inside; the standalone usage item is `folded`). STARTS:
+  `service._say_start` emits a `notice` (`words.start_notice`) when a message
+  (re)starts a process — `LiveSession.stopped_why` "idle" (reaper) /
+  "evicted" (pool) / restart / resume; `ID_SAVE_WAIT_S` 10 → 2 (the save goes
+  on shielded); `claude.HOLD_FOR_NOTE_S` 15 → 5. EVERY turn now opens with
+  that notice (moved on purpose: the three goldens and the Pi/OpenCode
+  `evs[1]` pins). METRICS: `_ask` → `InterruptNote` (surface `build_app`,
+  added to `INTERRUPT_SURFACES`; kind card|question; thread = the hosted
+  session, turn = the turn) and every way a card closes answers it once
+  (`metric_decision`: once / conversation / deny, answered / skipped;
+  stopped on expiry or Stop, timeout on a Pi dialog's own timeout; actor
+  "phone" from `news.PhoneWatch`); `eval/autonomy.build_app_tasks` makes one
+  "build" task per TURN the asks name (their success is not read, so never
+  successful or hands-off). Pins: `tests/test_build_app_{answers,
+  phone_actor}_v1417.py` (fixtures `tests/fixtures/build_app_v1409/
+  claude_{all_commands,plan,failed}_v1417.json`, built from the recorded
+  claude_allow frames; the fake harness's `on` branch reads a control_response:
+  `allow+all_commands` = a whole-tool session rule — the fake cannot evaluate
+  Claude Code's rules, the scenario plays what it then does),
+  `dashboard/__tests__/build-app-answers-v1417.test.tsx` (16 + 11 mutations,
+  all red); moved on purpose: the once-only Enter pins in
+  `build-app-{view-v1409,pi-v1411}` and the e2e. OPEN: not driven against the
+  real Claude Code (whether a whole-tool Bash rule silences EVERY later
+  command card, incl. Claude Code's own safety checks, is unproven live);
+  Codex shows no "all commands" button (its session allow is per command);
+  the plan's live-mode ExitPlanMode shape beyond `plan` was not re-read.
+  REVIEW (each red first, mutation-checked): (1) claude 2.1.316 calls a
+  whole-tool Bash / PowerShell allow "dangerous … (bypasses classifier)" —
+  `stripDangerousPermissionsForAutoMode` removes it on entering Auto and the
+  rules matched while the classifier runs leave it out — so the button is
+  not offered in Auto (nor Plan), and `prepare_answer` refuses it when the
+  mode moved there while the card waited. (2) With the reply's end now
+  waiting only 2 s for the id save, "Open in terminal" / "Continue on the
+  next account" pressed right after a slower save read "no conversation
+  yet" (the v1.414.4 bug back): both wait for the pending save themselves
+  (`service._row_with_saved_id`, `ID_SAVE_LATE_S` 15 s). (3) A turn the
+  boot reconcile closed got its `done` at the NEXT start, so the receipt
+  said "14 h 3 m": a stopped / cut-off turn is timed to its last step
+  (never a notice or error), and a changed file is counted by the path the
+  step began with. (4) `build_app_tasks` put never-successful tasks into
+  every denominator (one card halved a week's hands-off rate):
+  `Task.whole=False` — their interruptions count, they are in no task
+  count, rate or "per task". (5) The ExitPlanMode card is noted as kind
+  `plan` (never avoidable, `by_kind.plan`), not `card`. The literal rule
+  shape is pinned (a test comparing the constant with itself could not see
+  PowerShell dropped).
+
 - **A coding session STARTS AT THE COMPOSER: no form, no folder until one is
   chosen; Choose… is Windows' own folder picker; a tool with several logins
   asks which account** (v1.412.0; the user: "it should start automatically
@@ -11939,6 +12021,184 @@ does not need a bump, stop and bump it.
   mid-ask kills an npm install half way; the check downloads the package's
   tarball into npm's own cache (not `_npx`); the daily check can only run at
   a pack start (a pack running for days is checked at its next start).
+
+- **An approval card says WHY and WHO, Enter is never silent, and a button
+  never promises a grant the daemon will not write** (v1.417.0, fix plan
+  C1.7, dashboard half). The stream lane's `approval` frame carries `why`
+  (one sentence) and `asker` ("model" | "iron_jarvis"); `useChatStream`
+  whitelists both in BOTH places (`decodeSSE` case "approval": non-empty
+  string cut to 400, only the two askers; `run()`'s PendingApproval spread)
+  — a mock of that module needs nothing new (no new export). ApprovalCard:
+  with `why` it is the COMPACT card (`approval-header`, words only, the raw
+  tool id in its `title`; an unknown tool keeps "run <id>"; the preview; the
+  cost line; ONE `approval-why` line holding the why, then the undo verdict
+  (`approval-undo`) and a positive deadline (`approval-waiting`) as spans; a
+  plan door keeps its own sentence there; what a wider answer covers lives
+  in that button's `title`; the tab/always notes and the once-reason
+  paragraphs are not drawn). WITHOUT `why` the card is the old one BYTE FOR
+  BYTE (`__tests__/fixtures/approval-card-old-dom-v1417.json`, captured
+  before the change — checked against HEAD's card; compare with React's
+  `_r_N_` useId ids normalised; re-made ONLY with
+  `IJ_REGEN_APPROVAL_OLD_DOM=1`, a missing fixture FAILS);
+  `asker === "iron_jarvis"` reads "Iron Jarvis wants to …" in either layout
+  (`approvalWords.askerSubject`). BUTTONS: `approvalWords.answersOnlyOnce`
+  (onceOnly, the two plan doors by name, a non-empty `costNote`) hides
+  "Allow for this chat|run|session", "Allow for this tab" and "Always"; a
+  PRICED card used to offer the session answer the daemon reads as once, and
+  now also gets the once-only sentence (not the local-only line). ENTER:
+  `enterAllows` is unchanged (a safety once-only card is never allowed by
+  Enter — v1.381.0 stands); DockAsk's `press` now shows
+  `dockAsk.ENTER_BLOCKED_NOTE` ("Click Allow once to run it", warn tone,
+  `dock-ask-enter-blocked`) for `ENTER_BLOCKED_MS` (2.5 s) inside the dock
+  card, put INTO a `role=status` region (`dock-ask-enter-live`) that is
+  mounted with the card (a region mounted with its words is often not
+  announced — the v1.352.0 bell lesson). The keys line under the dock is the page's / harness's and
+  is unchanged. OPEN: PaneAsk (a Build pane) still swallows that Enter
+  silently; agent-run asks (listing rows, session page) carry no `why`, so
+  they keep the long card. Moved on purpose: `media-in-chat-v1346` (the
+  priced card's text). Pins: `dashboard/__tests__/approval-card-why-v1417.test.tsx`
+  (14 mutations, all red; the review added 3 pins — the scope title, the live region, a missing fixture — each red first).
+
+- **A coding session is drawn like the chat page: never redrawn per word, a
+  reply that never blinks, the finish check off the live reply, drafts per
+  session** (v1.417.0, fix plan C2.1/C2.2/C2.4/C2.7). RENDERS:
+  `useChatStream({clockInState: false})` keeps "when the turn last moved" out
+  of the caller's state (it lives in `lastEventStore`; the default keeps the
+  old state for the chat page's QuietNote) — HarnessSession passes it beside
+  `textInState: false`, so a token redraws only LiveText. Each message is
+  `components/harness/HarnessMessageRow` (memo; plain values + ONE `h`
+  handlers object built once from a ref, `undoFor`/`onUndo` passed as they
+  are because receipts call them while rendering; `prevUserAts` gives each
+  reply its changes window); `HarnessPanes`, `WorkLine` and `TurnReceipt`
+  are `memo`; the panes get `livePlan` memoised on `stream.tools`, stable
+  `onSessionChanged`/`onCompact`, a memoised `currentAccount`; CodeView's
+  terminal API is `useMemo`; IjHarnessView's list poll keeps the old array
+  when `sameFolders` (structural). A test's `useDaemon`/`useModels` mock must
+  hand back CONSTANT objects or every memo is defeated (the real hooks are
+  stable). SETTLE: `held` (the turn that ended) keeps `harness-live` up until
+  `shown` holds that turn's reply or `settle` gave up — the swap is ONE
+  render; LiveText's `settling` drops the Thinking line; the next-step box
+  waits too. FOLLOW: LiveText calls `onGrow` per published growth;
+  `followLive` sets the transcript's `scrollTop` (never scrollIntoView — the
+  page must not move) only while `followRef` (within `FOLLOW_SLACK_PX` 80 of
+  the bottom, read on scroll). FINISH: `sseEventFrom` decodes `check:
+  "finish"` on token/thinking/reset/round/tool_call and the done frame's
+  `finish` record (raw); `run()` folds those frames into `finishStore`
+  (`LiveFinish {running, test, record}`) and NEVER into the text, the cards,
+  the thinking or `onToken`; HarnessSession's `LiveFinishLine`
+  (`useLiveFinish` in lib/liveThinking — not exported from useChatStream, so
+  no mock changes) says `FINISH_CHECKING_WORDS`, the test run
+  (`FINISH_TEST_WORDS`), then `finishWords` of the record. The daemon half
+  (tagging the round's frames) is fix-plan lane A; the chat page never gets
+  `check` and is unchanged. DRAFTS: `lib/chatDrafts` under `draftKeyOf(id)`
+  (`build:<id>`): read at mount, written at unmount and `pagehide`, cleared
+  at send/queue; the box autofocuses once when the view arrives (not on a
+  hidden split column, not with a card up, never over a field being typed
+  in); it grows via `boxHeightFor` up to `BOX_MAX_ROWS` (8) lines,
+  `harnessLook` untouched. New `useChatStream` exports: TYPES only
+  (`ValueStore`, `LiveFinish`). Pins: `dashboard/__tests__/harness-render-
+  discipline-v1417.test.tsx` (counts session/row/view renders through
+  pass-through stubs), `harness-live-settle-v1417.test.tsx`. REVIEW: the
+  panes' memo was unpinned (a pass-through `HarnessTimeline` on the Timeline
+  tab now counts HarnessPanes' renders: 0 over 30 tokens and four keystrokes);
+  so was the hold's RELEASE (a settle read that finds no saved reply, or
+  cannot read the session, must take the live block down — pinned both
+  ways); the settle test held its read on a 400 ms TIMER and went red under a
+  loaded run (the read answered before the checks) — it holds the read on a
+  gate the test releases; `finishTag` had orphaned `sseEventFrom`'s doc
+  comment. Known: while the live block is held the "Working for N s" line
+  keeps counting (≤ the settle read).
+
+- **One approval means one approval in Chat › Code: a session grant reaches
+  the RUNNING reply; read-only commands, Iron Jarvis's own checks under
+  "Don't ask", and a test that already passed after the last edit never
+  card; every card says who asks and why** (v1.417.0, fix plan C1.2-C1.6,
+  C1.7/C2.4 daemon halves; the user's decisions D1, D2). (1) GRANTS:
+  `harness/session_grants.attach_turn` registers a coding session's reply
+  with its OWN `armed_grant` / `card_grants` (the very sets every card
+  decision reads; `routes/chat._attach_session_turn`, detached in the
+  stream's `finally`) and an `accept` (never low trust / tainted, never
+  `always_ask`, never a name a folder rule asks about or denies); `note()`
+  reaches attached replies, `release_helpers` wakes the reply's ORDINARY
+  card it covers (`watch_ask`; never once-only, priced, Local only, night)
+  with "conversation", actor "grant" (not listed in `approved`). Grants made
+  BEFORE the reply arrive through its `granted_tools` (attach adds nothing —
+  a test's earlier grant must not leak). A lead's "conversation" on `shell`
+  also widens `armed_grant` by `COMMAND_FAMILY` (minus folder-ruled names).
+  (2) `core/auto_approve.read_only_command` / `read_only_call` +
+  `READ_ONLY_COMMANDS` (git status/diff/log/show/branch listing/rev-parse,
+  ls, dir, cat, type, rg, grep, find, head, tail, wc, pwd, which, where,
+  echo, `node|python|python3|py|uv|git --version`): both shells' readings, `_UNSAFE_TEST_CHARS`,
+  no `<>;&(){}`/newline, a `|` only into another listed program, no escape,
+  no assignment, no path leaving the folder (a `cwd` too), git never
+  `--output`/`--ext-diff`/a branch name, rg never `--pre`/`-z`, find never
+  `-exec`/`-delete`, and NO `<prog><any PATHEXT ext>` in the folder
+  (cmd.exe runs it first). PASS rule `read_only_command` in `_classify`
+  for `ASK_FIRST` ("approve_for_me", decided for nothing else), Accept edits
+  and Auto (before the judge); the stream lane's pre-pass runs for Ask first
+  too; the POST lane gets it through `classify` under Accept edits / Auto
+  only (under Ask first it arms no ask-tier tool). (3) The judge: one round's
+  judgements `asyncio.gather`ed, `JUDGE_TIMEOUT_S` 3, `judge_prompt(first=,
+  reply=)` (byte-identical without them; `first_request_of`,
+  `last_reply_of`). (4) FINISH: `ProjectCheckers.needs_a_person(call,
+  posture=)` is False under "yolo"; the finish check's folder/non-builtin
+  test keeps its card. `_test_calls` does not re-run the model's last test
+  command when it ran after the last possible change (`_may_change_files`:
+  journaled edits, non-test non-read-only commands, unjournaled writers) and
+  exited 0 with its own status its tests' (`_reusable`) — record `reused:
+  true` (only then; `RECORD_KEYS`, `saved_record`), note "did not run it
+  again". (5) `unwatched_mode(pressed=)`: a person's press (the plan run —
+  `start_build_turn(pressed=True)` from `run_approved_plan` — or a
+  `resume_of` wait without `auto`) keeps Accept edits / Auto for
+  `PRESS_STARTERS` (person, wait); night, CI, restart still fall back.
+  (6) Every stream-lane `approval` frame carries `asker` ("model" |
+  "iron_jarvis" — the finish check's or a checker's own call) and `why`
+  (`auto_approve.card_why`, ≤ 400: own call → plan door → a spend check's
+  sentence → once-only reason → Local only / night → the eased rule kept
+  (`_auto_kept`, incl. `JUDGE_ASKED_RULE`) → strict → `NOT_GRANTED_WHY`).
+  Every round / token / thinking / tool_call / reset frame from the check
+  starting until the model's answer to the note has streamed carries
+  `check: "finish"` (`_ev`, `_fin_live`; `FinishCheck.answer_heard`); the
+  model's fixes after its answer are untagged. MOVED ON PURPOSE: the yolo
+  checker pins in `test_harness_phase3_review_v1387` (now Ask first, plus a
+  yolo-runs-it pin), five finish scenarios (test before the edit, so the
+  re-run still happens) in `test_finish_lanes_v1386`,
+  `test_finish_shell_writes_v1387`, `test_team_review_finish_v1401`, and
+  "ls -la" → "npm run build" as the judged command in the v14060 auto
+  pins, and every stream-lane pin that used `echo …` as "a cheap command
+  that cards" now runs `python -c "print(…)"` (`echo` is read-only now:
+  chat_approvals_v1187 (`_shell_call_stream`'s default), approvals_office,
+  standing_grants, session_grants, build_turns, night_shift, build_review,
+  build_stall, build_phone_ask(+review), build_long_replies_review,
+  wave4_chat_recovery, chat_lanes, chat_waiting, chat_receipts,
+  autonomy_metrics(+review)); a NEW pin that needs a card uses a command
+  that is not read-only. Pins: `tests/test_{one_approval_turn,read_only_commands,
+  auto_judge_together,finish_skip_rerun,checker_card_why,
+  posture_kept_on_press}_v1417.py`. REVIEW (each red first, mutation-checked;
+  `tests/test_{read_only,one_approval}_review_v1417.py`): the pass let a
+  command RUN a program with no card under the DEFAULT posture — (a) rg
+  `--hostname-bin=PROG` (ripgrep 14 runs it): every `--hostname*` refused
+  beside `--pre*`/`-z`; (b) `npm|npx|pnpm|yarn --version` are corepack shims
+  that fetch and run the version a `package.json` names: off the
+  version list; (c) cmd.exe tries EVERY PATHEXT extension in the current
+  folder (`.vbs`, `.js`, `.wsf`…), not only exe/bat/cmd/com: the planted check
+  reads the default list plus `PATHEXT`; (d) a `\host\share` cwd was
+  RESOLVED (an SMB connection, the v1.379.0 lesson): `_leaves_folder(cwd)`
+  first, lexically; (e) git in a SUB-folder `cwd` may meet another
+  repository whose config runs programs (fsmonitor, diff/textconv drivers):
+  only in the session folder itself (`git_ok`); (f) under Ask first a folder's
+  own "ask" rule on the tool kept no card: the lane skips the pass for it;
+  (g) no workspace known ⇒ never read-only; (h) a Local only reply attaches
+  no session grant (`_attach_session_turn`). Survivors, on purpose: adding
+  `rm` to the list (`command_destructive` still refuses it) and dropping the
+  lane's own `armed_grant` family widen (the attached turn's `_reach` makes
+  the same widen). KNOWN, not changed: an existing symlink/junction inside the
+  folder is followed by `cat`/`type` (reads are broad, as `read_file`); `dir
+  /s` under Git's bash lists drive S:; `tail -f` runs until its timeout;
+  identical calls in one Auto round are judged twice (cost only); the judge
+  now reads the assistant's own last words (a prompt-injected reply can argue
+  its case — the request is still the person's); helpers (agent runtime)
+  under Ask first get no read-only pass.
 
 ## Map (where things live)
 

@@ -102,6 +102,14 @@ export function enterAllows(item: DockAskItem | null | undefined): boolean {
   return !(a.onceOnly === true && onceReasonOf(a.onceReason) !== undefined);
 }
 
+/** v1.417.0 (C1.7): what the dock says, briefly and in the warn tone, when
+ *  Enter is pressed on a card Enter does not allow (enterAllows) — the key
+ *  used to do nothing at all, silently. It still does not allow the card. */
+export const ENTER_BLOCKED_NOTE = "Click Allow once to run it";
+
+/** How long that note stays up after the key. */
+export const ENTER_BLOCKED_MS = 2500;
+
 /** The keys line for a card whose Enter does not allow it (enterAllows). */
 export const CLICK_TO_ALLOW_HINT = "Click Allow once to run it · Esc to decline";
 

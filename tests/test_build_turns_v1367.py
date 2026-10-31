@@ -9,6 +9,9 @@ model (the router) is a scripted double.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these stream-lane pins card on run Python;
+# `echo …` now runs with no card as a read-only command.
+
 import asyncio
 import json
 import sys
@@ -463,7 +466,7 @@ async def test_a_command_runs_owned_by_the_session(app, work, monkeypatch):
 
     monkeypatch.setattr(procs, "owned_by", spy)
     sid = new_session(app, work, approval_mode="yolo")["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok"]))
     frames = await _run(app, sid, "say hi", "bt-owned")
     assert dict(frames)["done"]["tools_used"] == ["shell"]
     assert owners == [f"build:{sid}"]
@@ -503,7 +506,7 @@ async def test_a_conversation_grant_is_kept_for_the_next_turns(app, work, monkey
     sid = new_session(app, work)["id"]
     seen = _spy_lane(monkeypatch)
     wire(app, Script([
-        [ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok",
+        [ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok",
     ]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-grant"}, drop=drop))

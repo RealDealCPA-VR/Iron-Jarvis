@@ -70,6 +70,18 @@ import {
   type BuildFolder,
 } from "@/lib/buildSessions";
 
+/** v1.417.0 (C2.1): is the session list the same as the one on screen?
+ *  (Plain data read off the daemon: a structural compare.) */
+export function sameFolders(a: readonly BuildFolder[] | null, b: readonly BuildFolder[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 /** How often the session list is read while the window is visible. */
 export const SESSION_LIST_POLL_MS = 4000;
 
@@ -227,7 +239,10 @@ export function IjHarnessView({
   const refresh = useCallback(async () => {
     try {
       const { folders: list, workRoot: root } = await listSessionsWithRoot();
-      setFolders(list);
+      // v1.417.0 (C2.1): an answer equal to the list on screen changes
+      // nothing — the poll every 4 s used to redraw the whole view (and the
+      // session in it) for an unchanged list.
+      setFolders((prev) => (sameFolders(prev, list) ? prev : list));
       setWorkRoot(root);
       setListError(null);
       keepFolders({ folders: list, workRoot: root });

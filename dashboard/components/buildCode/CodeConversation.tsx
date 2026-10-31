@@ -9,9 +9,10 @@
  * and the thinking disclosure. Nothing here talks to Iron Jarvis.
  */
 
-import { memo, useId, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 import {
   Bot,
+  RotateCcw,
   CheckSquare,
   FileText,
   FilePen,
@@ -31,6 +32,7 @@ import { PlanChecklist } from "@/components/chat/PlanChecklist";
 import { DiffBody } from "@/components/chat/DiffView";
 import { StepOpenInEditor } from "@/components/harness/OpenInEditor";
 import { resolveInFolder } from "@/lib/codeEditor";
+import { friendlyModelName } from "@/lib/friendlyModelName";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
@@ -39,6 +41,7 @@ import {
   doneWords,
   signInProvider,
   planChecklistSteps,
+  receiptLine,
   resolvedWords,
   steerWords,
   toolLabel,
@@ -128,6 +131,16 @@ interface FailurePresses {
   tool: string;
   onContinueOn?: () => void;
   continuing?: boolean;
+  /** v1.417.0 (C4.9): send the reply's message again (same words, same
+   *  files) — the failure's own words say "Press Retry". */
+  onRetry?: () => void;
+}
+
+/** v1.417.0 (C4.9): who answered, for the receipt (the session row's own
+ *  model and account name when a turn's events named no model). */
+interface ReceiptFacts {
+  model: string;
+  account: string;
 }
 
 // A row draws again only when ITS item changed (the fold keeps unchanged
@@ -137,11 +150,13 @@ const Item = memo(function Item({
   folder,
   press,
   toolName,
+  facts,
 }: {
   item: ConvItem;
   folder: string;
   press: FailurePresses | null;
   toolName: string;
+  facts?: ReceiptFacts;
 }) {
   codeRowDraws.items += 1;
   switch (item.kind) {
@@ -224,6 +239,17 @@ const Item = memo(function Item({
           {press && item.fixKind === "sign_in" && signInProvider(press.tool) ? (
             <CliSignInPress provider={signInProvider(press.tool)} testIdPrefix="code" />
           ) : null}
+          {press && press.onRetry && item.fixKind !== "account_limit" ? (
+            <button
+              type="button"
+              data-testid="code-retry"
+              onClick={press.onRetry}
+              title="Send the same message again"
+              className="mt-1 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+            >
+              <RotateCcw size={13} aria-hidden="true" /> Retry
+            </button>
+          ) : null}
           {item.technical ? (
             <details className="mt-0.5 text-[12px] text-zinc-500">
               <summary className="cursor-pointer">Details</summary>
@@ -233,6 +259,8 @@ const Item = memo(function Item({
         </div>
       );
     case "usage":
+      // v1.417.0 (C4.9): a turn that ended says it inside its receipt.
+      if (item.folded) return null;
       return (
         <p data-testid="code-usage" className="text-[11px] text-zinc-600">
           {usageWords(item)}
@@ -240,12 +268,34 @@ const Item = memo(function Item({
       );
     case "done": {
       const words = doneWords(item.stop);
-      return words ? (
+      const said = words ? (
         <p data-testid="code-done" data-stop={item.stop} className="text-[12px] text-zinc-500">
           {words}
         </p>
       ) : (
         <span data-testid="code-done" data-stop={item.stop} hidden />
+      );
+      const r = item.receipt;
+      if (!r) return said;
+      // v1.417.0 (C4.9): the reply line, folded like Chat › Code's receipt:
+      // who answered, how long, what it did; the usage line inside.
+      const line = receiptLine({ ...r, model: friendlyModelName(r.model || facts?.model || "") }, facts?.account ?? "");
+      return (
+        <div className="grid gap-1">
+          {said}
+          {line || r.usage ? (
+            <details data-testid="code-receipt" className="text-[11px] text-zinc-600">
+              <summary data-testid="code-receipt-line" className="cursor-pointer select-none hover:text-zinc-400">
+                {line || "Details"}
+              </summary>
+              {r.usage ? (
+                <p data-testid="code-usage" className="mt-0.5 pl-3">
+                  {usageWords(r.usage)}
+                </p>
+              ) : null}
+            </details>
+          ) : null}
+        </div>
       );
     }
   }
@@ -257,6 +307,9 @@ export const CodeConversation = memo(function CodeConversation({
   tool = "",
   onContinueOn,
   continuing = false,
+  onRetry,
+  model = "",
+  account = "",
 }: {
   items: readonly ConvItem[];
   folder: string;
@@ -264,7 +317,14 @@ export const CodeConversation = memo(function CodeConversation({
   tool?: string;
   onContinueOn?: () => void;
   continuing?: boolean;
+  /** v1.417.0 (C4.9): send the failed reply's message again (absent while
+   *  a reply runs). */
+  onRetry?: () => void;
+  /** v1.417.0 (C4.9): the session's model and account, for the receipt. */
+  model?: string;
+  account?: string;
 }) {
+  const facts = useMemo(() => ({ model, account }), [model, account]);
   let lastError = -1;
   items.forEach((it, i) => {
     if (it.kind === "error") lastError = i;
@@ -278,8 +338,9 @@ export const CodeConversation = memo(function CodeConversation({
           key={item.key}
           item={item}
           folder={folder}
-          press={newest && i === lastError ? { tool, onContinueOn, continuing } : null}
+          press={newest && i === lastError ? { tool, onContinueOn, continuing, onRetry } : null}
           toolName={toolLabel(tool)}
+          facts={facts}
         />
       ))}
     </div>

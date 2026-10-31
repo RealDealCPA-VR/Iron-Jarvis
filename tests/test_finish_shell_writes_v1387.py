@@ -96,7 +96,9 @@ async def test_a_file_only_a_command_changed_makes_a_reply_that_changed_files(en
     """The lost runs' shape: no file tool, a command rewrites the file. OLD
     CODE: no note, no extra round, no ``finish`` (the journal was empty)."""
     platform, ws, wire = env
-    model = wire([_shell(_py("open('app.py', 'w').write('X = 2\\n')")), _shell(TEST_CMD, "s2"),
+    # v1.417.0 (C1.3): the test BEFORE the command's change, so the check
+    # re-runs it (a run that passed after the last change is not re-run).
+    model = wire([_shell(TEST_CMD, "s2"), _shell(_py("open('app.py', 'w').write('X = 2\\n')")),
                   "Set X to 2.", _met])
     done, _ = await _lane(lane, platform, _body(ws), monkeypatch)
     assert len(model.calls) == 4 and len(model.notes()) == 1

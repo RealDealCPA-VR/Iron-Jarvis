@@ -19,6 +19,9 @@ minutes are read through ``harness.stall.CLOCK``, moved by the test.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import asyncio
 
 import pytest
@@ -133,7 +136,7 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
 ):
     ch, desk_sent = phone
     sid = new_session(app, work, title="Fix the nav bar")["id"]  # approve-for-me: a command cards
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo phoned"})], "Ran it."]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('phoned')\""})], "Ran it."]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-ph"}, drop=drop))
     try:
@@ -151,7 +154,7 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
         # v1.392.0 review (moved on purpose): a NEW sentence says "coding
         # session" (lib/buildWords, v1.389.0).
         assert "Your coding session" in line and "Fix the nav bar" in line
-        assert "approve / deny" in line and "echo phoned" not in line  # names, never arguments
+        assert "approve / deny" in line and "python -c \"print('phoned')\"" not in line  # names, never arguments
         # "This PC" says nothing (the bell and the session's own row do).
         assert desk_sent == []
         # The bell's listing gives it no second row as an agent's.
@@ -176,7 +179,7 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
 async def test_a_card_answered_within_five_minutes_sends_nothing(app, work, clock, phone, ticks):
     ch, desk_sent = phone
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ok"]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-quick"}, drop=drop))
     try:
@@ -214,7 +217,7 @@ async def test_a_safety_card_is_never_sent_to_the_phone(app, work, clock, phone,
 
     monkeypatch.setattr(stall, "phone_may_ask", spy)
     sid = new_session(app, work, approval_mode="yolo")["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ok"]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-safe"}, drop=drop))
     try:
@@ -282,7 +285,7 @@ async def test_only_a_coding_sessions_card_goes_to_the_phone(app, work, clock, p
     from iron_jarvis.daemon.chat_stream import stream_chat_turn
     from iron_jarvis.daemon.schemas import ChatBody, ChatMessageBody
 
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ok"]))
     body = ChatBody(messages=[ChatMessageBody(role="user", content="run echo hi")],
                     workspace_dir=str(work), turn_id="ht-1", provider="anthropic", model="claude-sonnet-4-5")
     frames = await stream_chat_turn(app.state.platform, {}, body, harness="auto", round_budget=5,

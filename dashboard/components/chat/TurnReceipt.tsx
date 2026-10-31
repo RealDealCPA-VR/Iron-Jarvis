@@ -50,7 +50,7 @@
  * expanded detail.
  */
 
-import { useId, useState, type ReactNode } from "react";
+import { memo, useId, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -733,7 +733,7 @@ function ReceiptStepRow({ step, timed }: { step: ReceiptStep; timed: boolean }) 
   );
 }
 
-export function TurnReceipt({
+function TurnReceiptImpl({
   route,
   adapted,
   toolsUsed = [],
@@ -1533,3 +1533,7 @@ export function TurnReceipt({
     </div>
   );
 }
+
+/** v1.417.0 (C2.1): memoised — a coding session's transcript row and the chat
+ *  page redraw it only when its own props change. */
+export const TurnReceipt = memo(TurnReceiptImpl);

@@ -25,6 +25,9 @@
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import json
 
 import pytest
@@ -325,7 +328,7 @@ def one_file(tmp_path):
 
 async def _parked(app, folder, turn_id: str):
     sid = new_session(app, folder)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ran it"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ran it"]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": turn_id}, drop=drop))
     card = await until(lambda: [d for e, d in turn_frames(app, turn_id) if e == "approval"])

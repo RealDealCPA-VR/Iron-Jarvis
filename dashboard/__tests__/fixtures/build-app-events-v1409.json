@@ -8,6 +8,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "claude-code",
     "harness_session_id": "harness-session-1",
@@ -146,6 +151,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "claude-code",
     "harness_session_id": "harness-session-1",
@@ -171,6 +181,7 @@
     "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
     "detail": "List files in current directory",
     "can_session": false,
+    "can_all_commands": true,
     "once_only": true,
     "command": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
     "turn": "turn-1"
@@ -321,6 +332,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "claude-code",
     "harness_session_id": "harness-session-1",
@@ -461,6 +477,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
     "turn": "turn-1"
    },
    {
@@ -656,6 +677,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "claude-code",
     "harness_session_id": "harness-session-1",
@@ -766,6 +792,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "claude-code",
     "harness_session_id": "harness-session-1",
@@ -801,6 +832,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
     "turn": "turn-1"
    },
    {
@@ -845,6 +881,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Codex…",
     "turn": "turn-1"
    },
    {
@@ -1149,6 +1190,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Codex…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "codex",
     "harness_session_id": "harness-session-1",
@@ -1383,6 +1429,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Codex…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "codex",
     "harness_session_id": "harness-session-1",
@@ -1451,6 +1502,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Codex…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "codex",
     "harness_session_id": "harness-session-1",
@@ -1478,6 +1534,241 @@
     "output": 0,
     "cache_read": 0,
     "list_price": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_allow_all_commands": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_A1",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-ChildItem -Force | Select-Object Name",
+    "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Name\", \"description\": \"List files\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run Get-ChildItem -Force | Select-Object Name",
+    "detail": "List files\n\nAllow similar commands always allows PowerShell(Get-ChildItem *) for the rest of this session.",
+    "can_session": true,
+    "can_all_commands": true,
+    "command": "Get-ChildItem -Force | Select-Object Name",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow_commands",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_A1",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-ChildItem -Force | Select-Object Name",
+    "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Name\", \"description\": \"List files\"}",
+    "status": "done",
+    "output": "a.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_A2",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-Content a.txt",
+    "input": "{\"command\": \"Get-Content a.txt\", \"description\": \"Read a.txt\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_A2",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "Run Get-Content a.txt",
+    "input": "{\"command\": \"Get-Content a.txt\", \"description\": \"Read a.txt\"}",
+    "status": "done",
+    "output": "hello",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_end:t0",
+    "text": "The folder holds a.txt, which says hello.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109914,
+    "output": 243,
+    "cache_read": 70871,
+    "list_price": true,
+    "cost_usd": 0.331354,
+    "context": {
+     "used": 39077,
+     "window": 1000000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_plan_deny_with_words": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_P1",
+    "kind": "other",
+    "name": "ExitPlanMode",
+    "title": "Show the plan",
+    "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "tool",
+    "title": "Start working on this plan",
+    "detail": "Exit plan mode?",
+    "can_session": false,
+    "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "once_only": true,
+    "tool": "ExitPlanMode",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_P1",
+    "kind": "other",
+    "name": "ExitPlanMode",
+    "title": "Show the plan",
+    "input": "{\"plan\": \"# Plan\\n\\n1. Read `a.txt`.\\n2. Write `b.txt` with its words reversed.\\n\"}",
+    "status": "failed",
+    "output": "The user doesn't want to proceed with this tool use.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_plan_end:t0",
+    "text": "Understood, I will plan it differently.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109914,
+    "output": 243,
+    "cache_read": 70871,
+    "list_price": true,
+    "cost_usd": 0.331354,
+    "context": {
+     "used": 39077,
+     "window": 1000000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "The folder had one file, `a.txt` (7 bytes). I created `hello.txt` containing `hi`.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_failed_generic": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109914,
+    "output": 243,
+    "cache_read": 70871,
+    "list_price": true,
+    "context": {
+     "used": 39077,
+     "window": 1000000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "error",
+    "title": "Claude Code couldn't finish this answer",
+    "fix": "Press Retry. If it happens again, pick another model for this session.",
+    "technical": "The tool state could not be read back (unexpected end of data).",
     "turn": "turn-1"
    },
    {

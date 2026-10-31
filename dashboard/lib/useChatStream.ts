@@ -73,15 +73,18 @@ export type { McpAsk, McpProgress, ResourceReceipt } from "./mcpInteract";
 
 /** A single decoded SSE frame. Discriminated on `type` (the event name). */
 export type SSEEvent =
-  | { type: "token"; text: string }
+  /** v1.417.0 (C2.4): `check: "finish"` marks a frame of the finish check's
+   *  own round (Iron Jarvis's bookkeeping, never the reply) — on token,
+   *  thinking, reset, round and tool_call frames. Absent everywhere else. */
+  | { type: "token"; text: string; check?: "finish" }
   /** v1.323.0: a REASONING delta — the model's thinking, shown in its own
    *  quiet disclosure and never part of the reply. May arrive in any round,
    *  interleaved with tokens. Not work (no side effects), so not `committed`. */
-  | { type: "thinking"; text: string }
+  | { type: "thinking"; text: string; check?: "finish" }
   /** v1.311.0 (W3-1): "discard the reply text streamed so far; the tokens
    *  that follow replace it" — the daemon's streamed language rewrite. The
    *  daemon may send a `reason`; nothing here needs it. */
-  | { type: "reset" }
+  | { type: "reset"; check?: "finish" }
   /** v1.384.0: a TAGGED follow's first frame (Build's page asks for one,
    *  daemon/durable_turns): `resumed` false = the frames after it are the
    *  WHOLE turn from its start (drop what you hold); true = only what came
@@ -103,6 +106,8 @@ export type SSEEvent =
        *  Whitelisted to exactly those two strings; absent on started frames
        *  and from an older daemon. */
       detail?: StepDetail;
+      /** v1.390.0: a step Iron Jarvis ran itself (decoded since v1.417.0). */
+      check?: "finish";
     }
   | {
       /** The turn is PAUSED on a tool that needs the user's approval
@@ -138,6 +143,13 @@ export type SSEEvent =
        *  keeps an inverse, `false` for one that does not (or never said);
        *  ABSENT for a read-only tool and the plan ask (nothing to undo). */
       reversible?: boolean;
+      /** v1.417.0 (C1.7): WHY this call asks, in the daemon's one sentence
+       *  (the once-only reason, "not in this chat's grants", an automatic
+       *  rule's words). Absent from an older daemon. */
+      why?: string;
+      /** v1.417.0 (C1.7): who asks — the model, or Iron Jarvis itself (its
+       *  own finish-check re-run, a project checker). */
+      asker?: "model" | "iron_jarvis";
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -148,7 +160,7 @@ export type SSEEvent =
       decision: "once" | "conversation" | "deny" | "tab" | "timeout";
     }
   | { type: "meta"; provider: string; model: string }
-  | { type: "round"; round: number; steer?: string }
+  | { type: "round"; round: number; steer?: string; check?: "finish" }
   /** v1.312.0 (W4-1/W4-3): the daemon now opens the response at once and
    *  prepares the turn INSIDE it, naming each stage as it starts — before
    *  the first token. Only the four known stages decode; anything else is
@@ -256,6 +268,10 @@ export type SSEEvent =
        *  the guide, notes saved or not) — lib/brainProfiles. Absent when the
        *  daemon sent null (no profile applied). */
       brain?: BrainReceipt;
+      /** v1.417.0 (C2.4): the finish check's record (a Build turn's), raw —
+       *  the screen decodes it (lib/buildSessions decodeFinish). Absent when
+       *  the daemon sent none. */
+      finish?: Record<string, unknown>;
     }
   | {
       type: "error";
@@ -599,6 +615,12 @@ export function decodePriorToolResults(raw: unknown): PriorToolResult[] {
   return out;
 }
 
+/** v1.417.0 (C2.4): `{check: "finish"}` for a frame of the finish check's
+ *  own round, else nothing (the exact string only). */
+function finishTag(data: Record<string, unknown>): { check?: "finish" } {
+  return data.check === "finish" ? { check: "finish" } : {};
+}
+
 /**
  * Map an SSE event name + its already-parsed JSON payload to a typed SSEEvent
  * (or null for an unknown event name). Shared by the fetch-reader path
@@ -611,13 +633,13 @@ export function sseEventFrom(
 ): SSEEvent | null {
   switch (event) {
     case "token":
-      return { type: "token", text: str(data.text) };
+      return { type: "token", text: str(data.text), ...finishTag(data) };
     case "thinking":
       // v1.323.0: reasoning deltas, display-only. Text only — a junk payload
       // is an empty delta, never "[object Object]" in the disclosure.
-      return { type: "thinking", text: typeof data.text === "string" ? data.text : "" };
+      return { type: "thinking", text: typeof data.text === "string" ? data.text : "", ...finishTag(data) };
     case "reset":
-      return { type: "reset" };
+      return { type: "reset", ...finishTag(data) };
     case "resume": {
       // v1.384.0 review: a WHOLE replay of a running turn says when it
       // started (ms), so a reload counts "Working for" from there.
@@ -649,6 +671,7 @@ export function sseEventFrom(
         const detail = cleanStepDetail(data.detail);
         if (detail) ev.detail = detail;
       }
+      if (data.check === "finish") ev.check = "finish";
       return ev;
     }
     case "approval": {
@@ -688,6 +711,10 @@ export function sseEventFrom(
       // v1.352.0 (G25): the undo verdict, a real boolean only — anything
       // else reads as "not said", and the card then says nothing about undo.
       if (typeof data.reversible === "boolean") ev.reversible = data.reversible;
+      // v1.417.0 (C1.7): the reason line and who asks, whitelisted: a
+      // non-empty string (cut), and only the two known askers.
+      if (typeof data.why === "string" && data.why.trim()) ev.why = data.why.trim().slice(0, 400);
+      if (data.asker === "model" || data.asker === "iron_jarvis") ev.asker = data.asker;
       return ev;
     }
     case "approval_resolved": {
@@ -710,6 +737,7 @@ export function sseEventFrom(
       };
       // v1.278.0: the steer note this round READ (absent when none was).
       if (typeof data.steer === "string" && data.steer) ev.steer = data.steer;
+      if (data.check === "finish") ev.check = "finish";
       return ev;
     }
     case "phase":
@@ -840,6 +868,9 @@ export function sseEventFrom(
         const brain = decodeBrainReceipt(data.brain);
         if (brain) ev.brain = brain;
       }
+      // v1.417.0 (C2.4): the finish check's record, an object only.
+      if (data.finish && typeof data.finish === "object" && !Array.isArray(data.finish))
+        ev.finish = data.finish as Record<string, unknown>;
       return ev;
     }
     case "error": {
@@ -1331,6 +1362,11 @@ export interface PendingApproval {
    *  Absent when it did not say (a read-only tool, the plan ask, an older
    *  daemon): the card then says nothing about undo. */
   reversible?: boolean;
+  /** v1.417.0 (C1.7): why it asks, in the daemon's one sentence; the card's
+   *  one explanatory line. Absent = an older daemon (today's card). */
+  why?: string;
+  /** v1.417.0 (C1.7): who asks; "iron_jarvis" = Iron Jarvis's own check. */
+  asker?: "model" | "iron_jarvis";
 }
 
 /**
@@ -1349,11 +1385,35 @@ export interface TextStore {
   subscribe(cb: () => void): () => void;
 }
 
+/** v1.417.0: a value readable without re-rendering the caller (the twin of
+ *  {@link TextStore} for a value that is not text). */
+export interface ValueStore<T> {
+  get(): T;
+  subscribe(cb: () => void): () => void;
+}
+
+/** v1.417.0 (C2.4): the finish check's own round, as it runs — kept OUT of
+ *  the live reply (its "N. met:" checklist is bookkeeping the saved reply
+ *  drops) and shown as one quiet line instead. */
+export interface LiveFinish {
+  /** The check's round has started (a frame carried `check: "finish"`). */
+  running: boolean;
+  /** The check's own test run: running, then passed or failed; null = none. */
+  test: "running" | "passed" | "failed" | null;
+  /** The `done` frame's record (raw), once it arrived. */
+  record: Record<string, unknown> | null;
+}
+
 export interface UseChatStreamOptions {
   /** Keep the live text in React state (default true). Pass false when the
    *  text is rendered by a child through `textStore`, so the caller does not
    *  re-render per frame. */
   textInState?: boolean;
+  /** v1.417.0 (C2.1): keep "when the turn last moved" in React state (default
+   *  true). Pass false when nothing on the caller reads `lastEventAt` — every
+   *  frame (each token) would otherwise re-render the caller; the value is
+   *  still readable through `lastEventStore`. */
+  clockInState?: boolean;
   /** v1.384.0: a running reply's state kept while the user was elsewhere
    *  (lib/turnCache) — drawn on the FIRST render (streaming, its text, steps,
    *  card), so a return shows where the user was before anything is read.
@@ -1381,6 +1441,8 @@ export interface StreamSeed {
   truncated: boolean;
   provider?: string;
   model?: string;
+  /** v1.417.0: the finish check's round, as far as it got. */
+  finish?: LiveFinish | null;
 }
 
 /** The live text of `stream`, subscribed at the component that SHOWS it.
@@ -1447,6 +1509,13 @@ export interface UseChatStream {
    *  Keepalives do not count: they prove the daemon is alive, not that the
    *  turn moved. */
   lastEventAt: number | null;
+  /** v1.417.0 (C2.1): `lastEventAt`, readable without re-rendering this
+   *  hook's caller (the only place it lives for `clockInState: false`).
+   *  Optional so a hand-built test double need not carry it. */
+  lastEventStore?: ValueStore<number | null>;
+  /** v1.417.0 (C2.4): the finish check's round of the running turn (null
+   *  when none ran). Optional so a hand-built test double need not carry it. */
+  finishStore?: ValueStore<LiveFinish | null>;
   /** Drive one chat turn. Accumulates tokens into `text`, upserts tool frames
    *  into `tools`, and resolves with the authoritative reply. Throws an
    *  ApiError on an `error` frame (matching the non-streaming POST /chat path). */
@@ -1516,6 +1585,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   // `textStore` and the caller itself never re-renders per token. Everyone
   // else keeps `text` as state, exactly as before.
   const textInState = opts.textInState ?? true;
+  // v1.417.0 (C2.1): the same for "when the turn last moved".
+  const clockInState = opts.clockInState ?? true;
   // v1.384.0: a kept reply is drawn on the FIRST render (read once, at mount).
   const seedRef = useRef<StreamSeed | null | undefined>(undefined);
   if (seedRef.current === undefined) seedRef.current = opts.seed ?? null;
@@ -1589,7 +1660,49 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
   const [withFiles, setWithFiles] = useState(false);
   const [prepStep, setPrepStep] = useState<PrepStep | null>(seed0?.prepStep ?? null);
   const [startedAt, setStartedAt] = useState<number | null>(seed0?.startedAt ?? null);
-  const [lastEventAt, setLastEventAt] = useState<number | null>(seed0 ? Date.now() : null);
+  const [lastEventAt, setLastEventAt] = useState<number | null>(
+    seed0 && clockInState ? Date.now() : null,
+  );
+  // v1.417.0 (C2.1): the clock's truth and its readers — a caller that keeps
+  // it out of state is never re-rendered by a token.
+  const lastEventRef = useRef<number | null>(seed0 ? Date.now() : null);
+  const lastEventListenersRef = useRef<Set<() => void>>(new Set());
+  const lastEventStoreRef = useRef<ValueStore<number | null> | null>(null);
+  if (lastEventStoreRef.current === null) {
+    lastEventStoreRef.current = {
+      get: () => lastEventRef.current,
+      subscribe: (cb: () => void) => {
+        lastEventListenersRef.current.add(cb);
+        return () => lastEventListenersRef.current.delete(cb);
+      },
+    };
+  }
+  const noteEvent = useCallback(
+    (at: number | null) => {
+      lastEventRef.current = at;
+      if (clockInState) setLastEventAt(at);
+      for (const cb of [...lastEventListenersRef.current]) cb();
+    },
+    [clockInState],
+  );
+  // v1.417.0 (C2.4): the finish check's round, as its own small store.
+  const finishRef = useRef<LiveFinish | null>(seed0?.finish ?? null);
+  const finishListenersRef = useRef<Set<() => void>>(new Set());
+  const finishStoreRef = useRef<ValueStore<LiveFinish | null> | null>(null);
+  if (finishStoreRef.current === null) {
+    finishStoreRef.current = {
+      get: () => finishRef.current,
+      subscribe: (cb: () => void) => {
+        finishListenersRef.current.add(cb);
+        return () => finishListenersRef.current.delete(cb);
+      },
+    };
+  }
+  const publishFinish = useCallback((next: LiveFinish | null) => {
+    if (finishRef.current === next) return;
+    finishRef.current = next;
+    for (const cb of [...finishListenersRef.current]) cb();
+  }, []);
   const abortRef = useRef<AbortController | null>(null);
   // v1.384.0: the running reply's folded state, as `run` holds it (seedOf).
   const liveRef = useRef<StreamSeed | null>(seed0);
@@ -1637,7 +1750,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         setWithFiles(carriesFiles(body));
         setPrepStep(null);
         setStartedAt(t0);
-        setLastEventAt(t0);
+        noteEvent(t0);
+        publishFinish(null);
       }
       const watch: StreamWatch = {
         onOpen: () => {
@@ -1645,7 +1759,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           // A kept state already says where the turn is; a frame moves it.
           if (from) return;
           setPhase("working");
-          setLastEventAt(Date.now());
+          noteEvent(Date.now());
         },
         ...(runOpts.onFrame
           ? {
@@ -1690,6 +1804,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
       let pending: PendingApproval | null = from?.approval ?? null;
       let asks: McpAsk[] = from?.mcpAsks ?? [];
       let prep: PrepStep | null = from?.prepStep ?? null;
+      // v1.417.0 (C2.4): the finish check's round as this run folds it.
+      let fin: LiveFinish | null = from?.finish ?? null;
       // v1.324.0: the ids of the app asks THIS turn raised — the settle at the
       // end stops only these, so a newer turn's open question is never eaten.
       const askIds = new Set<string>(from?.askIds ?? []);
@@ -1718,6 +1834,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           truncated,
           ...(provider ? { provider } : {}),
           ...(model ? { model } : {}),
+          finish: fin,
         };
       };
       const drawAll = () => {
@@ -1728,7 +1845,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         setMcpAsks(asks);
         setPrepStep(prep);
         setPhase("working");
-        setLastEventAt(Date.now());
+        noteEvent(Date.now());
+        publishFinish(fin);
         flushText();
       };
       const restart = () => {
@@ -1745,6 +1863,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
         thinkingMs = null;
         firstTokenAt = null;
         truncated = false;
+        fin = null;
       };
       if (from) keep();
 
@@ -1802,7 +1921,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
             continue;
           }
           // A real frame moved the turn (keepalives never reach here).
-          if (!replaying && ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
+          if (!replaying && ev.type !== "done" && ev.type !== "error") noteEvent(Date.now());
           if (ev.type !== "thinking" && thinkingSince !== null) {
             thinkingMs = (thinkingMs ?? 0) + Math.max(0, Date.now() - thinkingSince);
             thinkingSince = null;
@@ -1810,9 +1929,34 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           // v1.312.0: anything but a stage name means preparation is over —
           // the bubble's stage words must not outlive it. (A `meta` frame is
           // routing, not progress; it leaves the words alone.)
-          if (ev.type !== "phase" && ev.type !== "meta" && ev.type !== "approval_resolved") {
+          if (ev.type !== "phase" && ev.type !== "meta" && ev.type !== "approval_resolved" && prep !== null) {
             prep = null;
             if (!replaying) setPrepStep(null);
+          }
+          // v1.417.0 (C2.4): the FINISH CHECK's own round — its words (the
+          // "N. met:" checklist the saved reply drops), thinking and test run
+          // are bookkeeping: they never reach the live reply or its rows. The
+          // round is folded into its own store, shown as one quiet line.
+          if (
+            (ev.type === "token" || ev.type === "thinking" || ev.type === "reset" ||
+              ev.type === "round" || ev.type === "tool_call") &&
+            ev.check === "finish"
+          ) {
+            if (ev.type !== "reset") committed = true;
+            const was: LiveFinish = fin ?? { running: false, test: null, record: null };
+            const test: LiveFinish["test"] =
+              ev.type === "tool_call"
+                ? ev.status === "started"
+                  ? "running"
+                  : ev.ok === false
+                    ? "failed"
+                    : "passed"
+                : was.test;
+            if (!was.running || test !== was.test) fin = { ...was, running: true, test };
+            if (!replaying) publishFinish(fin);
+            if (ev.type === "round" && ev.steer) steered.push(ev.steer);
+            keep();
+            continue;
           }
           switch (ev.type) {
             case "token":
@@ -1883,6 +2027,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(onceReasonOf(ev.once_reason) ? { onceReason: onceReasonOf(ev.once_reason) } : {}),
                 ...(ev.cost_note ? { costNote: ev.cost_note } : {}),
                 ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
+                ...(ev.why ? { why: ev.why } : {}),
+                ...(ev.asker ? { asker: ev.asker } : {}),
               };
               if (!replaying) setApproval(pending);
               break;
@@ -1941,6 +2087,15 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               break;
             case "done":
               truncated = ev.truncated === true;
+              // v1.417.0 (C2.4): the finish check's record ends its round.
+              if (ev.finish || fin) {
+                fin = {
+                  running: false,
+                  test: fin?.test ?? null,
+                  record: ev.finish ?? fin?.record ?? null,
+                };
+                if (!replaying) publishFinish(fin);
+              }
               done = {
                 reply: ev.reply || acc,
                 tools_used: ev.tools_used,
@@ -2016,6 +2171,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           thinkingRef.current = thought;
           setTools(cards);
           setMcpAsks(asks);
+          publishFinish(fin);
         }
         // The last words land EXACTLY, not one frame late: flush synchronously
         // and drop any queued frame (v1.250.0, S-03).
@@ -2034,7 +2190,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
           setPhase(null);
           setPrepStep(null);
           setStartedAt(null);
-          setLastEventAt(null);
+          noteEvent(null);
         }
       }
 
@@ -2069,6 +2225,8 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
     prepStep,
     startedAt,
     lastEventAt,
+    lastEventStore: lastEventStoreRef.current,
+    finishStore: finishStoreRef.current,
     run,
     abort,
     seedOf,

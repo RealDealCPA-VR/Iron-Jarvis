@@ -7,6 +7,9 @@ Driven through the REAL app factory / lanes; only the model is scripted.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import asyncio
 import json
 
@@ -397,7 +400,7 @@ async def test_a_waiting_build_session_is_marked_on_the_pending_listing(app, wor
     from tests.test_build_sessions_v1367 import asgi
 
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="b1", name="Bash", arguments={"command": "echo hi"})], "Ran it."]))
+    wire(app, Script([[ToolCall(id="b1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "Ran it."]))
     drop = asyncio.Event()
     status, _raw = await open_turn(app, sid, {"text": "run echo", "turn_id": "rv-wait"},
                                    drop=drop, stop_after="event: approval")
@@ -428,7 +431,7 @@ async def test_a_failed_read_while_keeping_a_grant_never_ends_the_turn(app, work
     from tests.test_chat_turn_stop_v1241 import _asgi_post
 
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ran it"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ran it"]))
     real = S.get_row
     calls = {"n": 0}
 

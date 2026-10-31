@@ -8,6 +8,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting OpenCode…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "opencode",
     "harness_session_id": "ses_e70e79018ffeyR0FR9FR2otmch",
@@ -95,6 +100,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting OpenCode…",
     "turn": "turn-1"
    },
    {
@@ -196,6 +206,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting OpenCode…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "opencode",
     "harness_session_id": "ses_e70e75d15ffeA9YG9XnfVdQ29n",
@@ -274,6 +289,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting OpenCode…",
     "turn": "turn-1"
    },
    {
@@ -401,6 +421,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting OpenCode…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "opencode",
     "harness_session_id": "ses_e70e727d7ffepRiSrrFYWHI9iE",
@@ -480,6 +505,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting OpenCode…",
     "turn": "turn-1"
    },
    {
@@ -622,6 +652,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting OpenCode…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "opencode",
     "harness_session_id": "ses_e70e6cc27ffezoM4tFfjoNw2MU",
@@ -650,6 +685,11 @@
     "files": [
      "C:\\work\\demo\\zebrafig.png"
     ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting OpenCode…",
     "turn": "turn-1"
    },
    {
@@ -713,6 +753,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting OpenCode…",
     "turn": "turn-1"
    },
    {

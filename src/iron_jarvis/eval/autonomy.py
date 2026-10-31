@@ -45,6 +45,10 @@ WHAT A TASK IS (the one definition):
   chat and is part of the chat's task; a Build session's helper is part of
   its session's task; a workflow's steps, a mission's teammates and delegated
   children are parts of something else and are never tasks of their own.
+* A Build › Code session (the user's own Claude Code / Codex, v1.417.0) is
+  split into tasks by the TURNS its cards name (:func:`build_app_tasks`,
+  counted under "build"); only their interruptions are read, never their
+  success.
 * The SYSTEM's own nudges (``autonomy.nudged``: an approved plan that ran by
   itself, a run that carried on past its step budget once, …) are counted
   apart and never make a task "not hands-off".
@@ -456,6 +460,11 @@ class Task:
     asked: list = field(default_factory=list)
     answered: list = field(default_factory=list)
     steer_times: list = field(default_factory=list)
+    #: v1.417.0 review: False for a task seen only through its cards (a
+    #: Build › Code turn): its interruptions count, but it is in no task
+    #: count, success or hands-off rate, nor "per task" — the metric sees
+    #: such a turn only when it asked something and never reads its reply.
+    whole: bool = True
 
     @property
     def human_nudges(self) -> int:
@@ -702,6 +711,42 @@ def _week_start(at: float) -> str:
     return (day - timedelta(days=day.weekday())).isoformat()
 
 
+def build_app_tasks(events: list[dict], *, known: "dict[str, list[Task]] | None" = None) -> list[Task]:
+    """v1.417.0 (C1.11): Build › Code's tasks (the user's own Claude Code /
+    Codex / Pi / OpenCode, ``hosted/``). Their conversation lives in the
+    session's own event log, not in a chat thread, so a task is each TURN its
+    asks name (``surface: "build_app"``, ``thread_id`` = the session, the
+    turn's first ask = its start), counted under "build". Only interruptions
+    are read here: such a task's success is not (its reply is not in a row
+    this reads), and a turn that asked nothing is never seen at all — so
+    such a task is not WHOLE (:attr:`Task.whole`): its interruptions are
+    counted, but it is in no task count, rate or "per task" (review: one
+    card used to halve a week's hands-off rate). A session a thread already
+    covers (``known``) is left to that thread."""
+    known = known or {}
+    starts: dict[str, dict[str, float]] = {}
+    for ev in events:
+        p = ev.get("payload") or {}
+        if not isinstance(p, dict) or str(p.get("surface") or "") != "build_app":
+            continue
+        thread = str(p.get("thread_id") or "")
+        if not thread or thread in known:
+            continue
+        at = _epoch(p.get("at")) or _epoch(ev.get("created_at"))
+        if at is None:
+            continue
+        turn = str(p.get("turn_id") or "") or thread
+        turns = starts.setdefault(thread, {})
+        turns[turn] = min(turns.get(turn, at), at)
+    out: list[Task] = []
+    for thread, turns in starts.items():
+        ts = [Task(surface="build", key=thread, start=s, whole=False) for s in sorted(turns.values())]
+        for a, b in zip(ts, ts[1:]):
+            a.end = b.start
+        out.extend(ts)
+    return out
+
+
 def compute(
     *, threads: list[dict], sessions: list[dict], events: list[dict], days: int, now: float,
     turn_threads: "dict[str, str] | None" = None, truncated: "Iterable[str]" = (),
@@ -737,6 +782,9 @@ def compute(
     for t in a_tasks:
         by_key.setdefault(t.key, []).append(t)
     all_tasks.extend(a_tasks)
+    for t in build_app_tasks(events, known=by_key):
+        by_key.setdefault(t.key, []).append(t)
+        all_tasks.append(t)
 
     # The interruptions, oldest first, paired asked → answered by ask id.
     system = Counter()
@@ -874,12 +922,16 @@ def compute(
         )
 
     def _block(ts: list[Task]) -> dict:
-        n = len(ts)
-        ok = [t for t in ts if t.success]
+        # (review) the tasks the metric sees WHOLE make every count and rate;
+        # a task seen only through its cards (Build › Code) adds its
+        # interruptions and nothing else.
+        whole = [t for t in ts if t.whole]
+        n = len(whole)
+        ok = [t for t in whole if t.success]
         hands = [t for t in ok if not _helped(t)]
         asked = sum(len(_interrupts(t)) for t in ts)
         avoid = sum(avoid_by_task.get(id(t), 0) for t in ts)
-        human = sum(t.human_nudges for t in ts)
+        human = sum(t.human_nudges for t in whole)
         return {
             "tasks": n, "successful": len(ok), "hands_off": len(hands),
             "hands_off_pct": _pct(len(hands), n),
@@ -887,7 +939,11 @@ def compute(
             "human_nudges": human,
         }
 
+    whole_tasks = [t for t in tasks if t.whole]
     total = _block(tasks)
+    # (review) "per task" over the tasks seen whole, their own interruptions.
+    per_task_asked = sum(len(_interrupts(t)) for t in whole_tasks)
+    per_task_avoid = sum(avoid_by_task.get(id(t), 0) for t in whole_tasks)
     by_kind = Counter(str(p.get("kind") or "card") for t in tasks for p in _interrupts(t))
     by_tool = Counter(str(p.get("tool") or "") for t in tasks for p in _interrupts(t) if p.get("tool"))
     waits = [int(a.get("wait_ms") or 0) for t in tasks for a in t.answered
@@ -919,8 +975,8 @@ def compute(
         "interruptions": {
             "total": total["interruptions"],
             "avoidable": total["avoidable"],
-            "per_task": _rate(total["interruptions"], total["tasks"]),
-            "avoidable_per_task": _rate(total["avoidable"], total["tasks"]),
+            "per_task": _rate(per_task_asked, total["tasks"]),
+            "avoidable_per_task": _rate(per_task_avoid, total["tasks"]),
             "by_kind": {k: by_kind.get(k, 0) for k in ("card", "question", "plan")},
             "by_tool": [{"tool": k, "count": v} for k, v in by_tool.most_common(10)],
             "median_wait_ms": sorted(waits)[len(waits) // 2] if waits else 0,
@@ -1042,7 +1098,8 @@ def read_metrics(engine: Any, days: int = 30, *, now: "float | None" = None) -> 
 
 __all__ = [
     "ACK", "AGENT_TASK_ORIGINS", "NUDGE", "REQUEST", "RETRY", "Task",
-    "agent_tasks", "avoidable", "bare_affirmation", "classify_line", "compute", "empty", "ends_on_offer",
+    "agent_tasks", "avoidable", "bare_affirmation", "build_app_tasks", "classify_line", "compute", "empty",
+    "ends_on_offer",
     "normalize_request", "question_deferred", "read_metrics", "reply_succeeded", "split_conversation",
     "stored_versions", "would_card",
 ]

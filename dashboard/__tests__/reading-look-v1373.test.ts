@@ -68,7 +68,9 @@ describe("the IJ harness reads like a document", () => {
   });
 
   it("the session screen uses the harness look, never the pane's, for the conversation", () => {
-    const src = read("components/harness/HarnessSession.tsx");
+    // v1.417.0: the transcript row (the user bubble among it) lives in its
+    // own memoised file, HarnessMessageRow.tsx — read both.
+    const src = read("components/harness/HarnessSession.tsx") + "\n" + read("components/harness/HarnessMessageRow.tsx");
     expect(src).toContain('data-testid="harness-live-text" className={HARNESS_REPLY_PROSE}');
     expect(src).toContain('data-testid="harness-user-bubble" className={HARNESS_USER_BUBBLE}');
     expect(src).toMatch(/data-testid="harness-transcript"\s+className=\{`[^`]*\$\{HARNESS_TRANSCRIPT_ROWS\}`\}/);

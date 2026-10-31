@@ -20,6 +20,9 @@ not done. Three changes, each pinned here:
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the command these pins card on runs Python; it was
+# `echo approved-run`, which now runs with no card as a read-only command.
+
 import asyncio
 import json
 from types import SimpleNamespace
@@ -233,7 +236,7 @@ def _stream_of_three_shells():
         if rounds["n"] == 0:
             rounds["n"] += 1
             resp = LLMResponse(text="", tool_calls=[
-                ToolCall(id=f"c{n}", name="shell", arguments={"command": f"echo item-{n}"})
+                ToolCall(id=f"c{n}", name="shell", arguments={"command": f'python -c "print({n})"'})
                 for n in (1, 2, 3)
             ])
             yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}
@@ -417,7 +420,7 @@ def _stream_of_one_shell():
         if rounds["n"] == 0:
             rounds["n"] += 1
             resp = LLMResponse(text="", tool_calls=[
-                ToolCall(id="c1", name="shell", arguments={"command": "echo approved-run"}),
+                ToolCall(id="c1", name="shell", arguments={"command": "python -c \"print('approved-run')\""}),
             ])
             yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}
         else:

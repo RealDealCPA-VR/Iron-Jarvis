@@ -34,11 +34,14 @@ the model had run it —
   spend check), the permission engine in the REAL ``registry.invoke``, the
   ledger (``called_as`` :data:`CALLED_AS`) and the tool deadline;
 * it NEEDS A PERSON (Phase 3 review, :meth:`ProjectCheckers.needs_a_person`):
-  the model never chose to run it, so auto-approve's per-call grant never
-  covers it — under yolo it cards exactly as under approve-for-me unless a
-  grant wider than one call covers the command tool (the permission table,
-  "Allow for this chat", a standing grant). The v1.386.1 rule for the finish
-  check's folder command and the v1.366.0 rule for plugin checks. A round's
+  the model never chose to run it, so Accept edits' / Auto's per-call rules
+  never cover it — it cards unless a grant wider than one call covers the
+  command tool (the permission table, "Allow for this chat" / "for this
+  session", a standing grant). v1.417.0 (C1.3, the user's decision D1): EXCEPT
+  under "Don't ask" (yolo) — the user's standing "never ask me", and Iron
+  Jarvis's own checker after an edit is not a new risk — where it runs with no
+  card. (A folder's own ``plugins.toml`` check and a project's command file
+  keep their card there: the v1.386.1 and v1.381.0 rules.) A round's
   checkers share ONE card (v1.247.0) — under Local only each still cards
   alone ("Allow once"), as every command there does;
 * low trust never schedules one (and a call tainted low mid-round is refused
@@ -550,7 +553,7 @@ class ProjectCheckers:
     def owns(self, call: Any) -> bool:
         return str(getattr(call, "id", "") or "") in self._pending
 
-    def needs_a_person(self, call: Any) -> bool:
+    def needs_a_person(self, call: Any, *, posture: str = "") -> bool:
         """Must this call be allowed by a PERSON (a card, or a grant wider
         than one call — the permission table, "Allow for this chat", a
         standing grant) — never by auto-approve's per-call grant? True for
@@ -561,8 +564,19 @@ class ProjectCheckers:
         command (``finish.FinishCheck.needs_a_person``, v1.386.1) and a
         folder's plugin checks (``chat_turn.harness_check_runner``, v1.366.0).
         The stream lane reads it beside the finish check's (MIRROR NOTE: the
-        POST lane never auto-grants a call, so it needs no twin)."""
+        POST lane never auto-grants a call, so it needs no twin).
+
+        v1.417.0 (C1.3, decision D1): False under "Don't ask" (``posture``
+        "yolo") — the person's own standing answer covers Iron Jarvis's own
+        checker run; every other posture as before."""
+        if str(posture or "") == "yolo":
+            return False
         return self.owns(call)
+
+    def checker_name(self, call: Any) -> str:
+        """The checker a call of this round runs ("ruff"), else ""."""
+        p = self._pending.get(str(getattr(call, "id", "") or ""))
+        return str(getattr(getattr(p, "checker", None), "name", "") or "") if p is not None else ""
 
     def note(self, call: Any, *, ran: bool) -> None:
         """A call of the round settled (only an edit a checker covers is

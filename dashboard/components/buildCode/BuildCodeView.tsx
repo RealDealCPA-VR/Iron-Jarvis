@@ -810,6 +810,19 @@ function SessionPane({
   /** The account hit its limit: carry on with the same conversation on the
    *  next account of the same tool (Iron-Proxy picks it). A refusal (no
    *  other account) is said in its words. */
+  /** v1.417.0 (C4.9): Retry on the newest failed reply — the same message
+   *  again, its files by path (they went up already). */
+  const retryFailed = useCallback(() => {
+    if (runningRef.current) return;
+    for (let i = conv.items.length - 1; i >= 0; i--) {
+      const it = conv.items[i];
+      if (it.kind === "user") {
+        void sendRef.current?.(it.text, it.files);
+        return;
+      }
+    }
+  }, [conv.items]);
+
   const continueOn = useCallback(async () => {
     if (!session || continuing) return;
     setContinuing(true);
@@ -1098,6 +1111,9 @@ function SessionPane({
                 tool={session.tool}
                 onContinueOn={continueOn}
                 continuing={continuing}
+                onRetry={running ? undefined : retryFailed}
+                model={session.model}
+                account={session.account ? accountName : ""}
               />
             )}
             {running && !asking ? (
@@ -1153,6 +1169,7 @@ function SessionPane({
                 onAnswer={answer}
                 onStop={running ? stop : undefined}
                 error={askError}
+                takesWords={session.tool === "claude-code"}
               />
               {/* v1.412.0: the mode can change while a card waits (the
                   composer, and its chip, are hidden under the card). */}

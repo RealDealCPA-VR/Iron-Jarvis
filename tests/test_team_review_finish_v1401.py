@@ -387,9 +387,11 @@ async def test_the_review_is_ledgered_after_the_test_calls_of_the_same_round(wor
     (world.ws / "test_mini.py").write_bytes(
         b"import unittest\nimport app\n\n\nclass T(unittest.TestCase):\n"
         b"    def test_x(self):\n        self.assertEqual(app.X, 2)\n")
+    # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it (a
+    # run that passed after the last edit is not run again).
     world.main = [
-        [ToolCall(id="w1", name="write_file", arguments={"path": "app.py", "content": "X = 2\n"})],
         [ToolCall(id="s1", name="shell", arguments={"command": "python -m unittest -q test_mini"})],
+        [ToolCall(id="w1", name="write_file", arguments={"path": "app.py", "content": "X = 2\n"})],
         "Done: X is 2 and the tests pass.",
         "1. met: X is 2.\nNothing needed changing.",
     ]

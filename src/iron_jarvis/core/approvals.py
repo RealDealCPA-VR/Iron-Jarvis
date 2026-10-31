@@ -425,7 +425,10 @@ ACTORS = ("app", "phone", "grant", "timeout", "bench", "auto")
 #: ``ask_user``, an app's question), or a ``plan`` to approve.
 INTERRUPT_KINDS = ("card", "question", "plan")
 #: Where it was asked.
-INTERRUPT_SURFACES = ("chat", "build", "agent", "night", "bench")
+#: v1.417.0 (C1.11): "build_app" = Build › Code (the user's own Claude Code /
+#: Codex / Pi / OpenCode, ``hosted/``) — counted under "build" by
+#: ``eval/autonomy``.
+INTERRUPT_SURFACES = ("chat", "build", "agent", "night", "bench", "build_app")
 #: The two metric event types (== ``core.events.EventType.INTERRUPT_*``).
 INTERRUPT_ASKED = "interrupt.asked"
 INTERRUPT_ANSWERED = "interrupt.answered"

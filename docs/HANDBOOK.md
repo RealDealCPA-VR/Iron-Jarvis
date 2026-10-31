@@ -2423,6 +2423,37 @@ asks into a card you answer.
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
 
+## A calmer coding conversation in Chat › Code (v1.417.0)
+
+Four things changed in how a coding session's conversation behaves while a
+reply streams. Nothing about what the session does changed.
+
+- **The answer no longer blinks out at the end.** When a reply finished,
+  its live text used to vanish for a moment (up to about two seconds) while
+  Iron Jarvis read the saved copy back, then reappear. The live text now
+  stays where it is until the saved reply is on screen, and the two swap in
+  one step.
+- **The conversation follows the reply as it grows**, as long as you are at
+  (or within a few lines of) the bottom. Scroll up to read something earlier
+  and it stays where you put it.
+- **The finish check no longer writes itself into the reply.** After a
+  reply that changed files, Iron Jarvis checks the work (it runs your tests
+  again and goes through what you asked for). That check's own notes used to
+  stream into the reply and then disappear when the reply was saved. Now the
+  reply shows one quiet line while the check runs, "Checking the work…",
+  with "Running the tests…" (then "The tests passed" or "The tests failed")
+  under it, and then the same "Checked: …" line the saved reply keeps.
+- **Each session keeps what you were typing.** Switch to another session,
+  to Chat, or close the window, and the words you had half-typed are back in
+  the box when you return (they are forgotten once sent). When a session
+  opens, the caret is in its box, unless you were typing somewhere else or a
+  question is waiting for you. The box grows with your words, up to eight
+  lines, then scrolls.
+
+The session also stopped redrawing the whole conversation for every streamed
+word, every key you type and every check of the session list, which kept long
+conversations slow to scroll and type into.
+
 ## What fills a coding session's conversation: the Context drop-down (v1.415.0)
 
 The **Session** tab of a coding session, in both Chat › Code and Build ›
@@ -2477,6 +2508,80 @@ Also fixed: in a long Claude Code session, the percent could read far too low
 (1%). Iron Jarvis read the size of the last call in Claude Code's report, and
 that call could be a side call (an advisor or a summary) rather than the
 conversation. It now reads it the way Claude Code itself does.
+
+## Fewer cards, and clearer ones, in Build › Code (v1.417.0)
+
+- **Allow all commands this session.** A card for a command (Claude Code's
+  Bash or PowerShell) now offers it beside Allow once. One press lets Claude
+  Code run every command for the rest of that session without asking; it is
+  saved for that session only, never in your Claude Code settings. Claude
+  Code's own offer, which covers only commands that start the same way, is
+  still there as **Allow similar commands**. Not offered in Full access
+  (nothing asks there), in Auto (Claude Code does not keep a rule that
+  allows every command there: its own safety check decides) or in Plan
+  (it only reads and plans). For Codex the same answer is Codex's own "for this
+  session" for that command, and only when Codex offers one; Pi and OpenCode
+  do not have it.
+- **The plan, on the plan card.** In Plan mode, the card that asks to start
+  working shows the plan itself. **No, tell it what to do instead** opens a
+  line under the buttons: what you type goes to Claude Code with the no, and
+  it plans again with your words.
+- **Enter** allows a card once, as in Chat › Code. It still does nothing in
+  the first moment after a card appears, and in Full access Allow is a
+  click.
+- **A failed reply says which tool failed** ("Claude Code couldn't finish
+  this answer") and has a **Retry** press that sends the same message again.
+  Each finished reply ends with one quiet line, for example "answered by
+  Opus 5.5 on Work · 2 m 14 s · 7 actions · 3 files changed"; press it for
+  the tokens and the cost.
+- **Starting and waiting are said.** When a message has to start the tool
+  (the first message, after 15 minutes idle, after an effort change) the view
+  says "Starting Claude Code…" or "Resuming Claude Code after 15 minutes
+  idle…". The end of a reply no longer waits up to 10 seconds to save the
+  session's id, and a note sent while it worked holds the end for at most 5
+  seconds.
+- Your answers to these cards now count in **Autonomy › Hands-off** under
+  coding sessions, as interruptions. A Build › Code reply is not counted as
+  a task there (Iron Jarvis does not read its outcome), so it never changes
+  the hands-off rate.
+
+## One approval means one approval in Chat › Code (v1.417.0)
+
+- **"Allow for this session" covers the rest of the reply too.** Answering
+  it on a command card now also covers a command started in the background
+  in the same reply, and when a helper of the session gets your "for this
+  session", the reply that is running (and a card it is waiting on) is
+  covered at once. A folder rule that asks about a tool still asks.
+- **Commands that only read run without a card** under Ask first, Accept
+  edits and Auto: `git status`, `git diff`, `git log`, `git show`, listing
+  branches, `ls`, `dir`, `cat`, `type`, `rg`, `grep`, `find`, `head`, `tail`,
+  `wc`, `pwd`, `which`, `where`, `echo` and `node`, `python`, `uv` or `git`
+  with `--version`. Anything that could write, chain, redirect or run another
+  program (`>`, `;`, `&&`, a pipe into anything but another of these, `rm`,
+  `git push`, `find -delete`, `rg --pre` or `--hostname-bin`…), a path
+  outside the folder, a program of the same name in the folder itself (any
+  kind Windows would run: `.bat`, `.cmd`, `.js`, `.vbs`…), `git` run in a
+  sub-folder (it may hold another repository whose settings start
+  programs), and `npm`, `npx`, `pnpm` or `yarn` even with `--version` (they
+  can fetch the version a project names) still ask. So does a folder rule
+  that asks about running commands. "Ask before every action" still asks for
+  all of them. These commands only read, but they can read any file inside
+  the folder (a `.env` file too), as the file-reading tool can.
+- **The finish check asks less.** When your reply's own test run passed
+  AFTER its last change, the check does not run it again (the record says
+  the tests passed and were not re-run). Under "Don't ask" a project's own
+  checker (ruff, mypy, ESLint, tsc) runs with no card; a folder's own checks
+  and a project's command file still ask.
+- **A card says who asks and why.** A card for the finish check's test run
+  or a project checker says Iron Jarvis asks, not the assistant, and every
+  card carries one reason line (for example "it is not in this chat's grants
+  yet", or the rule that kept it under Accept edits or Auto).
+- **Auto decides faster.** The quick checks of one round run together and
+  each waits at most 3 seconds; the check also reads what you first asked
+  for and what the assistant just said.
+- **Your posture survives your own press.** An approved plan's work, and a
+  "Resume when ready" you pressed, keep Accept edits or Auto. A night task,
+  a check fix and a resume after a restart still run as Ask first.
 
 ## Build › Code is part of the app (v1.414.0)
 
@@ -5967,6 +6072,21 @@ it, where it ran, and what it wants from you. The chat looks the same.
   first**, **Ask when risky**, **Don't ask** (typing an old name such as
   "approve for me" still sets the same level). The browser sidebar's wide
   answer is **Allow all page actions**, because it covers every tab.
+- **A chat's card says why it asks, and who asks** (v1.417.0; a chat or a
+  coding session's reply; an agent run's ask keeps the longer card). It is
+  short: who wants to do what ("The assistant wants to save a file", or
+  "Iron Jarvis wants to run a command" when it is Iron Jarvis's own check,
+  such as re-running your tests), what will run, the price if it costs
+  money, and ONE line saying why it asks: the rule that kept it under
+  Accept edits or Auto, "not in this chat's grants", or the reason it asks
+  every time. The tool's exact name is in the header's tooltip, and what a
+  wider answer covers is in that button's tooltip. A card that the app
+  answers once whatever you press (a paid generation, a local-only chat's
+  card, a plan) shows only **Allow once** and **Deny**; before v1.417.0 a
+  paid card also showed "Allow for this session", which still counted as
+  once. On a card that asks every time for safety (a commit or push, a
+  project's command, a risky click) Enter still never allows it, but now
+  says so for a moment: "Click Allow once to run it".
 - **Every ask says whether it can be undone.** "You can undo this." for a
   file save, "This may not be undoable." for a message or a command; a read
   says nothing. The line is on every card: the chat, a Build pane, the

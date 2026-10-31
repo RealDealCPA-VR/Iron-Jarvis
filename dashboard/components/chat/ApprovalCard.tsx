@@ -78,6 +78,25 @@
 // inverse (`reversible`), and the card says it in ONE quiet line under what
 // will run: "You can undo this." or "This may not be undoable." A read-only
 // tool, and the plan ask, get no line: there is nothing to undo.
+//
+// WHY, WHO, AND BUTTONS THAT DO WHAT THEY SAY (v1.417.0, fix plan C1.7):
+//   - The daemon's `approval` frame carries `why` (one sentence: the
+//     once-only reason, "not in this chat's grants", an automatic rule's
+//     words under Accept edits / Auto) and `asker` ("model" | "iron_jarvis").
+//     With `why` the card is the COMPACT one: who wants to do what (the raw
+//     tool id only in a `title`; an unknown tool keeps "run <id>"), the
+//     preview, the cost, ONE explanatory line (the why, with the undo verdict
+//     and a real deadline after it; a plan door keeps its own sentence, which
+//     says what Allow does), and the buttons (what the wider answers cover is
+//     in their `title`). Without `why` (an older daemon, a listing row) the
+//     card is the one above, byte for byte (pinned by
+//     __tests__/approval-card-why-v1417).
+//   - `asker === "iron_jarvis"` (Iron Jarvis's own finish-check re-run, a
+//     project's checker): "Iron Jarvis wants to …", in either layout.
+//   - lib/approvalWords.answersOnlyOnce: a card the daemon answers ONCE
+//     whatever the button (once-only, a plan door, a PRICED call) offers
+//     Allow once and Deny only. A priced card used to offer "Allow for this
+//     session" while the daemon read it as once.
 
 import { useState } from "react";
 import { ApprovalPreview } from "@/components/chat/ApprovalPreview";
@@ -90,6 +109,8 @@ import {
   ALLOW_ONCE,
   ALLOW_TAB,
   ALWAYS_EXACT,
+  answersOnlyOnce,
+  askerSubject,
   DENY,
   PLAN_RUN_SENTENCE,
   scopeLabel,
@@ -134,6 +155,11 @@ function ExampleLine({ args }: { args: Record<string, unknown> }) {
     </p>
   );
 }
+
+/** v1.417.0: the plan ask's own sentence on the compact card (the same words
+ *  the full card's explanation uses). */
+const PLAN_ASK_SENTENCE =
+  "No step runs until you answer. “Allow once” lets it follow this plan; Deny ends the run before any step runs.";
 
 /** "Waiting for you" in the words the daemon's wait actually has. */
 export function waitingLine(timeoutS: number | undefined): string {
@@ -192,10 +218,19 @@ export function ApprovalCard({
   // listing row carries no flags), and is not a local-only card.
   const buildPlanAsk = approval.tool === EXIT_PLAN_TOOL;
   const onceOnly = approval.onceOnly === true || planAsk || buildPlanAsk;
-  const browserAction = isBuiltinBrowserTool(approval.tool) && !onceOnly;
+  // v1.417.0 (C1.7): the BUTTONS follow what the daemon does with an answer
+  // (a priced card is answered once too); `onceOnly` above still picks the
+  // once-only words, which a priced card does not get.
+  const onlyOnce = answersOnlyOnce(approval);
+  const priced = onlyOnce && !onceOnly;
+  const browserAction = isBuiltinBrowserTool(approval.tool) && !onlyOnce;
   // v1.299.0: offered by the daemon, never inferred here — a batch has no
   // single argument set to key a grant on, and the daemon says so by omission.
-  const canAlways = approval.canAlways === true && !onceOnly;
+  const canAlways = approval.canAlways === true && !onlyOnce;
+  // v1.417.0 (C1.7): the daemon said why it asks — the compact card.
+  const why = typeof approval.why === "string" ? approval.why.trim() : "";
+  const compact = why !== "";
+  const subject = askerSubject(approval.asker);
 
   async function decide(decision: "once" | "conversation" | "deny" | "tab" | "always") {
     if (sent) return;
@@ -251,13 +286,31 @@ export function ApprovalCard({
     >
       <div className="flex items-center gap-2">
         <ShieldQuestion size={15} className="shrink-0 text-tone-warn" aria-hidden="true" />
+        {compact ? (
+          // v1.417.0 (C1.7): who wants to do what, in words; the exact tool
+          // id is the record, kept in the title (an unknown tool's id IS its
+          // words, so it stays visible there).
+          <p
+            data-testid="approval-header"
+            className="text-[13px] font-medium text-zinc-100"
+            title={`The exact tool that will run: ${approval.tool}`}
+          >
+            {subject} wants to {words ?? <>run {toolChip}</>}
+            {batch && (
+              <>
+                {" "}
+                <span data-testid="approval-count">× {count}</span>
+              </>
+            )}
+          </p>
+        ) : (
         <p className="text-[13px] font-medium text-zinc-100">
           {words ? (
             <>
-              The assistant wants to {words} <span className="text-zinc-400">({toolChip})</span>
+              {subject} wants to {words} <span className="text-zinc-400">({toolChip})</span>
             </>
           ) : (
-            <>The assistant wants to run {toolChip}</>
+            <>{subject} wants to run {toolChip}</>
           )}
           {batch ? (
             <>
@@ -269,6 +322,7 @@ export function ApprovalCard({
             <>. Your call.</>
           )}
         </p>
+        )}
       </div>
 
       {batch
@@ -309,6 +363,33 @@ export function ApprovalCard({
         </p>
       )}
 
+      {compact ? (
+        // v1.417.0 (C1.7): ONE explanatory line — why it asks (a plan door
+        // keeps its own sentence: it says what Allow does to the plan), then
+        // the undo verdict and a real deadline, in the same line.
+        <p data-testid="approval-why" className="text-[12px] leading-relaxed text-zinc-300 [overflow-wrap:anywhere]">
+          {buildPlanAsk
+            ? PLAN_RUN_SENTENCE
+            : planAsk
+              ? PLAN_ASK_SENTENCE
+              : why}
+          {!planAsk && !buildPlanAsk && undo && (
+            <>
+              {" "}
+              <span data-testid="approval-undo" data-reversible={approval.reversible ? "true" : "false"}>
+                {undo}
+              </span>
+            </>
+          )}
+          {typeof approval.timeoutS === "number" && approval.timeoutS > 0 && (
+            <>
+              {" "}
+              <span data-testid="approval-waiting">{waitingLine(approval.timeoutS)}</span>
+            </>
+          )}
+        </p>
+      ) : (
+      <>
       {/* v1.352.0 (G25): can it be undone, in the cost line's quiet style.
           Never on a plan ask (a plan is not an action). */}
       {!planAsk && !buildPlanAsk && undo && (
@@ -333,7 +414,9 @@ export function ApprovalCard({
             No step runs until you answer. “Allow once” lets it follow this
             plan; Deny ends the run before any step runs.
           </>
-        ) : onceOnly ? (
+        ) : onceOnly || priced ? (
+          // v1.417.0 (C1.7): a priced card is answered once too, so it says
+          // what its two buttons do (no wider button to name).
           <>
             The turn is paused until you answer. “Allow once” runs only this
             call; Deny refuses it and the assistant is told you declined.
@@ -409,6 +492,8 @@ export function ApprovalCard({
           it any time on the Autonomy page.
         </p>
       )}
+      </>
+      )}
 
       {error && <p className="text-[11px] text-tone-danger">{error}</p>}
 
@@ -417,6 +502,11 @@ export function ApprovalCard({
           <button
             type="button"
             data-testid="approval-tab"
+            title={
+              compact
+                ? "Covers every page action in this browser tab until you close it. Payments, passwords and deletions still ask."
+                : undefined
+            }
             onClick={() => void decide("tab")}
             disabled={!!sent}
             className="btn-accent text-xs"
@@ -442,11 +532,16 @@ export function ApprovalCard({
             ALLOW_ONCE
           )}
         </button>
-        {!onceOnly && (
+        {!onlyOnce && (
           <button
             type="button"
             data-testid="approval-scope"
             data-scope={where}
+            // v1.417.0 (C1.7): the compact card says what the wider answer
+            // covers here instead of in a paragraph.
+            // Review: the TOOL is what the grant covers (the full card's own
+            // words); "stop asking for save a file" named an action instead.
+            title={compact ? `Run it and stop asking for ${approval.tool} in ${noun}` : undefined}
             onClick={() => void decide("conversation")}
             disabled={!!sent}
             className="btn-ghost text-xs"
@@ -460,7 +555,11 @@ export function ApprovalCard({
             data-testid="approval-always"
             onClick={() => void decide("always")}
             disabled={!!sent}
-            title={`Allow ${approval.tool} with exactly these arguments here for 30 days`}
+            title={
+              compact
+                ? `Runs it now and keeps allowing ${approval.tool} with exactly these arguments here for 30 days. Different arguments still ask; revoke it on the Autonomy page.`
+                : `Allow ${approval.tool} with exactly these arguments here for 30 days`
+            }
             className="btn-ghost text-xs"
           >
             {sent === "always" ? <LoaderInline label="Allowing…" /> : ALWAYS_EXACT}

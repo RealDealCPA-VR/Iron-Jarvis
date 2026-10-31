@@ -388,7 +388,7 @@ def generic_error(harness: str, technical: Any) -> dict[str, Any]:
 
     try:
         words = fw.friendly_error(
-            RuntimeError(str(technical or "")), provider=PROVIDERS.get(harness, ""),
+            HostedToolError(label(harness), str(technical or "")), provider=PROVIDERS.get(harness, ""),
             surface=fw.SURFACE_BUILD,
         )
         title, fix = words["title"], words["fix"]
@@ -409,3 +409,48 @@ def failure_for(harness: str, text: Any) -> dict[str, Any]:
     if found is not None:
         return limit_error(harness, said, reset_words=found.reset_words)
     return generic_error(harness, said)
+
+
+# --------------------------------------------------------------------------- #
+# v1.417.0 (fix plan wave 1: C1.1, C4.1, C4.7, C4.9)
+# --------------------------------------------------------------------------- #
+class HostedToolError(RuntimeError):
+    """A coding tool's failure, carrying the tool's NAME (``tool_label``) so
+    ``providers.failure_words`` heads it "<Claude Code> couldn't finish this
+    answer" — never "Iron Jarvis", whose fault it is not (C4.9)."""
+
+    def __init__(self, tool_label: str, text: str = "") -> None:
+        super().__init__(text)
+        self.tool_label = str(tool_label or "")
+
+
+#: C1.1: Claude Code's own (per-prefix) session-wide allow, beside "Allow all
+#: commands this session" — the card's button and its explanation say this.
+ALLOW_SIMILAR = "Allow similar commands"
+#: C1.1: the answer asked of a card that does not offer it.
+ALL_COMMANDS_NOT_HERE = (
+    "{label} offers no \"Allow all commands this session\" for this one — allow it once, or for this session."
+)
+#: C1.1: the answer asked of a tool that has no such answer (Pi, OpenCode, and
+#: Codex when it offers no session-wide allow for this command).
+ALL_COMMANDS_NOT_OFFERED = (
+    "{label} has no way to allow every command for the session from here — allow this one once."
+)
+#: C4.1: Claude Code's ExitPlanMode card (the plan itself is shown under it).
+PLAN_CARD_TITLE = "Start working on this plan"
+
+
+def start_notice(harness: str, *, why: str = "", resumed: bool = False, idle_minutes: int = 15) -> str:
+    """C4.7: what the view says when a process (re)starts for a message — a
+    cold start used to show the same spinner with no word. ``why``: why the
+    last process went ("idle" | "evicted" | "restart" | "")."""
+    name = label(harness)
+    if why == "restart":
+        return f"Restarting {name} with your new settings…"
+    if why == "idle":
+        return f"Resuming {name} after {idle_minutes} minutes idle…"
+    if why == "evicted":
+        return f"Starting {name} again (it was stopped to make room for another session)…"
+    if resumed:
+        return f"Resuming {name}…"
+    return f"Starting {name}…"

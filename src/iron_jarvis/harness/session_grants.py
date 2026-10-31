@@ -38,13 +38,25 @@ What it NEVER does (the review of this change found the first two):
 * wake a card that is answered once every time (``once_only`` — a commit or
   push on the session's branch, a project's or a plugin's command lines) or a
   priced one: those keep their own card.
+
+v1.417.0 (C1.2, the two residuals of v1.404.1): the session's RUNNING reply
+is reached too. The lane registers its own grant sets (:func:`attach_turn` —
+the SAME ``armed_grant`` / ``card_grants`` objects every card decision of the
+turn reads) and the card it is parked on (:func:`watch_ask`); a grant made on
+a helper's card (:func:`note`) joins those sets at once, and
+:func:`release_helpers` wakes the reply's own waiting card it covers (the
+finish check's test run, a checker, a command) with the same answer. Only
+names the reply's own rules accept (``accept``: never under low trust,
+"Ask before every action", Local only, or a folder rule that asks or denies)
+and never a forced card — the lane watches only ordinary ones.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Iterable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterable
 
 log = logging.getLogger("ironjarvis.harness.session_grants")
 
@@ -135,6 +147,7 @@ def note(thread_id: str, names: Iterable[str], registry: Any = None) -> set[str]
         return set()
     with _LOCK:
         _LIVE.setdefault(thread, set()).update(wide)
+    _reach_turns(thread, wide)
     return wide
 
 
@@ -150,8 +163,127 @@ def forget(thread_id: "str | None" = None) -> None:
     with _LOCK:
         if thread_id is None:
             _LIVE.clear()
+            _TURNS.clear()
         else:
             _LIVE.pop(str(thread_id or "").strip(), None)
+
+
+# --------------------------------------------------------------------------- #
+# the session's running reply (v1.417.0, C1.2)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(eq=False)
+class TurnGrants:
+    """A coding session's RUNNING reply, as the grants see it: the lane's own
+    mutable grant sets (``grants`` = ``armed_grant``, ``cards`` =
+    ``card_grants`` — the very objects its card decisions read), which names
+    its rules let a session grant reach (``accept``), and the ordinary card it
+    is parked on (``asks``: approval id -> the tool names that card covers)."""
+
+    thread: str
+    grants: set
+    cards: set
+    accept: Callable[[str], bool]
+    approvals: Any = None
+    asks: dict = field(default_factory=dict)
+
+    def takes(self, name: str) -> bool:
+        try:
+            return bool(self.accept(str(name)))
+        except Exception:  # noqa: BLE001 — cannot tell ⇒ the card stays
+            return False
+
+
+#: build thread id -> its running replies (one, in practice).
+_TURNS: dict[str, list[TurnGrants]] = {}
+
+
+def attach_turn(thread_id: str, grants: set, cards: set, *,
+                accept: "Callable[[str], bool] | None" = None,
+                approvals: Any = None) -> "TurnGrants | None":
+    """Register a running reply of coding session ``thread_id`` (the lane's
+    ``armed_grant`` and ``card_grants``, mutated IN PLACE by later grants).
+    What the session was granted BEFORE this reply started already reached
+    it through the reply's own ``granted_tools`` (``routes/build.
+    start_build_turn``) — only grants made while it runs join here. Pair with
+    :func:`detach_turn` in the lane's ``finally``. None for a blank thread."""
+    thread = str(thread_id or "").strip()
+    if not thread:
+        return None
+    turn = TurnGrants(thread=thread, grants=grants, cards=cards,
+                      accept=accept or (lambda _n: True), approvals=approvals)
+    with _LOCK:
+        _TURNS.setdefault(thread, []).append(turn)
+    return turn
+
+
+def detach_turn(turn: "TurnGrants | None") -> None:
+    if turn is None:
+        return
+    with _LOCK:
+        rows = _TURNS.get(turn.thread)
+        if rows and turn in rows:
+            rows.remove(turn)
+            if not rows:
+                _TURNS.pop(turn.thread, None)
+
+
+def watch_ask(turn: "TurnGrants | None", approval_id: str, names: Iterable[str]) -> None:
+    """The reply is parked on ordinary card ``approval_id`` covering ``names``
+    (never call it for a once-only, priced, Local only or night card)."""
+    if turn is None or not approval_id:
+        return
+    wanted = frozenset(str(n) for n in (names or ()) if str(n).strip())
+    if wanted:
+        with _LOCK:
+            turn.asks[str(approval_id)] = wanted
+
+
+def unwatch_ask(turn: "TurnGrants | None", approval_id: str) -> None:
+    if turn is None:
+        return
+    with _LOCK:
+        turn.asks.pop(str(approval_id), None)
+
+
+def _reach(turn: TurnGrants, names: Iterable[str]) -> None:
+    took = {n for n in names if turn.takes(n)}
+    if took:
+        # In place: the lane's card decisions read these very sets.
+        turn.grants.update(took)
+        turn.cards.update(took)
+
+
+def _reach_turns(thread: str, names: Iterable[str]) -> None:
+    with _LOCK:
+        turns = list(_TURNS.get(thread, ()))
+    names = set(names)
+    for turn in turns:
+        _reach(turn, names)
+
+
+def _wake_turns(thread: str, names: set[str], approvals: Any) -> int:
+    """Answer each running reply's watched card that ``names`` covers whole
+    (and its rules accept) with "conversation", settled by the grant."""
+    with _LOCK:
+        turns = list(_TURNS.get(thread, ()))
+        wanted = [(t, dict(t.asks)) for t in turns]
+    woken = 0
+    for turn, asks in wanted:
+        resolve = getattr(turn.approvals if turn.approvals is not None else approvals, "resolve", None)
+        if resolve is None:
+            continue
+        for approval_id, covers_names in asks.items():
+            if not covers_names <= names or not all(turn.takes(n) for n in covers_names):
+                continue
+            try:
+                if resolve(approval_id, "conversation", actor="grant"):
+                    woken += 1
+                    unwatch_ask(turn, approval_id)
+            except Exception:  # noqa: BLE001
+                continue
+    return woken
 
 
 def persist(engine: Any, thread_id: str, names: Iterable[str]) -> None:
@@ -190,15 +322,18 @@ def release_helpers(approvals: Any, registry: Any, thread_id: str, names: Iterab
     thread = str(thread_id or "").strip()
     if not thread or not wide:
         return 0
+    # v1.417.0 (C1.2): the session's own running reply first — its waiting
+    # card (a command, the finish check's test run, a checker) wakes too.
+    woken_turns = _wake_turns(thread, wide, approvals)
     pending = getattr(approvals, "pending_for", None)
     resolve = getattr(approvals, "resolve", None)
     if pending is None or resolve is None:
-        return 0
+        return woken_turns
     try:
         children = live_helpers(f"build:{thread}")
     except Exception:  # noqa: BLE001
-        return 0
-    woken = 0
+        return woken_turns
+    woken = woken_turns
     for child in children:
         if not child or child == skip_session:
             continue

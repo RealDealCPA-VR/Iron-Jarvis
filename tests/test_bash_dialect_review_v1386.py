@@ -80,7 +80,9 @@ async def test_the_finish_check_reruns_a_bash_test_command_in_bash(env, lane, mo
         assert "passed (exit code 0)" in note, note
         return "1. met: X is 2 and the tests pass."
 
-    wire([_write("app.py", "X = 2\n"), _bash(BASH_TEST_CMD), "Set X to 2; the tests pass.", answer])
+    # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it (a
+    # run that passed after the last edit is not run again).
+    wire([_bash(BASH_TEST_CMD), _write("app.py", "X = 2\n"), "Set X to 2; the tests pass.", answer])
     done, _frames = await _lane(lane, platform, _claude_body(ws), monkeypatch, harness="claude")
     assert done["finish"]["tests"] == "passed", done["finish"]
     assert done["finish"]["command"] == BASH_TEST_CMD

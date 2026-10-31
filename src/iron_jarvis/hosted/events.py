@@ -12,9 +12,16 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
 * ``thinking`` {item, delta}
 * ``tool`` {item, kind, name, title, input, status, output?, path?, line?, diff?}
 * ``plan`` {steps: [{text, status}]}
-* ``approval`` {request_id, kind, title, detail, command?, path?, diff?, can_session}
+* ``approval`` {request_id, kind, title, detail, command?, path?, diff?, can_session,
+  once_only?, tool?, can_all_commands?, plan?} (v1.417.0: ``can_all_commands``
+  = the card takes the answer ``allow_commands``, "Allow all commands this
+  session"; ``plan`` = the plan Claude Code's ExitPlanMode asks to start on,
+  Markdown, masked then cut at 20,000)
 * ``question`` {request_id, questions: [{question, header?, options, multi}]}
-* ``resolved`` {request_id, decision}
+* ``resolved`` {request_id, decision} (decision: allow | allow_session |
+  allow_commands | deny | expired | answered)
+* v1.417.0: a ``notice`` "Starting Claude Code…" / "Resuming Claude Code
+  after 15 minutes idle…" follows a ``user`` whose message starts a process
 * ``usage`` {input, output, cache_read, cost_usd?, list_price}
 * ``notice`` {text}
 * ``error`` {title, fix, technical, fix_kind?, account?}

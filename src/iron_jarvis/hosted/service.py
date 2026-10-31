@@ -124,8 +124,13 @@ BACKGROUND_SILENT_MAX_S = 2 * 60 * 60.0
 SELF_REPLY_QUIET_S = 10 * 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
-#: v1.414.3: how long a reply's end waits for the tool's session id to be saved.
-ID_SAVE_WAIT_S = 10.0
+#: v1.414.3: how long a reply's end waits for the tool's session id to be
+#: saved. v1.417.0 (C4.7): 10 -> 2 s — past it the save goes on in the
+#: background (it is shielded) and the reply ends now.
+ID_SAVE_WAIT_S = 2.0
+#: v1.417.0 review: how long a press that NEEDS the id ("Open in terminal",
+#: "Continue on the next account") waits for a save still running.
+ID_SAVE_LATE_S = 15.0
 #: The newest events ``GET /build/app/sessions/{id}`` returns by default.
 DEFAULT_EVENTS = 2000
 #: A turn's in-memory replay keeps at most this many characters of streamed
@@ -140,6 +145,25 @@ INTERRUPT_WAIT_S = 5.0
 STEER_WAIT_S = 20.0
 #: Disk listings read at most this many conversation files (newest first).
 DISK_FILES = 500
+
+from .claude import ALLOW_COMMANDS  # noqa: E402 — v1.417.0, kept apart from the imports above
+
+#: v1.417.0 (C1.1): every answer the route takes — the driver's three and
+#: "Allow all commands this session".
+ANSWER_DECISIONS: tuple[str, ...] = DECISIONS + (ALLOW_COMMANDS,)
+
+
+def metric_decision(kind: str, decision: str) -> str:
+    """v1.417.0 (C1.11): a Build › Code answer in the autonomy metric's own
+    words (``core.approvals.InterruptNote.answered``): an approval's once /
+    conversation / deny, a question's answered / skipped."""
+    if kind == "question":
+        return "skipped" if decision == "deny" else "answered"
+    if decision == "deny":
+        return "deny"
+    if decision in ("allow_session", ALLOW_COMMANDS):
+        return "conversation"
+    return "once"
 
 #: Effort levels each harness takes.
 EFFORTS: dict[str, tuple[str, ...]] = {
@@ -660,6 +684,12 @@ class LiveSession:
         #: folder (where a tool call through that token runs).
         self.caps: dict[str, bool] = {}
         self.folder = ""
+        #: v1.417.0 (C1.11): ask id -> its ``core.approvals.InterruptNote``
+        #: (the autonomy metrics count Build › Code's cards too).
+        self.notes: dict[str, Any] = {}
+        #: v1.417.0 (C4.7): why the last process went ("idle" | "evicted"),
+        #: said when the next message starts one again.
+        self.stopped_why = ""
 
     @property
     def running(self) -> bool:
@@ -1455,6 +1485,7 @@ class HostedService:
                 if not idle:
                     raise Refused(W.POOL_FULL)
                 await self._stop_process(idle[0])
+                idle[0].stopped_why = "evicted"  # v1.417.0 (C4.7)
             await self._start_process(live, row, argv0)
         self._ensure_reaper()
 
@@ -1714,15 +1745,54 @@ class HostedService:
         """Every open card closes when its process goes (nobody can answer it)."""
         for ask_id in list(live.asks):
             live.asks.pop(ask_id, None)
+            self._note_answered(live, ask_id, "stopped", "app")
             self._emit(live, make("resolved", request_id=ask_id, decision="expired"))
 
     def _forget_ask(self, live: LiveSession, ask_id: str) -> None:
         """One card the tool stopped waiting for (a Pi dialog that timed out)."""
         if live.asks.pop(ask_id, None) is not None:
+            self._note_answered(live, ask_id, "timeout", "timeout")
             self._emit(live, make("resolved", request_id=ask_id, decision="expired"))
+
+    # -- v1.417.0 (C1.11): the autonomy metrics count these cards ---------------
+    def _note_asked(self, live: LiveSession, ask: Ask) -> None:
+        """``interrupt.asked`` for a card or question put to the user (names
+        only; never raises — a metric never fails a card)."""
+        try:
+            from ..core.approvals import InterruptNote
+
+            bus = getattr(self.platform, "event_bus", None)
+            if bus is None:
+                return
+            turn = live.turn.id if live.turn is not None and live.turn.running else ""
+            ev = ask.event or {}
+            # (review) Claude Code's ExitPlanMode card is a PLAN approval: the
+            # metrics never count one as avoidable and report it apart.
+            kind = "question" if ask.kind == "question" else "plan" if ask.tool == "ExitPlanMode" else "card"
+            note = InterruptNote(
+                bus, kind=kind, tool=ask.tool or "",
+                surface=NEWS.SURFACE, ask_id=ask.id, thread_id=live.sid, turn_id=turn,
+                session_id=NEWS.session_id_for(live.sid), once_only=bool(ev.get("once_only")),
+            )
+            note.asked()
+            live.notes[ask.id] = note
+        except Exception:  # noqa: BLE001
+            log.debug("could not note a Build › Code card for the metrics", exc_info=True)
+
+    def _note_answered(self, live: LiveSession, ask_id: str, decision: str, actor: str) -> None:
+        """``interrupt.answered`` once, in the metric's own words (once /
+        conversation / deny; answered / skipped; stopped / timeout)."""
+        note = live.notes.pop(ask_id, None)
+        if note is None:
+            return
+        try:
+            note.answered(decision, actor)
+        except Exception:  # noqa: BLE001
+            log.debug("could not note a Build › Code answer for the metrics", exc_info=True)
 
     def _ask(self, live: LiveSession, ask: Ask) -> None:
         live.asks[ask.id] = ask
+        self._note_asked(live, ask)
         self._emit(live, ask.event)
         # v1.414.0: a card nobody answers in the app goes to the phone after
         # ``stall.PHONE_AFTER_S`` (only the kinds :func:`.news.phone_may_send`
@@ -1949,6 +2019,7 @@ class HostedService:
         started = False
         try:
             async with live.lock:
+                self._say_start(live, row)  # v1.417.0 (C4.7)
                 await self._ensure_running(live, row)
             started = True
             if live.driver is None:
@@ -1989,6 +2060,19 @@ class HostedService:
                 # ran, the conversation belongs to that folder: it stays.
                 await asyncio.shield(asyncio.to_thread(self._take_back_folder, live.sid, made, forget=forget))
 
+    def _say_start(self, live: LiveSession, row: Any) -> None:
+        """v1.417.0 (C4.7): a process (re)starting for this message is SAID —
+        a cold start (the first message, after the idle reaper, after an
+        effort change, after an eviction) used to show the same spinner with
+        no word for many seconds."""
+        if live.running and not live.restart:
+            return
+        why = "restart" if live.running else live.stopped_why
+        live.stopped_why = ""
+        self._emit(live, make("notice", text=W.start_notice(
+            row.harness, why=why, resumed=bool(row.harness_session_id), idle_minutes=int(IDLE_S // 60),
+        )))
+
     def turn(self, turn_id: str) -> HostedTurn | None:
         self._evict_turns()
         return self.turns.get(turn_id)
@@ -2003,18 +2087,21 @@ class HostedService:
         return "".join(sse(e.get("type") or "notice", e) for e in events)
 
     async def answer(self, sid: str, request_id: str, decision: str, message: str = "",
-                     answers: Any = None) -> dict[str, Any]:
+                     answers: Any = None, *, actor: str = "app") -> dict[str, Any]:
         await self._row(sid)
         live = self.live.get(sid)
         decision = str(decision or "").strip()
-        if decision not in DECISIONS:
-            raise Refused(f"Answer with one of: {', '.join(DECISIONS)}.", 400)
+        if decision not in ANSWER_DECISIONS:
+            raise Refused(f"Answer with one of: {', '.join(ANSWER_DECISIONS)}.", 400)
         rid = str(request_id or "")
         ask = live.asks.get(rid) if live else None
         if live is None or ask is None or live.driver is None:
             raise Refused("No such question is waiting (it was answered, or the session stopped).", 404)
-        if ask.kind == "question" and decision == "allow_session":
+        if ask.kind == "question" and decision in ("allow_session", ALLOW_COMMANDS):
             decision = "allow"
+        if decision == ALLOW_COMMANDS and live.harness not in (CLAUDE, CODEX):
+            # v1.417.0 (C1.1): Pi and OpenCode have no such answer.
+            raise Refused(W.ALL_COMMANDS_NOT_OFFERED.format(label=W.label(live.harness)), 400)
         if decision == "allow_session" and not ask.can_session:
             raise Refused(f"{W.label(live.harness)} offers no session-wide allow for this one — allow it once.", 400)
         # CLAIMED before the await: a second answer to this card finds nothing.
@@ -2036,6 +2123,7 @@ class HostedService:
             raise Refused("The session stopped before your answer reached it.", 409) from None
         # Said BEFORE the answer is sent, so the card closes ahead of whatever
         # the harness does next (its frames arrive only after it reads this).
+        self._note_answered(live, ask.id, metric_decision(ask.kind, decision), actor)
         self._emit(live, make("resolved", request_id=ask.id, decision=decision))
         new_mode = ask.data.get("sets_mode") if decision == "allow_session" else None
         if new_mode:
@@ -2074,6 +2162,7 @@ class HostedService:
                         await driver.answer(ask, "deny", "The user pressed Stop.", None)
                     except Exception:  # noqa: BLE001
                         pass
+                    self._note_answered(live, ask_id, "stopped", "app")
                     self._emit(live, make("resolved", request_id=ask_id, decision="deny"))
                 proc = live.proc
                 if getattr(driver, "notes_started_on_stop", False) and proc is not None:
@@ -2138,6 +2227,7 @@ class HostedService:
             quiet = now - max(live.last_active, live.last_heard)
             if live.running and not live.busy and not live.keeps_working(now) and quiet >= IDLE_S:
                 await self._stop_process(live)
+                live.stopped_why = "idle"  # v1.417.0 (C4.7): said at the next start
                 stopped.append(live.sid)
         return stopped
 
@@ -2156,6 +2246,23 @@ class HostedService:
         await asyncio.gather(*(self._stop_process(lv) for lv in lives), return_exceptions=True)
         await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in lives), return_exceptions=True)
 
+    async def _row_with_saved_id(self, sid: str) -> Any:
+        """v1.417.0 review: the row once the tool's session id it reported is
+        saved. A reply's end waits at most :data:`ID_SAVE_WAIT_S` (2 s) for
+        that save, so a slower one (a busy database) can still be running
+        when "Open in terminal" or "Continue on the next account" is pressed
+        right after — they wait for it here (bounded), then read the row
+        again: never "no conversation yet" for a conversation that has one
+        (the v1.414.4 bug)."""
+        live = self.live.get(sid)
+        pending = live.id_save if live is not None else None
+        if pending is not None and not pending.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(pending), ID_SAVE_LATE_S)
+            except Exception:  # noqa: BLE001 — the row is read as it stands
+                log.debug("a Code-view session's id was still being saved", exc_info=True)
+        return await self._row(sid)
+
     # -- terminals -----------------------------------------------------------------
     async def open_terminal(self, sid: str) -> dict[str, Any]:
         row = await self._row(sid)
@@ -2165,6 +2272,7 @@ class HostedService:
         if live and live.running and live.keeps_working(self.clock()):
             raise Refused(W.BACKGROUND_OPEN_TERMINAL.format(
                 label=W.label(row.harness), tasks=W.background_count(live.background_tasks)))
+        row = await self._row_with_saved_id(sid)  # v1.417.0 review
         hid = row.harness_session_id
         if not hid:
             raise Refused(W.NO_SESSION_YET)
@@ -2276,6 +2384,8 @@ class HostedService:
             raise Refused(W.PI_CONTINUE if row.harness == PI
                           else W.OPENCODE_CONTINUE if row.harness == OPENCODE
                           else W.GROK_CONTINUE if row.harness == GROK else W.CODEX_CONTINUE)
+        if not row.harness_session_id:
+            row = await self._row_with_saved_id(sid)  # v1.417.0 review
         if not row.harness_session_id:
             raise Refused(W.NO_SESSION_YET)
         live = self._live(row)

@@ -56,6 +56,28 @@ MEASURED for v1.412.0 (claude 2.1.311, live, haiku):
   after the turn (a SECOND ``result``). ``interrupt`` with ``cancel_queued:
   true`` cancels a note not yet read (``cancelled``) instead of running it
   after the stop.
+
+READ for v1.417.0 (claude 2.1.316's own bundle, read-only: its control
+schema and its ``updatedPermissions`` validator):
+
+* an ``updatedPermissions`` entry is ``{"type": "addRules" | "replaceRules" |
+  "removeRules", "rules": [{"toolName", "ruleContent"?}], "behavior": "allow"
+  | "deny" | "ask", "destination": "userSettings" | "projectSettings" |
+  "localSettings" | "session" | "cliArg"}`` (or ``setMode`` /
+  ``addDirectories`` / ``removeDirectories``). ``ruleContent`` is OPTIONAL: a
+  rule with only ``toolName`` is the whole tool. Claude Code's OWN suggestion
+  for a command is a PREFIX rule (``Bash(npm test *)``, destination
+  ``localSettings``), which is why 24 presses of "Allow for this session" did
+  not stop 40 command cards in one live session. "Allow all commands this
+  session" (:data:`ALLOW_COMMANDS`) answers allow with Iron Jarvis's OWN rule
+  (:data:`ALL_COMMANDS_RULE`): the whole ``Bash`` and ``PowerShell`` tools
+  (Claude Code on Windows runs commands through either), destination
+  ``session`` — never written to a settings file. Claude Code's own
+  suggestion stays offered, as "Allow similar commands". (Claude Code's own
+  safety checks may still ask about a command its rules never allow alone.)
+* ``ExitPlanMode``'s ``input`` carries the plan (``plan``, Markdown): the card
+  shows it (:data:`PLAN_CHARS`). A ``deny`` carries the user's own words as
+  its ``message`` (the model reads them and stays in plan mode).
 """
 
 from __future__ import annotations
@@ -83,6 +105,37 @@ from .events import (
 )
 
 HARNESS = "claude-code"
+
+#: v1.417.0 (C1.1): the answer "Allow all commands this session" (beside the
+#: route's ``allow`` / ``allow_session`` / ``deny``).
+ALLOW_COMMANDS = "allow_commands"
+#: The tools whose every call that answer allows (the session's commands).
+ALL_COMMANDS_TOOLS: tuple[str, ...] = ("Bash", "PowerShell")
+#: Iron Jarvis's OWN ``updatedPermissions`` entry for that answer (the shape
+#: claude 2.1.316 validates — see the module doc): the whole tools, for this
+#: session only.
+ALL_COMMANDS_RULE: dict[str, Any] = {
+    "type": "addRules",
+    "rules": [{"toolName": t} for t in ALL_COMMANDS_TOOLS],
+    "behavior": "allow",
+    "destination": "session",
+}
+#: v1.417.0 review: the modes that never offer (or take) that answer. Full
+#: access asks about nothing it could cover; in Auto, claude 2.1.316 calls a
+#: whole-tool Bash / PowerShell allow "dangerous ... (bypasses classifier)":
+#: it strips it on entering Auto (``stripDangerousPermissionsForAutoMode``)
+#: and leaves it out of the rules it matches while the classifier runs, so
+#: the press would not do what it says; Plan reads and plans only (and
+#: Claude Code strips the same rule when its plan mode uses Auto's
+#: classifier).
+ALL_COMMANDS_NOT_IN: frozenset[str] = frozenset({"full", "auto", "plan"})
+#: v1.417.0 (C4.1): the longest plan an ExitPlanMode card shows.
+PLAN_CHARS = 20_000
+
+
+def all_commands_rule() -> dict[str, Any]:
+    """A fresh copy of :data:`ALL_COMMANDS_RULE` (never the shared one)."""
+    return {**ALL_COMMANDS_RULE, "rules": [dict(r) for r in ALL_COMMANDS_RULE["rules"]]}
 
 #: The composer's presets -> Claude Code's permission modes (flag and live).
 MODES: dict[str, str] = {
@@ -128,7 +181,7 @@ CONTROL_TIMEOUT_S = 30.0
 #: v1.412.0: how long a reply's end waits for Claude Code to say it QUEUED a
 #: note sent while it worked (it says so at once, measured); past it the note
 #: goes back to the box and the reply ends.
-HOLD_FOR_NOTE_S = 15.0
+HOLD_FOR_NOTE_S = 5.0  # v1.417.0 (C4.7): 15 -> 5; Claude Code says "queued" at once
 #: How long a note waits for Claude Code's first ``command_lifecycle`` (the
 #: sign it reports when it reads a message) before it is refused.
 LIFECYCLE_WAIT_S = 5.0
@@ -271,13 +324,15 @@ def suggested_mode(sugg: list[dict[str, Any]]) -> str:
     return ""
 
 
-def suggestion_words(sugg: list[dict[str, Any]]) -> str:
-    """What "Allow for this session" does, in plain words, before the press."""
+def suggestion_words(sugg: list[dict[str, Any]], button: str = "Allow for this session") -> str:
+    """What "Allow for this session" does, in plain words, before the press.
+    ``button`` (v1.417.0): the words the card's own button says — "Allow
+    similar commands" when "Allow all commands this session" is beside it."""
     parts = []
     for s in sugg:
         kind = s.get("type")
         if kind == "setMode":
-            parts.append(f"Allow for this session switches Claude Code to {MODE_LABELS[MODE_OF[str(s['mode'])]]} "
+            parts.append(f"{button} switches Claude Code to {MODE_LABELS[MODE_OF[str(s['mode'])]]} "
                          "for the rest of this session.")
         elif kind in ("addRules", "replaceRules"):
             rules = []
@@ -286,14 +341,14 @@ def suggestion_words(sugg: list[dict[str, Any]]) -> str:
                     tool, content = str(r.get("toolName") or ""), str(r.get("ruleContent") or "")
                     rules.append(f"{tool}({content})" if content else tool)
             if rules:
-                parts.append("Allow for this session always allows " + ", ".join(clip(r, 80) for r in rules)
+                parts.append(f"{button} always allows " + ", ".join(clip(r, 80) for r in rules)
                              + " for the rest of this session.")
         elif kind == "addDirectories":
             dirs = [clip(d, 120) for d in s.get("directories") or [] if isinstance(d, str)]
             if dirs:
-                parts.append("Allow for this session lets Claude Code work in " + ", ".join(dirs) + ".")
+                parts.append(f"{button} lets Claude Code work in " + ", ".join(dirs) + ".")
     if sugg and not parts:
-        parts.append("Allow for this session saves Claude Code's own permission rule for this session.")
+        parts.append(f"{button} saves Claude Code's own permission rule for this session.")
     return " ".join(parts)
 
 
@@ -607,6 +662,15 @@ class ClaudeDriver(Driver):
                 resp = {"behavior": "allow", "updatedInput": inp}
         elif decision == "deny":
             resp = {"behavior": "deny", "message": (message or "The user said no to this.")[:2000]}
+        elif decision == ALLOW_COMMANDS:
+            # v1.417.0 (C1.1): Iron Jarvis's own whole-tool rule for the
+            # session — never Claude Code's per-prefix suggestion.
+            if not ask.data.get("all_commands") or self.mode in ALL_COMMANDS_NOT_IN:
+                # (review) also when the mode moved to Auto / Plan while the
+                # card waited: Claude Code would not keep the rule there.
+                raise AskRefused(W.ALL_COMMANDS_NOT_HERE.format(label=W.label(HARNESS)))
+            resp = {"behavior": "allow", "updatedInput": inp,
+                    "updatedPermissions": [all_commands_rule()]}
         elif decision == "allow_session":
             sugg = ask.data.get("suggestions") or []
             if not sugg:
@@ -772,14 +836,24 @@ class ClaudeDriver(Driver):
             return
         kind = tool_kind(name)
         akind = {"command": "command", "edit": "edit", "write": "edit", "web": "network"}.get(kind, "tool")
+        # v1.417.0 (C1.1): a command card offers "Allow all commands this
+        # session" (Iron Jarvis's own whole-tool rule), never in Full access,
+        # Auto or Plan (:data:`ALL_COMMANDS_NOT_IN`).
+        all_commands = akind == "command" and name in ALL_COMMANDS_TOOLS and self.mode not in ALL_COMMANDS_NOT_IN
         detail = clip(req.get("description") or req.get("decision_reason") or "", DETAIL_CHARS)
-        effect = suggestion_words(sugg)
+        effect = suggestion_words(sugg, W.ALLOW_SIMILAR if all_commands else "Allow for this session")
         if effect:
             detail = f"{detail}\n\n{effect}" if detail else effect
+        title = W.PLAN_CARD_TITLE if name == "ExitPlanMode" else tool_title(name, inp)
         ev = make(
-            "approval", request_id=ask_id, kind=akind, title=tool_title(name, inp),
+            "approval", request_id=ask_id, kind=akind, title=title,
             detail=detail, can_session=bool(sugg),
         )
+        if all_commands:
+            ev["can_all_commands"] = True
+        if name == "ExitPlanMode" and str(inp.get("plan") or "").strip():
+            # v1.417.0 (C4.1): the plan itself, read before the answer.
+            ev["plan"] = clip(inp.get("plan"), PLAN_CHARS)
         if not sugg:
             # No session-wide allow offered: the card answers this one call.
             ev["once_only"] = True
@@ -795,6 +869,8 @@ class ClaudeDriver(Driver):
         if name.startswith("mcp__") or akind == "tool":
             ev["tool"] = clip(name, 120)
         data: dict[str, Any] = {"input": inp, "suggestions": sugg}
+        if all_commands:
+            data["all_commands"] = True
         mode = suggested_mode(sugg)
         if mode:
             data["sets_mode"] = mode

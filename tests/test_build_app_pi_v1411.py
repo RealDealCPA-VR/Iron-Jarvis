@@ -182,7 +182,9 @@ async def test_pi_starts_in_rpc_mode_on_its_own_saved_session_with_nothing_switc
     assert start["env"].get("OPENAI_API_KEY") == "sk-users-own-key-0000", "the user's own keys are a terminal's"
     assert [m["type"] for m in sent(log)][:4] == ["get_state", "get_commands", "get_available_models", "prompt"]
     assert sent(log)[3]["message"] == "do it"
-    assert evs[1]["type"] == "session" and evs[1]["harness"] == "pi" and evs[1]["mode"] == "own"
+    # v1.417.0 (C4.7, moved on purpose): "Starting Pi…" is said first.
+    assert evs[1]["type"] == "notice" and evs[1]["text"] == "Starting Pi…"
+    assert evs[2]["type"] == "session" and evs[2]["harness"] == "pi" and evs[2]["mode"] == "own"
 
 
 async def test_a_model_and_a_thinking_level_are_pis_own_flags_and_change_live(app, work, tmp_path, monkeypatch):
