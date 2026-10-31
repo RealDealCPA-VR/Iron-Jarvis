@@ -2423,6 +2423,104 @@ asks into a card you answer.
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
 
+## A reply starts sooner, and a long one costs less to keep (v1.418.0)
+
+- **A slow memory source no longer holds the first word.** Before a reply,
+  Iron Jarvis gathers what grounds it: your project's notes, your lessons,
+  your memory bases (some of them on other machines), the saved workflows.
+  It used to wait for the slowest of these. Now it waits at most 2.5 seconds
+  for the optional ones; a source still answering then is left out of THAT
+  reply, and the reply's receipt says so (`late` in its context numbers,
+  naming the source). Your project's own instructions, its folder's
+  AGENTS.md / CLAUDE.md, and the apps you switched on for the chat are never
+  left out: the reply waits for those.
+- **A coding session does not walk its whole folder before every reply.**
+  The project map at the top of a coding reply is kept, and Iron Jarvis only
+  looks at the folder's top two levels to see whether anything there changed
+  (a file added, removed, renamed or edited at those levels makes a new map).
+  A change deeper in the folder shows in the map at the next change near the
+  top; the model reads the files it works on either way. The finish check
+  still takes its own picture of the folder when a reply begins, so a second
+  reply reads the folder once, not twice.
+- **A long reply's record grows by what each step added.** A coding reply
+  keeps its own conversation so it can carry on after a restart. That record
+  used to be written out whole twice a step; it is now written whole once and
+  then only added to. The live record of the reply's words is joined only
+  when it is saved or someone rejoins it, instead of on every word. Nothing
+  you see changes; a long reply simply spends less of your PC on keeping
+  itself safe.
+
+## Chat › Code starts at the box, reads in order, and gives archived sessions back (v1.418.0)
+
+- **A new session starts where you type.** With nothing open, and after New
+  session (or Ctrl+N, or a folder's +), Chat › Code shows the message box
+  with the caret already in it. Under it are the choices for the session:
+  the folder (Choose… opens Windows' own folder picker; with no folder the
+  session keeps its files in a folder of its own), "Work on a new branch"
+  (only for a folder in a git repository that can start one), how much it
+  asks before acting, the model, and Local only. Type and press Enter: the
+  session is made in that folder with those choices and your words go to it
+  as its first message. Nothing is made until you send, so leaving the box
+  leaves nothing behind. A folder Iron Jarvis cannot use is said on the
+  folder chip and your words stay in the box; any other reason is said under
+  the box. If the session is made but cannot take your first message, it is
+  not kept: you are back at the box with your words, your choices and the
+  reason. Pressing New session again while the box is open keeps what you
+  typed.
+- **A reply reads in the order it happened.** What the session said and what
+  it did now alternate the way they happened: "Let me look at the cart",
+  then the files it read, then "Found the bug, fixing it", then the edit.
+  Each run of steps is one quiet line ("3 steps · read 2 files, edited 1
+  file") that opens to the steps themselves; the run it is working in shows
+  its steps as they go. A reply you watched keeps that order once it is
+  saved. A reply you did not watch (it ran while the window was closed)
+  shows its steps before its final words, because Iron Jarvis keeps only the
+  last part of what a reply said.
+- **One line under each reply.** Instead of a stack of lines, a finished
+  reply has one: "Worked for 2 min 14 s · 7 steps · Checked: tests passed",
+  then who answered. Press it to open everything else: every step, the
+  check, the task list, the files it changed (with Undo) and, under the
+  newest reply, where things stand. The buttons for the next step stay in
+  sight. Failed tests, failed steps and a reply that was cut off are said on
+  the line in the warning colour.
+- **Archived sessions can come back.** Archived sessions are listed at the
+  bottom of the session list under "Archived (N)". Each has a Bring back
+  button, and a session you open from there (or from a link) says it is
+  archived with a Bring back button where you type.
+
+## Build › Code keeps its history, and lets a message wait (v1.418.0)
+
+- **Older steps are a press away.** A long session shows its newest steps;
+  above them a line says how many earlier steps there are, and **Load
+  earlier** puts the page before them on top (press again for more) — the
+  first message is never lost. Opening a session is also quicker: once Iron
+  Jarvis has driven a session, it keeps the newest steps in memory instead of
+  reading the whole record from disk each time.
+- **A conversation from elsewhere shows what was said there.** Open a
+  conversation Claude Code, Codex, Pi or OpenCode saved by itself, or bring
+  one in from a terminal, and the Code view shows that conversation's own
+  history — your messages, the answers and the steps — read from the tool's
+  own saved file (never changed). After **Open in terminal** and back, what
+  you did in the terminal shows in order with the rest.
+- **Send while it works: your message waits.** Press Enter while the tool is
+  working and your message waits under the box ("Waiting", with an × to take
+  it off). When the reply ends normally, Iron Jarvis sends it as your next
+  message — even if you closed the page. If the reply was stopped, failed, or
+  hit an account's limit, or Iron Jarvis restarted meanwhile, nothing is
+  sent: the words come back to your message box, and a line says so. To tell the running reply something now,
+  press **Shift+Enter** (or the arrow) — that sends it a note, as before.
+- **Keys.** **Esc** stops a running reply (when no list is open). **Shift+Tab**
+  steps through the modes — Ask first, Auto edits, Plan, Auto — and never
+  turns on Full access (that still takes two presses in the mode menu).
+- **The `/` list** opens when a line starts with `/`, anywhere in your
+  message, lists up to 20 of the tool's commands and shows what each one
+  expects after it.
+- **Changing the model while it works.** The model can be changed while
+  Claude Code, Pi or OpenCode works (it switches at once or from your next
+  message); going back to the tool's default, and Claude Code's effort, wait
+  for the reply to end, because the tool has to start again for them — the
+  chip says so.
+
 ## A calmer coding conversation in Chat › Code (v1.417.0)
 
 Four things changed in how a coding session's conversation behaves while a
@@ -2508,6 +2606,34 @@ Also fixed: in a long Claude Code session, the percent could read far too low
 (1%). Iron Jarvis read the size of the last call in Claude Code's report, and
 that call could be a side call (an advisor or a summary) rather than the
 conversation. It now reads it the way Claude Code itself does.
+
+## Build › Code shows the work as it happens (v1.418.0)
+
+- **A step appears when it starts.** A file being written, an edit or a
+  command shows its row the moment Claude Code starts writing it, and the row
+  fills in as the words arrive ("Write notes.md · 1,234 characters so far").
+  A Codex command shows its output while it runs.
+- **Helpers fold inside their row.** When Claude Code hands part of the job to
+  a helper, the helper's steps and its answer sit inside that one row. Closed,
+  it says how many steps the helper took and what it answered; press it to
+  see each step.
+- **Thinking says when it is happening.** The thinking line reads
+  "Thinking…" while Claude is thinking, then "Thought for N s".
+- **What Claude Code says about its own work shows.** Your hooks' output
+  (Iron Jarvis asks Claude Code for every hook's), "compacting the
+  conversation", an action Claude Code refused by itself, and a background
+  helper that finished are quiet lines in the conversation. A request Iron
+  Jarvis does not answer (a hook callback, a form for one of its added tools)
+  is still refused, and the line says what was asked.
+- **A command is named in Claude Code's words.** Its row reads the short
+  description Claude Code wrote ("List tracked files and remotes") with the
+  command underneath; a description that had to be cut ends in "…".
+- **Long output: Show all.** A step shows the first 1,500 characters of what
+  it printed; when there was more, opening the step offers **Show all N
+  characters**, which reads up to 20,000 back from the session's record.
+- **Every edit shows its change, in every mode.** In Full access Claude Code
+  often sends an edit without its change; Build › Code now reads the change
+  from the edit itself, and the line it landed on from the file.
 
 ## Fewer cards, and clearer ones, in Build › Code (v1.417.0)
 

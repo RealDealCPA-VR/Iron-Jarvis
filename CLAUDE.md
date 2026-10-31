@@ -11856,6 +11856,82 @@ does not need a bump, stop and bump it.
   comment. Known: while the live block is held the "Working for N s" line
   keeps counting (≤ the settle read).
 
+- **Chat › Code starts at the composer, reads a reply IN ORDER, has ONE line
+  under each reply, and lists its archived sessions** (v1.418.0, fix plan
+  C2.3/C2.5/C2.6/C2.8, wave 2 lane E). START (C2.6):
+  `components/harness/HarnessStartComposer.tsx` is the empty view AND New
+  session / Ctrl+N / a folder's "+" / "/clear" (IjHarnessView `middle ===
+  "new"`, `openNew(folder)`): a focused box + chips (FolderChip
+  `harness-new-folder`, the branch switch only when `fetchFolderGit` says
+  repo + canBranch, PermissionChip `harness-new-posture`, a model select,
+  Local only). NOTHING exists on the daemon until Send: ONE `POST
+  /build/sessions` with `startCreateBody` (only what the user chose), then
+  `keepView(made)` + HarnessSession `freshView` (the create's own view: NO
+  mount GET) + `firstMessage` (sent once via `send(item)`, `onFirstTaken`).
+  The v1.412.0 "make an empty session at once" path and its abandoned-session
+  clean-up in IjHarnessView are GONE (nothing to abandon); the in-session
+  `HarnessStartFolder` move stays for an empty session that already exists.
+  IN ORDER (C2.3): `lib/replyItems.ts` — live, the frame tap
+  (`onFrame` tool_call, not `check: "finish"`) records the text store's length
+  per card in `liveOffsetsFor(turnId)` (a frame is tapped before the next is
+  read, so the store holds exactly the earlier words; LiveText also records a
+  card it first sees at render as a fallback) and `liveReplyItems` splits the
+  words there; earlier runs are `WorkLine.StepRun` (folded, `runWords`), the
+  current run `LiveToolRows`, `harness-live-text` = the LAST text item
+  (`harness-live-text-part` the earlier ones). The daemon saves only the LAST
+  round's words (`done.reply`), so a settled reply is placed by the shape this
+  window kept (`keepReplyShape`, ≤ 32): earlier words, saved steps by count,
+  then the saved content; not watched here = steps then content. Runs leave
+  out `check: "finish"` steps and `helper` steps. ONE LINE (C2.5):
+  `HarnessMessageRow.ReplyLine` (`reply-line`, `reply-line-toggle`,
+  `replyLineParts`: Worked for · N steps · Checked · N failed · cut off) with
+  TurnReceipt inline (its warnings stay visible) and Branch on the same row;
+  the panel holds WorkLine (`timing={null}`: "Worked for" is said once),
+  SettledPlan, ReplyChanges and the newest reply's `next-step-recap`
+  (HarnessSession computes `nextStep` once; the NextStepBox gets `recap: ""`
+  and keeps its buttons and follow-up chips). ARCHIVE (C2.8):
+  `listArchivedSessions` (GET `?archived=1`, read at mount and after a change,
+  never on the poll), HarnessSidebar `ArchivedFold` ("Archived (N)", rows,
+  `harness-bring-back-<id>`), the session's `harness-archived-banner` +
+  `harness-bring-back`; a row's Bring back re-reads an OPEN session
+  (`rereadRequest`). Pins: `dashboard/__tests__/ij-harness-{start-composer,
+  reply-items}-v1418.test.tsx`; moved on purpose: `ij-harness-abandoned-v1412`,
+  `ij-harness-new-folder-v1378`, `ij-harness-new-folder-nofolder-review-v1379`,
+  `ij-harness-phase6-v1377` (Ctrl+N), `ij-harness-phase7-review-v1378`,
+  `ij-harness-sidebar-v1369`, `finish-check-v1386`, `ij-harness-keys-review-
+  v1377`, `ij-harness-session-v1369`, `ij-harness-work-v1374`,
+  `next-step-v1406`, `session-team-v1403`, e2e `ij-harness{,-git,
+  -attempts}.spec.ts` (their `startInFolder` types and sends). REVIEW (each
+  red first, `ij-harness-{start-composer,reply-items}-review-v1418`): (1) A
+  FIRST MESSAGE REFUSED BEFORE ITS TURN STARTED (a 400 on POST …/turn) left
+  the session the start had just made as an EMPTY row — the removed clean-up
+  used to be the only thing that took such rows away. Now HarnessSession's
+  `onFirstRefused` (only while `firstPendingRef`: from the hand-over until the
+  turn's first frame or the send ends) hands the words back: IjHarnessView
+  `firstRefused` deletes that row with `only_if_empty` and reopens the
+  composer with `seed` (the words, the files, every chip, the refusal) — as
+  if nothing had been made; a second message's refusal stays in its session
+  as before. (2) Ctrl+N / New session / a folder's "+" while the composer is
+  ALREADY open remounted it and dropped the words and the folder: now `again`
+  (`StartAgain {n, folder}`) keeps them, sets the folder given and puts the
+  caret back; a seed or press is forgotten once the view shows anything else
+  (never handed to a later composer). (3) A refusal not about the folder was
+  said in red ON THE FOLDER CHIP: `isFolderProblem` routes folder/branch/
+  repository/worktree words to the chip, the rest to `harness-new-problem`.
+  (4) THE TAP COUNTS THE WORDS ITSELF (`tapLenRef`: tokens added, `reset`
+  zeroes it and moves every step placed so far to 0, `resume {resumed:false}`
+  zeroes it, a resumed run starts from its seed's length): the text store
+  stands still through a replay (every replayed step landed above every
+  word), and after a `reset` (a cut-off call, the text-tool-call nudge, the
+  language rewrite) an old place cut the NEW words mid-word. (5) A kept
+  segment the saved content already holds (the approved plan put before the
+  reply, a closing offer's combined answer) is drawn once. OPEN: the
+  in-session `HarnessStartFolder` (an empty session opened by address) and
+  `e2e/build-code-start.spec.ts`'s 390 px pin of it are unchanged; a first
+  message that is only a "/" command (`/model`, `/clear`) makes a session
+  that stays empty; `lib/emptySessions` is still written (pinned by
+  `ij-harness-start-review-v1412`) but nothing reads it.
+
 - **One approval means one approval in Chat › Code: a session grant reaches
   the RUNNING reply; read-only commands, Iron Jarvis's own checks under
   "Don't ask", and a test that already passed after the last edit never
@@ -11946,6 +12022,219 @@ does not need a bump, stop and bump it.
   now reads the assistant's own last words (a prompt-injected reply can argue
   its case — the request is still the person's); helpers (agent runtime)
   under Ask first get no read-only pass.
+
+- **Grounding has a SOFT DEADLINE; the project map is CACHED by its top two
+  levels; a kept reply APPENDS; a token is never re-parsed** (v1.418.0, fix
+  plan C3.4 + C3.6). GROUNDING: `chat_turn._gather_grounding` starts every hop
+  as a `to_thread` task, waits `GROUNDING_SOFT_S` (2.5, read at call time) for
+  all of them, then to the end only for `GROUNDING_REQUIRED_HOPS` (project,
+  folder_rules, connector — the ones that raise or carry the user's
+  instructions/toggles); a hop still running is left out of THIS turn
+  (`_Grounding.late`, its late answer read by `_drop_late_hop`), logged, and
+  named on BOTH lanes' receipt as `context.late` via `late_receipt()` — the key
+  is ABSENT when nothing was late (byte-identical receipt and prompt); a
+  cancelled gather (Stop) cancels its tasks; the first error in hop order
+  still raises. Supersedes v1.311.0's "no soft deadline"
+  (`test_wave3_chat_lanes_v1311`'s optional pin moved to these names). MAP:
+  `project_map.build` reads `_top_signature` (one listing of the folder + one
+  per kept top-level folder; name/kind/size/mtime; a FOLDER's time from
+  `os.stat`, never the parent listing's copy — NTFS updates that lazily and
+  the next turn read a different signature; review: BOUNDED like the walk —
+  past `TOP_SIGNATURE_MAX_ENTRIES` 5000 entries or `WALK_DEADLINE_S` it
+  answers None and the turn walks as before) BEFORE walking and serves
+  `_MAP_CACHE[(folder, limit, depth, top, MAP_VERSION)]` (≤ `MAP_CACHE_MAX`
+  64) with NO walk; a map with names left unread is never cached; a change
+  deeper than two levels shows at the next top-level change (said in the
+  module doc). So a Build reply's second turn makes ONE walk (the finish
+  check's `folder_changes.take`); the first makes two (the map and the
+  snapshot prune differently — not merged). RECORD: `ReplyRecord.save` writes
+  whole once, then `_append` encodes only the new messages and joins them in
+  SQL (`substr(messages_json, 1, len-1) || ', <rows>]'`, guarded by
+  `length() == the length it wrote` and the session id; SQLite's length()
+  and substr() count characters like Python, checked with "é" and an emoji);
+  a changed earlier message (`_fingerprint`: id, role, content length AND
+  hash — review: `attach_check` can rewrite an earlier tool message in place
+  to the SAME length (both over the harness cap) —, picture, calls;
+  `trim_tool_images` mutates in place too), a moved/
+  changed row, or the cap falls back to `_write`. BOTH per-round saves stay
+  (`test_build_resume_v1391` pins the top-of-round one: a crash during the
+  model call keeps the round's results) — 1 whole write + ≤ 2 appends a
+  round; SQLite still rewrites the row's pages (no partial-value write).
+  TURN LOG: `TurnLog.frames` is a PROPERTY (setter kept) joining the growing
+  canonical text frame (`{"text": "<esc>"}`, ASCII, printable — `_escaped_
+  text`) from `_live` chunks; a plain token makes no `json.loads` (an escaped
+  one parses only ITSELF for its length); any other shape takes the old path
+  byte for byte; `_row_values` hands a COPIED snapshot and `_write_record`
+  `json.dumps` it on the worker thread. Pins: `tests/test_grounding_
+  deadline_v1418.py`, `tests/test_reply_writes_v1418.py` (incl. the v1384
+  recorded logs fed frame by frame and a byte reference of the old `_store`).
+
+- **Build › Code shows the work AS IT HAPPENS: a row from the first written
+  character, helpers nested, the tool's own words, the rest of a long output
+  kept in the LOG** (v1.418.0, fix plan C4.2-C4.5, lane F). STREAMING
+  (`hosted/claude.py`): a `tool_use` `content_block_start` emits the running
+  row at once with `partial: true`; `input_json_delta` keeps a 4,000-char
+  HEAD (fields read by `partial_input`: path, command, description …, for the
+  title) and a 2,000-char TAIL (`events.clip_tail`, the row's `input`) and
+  re-emits at most every `PARTIAL_EVERY_S` (0.25 s, by the clock — the golden
+  test sets it to 3600 so only the start row is pinned); the block's end
+  sends what came since unless the whole input already arrived (the
+  assistant frame comes BEFORE `content_block_stop`). Codex
+  (`hosted/codex.py`): `item/commandExecution/outputDelta` {itemId, delta}
+  (READ from codex 0.157.0's `generate-json-schema`) updates the running row's
+  `output` (tail, `partial`, `OUTPUT_EVERY_S`); Pi's running output rows carry
+  `partial` too. NESTING: every frame's `parent_tool_use_id` → `parent` on
+  `text`/`text_done`/`thinking`/`tool` (`_with_parent`); stream state is per
+  parent (`_streams`); a helper's TodoWrite is no plan. MEASURED in the ONE
+  real run (claude 2.1.316, haiku, Full access, `tests/fixtures/build_app_
+  v1409/claude_full_mode_edit_v1418.json`, masked): Claude Code names the tool
+  `Agent`, runs it in the BACKGROUND (its tool_result is "Async agent
+  launched" at once), and the helper's messages come WHOLE (no stream deltas)
+  with `parent_tool_use_id` — so a helper's thinking is said from the whole
+  message only when that message id was never streamed (`_streamed`). A
+  helper's title is `Helper: <its description>`. DASHBOARD
+  (`lib/buildApp.foldConversation(events, extra, root)`): a `parent`-tagged
+  event folds into its top helper's row as `children` (recursive fold; a
+  missing helper row gets a placeholder `task` row), the child edits count
+  toward the receipt's files; `CodeConversation` draws a helper closed with
+  `code-helper-count` + `code-helper-final` (its last text) and opens onto the
+  nested rows. SYSTEM (C4.3): `--include-hook-events` is passed (READ from
+  2.1.316's bundle; without it only SessionStart/Setup hooks are emitted;
+  the flag is in the 2.1.310 and 2.1.311 bundles too and hook events streamed
+  headless by 2.1.204 per Claude Code's changelog, while `--permission-prompts`
+  (already passed) came in 2.1.259 — a CLI too old for the hook flag is
+  refused by that one first, so it adds no new way to fail to start; pinned
+  as riding together); `claude.system_notice` maps
+  hook_response (silent when it succeeded and said nothing), stop_hook_summary
+  (only when it prevented continuation), task_started (background only, no
+  tool_use_id), task_notification, notification, informational/local_command/
+  model_*fallback, permission_denied, api_error to a `notice` in plain words
+  (`words.SYS_*`); `status: compacting` (sent every 30 s while it lasts) is
+  said ONCE (`_compacting`), a failed compaction says why; every other
+  control request is refused AND said (`words.CONTROL_REFUSED`). Thinking
+  items carry `live` (the newest thing a running turn said) and `seconds`
+  (to the next event). KEPT TEXTS (C4.4): `events.with_full` cuts a finished
+  step's `input`/`output` for the screen (300 / 1,500) and, when cut, adds
+  `more`, `input_chars`/`output_chars` and the texts (≤ 20,000, masked
+  BEFORE the cut) under `_full`; `EventLog.append` POPS `_full` off the
+  caller's dict IN PLACE (the service hands the same dict to the watchers
+  right after — `_emit` calls `live.log.append` BEFORE `turn.add`; keep that
+  order) and writes it as `full`; `EventLog.read` and `coalesce_into` drop
+  it; `EventLog.item_text(item)` reads it back (`{item, input, output}`; the
+  newest event of the step that kept texts) for `GET /build/app/sessions/
+  {id}/events/{item}` (lane G's route); `CodeConversation`'s `onExpand(item)`
+  prop (BuildCodeView supplies it) is pressed from "Show all N characters".
+  A command's title is Claude Code's own `description` (`tool_title`), the
+  command its `subtitle`; a card whose description equals its title shows no
+  detail twice. DIFFS (C4.5): the live log held 619 of 619 Full-access edits
+  with NO diff, yet the one direct run had `tool_use_result.structuredPatch`
+  on the main Edit — the cause under Iron Jarvis's own flags is NOT known; a
+  finished edit/write with no diff from the meta gets one from its own input
+  (`_edit_diff`; a Write's line is 1) and an Edit's line read off the file
+  OFF THE LOOP, ≤ `LINE_READ_BYTES` 2 MB (`line_of`), sent as a second `tool`
+  event with `line`. Pins: `tests/test_build_app_stream_rows_v1418.py` (20
+  mutations, all red), `dashboard/__tests__/build-app-stream-rows-v1418.
+  test.tsx` (18 mutations, all red), the v1409 golden's
+  `claude_full_mode_helper` and `claude_hooks_and_long_output` cases
+  (`claude_hooks_v1418.json` is built from recorded frame shapes). Moved on
+  purpose: the v1409/v1411 goldens (start rows, titles from descriptions,
+  `partial`). REVIEW (independent, each red first): (1) `line_of` read a
+  model-written path as given — `\\host\share\x`, or a link that leads there,
+  is an SMB connection (the v1.379.0 lesson): it refuses the spelling
+  (`code_editor._network_or_device`) before any lstat/open and walks links
+  one hop at a time (`code_editor._walk_links`); (2) the line read's task was
+  held by nobody (asyncio keeps tasks weakly): `ClaudeDriver._line_tasks`;
+  (3) every update of a step being written went into the LOG (~4 a second for
+  as long as a long Write takes) and the turn's replay: `EventLog.append`
+  writes a step's FIRST `partial` row only (a crash still shows the step) and
+  then its finished row (`_partial_logged`), and `coalesce_into` lets a newer
+  row of the same step replace a trailing `partial` one
+  (`_replaces_partial`); followers still get every update; (4)
+  `reuseItems` now reuses an open helper's unchanged `children` (they drew
+  again on every frame).
+
+- **Build › Code's history STAYS (paged by a cursor, the tool's own
+  transcript merged in), a view is served from MEMORY, and a message sent
+  while it works WAITS** (v1.418.0, fix plan C4.6/C4.8/C4.11, lane G).
+  MEMORY (C4.11): `hosted/history.TailLog` (an `EventLog` SUBCLASS — never
+  edit `events.py` for this) is every live session's log (`_live`); each
+  append stamps `seq` (`next_seq`: microseconds since 1970, strictly
+  increasing, so larger than any earlier run's) on the LOG's copy only —
+  the caller's dict (which `turn.add` sends to followers) is untouched,
+  EXCEPT that `FULL_KEY` comes off it in place (the v1.418.0 C4.4 rule:
+  watchers never see the kept texts) — and keeps the newest 2,000 coalesced
+  entries in memory. `seed()` is the ONE file read: only the lines BEFORE
+  the one carrying this process's first seq EXACTLY (a batch's first event
+  opens its first line; never "seq >= first" — a seq is the wall clock and
+  after the clock moved back an earlier run's newer lines vanished), so the
+  writer thread's batching can never double an event. `service.view` → `_view_events`:
+  `served(limit)` from memory, else the file (`history.file_view`, which
+  also serves sessions this daemon never drove); a read past what memory
+  holds falls back to the file. The view's events never carry `seq` or the
+  log's `full` (`history.public`). CURSOR (C4.6): a view and a page answer
+  `older` = `s<seq>` (an event with a seq — survives the memory merging
+  deltas the file kept apart; `_cut_of` finds that seq EXACTLY, the first
+  larger one only when no line carries it) or `i<index>:<dropped>` (an older event; a
+  later trim moves it back); `GET /build/app/sessions/{id}/events?before=
+  <cursor>&limit=` (`events_page`, ≤ 2,000, 400 `BAD_CURSOR` in words).
+  `GET …/events/{item}` = `EventLog.item_text` (Lane F's, C4.4), else
+  `history.item_text`; BuildCodeView hands CodeConversation `onExpand`
+  (`expandStep` → `decodeItemText`). TRANSCRIPT (C4.6): `history.transcript_events` reads
+  the tool's OWN saved conversation READ-ONLY — Claude Code's
+  `projects/*/<id>.jsonl` (the `history` package's bounded `_records` +
+  `claude.tool_kind/tool_title`), Codex's rollout (`history.codex.
+  map_events`), Pi's session file, OpenCode's DB `mode=ro` (`part` JOIN
+  `message`, newest 6,000 parts) — as `user`/`text_done`/`tool` events
+  (`imported: true`, masked, newest 2,000), cached by (size, mtime_ns; +
+  the `-wal` for OpenCode). Read ONLY for a session whose log is empty or
+  that `mark_outside` named (`<home>/hosted/<id>/outside.json`, written by
+  create-with-`harness_session_id`, `open_terminal`, `from_terminal`) —
+  never for a session that lived only in the view. The file is FOUND once
+  (`_SOURCES`, then a stat per view); a Pi sessionDir spelled as a network
+  path (a project's `.pi/settings.json` can name one) is refused by its TEXT
+  unless the session's folder is itself on a share (the v1.379.0 rule).
+  `merge_transcript`:
+  entries inside a log turn's window (user → done, ±`EDGE_S` 2 s; an open
+  turn runs on) are that turn's and dropped; the rest merged by time; with
+  the view cut (`older`), entries older than its oldest are dropped. QUEUE
+  (C4.8): `hosted/queued.SessionQueue` (memory first, `<home>/hosted/<id>/
+  queue.json` behind it, newest write wins, ≤ 5 items); `POST …/queue`
+  (409 `code: not_working` when no reply runs or it is ending — checked
+  AFTER the awaits), `POST …/queue/{qid}/remove`, `POST …/queue/take`;
+  `_end_turn` → `_after_turn_queue`: `completed` and no account-limit card →
+  `_send_queued` starts the first as the next turn (a refusal puts it back,
+  holds the queue, says `QUEUE_NOT_SENT`); anything else HOLDS. The view
+  says `queued` + `queue_held` = the queue's OWN hold (never "nothing is
+  running": between a clean end and the next waiting message's turn nothing
+  runs, and the page pulled the rest back into the box); a queue read back
+  from disk is an EARLIER run's and is HELD at load (`_queue_of`; a shutdown
+  returns before writing the hold), so it is never sent behind a new reply.
+  The waiting message goes with the session's CURRENT model and mode. `commands_for` now keeps `argument_hint`. DASHBOARD
+  (`BuildCodeView`, words in `lib/buildAppHistory.ts`): `earlierEvents` +
+  `older` (`code-earlier-count` "N earlier steps", `code-load-earlier`,
+  scroll kept); `allEvents` feeds the fold and the panes. Enter while
+  running QUEUES (`queueIt`; `code-queued`, × `code-queued-remove-<id>`);
+  Shift+Enter and the arrow send a NOTE (`sendNote`, waits for uploads) —
+  the v1412 steer pins moved to Shift+Enter on purpose; a held queue is
+  taken back into the box on load (`takeBack`, by `sessionId`); after a turn
+  ends, a running turn the window has NOT followed (`followedTurnsRef`) is
+  followed — the daemon's queued turn — never in a loop. Esc stops when no
+  menu is open; Shift+Tab → `nextMode` (ordinary modes only, never Full
+  access). `/` menu: `slashAt(text, caret)` (start of ANY line), `SLASH_ROWS`
+  20, hints (`commandHints`). Chips while running: model open (its default
+  row held for Claude Code, Pi, OpenCode — a new start), effort held only for
+  Claude Code (`effortWhileRunning`), titles say why. OPEN: Codex's own `/`
+  prompts are not listed (needs a driver change); a page loaded earlier is
+  dropped on a rejoin; "Load earlier" pages the log only (transcript entries
+  older than a cut view are not shown). Pins: `tests/test_build_app_{history,
+  queue}_v1418.py` (14 mutations, all red), `dashboard/__tests__/build-app-
+  history-keys-v1418.test.tsx` (14 mutations, all red), e2e `dashboard/e2e/
+  build-code-keys.spec.ts` (not run here). REVIEW (each red first,
+  `tests/test_build_app_{history,queue}_v1418.py`): the restart queue held,
+  `queue_held` no longer "nothing running", the exact-seq cursor and seed,
+  the Pi share, the transcript file found once. Known (older than this
+  wave): `service._conversation_files` lists a Pi sessionDir a project names
+  even when it is a share.
 
 ## Map (where things live)
 
