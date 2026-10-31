@@ -12,6 +12,10 @@ facts come from — in memory, never a database read on the poll paths:
   shape ``durable_turns.running_replies`` gives a chat's or a Chat › Code
   reply (``surface: "build_app"``), with ``waiting`` = a card or a question
   is open on it (the reply goes on only when the user answers).
+  v1.417.0: also one row per session whose reply ENDED while its helper
+  agents work on in the background, or whose tool is writing a report of its
+  own (``background: true``, ``turn_id`` ``bg:<session>``) — that is work
+  too: an update would stop it and the PC must not sleep under it.
 * :func:`counts` — ``{running, working}`` for ``/health`` and
   ``/system/activity``. WORKING follows the v1.391.0 rule exactly: a reply
   parked on an unanswered card is BUSY (the update still cuts it off, so the
@@ -74,9 +78,24 @@ def running_rows(platform: Any) -> list[dict[str, Any]]:
         return []
     rows: list[dict[str, Any]] = []
     try:
+        now = svc.clock()
         for live in list(svc.live.values()):
             turn = live.turn
             if turn is None or not turn.running:
+                helpers = live.background_helpers if live.helpers_working(now) else 0
+                alone = live.replying_alone(now)
+                if helpers or alone:
+                    rows.append({
+                        "turn_id": f"bg:{live.sid}",
+                        "thread_id": live.sid,
+                        "surface": SURFACE,
+                        "harness": live.harness,
+                        "started_at": "",
+                        "waiting": bool(live.asks),
+                        "title": getattr(live, "title", "") or "",
+                        "background": True,
+                        "helpers": helpers,
+                    })
                 continue
             rows.append({
                 "turn_id": turn.id,

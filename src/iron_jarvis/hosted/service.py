@@ -117,6 +117,11 @@ REAP_EVERY_S = 60.0
 #: reaper treats the session as idle again (a forgotten dev server must not
 #: hold a process forever).
 BACKGROUND_SILENT_MAX_S = 2 * 60 * 60.0
+#: v1.417.0: a reply the tool started BY ITSELF (Claude Code's report once its
+#: helpers end) counts as being written while the tool was heard from within
+#: this long — the Code view reads the session again meanwhile, and a reply
+#: whose end never came stops being one.
+SELF_REPLY_QUIET_S = 10 * 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
 #: v1.414.3: how long a reply's end waits for the tool's session id to be saved.
@@ -682,6 +687,35 @@ class LiveSession:
         return self.background_tasks > 0 and now - self.last_heard < BACKGROUND_SILENT_MAX_S
 
     @property
+    def background_helpers(self) -> int:
+        """v1.417.0: the open background tasks that are helper AGENTS."""
+        try:
+            return int(getattr(self.driver, "background_helpers", 0) or 0) if self.driver is not None else 0
+        except Exception:  # noqa: BLE001 — a driver's count must never break a view
+            return 0
+
+    def replying_alone(self, now: float) -> bool:
+        """v1.417.0: the tool is writing a reply no message of the user's
+        owns (Claude Code's report after its helpers ended; Pi's run of its
+        own), heard from within :data:`SELF_REPLY_QUIET_S`. Never while a
+        reply the user started runs (that reply shows itself)."""
+        if not self.running or (self.turn is not None and self.turn.running):
+            return False
+        try:
+            alone = self.working_alone or bool(getattr(self.driver, "replying_alone", False))
+        except Exception:  # noqa: BLE001
+            return False
+        return alone and now - self.last_heard < SELF_REPLY_QUIET_S
+
+    def helpers_working(self, now: float) -> bool:
+        """v1.417.0: helpers still at work (the tool heard from within
+        :data:`BACKGROUND_SILENT_MAX_S`) with no reply of the user's running —
+        what Running now and the busy counts list beside the replies."""
+        if not self.running or (self.turn is not None and self.turn.running):
+            return False
+        return self.background_helpers > 0 and now - self.last_heard < BACKGROUND_SILENT_MAX_S
+
+    @property
     def busy(self) -> bool:
         return ((self.turn is not None and self.turn.running) or bool(self.asks) or bool(self.claim)
                 or self.working_alone)
@@ -1161,6 +1195,11 @@ class HostedService:
         view["process"] = bool(live and live.running)
         view["waiting"] = bool(live and live.asks)
         view["background"] = live.background_tasks if live and live.running else 0
+        # v1.417.0: of those, the helper agents (the words say "helpers" only
+        # for these), and whether the tool is writing a reply of its own —
+        # the Code view reads the session again while either holds.
+        view["background_helpers"] = live.background_helpers if live and live.running else 0
+        view["self_reply"] = bool(live and live.replying_alone(self.clock()))
         return view
 
     def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
@@ -1192,11 +1231,16 @@ class HostedService:
     async def view(self, sid: str, *, limit: int = DEFAULT_EVENTS) -> dict[str, Any]:
         row = await self._row(sid)
         log_ = self.live[sid].log if sid in self.live else EventLog(self.home, sid)
+        # v1.417.0: the live flags (helpers, a reply of the tool's own) are
+        # taken BEFORE the events are read: a "nothing is happening" answer
+        # then always comes with every event that work wrote, so the Code
+        # view's last read never misses the end of the report.
+        session = self._with_live(store.view(row))
         events, total, dropped = await asyncio.to_thread(log_.read, max(1, min(int(limit or DEFAULT_EVENTS), 20_000)))
         live = self.live.get(sid)
         running = live.turn.id if live and live.turn and live.turn.running else None
         out: dict[str, Any] = {
-            "session": self._with_root(self._with_live(store.view(row))),
+            "session": self._with_root(session),
             "events": events,
             "events_total": total,
             "dropped": dropped,

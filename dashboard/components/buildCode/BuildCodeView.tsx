@@ -118,6 +118,8 @@ import {
   modeIsDangerous,
   sessionFolderWords,
   sessionRowLine,
+  backgroundRereadMs,
+  backgroundWorkWords,
   signsInItself,
   sessionTitle,
   steerPlaceholder,
@@ -514,6 +516,26 @@ function SessionPane({
   // Iron Jarvis stopped answering mid-reply: look again until it is back,
   // then follow the reply again (the read rejoins a running turn).
   useVisibleInterval(() => void load({ follow: true }), CODE_LOST_REREAD_MS, lost && !following);
+  // v1.417.0 (a USER BUG: "it seems to be getting stuck"): the reply ended
+  // while helpers work on in the background; when they finish, the tool
+  // writes a report of its own that no message owns. Read the session again
+  // meanwhile (only while the window is seen) so that report appears as it
+  // is written — and stop once nothing is happening.
+  const bgRereadMs = backgroundRereadMs(session, running);
+  useVisibleInterval(() => void load({ follow: true }), bgRereadMs, bgRereadMs > 0 && !lost);
+  // The read that said "nothing is happening" any more: one more read, so
+  // the end of the report is on screen (never on a send, a switch or a lost
+  // daemon — those read for themselves).
+  const bgWatchRef = useRef<{ sid: string; on: boolean }>({ sid: "", on: false });
+  const bgOn = bgRereadMs > 0;
+  useEffect(() => {
+    const prev = bgWatchRef.current;
+    bgWatchRef.current = { sid: sessionId, on: bgOn };
+    if (prev.on && !bgOn && prev.sid === sessionId && session && !runningRef.current && !lost) {
+      void load({ follow: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgOn, sessionId]);
 
   // The newest stays in view only for a reader who is AT the bottom (the
   // chat's rule); one who scrolled up is left where they are, with "Jump to
@@ -943,6 +965,8 @@ function SessionPane({
   }
 
   const asking = conv.asks.length > 0;
+  // v1.417.0: helpers still at work after the reply ended (one quiet line).
+  const bgWords = backgroundWorkWords(session, toolName, running);
   const accountName = accountWords(session, tools);
   return (
     <SessionEditorProvider folder={session.folder}>
@@ -1052,6 +1076,11 @@ function SessionPane({
               <p data-testid="code-working" className="mt-3 flex items-center gap-2 text-[12px] text-zinc-500">
                 <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 {toolName} is working…
+              </p>
+            ) : null}
+            {bgWords ? (
+              <p role="status" data-testid="code-background" className="mt-3 text-[12px] text-zinc-500">
+                {bgWords}
               </p>
             ) : null}
             {lost ? (

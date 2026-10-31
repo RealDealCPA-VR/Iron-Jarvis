@@ -401,6 +401,14 @@ export interface CodeSession {
   running: boolean;
   /** An approval or question is waiting on the user right now. */
   waiting: boolean;
+  /** v1.417.0: background tasks the tool says are still open (helper agents
+   *  and background commands) while its process runs; 0 otherwise. */
+  background: number;
+  /** v1.417.0: of those, the helper AGENTS (a dev server is not a helper). */
+  backgroundHelpers: number;
+  /** v1.417.0: the tool is writing a reply no message of the user's owns
+   *  (Claude Code's report once its helpers end). */
+  selfReply: boolean;
   /** v1.412.0: started with no folder chosen — its own folder is made with
    *  its first message (`folder` names it once made). */
   noFolder: boolean;
@@ -462,6 +470,46 @@ export function isArchived(s: Pick<CodeSession, "archivedAt"> & { archived?: boo
   return !!s.archivedAt || s.archived === true;
 }
 
+/** A whole, non-negative count off the wire (anything else reads 0). */
+function count(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+/** v1.417.0: how often an open session is read again while work goes on
+ *  that no reply of the user's owns — helper agents in the background, or the
+ *  tool writing a report of its own (it appears as it is written). */
+export const CODE_BACKGROUND_REREAD_MS = 4_000;
+/** v1.417.0: …and while only background COMMANDS run (a dev server can run
+ *  for hours; its end is rarely news). */
+export const CODE_COMMANDS_REREAD_MS = 20_000;
+
+/** v1.417.0: how often to read the session again for work no reply owns
+ *  (0 = not at all). Never while a reply of the user's runs (it is followed). */
+export function backgroundRereadMs(s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> | null, running: boolean): number {
+  if (!s || running) return 0;
+  if (s.selfReply || s.backgroundHelpers > 0) return CODE_BACKGROUND_REREAD_MS;
+  if (s.background > 0) return CODE_COMMANDS_REREAD_MS;
+  return 0;
+}
+
+/** v1.417.0: the one quiet line under the conversation while work goes on in
+ *  the background after a reply ended ("" = none). */
+export function backgroundWorkWords(
+  s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> | null,
+  toolName: string,
+  running: boolean,
+): string {
+  if (!s || running) return "";
+  const helpers = s.backgroundHelpers;
+  if (helpers === 1) return "1 helper is still working in the background. Its report will appear here when it finishes.";
+  if (helpers > 1) return `${helpers} helpers are still working in the background. Their report will appear here when they finish.`;
+  if (s.selfReply) return `${toolName} is writing a reply of its own. It appears here as it goes.`;
+  const commands = s.background;
+  if (commands === 1) return "1 background command is still running.";
+  if (commands > 1) return `${commands} background commands are still running.`;
+  return "";
+}
+
 export function decodeCodeSession(raw: unknown): CodeSession | null {
   let r = obj(raw);
   if (r && obj(r.session) && !str(r.id)) r = obj(r.session);
@@ -486,6 +534,9 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     source: r.source === "disk" ? "disk" : "",
     running: r.running === true || (typeof r.running === "string" && r.running.trim() !== ""),
     waiting: r.waiting === true,
+    background: count(r.background),
+    backgroundHelpers: count(r.background_helpers),
+    selfReply: r.self_reply === true,
     noFolder: r.no_folder === true,
     workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
     ...(obj(r.capabilities)
@@ -1495,10 +1546,14 @@ function sameValue(a: unknown, b: unknown): boolean {
 export function reuseItems(prev: readonly ConvItem[] | null, next: ConvItem[]): ConvItem[] {
   if (!prev || !prev.length) return next;
   const byKey = new Map(prev.map((it) => [it.key, it]));
-  return next.map((it) => {
+  const out = next.map((it) => {
     const old = byKey.get(it.key);
     return old && sameValue(old, it) ? old : it;
   });
+  // v1.417.0: nothing changed at all (a read again while helpers work): the
+  // SAME list, so nothing draws and "Jump to latest" never lights up for it.
+  if (out.length === prev.length && out.every((it, i) => it === prev[i])) return prev as ConvItem[];
+  return out;
 }
 
 /** How long a title from the first message may be (the daemon's
