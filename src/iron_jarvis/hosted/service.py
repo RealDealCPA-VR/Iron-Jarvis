@@ -1330,6 +1330,13 @@ class HostedService:
     async def _ensure_running(self, live: LiveSession, row: Any) -> None:
         if live.running and not live.restart:
             return
+        if live.running and live.restart and live.keeps_working(self.clock()):
+            # v1.417.0 review: a restart is a tree kill — it would stop every
+            # helper still working in the background. It waits (``restart``
+            # stays set) and this message runs on the process as it is.
+            self._emit(live, make("notice", text=W.RESTART_WAITS.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks))))
+            return
         if live.running and live.restart:
             # v1.413.0: the old process goes WITHOUT ending the turn that is
             # starting now (it is already ``live.turn``) — this stop used to
@@ -1355,8 +1362,10 @@ class HostedService:
             others = [lv for lv in self.live.values() if lv is not live and lv.running]
             if len(others) >= MAX_LIVE:
                 now = self.clock()
+                # v1.417.0 review: least recently HEARD first, like the reaper
+                # (a reply the tool started by itself owns no turn).
                 idle = sorted((lv for lv in others if not lv.busy and not lv.keeps_working(now)),
-                              key=lambda lv: lv.last_active)
+                              key=lambda lv: max(lv.last_active, lv.last_heard))
                 if not idle:
                     raise Refused(W.POOL_FULL)
                 await self._stop_process(idle[0])
@@ -2037,6 +2046,9 @@ class HostedService:
         live = self.live.get(sid)
         if live and ((live.turn and live.turn.running) or live.claim):
             raise Refused(W.RUNNING)
+        if live and live.running and live.keeps_working(self.clock()):
+            raise Refused(W.BACKGROUND_OPEN_TERMINAL.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks)))
         hid = row.harness_session_id
         if not hid:
             raise Refused(W.NO_SESSION_YET)
