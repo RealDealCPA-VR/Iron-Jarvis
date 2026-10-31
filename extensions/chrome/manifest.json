@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Iron Jarvis",
-  "version": "1.414.0",
+  "version": "1.414.1",
   "description": "Lets Iron Jarvis, running on this computer, work in the tabs you are already signed in to.",
   "minimum_chrome_version": "120",
   "icons": {
