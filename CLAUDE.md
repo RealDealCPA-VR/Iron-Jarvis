@@ -4732,6 +4732,25 @@ does not need a bump, stop and bump it.
   purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
   tick per act — two ticks in one synchronous jump are one read now).
 
+- **Python's `platform` module never asks WMI in this app** (v1.414.3, found
+  measuring the user's installed daemon: ~200% CPU for as long as it ran).
+  SQLAlchemy calls `platform.machine()` on import; Python 3.12 answers it with
+  two WMI queries over COM. Sometimes the query never returned (the
+  `_wmi.pyd` thread stayed alive from startup — Malwarebytes' `mbamsi64.dll`
+  is injected into the frozen exe and not into source python.exe, which never
+  spun) and COM's RPC worker threads (`TppAlpcpExecuteCallback` ->
+  `LRPC_ADDRESS::ProcessIO` / `HandleBindRequest`, the process calling its own
+  `\RPC Control\OLE…` endpoint) looped on two cores until restart. Found
+  read-only: thread start modules (`NtQueryInformationThread` class 9), stack
+  scans resolved with Microsoft's public PDBs through System32 `dbghelp`, and
+  handle names; then an exact `StackWalk64` on a SCRATCH copy caught spinning.
+  `iron_jarvis/__init__.py::_platform_without_wmi` replaces
+  `platform._wmi_query` with one that raises `OSError`, so the module falls
+  back to `sys.getwindowsversion()` / `PROCESSOR_ARCHITECTURE` — identical
+  answers on this PC, no COM. Pin: `tests/test_no_wmi_v14143.py` (a fresh
+  interpreter spies `_wmi.exec_query` through `create_app` + `/health`; both
+  tests red with the call removed). A NEW dependency that talks COM/WMI at
+  import gets the same look.
 - **A Build › Code tool signed out on this PC is still offered when an
   Iron-Proxy account can run it** (v1.414.2, a USER BUG: "it states that I'm
   signed out of Claude, but I am signed in"). `signed_in` on GET
