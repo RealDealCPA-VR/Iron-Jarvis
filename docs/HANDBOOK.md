@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.417.0 (2026-10-30).*
+holds itself to. Current as of v1.418.0 (2026-10-30).*
 
 ---
 
@@ -4441,7 +4441,7 @@ tray icon and the installer, each drawn from a size made for it (16 to 256
 pixels). After the update installs, Windows may keep showing the old picture
 on a shortcut for a while; signing out and back in refreshes it.
 
-## Coding sessions keep going while Claude Code's helpers work (v1.417.0)
+## Coding sessions keep going while Claude Code's helpers work (v1.418.0)
 
 When Claude Code hands work to helper agents in the background and its reply
 ends ("I'll report as the teams finish"), Iron Jarvis now keeps Claude Code
@@ -4464,7 +4464,7 @@ session looked stuck.
 Only Claude Code reports its helpers; Codex, OpenCode and Grok sessions do
 not show the line.
 
-## Grok in the Code view (v1.417.0)
+## Grok in the Code view (v1.418.0)
 
 If the Grok CLI is installed and signed in on this PC, the Code view offers
 Grok beside Claude Code, Codex, Pi and OpenCode. Iron Jarvis asks Grok to
@@ -4473,7 +4473,7 @@ everything is not used here), and never chooses Grok's "always allow" or
 "always reject", which would save a rule into your project. Auto edits and
 Plan are not offered for Grok. Stop also ends the command Grok was running.
 
-## Skills from your other coding tools work the same here (v1.417.0)
+## Skills from your other coding tools work the same here (v1.418.0)
 
 A skill you installed for Claude Code, Codex, Grok, Pi or OpenCode works in
 a coding session (Chat › Code) the way it works in that tool:

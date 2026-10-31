@@ -4205,7 +4205,7 @@ does not need a bump, stop and bump it.
   different path and is untouched. Pin: `tests/test_claude_slash_text_v1416.py`.
 
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
-  or evicted** (v1.417.0, a USER BUG: seven Claude Code builder teams died
+  or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died
   together twice in one day, each ~15 min after the reply that said "I'll
   report as teams finish"). The pool's idle reaper (`IDLE_S`) looked only at
   whether a reply ran. Claude Code says `system` `task_started` (task_id,
@@ -7782,7 +7782,7 @@ does not need a bump, stop and bump it.
 - **A skill works in a coding session the way the harness it came from runs
   it: the same discovery, listed up front, Claude Code's base-directory line
   and argument filling, the harnesses' own switches; `allowed-tools` grants
-  nothing** (v1.417.0; the user: "skills that are native across different
+  nothing** (v1.418.0; the user: "skills that are native across different
   harnesses to work exactly the same way inside our native harness").
   MEASURED, not recalled: Claude Code 2.1.316 (a probe with a throwaway
   CLAUDE_CONFIG_DIR — its `skill_listing` attachment and the expanded
