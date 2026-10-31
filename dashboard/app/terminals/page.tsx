@@ -173,16 +173,6 @@ export default function TerminalsPage() {
   // restart (`GET /terminals` → `restoring`), kept current by the re-reads.
   const [restoringIds, setRestoringIds] = useState<string[]>([]);
 
-  // ---- what each pane's agent is doing (v1.217.0) --------------------------
-  // A SMALL, SEPARATE poll. The terminal list is loaded once and then mutated
-  // locally on add/close, so re-polling it would fight those edits; this asks
-  // only for the volatile part, exactly as `chatStatus` already does for the
-  // hidden chat layer. 2.5s is a human-noticing cadence for "that pane stopped
-  // and needs me", not a progress bar.
-  const { data: activityData } = usePolledApi<{ panes: PaneActivity[] }>(
-    "/terminals/activity",
-    2500,
-  );
   // v1.406.0 (part 1): Build is the terminals only. An OLD link to a
   // coding session or to Last night (`/terminals?session=<id>`,
   // `?night=<date>` — saved before the move, in a toast, in a bookmark) is
@@ -223,6 +213,23 @@ export default function TerminalsPage() {
     }
     return cachedBuildView() ?? "terminal";
   });
+
+  // ---- what each pane's agent is doing (v1.217.0) --------------------------
+  // A SMALL, SEPARATE poll. The terminal list is loaded once and then mutated
+  // locally on add/close, so re-polling it would fight those edits; this asks
+  // only for the volatile part, exactly as `chatStatus` already does for the
+  // hidden chat layer. 2.5s is a human-noticing cadence for "that pane stopped
+  // and needs me", not a progress bar.
+  // v1.415.0 (idle cost): ONLY while the Terminal view is shown. Everything
+  // its answer draws (the rail's dots, names and accounts, the "Open in Code
+  // view" offer) is in that view; in the Code view it was 24 requests a
+  // minute for nothing on screen. A null path keeps the held answer, and
+  // coming back asks at once (useApiCore's path change), so the dots are
+  // never staler than before. Pin: __tests__/build-activity-poll-v1415-0.
+  const { data: activityData } = usePolledApi<{ panes: PaneActivity[] }>(
+    buildView === "terminal" ? "/terminals/activity" : null,
+    2500,
+  );
   const [codeLink, setCodeLink] = useState<{ id: string | null; seq: number }>({ id: null, seq: 0 });
   const [offerNote, setOfferNote] = useState<string | null>(null);
   const chooseView = useCallback((next: BuildView) => {

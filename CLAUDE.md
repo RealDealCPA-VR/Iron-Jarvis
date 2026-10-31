@@ -3404,6 +3404,40 @@ does not need a bump, stop and bump it.
   green; new shape inside a `background_lane` job = red. A priority pin
   compares a child against Normal only from a Normal parent.
 
+- **The idle window's cost is its MOTION, and the dead ends are written down
+  here so nobody walks them again** (v1.415.0, the user's "cut resource use,
+  nothing may look different"). Measured on a scratch stack (production
+  `next build`, headed Edge 1440 x 900 on a 75 Hz display, CDP
+  `SystemInfo.getProcessInfo` per process, 20-30 s idle windows, A/B
+  interleaved — a single pair is noise here, runs moved ±1.5 points): the
+  app SHELL is quiet (0.05-0.3 React commits/s, ~1-2 ms/s main-thread work,
+  ~0.3% daemon CPU for every poll together; no CSS animation runs off
+  screen on any of the 40 routes). What costs is what moves: the drifting
+  glow (`body::before`, 2 steps/s) ~1-2% GPU process + ~1% renderer; an
+  animated background (Grid) ~5-8% GPU process + ~3-4% for its own
+  renderer (it IS the "second renderer"), at its 25-30 frames/s; a focused
+  terminal's cursor blink (xterm, 600 ms). A covered or minimised window
+  already costs ~0: Electron 42 reports a fully covered window HIDDEN
+  (`visibilitychange`, measured with a scratch Electron probe), and
+  BackgroundLayer + the CSS stop then. The cost is a per-FRAME fixed
+  overhead in the GPU process, not pixels (graphics-engine use of the GPU
+  process was 0.18%): these were tried, measured and NOT shipped — redraw
+  only the beams' boxes in the Grid file (proven pixel-identical over 400
+  frames, both colour versions, CPU and GPU raster), fold the scrim into the
+  iframe's opacity (same maths), one rAF per drawn frame instead of polling
+  every vsync, `will-change` on the glow — none moved the numbers beyond
+  noise. Only FEWER frames do (Grid at 20 fps: GPU process −24% in one pair, 15
+  fps −36%; paused: ~6% → 0.3%), and that is a visible change: a proposal for the user, never
+  a quiet tweak. SHIPPED: Build's `/terminals/activity` 2.5 s poll runs only
+  while the TERMINAL view is shown (`usePolledApi(buildView === "terminal" ?
+  path : null)`) — in Build › Code it was 10 requests per 30 s (~1.6 ms of
+  daemon CPU each) for dots nobody could see; now 0 (the bell's own 15 s
+  poll stays), and a return to Terminal asks at once. Pin:
+  `dashboard/__tests__/build-activity-poll-v1415-0.test.tsx` (gate removed:
+  2 red; a long interval instead of a null path: the "asks at once" case
+  red). A NEW poll on a page with views is gated on the view that draws its
+  answer.
+
 - **Everything › Status is the system map** (v1.334.0; the user: "If the
   directory has everything the user will need to access, then the status
   should simply be a beautiful visual allowing the user to understand
