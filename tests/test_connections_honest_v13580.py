@@ -157,7 +157,9 @@ def _use_server(monkeypatch, script: Path, signin_file: Path | None = None) -> N
     command, arguments and settings are the card's)."""
     real = mcp_client.StdioTransport
 
-    def _transport(command, args=None, env=None, cwd=None, request_timeout=None):
+    def _transport(command, args=None, env=None, cwd=None, request_timeout=None, **_kw):
+        # **_kw: v1.415.0 adds direct= (an npx line parsed for a direct start);
+        # the program is swapped here, so it is not used.
         env2 = dict(env or {})
         if signin_file is not None:
             env2["MS365_FIXTURE_SIGNIN"] = str(signin_file)

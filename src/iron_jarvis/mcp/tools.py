@@ -420,12 +420,21 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
     # loading pages, a long repo search) and silently override the user's
     # setting. A caller that passes no deadline keeps its unbounded wait, off
     # the loop.
+    launcher = resolve_launcher(str(cfg["command"]))
+    # v1.415.0: an `npx -y <pkg>` / `uvx <pkg>` pack is started straight from
+    # the files its launcher would run once the launcher has said which they
+    # are (`mcp/direct_launch`) — the launcher process no longer idles beside
+    # the server for the pack's whole life. Same args, env and cwd; anything
+    # uncertain starts exactly as before.
+    from .direct_launch import parse as _direct_parse
+
     return StdioTransport(
-        resolve_launcher(str(cfg["command"])),
+        launcher,
         args or None,
         env=merged_env,
         cwd=cfg.get("cwd"),
         request_timeout=None,
+        direct=_direct_parse(launcher, args, cwd=cfg.get("cwd"), env=merged_env),
     )
 
 
@@ -527,9 +536,13 @@ class PackLoadFailed(Exception):
     ``str()`` is ``"<CauseType>: <message>"``, the shape every load record
     and route has shown since v1.229.0."""
 
-    def __init__(self, cause: BaseException, stderr_tail: str = "") -> None:
+    def __init__(
+        self, cause: BaseException, stderr_tail: str = "", launch: "dict[str, Any] | None" = None
+    ) -> None:
         self.cause = cause
         self.stderr_tail = stderr_tail or ""
+        #: v1.415.0: how the server was started (``launch_info``), when known.
+        self.launch = launch
         super().__init__(f"{type(cause).__name__}: {cause}")
 
 
@@ -542,34 +555,75 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
     while the transport is still in hand."""
     import threading
 
-    box: dict[str, Any] = {}
+    # v1.415.0 review: a DIRECT start is given this whole bound (a slow but
+    # healthy server must not be killed at a shorter cap and restarted through
+    # a launcher that needs even longer — it could no longer fit); when the
+    # bound runs out while a direct start is still silent, the pack is held on
+    # its launcher and the load is tried ONCE more through it, with a fresh
+    # bound. ``given_up`` is that first start's note, carried to the record.
+    given_up: "dict[str, Any] | None" = None
+    for attempt in range(2):
+        box: dict[str, Any] = {}
 
-    def work() -> None:
-        try:
-            transport = _build_transport(cfg, secret_resolver)
-            box["transport"] = transport
-            client = MCPClient(transport, name=name)
-            box["specs"] = _run_sync(client.list_tools())
-            box["client"] = client
-        except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
-            box["error"] = exc
-
-    th = threading.Thread(target=work, daemon=True)
-    th.start()
-    th.join(timeout)
-    if th.is_alive():
-        transport = box.get("transport")
-        if transport is not None and hasattr(transport, "close"):
+        def work(box: dict[str, Any] = box) -> None:
             try:
-                transport.close()  # terminate the hung child; unblocks readline
-            except Exception:  # noqa: BLE001
-                pass
-        raise PackLoadFailed(
-            TimeoutError(f"did not respond within {timeout:g}s"), _transport_tail(transport)
-        )
-    if "error" in box:
-        raise PackLoadFailed(box["error"], _transport_tail(box.get("transport")))
-    return box["client"], box["specs"]
+                transport = _build_transport(cfg, secret_resolver)
+                if hasattr(transport, "start_budget"):
+                    transport.start_budget = timeout
+                box["transport"] = transport
+                client = MCPClient(transport, name=name)
+                box["specs"] = _run_sync(client.list_tools())
+                box["client"] = client
+            except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
+                box["error"] = exc
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(timeout)
+        if th.is_alive():
+            transport = box.get("transport")
+            give_up = getattr(transport, "give_up_direct_start", None)
+            retry = False
+            if attempt == 0 and callable(give_up):
+                try:
+                    retry = bool(give_up(timeout))
+                except Exception:  # noqa: BLE001 — bookkeeping never breaks a load
+                    retry = False
+            # `shutdown` (stdio, v1.415.0) also stops the start still running in
+            # `work` from starting anything after this; else `close` as before.
+            closer = getattr(transport, "shutdown", None) or getattr(transport, "close", None)
+            if callable(closer):
+                try:
+                    closer()  # terminate the hung child; unblocks readline
+                except Exception:  # noqa: BLE001
+                    pass
+            if retry:
+                given_up = _launch_info(transport)
+                log.warning("MCP server %r: its direct start did not answer within %gs; "
+                            "trying once more through its launcher", name, timeout)
+                continue
+            raise PackLoadFailed(
+                TimeoutError(f"did not respond within {timeout:g}s"),
+                _transport_tail(transport),
+                given_up or _launch_info(transport),
+            )
+        transport = box.get("transport")
+        if given_up is not None and transport is not None and hasattr(transport, "launch_info"):
+            transport.launch_info = dict(given_up)
+        if "error" in box:
+            raise PackLoadFailed(
+                box["error"], _transport_tail(transport), given_up or _launch_info(transport)
+            )
+        return box["client"], box["specs"]
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _launch_info(transport: Any) -> "dict[str, Any] | None":
+    """How a stdio pack's server was started (v1.415.0): ``{direct, how,
+    note}`` — ``None`` for a pack that is not an npx/uvx pack, a non-stdio
+    transport or a double. Copied, so a later start never edits a record."""
+    info = getattr(transport, "launch_info", None)
+    return dict(info) if isinstance(info, dict) else None
 
 
 #: Per-server load record (v1.229.0, audit U4): ``name -> {last_error, tools_loaded,
@@ -801,6 +855,7 @@ def _record_load(
     cfg: dict[str, Any] | None = None,
     quarantined: "list[str] | None" = None,
     stderr_tail: str = "",
+    launch: "dict[str, Any] | None" = None,
 ) -> None:
     from datetime import datetime, timezone
 
@@ -831,6 +886,14 @@ def _record_load(
             "stderr_tail": _mask_text(stderr_tail) if stderr_tail else "",
             "failures": 0,
         }
+        if launch is not None:
+            # v1.415.0 (additive, npx/uvx packs only): how the server was
+            # started - directly, or through its launcher and why.
+            _LOAD_STATUS[name]["launch"] = {
+                "direct": bool(launch.get("direct")),
+                "how": str(launch.get("how") or ""),
+                "note": _mask_text(str(launch.get("note") or ""), 600),
+            }
         if cfg is not None:
             _LOAD_CFGS[name] = dict(cfg)
         _ANNOUNCED.discard(name)
@@ -1438,8 +1501,10 @@ def _load_one_server(
     try:
         client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
     except Exception as exc:  # skip the bad/hung server; keep booting
+        launch = None
         if isinstance(exc, PackLoadFailed):
             error_text, tail = _mask_text(str(exc)), exc.stderr_tail
+            launch = exc.launch
         else:  # a double that raised something else: same words, no tail
             error_text, tail = _mask_text(f"{type(exc).__name__}: {exc}"), ""
         log.warning("skipping MCP server %r: %s", name, error_text)
@@ -1455,7 +1520,9 @@ def _load_one_server(
             # `cfg` names the launcher, which is what makes the reason
             # actionable (v1.256.0, R-02) — without it the classifier can
             # only echo the exception.
-            _record_load(name, error=error_text, tools_loaded=0, cfg=cfg, stderr_tail=tail)
+            _record_load(
+                name, error=error_text, tools_loaded=0, cfg=cfg, stderr_tail=tail, launch=launch
+            )
             # The pack is not loaded: no prompts or resources either.
             forget_live_client(name)
         return []
@@ -1487,6 +1554,7 @@ def _load_one_server(
             cfg=cfg,
             quarantined=held,
             stderr_tail=client.stderr_tail() if hasattr(client, "stderr_tail") else "",
+            launch=_launch_info(getattr(client, "transport", None)),
         )
     return tools
 

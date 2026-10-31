@@ -1196,7 +1196,14 @@ def mcp_server_row(d, s: dict[str, Any]) -> dict[str, Any]:
         # the one clue a crashed pack leaves behind.
         "failures": int(status.get("failures") or 0) if status else 0,
         "stderr_tail": str(status.get("stderr_tail") or "") if status else "",
-    }
+    } | (
+        # v1.415.0 (additive, npx/uvx packs only): how the server was
+        # started — directly from the launcher's files, or through the
+        # launcher and why (`mcp/direct_launch`).
+        {"launch": dict(status["launch"])}
+        if status and isinstance(status.get("launch"), dict)
+        else {}
+    )
 
 
 #: The keys that make up a pack row's SHAPE (stdio or http). Anything else a

@@ -473,7 +473,11 @@ class MCPClient:
 
     def close(self) -> None:
         self.closed = True
-        closer = getattr(self.transport, "close", None)
+        # v1.415.0: ``shutdown`` (stdio) also stops a start in flight from
+        # starting anything else; a transport without it is closed as before.
+        closer = getattr(self.transport, "shutdown", None)
+        if not callable(closer):
+            closer = getattr(self.transport, "close", None)
         if callable(closer):
             closer()
 
@@ -633,11 +637,39 @@ class StdioTransport:
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         request_timeout: float | None | EllipsisType = ...,
+        direct: Any = None,
     ) -> None:
         self.command = command
         self.args = list(args or [])
         self.env = env
         self.cwd = cwd
+        #: v1.415.0: the pack's ``npx -y`` / ``uvx`` command line parsed
+        #: (``mcp.direct_launch.LaunchSpec``), or ``None``. When the launcher
+        #: has said which files it runs and they still check out on disk, the
+        #: server is started from them DIRECTLY (no launcher process idling
+        #: beside it); a direct start that does not answer ``initialize`` falls
+        #: back to the launcher once, in the same start.
+        self.direct = direct
+        #: The last direct start of THIS transport failed: every later spawn
+        #: (a respawn after a crash) goes through the launcher.
+        self._direct_failed = False
+        #: How the running (or last) server was started, for the load record:
+        #: ``{"direct": bool, "how": str, "note": str}``; ``None`` for a pack
+        #: that is not an npx/uvx pack.
+        self.launch_info: dict[str, Any] | None = None
+        #: Set by :meth:`shutdown` (the connect timeout, a closed client): a
+        #: start in flight must not go on to start anything else.
+        self._shut = False
+        #: A tighter bound for the read in flight (a direct handshake only).
+        self._read_cap: float | None = None
+        #: v1.415.0 review: the caller's own bound on the NEXT start (the boot
+        #: connect probe sets it). With it, a direct start is not cut at
+        #: ``DIRECT_INIT_TIMEOUT_S``: the launcher would need longer still, so a
+        #: slow-but-healthy server is waited for and the caller decides
+        #: (:meth:`give_up_direct_start`). Used once, then cleared.
+        self.start_budget: float | None = None
+        #: The plan of a direct start whose handshake is in flight, else None.
+        self._direct_starting: Any = None
         #: Seconds one answer may take before the server is killed. ``None``
         #: means no deadline (the caller carries its own and aborts through
         #: :meth:`abort`); left unset it is :data:`DEFAULT_REQUEST_TIMEOUT_S`
@@ -707,6 +739,15 @@ class StdioTransport:
             # Through close(): the swap-first path, so an abort() landing during
             # this respawn can never kill the same tuple a second time.
             self.close()
+        # v1.415.0: a direct start when the launcher's answer is certain.
+        plan = None
+        why = ""
+        if self.direct is not None and not self._direct_failed:
+            from . import direct_launch
+
+            plan, why = direct_launch.plan(self.direct)
+        argv = list(plan.argv) if plan is not None else [self.command, *self.args]
+        spawn_env = plan.env_for(self.env) if plan is not None else self.env
         popen_kw: dict[str, Any] = {}
         if os.name != "nt":
             # Its own session, so ``killpg`` in ``_kill`` reaches the whole tree.
@@ -727,7 +768,7 @@ class StdioTransport:
 
                 kw["creationflags"] = int(kw.get("creationflags", 0) or 0) | CREATE_SUSPENDED
             child = subprocess.Popen(  # noqa: S603 — command comes from trusted config
-                [self.command, *self.args],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -735,7 +776,7 @@ class StdioTransport:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                env=self.env,
+                env=spawn_env,
                 cwd=self.cwd,
                 **kw,
             )
@@ -754,7 +795,14 @@ class StdioTransport:
             pump.start()
             return child, ring, pump
 
-        proc, stderr_ring, err_reader = _spawn(suspended=os.name == "nt")
+        try:
+            proc, stderr_ring, err_reader = _spawn(suspended=os.name == "nt")
+        except OSError as exc:
+            if plan is None:
+                raise
+            # The direct start could not even be created (the file went away
+            # between the check and the spawn): the launcher, now.
+            return self._direct_fell_back(plan, f"{type(exc).__name__}: {exc}", "", cancel)
         job: int | None = None
         if os.name == "nt":
             handle = getattr(proc, "_handle", None)
@@ -787,22 +835,141 @@ class StdioTransport:
         with self._state_lock:  # one atomic tuple, never half of one to a closer
             self._proc, self._out, self._job, self._reader = proc, out, job, reader
             self._stderr, self._err_reader = stderr_ring, err_reader
-            cancelled = cancel is not None and cancel.is_set()
+            cancelled = (cancel is not None and cancel.is_set()) or self._shut
         if cancelled:
             # The caller gave up during the spawn (abort() found nothing to
-            # kill): kill the fresh server before it is ever spoken to.
+            # kill): kill the fresh server before it is ever spoken to. Same
+            # for a transport shut down meanwhile (the connect timeout).
             self.close()
             raise MCPError("the call was cancelled before it was sent")
-        # MCP handshake: initialize (request), then the initialized notification.
-        self._rpc(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": client_capabilities(),
-                "clientInfo": _CLIENT_INFO,
-            },
-        )
+        if plan is None:
+            self._handshake()
+            if self.direct is not None and not self._direct_failed:
+                self.launch_info = {
+                    "direct": False,
+                    "how": self.direct.launcher_name,
+                    "note": f"Started through {self.direct.launcher_name}: {why}.",
+                }
+            self._after_start(plan_failed=bool(getattr(why, "stale", False)))
+            return
+        from . import direct_launch
+
+        budget, self.start_budget = self.start_budget, None
+        self._direct_starting = plan
+        try:
+            try:
+                # With a caller's bound (the connect probe), the direct start
+                # gets all of it; without one (a respawn in a call), the cap.
+                self._handshake(
+                    timeout=None if budget is not None else direct_launch.DIRECT_INIT_TIMEOUT_S
+                )
+            finally:
+                self._direct_starting = None
+        except MCPServerStopped as exc:
+            if (cancel is not None and cancel.is_set()) or self._shut:
+                raise  # the caller gave up: never start anything else
+            # The EOF words already carry the child's last output; a timeout's
+            # do not, so the ring is read for those.
+            text = str(exc).split("; it will be restarted", 1)[0]
+            tail = "" if "its last output" in text else self.stderr_tail()
+            return self._direct_fell_back(plan, text, tail, cancel)
+        self.launch_info = {"direct": True, "how": plan.describe(), "note": ""}
+        self._after_start(plan_failed=False)
+
+    def _handshake(self, timeout: float | None = None) -> None:
+        """MCP handshake: initialize (request), then the initialized
+        notification. ``timeout`` bounds the answer tighter than
+        ``request_timeout`` (a direct start, v1.415.0)."""
+        self._read_cap = timeout
+        try:
+            self._rpc(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": client_capabilities(),
+                    "clientInfo": _CLIENT_INFO,
+                },
+            )
+        finally:
+            self._read_cap = None
         self._write({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+
+    def _direct_fell_back(
+        self, plan: Any, why: str, tail: str, cancel: threading.Event | None
+    ) -> None:
+        """A direct start did not answer: kill what it left, hold this pack on
+        its launcher (here for good, in the kept answer for a day) and start
+        it through the launcher ONCE, now. Said in ``launch_info``, which the
+        load record carries."""
+        from . import direct_launch
+
+        self.close()
+        self._direct_failed = True
+        direct_launch.note_direct_failed(plan.spec, why)
+        try:
+            from ..detections.redact import mask
+
+            tail = mask(tail or "")
+        except Exception:  # noqa: BLE001 — never break a start over a note
+            tail = ""
+        tail = " | ".join(p for p in tail.splitlines() if p.strip())[-300:]
+        name = plan.spec.launcher_name
+        log.warning("mcp direct start of %s failed (%s); starting it through %s",
+                    plan.spec.spec, why, name)
+        self.launch_info = {
+            "direct": False,
+            "how": name,
+            "note": (
+                f"The direct start ({plan.describe()}) did not answer ({why}"
+                + (f"; its last output: {tail}" if tail else "")
+                + f"), so it was started through {name} instead."
+            ),
+        }
+        self._ensure_started(cancel)
+
+    def _after_start(self, *, plan_failed: bool) -> None:
+        """A server answered: let the launcher be asked in the background when
+        this pack has no (fresh) answer yet. Never blocks, never raises."""
+        if self.direct is None:
+            return
+        try:
+            from . import direct_launch
+
+            direct_launch.note_started(self.direct, plan_failed=plan_failed)
+        except Exception:  # noqa: BLE001 — bookkeeping never breaks a start
+            pass
+
+    def give_up_direct_start(self, budget: float) -> bool:
+        """The caller's bound ran out while a DIRECT start had not answered
+        yet (v1.415.0 review): hold this pack on its launcher (here, and in the
+        kept answer for a day), say so in ``launch_info`` and return True so
+        the caller tries the load ONCE more through the launcher. False when
+        no direct start was in flight (then nothing is noted)."""
+        plan = self._direct_starting
+        if plan is None:
+            return False
+        from . import direct_launch
+
+        why = f"the MCP server did not answer within {float(budget):g} s"
+        self._direct_failed = True
+        direct_launch.note_direct_failed(plan.spec, why)
+        name = plan.spec.launcher_name
+        self.launch_info = {
+            "direct": False,
+            "how": name,
+            "note": (
+                f"The direct start ({plan.describe()}) did not answer ({why}), "
+                f"so it was started through {name} instead."
+            ),
+        }
+        return True
+
+    def shutdown(self) -> None:
+        """Close for good from OUTSIDE a start (the connect timeout, a closed
+        client): a start still in flight kills what it made and starts
+        nothing else. A later request starts afresh."""
+        self._shut = True
+        self.close()
 
     @staticmethod
     def _pump_stdout(stream: Any, out: "queue.Queue[str | None]") -> None:
@@ -1016,6 +1183,10 @@ class StdioTransport:
         proc, out = self._proc, self._out
         assert proc is not None and out is not None
         timeout = self.request_timeout
+        cap = self._read_cap
+        if cap is not None:
+            # A direct start's handshake (v1.415.0): tighter than the floor.
+            timeout = cap if timeout is None else min(float(timeout), float(cap))
         deadline = None if timeout is None else time.monotonic() + float(timeout)
         while True:
             remaining = None if deadline is None else deadline - time.monotonic()
@@ -1110,6 +1281,7 @@ class StdioTransport:
             if cancel is not None and cancel.is_set():
                 raise MCPError("the call was cancelled before it was sent")
             self._inflight = cancel
+            self._shut = False  # a NEW call: a past shutdown() is over
             self._ensure_started(cancel)
             if cancel is not None and cancel.is_set():
                 # Cancelled during the spawn/handshake but after the spawn's
