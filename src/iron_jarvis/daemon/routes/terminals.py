@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 from ...projects.locate import project_context_block, project_for_path
+from ...terminals.backend import ShellStartStuck
 from ..chat_turn import _profile_section
 
 from ..app import _first_code_block, _ws_token_ok
@@ -278,6 +279,8 @@ def launch_pane(
                 # daemon's environment themselves).
                 **({"env": {**os.environ, **job_env}} if job_env else {}),
             )
+        except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         except RuntimeError as exc:  # the session cap
             raise HTTPException(status_code=429, detail=str(exc)) from None
     # Nobody is attached until the page focuses it: keep the CLI's first
@@ -437,6 +440,14 @@ def register(app: FastAPI, d) -> None:
         ids = restoring() if callable(restoring) else []
         if ids:
             out["restoring"] = ids
+        # v1.418.1: panes the boot GAVE UP on (their shell never started
+        # within RESTORE_GIVE_UP_S). Only when there are any; the page says so
+        # in plain words instead of "Reopening…" forever. Kept in the
+        # snapshot, so the next start tries them again.
+        failed = getattr(terminals, "restore_failed", None)
+        note = failed() if callable(failed) else None
+        if note:
+            out["restore_failed"] = note
         return out
 
     @app.get("/terminals/shells")
@@ -544,6 +555,8 @@ def register(app: FastAPI, d) -> None:
             )
         except PaneAccountRefused as refused:  # no pane was created
             raise HTTPException(status_code=refused.status, detail=refused.sentence)
+        except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
+            raise HTTPException(status_code=503, detail=str(exc))
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
         return pane_row(d.platform, session.info())

@@ -568,7 +568,10 @@ describe("the pane and page wiring (source-pinned)", () => {
     expect(close.slice(0, 600)).toContain("disposePaneHost(id);");
     // v1.406.0 (part 6): the kept set is the live panes PLUS the ones the
     // daemon is still reopening after a restart (build-restoring-v1406).
-    expect(page).toContain("const keep = [...alive.map((t) => t.id), ...restoring];");
+    // v1.418.1: ...and the panes it gave up reopening (build-restore-failed-v14181).
+    expect(page).toContain(
+      "const keep = [...alive.map((t) => t.id), ...restoring, ...(failed?.ids ?? [])];",
+    );
     expect(page).toContain("retainPaneHosts(keep);");
   });
 });

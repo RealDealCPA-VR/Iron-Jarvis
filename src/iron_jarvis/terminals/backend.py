@@ -740,6 +740,13 @@ _CONPTY_PIPE_BYTES = 64 * 1024
 _CONPTY_READ_BYTES = 64 * 1024
 
 _CONPTY_API = None
+#: v1.418.1: ONE thread loads the ConPTY DLLs (kernel32's surface and the
+#: bundled conpty.dll). A frozen daemon (2026-10-31, daemon-freeze.txt) had
+#: two pane-restore threads inside ``ctypes.WinDLL`` at once while the boot
+#: thread waited in ``Thread.start`` — nothing answered until the desktop
+#: restarted it. The boot now also loads it before its restore threads start
+#: (``warm_conpty``).
+_CONPTY_API_LOCK = threading.Lock()
 
 
 class ConPtyUnavailable(OSError):
@@ -748,13 +755,52 @@ class ConPtyUnavailable(OSError):
     must not disable ConPTY for every later pane."""
 
 
+class ShellStartStuck(RuntimeError):
+    """v1.418.1: a Store shell (WindowsApps pwsh) could not be ASKED to start
+    because another one has been starting for ``PACKAGED_SPAWN_WAIT_S`` and
+    has not finished — Windows can leave that call hanging for hours. Not a
+    broken ConPTY (it must not disable ConPTY for later panes) and not a cap:
+    its message is the plain sentence the user sees."""
+
+
+def _shell_words(argv0: str) -> str:
+    """The shell's name as a person knows it, for :class:`ShellStartStuck`."""
+    base = os.path.basename(str(argv0 or "")).lower()
+    return {
+        "pwsh.exe": "PowerShell",
+        "powershell.exe": "Windows PowerShell",
+        "cmd.exe": "Command Prompt",
+        "wsl.exe": "WSL",
+        "bash.exe": "Bash",
+    }.get(base, os.path.basename(str(argv0 or "")) or "The shell")
+
+
+def warm_conpty() -> bool:
+    """Load the ConPTY DLLs now, on the calling thread (v1.418.1: the boot
+    calls it before starting its restore threads). Never raises; True when
+    ConPTY is available."""
+    try:
+        return conpty_available()
+    except Exception:  # noqa: BLE001 — warming is an optimisation only
+        return False
+
+
 def _conpty_api():
     """kernel32's ConPTY surface, typed, on a PRIVATE ``WinDLL`` — argtypes set
     here never leak into another ctypes user in the process (``_win_job_for``
-    has its own). Built once and lazily, so this module imports on every OS."""
-    global _CONPTY_API
+    has its own). Built once and lazily, so this module imports on every OS.
+    v1.418.1: built under ``_CONPTY_API_LOCK`` (double-checked), so the DLLs
+    are loaded by ONE thread, once."""
     if _CONPTY_API is not None:
         return _CONPTY_API
+    with _CONPTY_API_LOCK:
+        if _CONPTY_API is not None:
+            return _CONPTY_API
+        return _build_conpty_api()
+
+
+def _build_conpty_api():
+    global _CONPTY_API
     import ctypes
     from ctypes import wintypes
     from types import SimpleNamespace
@@ -926,6 +972,14 @@ def _env_block(api, env: dict):
 #: (two AppX activations into one container were in every caught hang).
 _PACKAGED_SPAWN = threading.Lock()
 
+#: v1.418.1 (a USER BUG): the longest a Store shell waits for another one
+#: that is still starting. Windows has left that start hanging for hours
+#: (2026-10-31: three restores never returned), and a plain ``with`` made
+#: every later PowerShell terminal — a New terminal press included — wait
+#: behind it forever. Past this, the new one is refused in plain words
+#: (:class:`ShellStartStuck`). A normal start takes well under a second.
+PACKAGED_SPAWN_WAIT_S = 15.0
+
 
 class ConPtyBackend:
     """Windows ConPTY straight from kernel32 (v1.248.0): BYTES in and out, and
@@ -1046,8 +1100,18 @@ class ConPtyBackend:
         try:
             try:
                 if packaged:
-                    with _PACKAGED_SPAWN:
+                    if not _PACKAGED_SPAWN.acquire(timeout=PACKAGED_SPAWN_WAIT_S):
+                        raise ShellStartStuck(
+                            f"{_shell_words(argv[0])} is still starting another "
+                            f"terminal and has not finished after "
+                            f"{PACKAGED_SPAWN_WAIT_S:g} s, so Windows may be stuck "
+                            "starting it. This terminal did not open. Try again in "
+                            "a moment, pick another shell, or restart Iron Jarvis."
+                        )
+                    try:
                         self._spawn(api, argv, cwd, env, None)
+                    finally:
+                        _PACKAGED_SPAWN.release()
                 else:
                     self._spawn(api, argv, cwd, env, self._job)
             except ConPtyUnavailable:
