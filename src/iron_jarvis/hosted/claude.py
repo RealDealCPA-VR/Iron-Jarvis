@@ -610,6 +610,27 @@ class ClaudeDriver(Driver):
             self.emit(make("notice", text=f"Claude Code now answers with {clip(res['model'], 80)}."))
         return "now"
 
+    async def context_breakdown(self) -> dict[str, Any] | None:
+        """v1.415.0: Claude Code's OWN ``/context`` — its ``get_context_usage``
+        control request (measured, claude 2.1.316: answered from what the
+        session holds, with NO model call, signed in or not): every part, its
+        tokens, the automatic-summary mark, the instruction files and the
+        extension tools. The service asks only while no reply runs."""
+        from ..context.breakdown import claude_breakdown
+
+        # v1.415.0 review: ``detail: "summary"`` — Claude Code's default is
+        # "full", which (its own schema, claude 2.1.316) "counts each category
+        # with the token-count API": the conversation goes to Anthropic once
+        # per category on every read, through a queue Claude Code serialises
+        # and waits up to 300 s for at teardown. "summary" answers "from the
+        # last response's usage and local estimates" — the same shape, no
+        # network (measured, signed out: 0.5 s).
+        try:
+            res = await self.control("get_context_usage", detail="summary")
+        except Exception:  # noqa: BLE001 — a stopped tool or a refusal: no reading
+            return None
+        return claude_breakdown(res)
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 

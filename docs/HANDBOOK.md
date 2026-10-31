@@ -2423,6 +2423,61 @@ asks into a card you answer.
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
 
+## What fills a coding session's conversation: the Context drop-down (v1.415.0)
+
+The **Session** tab of a coding session, in both Chat › Code and Build ›
+Code, has a **Context** drop-down. Press the heading to close it; Iron Jarvis
+remembers that for the window.
+
+- **The headline**: how full the conversation is for the model ("72% used")
+  and how many tokens that is out of the model's limit ("722.5k / 1M").
+- **The parts**: one row each, with a colour, its tokens and its share of the
+  limit: the messages, the instruction files (AGENTS.md, CLAUDE.md), memory
+  and your profile, the project and folder, the system prompt, skills, files
+  you attached, a summary of earlier messages, the room kept free for the
+  automatic summary, and free space. The bar above the rows shows the same
+  parts; each segment is named on the bar and in its row, so the colour is
+  never the only way to tell them apart.
+- **Not counted above**: in Chat › Code, the descriptions of the tools the
+  model can use, which are sent with each message ("Sent with each message,
+  not counted above"). Iron Jarvis has always measured how full a
+  conversation is without them, so they are listed apart and the percent
+  stays the one the Summarize offer uses. In Build › Code, Claude Code's tools
+  that load only when needed.
+- **Lists** you can open: the instruction files, the extension tools by
+  extension, and (for Claude Code) its skills.
+- **How far the automatic summary is** ("240k until earlier messages are
+  summarized") and the button that summarizes the earlier messages now
+  (**Summarize** in Chat › Code, **Compact session** in Build › Code), which
+  you can press only when no reply is running.
+
+**Chat › Code** (Iron Jarvis's own coding sessions) counts every part itself,
+from the very text each reply sent, so the parts add up exactly to the
+percent. **Summarize earlier messages at** is a real setting (Auto is 92%;
+85%, 80% and 75% keep more room free). It applies to every chat and coding
+session. Summarize writes the same checked summary as the box's Summarize.
+
+**Build › Code** asks the coding tool itself, and never starts it to ask:
+
+- **Claude Code** answers with its own `/context` breakdown (its quick
+  reading, which sends nothing over the internet), asked only while no reply
+  is running (while one runs, the last answer shows, and Claude Code
+  is asked again when the reply ends). Its tools that load only when needed
+  are listed apart. **Compact session** sends Claude Code's own `/compact` as
+  a message.
+- **Pi** says how full the conversation is, but not what fills it, and the
+  tab says so. Right after Pi summarizes by itself it does not know yet, so
+  the tab shows no number until its next answer.
+- **Codex** and **OpenCode** say only the total after each reply, and the tab
+  says so.
+- Codex, Pi and OpenCode summarize by themselves when the conversation is
+  full; Compact session is offered for Claude Code only.
+
+Also fixed: in a long Claude Code session, the percent could read far too low
+(1%). Iron Jarvis read the size of the last call in Claude Code's report, and
+that call could be a side call (an advisor or a summary) rather than the
+conversation. It now reads it the way Claude Code itself does.
+
 ## Build › Code is part of the app (v1.414.0)
 
 A coding session in Build's **Code** view (your own Claude Code, Codex, Pi or

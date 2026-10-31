@@ -114,6 +114,17 @@ class Driver:
     async def set_model(self, model: str) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    #: v1.415.0: may :meth:`context_breakdown` be asked while a turn runs?
+    #: (Pi answers its stats at once; Claude Code is asked only when idle.)
+    context_while_working = False
+
+    async def context_breakdown(self) -> dict[str, Any] | None:
+        """v1.415.0: what fills the conversation, in the tool's OWN numbers
+        (``context.breakdown``'s shape), read without a model call — or None
+        when the tool has no way to say (Codex and OpenCode report only a
+        total, which their turn's ``usage`` event already carries)."""
+        return None
+
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
         """v1.412.0: give the RUNNING turn a note the user typed while it
         works, through the tool's OWN way of taking one (Claude Code: a user

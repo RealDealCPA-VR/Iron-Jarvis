@@ -1,0 +1,228 @@
+{
+ "recorded": "tests/test_context_breakdown_v14150.py (IJ_REGEN_CONTEXT_BREAKDOWN=1): a Chat \u203a Code reply line's context, and GET /build/app/sessions/{id}/context for Claude Code (its recorded get_context_usage, claude 2.1.316)",
+ "harness_line_context": {
+  "window": 200000,
+  "used": 1411,
+  "tokens": 1411,
+  "percent": 1,
+  "suggest_at": 70,
+  "auto_at": 92,
+  "level": "ok",
+  "breakdown": {
+   "source": "app",
+   "used": 1411,
+   "window": 200000,
+   "percent": 1,
+   "parts": [
+    {
+     "key": "messages",
+     "label": "Messages",
+     "tokens": 9,
+     "kind": "used"
+    },
+    {
+     "key": "rules",
+     "label": "Instruction files",
+     "tokens": 64,
+     "kind": "used"
+    },
+    {
+     "key": "memory",
+     "label": "Memory and profile",
+     "tokens": 43,
+     "kind": "used"
+    },
+    {
+     "key": "project",
+     "label": "Project and folder",
+     "tokens": 193,
+     "kind": "used"
+    },
+    {
+     "key": "system",
+     "label": "System prompt",
+     "tokens": 1102,
+     "kind": "used"
+    },
+    {
+     "key": "buffer",
+     "label": "Kept free for the automatic summary",
+     "tokens": 16000,
+     "kind": "buffer"
+    },
+    {
+     "key": "free",
+     "label": "Free space",
+     "tokens": 182589,
+     "kind": "free"
+    }
+   ],
+   "extra": [
+    {
+     "key": "tools",
+     "label": "Built-in tools",
+     "tokens": 5113
+    }
+   ],
+   "lists": [
+    {
+     "key": "rules",
+     "label": "Instruction files",
+     "count": 1,
+     "items": [
+      {
+       "name": "AGENTS.md"
+      }
+     ]
+    }
+   ],
+   "auto_compact": {
+    "enabled": true,
+    "at": 184000,
+    "left": 182589,
+    "percent": 92
+   }
+  }
+ },
+ "claude_context": {
+  "harness": "claude-code",
+  "reading": {
+   "source": "tool",
+   "used": 21368,
+   "window": 1000000,
+   "percent": 2,
+   "parts": [
+    {
+     "key": "system_prompt",
+     "label": "System prompt",
+     "tokens": 1957,
+     "kind": "used"
+    },
+    {
+     "key": "system_tools",
+     "label": "Built-in tools",
+     "tokens": 17373,
+     "kind": "used"
+    },
+    {
+     "key": "memory_files",
+     "label": "Instruction files",
+     "tokens": 6,
+     "kind": "used"
+    },
+    {
+     "key": "skills",
+     "label": "Skills",
+     "tokens": 2032,
+     "kind": "used"
+    },
+    {
+     "key": "autocompact_buffer",
+     "label": "Kept free for the automatic summary",
+     "tokens": 33000,
+     "kind": "buffer"
+    },
+    {
+     "key": "free_space",
+     "label": "Free space",
+     "tokens": 945632,
+     "kind": "free"
+    }
+   ],
+   "extra": [
+    {
+     "key": "system_tools_deferred",
+     "label": "Built-in tools (loaded when needed)",
+     "tokens": 22764
+    }
+   ],
+   "lists": [
+    {
+     "key": "rules",
+     "label": "Instruction files",
+     "count": 1,
+     "items": [
+      {
+       "name": "CLAUDE.md",
+       "detail": "Project",
+       "path": "C:\\work\\demo\\CLAUDE.md",
+       "tokens": 6
+      }
+     ]
+    },
+    {
+     "key": "skills",
+     "label": "Skills",
+     "count": 13,
+     "items": [
+      {
+       "name": "dataviz",
+       "tokens": 482
+      },
+      {
+       "name": "update-config",
+       "tokens": 236
+      },
+      {
+       "name": "keybindings-help",
+       "tokens": 83
+      },
+      {
+       "name": "code-review",
+       "tokens": 280
+      },
+      {
+       "name": "simplify",
+       "tokens": 63
+      },
+      {
+       "name": "fewer-permission-prompts",
+       "tokens": 64
+      },
+      {
+       "name": "loop",
+       "tokens": 115
+      },
+      {
+       "name": "claude-api",
+       "tokens": 361
+      },
+      {
+       "name": "workflow-authoring",
+       "tokens": 84
+      },
+      {
+       "name": "run",
+       "tokens": 123
+      },
+      {
+       "name": "plugin-authoring",
+       "tokens": 89
+      },
+      {
+       "name": "init",
+       "tokens": 22
+      },
+      {
+       "name": "security-review",
+       "tokens": 30
+      }
+     ]
+    }
+   ],
+   "auto_compact": {
+    "enabled": true,
+    "at": 967000,
+    "left": 945632,
+    "percent": 97
+   },
+   "model": "claude-opus-5-5",
+   "at": "2026-10-31T16:58:37.401950Z"
+  },
+  "waiting": false,
+  "compact": {
+   "how": "message",
+   "text": "/compact"
+  }
+ }
+}

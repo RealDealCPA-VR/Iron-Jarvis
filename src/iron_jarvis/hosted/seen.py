@@ -7,10 +7,12 @@ windows (``unifiedWindows``: utilization + reset per window), Codex's
 ``account/rateLimits/updated`` its ``primary`` / ``secondary`` windows
 (``usedPercent``, ``windowDurationMins``, ``resetsAt``) and plan. How full
 the conversation is: Claude Code's ``result`` (the LAST call's prompt —
-``usage.iterations[-1]`` — over ``modelUsage[*].contextWindow``), Codex's
+``usage.iterations``, the last main-loop call, v1.415.0 — over
+``modelUsage[*].contextWindow``), Codex's
 ``thread/tokenUsage/updated`` (``last.totalTokens`` over
 ``modelContextWindow``), OpenCode's ``usage_update`` (``used`` / ``size``).
-Pi says none of these over its RPC: nothing is kept for it.
+Pi says none of these on its events (v1.415.0: its ``get_session_stats`` is
+read on demand by the Session tab, ``Driver.context_breakdown``).
 
 A driver NOTES what it saw (:func:`note_windows`, :func:`note_context`) and
 puts it on the turn's ``usage`` event (:func:`attach`): ``windows`` [{key,
@@ -123,7 +125,20 @@ def claude_context(result: Any) -> tuple[int, int] | None:
         return None
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
     its = usage.get("iterations")
-    last = its[-1] if isinstance(its, list) and its and isinstance(its[-1], dict) else None
+    # v1.415.0: Claude Code's own rule (its usage reader, read from claude
+    # 2.1.316): the LAST iteration that is the main loop's own call — type
+    # "message" or "fallback_message" — never an "advisor_message" or a
+    # "compaction" (a side call's small prompt read as the conversation said
+    # a long session was 1 % full). A result with no such iteration says
+    # nothing new (the top-level usage is the WHOLE turn's sum, not a size).
+    last = None
+    if isinstance(its, list):
+        for it in reversed(its):
+            if not isinstance(it, dict) or it.get("type") in ("advisor_message", "compaction"):
+                continue
+            if it.get("type") in ("message", "fallback_message") and _num(it.get("input_tokens")) is not None:
+                last = it
+            break
     if last is None:
         return None
     used = sum(int(_num(last.get(k)) or 0) for k in (

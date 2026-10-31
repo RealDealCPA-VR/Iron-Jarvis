@@ -479,6 +479,28 @@ def terminal_holds(platform: Any, hid: str, *, harness: str = CLAUDE, rows: Any 
 # --------------------------------------------------------------------------- #
 # Turns
 # --------------------------------------------------------------------------- #
+#: v1.415.0: how long the Context drop-down waits for the tool's own answer.
+CONTEXT_READ_S = 20.0
+
+
+def _iso_after(a: Any, b: Any) -> bool:
+    """Is ISO time ``a`` at or after ``b``? (False when ``a`` is unreadable;
+    True when only ``b`` is.)"""
+    def parse(v: Any) -> "datetime | None":
+        if not isinstance(v, str) or not v.strip():
+            return None
+        try:
+            t = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return t if t.tzinfo is not None else t.replace(tzinfo=timezone.utc)
+
+    ta, tb = parse(a), parse(b)
+    if ta is None:
+        return False
+    return tb is None or ta >= tb
+
+
 def sse(event: str, data: Any) -> str:
     from ..daemon.durable_turns import sse as _sse
 
@@ -640,6 +662,9 @@ class HostedService:
         #: v1.414.0: Iron Jarvis's own tools for a session — tokens of their
         #: own (memory only), revoked with the process.
         self.tokens = JT.HostedTokens(self)
+        #: v1.415.0: the newest Context reading a tool gave per session
+        #: (memory only; the Session tab's drop-down).
+        self._context_seen: dict[str, dict[str, Any]] = {}
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -773,6 +798,66 @@ class HostedService:
     async def commands(self, sid: str) -> list[dict[str, str]]:
         row = await self._row(sid)
         return self.commands_for(row.harness, self.live.get(sid))
+
+    # -- v1.415.0: the Session tab's Context drop-down ---------------------------
+    async def context_view(self, row: Any, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """What fills this session's conversation, in the TOOL's own numbers.
+
+        Asked of the tool only while its process runs (never started for
+        this) and, for a tool that cannot answer mid-reply, only while no
+        reply runs (``Driver.context_while_working``): Claude Code's own
+        ``/context`` (``get_context_usage``), Pi's ``get_session_stats``. A
+        reading is kept in memory with the time it was taken; otherwise the
+        total the tool said after its last reply (``panes.seen_context``).
+        Codex and OpenCode say only a total. Never a model call."""
+        from ..context.breakdown import clean, is_not_known_now, total_only
+        from . import panes as PN
+
+        sid = row.id
+        harness = str(row.harness or "")
+        label = W.label(harness)
+        live = self.live.get(sid)
+        driver = live.driver if live is not None and live.running else None
+        reading: dict[str, Any] | None = None
+        waiting = False
+        unknown_now = False
+        if driver is not None:
+            if live.busy and not getattr(driver, "context_while_working", False):
+                waiting = True
+            else:
+                try:
+                    got = await asyncio.wait_for(driver.context_breakdown(), timeout=CONTEXT_READ_S)
+                except Exception:  # noqa: BLE001 — no reading, never an error
+                    got = None
+                if is_not_known_now(got):
+                    # v1.415.0 review: the tool ANSWERED that it does not
+                    # know right now (Pi just compacted): every older reading
+                    # — kept or seen — is out of date.
+                    self._context_seen.pop(sid, None)
+                    unknown_now = True
+                got = clean(got)
+                if got is not None:
+                    got["at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    self._context_seen[sid] = got
+                    reading = got
+        seen = None if unknown_now else PN.seen_context(events)
+        kept = self._context_seen.get(sid)
+        if reading is None and kept is not None:
+            # A kept reading is shown only while no newer total says otherwise.
+            if seen is None or _iso_after(kept.get("at"), seen.get("at")):
+                reading = kept
+        if reading is None and seen is not None:
+            reading = total_only(seen["used"], seen["window"], at=seen.get("at"))
+        out: dict[str, Any] = {"harness": harness, "reading": reading, "waiting": waiting}
+        if reading is not None and not reading.get("parts"):
+            out["note"] = f"{label} says only how full the conversation is, not what fills it."
+        if waiting:
+            out["waiting_note"] = f"{label} is asked again when this reply ends."
+        if harness == CLAUDE:
+            out["compact"] = {"how": "message", "text": "/compact"}
+        else:
+            out["compact"] = {"how": "", "why": f"{label} compacts by itself when the conversation is full."}
+        return out
 
     # -- who holds a conversation -------------------------------------------------
     def _holder(self, harness: str, hid: str, *, except_sid: str = "") -> str:

@@ -37,7 +37,8 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { ChangesReview } from "@/components/harness/ChangesReview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { Row, Section } from "@/components/harness/HarnessSessionRail";
-import { formatTokens } from "@/lib/format";
+import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
+import { decodeCodeContext, totalReading, type CodeContext } from "@/lib/contextBreakdown";
 import { isThumbImage, localMediaSrc } from "@/lib/mediaLightbox";
 import { baseName, openablePath } from "@/lib/sessionRail";
 import {
@@ -101,7 +102,7 @@ function errText(e: unknown): string {
  *  few seconds while `running` (only while the window is on screen). */
 function usePaneRead<T>(
   sessionId: string,
-  part: "changes" | "usage" | "overview",
+  part: "changes" | "usage" | "overview" | "context",
   decode: (raw: unknown) => T | null,
   refresh: number,
   running: boolean,
@@ -146,6 +147,7 @@ export function CodePanes({
   tools,
   events,
   running,
+  onSend,
 }: {
   session: CodeSession;
   tools: readonly CodingTool[];
@@ -153,6 +155,9 @@ export function CodePanes({
   events: readonly CodeEvent[];
   /** A reply is running. */
   running: boolean;
+  /** v1.415.0: send a message as the user would (Claude Code's own
+   *  `/compact`, from the Context drop-down). */
+  onSend?: (text: string) => void;
 }) {
   const [tab, setTab] = useState<CodePaneTab>("changes");
   const baseId = useId();
@@ -255,6 +260,7 @@ export function CodePanes({
             refresh={refresh}
             running={running}
             onOpenChanges={() => choose("changes")}
+            onSend={onSend}
           />
         ) : null}
       </div>
@@ -447,6 +453,7 @@ function SessionPaneTab({
   refresh,
   running,
   onOpenChanges,
+  onSend,
 }: {
   session: CodeSession;
   tools: readonly CodingTool[];
@@ -455,10 +462,13 @@ function SessionPaneTab({
   refresh: number;
   running: boolean;
   onOpenChanges: () => void;
+  onSend?: (text: string) => void;
 }) {
   const over = usePaneRead<CodeOverview>(session.id, "overview", decodeCodeOverview, refresh, running);
   const changes = usePaneRead<CodeChanges>(session.id, "changes", decodeCodeChanges, refresh, running);
   const usage = usePaneRead<CodeUsage>(session.id, "usage", decodeCodeUsage, refresh, false);
+  // v1.415.0: the tool's own breakdown (read again when a reply ends).
+  const cctx = usePaneRead<CodeContext>(session.id, "context", decodeCodeContext, refresh, false);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const tool = tools.find((x) => x.id === session.tool) ?? null;
@@ -541,31 +551,14 @@ function SessionPaneTab({
         ) : null}
       </Section>
 
-      <Section id="context" title="Context">
-        {ctx ? (
-          <>
-            <div className="flex items-baseline justify-between gap-2 text-[13px]">
-              <span data-testid="code-session-context-percent" className={ctx.percent >= 80 ? "text-tone-warn" : "text-zinc-200"}>
-                {ctx.percent}% used
-              </span>
-              <span className={QUIET}>of {formatTokens(ctx.window)} tokens</span>
-            </div>
-            <div className="h-1 overflow-hidden rounded-full bg-white/[0.08]" aria-hidden>
-              <div
-                className={`h-full rounded-full ${ctx.percent >= 80 ? "bg-tone-warn" : "bg-zinc-400"}`}
-                style={{ width: `${ctx.percent}%` }}
-              />
-            </div>
-            <p className={QUIET}>
-              As {toolName} said{ctx.at ? ` ${agoWords(ctx.at)}` : ""}, after its last reply.
-            </p>
-          </>
-        ) : (
-          <p data-testid="code-session-context-none" className={QUIET}>
-            {contextNotKnownWords(session.tool, toolName)}
-          </p>
-        )}
-      </Section>
+      <CodeContextSection
+        cctx={cctx.data}
+        seen={ctx}
+        toolName={toolName}
+        tool={session.tool}
+        running={running}
+        onSend={onSend}
+      />
 
       <Section id="attachment" title="Last attachment">
         {last ? (
@@ -677,5 +670,54 @@ function SessionPaneTab({
         )}
       </Section>
     </div>
+  );
+}
+
+/** v1.415.0: the Session tab's Context drop-down (the shared
+ *  ContextBreakdown): the tool's OWN numbers from `GET /context` — Claude
+ *  Code's `/context`, Pi's stats — else the total it said after its last
+ *  reply (the overview's). Compact is the tool's own `/compact`, sent as a
+ *  message, and only when no reply runs; a tool with none says why. */
+function CodeContextSection({
+  cctx,
+  seen,
+  toolName,
+  tool,
+  running,
+  onSend,
+}: {
+  cctx: CodeContext | null;
+  seen: CodeOverview["context"] | null;
+  toolName: string;
+  tool: string;
+  running: boolean;
+  onSend?: (text: string) => void;
+}) {
+  const reading = cctx?.reading ?? (seen ? totalReading(seen.window, seen.used, seen.percent, seen.at) : null);
+  const fromTool = !!cctx?.reading && cctx.reading.parts.length > 0;
+  const at = reading?.at ? agoWords(reading.at) : "";
+  const sourceLine = !reading
+    ? undefined
+    : fromTool
+      ? `As ${toolName} counted it${at ? ` ${at}` : ""}.`
+      : `As ${toolName} said${at ? ` ${at}` : ""}, after its last reply.`;
+  const compactText = cctx?.compactHow === "message" ? cctx.compactText || "/compact" : "";
+  return (
+    <ContextBreakdown
+      prefix="code-session"
+      reading={reading}
+      emptyWords={contextNotKnownWords(tool, toolName)}
+      sourceLine={sourceLine}
+      note={[cctx?.note, cctx?.waiting ? cctx.waitingNote : ""].filter(Boolean).join(" ") || undefined}
+      compact={
+        compactText && onSend
+          ? {
+              onPress: () => onSend(compactText),
+              blocked: running ? "Wait for the reply to finish, then compact." : "",
+            }
+          : null
+      }
+      compactAbsent={cctx?.compactWhy || undefined}
+    />
   );
 }

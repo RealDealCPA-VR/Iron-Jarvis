@@ -3653,7 +3653,12 @@ async def chat_stream(
     )
     # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
     # MIRROR NOTE: edit both or neither.
-    system += _profile_section(d.platform)
+    # v1.415.0: each section a coding session's Context drop-down names is
+    # kept by name too (``_ctx_pieces``; MIRROR NOTE, lock-step: chat_turn).
+    _ctx_pieces: dict[str, list[str]] = {}
+    _profile_text = _profile_section(d.platform)
+    _ctx_pieces.setdefault("memory", []).append(_profile_text)
+    system += _profile_text
     # DRAFT FENCE (v1.161.0) — lock-step copy of chat_turn's injection. This
     # is the STREAMING lane, which is the one a user actually watches write
     # an email; if the instruction reached only the non-streaming lane the
@@ -3861,6 +3866,9 @@ async def chat_stream(
     images, attach_block = _attached
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+        _ctx_pieces.setdefault("attachments", []).append(
+            "\n\n# Attachments (provided by the user this turn)" + attach_block
+        )
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, under an
     # attachment's policy, raced against Stop like the attachments.
@@ -3869,6 +3877,7 @@ async def chat_stream(
         if _page is _PREP_STOPPED:
             return
         system += _page
+        _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
     # like the attachments. Only a turn that carries resources pays anything.
@@ -3880,6 +3889,7 @@ async def chat_stream(
         _res_block, resources_receipt = _res
         if _res_block:
             system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+            _ctx_pieces.setdefault("attachments", []).append(_res_block)
     # EARLIER CHATS THE USER POINTED TO (v1.326.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
     # like the attachments. Only a turn that carries thread_refs pays anything.
@@ -3890,6 +3900,7 @@ async def chat_stream(
             return
         _refs_block, thread_refs_receipt = _refs
         system += _refs_block
+        _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
     if (body.skill or "").strip():
         sk = d.platform.skills.get(body.skill.strip())
@@ -3915,11 +3926,13 @@ async def chat_stream(
                 cap=8000,
             )
         )
-        system += (
+        _skill_text = (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
             "FOLLOW this playbook for this request.\n"
             + _playbook[:8000]
         )
+        system += _skill_text
+        _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0), computed in
     # the grounding gather above and appended in their old place — after the
@@ -3947,7 +3960,9 @@ async def chat_stream(
         # (`_none_on_error`) renders the honest "not accessible" wording
         # rather than a grounding claim tools cannot back.
         _ws_resolved = await _prep.take("workspace")
-        system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+        _ws_text = _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+        system += _ws_text
+        _ctx_pieces.setdefault("project", []).append(_ws_text)
 
     # IJ HARNESS (v1.366.0): the folder's own instruction files (when the
     # grounding did not already carry them) and the component tree, at the
@@ -3967,6 +3982,7 @@ async def chat_stream(
     if await _stop():
         return
     _summarizing = asyncio.Event()
+    _system_before_compaction = system
     _compaction = asyncio.ensure_future(_apply_compaction(
         d, body, system, provider_choice, model_choice,
         on_summarize=_summarizing.set,
@@ -4008,6 +4024,7 @@ async def chat_stream(
         # order, before "choosing_tools".
         yield _sse("phase", {"phase": "summarizing"})
     system, _ctx_messages, context_report = _compaction.result()
+    _ctx_system = system
     if await _stop():
         return
     plan = _plan_context(
@@ -4086,6 +4103,16 @@ async def chat_stream(
                 [n for n in _CODING if d.platform.registry.get(n) is not None]
             )
         tool_specs = _harness.specs(d.platform.registry)
+        # v1.415.0: what fills the conversation, part by part — the coding
+        # session's Context drop-down (additive; MIRROR NOTE, lock-step:
+        # chat_turn.run_chat_turn).
+        await asyncio.to_thread(
+            _chat_turn.harness_context_breakdown,
+            d, context_report, system_before=_system_before_compaction,
+            system=_ctx_system, messages=_ctx_messages, harness=_harness,
+            harness_rules=_harness_rules, grounding=_grounding, brain=_brain,
+            pieces=_ctx_pieces, tool_specs=tool_specs,
+        )
     else:
         # v1.312.0: the last preparation stage — said, then done. A text-only
         # pick arms nothing and so says nothing.

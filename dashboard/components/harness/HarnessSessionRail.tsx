@@ -23,6 +23,9 @@ import { AtSign, FolderOpen, GitBranch, Loader2, Monitor, Paperclip, Sparkles, S
 import { post } from "@/lib/api";
 import { fetchTurnChangeSet } from "@/components/chat/ChangedFiles";
 import { latestContext, decodeCompaction, meterTitle, offersCompact, readingIsBeforeSummary } from "@/lib/buildContext";
+import { latestReading } from "@/lib/contextBreakdown";
+import { COMPACTION_OFFER_BUTTON } from "@/lib/chatControlWords";
+import { AutoCompactChoice, ContextBreakdown, type CompactPress } from "@/components/harness/ContextBreakdown";
 import { accountStatusLine, type BuildAccount } from "@/lib/buildAccounts";
 import { decodeFolderRules } from "@/lib/turnReads";
 import { formatTokens } from "@/lib/format";
@@ -103,6 +106,8 @@ export function SessionRail({
   busy = false,
   refreshKey,
   onOpenChanges,
+  onCompact,
+  compacting = false,
 }: {
   view: BuildSessionView;
   /** The conversation as shown, the question being sent included. */
@@ -119,6 +124,9 @@ export function SessionRail({
   refreshKey: number;
   /** Open the Changes tab. */
   onOpenChanges: () => void;
+  /** v1.415.0: Compact (the session's own summary of its earlier turns). */
+  onCompact?: () => void;
+  compacting?: boolean;
 }) {
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -139,7 +147,7 @@ export function SessionRail({
     <div data-testid="pane-session" className="space-y-5 pb-4">
       <WhereItWorks view={view} messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
       <WhatAnswers view={view} modelWords={modelWords} account={account} />
-      <HowFull view={view} />
+      <HowFull view={view} busy={busy} compacting={compacting} onCompact={onCompact} />
       <LastAttachmentSection messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
       {openError ? (
         <p role="alert" className="text-[12px] text-tone-danger">
@@ -269,53 +277,57 @@ function WhatAnswers({
   );
 }
 
-function HowFull({ view }: { view: BuildSessionView }) {
-  const reading = latestContext(view.messages);
+function HowFull({
+  view,
+  busy,
+  compacting,
+  onCompact,
+}: {
+  view: BuildSessionView;
+  busy: boolean;
+  compacting: boolean;
+  onCompact?: () => void;
+}) {
+  const latest = latestContext(view.messages);
   const compaction = decodeCompaction(view.compaction);
-  const summarized = !!compaction && readingIsBeforeSummary(reading?.at ?? null, compaction);
+  const summarized = !!compaction && readingIsBeforeSummary(latest?.at ?? null, compaction);
   // A summary made AFTER the newest reading stands in for the turns it read:
   // that reading is out of date, so it is not shown (ContextMeter's rule).
-  if (summarized) {
-    return (
-      <Section id="context" title="Context">
+  const reading = summarized || !latest ? null : latestReading(view.messages, latest.context, latest.at);
+  const c = latest?.context ?? null;
+  // v1.415.0: Compact from the drop-down — the session's own Compact (the
+  // box's meter offers it past 70 %; here it is always there, like Claude
+  // Code's panel), never while a reply runs, and not while compaction is
+  // turned off in Settings.
+  const compact: CompactPress | null =
+    onCompact && c && !c.compactionOff
+      ? {
+          onPress: onCompact,
+          busy: compacting,
+          // v1.415.0 review: the app's word for its own summary — the box's
+          // meter and "/compact"'s refusal say the same (HarnessSession).
+          label: COMPACTION_OFFER_BUTTON,
+          blocked: busy ? "Wait for the reply to finish, then summarize the earlier turns." : "",
+        }
+      : null;
+  return (
+    <ContextBreakdown
+      prefix="session-rail"
+      reading={reading}
+      // The box's meter's own rule: the warning tone exactly when it offers
+      // Compact (past the daemon's mark, and compaction not turned off).
+      warn={c ? offersCompact(c, false) : false}
+      emptyWords={summarized ? "" : "Measured after the first reply."}
+      sourceLine={c ? meterTitle(c) : undefined}
+      autoCompactControl={reading && reading.parts.length && c && !c.compactionOff ? <AutoCompactChoice prefix="session-rail" /> : null}
+      compact={compact}
+    >
+      {summarized ? (
         <p data-testid="session-rail-summarized" className={QUIET}>
           Earlier turns are summarized; the model reads the summary in their place. The next reply measures again.
         </p>
-      </Section>
-    );
-  }
-  if (!reading) {
-    return (
-      <Section id="context" title="Context">
-        <p data-testid="session-rail-context-none" className={QUIET}>
-          Measured after the first reply.
-        </p>
-      </Section>
-    );
-  }
-  const c = reading.context;
-  // The box's meter's own rule: the warning tone exactly when it offers
-  // Compact (past the daemon's mark, and compaction not turned off).
-  const warn = offersCompact(c, false);
-  return (
-    <Section id="context" title="Context">
-      <div className="flex items-baseline justify-between gap-2 text-[13px]">
-        <span data-testid="session-rail-context-percent" className={warn ? "text-tone-warn" : "text-zinc-200"}>
-          {c.percent}% used
-        </span>
-        <span data-testid="session-rail-context-window" className={QUIET}>
-          of {formatTokens(c.window)} tokens
-        </span>
-      </div>
-      <div className="h-1 overflow-hidden rounded-full bg-white/[0.08]" aria-hidden>
-        <div
-          data-testid="session-rail-context-bar"
-          className={`h-full rounded-full ${warn ? "bg-tone-warn" : "bg-zinc-400"}`}
-          style={{ width: `${Math.max(0, Math.min(100, c.percent))}%` }}
-        />
-      </div>
-      <p className={QUIET}>{meterTitle(c)}</p>
-    </Section>
+      ) : null}
+    </ContextBreakdown>
   );
 }
 

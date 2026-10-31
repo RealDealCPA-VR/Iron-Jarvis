@@ -838,6 +838,31 @@ class PiDriver(Driver):
         self.effort = effort
         return "now" if effort else "next"
 
+    #: v1.415.0: ``get_session_stats`` is answered at once, even mid-run
+    #: (rpc-mode.js: a plain read of the session, no model call).
+    context_while_working = True
+
+    async def context_breakdown(self) -> dict[str, Any] | None:
+        """v1.415.0: Pi's own ``get_session_stats`` → ``contextUsage``
+        {tokens, contextWindow, percent} (pi 1.3.0 docs/rpc-commands.md: "the
+        actual current context-window estimate used for compaction"). A total
+        only — Pi says nothing about what fills it; ``tokens`` is null right
+        after a compaction, until Pi's next answer (then: no reading)."""
+        from ..context.breakdown import NOT_KNOWN_NOW, total_only
+
+        try:
+            got = await self.request("get_session_stats")
+        except Exception:  # noqa: BLE001 — a stopped tool or a refusal: no reading
+            return None
+        usage = got.get("contextUsage") if isinstance(got, dict) else None
+        if not isinstance(usage, dict):
+            return None
+        if usage.get("tokens") is None:
+            # v1.415.0 review: Pi ANSWERED that it does not know yet (right
+            # after a compaction) — an older reading must not stand in.
+            return dict(NOT_KNOWN_NOW)
+        return total_only(usage.get("tokens"), usage.get("contextWindow"))
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 

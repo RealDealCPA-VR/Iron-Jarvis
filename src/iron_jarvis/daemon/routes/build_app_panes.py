@@ -1,4 +1,4 @@
-"""Build › Code's right panes (v1.414.0): three READ-ONLY reads of one
+"""Build › Code's right panes (v1.414.0): READ-ONLY reads of one
 session — its changes, its usage, its session facts. Every rule lives in
 :mod:`iron_jarvis.hosted.panes`; each read runs off the event loop (git, the
 events log, a process listing) and never starts the coding tool, a model call
@@ -53,6 +53,16 @@ def register(app: FastAPI, d: Any) -> None:
         tool itself last reported) and the session's totals."""
         row, events, _live = await _session(sid)
         return await asyncio.to_thread(PN.usage_view, d.platform, row, events)
+
+    @app.get("/build/app/sessions/{sid}/context")
+    async def app_context(sid: str) -> dict[str, Any]:
+        """v1.415.0: the Session tab's Context drop-down — what fills the
+        conversation, in the tool's own numbers (Claude Code's ``/context``,
+        Pi's stats) while its process runs and no reply is in the way, else
+        the total it said after its last reply. Never starts the tool, never
+        a model call."""
+        row, events, _live = await _session(sid)
+        return await svc().context_view(row, events)
 
     @app.get("/build/app/sessions/{sid}/overview")
     async def app_overview(sid: str) -> dict[str, Any]:

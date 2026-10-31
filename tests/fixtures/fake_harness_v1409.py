@@ -266,10 +266,20 @@ while True:
     if obj is None:
         sys.exit(0)
     if obj.get("type") == "control_request":
+        # v1.415.0: ``IJ_FAKE_CONTEXT_USAGE`` — a recorded get_context_usage
+        # answer (tests/fixtures/claude_context_usage_v14150.json).
+        resp = {}
+        if (obj.get("request") or {}).get("subtype") == "get_context_usage" and os.environ.get("IJ_FAKE_CONTEXT_USAGE"):
+            with open(os.environ["IJ_FAKE_CONTEXT_USAGE"], encoding="utf-8") as fh:
+                resp = json.load(fh)["response"]
         out({"type": "control_response", "response": {
-            "subtype": "success", "request_id": obj.get("request_id"), "response": {}}})
+            "subtype": "success", "request_id": obj.get("request_id"), "response": resp}})
     elif "method" in obj and "id" in obj:
         out({"jsonrpc": "2.0", "id": obj["id"], "result": {}})
     elif obj.get("type") and obj.get("type") not in NOT_PI and "jsonrpc" not in obj:
         # A Pi command the recording did not script: a plain success.
-        out({"id": obj.get("id"), "type": "response", "command": obj["type"], "success": True})
+        reply = {"id": obj.get("id"), "type": "response", "command": obj["type"], "success": True}
+        if obj["type"] == "get_session_stats" and os.environ.get("IJ_FAKE_PI_STATS"):
+            # v1.415.0: Pi's own stats, as pi 1.3.0 answers them.
+            reply["data"] = json.loads(os.environ["IJ_FAKE_PI_STATS"])
+        out(reply)

@@ -1303,7 +1303,13 @@ function SessionPane({
         data-testid="code-panes-aside"
         className="flex h-[70vh] w-full shrink-0 flex-col border-t border-white/[0.06] p-2 xl:h-auto xl:min-h-0 xl:w-[320px] xl:border-l xl:border-t-0 2xl:w-[400px]"
       >
-        <CodePanes session={session} tools={tools} events={events} running={running} />
+        <CodePanes
+          session={session}
+          tools={tools}
+          events={events}
+          running={running}
+          onSend={(t) => void sendRef.current?.(t)}
+        />
       </aside>
       </div>
     </SessionEditorProvider>
