@@ -33,13 +33,15 @@
         "path": "brief.md"
       },
       "args_hash": "<args_hash>",
+      "asker": "model",
       "call_id": "call_fixture",
       "can_always": true,
       "id": "apr_fixture",
       "quarantined": false,
       "reversible": true,
       "timeout_s": 0,
-      "tool": "write_file"
+      "tool": "write_file",
+      "why": "you chose to approve every action"
     },
     "waiting_on": {
       "approval_id": "apr_fixture",

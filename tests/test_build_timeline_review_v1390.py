@@ -172,9 +172,12 @@ async def test_the_finish_checks_own_test_run_is_marked_on_the_line_and_the_fram
     (work / "app.py").write_text("X = 1\n", encoding="utf-8")
     (work / "test_mini.py").write_text(PASSING, encoding="utf-8")
     sid = new_session(app, work, approval_mode="yolo")
+    # v1.417.0 (moved on purpose): the finish check REUSES a test run that
+    # passed after the last edit, so the model runs the tests BEFORE the write
+    # here (they fail on X = 1) and the check's own re-run is what passes.
     wire(app, Timed([
-        [ToolCall(id="w1", name="Write", arguments={"file_path": "app.py", "content": "X = 2\n"})],
         [ToolCall(id="b1", name="Bash", arguments={"command": TEST_CMD})],
+        [ToolCall(id="w1", name="Write", arguments={"file_path": "app.py", "content": "X = 2\n"})],
         "Set X to 2; the tests pass.",
         "1. met: done.",
     ]))
@@ -184,7 +187,7 @@ async def test_the_finish_checks_own_test_run_is_marked_on_the_line_and_the_fram
     assert any(str(i).startswith(F.CALL_ID_PREFIX) for i in ids), ids
     # The line: the model's own two steps unmarked, the check's run marked.
     marks = [(s["name"], s.get("check")) for s in line["steps"]]
-    assert marks == [("write_file", None), ("shell", None), ("shell", "finish")], marks
+    assert marks == [("shell", None), ("write_file", None), ("shell", "finish")], marks
     # The live frames say the same (started and finished), so the running
     # Timeline and the saved one agree.
     for e, d in frames:
