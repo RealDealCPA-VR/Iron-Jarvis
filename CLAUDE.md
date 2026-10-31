@@ -7552,6 +7552,114 @@ does not need a bump, stop and bump it.
   it refreshes. `desktop/assets/README.md` says how to remake the files. Pin:
   `tests/test_app_icon_v1380.py` (red on the old files: 4 of 5).
 
+- **A skill works in a coding session the way the harness it came from runs
+  it: the same discovery, listed up front, Claude Code's base-directory line
+  and argument filling, the harnesses' own switches; `allowed-tools` grants
+  nothing** (v1.417.0; the user: "skills that are native across different
+  harnesses to work exactly the same way inside our native harness").
+  MEASURED, not recalled: Claude Code 2.1.316 (a probe with a throwaway
+  CLAUDE_CONFIG_DIR — its `skill_listing` attachment and the expanded
+  `/name` turn in the saved transcript), Codex 0.157.0 (`codex debug
+  prompt-input`, no model call — its skill roots table), Grok 1.0.5 / Pi
+  1.3.0 / OpenCode 1.18 (their docs and binaries). `skills/native.py` is THE
+  module. DISCOVERY (`external_skill_roots()` now returns `(path, tag, how)`,
+  `how` one|tree|skill; a caller's 2-tuple reads as tree): Claude Code's
+  `skills/` ONE level deep (`discover_first`, first-wins), its
+  `skills/synced/<bucket>` of the SIGNED-IN account only
+  (`claude_commands.signed_in_bucket`; every bucket when unknown), and the
+  skill folders of `claude_commands.enabled_plugins([])` only (installed in
+  `installed_plugins.json`, synced, or skills-dir; `enabledPlugins` not
+  false) — the old recursive read of `~/.claude/plugins` and `skills/`
+  loaded 32 skills on the user's PC from OTHER accounts' synced buckets and
+  synced plugins; `$CODEX_HOME/skills` (default `~/.codex`),
+  `~/.agents/skills` (source "agents"), `~/.grok/skills`,
+  `~/.config/opencode/skill(s)`, `~/.pi/agent/skills`. NOT read: Grok's
+  vendor-bundled `~/.grok/bundled/skills` (Grok-specific; Codex's `.system`
+  still is). A session FOLDER's own skills (`project_skills`): `.claude/
+  skills` (one level), `.agents/skills`, `.grok/skills`, `.opencode/
+  skill(s)`, `.pi/skills` from the folder up to the first folder holding
+  `.git` (none: the folder alone; never the home), nearest first; source
+  `project` = SCANNED; the registry wins a name (Claude Code: personal
+  before project). FRONTMATTER (`loader.Skill`): `when_to_use`/`when-to-use`,
+  `model_invocable` (`disable-model-invocation`, and Codex's
+  `agents/openai.yaml` `policy.allow_implicit_invocation: false`),
+  `user_invocable`, `argument_names`, `argument_hint` (a YAML list joined
+  like JavaScript's String), `allowed_tools` (READ, NEVER OBEYED). LISTING
+  (`native.listing`, `HarnessTurn.skill_listing`, built in
+  `chat_turn._build_harness` off the loop when `skill_load` is in the gate,
+  after the rendered harness and before the date, NOT in the fingerprint):
+  claude dialect = Claude Code's "The following skills are available for
+  use with the Skill tool:" + `- name: description - when to use`; gpt =
+  Codex's `## Skills` list with `(file: …/SKILL.md)` and its how-to;
+  generic/qwen = Claude Code's shape naming `skill_load`; 1% of the window ×
+  4 chars, 1,536 a description, shortened evenly, names only last;
+  model-invocable only; harness-layer folder skills stay in the tree's own
+  list. INVOCATION (`native.invocation_text` — ONE function for
+  `skill_load` and both chat lanes' `/name`): `Base directory for this
+  skill: <dir>\n\n` + the body (scanned first when not the user's) with
+  `${CLAUDE_SKILL_DIR}` (forward slashes) then `claude_commands.substitute`
+  (`$ARGUMENTS`, `$N` 0-based, named, `ARGUMENTS: …` appended when nothing
+  filled). `skill_load` takes `args` (Claude Code's `Skill` passes them —
+  dropped before), resolves registry → the session folder (`ctx.workspace`)
+  → `<plugin>:<skill>`, refuses a non-model-invocable skill in words;
+  `skill_search` never finds one and also searches the folder. `/name`:
+  `chat_turn.skill_playbook` (both lanes, lock-step) — args =
+  `ChatBody.skill_args` (the build route sends the typed words; "" picked
+  alone), else the last user message unless it is `SKILL_ALONE`; whole up to
+  `INVOKE_CHARS` 100,000 (was 8,000 — a real 37 KB skill was cut at a
+  fifth; a cut is said); `turn_skill_async` finds a folder skill
+  (`workspace_dir`) and the stream lane's 404 for an unknown one is still
+  before the response opens (`_eager_checks` defers only the folder case to
+  an off-loop check). MENUS: `GET /skills` rows carry `user_invocable`,
+  `model_invocable`, `argument_hint`; `GET /build/sessions/{id}/skills`
+  adds the folder's own as `kind: "project"` (dashboard `decodeSkills` →
+  `source: "yours"`, `origin: "project"`, sent as `skill`); both menus drop
+  `user_invocable: false` (`buildComposer.decodeSkills`, the chat page's
+  `slashSkills`). PLAIN CHAT CHANGED TOO (shared path): its `/skill`
+  playbook carries the base directory and filled arguments, and
+  `skill_load`/`skill_search` everywhere follow the new rules. Goldens:
+  `team_first_off_golden_v1400.json` regenerated (only the listing and
+  `skill_load`'s spec moved; the capture reads no skill folder of the PC and
+  writes `<SRC>`). Moved on purpose: `test_plugin_catalog_not_installed`,
+  the trash tests of `test_build_slash_commands_v1379` /
+  `_nofolder_review_v1379` (their plugins are now INSTALLED Claude Code's
+  way), two pins of `test_harness_helpers_v1372` (`Skill`'s args now reach
+  `skill_load`; the base-directory line leads the user's own text). LIVE (scratch daemon 8797, real claude-cli Haiku 4.5): a coding
+  session loaded the installed `pixio-skill` and answered its script's path
+  `C:\Users\VR\.claude\skills\pixio-skill\scripts\pixio-run.mjs`. OPEN:
+  Claude Code's managed settings and `skillOverrides` are not read; Grok's
+  `[skills] paths/ignore/disabled` and its `[compat.claude]` switch are not
+  read; Codex's `[[skills.config]] enabled = false` is not read; Claude
+  Code's `!` shell lines in a SKILL body are not expanded (the model sees
+  them as text); synced skills when no account is readable load from every
+  bucket. Pins: `tests/test_skill_parity_v1417.py` (28 mutations, all red),
+  `dashboard/__tests__/skill-parity-v1417.test.ts` (4 mutations, all red).
+  REVIEW (each red first, `tests/test_skill_parity_review_v1417.py`, 10
+  mutations red): (1) the LIST and `skill_search`'s answer go through
+  `native.shown_entry` — a skill `scans_skill` marks (another program's
+  folder, a plugin, a session folder's own) has its description (and the
+  Codex list's `(file: …)`) promptguard-scanned and is left out when its
+  NAME is flagged; the planted description reached the system prompt
+  verbatim. (2) a session folder's skills stay IN the folder: no part of
+  the way, skill folder or SKILL.md that is a link or junction is followed
+  (never opened, so a link to a share is never touched — a deliberate
+  difference from Claude Code, which follows them), TREE roots are walked
+  by hand (≤ 8 deep, ≤ 2,000 folders), and every file passes `fs_read_ok`
+  (the walk goes UP to the repository root, past "Folders Jarvis may
+  read"). (3) the "/name" playbook rides the SYSTEM prompt, which the
+  planner cannot shrink: `native.invoke_cap(window)` = a quarter of the
+  answering model's window, between the old 8,000 and `INVOKE_CHARS`, both
+  lanes passing their own `_context_window` (lock-step), and the cap bounds
+  the FILLED text (a pasted message filled in as `ARGUMENTS:` is not copied
+  whole a second time). Checked fine: synced skills read the signed-in
+  account through the shared `claude_commands.signed_in_bucket`
+  (`CLAUDE_CODE_*_UUID` ignored, pinned); `codex debug prompt-input` on a
+  scratch CODEX_HOME confirmed `.agents/skills` from the folder up to the
+  repo root, nested. OPEN: blocks in the list publish no `context.blocked`;
+  `user-invocable: false` is only hidden from the menus (a typed API
+  `skill` still runs it); terminal assist's auto skills
+  (`routes/terminals`) still inject `sk.instructions` unscanned (older).
+
 - **Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it;
   Claude Code's own command files are read, never executed; a Build session
   needs NO folder** (v1.379.0; the user: "I want to be able to use the same

@@ -48,23 +48,25 @@ def claude_dir(home: "Path | None" = None) -> Path:
     return Path(raw).expanduser() if raw else Path.home() / ".claude"
 
 
-def external_skill_roots() -> list[tuple[Path, str]]:
-    """Well-known external skill locations to pull in, each with a source tag.
+def external_skill_roots() -> list[tuple[Path, str, str]]:
+    """Every user-level skill place the coding harnesses on this PC read,
+    each with a source tag and how it is read — ``(path, tag, how)``, ``how``
+    being ``"one"`` (``<root>/<name>/SKILL.md``), ``"tree"`` (every SKILL.md
+    below it) or ``"skill"`` (the root is one skill's folder).
 
-    Scanned RECURSIVELY (see ``discover_recursive``) so nested layouts are all
-    found — Claude Code skills (``~/.claude/skills/<name>/SKILL.md``), Claude
-    plugin skills (``~/.claude/plugins/**/SKILL.md``), and Codex skills
-    (``~/.codex/skills/**/SKILL.md``, including its ``.system/`` bundles). Only
-    existing directories are returned.
+    v1.417.0 (skill parity, ``skills/native``): only what each harness REALLY
+    loads — Claude Code's skills folder one level deep, its claude.ai synced
+    skills of the SIGNED-IN account only, and the skills of the plugins it
+    loads (``enabledPlugins``; before this, every plugin folder on disk —
+    disabled ones and other accounts' synced ones — was read recursively);
+    Codex's ``$CODEX_HOME/skills``; the Agent Skills ``~/.agents/skills``
+    (Codex, Pi, Grok, OpenCode); Grok's, OpenCode's and Pi's own. Only
+    existing places are returned. A caller (a test) may hand back plain
+    ``(path, tag)`` pairs: those are read as ``"tree"``.
     """
-    home = Path.home()
-    claude = claude_dir()
-    candidates = [
-        (claude / "skills", "claude"),
-        (claude / "plugins", "claude"),
-        (home / ".codex" / "skills", "codex"),
-    ]
-    return [(p, tag) for p, tag in candidates if p.is_dir()]
+    from .native import user_roots
+
+    return user_roots()
 
 
 def marketplace_catalog_dirs(home: "Path | None" = None) -> list[Path]:
@@ -237,6 +239,48 @@ class SkillRegistry:
                     self._skills[skill.name] = skill
         return self
 
+    def discover_first(
+        self, root: Path, *, source: str, exclude: "list[Path] | None" = None
+    ) -> "SkillRegistry":
+        """``<root>/<name>/SKILL.md`` one level deep (Claude Code's own skills
+        folder, Grok's), FIRST-wins like :meth:`discover_recursive` — an
+        external skill never replaces a builtin or user one. Dot folders
+        (``synced``'s buckets are read as roots of their own; ``.trash``,
+        ``.archive``) are skipped."""
+        base = Path(root)
+        skips = [Path(p) for p in (exclude or [])]
+        try:
+            children = sorted(base.iterdir()) if base.is_dir() else []
+        except OSError:
+            return self
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            self.add_first(child, source=source, exclude=skips)
+        return self
+
+    def add_first(
+        self, skill_dir: Path, *, source: str, exclude: "list[Path] | None" = None
+    ) -> "SkillRegistry":
+        """Load ONE skill folder unless its name is already registered."""
+        d = Path(skill_dir)
+        try:
+            if not (d / SKILL_FILE).is_file():
+                return self
+        except OSError:
+            return self
+        if exclude and _under_any(d / SKILL_FILE, [Path(p) for p in exclude]):
+            return self
+        if is_archived_path(d):
+            return self
+        try:
+            skill = load_skill(d, source=source)
+        except Exception:  # noqa: BLE001 — a malformed SKILL.md is skipped
+            return self
+        if skill.name and skill.name not in self._skills:
+            self._skills[skill.name] = skill
+        return self
+
     def discover_recursive(
         self,
         *dirs: Path,
@@ -297,8 +341,15 @@ class SkillRegistry:
         # installed — excluded so the catalog's sample/authoring plugins never
         # enter the registry (v1.98.0).
         catalogs = marketplace_catalog_dirs() + claude_trash_dirs()
-        for root, tag in external_skill_roots():
-            self.discover_recursive(root, source=tag, exclude=catalogs)
+        for entry in external_skill_roots():
+            root, tag = Path(entry[0]), str(entry[1])
+            how = str(entry[2]) if len(entry) > 2 else "tree"
+            if how == "one":
+                self.discover_first(root, source=tag, exclude=catalogs)
+            elif how == "skill":
+                self.add_first(root, source=tag, exclude=catalogs)
+            else:
+                self.discover_recursive(root, source=tag, exclude=catalogs)
         for extra in extra_paths or []:
             try:
                 self.discover_recursive(Path(extra).expanduser(), source="custom")
@@ -319,6 +370,10 @@ class SkillRegistry:
             return []
         scored: list[tuple[int, Skill]] = []
         for skill in self._skills.values():
+            # v1.417.0: a skill only the user's "/name" may run
+            # (``disable-model-invocation``) is never found for a model.
+            if not getattr(skill, "model_invocable", True):
+                continue
             hay = set(_tokens(f"{skill.name} {skill.description}"))
             score = len(terms & hay)
             if score:

@@ -39,13 +39,34 @@ class SkillSearchTool(Tool):
         query = str(args.get("query", ""))
         k = int(args.get("k", 5))
         hits = self._registry.search(query, k)
-        if not hits:
+        folder = str(getattr(ctx, "workspace", "") or "")
+        if folder and len(hits) < k:
+            # v1.417.0: the session folder's own skills (``skills/native``)
+            # are found too — after the library's, never in its place.
+            from . import native
+            from .framework import SkillRegistry as _Reg
+
+            local = _Reg()
+            for s in await asyncio.to_thread(native.project_skills, folder):
+                if self._registry.get(s.name) is None:
+                    local._skills[s.name] = s
+            hits = hits + local.search(query, k - len(hits))
+        # Review (v1.417.0): what the model reads of each hit is the list's
+        # own (``native.shown_entry``) — a description from another program's
+        # folder or the session folder's own is SCANNED, a flagged name left
+        # out. Off the loop (the scan reads the text).
+        from . import native as _native
+
+        shown = await asyncio.to_thread(
+            lambda: [e for e in (_native.shown_entry(s) for s in hits) if e is not None]
+        )
+        if not shown:
             return ToolResult(ok=True, output="(no matching skills)", data={"skills": []})
-        lines = [f"{s.name}: {s.description}" for s in hits]
+        lines = [f"{n}: {desc}" for n, desc in shown]
         return ToolResult(
             ok=True,
             output="\n".join(lines),
-            data={"skills": [{"name": s.name, "description": s.description} for s in hits]},
+            data={"skills": [{"name": n, "description": desc} for n, desc in shown]},
         )
 
 
@@ -53,10 +74,17 @@ class SkillLoadTool(Tool):
     """Load a skill's instructions by name (§23)."""
 
     name = "skill_load"
-    description = "Load a skill by name and return its full instructions."
+    description = (
+        "Load a skill by name and return its full instructions, after a line naming the "
+        "skill's base directory (its scripts/ and references/ are there — run and read them "
+        "from that folder). args fills the skill's $ARGUMENTS."
+    )
     input_schema = {
         "type": "object",
-        "properties": {"name": {"type": "string"}},
+        "properties": {
+            "name": {"type": "string"},
+            "args": {"type": "string", "description": "Optional arguments for the skill ($ARGUMENTS)"},
+        },
         "required": ["name"],
     }
     #: v1.372.0: loading a skill returns its text and changes nothing.
@@ -67,23 +95,44 @@ class SkillLoadTool(Tool):
         self._registry = registry
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        name = str(args.get("name", ""))
-        skill = self._registry.get(name)
+        from . import native
+
+        name = str(args.get("name", "")).strip()
+        # v1.417.0 (skill parity): the registry's skill, else the session
+        # FOLDER's own (``.claude/skills``, ``.agents/skills`` … from its
+        # folder up to the repository root — ``skills/native``), else a
+        # plugin skill asked for by Claude Code's ``<plugin>:<skill>`` name.
+        folder = str(getattr(ctx, "workspace", "") or "")
+        skill = self._registry.get(name) or await asyncio.to_thread(
+            native.find, self._registry, name, folder,
+        )
         if skill is None:
             return ToolResult(ok=False, error=f"unknown skill '{name}'")
+        if not getattr(skill, "model_invocable", True):
+            # Claude Code's rule (``disable-model-invocation: true``; Codex's
+            # ``allow_implicit_invocation: false``): only the user runs it.
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"The skill '{skill.name}' runs only when the user asks for it "
+                    f"(they type /{skill.name}); it cannot be loaded by a model."
+                ),
+            )
         # v1.372.0: the ONE rule ``inject`` and the "/skill" playbook follow
         # (``framework.guarded_instructions``): a skill that did not come from
         # the user (another program's skill folder, a plugin, an agent-made
-        # one) is scanned for planted instructions before a model reads it;
-        # the user's own and the bundled ones come back verbatim. The IJ
-        # harness arms this tool on every turn, so the loader must not be the
-        # door that skips the scan. Off the loop (the scan reads the text).
-        from .framework import guarded_instructions
-
+        # one, a project's own) is scanned for planted instructions before a
+        # model reads it; the user's own and the bundled ones come back
+        # verbatim. Off the loop (the scan reads the text). v1.417.0: Claude
+        # Code's result — the base directory line, then the body with its
+        # arguments (``args``) and ``${CLAUDE_SKILL_DIR}`` filled. The skill's
+        # ``allowed-tools`` grants nothing: every call it leads to is asked
+        # for under Iron Jarvis's own rules.
         text = await asyncio.to_thread(
-            guarded_instructions, skill,
+            native.invocation_text, skill, str(args.get("args") or ""),
             event_bus=getattr(ctx, "event_bus", None),
             session_id=getattr(ctx, "session_id", None),
+            cap=None,
         )
         return ToolResult(
             ok=True,
@@ -91,6 +140,7 @@ class SkillLoadTool(Tool):
             data={
                 "name": skill.name,
                 "description": skill.description,
+                "base_dir": native.base_dir(skill),
                 "examples": skill.examples,
                 "scripts": skill.scripts,
                 "templates": skill.templates,

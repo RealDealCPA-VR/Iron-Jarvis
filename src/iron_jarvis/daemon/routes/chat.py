@@ -3232,6 +3232,12 @@ async def stream_chat_turn(
     ONLY, like ``reply_record`` (the POST lane has no coding session).
     """
     _eager_checks(platform, body)
+    if (body.skill or "").strip() and platform.skills.get(body.skill.strip()) is None:
+        # v1.417.0: a skill of the turn's FOLDER is a folder read — off the
+        # loop, still before the response opens, so an unknown "/" skill is
+        # the same 404 it always was.
+        if await _chat_turn.turn_skill_async(platform, body) is None:
+            raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
     round_budget = _chat_turn.turn_round_budget(round_budget)
     # v1.366.0 (IJ harness): checked eagerly, like the budget. MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn does the same.
@@ -3367,7 +3373,14 @@ def _eager_checks(platform, body) -> None:
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
     _skill = (getattr(body, "skill", "") or "").strip()
-    if _skill and platform.skills.get(_skill) is None:
+    # v1.417.0: a turn bound to a folder may name the FOLDER's own skill
+    # (``skills/native``) — reading the folder is not a dictionary lookup, so
+    # that case is checked in the stream (the same 404 words, as an error
+    # frame) rather than here.
+    if (
+        _skill and platform.skills.get(_skill) is None
+        and not (getattr(body, "workspace_dir", "") or "").strip()
+    ):
         raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
 
 
@@ -3795,16 +3808,14 @@ async def chat_stream(
         _prep.start("refs", read_thread_refs(
             d, body, provider=provider_choice or d.platform.config.default_provider,
         ))
-    _skill_early = (
-        d.platform.skills.get(body.skill.strip()) if (body.skill or "").strip() else None
-    )
+    # v1.417.0 (skill parity): the registry's skill, else the bound folder's
+    # own (``chat_turn.turn_skill_async``). MIRROR NOTE (lock-step).
+    _skill_early = await _chat_turn.turn_skill_async(d.platform, body)
     if _skill_early is not None:
-        from ...skills.framework import guarded_instructions
-
+        # v1.417.0: Claude Code's own invocation (``skill_playbook``).
         _prep.start("skill", asyncio.to_thread(
-            guarded_instructions,
-            _skill_early, event_bus=getattr(d.platform, "event_bus", None),
-            session_id="chat", cap=8000,
+            _chat_turn.skill_playbook, d.platform, body, _skill_early,
+            _chat_turn._context_window(d, provider_choice, model_choice),
         ))
     if (getattr(body, "workspace_dir", "") or "").strip():
         _prep.start("workspace", _chat_turn._none_on_error(asyncio.to_thread(
@@ -3903,33 +3914,32 @@ async def chat_stream(
         _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
     if (body.skill or "").strip():
-        sk = d.platform.skills.get(body.skill.strip())
+        sk = _skill_early if _skill_early is not None else await _chat_turn.turn_skill_async(d.platform, body)
         if sk is None:
             # The 404 is `_eager_checks` (v1.312.0); a skill that vanished
             # between that check and here (the registry repopulates in place)
-            # is said in the stream, in the same words.
+            # — or (v1.417.0) a folder skill the eager check could not read
+            # without blocking — is said in the stream, in the same words.
             yield _sse("error", {"detail": f"no such skill: {body.skill}"})
             return
         # v1.298.0: an external-root or agent/proposal-made skill is SCANNED
         # (skills/framework.guarded_instructions — the inject rule); the
-        # user's own and builtin skills ride verbatim. MIRROR NOTE (lock-step).
-        from ...skills.framework import guarded_instructions
-
-        # Off the loop, clipped to the playbook's 8,000 BEFORE the scan
-        # (PERF, wave-4a review). Lock-step with chat_turn.
+        # user's own and builtin skills ride verbatim. v1.417.0: what rides is
+        # Claude Code's own invocation (``chat_turn.skill_playbook``: the base
+        # directory line and the body with its ARGUMENTS filled), whole up to
+        # ``native.INVOKE_CHARS``. MIRROR NOTE (lock-step): chat_turn.
         # v1.332.0: started with the other prep steps above; read inline only
         # when the registry gained the skill since then.
         _playbook = await (
             _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
-                guarded_instructions,
-                sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
-                cap=8000,
+                _chat_turn.skill_playbook, d.platform, body, sk,
+                _chat_turn._context_window(d, provider_choice, model_choice),
             )
         )
         _skill_text = (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
             "FOLLOW this playbook for this request.\n"
-            + _playbook[:8000]
+            + _playbook
         )
         system += _skill_text
         _ctx_pieces.setdefault("skills", []).append(_skill_text)

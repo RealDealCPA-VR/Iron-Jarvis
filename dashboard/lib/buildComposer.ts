@@ -197,6 +197,18 @@ export function sourceWords(row: SlashRow): string {
       return "from Claude Code";
     case "codex":
       return "from Codex";
+    // v1.417.0 (skill parity): the other harnesses' skill folders, and a
+    // skill the session folder brings (.claude/skills, .agents/skills …).
+    case "agents":
+      return "from your agent skills";
+    case "grok":
+      return "from Grok";
+    case "opencode":
+      return "from OpenCode";
+    case "pi":
+      return "from Pi";
+    case "project":
+      return "this folder";
     case "builtin":
       return "built in";
     case "custom":
@@ -314,8 +326,29 @@ export function decodeSkills(raw: unknown, source: SkillSource): SkillOption[] {
   const out: SkillOption[] = [];
   for (const s of list) {
     if (!s || typeof s !== "object") continue;
-    const { name, description, source: origin } = s as { name?: unknown; description?: unknown; source?: unknown };
+    const {
+      name,
+      description,
+      source: origin,
+      kind,
+      user_invocable: userInvocable,
+    } = s as { name?: unknown; description?: unknown; source?: unknown; kind?: unknown; user_invocable?: unknown };
     if (typeof name !== "string" || !name.trim()) continue;
+    // v1.417.0 (skill parity): `user-invocable: false` is never offered by
+    // "/" (Claude Code's rule; the model may still load it).
+    if (userInvocable === false) continue;
+    // v1.417.0: a skill the session FOLDER brings for the harnesses
+    // (`kind: "project"` on the session's own list) runs as one of YOUR
+    // skills (`skill`), never as a harness-layer skill (`folder_skill`).
+    if (kind === "project") {
+      out.push({
+        name,
+        description: typeof description === "string" ? description : "",
+        source: "yours",
+        origin: "project",
+      });
+      continue;
+    }
     out.push({
       name,
       description: typeof description === "string" ? description : "",
