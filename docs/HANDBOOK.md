@@ -4336,6 +4336,38 @@ tray icon and the installer, each drawn from a size made for it (16 to 256
 pixels). After the update installs, Windows may keep showing the old picture
 on a shortcut for a while; signing out and back in refreshes it.
 
+## Skills from your other coding tools work the same here (v1.417.0)
+
+A skill you installed for Claude Code, Codex, Grok, Pi or OpenCode works in
+a coding session (Chat › Code) the way it works in that tool:
+
+- **The same skills.** Claude Code's skills folder, the skills of the
+  plugins Claude Code really loads (installed and switched on — not one you
+  only browsed or turned off), the claude.ai skills of the account Claude
+  Code is signed in to, Codex's skills (`CODEX_HOME` respected),
+  `~/.agents/skills`, Grok's, Pi's and OpenCode's own folders — and the
+  skills the session's folder brings (`.claude/skills`, `.agents/skills`,
+  `.grok/skills`, `.opencode/skills`, `.pi/skills`, from the folder up to
+  its repository). Skills synced for a different claude.ai account no
+  longer appear.
+- **The model is told which skills it can use**, up front, the way its
+  tool lists them (Claude Code's list, or Codex's with where each SKILL.md
+  is), so it no longer has to search for them first.
+- **A loaded skill says where it lives.** The model gets "Base directory for
+  this skill: …" first, so a skill that ships scripts or reference files
+  (`node scripts/run.mjs`) runs them from the skill's own folder. Words
+  after the name fill the skill's `$ARGUMENTS` (and `$0`, `$1`, named
+  arguments, `${CLAUDE_SKILL_DIR}`), for `/name words` and when the model
+  loads it.
+- **Their own switches are respected.** `disable-model-invocation: true`
+  (Codex: `allow_implicit_invocation: false`) means only your `/name` runs
+  it; `user-invocable: false` keeps it out of the `/` menu. A skill's
+  `allowed-tools` never grants anything — every action still goes through
+  your approval setting — and a skill that is not your own is checked for
+  hidden instructions before the model reads it.
+- **`/name` sends the whole skill** (up to 100,000 characters; it used to
+  stop at 8,000).
+
 ## Claude Code's `/` commands, and sessions with no folder (v1.380.0)
 
 **Type `/name` and your words, then press Enter**, in a Build session's box

@@ -172,6 +172,28 @@ class Skill:
     pinned: bool = False
     #: ISO timestamp stamped when the curator archived this copy; "" live.
     archived_at: str = ""
+    #: v1.417.0 (skill parity): the frontmatter the harnesses a skill came
+    #: from honour (Claude Code 2.1.316, Codex 0.157.0, Grok, Pi, OpenCode —
+    #: the Agent Skills fields). ``when_to_use`` (``when_to_use`` /
+    #: ``when-to-use``) is added to the listing's description as Claude Code
+    #: does ("<description> - <when to use>").
+    when_to_use: str = ""
+    #: False when ``disable-model-invocation: true`` (Claude Code, Grok, Pi)
+    #: or Codex's ``agents/openai.yaml`` says ``policy:
+    #: allow_implicit_invocation: false``: the skill is not listed to the
+    #: model, not found by ``skill_search`` and ``skill_load`` refuses it —
+    #: only the user's "/name" runs it.
+    model_invocable: bool = True
+    #: False when ``user-invocable: false``: not offered in the "/" menu (the
+    #: model may still load it).
+    user_invocable: bool = True
+    #: ``arguments`` — the NAMED ``$name`` placeholders (Claude Code).
+    argument_names: tuple[str, ...] = ()
+    #: ``argument-hint`` — the "/" menu's hint.
+    argument_hint: str = ""
+    #: ``allowed-tools`` as written. READ, NEVER OBEYED: Iron Jarvis's own
+    #: approval rules decide every call (a skill never grants a tool).
+    allowed_tools: tuple[str, ...] = ()
 
 
 def _list_files(directory: Path) -> list[str]:
@@ -184,6 +206,75 @@ def _list_files(directory: Path) -> list[str]:
 def _created_by(meta: dict) -> str:
     value = str(meta.get("created_by") or "").strip().lower()
     return value if value in CREATED_BY_VALUES else "user"
+
+
+def _flag(value: Any, default: bool) -> bool:
+    """A frontmatter boolean the way Claude Code reads one: true/false,
+    yes/no, on/off, 1/0; anything else is ``default``."""
+    if isinstance(value, bool):
+        return value
+    text = str(value if value is not None else "").strip().lower()
+    if text in ("true", "yes", "on", "1"):
+        return True
+    if text in ("false", "no", "off", "0"):
+        return False
+    return default
+
+
+def _named_args(value: Any) -> tuple[str, ...]:
+    """``arguments: [issue, branch]`` (or a space-separated string)."""
+    if isinstance(value, str):
+        items: list[Any] = value.split()
+    elif isinstance(value, list):
+        items = value
+    else:
+        return ()
+    out: list[str] = []
+    for item in items:
+        name = str(item or "").strip()
+        if name and not name.isdigit() and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", name) and name not in out:
+            out.append(name)
+    return tuple(out[:64])
+
+
+def _hint(value: Any) -> str:
+    """``argument-hint`` as Claude Code shows it: YAML reads ``[file]`` as a
+    list, which JavaScript's ``String`` writes as ``file`` (items joined by a
+    comma)."""
+    if isinstance(value, list):
+        value = ",".join(str(v) for v in value)
+    return " ".join(str(value or "").split())[:200]
+
+
+def _tool_list(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        items: list[Any] = re.split(r"[,\s]+", value)
+    elif isinstance(value, list):
+        items = value
+    else:
+        return ()
+    return tuple(str(i).strip() for i in items if str(i or "").strip())[:64]
+
+
+#: Codex's per-skill policy file (``<skill>/agents/openai.yaml``) is small.
+_OPENAI_YAML_BYTES = 64 * 1024
+
+
+def _codex_allows_implicit(skill_dir: Path) -> bool:
+    """Codex 0.157.0: ``agents/openai.yaml`` ``policy.allow_implicit_invocation:
+    false`` keeps a skill out of the model's list (measured with ``codex debug
+    prompt-input``: ``review-agent`` is not listed). Absent/unreadable = True."""
+    path = Path(skill_dir) / "agents" / "openai.yaml"
+    try:
+        if not path.is_file() or path.stat().st_size > _OPENAI_YAML_BYTES:
+            return True
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001 — a bad policy file never hides a skill
+        return True
+    policy = data.get("policy") if isinstance(data, dict) else None
+    if isinstance(policy, dict) and "allow_implicit_invocation" in policy:
+        return _flag(policy.get("allow_implicit_invocation"), True)
+    return True
 
 
 def load_skill(dir: Path, source: str = "user") -> Skill:
@@ -210,4 +301,13 @@ def load_skill(dir: Path, source: str = "user") -> Skill:
         created_session=str(meta.get("created_session") or "").strip(),
         pinned=bool(meta.get("pinned", False)),
         archived_at=str(meta.get("archived_at") or "").strip(),
+        when_to_use=" ".join(str(meta.get("when_to_use") or meta.get("when-to-use") or "").split()),
+        model_invocable=(
+            not _flag(meta.get("disable-model-invocation"), False)
+            and _codex_allows_implicit(skill_dir)
+        ),
+        user_invocable=_flag(meta.get("user-invocable", True), True),
+        argument_names=_named_args(meta.get("arguments")),
+        argument_hint=_hint(meta.get("argument-hint")),
+        allowed_tools=_tool_list(meta.get("allowed-tools")),
     )

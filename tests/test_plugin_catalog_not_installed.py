@@ -45,7 +45,14 @@ def fake_home(tmp_path, monkeypatch) -> Path:
     _skill(home / ".claude" / "skills" / "my-real-skill", "my-real-skill")
 
     # A plugin installed DIRECTLY under plugins/ (not from a catalog clone).
+    # v1.417.0 (skill parity, moved on purpose): "installed" means what Claude
+    # Code means — RECORDED in installed_plugins.json (a plugin folder on disk
+    # that nothing records is not loaded by Claude Code, so not by us).
     _skill(plugins / "installed-plugin" / "skills" / "helper", "installed-helper")
+    plugins.mkdir(parents=True, exist_ok=True)
+    (plugins / "installed_plugins.json").write_text(json.dumps({"plugins": {"installed-plugin@m": [
+        {"installPath": str(plugins / "installed-plugin"), "scope": "user"},
+    ]}}), encoding="utf-8")
 
     # The cloned catalog: what "add a marketplace" produces.
     mkt = plugins / "marketplaces" / "official"

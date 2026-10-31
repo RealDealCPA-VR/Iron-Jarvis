@@ -1220,6 +1220,14 @@ interface SkillOption {
   name: string;
   description: string;
   source?: string;
+  /** v1.417.0: false = `user-invocable: false` — never offered by "/". */
+  user_invocable?: boolean;
+}
+
+/** v1.417.0 (skill parity): the skills "/" may offer — a skill whose
+ *  SKILL.md says `user-invocable: false` is left out (Claude Code's rule). */
+function slashSkills(list: SkillOption[] | undefined): SkillOption[] {
+  return (list ?? []).filter((s) => s.user_invocable !== false);
 }
 
 /** One row from GET /tools — the registry sends more fields; we need these two. */
@@ -6830,7 +6838,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     if (skillsFetchedRef.current) return;
     skillsFetchedRef.current = true;
     get<{ skills: SkillOption[] }>("/skills")
-      .then((d) => setSkills(d.skills ?? []))
+      .then((d) => setSkills(slashSkills(d.skills)))
       .catch(() => {
         skillsFetchedRef.current = false; // a later open retries
         setSkills([]);
@@ -7060,7 +7068,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     if (skillsFetchedRef.current) return;
     skillsFetchedRef.current = true;
     get<{ skills: SkillOption[] }>("/skills")
-      .then((d) => setSkills(d.skills ?? []))
+      .then((d) => setSkills(slashSkills(d.skills)))
       .catch(() => {
         skillsFetchedRef.current = false; // a later "/" retries
         setSkills([]);

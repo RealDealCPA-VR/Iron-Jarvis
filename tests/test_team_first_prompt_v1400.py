@@ -31,6 +31,15 @@ v1.399.4 capture by exactly ``"\\n\\n" + ASK_POLICY`` in the system prompt,
 and the tool specs are identical (``tests/test_ask_policy_v1402.py`` holds
 that one change to its place).
 
+REGENERATED AGAIN, v1.417.0 (skill parity, ``skills/native``): a harness
+turn LISTS the skills its model may load, in the words of the harness its
+dialect speaks, and ``skill_load`` takes ``args`` and names the skill's base
+directory. Checked before it was written: every key differs from the v1.402.0
+capture by exactly that listing (after the rendered harness, before the date)
+and, where ``skill_load`` is shown under its own name (generic, gpt, qwen), its
+spec; nothing else moved. The capture now reads no skill folder of this PC
+(only the bundled skills) and writes the source folder as ``<SRC>``.
+
 The capture is machine-independent: the temporary folder and the home folder
 become placeholders, today's date becomes ``<TODAY>``, and a command tool's
 "How commands run here" note (it names the shell this PC has) becomes
@@ -116,6 +125,12 @@ async def capture(tmp_path: Path, monkeypatch, *, team: bool, team_first: "bool 
                   lanes: tuple[str, ...] = ("stream",)) -> dict[str, Any]:
     """Per dialect: the planner's system prompt and its tool specs."""
     monkeypatch.setenv("IRON_PROXY_DATA_DIR", str(tmp_path / "ipd"))
+    # v1.417.0: a harness turn LISTS the skills its model may load (skills/
+    # native), so the capture reads no skill folder of this PC — only the
+    # app's bundled ones — or it would record the developer's own skills.
+    from iron_jarvis.skills import framework as _skills_framework
+
+    monkeypatch.setattr(_skills_framework, "external_skill_roots", lambda: [])
     platform = build_platform(str(tmp_path / "home"))
     monkeypatch.setattr(platform.providers, "inherited_from", lambda name: None)
     if team:
@@ -147,7 +162,11 @@ async def capture(tmp_path: Path, monkeypatch, *, team: bool, team_first: "bool 
             first = model.calls[0]
             out[f"{lane}:{dialect}"] = {"system": first["system"], "specs": first["specs"]}
     subs = [(_dt.date.today().isoformat(), "<TODAY>")]
-    for root, mark in ((tmp_path, "<TMP>"), (Path.home(), "<HOME>")):
+    # v1.417.0: Codex's skills list names each SKILL.md's location — the
+    # bundled skills live in the app's own source folder (<SRC>).
+    import iron_jarvis as _ij
+
+    for root, mark in ((Path(_ij.__file__).parent, "<SRC>"), (tmp_path, "<TMP>"), (Path.home(), "<HOME>")):
         for form in dict.fromkeys((root, root.resolve())):
             subs += [(str(form), mark), (form.as_posix(), mark)]
     return json.loads(json.dumps(_normalise(out, subs), default=str))

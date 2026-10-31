@@ -2502,8 +2502,12 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
     skill = str(question.get("skill") or "").strip()
     source = str(question.get("skillSource") or "")
     skills = getattr(platform, "skills", None)
-    yours = skill if (skill and source != "folder" and skills is not None
-                      and skills.get(skill) is not None) else ""
+    # v1.417.0: "yours" includes a skill of the session folder's own
+    # (``.claude/skills``, ``.agents/skills`` … — ``skills/native.find``).
+    from ...skills.native import find as _find_skill
+
+    yours = skill if (skill and source != "folder"
+                      and _find_skill(skills, skill, S.folder_of(row)) is not None) else ""
     playbook = ""
     folder_skill = skill if skill and source == "folder" else ""
     if folder_skill:
@@ -3050,6 +3054,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             attachments=list(resume["attachments"]) if resume is not None else [*attachments, *picked],
             local_only=setup.get("local_only") is True,
             skill=resume["skill"] if resume is not None else str(skill or "").strip(),
+            # v1.417.0 (skill parity): the words typed after "/name" are the
+            # skill's ARGUMENTS ($ARGUMENTS, $0 …) — "" for a skill picked
+            # alone, never "Follow the X skill.". A resumed turn's are its
+            # question's (the lane reads the last user message).
+            skill_args=(
+                None if resume is not None or not str(skill or "").strip() else text
+            ),
         )
         # v1.391.0: every coding-session turn keeps its own conversation (the
         # lane saves it; `recorded_turn` drops it when the turn ends), so a
@@ -4574,6 +4585,28 @@ def register(app: FastAPI, d: Any) -> None:
         # v1.375.0: a branch's layer is its worktree's, else the main
         # checkout's (S.layer_folder_of — the session's folder otherwise).
         skills, note = folder_skills(S.layer_folder_of(row), known_tools=known)
+        # v1.417.0 (skill parity, ``skills/native``): the skills the session
+        # FOLDER brings for the harnesses — ``.claude/skills``,
+        # ``.agents/skills``, ``.grok/skills``, ``.opencode/skills``,
+        # ``.pi/skills`` from its folder up to the repository root — marked
+        # ``kind: "project"`` (the box sends them as ``skill``; the lane finds
+        # them in the folder). One a skill of the library or the harness
+        # layer shares a name with is not offered (Claude Code: personal
+        # before project); ``user-invocable: false`` is never offered.
+        from ...skills.native import project_skills
+
+        reg = getattr(d.platform, "skills", None)
+        taken = {str(s.get("name", "")).lower() for s in skills}
+        for sk in project_skills(S.folder_of(row)):
+            if sk.name.lower() in taken or not sk.user_invocable:
+                continue
+            if reg is not None and reg.get(sk.name) is not None:
+                continue
+            taken.add(sk.name.lower())
+            skills.append({
+                "name": sk.name, "description": sk.description, "kind": "project",
+                "argument_hint": sk.argument_hint,
+            })
         return {"skills": skills, "note": note}
 
     @app.get("/build/sessions/{thread_id}/commands")
