@@ -840,7 +840,7 @@ def waiting_items(
                 "title": c["title"],
                 "agent": c.get("tool") or "",
                 "since": c.get("_updated"),
-                "reason": "it is waiting for your OK on a card",
+                "reason": "it is waiting for your answer",
                 "link": c["link"],
                 "view": c["view"],
             }

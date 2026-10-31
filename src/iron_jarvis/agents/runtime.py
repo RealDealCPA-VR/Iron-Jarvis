@@ -1836,8 +1836,11 @@ class AgentRuntime:
             recent = recent_lines(self.p.engine, session.project_id, siblings, platform=self.p)
         except Exception:  # noqa: BLE001 — the recap must never break a run
             from ..projects.recent_activity import run_line
+            from .orchestrator import session_local_only
 
-            recent = [run_line(s) for s in siblings]
+            # v1.414.0 review: the fallback never hands a LOCAL-ONLY run's
+            # task on either (unsure of the scope here: keep it home).
+            recent = [run_line(s) for s in siblings if not session_local_only(s)]
         if recent:
             lines.append("Recent activity in this project (newest first):")
             lines.extend(recent)

@@ -71,7 +71,7 @@ export function codingStateWords(c: Pick<ProjectCodingSession, "state" | "outcom
     case "working":
       return "Working";
     case "waiting":
-      return "Waiting for your OK";
+      return "Waiting for you";
     case "finished":
       if (c.outcome === "failed") return "Failed";
       if (c.outcome === "cancelled") return "Stopped";

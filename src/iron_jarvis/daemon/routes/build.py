@@ -465,6 +465,28 @@ def build_round_budget(config: Any) -> int:
     return build_step_limit(config)[0]
 
 
+def retries_failed_question(row: Any, text: str) -> bool:
+    """v1.414.0 review: is ``text`` a RETRY — the session's newest line is a
+    reply that failed or was cut off, and the question it answered said the
+    same words (whitespace and case aside)? Retry sends that question again as
+    a new turn, so it is not a second saying of a correction. BLOCKING (parses
+    the transcript): call it off the loop. Never raises."""
+    try:
+        msgs = S._messages(row)
+        if not msgs or msgs[-1].get("role") != "assistant":
+            return False
+        last = msgs[-1]
+        if not (str(last.get("error") or "").strip() or last.get("interrupted") is True):
+            return False
+        for m in reversed(msgs[:-1]):
+            if m.get("role") == "user" and not m.get("steer"):
+                said = " ".join(str(m.get("content") or "").split()).casefold()
+                return bool(said) and said == " ".join(str(text or "").split()).casefold()
+        return False
+    except Exception:  # noqa: BLE001 — unsure: not a retry (the chat's own rule)
+        return False
+
+
 def _never_orphaned() -> bool:
     """A BUILD turn's ``should_stop`` (v1.384.0): never. A chat turn nobody
     has watched for ``durable_turns.ORPHAN_STOP_S`` (an hour) is stopped — it
@@ -2950,6 +2972,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         else:
             _history, _summary = await asyncio.to_thread(_compact.history_for_turn, row)
         history = [ChatMessageBody(**m) for m in _history]
+        # v1.414.0 review: Retry sends a failed (or cut-off) question again as
+        # a NEW turn, so its words sit in the history once already — read as an
+        # earlier saying, ONE correction would offer itself as a preference.
+        asks_preference = started_by == "person" and not continuation
+        if asks_preference and resume is None:
+            asks_preference = not await asyncio.to_thread(retries_failed_question, row, text)
         # v1.381.0: what this turn's command-running calls must ask about
         # (harness/command_shell) — every command when a project's or a
         # plugin's command with shell lines starts it (or it CONTINUES such a
@@ -3139,7 +3167,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     # the one-press Keep line under the reply, as in chat —
                     # never for a turn Iron Jarvis started by itself (a
                     # carry-on, the night, a check fix, a restart).
-                    suggest_preferences=started_by == "person" and not continuation,
+                    # (v1.414.0 review: nor a Retry of a failed question —
+                    # `retries_failed_question`.)
+                    suggest_preferences=asks_preference,
                     harness="auto",
                     round_budget=rounds,
                     stay_in_chat=True,

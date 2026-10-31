@@ -116,6 +116,14 @@ def _withhold_local_only() -> bool:
         return True
 
 
+def _run_local_only(s: Any) -> bool:
+    """Is this run row LOCAL ONLY (``options_json.local_only``, v1.332.0)?
+    The orchestrator's own reading (never raises)."""
+    from ..agents.orchestrator import session_local_only
+
+    return session_local_only(s)
+
+
 def _chat_rows(engine: Any, project_id: str, exclude: str) -> list[tuple[str, Any, Any, Any]]:
     from ..core.models import ChatThreadRecord as T, chat_surface_only
 
@@ -197,6 +205,12 @@ def recent_lines(
     chats and no coding sessions this is exactly ``[run_line(s) for s in
     runs]``."""
     run_list = list(runs)
+    # v1.414.0 review: a run switched to LOCAL ONLY keeps its task and summary
+    # (far more than a title) home from work that leaves this network — the
+    # same rule as a local-only chat or coding session. Every other run's line
+    # is unchanged (byte-identical).
+    if any(_run_local_only(s) for s in run_list) and _withhold_local_only():
+        run_list = [s for s in run_list if not _run_local_only(s)]
     base = [(_naive(getattr(s, "created_at", None)), run_line(s)) for s in run_list]
     extras = extra_entries(
         engine, project_id, platform=platform, exclude_thread=exclude_thread, now=now,

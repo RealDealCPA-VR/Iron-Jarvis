@@ -278,7 +278,7 @@ export function waitingKindLabel(kind: string): string {
       return "Stopped. It needs your answer";
     case "interrupted":
       return "Cut off by a restart. Continue?";
-    // v1.414.0: a coding session parked on a card.
+    // v1.414.0: a coding session parked on the user (a card or a question).
     case "coding_session":
       return CODING_SESSION_LABEL;
     default:

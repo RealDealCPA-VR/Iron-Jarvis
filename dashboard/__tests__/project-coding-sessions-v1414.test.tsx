@@ -85,7 +85,7 @@ describe("lib/codingSessions", () => {
 
   it("says each state in words", () => {
     expect(codingStateWords({ state: "working", outcome: "" })).toBe("Working");
-    expect(codingStateWords({ state: "waiting", outcome: "" })).toBe("Waiting for your OK");
+    expect(codingStateWords({ state: "waiting", outcome: "" })).toBe("Waiting for you");
     expect(codingStateWords({ state: "finished", outcome: "completed" })).toBe("Finished");
     expect(codingStateWords({ state: "finished", outcome: "failed" })).toBe("Failed");
     expect(codingStateWords({ state: "finished", outcome: "cancelled" })).toBe("Stopped");
@@ -102,7 +102,7 @@ describe("ProjectCodingSessions", () => {
     expect(a.getAttribute("href")).toBe("/chat?view=code&session=chat_1");
     expect(a.getAttribute("data-state")).toBe("waiting");
     expect(a.textContent).toContain("Fix the invoice export");
-    expect(a.textContent).toContain("Waiting for your OK");
+    expect(a.textContent).toContain("Waiting for you");
     const b = screen.getByTestId("project-coding-session-app_2");
     expect(b.getAttribute("href")).toBe("/terminals?view=code&code=app_2");
     expect(b.textContent).toContain("Codex · ");
@@ -131,7 +131,7 @@ describe("the world's lists name a coding session as one", () => {
             agent: "",
             since: "2026-10-30T10:00:00+00:00",
             link: "/chat?view=code&session=chat_1",
-            reason: "it is waiting for your OK on a card",
+            reason: "it is waiting for your answer",
           },
         ]}
       />,

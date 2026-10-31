@@ -4570,7 +4570,20 @@ does not need a bump, stop and bump it.
   the reply. `corrections._ONE_OFF` refuses code-scoped corrections ("in
   this repo/module/package/workspace/session/case", "right now", "today",
   "here"). Build › Code (the real CLI) offers none: its words never pass
-  through a lane. Pins: `tests/test_{project_coding_sessions,
+  through a lane. REVIEW (each red first): (1) a LOCAL-ONLY agent run's task
+  + summary still rode every project turn's run lines — `recent_lines` now
+  withholds a run whose `options_json.local_only` is true by the same rule,
+  and the runtime's fallback (`run_line` per sibling) always leaves it out;
+  (2) Retry of a failed or cut-off question minted from ONE correction (the
+  question sits in the history once already) — `routes/build.
+  retries_failed_question` turns the ask off for that turn; (3) the moment
+  words ("right now", "today", "here") live in `corrections._MOMENT` and give
+  way to a lasting marker in the same message (`_LASTING`: "you keep",
+  "anywhere", "every day", "forever"…); "our" scopes CODE nouns only ("no
+  emoji in our chat" is every chat); (4) a waiting coding session reads "it
+  is waiting for your answer" / "Waiting for you" (a question waits too, not
+  only a card). Pins: `tests/test_project_spine_review_v1414.py`,
+  `tests/test_{project_coding_sessions,
   project_recent_activity,code_preferences}_v1414.py`,
   `dashboard/__tests__/{project-coding-sessions,project-page-coding-sessions,
   harness-preference-suggestion}-v1414.test.tsx`; moved on purpose:
