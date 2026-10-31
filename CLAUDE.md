@@ -7623,7 +7623,8 @@ does not need a bump, stop and bump it.
   writes `<SRC>`). Moved on purpose: `test_plugin_catalog_not_installed`,
   the trash tests of `test_build_slash_commands_v1379` /
   `_nofolder_review_v1379` (their plugins are now INSTALLED Claude Code's
-  way). LIVE (scratch daemon 8797, real claude-cli Haiku 4.5): a coding
+  way), two pins of `test_harness_helpers_v1372` (`Skill`'s args now reach
+  `skill_load`; the base-directory line leads the user's own text). LIVE (scratch daemon 8797, real claude-cli Haiku 4.5): a coding
   session loaded the installed `pixio-skill` and answered its script's path
   `C:\Users\VR\.claude\skills\pixio-skill\scripts\pixio-run.mjs`. OPEN:
   Claude Code's managed settings and `skillOverrides` are not read; Grok's
