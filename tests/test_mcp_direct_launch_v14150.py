@@ -387,7 +387,9 @@ def test_only_a_fresh_spec_is_asked_again_and_only_once_a_day(tmp_path, state, m
         return 1, ""
 
     monkeypatch.setattr(dl, "ask_runner", runner)
+    monkeypatch.setattr(dl, "check_runner", runner)
     c = make_npx_cache(tmp_path, "pkg", "pkg")
+    (tmp_path / "npm.cmd").write_text("@echo off")  # the npm beside npx
     fresh = npx_spec(tmp_path, "pkg")
     pinned = npx_spec(tmp_path, "pkg@1.0.0")
     dl.put_record(fresh, {**npx_record(c), "asked_at": time.time()})
@@ -397,7 +399,11 @@ def test_only_a_fresh_spec_is_asked_again_and_only_once_a_day(tmp_path, state, m
     assert dl.note_started(fresh)
     assert not dl.note_started(fresh)  # already queued: one ask at a time
     assert dl.drain(30)
-    assert len(calls) == 1 and "--package=pkg" in calls[0]
+    # v1.415.0 review: the DAILY refresh of an npx pack is the read-only
+    # `npm pack --dry-run` check, never npx (which upgrades _npx in place).
+    assert len(calls) == 1 and calls[0][1:] == [
+        "pack", "--dry-run", "--json", "--prefer-online", "pkg"]
+    assert not any("--package=pkg" in a for a in calls[0])
 
 
 def test_no_state_home_means_no_ask(tmp_path, monkeypatch):

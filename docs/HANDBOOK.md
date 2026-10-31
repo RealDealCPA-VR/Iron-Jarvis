@@ -2617,9 +2617,11 @@ answer, and from then on starts the server from those files itself.
   after that, and the next start (a restart, or **Retry**) is direct. A pack
   started this way also starts faster: `npx` checks the internet for a newer
   version on every start, which took 3 to 5 seconds.
-- **Still up to date.** For a pack with no version pinned, the launcher is
-  asked again at most once a day, so a newer version arrives on the next
-  start after that check instead of on every start.
+- **Still up to date.** For a pack with no version pinned, Jarvis checks at
+  most once a day whether a newer version is out, without changing anything
+  (for `npx` packs it asks npm which version it would pick; a running pack's
+  files are never touched). When there is one, the pack's next start goes
+  through its launcher, which installs it, exactly as before.
 - **Never a guess.** If anything is not certain (a copy installed globally or
   in the pack's folder, a version the saved copy does not match, an unusual
   launcher command line, or a `%NAME%` or `^` in its arguments that the

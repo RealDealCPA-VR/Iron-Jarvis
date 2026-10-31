@@ -26,10 +26,25 @@ says ``GET 200 …/server-everything (cache revalidated)`` on each run) and
 upgrades the copy in its cache when a newer one exists. ``uvx <pkg>``
 re-resolves on every start too (the user's uv cache holds ~60 environments
 for ``mcp-server-fetch``, one per day the dependencies moved). A direct start
-skips that check, so the ask is repeated in the background at most once every
-:data:`REFRESH_S` (a day) per pack — the next start after it runs what the
-launcher would have run. A pack pinned to an exact version or a range (npx
-does not revalidate those) is only asked when it has no answer yet.
+skips that check, so it is made in the background at most once every
+:data:`REFRESH_S` (a day) per pack. For npx it is READ-ONLY (review): asking
+npx again would UPGRADE ``_npx/<hash>`` in place under a server running from
+it all day, while npx itself only ever upgrades at a start. So the daily check
+is ``npm pack --dry-run --json --prefer-online <spec>`` (the npm next to npx):
+the same ``pacote.manifest`` pick npx makes — engines included (measured:
+``npm view`` said 2.1.0 for server-everything, whose 2.x needs node >= 24,
+while npx and ``npm pack`` both pick 1.0.0 on node 20), the same project /
+user / env config (measured: a project ``.npmrc`` registry stops both the
+same way) — writing only npm's HTTP cache, never ``_npx`` (snapshot
+measured) and no tarball. A different version marks the answer ``outdated``:
+the NEXT start goes through npx, which upgrades at start time as it always
+did, and the ask after that start keeps the new answer. A check that cannot
+run or answer changes nothing and is tried again after :data:`CHECK_RETRY_S`.
+uv is asked again as before: a new resolution is a NEW environment (measured:
+``--refresh``/``--upgrade`` left the running environment byte-for-byte as it
+was; a different resolution got another ``archive-v0`` folder). A pack pinned
+to an exact version or a range (npx does not revalidate those) is only asked
+when it has no answer yet.
 
 NEVER A GUESS. Anything this module is not sure of starts the pack exactly as
 before, through its launcher: no answer yet, an answer that no longer matches
@@ -59,6 +74,7 @@ import queue
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -76,6 +92,12 @@ REFRESH_S = 24 * 3600.0
 FAILED_HOLD_S = 24 * 3600.0
 #: The bound on one background ask (an npx first install measured 9 s).
 ASK_TIMEOUT_S = 120.0
+#: The bound on one read-only npm freshness check (measured 1.7-2.3 s).
+CHECK_TIMEOUT_S = 60.0
+#: A check that could not run or answer is tried again after this long.
+CHECK_RETRY_S = 3600.0
+#: ``os.replace`` attempts when Windows says the answers file is busy.
+_REPLACE_TRIES = 25
 #: How long a DIRECT start may take to answer ``initialize`` before the pack
 #: is started through its launcher instead (a cached direct start of
 #: server-everything answered in 0.6 s; through npx, 3.9-5.2 s).
@@ -332,13 +354,31 @@ def _save() -> None:
         return
     with _LOCK:
         data = dict(_load())
+        # A temp name of its OWN per write (v1.415.0 review): two processes
+        # (the daemon and a CLI one-shot) writing one fixed ``.tmp`` could
+        # truncate each other's half-written file and replace the answers
+        # with a torn one. Last writer still wins; an answer lost that way
+        # only means that pack starts through its launcher and is asked again.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, path)
+            tmp.write_bytes(json.dumps(data, indent=1, sort_keys=True).encode("utf-8"))
+            for attempt in range(_REPLACE_TRIES):
+                try:
+                    os.replace(tmp, path)
+                    break
+                except PermissionError:
+                    # Windows: another process is replacing or reading the
+                    # file this instant. Brief, bounded patience.
+                    if attempt == _REPLACE_TRIES - 1:
+                        raise
+                    time.sleep(min(0.1, 0.01 * (attempt + 1)))
         except Exception as exc:  # noqa: BLE001 — memory still has the answer
             log.warning("mcp direct-launch answers not saved: %s", exc)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def record_for(spec: LaunchSpec) -> dict[str, Any] | None:
@@ -659,6 +699,11 @@ def _plan(spec: LaunchSpec | None, *, now: float | None = None) -> "tuple[Direct
     failed_at = float(rec.get("failed_at") or 0)
     if failed_at and when - failed_at < FAILED_HOLD_S:
         return None, "its direct start failed recently"
+    if rec.get("outdated"):
+        # The read-only daily check saw a different version than the copy in
+        # npx's cache: this start goes through npx, which upgrades at START
+        # time exactly as it always did; the ask after it keeps the new answer.
+        return None, _stale(f"version {rec['outdated']} is out; npx updates it on this start")
     if rec.get("kind") != spec.kind:
         return None, _stale("the kept answer is for another launcher")
     try:
@@ -791,16 +836,104 @@ def note_direct_failed(spec: LaunchSpec, why: str, *, now: float | None = None) 
         _save()
 
 
-_QUEUE: "queue.Queue[LaunchSpec]" = queue.Queue(maxsize=64)
+# --------------------------------------------------------------------------- #
+# The read-only daily check (npx).
+# --------------------------------------------------------------------------- #
+#: The check runner (a seam for tests), same shape as :data:`ask_runner`.
+check_runner: Callable[..., tuple[int, str]] = _run_ask_default
+#: The clock the check and its retry read (a seam for tests).
+_clock: Callable[[], float] = time.time
+#: When a pack's check last could not run or answer (in memory: a restart
+#: may simply try again).
+_CHECK_FAILED: dict[str, float] = {}
+
+
+def check_argv(spec: LaunchSpec) -> list[str] | None:
+    """``npm pack --dry-run --json --prefer-online <spec>`` with the npm that
+    sits beside the npx this pack runs (``npx.CMD`` -> ``npm.CMD``), or
+    ``None`` when there is none."""
+    npx = Path(spec.launcher)
+    npm = npx.with_name("npm" + npx.suffix)
+    if spec.kind != "npx" or not npm.is_file():
+        return None
+    return [str(npm), "pack", "--dry-run", "--json", "--prefer-online", spec.spec]
+
+
+def _installed_version(spec: LaunchSpec, rec: dict[str, Any]) -> str | None:
+    try:
+        install = Path(str(rec["cache"])) / "_npx" / npx_hash(spec.spec)
+        manifest = _read_json(install / "node_modules" / spec.name / "package.json")
+        version = manifest.get("version") if isinstance(manifest, dict) else None
+        return str(version) if version else None
+    except Exception:  # noqa: BLE001 — unknown: nothing is changed
+        return None
+
+
+def _picked_version(spec: LaunchSpec, stdout: str) -> str | None:
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return None
+    item = data[0]
+    if item.get("name") != spec.name or not isinstance(item.get("version"), str):
+        return None
+    return item["version"] or None
+
+
+def check(spec: LaunchSpec) -> bool | None:
+    """The READ-ONLY daily freshness check of an npx pack: which version npm
+    would pick now, against the copy in npx's cache. ``True`` = same (the
+    answer counts as fresh for another day), ``False`` = different (marked
+    ``outdated``: the next start goes through npx), ``None`` = the check could
+    not run or answer (nothing changed; tried again after
+    :data:`CHECK_RETRY_S`). Blocking (the background worker calls it); never
+    raises; never touches ``_npx``."""
+    rec = record_for(spec)
+    argv = check_argv(spec)
+    have = _installed_version(spec, rec) if rec is not None else None
+    want = None
+    if argv is not None and have is not None:
+        try:
+            rc, out = check_runner(argv, env=spec.env, cwd=spec.cwd, timeout=CHECK_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001
+            log.info("mcp direct-launch: npm could not check %s: %s", spec.spec, exc)
+            rc, out = -1, ""
+        want = _picked_version(spec, out) if rc == 0 else None
+    if want is None:
+        with _LOCK:
+            _CHECK_FAILED[spec.key] = _clock()
+        log.info("mcp direct-launch: the freshness check of %s did not answer", spec.spec)
+        return None
+    with _LOCK:
+        cur = _load().get(spec.key)
+        if cur is None or _installed_version(spec, cur) != have:
+            return None  # the answer changed meanwhile: leave it to the next start
+        _CHECK_FAILED.pop(spec.key, None)
+        if want == have:
+            cur["asked_at"] = _clock()
+            cur.pop("outdated", None)
+        else:
+            cur["outdated"] = want
+            log.info("mcp direct-launch: %s %s is out (npx has %s); the next start goes "
+                     "through npx", spec.spec, want, have)
+        _save()
+    return want == have
+
+
+_QUEUE: "queue.Queue[tuple[str, LaunchSpec]]" = queue.Queue(maxsize=64)
 _PENDING: set[str] = set()
 _WORKER: threading.Thread | None = None
 
 
 def _worker() -> None:
     while True:
-        spec = _QUEUE.get()
+        job, spec = _QUEUE.get()
         try:
-            ask(spec)
+            (check if job == "check" else ask)(spec)
+        except Exception as exc:  # noqa: BLE001 — the worker never dies
+            log.warning("mcp direct-launch %s of %s failed: %s", job, spec.spec, exc)
         finally:
             with _LOCK:
                 _PENDING.discard(spec.key)
@@ -813,27 +946,45 @@ def needs_ask(spec: LaunchSpec, *, now: float | None = None) -> bool:
         return True
     if not spec.fresh:
         return False
-    when = time.time() if now is None else now
+    when = _clock() if now is None else now
     return when - float(rec.get("asked_at") or 0) >= REFRESH_S
+
+
+def _job_for(spec: LaunchSpec, plan_failed: bool) -> str | None:
+    """What the background worker should do after a start: ``ask`` the
+    launcher (no answer, a stale one, or a uv pack's day-old one), ``check``
+    an npx pack's day-old answer READ-ONLY, or nothing."""
+    if plan_failed or record_for(spec) is None:
+        return "ask"
+    if not needs_ask(spec):
+        return None
+    if spec.kind != "npx":
+        return "ask"  # uv: a new resolution is a new environment (measured)
+    failed = _CHECK_FAILED.get(spec.key)
+    if failed is not None and _clock() - failed < CHECK_RETRY_S:
+        return None
+    return "check"
 
 
 def note_started(spec: LaunchSpec | None, *, plan_failed: bool = False) -> bool:
     """A pack started (any way). Queue a background ask when it has no
-    answer yet, its answer did not hold on disk (``plan_failed``), or it is a
-    fresh spec whose answer is a day old. ONE ask runs at a time (each is an
-    npm or uv process of 80-160 MB for a few seconds). Only with a state home
-    (the daemon): a CLI one-shot or a unit test never asks. Returns whether
-    an ask was queued."""
+    answer yet or its answer did not hold on disk (``plan_failed``); for a
+    fresh spec whose answer is a day old, a READ-ONLY ``check`` (npx) or an
+    ask (uv). ONE job runs at a time (each is an npm or uv process of 80-160
+    MB for a few seconds). Only in the daemon (``set_state_dir(..., ask=
+    True)``): a CLI one-shot or a unit test never asks. Returns whether a job
+    was queued."""
     global _WORKER
     if spec is None or not enabled() or _STATE_DIR is None or not _ASKS:
         return False
-    if not (plan_failed or needs_ask(spec)):
+    job = _job_for(spec, plan_failed)
+    if job is None:
         return False
     with _LOCK:
         if spec.key in _PENDING:
             return False
         try:
-            _QUEUE.put_nowait(spec)
+            _QUEUE.put_nowait((job, spec))
         except queue.Full:
             return False
         _PENDING.add(spec.key)
@@ -856,6 +1007,10 @@ def drain(timeout: float = 60.0) -> bool:
 
 __all__ = [
     "ASK_TIMEOUT_S",
+    "CHECK_RETRY_S",
+    "CHECK_TIMEOUT_S",
+    "check",
+    "check_argv",
     "DIRECT_INIT_TIMEOUT_S",
     "DirectPlan",
     "ENV_SWITCH",

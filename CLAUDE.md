@@ -11451,8 +11451,9 @@ does not need a bump, stop and bump it.
   FRESHNESS (measured): `npx -y <name>` revalidates against the registry on
   EVERY start (`GET … (cache revalidated)`, 3.9-5.2 s) and `uvx` re-resolves
   every start; a direct start skips that, so a fresh spec (no version /
-  `latest`, every uv spec) is re-asked at most once per `REFRESH_S` (a day),
-  in the background, and the new version runs from the NEXT start. THE START
+  `latest`, every uv spec) is refreshed at most once per `REFRESH_S` (a day),
+  in the background, and the new version runs from the NEXT start (an npx
+  pack's refresh is the READ-ONLY check, see REVIEW 2 (1)). THE START
   (`client.StdioTransport._ensure_started`): Job, suspended start, stderr
   ring, tree kill, UTF-8 pipes all unchanged; the direct handshake is bounded
   by `DIRECT_INIT_TIMEOUT_S` (10 s, via `_read_cap` — `_read`/`_rpc` keep
@@ -11468,8 +11469,8 @@ does not need a bump, stop and bump it.
   rows) gain `launch {direct, how, note}` for npx/uvx packs ONLY (other
   packs byte-identical). Known differences: the server's env lacks npm's
   `npm_*` script variables (PATH gets the same prepended folders, read off
-  the ask); a background refresh may upgrade npx's cache dir under a running
-  direct server (the same exposure a second npx start always had).
+  the ask); the ask right after a launcher start runs npx again beside the
+  server that start launched (as a second npx start always could).
   `IRONJARVIS_MCP_DIRECT=off` turns it all off. Pins:
   `tests/test_mcp_direct_launch_v14150.py` (fake npx + uv caches; a REAL
   direct start of `tests/fixtures/direct_launch_v14150/server.js` whose tree
@@ -11496,11 +11497,38 @@ does not need a bump, stop and bump it.
   keeps the cap. (5) `build_platform` armed background asks in every process,
   CLI one-shots too (an npm/uv install killed half way on exit): `set_state_
   dir(home, ask=defer_mcp)` — every process READS answers, only the daemon
-  asks. OPEN: two processes writing `direct-launch.json` share one `.tmp`
-  name and last-writer-wins (answers lost are re-asked); a daily refresh ask
-  can upgrade npx's `_npx/<hash>` folder under a RUNNING direct server (a
-  launcher start only upgraded at start); daemon exit mid-ask kills an npm
-  install half way.
+  asks. REVIEW 2 (`tests/test_mcp_direct_launch_refresh_v14150.py`, 15
+  mutations red): (1) the daily refresh of an npx pack ran npx, which
+  UPGRADES `_npx/<hash>` IN PLACE under a direct server running from it all
+  day (npx itself only upgrades at a start). It is now a READ-ONLY check
+  (`check`, job "check" from `_job_for`): `npm pack --dry-run --json
+  --prefer-online <spec>` with the npm BESIDE the pack's npx (`npx.CMD` ->
+  `npm.CMD`), the pack's env and cwd, through `core/procs`, 60 s, on the
+  background worker — never `npm view`: MEASURED, `npm view` said 2.1.0 for
+  server-everything whose 2.x needs node >= 24, while npx and `npm pack` both
+  pick 1.0.0 on node 20 (the same engine-aware `pacote.manifest`); a project
+  `.npmrc` registry stopped `npm pack` and npx the same way; `_npx`
+  byte-for-byte unchanged (snapshot) and no tarball written. Same version ->
+  `asked_at` refreshed; a different one -> `rec["outdated"]`, so `plan` says
+  `Why.stale` "version X is out": the NEXT start goes through npx (which
+  upgrades at start time, as always) and the ask after that start keeps the
+  new answer; an answer whose installed version changed during the check is
+  left alone; a check that cannot run or answer changes nothing and is
+  retried after `CHECK_RETRY_S` (1 h, in memory). uv is still ASKED daily:
+  MEASURED, a new resolution is a NEW `archive-v0` environment, and
+  `--refresh`/`--upgrade` left the running environment unchanged (file
+  size+mtime snapshot). (2) `direct-launch.json` is written through a temp
+  name of its OWN per write (`<name>.<pid>.<uuid>.tmp`) + `os.replace`,
+  retried while Windows says the file is busy (`_REPLACE_TRIES`), the temp
+  removed on failure; two processes x 150 writes each: no torn file and
+  no write lost to another writer's temp (the fixed `.tmp` lost 7-12 per
+  process to FileNotFoundError, measured); on a loaded PC Windows can still
+  refuse a busy replace past the retries (PermissionError, at most a few,
+  the pin allows 3). Last writer still wins; a lost answer only means a
+  launcher start and a new ask. OPEN: daemon exit
+  mid-ask kills an npm install half way; the check downloads the package's
+  tarball into npm's own cache (not `_npx`); the daily check can only run at
+  a pack start (a pack running for days is checked at its next start).
 
 ## Map (where things live)
 
