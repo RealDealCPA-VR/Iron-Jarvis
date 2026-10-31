@@ -102,6 +102,8 @@ IDLE_S = 15 * 60.0
 REAP_EVERY_S = 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
+#: v1.414.3: how long a reply's end waits for the tool's session id to be saved.
+ID_SAVE_WAIT_S = 10.0
 #: The newest events ``GET /build/app/sessions/{id}`` returns by default.
 DEFAULT_EVENTS = 2000
 #: A turn's in-memory replay keeps at most this many characters of streamed
@@ -573,6 +575,9 @@ class LiveSession:
         #: The process must restart before the next message (an effort change).
         self.restart = False
         self.limit: Any = None
+        #: v1.414.3: the background save of the tool's own session id; a
+        #: reply's end waits for it, so the row read right after names it.
+        self.id_save: asyncio.Future | None = None
         self.limit_since = ""
         self.last_error = ""
         #: The Iron-Proxy account the session runs on ("" = this PC's login).
@@ -1338,7 +1343,7 @@ class HostedService:
             except Exception:  # noqa: BLE001 — the next start mints again, said nowhere
                 log.warning("could not record a Code-view session's harness id", exc_info=True)
 
-        asyncio.ensure_future(save())
+        live.id_save = asyncio.ensure_future(save())
 
     def _on_exit(self, live: LiveSession, proc: HarnessProcess, code: int | None) -> None:
         if live.proc is not proc:
@@ -1439,6 +1444,15 @@ class HostedService:
             return
         turn.ending = True
         self._return_steers(live)
+        pending = live.id_save
+        if pending is not None and not pending.done():
+            # v1.414.3: the tool's session id is on the row before the reply
+            # ends (it was saved in the background, and a read right after the
+            # reply — "Open in terminal", a reopen — could find it empty).
+            try:
+                await asyncio.wait_for(asyncio.shield(pending), ID_SAVE_WAIT_S)
+            except Exception:  # noqa: BLE001 — the done still goes out
+                log.debug("a Code-view session's id was still being saved", exc_info=True)
         error = live.last_error
         try:
             await asyncio.to_thread(store.update, self.engine, live.sid, last_error=error)

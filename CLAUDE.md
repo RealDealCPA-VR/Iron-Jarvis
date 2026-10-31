@@ -4732,6 +4732,13 @@ does not need a bump, stop and bump it.
   purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
   tick per act — two ticks in one synchronous jump are one read now).
 
+- **A Build › Code reply ends only after the tool's own session id is on the
+  row** (v1.414.4; three CI gates read it empty). `service._on_session_id`
+  saves the id in the background (`live.id_save`), and `_end_turn` now waits
+  for that save (`ID_SAVE_WAIT_S` 10 s, shielded) before stamping the row and
+  emitting `done` — a read right after the reply ("Open in terminal", a
+  reopen) used to find "". Pin: `tests/test_build_app_id_save_v14144.py` (the
+  save held back 0.8 s; red without the wait).
 - **Python's `platform` module never asks WMI in this app** (v1.414.3, found
   measuring the user's installed daemon: ~200% CPU for as long as it ran).
   SQLAlchemy calls `platform.machine()` on import; Python 3.12 answers it with
