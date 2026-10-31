@@ -82,7 +82,7 @@ async def test_the_finish_check_reruns_a_bash_test_command_in_bash(env, lane, mo
 
     # v1.417.0 (C1.3): the test BEFORE the edit, so the check re-runs it (a
     # run that passed after the last edit is not run again).
-    (ws / "app.py").write_bytes(b"X = 11\n")  # v1.386.1 shape: a different LENGTH, so the re-run never reuses a stale .pyc
+    (ws / "app.py").write_bytes(b"X = 100\n")  # v1.386.1 shape: a different LENGTH from the X = 2 the model writes (6 bytes LF, 7 bytes CRLF on Windows), so the re-run never reuses a stale .pyc
     wire([_bash(BASH_TEST_CMD), _write("app.py", "X = 2\n"), "Set X to 2; the tests pass.", answer])
     done, _frames = await _lane(lane, platform, _claude_body(ws), monkeypatch, harness="claude")
     assert done["finish"]["tests"] == "passed", done["finish"]
