@@ -2486,6 +2486,41 @@ Build now has a switch for **Pi** and **OpenCode** too (off by default):
   the box: **Share your profile with <tool>** turns the switch on;
   **No thanks** hides the offer for good.
 
+**The right column: Changes, Usage, Files, Session.** A Build › Code session
+has the same row of icons on its right that a Chat › Code session has (in a
+narrower window the column sits under the conversation; scroll down to it).
+Rest the pointer on an icon to see its name.
+
+- **Changes** lists every file that changed, each diff in one scrolling list,
+  with **Reviewed** marks and **Open in VS Code / Cursor** at each change. The
+  coding tool writes files by itself, so Iron Jarvis reads the changes from
+  **git**: every file in the session's folder that differs from where the
+  repository was when the session started here, committed since or not, new
+  files included. That includes changes you or another program made in the
+  folder meanwhile (the files the tool edited itself are counted as its own),
+  and files git ignores are not listed. In a folder that is **not a git
+  repository**, the list is the tool's own record of the files it edited with
+  its file tools; changes made by commands it ran (a script, `sed`) are not in
+  it. There is **no Undo** here: use git, or the tool's own undo.
+- **Usage** shows what is **left** of the account's limit windows (the 5-hour
+  and 7-day windows, with when each resets): Iron-Proxy's last look at the
+  account when the session runs on an Iron-Proxy account, and the numbers the
+  tool itself reported after its last reply (Claude Code and Codex report
+  them; Pi and OpenCode do not, and the tab says so). Before any number
+  arrives it says **Not known yet**, never 0%. Below that: this session's
+  replies and tokens. A plan's use is shown at list price: what it would
+  cost, not what you paid. Nothing here asks the tool or the vendor anything;
+  it shows what was already reported.
+- **Files** is the session folder's files.
+- **Session**: where it works (this computer, the folder with **Open**, the
+  git branch, instruction files such as `CLAUDE.md` in the folder), what
+  answers (the tool, model, effort, account, the permission mode and what it
+  means, and which Iron Jarvis tools are on), how full the conversation was
+  at the tool's last report, your last attachment, how many files changed
+  (**See changes**), and the programs running under the tool right now (its
+  own helpers included). When the tool is not running, nothing is listed; it
+  starts again with your next message.
+
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron

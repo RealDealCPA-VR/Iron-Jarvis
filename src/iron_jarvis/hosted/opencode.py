@@ -1119,6 +1119,9 @@ class OpenCodeDriver(Driver):
                 LAST_COMMANDS[HARNESS] = list(self.commands)
             return
         if kind == "usage_update":
+            from . import seen as _seen  # v1.414.0: how full, as OpenCode says
+
+            _seen.note_context(self, _seen.opencode_context(u))
             cost = u.get("cost") if isinstance(u.get("cost"), dict) else {}
             amount = cost.get("amount")
             if isinstance(amount, (int, float)) and not isinstance(amount, bool):
@@ -1236,5 +1239,7 @@ class OpenCodeDriver(Driver):
             if self._cost is not None and self._cost_start is not None and self._cost > self._cost_start:
                 usage["cost_usd"] = round(self._cost - self._cost_start, 6)
                 usage["cost_reported_by"] = "OpenCode"
-            self.emit(usage)
+            from . import seen as _seen
+
+            self.emit(_seen.attach(usage, self))
         self.emit(make("done", stop=stop))

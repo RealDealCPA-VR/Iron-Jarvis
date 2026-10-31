@@ -475,6 +475,9 @@ class CodexDriver(Driver):
                     steps.append({"text": clip(s.get("step") or "", 300), "status": st})
             self.emit(make("plan", steps=steps))
         elif method == "thread/tokenUsage/updated":
+            from . import seen as _seen  # v1.414.0: how full, as Codex says
+
+            _seen.note_context(self, _seen.codex_context(p.get("tokenUsage")))
             last = _token_numbers(((p.get("tokenUsage") or {}).get("last")))
             for k in self._usage:
                 self._usage[k] += last[k]
@@ -487,6 +490,9 @@ class CodexDriver(Driver):
         elif method == "model/rerouted":
             self.emit(make("notice", text="Codex moved this turn to another model."))
         elif method == "account/rateLimits/updated":
+            from . import seen as _seen  # v1.414.0: the Usage tab's windows
+
+            _seen.note_windows(self, *_seen.codex_windows(p.get("rateLimits")))
             reached = ((p.get("rateLimits") or {}).get("rateLimitReachedType"))
             if reached:
                 self.emit(make("notice", text=f"Codex says this account reached its {clip(reached, 40)} limit."))
@@ -606,7 +612,9 @@ class CodexDriver(Driver):
             err = turn.get("error") or {}
             kind, code = _error_info(err)
             self._fail(str(err.get("message") or "Codex could not finish"), kind, code)
-        self.emit(make("usage", **self._usage, list_price=True))
+        from . import seen as _seen
+
+        self.emit(_seen.attach(make("usage", **self._usage, list_price=True), self))
         stop = {"completed": "completed", "interrupted": "interrupted", "failed": "failed"}.get(status, "failed")
         if self._interrupting and stop != "completed":
             stop = "interrupted"
