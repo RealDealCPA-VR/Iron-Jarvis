@@ -1979,6 +1979,11 @@ class HostedService:
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:
+                stopping = getattr(driver, "stopping", None)
+                if callable(stopping):
+                    # v1.416.0 review: Grok ends its reply on the deny below,
+                    # before the cancel — the driver knows it is a Stop first.
+                    stopping()
                 for ask_id in list(live.asks):  # an unanswered card goes with the stop
                     ask = live.asks.pop(ask_id, None)
                     if ask is None:

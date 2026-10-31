@@ -140,3 +140,42 @@ async def test_only_groks_process_ends_what_it_left_outside_its_job(tmp_path, mo
                                               json={"text": "do it", "turn_id": "t"}), 30)).text)
     await stop_all(app)
     assert made and all(p.ends_left_behind for p in made)
+
+
+async def test_stop_while_a_card_waits_is_the_users_stop_not_a_decline(tmp_path, monkeypatch):
+    """A Stop answers a waiting card "deny" first (Grok's ``reject-once``),
+    and Grok ends its reply on a reject AT ONCE (PermissionRejected) — before
+    the cancel that follows. That reply was ended by the user's Stop: it ends
+    "interrupted", never "completed" with "You declined, so Grok stopped"."""
+    import time as _t
+
+    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.hosted import service as S
+    from iron_jarvis.hosted import words as W
+    from tests._build_app_helpers_v1409 import client, frames, new_session, stop_all, until
+    from tests.test_build_app_grok_v1416 import EFFORT, MODEL, use_fake_grok
+
+    note = PR.HarnessProcess.note_started
+
+    def slow_note(self):
+        _t.sleep(0.4)  # what Grok started is read (a process walk) while its reject lands
+        return note(self)
+
+    monkeypatch.setattr(PR.HarnessProcess, "note_started", slow_note)
+    work = tmp_path / "work"
+    work.mkdir()
+    use_fake_grok(monkeypatch, "g_cmd_deny", tmp_path / "fake.log")
+    app = create_app(str(tmp_path / "home"))
+    async with client(app) as c:
+        s = await new_session(c, work, harness="grok", model=MODEL, effort=EFFORT)
+        svc = S.service_for(app.state.platform)
+        task = asyncio.ensure_future(c.post(f"/build/app/sessions/{s['id']}/turn",
+                                            json={"text": "do it", "turn_id": "t"}))
+        await until(lambda: s["id"] in svc.live and svc.live[s["id"]].asks)
+        r = await c.post(f"/build/app/sessions/{s['id']}/interrupt")
+        assert r.status_code == 200, r.text
+        evs = frames((await asyncio.wait_for(task, 30)).text)
+    await stop_all(app)
+    notices = [e.get("text") for e in evs if e["type"] == "notice"]
+    assert W.GROK_DECLINED_ENDS not in notices, "the user pressed Stop; they did not decline"
+    assert evs[-1]["stop"] == "interrupted", evs[-1]

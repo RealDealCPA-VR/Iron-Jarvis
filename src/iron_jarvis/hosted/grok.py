@@ -589,6 +589,13 @@ class GrokDriver(AcpDriver):
             raise ControlRefused(f"Grok did not take the note ({clip(status, 60)}).")
         return "step"
 
+    def stopping(self) -> None:
+        """v1.416.0 review: the user pressed Stop. Called BEFORE a waiting card
+        is answered "deny" for it: Grok ends its reply on that reject at once
+        (``PermissionRejected``), before the cancel that follows — and that
+        reply was ended by the Stop, never by a decline."""
+        self._interrupting = True
+
     async def set_mode(self, mode: str) -> str:
         """A mode is the session's own ``_meta``, given when Grok opens (or
         reopens) it — so a change is a NEW process before the next message
