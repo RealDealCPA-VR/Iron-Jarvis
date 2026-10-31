@@ -218,7 +218,9 @@ async def test_grok_starts_its_own_agent_over_stdio_never_a_shared_leader(app, w
         "Ask first is stated explicitly: the user's own config default (always-approve here) never decides"
     assert msgs[2]["params"]["modelId"] == MODEL
     assert msgs[3]["params"] == {"sessionId": row.harness_session_id, "configId": "reasoning_effort", "value": EFFORT}
-    assert evs[1]["type"] == "session" and evs[1]["harness"] == "grok" and evs[1]["model"] == MODEL
+    # v1.418.0: master's v1.417.0 puts a start notice before the session event.
+    sess = next(e for e in evs if e["type"] == "session")
+    assert sess["harness"] == "grok" and sess["model"] == MODEL
     tool = next(e for e in evs if e["type"] == "tool" and e["status"] == "done")
     assert tool["kind"] == "read" and tool["name"] == "read_file" and tool["title"] == "Read hello.txt"
     usage = next(e for e in evs if e["type"] == "usage")

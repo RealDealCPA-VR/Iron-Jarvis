@@ -8,6 +8,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Grok…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "grok",
     "harness_session_id": "01a19366-8cea-7361-97d2-84add5db6831",
@@ -86,6 +91,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
@@ -253,6 +263,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
@@ -435,6 +450,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Grok…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "grok",
     "harness_session_id": "01a19367-7551-7e61-ad3a-8e5adf00f6aa",
@@ -522,6 +542,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
@@ -655,6 +680,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
@@ -814,6 +844,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Grok…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "grok",
     "harness_session_id": "01a19368-44da-7f21-aab9-961626eba3fa",
@@ -929,6 +964,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
@@ -1093,6 +1133,11 @@
     "files": [
      "C:\\work\\demo\\word.png"
     ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Grok…",
     "turn": "turn-1"
    },
    {
