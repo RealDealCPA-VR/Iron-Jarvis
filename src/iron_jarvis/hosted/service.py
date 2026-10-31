@@ -87,6 +87,8 @@ from .opencode import OpenCodeDriver
 from . import jarvis_tools as JT
 from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
+from . import history as HIST  # v1.418.0 (C4.6, C4.11)
+from . import queued as Q  # v1.418.0 (C4.8)
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
 log = logging.getLogger(__name__)
@@ -649,6 +651,9 @@ class LiveSession:
         #: v1.417.0 (C4.7): why the last process went ("idle" | "evicted"),
         #: said when the next message starts one again.
         self.stopped_why = ""
+        #: v1.418.0 (C4.8): the messages waiting behind the running reply
+        #: (:class:`.queued.SessionQueue`; None until first read).
+        self.queue: Any = None
 
     @property
     def running(self) -> bool:
@@ -711,7 +716,8 @@ class HostedService:
     def _live(self, row: Any) -> LiveSession:
         live = self.live.get(row.id)
         if live is None:
-            live = LiveSession(row.id, row.harness, EventLog(self.home, row.id))
+            # v1.418.0 (C4.11): the log keeps its newest events in memory too.
+            live = LiveSession(row.id, row.harness, HIST.TailLog(self.home, row.id))
             self.live[row.id] = live
         return live
 
@@ -823,7 +829,9 @@ class HostedService:
         from .claude import LAST_COMMANDS
 
         rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
-        return [{"name": c["name"], "description": c.get("description", "")} for c in rows]
+        # v1.418.0 (C4.8): the `/` menu shows each command's argument hint.
+        return [{"name": c["name"], "description": c.get("description", ""),
+                 **({"argument_hint": c["argument_hint"]} if c.get("argument_hint") else {})} for c in rows]
 
     async def commands(self, sid: str) -> list[dict[str, str]]:
         row = await self._row(sid)
@@ -973,6 +981,8 @@ class HostedService:
             model=model, effort=effort, mode=mode, harness_session_id=resume_id,
             no_folder=no_folder,
         )
+        if resume_id:  # v1.418.0 (C4.6): its history is the tool's own transcript
+            await asyncio.to_thread(HIST.mark_outside, self.home, row.id, "disk")
         return self._with_root(store.view(row))
 
     def _with_root(self, view: dict[str, Any]) -> dict[str, Any]:
@@ -1155,14 +1165,19 @@ class HostedService:
 
     async def view(self, sid: str, *, limit: int = DEFAULT_EVENTS) -> dict[str, Any]:
         row = await self._row(sid)
-        log_ = self.live[sid].log if sid in self.live else EventLog(self.home, sid)
-        events, total, dropped = await asyncio.to_thread(log_.read, max(1, min(int(limit or DEFAULT_EVENTS), 20_000)))
         live = self.live.get(sid)
+        # v1.418.0 (C4.11): from memory when this daemon drove the session
+        # (the file is read once); else the file.
+        got = await self._view_events(sid, live, max(1, min(int(limit or DEFAULT_EVENTS), 20_000)))
         running = live.turn.id if live and live.turn and live.turn.running else None
+        # v1.418.0 (C4.6): the coding tool's own transcript, for a conversation
+        # that lived outside this view (opened from disk, or a terminal).
+        events = await self._with_transcript(row, live, got["events"], cut=bool(got["older"]))
+        dropped = got["dropped"]
         out: dict[str, Any] = {
             "session": self._with_root(self._with_live(store.view(row))),
             "events": events,
-            "events_total": total,
+            "events_total": got["events_total"] + (len(events) - len(got["events"])),
             "dropped": dropped,
             # The running turn's id (rejoin with GET …/turns/{id}/stream — its
             # replay starts with the turn's `user` event), else null.
@@ -1173,7 +1188,197 @@ class HostedService:
         out["commands"] = self.commands_for(row.harness, live)
         if row.harness in (PI, OPENCODE):
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
+        # v1.418.0 (C4.6): "Load earlier" reads the page before this cursor.
+        out["older"] = got["older"]
+        # v1.418.0 (C4.8): the messages waiting behind the reply.
+        out.update(await self._queue_view(sid, running=bool(running)))
         return out
+
+    # -- v1.418.0 (C4.6, C4.11): history that stays --------------------------------
+    async def _view_events(self, sid: str, live: "LiveSession | None", limit: int) -> dict[str, Any]:
+        """The newest ``limit`` events: from the live log's memory (seeded by
+        ONE file read), else the file."""
+        log_ = live.log if live is not None else None
+        if isinstance(log_, HIST.TailLog):
+            got = log_.served(limit)
+            if got is None and not log_.seeded:
+                await asyncio.to_thread(log_.seed)
+                got = log_.served(limit)
+            if got is not None:
+                return got
+            await asyncio.to_thread(log_.flush)
+        d = session_dir(self.home, sid)
+        return await asyncio.to_thread(HIST.file_view, d / "events.jsonl", d / "meta.json", limit)
+
+    async def _with_transcript(self, row: Any, live: "LiveSession | None", events: list[dict[str, Any]],
+                               *, cut: bool) -> list[dict[str, Any]]:
+        """The tool's own transcript merged in by time — only for a session
+        whose conversation lived outside this view (nothing in its log yet,
+        or opened from disk / a terminal: :func:`.history.mark_outside`).
+        Never fails a view."""
+        hid = str(row.harness_session_id or "")
+        if not hid or not typable_sid(row.harness, hid):
+            return events
+        if events and not await asyncio.to_thread(HIST.went_outside, self.home, row.id):
+            return events
+        running = bool(live and live.turn and live.turn.running)
+        home = home_of(row.harness, store.account_record(row))
+        imported = await asyncio.to_thread(
+            HIST.transcript_events, row.harness, home, row.folder or "", hid, allow_stale=running,
+        )
+        return HIST.merge_transcript(events, imported, cut=cut) if imported else events
+
+    async def events_page(self, sid: str, before: str, limit: int = 500) -> dict[str, Any]:
+        """``GET …/events?before=``: the events older than a view's (or a
+        page's) ``older`` cursor — the file, read when the user asks."""
+        await self._row(sid)
+        live = self.live.get(sid)
+        if live is not None:
+            await asyncio.to_thread(live.log.flush)
+        d = session_dir(self.home, sid)
+        try:
+            return await asyncio.to_thread(HIST.read_page, d / "events.jsonl", d / "meta.json", before, limit)
+        except HIST.BadCursor:
+            raise Refused(W.BAD_CURSOR, 400) from None
+
+    async def item_text(self, sid: str, item: str) -> dict[str, Any]:
+        """``GET …/events/{item}``: the whole text the log keeps for one item
+        (``EventLog.item_text`` when the log has it, else the record's own)."""
+        await self._row(sid)
+        live = self.live.get(sid)
+        log_ = live.log if live is not None else EventLog(self.home, sid)
+        own = getattr(log_, "item_text", None)
+        got: Any = None
+        if callable(own):
+            await asyncio.to_thread(log_.flush)
+            got = await asyncio.to_thread(own, item)
+            if isinstance(got, str):
+                got = {"item": item, "text": got}
+        if not isinstance(got, dict):
+            await asyncio.to_thread(log_.flush)
+            got = await asyncio.to_thread(HIST.item_text, log_.path, item)
+        if not got:
+            raise Refused(W.NO_SUCH_ITEM, 404)
+        return got
+
+    # -- v1.418.0 (C4.8): messages that wait behind the reply -----------------------
+    async def _queue_of(self, sid: str) -> Q.SessionQueue:
+        live = self.live.get(sid)
+        if live is not None and live.queue is not None:
+            return live.queue
+        saved = await asyncio.to_thread(Q.read, self.home, sid)
+        # Review (v1.418.0): a queue read from disk was left by an EARLIER
+        # run of Iron Jarvis (this run keeps its own on the live session) —
+        # the reply it waited for is gone, so it is HELD: back to the box,
+        # never sent behind the next reply (a shutdown returns before it
+        # could write the hold).
+        if saved.get("items"):
+            saved = {**saved, "held": True}
+        live = self.live.get(sid)
+        if live is not None:
+            if live.queue is None:
+                live.queue = Q.SessionQueue(self.home, sid, saved)
+            return live.queue
+        return Q.SessionQueue(self.home, sid, saved)
+
+    async def _queue_view(self, sid: str, *, running: bool) -> dict[str, Any]:
+        q = await self._queue_of(sid)
+        # The queue's OWN hold (a Stop, a failure, a limit card, or a queue
+        # an earlier run left — held when it is read back). Review (v1.418.0):
+        # never "nothing is running" — between a clean end and the next
+        # waiting message's turn starting nothing runs, and the page would
+        # pull a message the daemon is about to send back into the box.
+        return q.view()
+
+    def _persist_queue(self, q: Q.SessionQueue) -> None:
+        from ..harness.stall import keep
+
+        version, data = q.snapshot()
+        with contextlib.suppress(RuntimeError):
+            keep(asyncio.ensure_future(asyncio.to_thread(q.write, version, data)))
+
+    async def queue_add(self, sid: str, text: str, files: list[str] | None = None) -> dict[str, Any]:
+        """A message typed while a reply runs WAITS (sent when the reply ends
+        cleanly). Refused with ``code: not_working`` when no reply runs (the
+        page sends it as a message instead)."""
+        row = await self._row(sid)
+        label = W.label(row.harness)
+        text = str(text or "")
+        files = [str(f) for f in (files or []) if str(f).strip()]
+        if not text.strip() and not files:
+            raise Refused("Type a message first.", 400)
+        problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
+        if problems:
+            raise Refused(problems, 400)
+        q = await self._queue_of(sid)
+        live = self.live.get(sid)  # read AFTER the awaits: no await from here on
+        if live is None or live.turn is None or not live.turn.running or live.turn.ending:
+            raise Refused(W.QUEUE_NOT_WORKING.format(label=label), 409, code="not_working")
+        if live.queue is None:
+            live.queue = q
+        q = live.queue
+        if len(q.items) >= Q.MAX_QUEUED:
+            raise Refused(W.QUEUE_FULL.format(n=len(q.items), label=label))
+        item = q.add(text, files)
+        self._persist_queue(q)
+        return {"ok": True, "id": item["id"], **(await self._queue_view(sid, running=True))}
+
+    async def queue_remove(self, sid: str, qid: str) -> dict[str, Any]:
+        await self._row(sid)
+        q = await self._queue_of(sid)
+        if not q.remove(str(qid or "")):
+            raise Refused("That message is not waiting any more (it was sent or removed).", 404)
+        self._persist_queue(q)
+        live = self.live.get(sid)
+        return await self._queue_view(sid, running=bool(live and live.turn and live.turn.running))
+
+    async def queue_take(self, sid: str) -> dict[str, Any]:
+        """Every waiting message, taken out (the page puts them in the box)."""
+        await self._row(sid)
+        q = await self._queue_of(sid)
+        taken = q.clear()
+        self._persist_queue(q)
+        return {"ok": True, "taken": taken, "queued": [], "queue_held": False}
+
+    def _after_turn_queue(self, live: "LiveSession", turn: HostedTurn, done: dict[str, Any]) -> None:
+        """A reply ended: a clean end sends the first waiting message; any
+        other end (Stop, a failure, an account's limit card) HOLDS the queue
+        — its words go back to the box, never sent behind the user's back."""
+        q = live.queue
+        if q is None or not q.items or self._closing:
+            return
+        clean = str(done.get("stop") or "") == "completed" and not turn.account_limit
+        if not clean:
+            q.hold()
+            self._persist_queue(q)
+            return
+        from ..harness.stall import keep
+
+        with contextlib.suppress(RuntimeError):
+            keep(asyncio.ensure_future(self._send_queued(live.sid)))
+
+    async def _send_queued(self, sid: str) -> None:
+        live = self.live.get(sid)
+        q = live.queue if live is not None else None
+        if q is None or q.held:
+            return
+        item = q.pop_first()
+        if item is None:
+            return
+        self._persist_queue(q)
+        try:
+            await self.start_turn(sid, item["text"], "", item["files"])
+        except Refused as r:
+            q.put_back(item)
+            q.hold()
+            self._persist_queue(q)
+            if live is not None:
+                self._emit(live, make("notice", text=W.QUEUE_NOT_SENT.format(why=r.sentence)))
+        except Exception:  # noqa: BLE001 — a waiting message is never lost
+            log.warning("a waiting Code-view message could not be sent", exc_info=True)
+            q.put_back(item)
+            q.hold()
+            self._persist_queue(q)
 
     async def patch(self, sid: str, body: dict[str, Any]) -> dict[str, Any]:
         row = await self._row(sid)
@@ -1584,6 +1789,7 @@ class HostedService:
         turn.end("done" if done.get("stop") == "completed" else str(done.get("stop")))
         if live.turn is turn:
             live.turn = None
+        self._after_turn_queue(live, turn, done)  # v1.418.0 (C4.8)
         # v1.414.0: a long reply that ENDED is told to the bell and the tray
         # (never for a Stop or a cut-off, never beside an account's limit
         # card) — after its done is on the record.
@@ -2125,6 +2331,8 @@ class HostedService:
         session = await asyncio.to_thread(self._launch_terminal, row, hid)
         # The row is now the terminal's until that terminal's CLI has exited.
         await asyncio.to_thread(store.update, self.engine, sid, terminal_id=str(session.id))
+        # v1.418.0 (C4.6): what the user does in that terminal shows here later.
+        await asyncio.to_thread(HIST.mark_outside, self.home, sid, "terminal")
         return {"terminal_id": session.id}
 
     def _launch_terminal(self, row: Any, hid: str) -> Any:
@@ -2181,6 +2389,7 @@ class HostedService:
             title=title or "From a terminal", account=str(acc.get("id") or ""),
             account_json=json.dumps(acc) if acc else "", mode=default_mode(harness), harness_session_id=hid,
         )
+        await asyncio.to_thread(HIST.mark_outside, self.home, row.id, "terminal")  # v1.418.0 (C4.6)
         return store.view(row)
 
     def _pane_facts(self, pane: Any) -> tuple[str, str, str, dict[str, Any]]:

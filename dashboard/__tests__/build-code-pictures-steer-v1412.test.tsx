@@ -17,7 +17,8 @@
  *   - the mode chip is reachable while the tool waits on a card (it used to
  *     hide with the composer), Full access still takes two presses there, and
  *     every mode says what it does;
- *   - Enter while it works sends a NOTE (POST …/steer), never a second turn;
+ *   - Shift+Enter while it works sends a NOTE (POST …/steer; v1.418.0: Enter
+ *     QUEUES a message instead — these pins moved on purpose), never a second turn;
  *     the note is drawn where it was sent and says when it was read; one the
  *     tool never read comes back to the box with words; with no reply running
  *     after all it goes as a message.
@@ -341,15 +342,15 @@ describe("the mode at any time", () => {
 /* ===================================================== a note while it works */
 
 describe("a note while it works (steer)", () => {
-  it("Enter while it works posts a NOTE to the running reply — never a second turn — and the box empties", async () => {
+  it("Shift+Enter while it works posts a NOTE to the running reply — never a second turn — and the box empties", async () => {
     working();
     H.postReply["/build/app/sessions/a1/steer"] = { ok: true, id: "note-1", state: "sent", how: "step" };
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     await screen.findByTestId("code-working");
     const box = screen.getByTestId("code-box");
-    expect(box.getAttribute("placeholder")).toContain("type a note to steer it (Enter)");
+    expect(box.getAttribute("placeholder")).toContain("Shift+Enter sends it a note now"); // v1.418.0 (C4.8), moved on purpose
     fireEvent.change(box, { target: { value: "also add a test" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true }); // v1.418.0 (C4.8): a note is Shift+Enter now (Enter queues) — moved on purpose
     await waitFor(() => expect(H.posts.find((p) => p.path === "/build/app/sessions/a1/steer")?.body).toEqual({ text: "also add a test" }));
     expect(H.streams.filter((s) => s.path.endsWith("/turn"))).toHaveLength(0);
     await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(""));
@@ -384,7 +385,7 @@ describe("a note while it works (steer)", () => {
     await screen.findByTestId("code-working");
     const box = screen.getByTestId("code-box") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "then deploy" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true }); // v1.418.0 (C4.8): a note is Shift+Enter now (Enter queues) — moved on purpose
     await waitFor(() => expect(box.value).toBe(""));
     await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-3", state: "sent", text: "then deploy" });
     await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-3", state: "returned", text: "then deploy" });
@@ -407,7 +408,7 @@ describe("a note while it works (steer)", () => {
     await screen.findByTestId("code-working");
     const box = screen.getByTestId("code-box") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "then deploy" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true }); // v1.418.0 (C4.8): a note is Shift+Enter now (Enter queues) — moved on purpose
     await waitFor(() => expect(box.value).toBe(""));
     await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-9", state: "sent", text: "then deploy" });
     await frame({ type: "steer", at: "x", turn: "turn_1", id: "note-9", state: "returned", text: "then deploy" });
@@ -443,7 +444,7 @@ describe("a note while it works (steer)", () => {
     await screen.findByTestId("code-working");
     const box = screen.getByTestId("code-box");
     fireEvent.change(box, { target: { value: "next thing" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true }); // v1.418.0 (C4.8): a note is Shift+Enter now (Enter queues) — moved on purpose
     await waitFor(() => expect(send()?.body).toMatchObject({ text: "next thing" }));
   });
 
@@ -457,7 +458,7 @@ describe("a note while it works (steer)", () => {
     await screen.findByTestId("code-working");
     const box = screen.getByTestId("code-box") as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "too late?" } });
-    fireEvent.keyDown(box, { key: "Enter" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true }); // v1.418.0 (C4.8): a note is Shift+Enter now (Enter queues) — moved on purpose
     await waitFor(() => expect(screen.getByTestId("code-note").textContent).toContain("did not reach it"));
     expect(box.value).toBe("too late?");
   });

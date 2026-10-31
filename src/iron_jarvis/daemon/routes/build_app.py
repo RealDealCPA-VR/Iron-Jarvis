@@ -61,6 +61,14 @@ class AppSteer(BaseModel):
     files: list[str] | None = None
 
 
+class AppQueue(BaseModel):
+    """v1.418.0 (C4.8): a message typed while the reply runs — it WAITS and
+    goes as the next message when the reply ends cleanly."""
+
+    text: str = ""
+    files: list[str] | None = None
+
+
 class AppAnswer(BaseModel):
     request_id: str
     decision: str
@@ -125,6 +133,54 @@ def register(app: FastAPI, d: Any) -> None:
     async def app_get(sid: str, limit: int = S.DEFAULT_EVENTS) -> dict[str, Any]:
         try:
             return await svc().view(sid, limit=limit)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.get("/build/app/sessions/{sid}/events")
+    async def app_events_page(sid: str, before: str = "", limit: int = 500) -> dict[str, Any]:
+        """v1.418.0 (C4.6): "Load earlier" — the events older than ``before``
+        (the ``older`` cursor a view or a page answered with), oldest first,
+        with the cursor of the page before this one (``older``)."""
+        if not before.strip():
+            raise HTTPException(status_code=400, detail="Say which place to load from (before=…).")
+        try:
+            return await svc().events_page(sid, before, limit)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.get("/build/app/sessions/{sid}/events/{item}")
+    async def app_event_item(sid: str, item: str) -> dict[str, Any]:
+        """v1.418.0: the whole text the record keeps for one step (its
+        output, its answer) — a row's "Show all"."""
+        try:
+            return await svc().item_text(sid, item)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.post("/build/app/sessions/{sid}/queue")
+    async def app_queue(sid: str, body: AppQueue) -> Any:
+        """v1.418.0 (C4.8): queue a message behind the running reply;
+        ``{ok, id, queued, queue_held}``. 409 ``code: not_working`` = no reply
+        runs (send it as a message instead)."""
+        try:
+            return await svc().queue_add(sid, body.text, body.files)
+        except S.Refused as r:
+            return _refused(r)
+
+    @app.post("/build/app/sessions/{sid}/queue/{qid}/remove")
+    async def app_queue_remove(sid: str, qid: str) -> dict[str, Any]:
+        """One waiting message taken off the queue (its ×)."""
+        try:
+            return await svc().queue_remove(sid, qid)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.post("/build/app/sessions/{sid}/queue/take")
+    async def app_queue_take(sid: str) -> dict[str, Any]:
+        """Every waiting message, taken out (the page puts the words back in
+        the box): after a Stop, a failure or an account's limit card."""
+        try:
+            return await svc().queue_take(sid)
         except S.Refused as r:
             raise _http(r) from None
 

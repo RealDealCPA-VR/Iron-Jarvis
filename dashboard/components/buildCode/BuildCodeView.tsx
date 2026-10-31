@@ -68,6 +68,7 @@ import {
   ShieldAlert,
   Square,
   UserRound,
+  X,
 } from "lucide-react";
 import { ApiError, get, patch, post } from "@/lib/api";
 import { streamSSE } from "@/lib/useChatStream";
@@ -107,6 +108,7 @@ import {
   isFullAccess,
   reuseItems,
   decodeCodeEvent,
+  decodeItemText,
   decodeCodeSession,
   decodeCodeSessionView,
   decodeCodeSessions,
@@ -120,7 +122,6 @@ import {
   sessionRowLine,
   signsInItself,
   sessionTitle,
-  steerPlaceholder,
   STEER_RETURNED_WORDS,
   toolLabel,
   type CodeEvent,
@@ -131,6 +132,28 @@ import {
   type OpenAsk,
   type ToolCommand,
 } from "@/lib/buildApp";
+import {
+  LOAD_EARLIER,
+  SLASH_ROWS,
+  commandHints,
+  decodeEventsPage,
+  decodeQueue,
+  earlierStepsWords,
+  effortWhileRunning,
+  eventsPagePath,
+  modelWhileRunning,
+  nextMode,
+  olderOf,
+  pickCommand,
+  prependEvents,
+  queuedBackWords,
+  queuedLine,
+  slashAt,
+  wordsBack,
+  workingPlaceholder,
+  type OlderInfo,
+  type QueuedMessage,
+} from "@/lib/buildAppHistory";
 
 /** The wire's own paths (the daemon's names; never shown). */
 const API = "/build/app";
@@ -234,6 +257,8 @@ function SessionPane({
   const [note, setNote] = useState<string | null>(null);
   const [askError, setAskError] = useState<string | null>(null);
   const [text, setText] = useState("");
+  /** v1.418.0 (C4.8): where the caret is in the box (the `/` menu reads it). */
+  const [caret, setCaret] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuIndex, setMenuIndex] = useState(0);
@@ -243,6 +268,22 @@ function SessionPane({
   /** v1.411.0: the conversation keeps its last model and effort (Pi). */
   const [keepsLast, setKeepsLast] = useState(false);
   const [dropped, setDropped] = useState(0);
+  /** v1.418.0 (C4.6): steps loaded with "Load earlier" (oldest first), the
+   *  cursor of the page before them, and how many are older still. */
+  const [earlierEvents, setEarlierEvents] = useState<CodeEvent[]>([]);
+  const [older, setOlder] = useState<OlderInfo>({ cursor: null, earlier: 0 });
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  /** v1.418.0 (C4.8): messages waiting behind the running reply. */
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const takingBackRef = useRef(false);
+  const takeBackRef = useRef<(() => Promise<void>) | null>(null);
+  const earlierCountRef = useRef(0);
+  /** v1.418.0 (C4.8): the turns this window followed (a waiting message the
+   *  daemon sent is a NEW turn: followed once, when the reply before it ends). */
+  const followedTurnsRef = useRef<Set<string>>(new Set());
+  earlierCountRef.current = earlierEvents.length;
+  /** v1.418.0 (C4.8): each `/` command's argument hint. */
+  const [hints, setHints] = useState<Record<string, string>>({});
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
@@ -294,12 +335,14 @@ function SessionPane({
   const toolName = toolLabel(session?.tool ?? "", tools);
   // Rows whose item did not change keep their object (they do not draw
   // again; the v1.250.0 rule).
+  // v1.418.0 (C4.6): the steps loaded earlier come first.
+  const allEvents = useMemo(() => (earlierEvents.length ? [...earlierEvents, ...events] : events), [earlierEvents, events]);
   const conv = useMemo(() => {
-    const c = foldConversation(events, extra);
+    const c = foldConversation(allEvents, extra);
     const items = reuseItems(prevItemsRef.current, c.items);
     prevItemsRef.current = items;
     return { ...c, items };
-  }, [events, extra]);
+  }, [allEvents, extra]);
   // Full access by the session's own mode id, whatever the tool list says.
   const dangerous = isFullAccess(session?.mode ?? "", tool);
 
@@ -371,9 +414,36 @@ function SessionPane({
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
-        if (view.running && view.runningTurn && opts.follow) {
+        // v1.418.0 (C4.8): argument hints, and the messages waiting behind
+        // the reply (held ones go back to the box).
+        setHints(commandHints((raw as { commands?: unknown } | null)?.commands));
+        const q = decodeQueue(raw);
+        if (q) {
+          setQueued(q.queued);
+          if (q.held && q.queued.length) void takeBackRef.current?.();
+        }
+        // v1.418.0 (C4.6): what is older than this read ("Load earlier").
+        if (opts.follow) {
+          setEarlierEvents([]);
+          setOlder(olderOf(raw, view.events.length));
+        } else if (!earlierCountRef.current) {
+          setOlder(olderOf(raw, view.events.length));
+        }
+        // v1.418.0 (C4.8): a reply that ended and a WAITING message the
+        // daemon sent as the next one: that one is followed too.
+        // Only a turn this window has not followed yet (a record that still
+        // names the turn that just ended is left to the re-read below —
+        // never a follow loop).
+        const nextQueued =
+          !opts.follow &&
+          !abortRef.current &&
+          view.running &&
+          !!view.runningTurn &&
+          !followedTurnsRef.current.has(view.runningTurn);
+        if (view.running && view.runningTurn && (opts.follow || nextQueued)) {
+          followedTurnsRef.current.add(view.runningTurn);
           const { base, carry } = cutForRejoin(view.events, view.runningTurn);
-          setEvents(base);
+          setEvents((prev) => (nextQueued && prev.length > base.length ? prev : base));
           setRunning(true);
           void follow(gen, `${SESSIONS}/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(view.runningTurn)}/stream`, undefined, carry);
         } else if (opts.follow) {
@@ -497,6 +567,11 @@ function SessionPane({
     setKeepsLast(false);
     setDropped(0);
     setInfo(null);
+    setEarlierEvents([]);
+    setOlder({ cursor: null, earlier: 0 });
+    setQueued([]);
+    setHints({});
+    followedTurnsRef.current = new Set();
     void load({ follow: true });
     return () => {
       genRef.current += 1;
@@ -580,6 +655,131 @@ function SessionPane({
     }
   }, [session, steering, att, giveNoteBack]);
 
+  /** v1.418.0 (C4.8): the waiting messages taken back into the box (the
+   *  reply ended with Stop, a failure or an account's limit card — nothing
+   *  is sent behind the user's back). Once at a time. */
+  const takeBack = useCallback(async () => {
+    if (takingBackRef.current) return;
+    takingBackRef.current = true;
+    try {
+      const raw = await post<{ taken?: unknown }>(`${SESSIONS}/${encodeURIComponent(sessionId)}/queue/take`);
+      const items = decodeQueue({ queued: raw?.taken })?.queued ?? [];
+      setQueued([]);
+      if (!items.length) return;
+      setText((cur) => wordsBack(cur, items));
+      const back = items.flatMap((i) => i.files);
+      if (back.length) setFiles((cur) => [...cur, ...back.filter((f) => !cur.includes(f))]);
+      setInfo(queuedBackWords(toolLabel(sessionToolRef.current, toolsRef.current), items.length));
+    } catch (e) {
+      setNote(errorWords(e, "Your waiting messages could not be read back."));
+    } finally {
+      takingBackRef.current = false;
+    }
+  }, [sessionId]);
+  takeBackRef.current = takeBack;
+  const steerRef = useRef(steer);
+  steerRef.current = steer;
+  /** A note for the running reply (Shift+Enter, or its arrow) — after the
+   *  pictures still going up (a note never goes without them). */
+  const sendNote = useCallback(() => {
+    if (att.busyRef.current) att.whenSettled(() => void steerRef.current());
+    else void steerRef.current();
+  }, [att]);
+
+  /** v1.418.0 (C4.8): Enter while it works QUEUES the message: it goes as
+   *  the next message when this reply ends cleanly. No reply running after
+   *  all (409 `not_working`) → it goes as a message now. */
+  const queueIt = useCallback(async () => {
+    if (!session) return;
+    const words = textRef.current.trim();
+    const uploads: HarnessFile[] = att.filesRef.current.slice();
+    const picks = picksRef.current.slice();
+    const all = [...uploads.map((f) => f.path), ...picks];
+    if (!words && !all.length) return;
+    setNote(null);
+    setText("");
+    setFiles([]);
+    att.clear();
+    try {
+      const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/queue`, {
+        text: words,
+        ...(all.length ? { files: all } : {}),
+      });
+      const q = decodeQueue(raw);
+      if (q) {
+        setQueued(q.queued);
+        if (q.held && q.queued.length) void takeBackRef.current?.();
+      }
+    } catch (e) {
+      const body = e instanceof ApiError ? (e as ApiError & { body?: unknown }).body : null;
+      const code = body && typeof body === "object" ? (body as { code?: unknown }).code : undefined;
+      if (code === "not_working") {
+        setRunning(false);
+        runningRef.current = false;
+        void sendRef.current?.(words, all);
+        return;
+      }
+      setText((cur) => (cur.trim() ? cur : words));
+      setFiles((cur) => (cur.length ? cur : picks));
+      att.restore(uploads);
+      setNote(errorWords(e, "Your message could not wait for the reply — send it again once it ends."));
+    }
+  }, [session, att]);
+
+  /** v1.418.0 (C4.8): a waiting message taken off the queue (its ×). */
+  const removeQueued = useCallback(
+    async (id: string) => {
+      if (!session) return;
+      setQueued((cur) => cur.filter((q) => q.id !== id));
+      try {
+        const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/queue/${encodeURIComponent(id)}/remove`);
+        const q = decodeQueue(raw);
+        if (q) setQueued(q.queued);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404)) setNote(errorWords(e, "That waiting message was not removed."));
+      }
+    },
+    [session],
+  );
+
+  /** v1.418.0 (C4.4, wired here): the whole text the record keeps for one
+   *  step (`GET …/events/{item}`); null when it cannot be read. */
+  const expandStep = useCallback(
+    async (item: string) => {
+      try {
+        return decodeItemText(await get<unknown>(`${SESSIONS}/${encodeURIComponent(sessionId)}/events/${encodeURIComponent(item)}`));
+      } catch {
+        return null;
+      }
+    },
+    [sessionId],
+  );
+
+  /** v1.418.0 (C4.6): the page of steps before the oldest one shown. The
+   *  reader stays where they were (the new rows grow above them). */
+  const loadEarlier = useCallback(async () => {
+    if (!session || !older.cursor || loadingEarlier) return;
+    setLoadingEarlier(true);
+    const gen = genRef.current;
+    const el = scrollRef.current;
+    const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    try {
+      const raw = await get<unknown>(eventsPagePath(SESSIONS, session.id, older.cursor));
+      if (gen !== genRef.current) return;
+      const page = decodeEventsPage(raw);
+      setEarlierEvents((prev) => prependEvents(page.events, prev));
+      setOlder({ cursor: page.older, earlier: page.earlier });
+      nextFrame(() => {
+        const box = scrollRef.current;
+        if (box) box.scrollTop = Math.max(0, box.scrollHeight - fromBottom);
+      });
+    } catch (e) {
+      if (gen === genRef.current) setNote(errorWords(e, "The earlier steps could not be loaded."));
+    } finally {
+      if (gen === genRef.current) setLoadingEarlier(false);
+    }
+  }, [session, older.cursor, loadingEarlier]);
+
   const send = useCallback(async (handed?: string, handedFiles?: string[]) => {
     if (!session) return;
     // v1.412.0: a send waits for the pictures still going up (never goes
@@ -589,7 +789,8 @@ function SessionPane({
       return;
     }
     if (handed === undefined && runningRef.current) {
-      void steer();
+      // v1.418.0 (C4.8): it WAITS for the reply (a note is Shift+Enter).
+      void queueIt();
       return;
     }
     const typedNow = handed ?? textRef.current;
@@ -600,6 +801,7 @@ function SessionPane({
     if ((!words && !sent.length) || runningRef.current) return;
     const gen = genRef.current;
     const turnId = mintTurnId();
+    followedTurnsRef.current.add(turnId); // v1.418.0 (C4.8)
     sendSeqRef.current += 1;
     const mine: CodeEvent = { type: "user", at: new Date().toISOString(), text: words, files: sent };
     optimisticRef.current = mine;
@@ -654,7 +856,7 @@ function SessionPane({
         setNote(words2);
       },
     );
-  }, [session, follow, onChanged, att, steer]);
+  }, [session, follow, onChanged, att, queueIt]);
   const sendRef = useRef<typeof send | null>(null);
   sendRef.current = send;
 
@@ -821,7 +1023,8 @@ function SessionPane({
   }, [session, onArchived]);
 
   // ── the `/` and `@` lists ──
-  const slash = /^\/(\S*)$/.exec(text);
+  // v1.418.0 (C4.8): `/` at the start of ANY line (where the caret is).
+  const slash = slashAt(text, caret);
   const at = /(^|\s)@(\S*)$/.exec(text);
   const filesState = useProjectFilesState(menuOpen && !!at, session?.folder ?? null);
   const commands = useMemo(() => {
@@ -831,7 +1034,7 @@ function SessionPane({
   }, [viewCommands, tool, fetchedCommands]);
   // Keyed on the TEXT a regex found (a new match object each render would
   // re-run these on every key press).
-  const slashKey = slash ? slash[0] : null;
+  const slashKey = slash ? `${slash.start}:${slash.query}` : null;
   const atKey = at ? at[0] : null;
   useEffect(() => {
     if (slashKey === null || !session || (viewCommands && viewCommands.length) || (tool && tool.commands.length) || fetchedCommands !== null)
@@ -846,15 +1049,16 @@ function SessionPane({
             out.push({ name: o.name.trim().replace(/^\//, ""), description: typeof o.description === "string" ? o.description : "" });
         }
         setFetchedCommands(out);
+        setHints((cur) => ({ ...commandHints(raw), ...cur }));
       })
       .catch(() => setFetchedCommands([]));
   }, [slashKey, session, viewCommands, tool, fetchedCommands]);
   const menuRows: MenuRow[] = useMemo(() => {
     if (slash) {
-      const q = slash[1].toLowerCase();
+      const q = slash.query.toLowerCase();
       return commands
         .filter((c) => c.name.toLowerCase().includes(q))
-        .slice(0, 8)
+        .slice(0, SLASH_ROWS)
         .map((cmd) => ({ kind: "command", cmd }));
     }
     if (at) {
@@ -869,9 +1073,19 @@ function SessionPane({
 
   const pick = (row: MenuRow) => {
     if (row.kind === "command") {
-      setText(`/${row.cmd.name} `);
+      if (slash) {
+        // v1.418.0 (C4.8): only the `/word` is replaced (a line of its own).
+        const done = pickCommand(text, slash, row.cmd.name);
+        setText(done.text);
+        setCaret(done.caret);
+        nextFrame(() => boxRef.current?.setSelectionRange?.(done.caret, done.caret));
+      } else {
+        setText(`/${row.cmd.name} `);
+      }
     } else if (at) {
-      setText(text.slice(0, text.length - at[2].length) + `${row.entry.rel} `);
+      const next = text.slice(0, text.length - at[2].length) + `${row.entry.rel} `;
+      setText(next);
+      setCaret(next.length);
       if (row.entry.kind === "file") setFiles((prev) => (prev.includes(row.entry.path) ? prev : [...prev, row.entry.path]));
     }
     setMenuOpen(false);
@@ -894,6 +1108,28 @@ function SessionPane({
     if (e.key === "Escape" && menuOpen) {
       e.preventDefault();
       setMenuOpen(false);
+      return;
+    }
+    // v1.418.0 (C4.8): Esc stops the reply when no menu (and no card — the
+    // box is hidden under one) is open: the same press as Stop.
+    if (e.key === "Escape" && runningRef.current) {
+      e.preventDefault();
+      stop();
+      return;
+    }
+    // Shift+Tab steps the mode (never into Full access: two presses there).
+    if (e.key === "Tab" && e.shiftKey && session) {
+      const m = nextMode(tool, session.mode);
+      if (m) {
+        e.preventDefault();
+        void change({ mode: m });
+      }
+      return;
+    }
+    // While it works: Enter queues the message, Shift+Enter sends a note now.
+    if (e.key === "Enter" && e.shiftKey && runningRef.current) {
+      e.preventDefault();
+      sendNote();
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
@@ -956,6 +1192,9 @@ function SessionPane({
 
   const asking = conv.asks.length > 0;
   const accountName = accountWords(session, tools);
+  // v1.418.0 (C4.8): which chip changes wait for the reply to end.
+  const modelLive = modelWhileRunning(session.tool, toolName, running);
+  const effortLive = effortWhileRunning(session.tool, toolName, running);
   return (
     <SessionEditorProvider folder={session.folder}>
       {/* v1.414.0: the conversation and, to its right, the panes (Changes,
@@ -1035,6 +1274,24 @@ function SessionPane({
           className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
           <div className={HARNESS_COLUMN}>
+            {/* v1.418.0 (C4.6): what is older than this read, said — and one
+                press loads the page before it. */}
+            {older.earlier > 0 ? (
+              <div data-testid="code-earlier" className="mb-3 flex items-center justify-center gap-2 text-[12px] text-zinc-500">
+                <span data-testid="code-earlier-count">{earlierStepsWords(older.earlier)}</span>
+                {older.cursor ? (
+                  <button
+                    type="button"
+                    data-testid="code-load-earlier"
+                    disabled={loadingEarlier}
+                    onClick={() => void loadEarlier()}
+                    className="rounded-lg px-2 py-0.5 text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 disabled:opacity-50"
+                  >
+                    {loadingEarlier ? "Loading…" : LOAD_EARLIER}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {dropped > 0 ? (
               <p data-testid="code-dropped" className="mb-3 text-center text-[11px] text-zinc-600">
                 {droppedWords(dropped)}
@@ -1061,6 +1318,7 @@ function SessionPane({
                 onRetry={running ? undefined : retryFailed}
                 model={session.model}
                 account={session.account ? accountName : ""}
+                onExpand={expandStep}
               />
             )}
             {running && !asking ? (
@@ -1164,6 +1422,11 @@ function SessionPane({
                       {row.kind === "command" ? (
                         <>
                           <span className="shrink-0 font-mono">/{row.cmd.name}</span>
+                          {hints[row.cmd.name] ? (
+                            <span data-testid="code-command-hint" className="shrink-0 font-mono text-[12px] text-zinc-500">
+                              {hints[row.cmd.name]}
+                            </span>
+                          ) : null}
                           <span className="min-w-0 truncate text-[12px] text-zinc-500">{row.cmd.description}</span>
                         </>
                       ) : (
@@ -1188,10 +1451,14 @@ function SessionPane({
               ref={boxRef}
               data-testid="code-box"
               aria-label={`Message ${toolName}`}
-              placeholder={running ? steerPlaceholder(toolName) : `Message ${toolName} — / for commands, @ for files`}
+              placeholder={running ? workingPlaceholder(toolName) : `Message ${toolName} — / for commands, @ for files`}
               rows={2}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                setCaret(e.target.selectionStart ?? e.target.value.length);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length)}
               onKeyDown={onBoxKey}
               onPaste={(e) => {
                 // A pasted picture is attached; pasted text is typed.
@@ -1209,15 +1476,19 @@ function SessionPane({
                 aria-label={`${toolName} model`}
                 data-testid="code-model-chip"
                 value={session.model}
-                disabled={running}
-                title={keepsLast ? keepsLastTitle(session.tool) : undefined}
+                title={keepsLast ? keepsLastTitle(session.tool) : modelLive.title || undefined}
                 onChange={(e) => void change({ model: e.target.value })}
                 className={CHIP_SELECT}
               >
                 {/* A conversation that keeps its last model offers no way
-                    back to the default (Pi would restore the last one). */}
+                    back to the default (Pi would restore the last one).
+                    v1.418.0 (C4.8): the chip stays open while a reply runs
+                    (the tool switches live, or from the next message); only
+                    going back to the default — a new start — waits. */}
                 {!keepsLast || !session.model ? (
-                  <option value="">{defaultModelWords(toolName, keepsLast)}</option>
+                  <option value="" disabled={modelLive.defaultHeld && session.model !== ""} title={modelLive.title || undefined}>
+                    {defaultModelWords(toolName, keepsLast)}
+                  </option>
                 ) : null}
                 {(tool?.models ?? []).map((m) => (
                   <option key={m.id} value={m.id}>
@@ -1235,13 +1506,15 @@ function SessionPane({
                   aria-label="Effort"
                   data-testid="code-effort-chip"
                   value={session.effort}
-                  disabled={running}
-                  title={keepsLast ? keepsLastTitle(session.tool) : undefined}
+                  disabled={effortLive.held}
+                  title={keepsLast ? keepsLastTitle(session.tool) : effortLive.title || undefined}
                   onChange={(e) => void change({ effort: e.target.value })}
                   className={CHIP_SELECT}
                 >
                   {!keepsLast || !session.effort ? (
-                    <option value="">{defaultEffortWords(keepsLast)}</option>
+                    <option value="" disabled={effortLive.defaultHeld && session.effort !== ""}>
+                      {defaultEffortWords(keepsLast)}
+                    </option>
                   ) : null}
                   {/* v1.412.0 review: the levels THIS model takes (the
                       daemon's per-model list, else the tool's); a kept
@@ -1276,9 +1549,9 @@ function SessionPane({
                   type="button"
                   data-testid="code-steer-send"
                   disabled={steering}
-                  onClick={() => void send()}
+                  onClick={sendNote}
                   aria-label={`Send a note to ${toolName}`}
-                  title={`Send a note to ${toolName} while it works (Enter)`}
+                  title={`Send a note to ${toolName} while it works (Shift+Enter) — Enter queues it for when it finishes`}
                   className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ink-950 transition-opacity disabled:opacity-40"
                 >
                   <ArrowUp size={15} aria-hidden="true" />
@@ -1313,6 +1586,34 @@ function SessionPane({
               With: {files.map((f) => f.split(/[\\/]/).pop()).join(", ")}
             </p>
           ) : null}
+          {/* v1.418.0 (C4.8): messages waiting for the reply to end (sent
+              one by one when it ends cleanly; back in the box otherwise). */}
+          {queued.length ? (
+            <ul data-testid="code-queued" aria-label={`Waiting for ${toolName} to finish`} className="mt-2 space-y-1 px-1">
+              {queued.map((q) => (
+                <li
+                  key={q.id}
+                  data-testid="code-queued-item"
+                  className="flex items-center gap-2 rounded-lg bg-white/[0.04] px-2.5 py-1 text-[12px] text-zinc-400"
+                >
+                  <span className="shrink-0 text-zinc-500">Waiting</span>
+                  <span className="min-w-0 flex-1 truncate" title={q.text}>
+                    {queuedLine(q)}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid={`code-queued-remove-${q.id}`}
+                    aria-label={`Remove the waiting message: ${queuedLine(q)}`}
+                    title="Remove this waiting message"
+                    onClick={() => void removeQueued(q.id)}
+                    className="grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-500 hover:bg-white/[0.08] hover:text-zinc-200"
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       </div>
       <aside
@@ -1323,7 +1624,7 @@ function SessionPane({
         <CodePanes
           session={session}
           tools={tools}
-          events={events}
+          events={allEvents}
           running={running}
           onSend={(t) => void sendRef.current?.(t)}
         />
