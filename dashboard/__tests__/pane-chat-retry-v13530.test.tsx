@@ -173,7 +173,10 @@ async function attach(name: string) {
   fireEvent.drop(screen.getByTestId("pane-chat"), {
     dataTransfer: { types: ["Files"], files: [file] },
   });
-  await screen.findByRole("button", { name: `Remove ${name}` });
+  // v1.414.1: the chip lands after the upload ANSWERS; on a loaded runner
+  // that took over the 1 s default (Tests gate red, reproduced with a 1.5 s
+  // upload delay).
+  await screen.findByRole("button", { name: `Remove ${name}` }, { timeout: 10_000 });
 }
 
 describe("a failed pane turn can be retried (G51)", () => {
