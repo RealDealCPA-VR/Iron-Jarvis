@@ -692,6 +692,11 @@ def build_platform(
     from .mcp.tools import set_event_bus as _mcp_set_event_bus
 
     _mcp_set_event_bus(event_bus)
+    # v1.415.0: where an npx/uvx pack's launcher answers are kept, so its
+    # server can be started without the launcher idling beside it.
+    from .mcp.direct_launch import set_state_dir as _mcp_direct_state
+
+    _mcp_direct_state(config.home)
     streams = StreamHub()  # FX-01: ephemeral token/tool stream side-channel
     # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
     # boots instead of wedging on a malformed file.

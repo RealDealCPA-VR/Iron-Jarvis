@@ -11414,6 +11414,70 @@ does not need a bump, stop and bump it.
   and 390 px: one file downloaded, frame origin "null", storage/parent/fetch
   all blocked, CSP header, reload keeps it, Delete removes it).
 
+- **An `npx -y` / `uvx` pack's server starts DIRECTLY once its launcher has
+  SAID which files it runs; anything uncertain starts exactly as before**
+  (v1.415.0; measured on the user's PC: each `npx -y` pack ran cmd.exe ->
+  cmd.exe -> `node npx-cli.js` (~81 MB private, idle forever) -> the server,
+  and `uvx mcp-server-fetch` ran uvx -> `uv.exe` (~158 MB, idle forever) ->
+  trampoline -> python: ~430 MB of launchers for 4 packs).
+  `mcp/direct_launch.py`: `parse(resolved_launcher, args, cwd=, env=)` ->
+  `LaunchSpec` ONLY for `npx` with `-y`/`--yes` and nothing else before a
+  registry spec (`name`, `@latest`, `x.y.z`, `^x.y.z`, `~x.y.z`), `uvx <spec>`
+  / `uv tool run <spec>` with no option before the spec, and Windows only;
+  `_build_transport` passes it as `StdioTransport(direct=)` (a test double of
+  `StdioTransport` must take `**kw`). THE LAUNCHER IS ASKED, never imitated:
+  `npx -y --package=<spec> -- node -e …` prints node's path, PATH, and npm's
+  `npm_config_cache`/`global_prefix`/`local_prefix`; `uvx --from <spec>
+  python -c …` prints `sys.prefix` (measured: the same uv environment `uvx
+  <spec>` runs), PATH and `UV`. The answer is kept in
+  `<home>/mcp/direct-launch.json` (paths only; the key HASHES launcher, spec,
+  cwd and the resolution-relevant env — never the raw env) by ONE background
+  worker (`note_started`, after a SUCCESSFUL start, only with a state home —
+  `build_platform` calls `set_state_dir(config.home)`; a CLI one-shot or a
+  unit test never asks) through `core/procs.run` (120 s bound). `plan(spec)`
+  rechecks the disk at EVERY spawn (file reads only): npx's install dir =
+  `<cache>/_npx/<sha512(spec)[:16]>` (npm's own hash, pinned against the
+  user's real folders), its package.json naming only that package, the
+  version satisfying the spec, npm's `getBinFromManifest` choice, a `.js/
+  .mjs/.cjs` target inside the package, npm's `.bin/<bin>.cmd` shim in its
+  plain `node` form pointing at that file with no extra args, no `.bin/
+  node.exe`, NO global copy (`<gp>/node_modules/<name>`) and NO copy npx
+  would take from the working folder's project (`_local_copy`: its
+  node_modules, `.bin`, own package.json, or any depth via `.package-lock.
+  json`; node_modules without that list = unsure); uv: `pyvenv.cfg`,
+  `Scripts/<name>.exe`, exactly one dist-info (= the pinned version), not
+  also a uv tool elsewhere. `Why.stale` (the answer no longer matches the
+  disk) re-asks after the start; a global/local copy or a hold does not.
+  FRESHNESS (measured): `npx -y <name>` revalidates against the registry on
+  EVERY start (`GET … (cache revalidated)`, 3.9-5.2 s) and `uvx` re-resolves
+  every start; a direct start skips that, so a fresh spec (no version /
+  `latest`, every uv spec) is re-asked at most once per `REFRESH_S` (a day),
+  in the background, and the new version runs from the NEXT start. THE START
+  (`client.StdioTransport._ensure_started`): Job, suspended start, stderr
+  ring, tree kill, UTF-8 pipes all unchanged; the direct handshake is bounded
+  by `DIRECT_INIT_TIMEOUT_S` (10 s, via `_read_cap` — `_read`/`_rpc` keep
+  their signatures because tests spy them); EOF / no answer / a spawn
+  OSError -> `_direct_fell_back`: kill, `_direct_failed` for this transport,
+  `note_direct_failed` (no direct start for `FAILED_HOLD_S`, a day, unless
+  the launcher later answers with OTHER files), and the launcher started
+  ONCE in the same start, said in `launch_info`. A cancel or `shutdown()`
+  (new: the connect timeout and `MCPClient.close` call it; a new request
+  clears it) during the direct handshake re-raises and starts nothing else —
+  and the post-spawn check now also kills a server spawned after a
+  shutdown (an old orphan race). The load record (and GET `/mcp/servers`
+  rows) gain `launch {direct, how, note}` for npx/uvx packs ONLY (other
+  packs byte-identical). Known differences: the server's env lacks npm's
+  `npm_*` script variables (PATH gets the same prepended folders, read off
+  the ask); a background refresh may upgrade npx's cache dir under a running
+  direct server (the same exposure a second npx start always had).
+  `IRONJARVIS_MCP_DIRECT=off` turns it all off. Pins:
+  `tests/test_mcp_direct_launch_v14150.py` (fake npx + uv caches; a REAL
+  direct start of `tests/fixtures/direct_launch_v14150/server.js` whose tree
+  is `node.exe` alone; ask-then-direct through a stand-in `npx.cmd`; fallback
+  on exit and on hang; shutdown mid-handshake), 20 mutations, all red; moved
+  on purpose: the `StdioTransport` doubles in `test_mcp_launcher_v1233`,
+  `test_connections_honest_v13580`, `test_microsoft_365_v13560`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

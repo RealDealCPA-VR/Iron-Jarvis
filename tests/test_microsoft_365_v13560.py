@@ -119,7 +119,9 @@ def spawned(monkeypatch):
     seen: list[dict] = []
     real = mcp_client.StdioTransport
 
-    def _transport(command, args=None, env=None, cwd=None, request_timeout=None):
+    def _transport(command, args=None, env=None, cwd=None, request_timeout=None, **_kw):
+        # **_kw: v1.415.0 adds direct= (an npx line parsed for a direct start);
+        # the program is swapped here, so it is not used.
         seen.append({"command": command, "args": list(args or []), "env": dict(env or {})})
         return real(sys.executable, [str(FIXTURE)], env=env, cwd=cwd, request_timeout=request_timeout)
 

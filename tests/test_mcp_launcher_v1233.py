@@ -53,8 +53,11 @@ def test_the_stdio_transport_is_built_with_the_resolved_path(monkeypatch):
     seen = {}
 
     class _Stdio:
-        def __init__(self, command, args=None, *, env=None, cwd=None, request_timeout=...):
+        def __init__(
+            self, command, args=None, *, env=None, cwd=None, request_timeout=..., direct=None
+        ):
             seen["command"] = command
+            seen["direct"] = direct
             seen["args"] = list(args or [])
             seen["request_timeout"] = request_timeout
 
@@ -72,6 +75,9 @@ def test_the_stdio_transport_is_built_with_the_resolved_path(monkeypatch):
     # v1.291.0: a registry pack carries NO transport floor — the registry
     # deadline (config.tool_call_timeout_s) is its bound.
     assert seen["request_timeout"] is None
+    # v1.415.0: the npx line is parsed for a direct start (Windows only).
+    if os.name == "nt":
+        assert seen["direct"] is not None and seen["direct"].spec == "pkg"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="the .cmd launcher shape is Windows-only")

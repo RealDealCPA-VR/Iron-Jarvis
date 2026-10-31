@@ -2604,6 +2604,33 @@ A project now sees the coding work done in its own folder.
   your own Claude Code or Codex, whose words do not pass through Jarvis, so
   it does not offer these.
 
+## Tool packs use less memory: no launcher left running (v1.415.0)
+
+A tool pack added as `npx -y <package>` or `uvx <package>` used to keep its
+launcher running beside the real server for as long as the pack was on:
+about 80 MB for each `npx` pack and about 160 MB for each `uvx` pack, doing
+nothing. Jarvis now asks the launcher once which files it runs, remembers the
+answer, and from then on starts the server from those files itself.
+
+- **Nothing to set up.** The first start after the update still goes through
+  the launcher, exactly as before; the launcher is asked in the background
+  after that, and the next start (a restart, or **Retry**) is direct. A pack
+  started this way also starts faster: `npx` checks the internet for a newer
+  version on every start, which took 3 to 5 seconds.
+- **Still up to date.** For a pack with no version pinned, the launcher is
+  asked again at most once a day, so a newer version arrives on the next
+  start after that check instead of on every start.
+- **Never a guess.** If anything is not certain (a copy installed globally or
+  in the pack's folder, a version the saved copy does not match, an unusual
+  launcher command line), the pack starts through its launcher as before.
+  If a direct start does not answer within 10 seconds, the pack is started
+  through its launcher right away, and the pack's record says what happened.
+- **Turning it off.** Set the environment variable
+  `IRONJARVIS_MCP_DIRECT=off` before starting Iron Jarvis to start every
+  pack through its launcher.
+- One difference: `npx` adds its own `npm_…` settings to the server's
+  environment; a direct start does not. No known pack reads them.
+
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron
