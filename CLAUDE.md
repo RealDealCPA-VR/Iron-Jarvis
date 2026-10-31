@@ -4568,9 +4568,10 @@ does not need a bump, stop and bump it.
   env. Our two files hold no credential and go with the process. The user's
   own config files are never written. MCP SERVER: `MEMORY_READ_TOOLS` gains
   `brain_search` / `brain_read` (exact names; `brain_save`/`brain_change`
-  never); a MEMORY-capability tool with `returns_untrusted_content` (memory_
-  search, ltm_search, brain_*) crosses `/mcp` inside `wrap_untrusted` (a
-  browser tool's page text keeps its v1.238.0 shape); a code grant's
+  never); EVERY MEMORY-capability tool's output (memory_search, memory_read,
+  ltm_search, brain_*; a terminal's grant too) crosses `/mcp` inside
+  `wrap_untrusted` (a browser tool's page text keeps its v1.238.0 shape;
+  review: memory_read was left bare by a flag check); a code grant's
   workspace is the session's folder and its `ToolContext.project_id` comes
   from `projects/locate.project_for_path` (terminal grants unchanged). NOT
   ENFORCED HERE: Build › Code has no Local only and no trust posture (none of
@@ -4591,8 +4592,7 @@ does not need a bump, stop and bump it.
   `lib/buildApp.jarvisToolHint`, PATCHes one key) and `ProfileShareOffer`
   (a new session's empty state; `PUT /profile/share`; "No thanks" =
   localStorage `ij.code.shareOffer.dismissed.<cli>`; hidden on 404, on, not
-  installed). OPEN: an account-limit card + finish suppression and the
-  MCP-off restart for a running reply are unpinned; Browser over a code grant
+  installed). OPEN: the MCP-off restart for a running reply is unpinned; Browser over a code grant
   was not driven live; the phone path was not driven with a real phone.
   Pins: `tests/test_build_app_spine{,_desktop}_v1414.py`,
   `tests/test_profile_share_pi_opencode_v1414.py`,
@@ -4602,7 +4602,17 @@ does not need a bump, stop and bump it.
   claude 2.1.311 haiku low, Memory ticked): Running now / activity / health
   listed the reply for 75 s, Claude called `mcp__iron-jarvis__memory_search`
   (ledger row `mcp:code:<id>`), answered from it, and `build.turn_finished`
-  (`seconds: 75`) was recorded.
+  (`seconds: 75`) was recorded. REVIEW (each red first; 12 mutations of the fixes and 11 of the first cut's claims, all red):
+  a process that ends BY ITSELF also removes our two connection files
+  (`_remove_files_if_stopped`: under the pool lock, only while no process
+  runs); a Code grant's 403s and instructions name the session and its
+  Iron Jarvis tools chip (`no_capability_message`,
+  `capability_refused_message(name, pane_id)`), never "this Build
+  terminal"; the share offer reads the PUT's answer and says a refused
+  write (OpenCode's fallback guard) instead of "shared"; the account-limit
+  finish suppression is pinned. Pins:
+  `tests/test_build_app_spine_review_v1414.py`,
+  `dashboard/__tests__/build-code-spine-review-v1414.test.tsx`.
 
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon

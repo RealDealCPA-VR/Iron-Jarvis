@@ -184,6 +184,29 @@ NO_CAPABILITY_MESSAGE = (
     "terminal's Capabilities in Build, then start the coding tool again"
 )
 
+#: v1.414.0 review: the same 403 for a Build › Code session's grant. Its
+#: remedy is the session's own "Iron Jarvis tools" chip — a Code session has no
+#: terminal Capabilities to tick.
+CODE_NO_CAPABILITY_MESSAGE = (
+    "this Build › Code session has none of Iron Jarvis's tools turned on — turn on "
+    "Memory or Browser under Iron Jarvis tools in the session's header in Build"
+)
+
+
+def _code_grant(pane_id: str) -> bool:
+    from ..hosted.jarvis_tools import session_of
+
+    return bool(session_of(pane_id))
+
+
+def no_capability_message(pane_id: str = "") -> str:
+    """The 403 sentence for a grant that enables nothing served here: the
+    terminal's words for a terminal (byte for byte), the session's for a
+    Build › Code grant."""
+    from ..hosted.jarvis_tools import session_of
+
+    return CODE_NO_CAPABILITY_MESSAGE if session_of(pane_id) else NO_CAPABILITY_MESSAGE
+
 #: 400 wording when a call arrives with no live ``Mcp-Session-Id``. The
 #: repository's own client always handshakes (``HttpTransport._handshake``), so
 #: this is reached by a harness that did not — or by one presenting an id minted
@@ -293,8 +316,13 @@ MCP_ASK_TIMEOUT_MESSAGE = (
 )
 
 
-def capability_refused_message(tool_name: str) -> str:
+def capability_refused_message(tool_name: str, pane_id: str = "") -> str:
     """The 403 sentence for one tool the pane may not use.
+
+    v1.414.0 review: a Build › Code session's grant (``pane_id`` "code:…") is
+    told about the session's own "Iron Jarvis tools" chip, and that a box
+    turned on there applies at once (its token reads the session LIVE) — a
+    terminal's words are unchanged.
 
     Names the tool, because a harness relays this to its own model and
     "forbidden" is not something a model can act on.
@@ -308,6 +336,14 @@ def capability_refused_message(tool_name: str) -> str:
     for capability, family in CAPABILITY_TOOLS.items():
         if family.admits(tool_name):
             label = _CAPABILITY_LABELS.get(capability, capability)
+            from ..hosted.jarvis_tools import session_of
+
+            if session_of(pane_id):
+                return (
+                    f"{tool_name} is not available to this Build › Code session: {label} is not "
+                    "turned on for it. The user can turn it on under Iron Jarvis tools in the "
+                    "session's header in Build."
+                )
             return (
                 f"{tool_name} is not available to this terminal: its Capabilities do not "
                 f"include {label}. Tick it in Build and start the coding tool again."
@@ -491,7 +527,9 @@ def server_instructions(d, grant) -> str:
     lines = [
         instructions_heading(pane_id),
         "",
-        "Capabilities enabled for this pane: " + (", ".join(caps) if caps else "none"),
+        # v1.414.0 review: a Build › Code session is not a pane.
+        f"Capabilities enabled for this {'session' if _code_grant(pane_id) else 'pane'}: "
+        + (", ".join(caps) if caps else "none"),
     ]
     if CAPABILITY_BROWSER in caps:
         try:
@@ -775,13 +813,15 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
         **({"deny_reason": deny_reason} if deny_reason else {}),
     )
     text = (result.output if result.ok else (result.error or "error")) or ""
-    if result.ok and tool is not None and getattr(tool, "returns_untrusted_content", False)             and CAPABILITY_TOOLS[CAPABILITY_MEMORY].admits(name):
+    if result.ok and CAPABILITY_TOOLS[CAPABILITY_MEMORY].admits(name):
         # v1.414.0: what a MEMORY tool returns from stored text (memory, the
         # memory profile's base) crosses this server inside the same
         # untrusted-content fence the chat lanes put around it — the
         # instructions say it too, but a fence travels with the text. (A
         # browser tool's page text keeps its v1.238.0 shape: its own
-        # instruction line covers it.)
+        # instruction line covers it.) v1.414.0 review: EVERY Memory tool,
+        # flag or not — ``memory_read`` returns the very stored text
+        # ``memory_search`` does, and went out bare.
         from ..computeruse.safety import wrap_untrusted
 
         text = wrap_untrusted(str(text))
@@ -871,7 +911,7 @@ async def dispatch(
             )
         if not granted_capabilities(grant):
             return McpReply(
-                payload=error_response(request.id, INVALID_REQUEST, NO_CAPABILITY_MESSAGE),
+                payload=error_response(request.id, INVALID_REQUEST, no_capability_message(grant.pane_id)),
                 status_code=403,
             )
         names = permitted_tool_names(d, grant)
@@ -896,7 +936,7 @@ async def dispatch(
             )
             return McpReply(
                 payload=error_response(
-                    request.id, INVALID_PARAMS, capability_refused_message(name)
+                    request.id, INVALID_PARAMS, capability_refused_message(name, grant.pane_id)
                 ),
                 status_code=403,
                 tool=name,

@@ -31,7 +31,7 @@ import {
   type CodeSession,
   type JarvisTools,
 } from "@/lib/buildApp";
-import { decodeShareView, shareSentence, type ShareCli } from "@/lib/profileShare";
+import { decodeShareView, fileLine, shareSentence, type ShareCli } from "@/lib/profileShare";
 
 const SESSIONS = "/build/app/sessions";
 
@@ -194,7 +194,16 @@ export function ProfileShareOffer({ tool, toolName }: { tool: string; toolName: 
     setBusy(true);
     setError(null);
     try {
-      await put("/profile/share", { cli, on: true });
+      const raw = await put<unknown>("/profile/share", { cli, on: true });
+      // v1.414.0 review: the answer is the view AFTER the write. A file that
+      // could not be written (OpenCode's AGENTS.md while it reads your Claude
+      // Code CLAUDE.md, a linked file, …) is said, never "shared".
+      const after = decodeShareView(raw)?.find((c) => c.cli === cli);
+      const refused = after?.files.map(fileLine).find((line, i) => line && after.files[i].error) ?? null;
+      if (refused) {
+        setError(refused);
+        return;
+      }
       setDone(true);
     } catch {
       setError("Sharing did not start. You can turn it on in Settings › Memory & you.");

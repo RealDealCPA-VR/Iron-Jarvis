@@ -224,7 +224,10 @@ def test_memory_read_runs_too(memory_app):
     response = memory_app.call(session_id, "memory_read", {"layer": "user", "key": "tone"})
     assert response.status_code == 200, response.text
     result = response.json()["result"]
-    assert result["isError"] is False and result["content"][0]["text"] == "short answers"
+    # v1.414.0 review (moved on purpose): stored memory crosses /mcp inside the
+    # untrusted-content fence, memory_read's included.
+    text = result["content"][0]["text"]
+    assert result["isError"] is False and text.startswith("[UNTRUSTED CONTENT") and "short answers" in text
 
 
 @pytest.mark.parametrize("name", MEMORY_WRITE_TOOLS)

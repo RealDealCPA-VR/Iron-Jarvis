@@ -463,7 +463,10 @@ def test_memory_output_crosses_mcp_inside_the_untrusted_fence(tmp_path, monkeypa
     assert found["isError"] is False
     assert text.startswith("[UNTRUSTED CONTENT") and "teal" in text
     read = a.call(mcp_session, "memory_read", {"layer": "user", "key": "fav"}).json()["result"]
-    assert read["content"][0]["text"] == "The user's favourite colour is teal."
+    # v1.414.0 review (moved on purpose): memory_read returns the same stored
+    # text, so it is fenced too (tests/test_build_app_spine_review_v1414.py).
+    read_text = read["content"][0]["text"]
+    assert read_text.startswith("[UNTRUSTED CONTENT") and "teal" in read_text
 
 
 def test_the_memory_capability_serves_the_memory_profile_read_only():

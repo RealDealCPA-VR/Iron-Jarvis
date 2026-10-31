@@ -1348,6 +1348,11 @@ class HostedService:
         if drv is not None:
             drv.on_exit()
         live.proc, live.driver = None, None
+        # v1.414.0 review: our own connection files go with a process that
+        # ended BY ITSELF too (a crash, a kill) — off the loop, and under the
+        # pool lock, so a new start writing them again is never undone.
+        with contextlib.suppress(RuntimeError):
+            asyncio.ensure_future(self._remove_files_if_stopped(live))
         self._expire_asks(live)
         turn = live.turn
         if turn is not None and turn.running and not turn.ending and not proc.stopped:
@@ -1360,6 +1365,17 @@ class HostedService:
             ev["title"] = W.GONE_DURING_TURN.format(label=W.label(live.harness))
             self._emit(live, ev)
             asyncio.ensure_future(self._end_turn(live, "failed"))
+
+    async def _remove_files_if_stopped(self, live: LiveSession) -> None:
+        """v1.414.0 review: remove the connection files of a process that ended
+        by itself — only while no new process runs (a start writes them under
+        the same lock). Never raises."""
+        try:
+            async with self._lock():
+                if live.proc is None:
+                    await asyncio.to_thread(JT.remove_files, session_dir(self.home, live.sid))
+        except Exception:  # noqa: BLE001 — files that hold no credential
+            log.debug("could not remove a Code session's connection files", exc_info=True)
 
     async def _stop_process(self, live: LiveSession, *, why: str = "", end_turn: bool = True) -> None:
         """Stop the process (tree kill, off the loop). ALWAYS: its open cards
