@@ -95,45 +95,48 @@ async function openHarness(page: Page) {
   await expect(page.getByTestId("ij-harness-view")).toBeVisible({ timeout: 60_000 });
 }
 
-/** v1.412.0: New session starts AT ONCE with no folder; the folder is chosen
- *  under the composer (Choose… → in a browser, the folder tree in a dialog:
- *  its typed path, then "Use this folder"), which moves the empty session
- *  into that folder. `branch`: for a repository, what the branch switch is
- *  left at (null: no switch expected). */
-async function startInFolder(page: Page, folder: string, branch: boolean | null = null): Promise<void> {
+/** v1.418.0 (fix plan C2.6): New session is the START COMPOSER — the box has
+ *  the caret, the folder is a chip under it (Choose… → in a browser, the
+ *  folder tree in a dialog: its typed path, then "Use this folder"), and Send
+ *  makes the session in that folder with ONE create and sends `message` as
+ *  its first message ("type, Enter"). `branch`: for a repository, what the
+ *  branch switch is left at (null: no switch expected). */
+async function startInFolder(page: Page, folder: string, message: string, branch: boolean | null = null): Promise<void> {
   await page.getByTestId("harness-new-session").click();
-  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 30_000 });
-  const first = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
-  await page.getByTestId("harness-start-folder-choose").click();
-  const typed = page.getByTestId("harness-start-folder-tree").getByLabel("Go to root path");
+  const box = page.getByTestId("harness-new-box");
+  await expect(box).toBeFocused({ timeout: 30_000 });
+  await expect(page.getByTestId("harness-new-folder")).toHaveText("No folder");
+  await page.getByTestId("harness-new-folder-choose").click();
+  const typed = page.getByTestId("harness-new-folder-tree").getByLabel("Go to root path");
   await typed.fill(folder);
   await typed.press("Enter");
-  await page.getByTestId("harness-start-folder-tree-use").click();
+  await page.getByTestId("harness-new-folder-tree-use").click();
   if (branch !== null) {
-    const sw = page.getByTestId("harness-start-branch-switch");
+    const sw = page.getByTestId("harness-new-branch-switch");
     await expect(sw).toBeVisible({ timeout: 20_000 });
     await expect(sw).toBeChecked();
     if (!branch) await sw.uncheck();
-    await page.getByTestId("harness-start-branch-use").click();
   }
-  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", first, { timeout: 30_000 });
-  await expect(page.getByTestId("harness-session")).toBeVisible();
+  await box.fill(message);
+  await box.press("Enter");
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 30_000 });
 }
 
 test("Chat › Code → a session → a reply with a change, and Undo", async ({ page }) => {
   await openHarness(page);
-  await startInFolder(page, work);
+  // v1.418.0 (C2.6): type, Enter — one create, the words go with it.
+  await startInFolder(page, work, "Write a hello file");
   await expect(page.getByTestId("harness-folder")).toContainText(work.split(/[\\/]/).pop() as string);
   sessionId = (await page.getByTestId("harness-session").getAttribute("data-session")) ?? "";
   expect(sessionId).not.toBe("");
   // The open session is the page's stable address.
   await expect(page).toHaveURL(new RegExp(`session=${sessionId}`));
 
-  const box = page.getByTestId("harness-input");
-  await box.fill("Write a hello file");
-  await box.press("Enter");
   // The reply the daemon wrote (re-read after the turn), with what it changed.
   await expect(page.getByTestId("harness-reply").last()).toContainText("saved RESULT.md", { timeout: 90_000 });
+  // v1.418.0 (C2.5): ONE line under the reply; what it changed opens from it.
+  await expect(page.getByTestId("harness-reply").last().getByTestId("reply-line")).toHaveCount(1);
+  await page.getByTestId("harness-reply").last().getByTestId("reply-line-toggle").click();
   const changes = page.getByTestId("harness-reply").last().getByTestId("changed-files");
   await expect(changes).toBeVisible({ timeout: 30_000 });
   expect(existsSync(join(work, "RESULT.md"))).toBe(true);
@@ -185,6 +188,27 @@ test("Rewind to here: the file goes back, the message returns to the box, the de
   // The demo model never writes a lesson (the library's honest-mock rule).
   await expect(page.getByTestId("library-cards")).toHaveCount(0);
   await box.fill("");
+});
+
+// v1.418.0 (fix plan C2.8): Archive is reversible and listed — the session
+// leaves the list for "Archived (N)", its banner and its row say Bring back,
+// and one press puts it back in the list.
+test("archive a session, find it under Archived, and bring it back", async ({ page }) => {
+  test.skip(!sessionId, "needs the session from the first test");
+  await page.goto(`/chat?view=code&session=${sessionId}`);
+  await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
+  await page.getByLabel("Session actions").click();
+  await page.getByTestId("harness-archive").click();
+  await expect(page.getByTestId(`harness-session-row-${sessionId}`)).toHaveCount(0, { timeout: 30_000 });
+  const toggle = page.getByTestId("harness-archived-toggle");
+  await expect(toggle).toContainText("Archived (", { timeout: 30_000 });
+  await toggle.click();
+  // Opened from the fold: the banner says it is archived and offers Bring back.
+  await page.getByTestId(`harness-archived-row-${sessionId}`).click();
+  await expect(page.getByTestId("harness-archived-banner")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId(`harness-bring-back-${sessionId}`).click();
+  await expect(page.getByTestId(`harness-session-row-${sessionId}`)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("harness-archived-banner")).toHaveCount(0, { timeout: 30_000 });
 });
 
 test("a terminal from the left pane, and back", async ({ page }) => {
@@ -808,12 +832,12 @@ test("Phase 6: the keys inside the harness only, the search, and Branch from her
   await expect(page.getByTestId("harness-session")).toHaveAttribute("data-session", sessionId, { timeout: 30_000 });
   await expect(page.getByTestId("harness-reply")).toHaveCount(before, { timeout: 30_000 });
 
-  // Ctrl+N with the focus in the harness: a new session starts at once
-  // (v1.412.0), with no folder, ready to type.
+  // Ctrl+N with the focus in the harness: the start composer (v1.418.0),
+  // with no folder, the caret in its box — nothing is made until Send.
   await box.click();
   await page.keyboard.press("Control+n");
-  await expect(page.getByTestId("harness-session")).not.toHaveAttribute("data-session", sessionId, { timeout: 10_000 });
-  await expect(page.getByTestId("harness-start-folder")).toHaveText("No folder", { timeout: 10_000 });
+  await expect(page.getByTestId("harness-new-box")).toBeFocused({ timeout: 10_000 });
+  await expect(page.getByTestId("harness-new-folder")).toHaveText("No folder", { timeout: 10_000 });
 });
 
 // v1.379.0: a typed "/name words" runs like Claude Code's "/": a skill rides
@@ -875,25 +899,23 @@ test("v1.379.0: a session with no folder makes its own folder with its first mes
     const put = await page.request.put(`${DAEMON}/settings`, { data: { values: { chat_files_root: chatFiles } } });
     expect(put.ok()).toBe(true);
     await openHarness(page);
-    // v1.412.0: New session starts with no folder at once; its folder chip
-    // says where its files go.
+    // v1.418.0 (C2.6): New session is the start composer, with no folder;
+    // its folder chip says where its files go. Nothing is made until Send.
     await page.getByTestId("harness-new-session").click();
-    await expect(page.getByTestId("harness-session")).toBeVisible();
-    await expect(page.getByTestId("harness-start-folder")).toHaveAttribute(
+    await expect(page.getByTestId("harness-new-folder")).toHaveAttribute(
       "title",
       new RegExp(`a new folder in ${chatFiles.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}`),
     );
-    const folderLine = page.getByTestId("harness-folder");
-    await expect(folderLine).toHaveAttribute("data-no-folder", "true");
-    await expect(folderLine).toContainText("its files get a folder of their own with your first message");
-    // Nothing made yet.
     expect(readdirSync(chatFiles)).toEqual([]);
-    // The list's "No folder" group holds it.
-    await expect(page.locator('[data-testid="harness-folder-group"][data-no-folder="true"]')).toBeVisible();
 
-    const box = page.getByTestId("harness-input");
+    const box = page.getByTestId("harness-new-box");
     await box.fill("Write a hello file");
     await box.press("Enter");
+    await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 30_000 });
+    const folderLine = page.getByTestId("harness-folder");
+    await expect(folderLine).toHaveAttribute("data-no-folder", "true");
+    // The list's "No folder" group holds it.
+    await expect(page.locator('[data-testid="harness-folder-group"][data-no-folder="true"]')).toBeVisible();
     await expect(page.getByTestId("harness-reply").last()).toContainText("saved RESULT.md", { timeout: 90_000 });
     await expect(page.getByTestId("harness-work-folder")).toContainText("files in ", { timeout: 30_000 });
     await expect(page.getByTestId("harness-open-work-folder")).toBeVisible();

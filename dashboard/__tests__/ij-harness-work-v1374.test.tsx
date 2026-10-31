@@ -245,6 +245,9 @@ describe("the task list sits under the live reply and folds into the settled one
       s.push("done", { reply: "Fixed the total." });
       s.end();
     });
+    // v1.418.0 (moved on purpose, fix plan C2.5): the folded plan is inside
+    // the reply's ONE line, one press away.
+    fireEvent.click(await screen.findByTestId("reply-line-toggle", undefined, NET));
     const folded = await screen.findByTestId("harness-reply-plan", undefined, NET);
     expect(screen.queryByTestId("harness-live-plan")).toBeNull();
     // FOLDED: one line until opened, in the checklist's own words.
@@ -261,6 +264,8 @@ describe("the task list sits under the live reply and folds into the settled one
     api.gets["/build/sessions/s1"] = view({ messages: turn("t1", "hi", "Hello.") });
     renderSession();
     await screen.findByText("Hello.");
+    const toggle = screen.queryByTestId("reply-line-toggle");
+    if (toggle) fireEvent.click(toggle);
     expect(screen.queryByTestId("harness-reply-plan")).toBeNull();
   });
 });

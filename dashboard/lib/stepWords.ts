@@ -462,3 +462,23 @@ export const PHASE_LABEL: Readonly<Record<string, string>> = {
 export function phaseLabel(phase: string): string {
   return PHASE_LABEL[phase] ?? phase;
 }
+
+/**
+ * v1.418.0 (fix plan C2.3): ONE RUN of steps between two pieces of a coding
+ * reply's text, folded to one line. A single step reads as its own phrase
+ * ("Read cart.py"); more read as their count and what they did, counted by
+ * the same counter as the reply's "Worked for" line:
+ *   "3 steps · read 2 files, edited 1 file"
+ * (a failed step adds the counter's own "1 failed"). Pure.
+ */
+export function runWords(steps: ReadonlyArray<{ name: string; ok?: boolean | null; target?: string | null }>): string {
+  if (!steps.length) return "";
+  if (steps.length === 1) {
+    const only = steps[0];
+    const words = stepPhraseText(stepPhrase(only.name, only.target ?? null));
+    return only.ok === false ? `${words} · failed` : words;
+  }
+  const counts = stepCounts(steps);
+  const head = `${steps.length} steps`;
+  return counts.length ? `${head} · ${counts.join(", ")}` : head;
+}

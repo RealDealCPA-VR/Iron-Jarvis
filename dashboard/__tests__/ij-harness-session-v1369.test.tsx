@@ -199,8 +199,12 @@ describe("the transcript is drawn with the chat page's own pieces", () => {
     renderSession();
     expect(await screen.findByText("Added the cart page.")).toBeInTheDocument();
     expect(screen.getByTestId("harness-user-bubble")).toHaveTextContent("Add a cart");
-    expect(screen.getByTestId("work-line")).toBeInTheDocument();
+    // v1.418.0 (moved on purpose, fix plan C2.5): ONE line under the reply —
+    // the receipt on it, the work line one press away.
+    expect(screen.getAllByTestId("reply-line")).toHaveLength(1);
     expect(screen.getByTestId("turn-receipt")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("reply-line-toggle"));
+    expect(screen.getByTestId("work-line")).toBeInTheDocument();
     expect(screen.getByTestId("harness-folder")).toHaveTextContent("shop");
     // No account list on this Iron Jarvis (a 404): no chip; the demo model
     // is named where it runs, in plain words.

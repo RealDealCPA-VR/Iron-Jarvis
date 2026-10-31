@@ -242,6 +242,11 @@ describe("the view", () => {
     render(<IjHarnessView initialSession={null} terminals={[]} onOpenTerminal={() => {}} defaultFolder={"C:\\work"} terminal={terminal} />);
     await screen.findByTestId("session-stub");
     fireEvent.click(screen.getByTestId("harness-new-session"));
+    // v1.418.0 (moved on purpose, fix plan C2.6): New session opens the start
+    // composer; its Send makes the session (one create) and opens it.
+    const box = await screen.findByTestId("harness-new-box");
+    fireEvent.change(box, { target: { value: "Add a cart" } });
+    fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
     // The folder only: the daemon chooses the account (its Default, even at
     // its limit — v1.368.0); the screen never picks one for a new session.

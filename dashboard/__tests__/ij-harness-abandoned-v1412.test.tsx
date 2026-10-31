@@ -7,6 +7,11 @@
  * New session pressed again, the view closed — while it still has no message,
  * no upload, no words in its box and no running reply is deleted with the
  * daemon's `only_if_empty` guard. Anything with content stays.
+ *
+ * v1.418.0 (MOVED ON PURPOSE, fix plan C2.6): New session opens the START
+ * COMPOSER and makes no server row until Send (with a message in it), so the
+ * clean-up is gone with its cause; these pins now say nothing is made or
+ * deleted by New session, leaving it, or closing the view.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,39 +101,50 @@ async function mount() {
   return out;
 }
 
-async function newSession(id: string) {
+/** v1.418.0 (moved on purpose, fix plan C2.6): New session opens the start
+ *  composer and makes NOTHING on the daemon until Send. */
+async function newSession() {
   fireEvent.click(screen.getByTestId("harness-new-session"));
-  await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", id));
+  await screen.findByTestId("harness-new-box");
 }
 
-describe("an abandoned New session", () => {
-  it("is deleted (only if empty) when New session is pressed again", async () => {
+const creates = () => api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions");
+
+describe("New session leaves nothing behind (v1.418.0: no row until Send)", () => {
+  it("pressing New session twice makes no session and deletes none", async () => {
     await mount();
-    await newSession("new1");
+    await newSession();
+    await newSession();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(creates()).toEqual([]);
     expect(deletes()).toEqual([]);
-    await newSession("new2");
-    await waitFor(() => expect(deletes()).toEqual(["/build/sessions/new1?only_if_empty=1"]));
   });
 
-  it("is deleted when another session is opened", async () => {
+  it("opening another session from the composer deletes nothing", async () => {
     await mount();
-    await newSession("new1");
+    await newSession();
     fireEvent.click(screen.getByTestId("harness-session-row-a1"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "a1"));
-    await waitFor(() => expect(deletes()).toEqual(["/build/sessions/new1?only_if_empty=1"]));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(creates()).toEqual([]);
+    expect(deletes()).toEqual([]);
   });
 
-  it("is deleted when the view closes", async () => {
+  it("closing the view on the composer deletes nothing", async () => {
     const { unmount } = await mount();
-    await newSession("new1");
+    await newSession();
     unmount();
-    await waitFor(() => expect(deletes()).toEqual(["/build/sessions/new1?only_if_empty=1"]));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deletes()).toEqual([]);
   });
 
-  it("one the user typed in (or attached to) is kept", async () => {
+  it("Send makes ONE session, with the message, and leaving it deletes nothing", async () => {
     await mount();
-    await newSession("new1");
-    fireEvent.click(screen.getByTestId("stub-type"));
+    await newSession();
+    fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "Fix the header" } });
+    fireEvent.click(screen.getByTestId("harness-new-send"));
+    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
+    expect(creates()).toHaveLength(1);
     fireEvent.click(screen.getByTestId("harness-session-row-a1"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "a1"));
     await new Promise((r) => setTimeout(r, 30));
@@ -137,10 +153,7 @@ describe("an abandoned New session", () => {
 
   it("a session the user opened from the list is never deleted for being left", async () => {
     await mount();
-    await newSession("new1");
-    fireEvent.click(screen.getByTestId("stub-type"));
-    await newSession("new2");
-    fireEvent.click(screen.getByTestId("stub-type"));
+    await newSession();
     fireEvent.click(screen.getByTestId("harness-session-row-a1"));
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "a1"));
     await new Promise((r) => setTimeout(r, 30));

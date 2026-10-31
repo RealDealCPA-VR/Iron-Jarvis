@@ -78,6 +78,8 @@ afterEach(() => cleanup());
 // v1.412.0 (moved on purpose): there is no New session form any more —
 // New session starts a session with no folder AT ONCE, in front of any
 // session; only where its "Choose…" opens follows the session in front.
+// v1.418.0 (moved on purpose, fix plan C2.6): New session opens the start
+// composer; the session is made by its Send (one create).
 async function startInFrontOf(id: string) {
   render(
     <IjHarnessView
@@ -91,6 +93,10 @@ async function startInFrontOf(id: string) {
   await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", id));
   await screen.findAllByTestId("harness-folder-group");
   fireEvent.click(screen.getByTestId("harness-new-session"));
+  const box = await screen.findByTestId("harness-new-box");
+  expect(api.posts.find((p) => p.path === "/build/sessions")).toBeUndefined();
+  fireEvent.change(box, { target: { value: "Plan the next trip" } });
+  fireEvent.click(screen.getByTestId("harness-new-send"));
   await waitFor(() => expect(api.posts.find((p) => p.path === "/build/sessions")).toBeTruthy());
   return api.posts.find((p) => p.path === "/build/sessions")?.body;
 }

@@ -75,8 +75,10 @@ import { answerElicitation, decideSampling } from "@/lib/mcpInteract";
 import { isProviderDefaultModel, machineName, modelGroupName, providerDisplay, providerHeading } from "@/lib/onboarding";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
 import type { ModelOption } from "@/lib/types";
-import { Markdown } from "@/components/Markdown";
-import { WorkLine, LiveToolRows } from "@/components/chat/WorkLine";
+import { Markdown, MemoMarkdown } from "@/components/Markdown";
+import { cutsOf, keepReplyShape, liveOffsetsFor, liveReplyItems } from "@/lib/replyItems";
+import type { ToolCard } from "@/lib/useChatStream";
+import { LiveToolRows, StepRun, liveSteps } from "@/components/chat/WorkLine";
 import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { DockAsk } from "@/components/chat/DockAsk";
@@ -240,6 +242,9 @@ import { noteSessionUsed } from "@/lib/emptySessions";
 import {
   answerQuestion,
   archiveSession,
+  unarchiveSession,
+  ARCHIVED_BANNER_WORDS,
+  BRING_BACK_WORDS,
   createSession,
   decodeAskResolved,
   decodeAskUser,
@@ -330,28 +335,74 @@ interface TurnExtras {
  *  the newest line while the reader is at the bottom), and while the turn has
  *  ended but its saved reply is not read back yet (`settling`) it keeps the
  *  words and drops the "Thinking…" line — the reply never blinks out. */
+const NO_CARDS: readonly ToolCard[] = [];
+
 function LiveText({
   stream,
   onGrow,
   settling = false,
+  cards = NO_CARDS,
+  since = null,
+  turnId = null,
 }: {
   stream: ReturnType<typeof useChatStream>;
   onGrow?: () => void;
   settling?: boolean;
+  /** v1.418.0 (C2.3): the reply's own tool cards (its helpers' calls left
+   *  out): drawn IN ORDER with the words, where each first appeared. */
+  cards?: readonly ToolCard[];
+  since?: number | null;
+  /** The running turn (the place of each card is kept by it). */
+  turnId?: string | null;
 }) {
   const text = useLiveText(stream);
   const thinking = useLiveThinking(stream);
   useEffect(() => {
     if (text || thinking) onGrow?.();
   }, [text, thinking, onGrow]);
+  // v1.418.0 (C2.3): where each card first appeared in the words — the
+  // store's CURRENT length (it runs ahead of the drawn words by at most a
+  // frame), kept per turn so a return mid-reply places them as before.
+  const localOffsets = useRef(new Map<string, number>());
+  const offsets = turnId ? liveOffsetsFor(turnId) : localOffsets.current;
+  if (turnId && localOffsets.current.size) {
+    // Cards seen before the turn had its id here keep their places.
+    for (const [id, at] of localOffsets.current) if (!offsets.has(id)) offsets.set(id, at);
+    localOffsets.current.clear();
+  }
+  const current = stream.textStore ? stream.textStore.get() : text;
+  for (const c of cards) if (!offsets.has(c.id)) offsets.set(c.id, current.length);
+  const items = liveReplyItems(text, cards, (c) => offsets.get(c.id) ?? text.length);
+  useEffect(() => {
+    if (turnId && cards.length) keepReplyShape(turnId, { text, cuts: cutsOf(text, items) });
+  });
+  let lastText = -1;
+  let lastRun = -1;
+  items.forEach((it, i) => {
+    if (it.kind === "text") lastText = i;
+    else lastRun = i;
+  });
   return (
     <>
       {thinking ? <ThinkingDisclosure text={thinking} live={!settling} /> : null}
-      {text ? (
-        <div data-testid="harness-live-text" className={HARNESS_REPLY_PROSE}>
-          <Markdown content={text} />
-        </div>
-      ) : null}
+      {items.map((it, i) =>
+        it.kind === "steps" ? (
+          i === lastRun ? (
+            // The run the reply is in: its rows and the "Working for" line.
+            <LiveToolRows key={`run-${i}`} cards={it.steps} since={since} />
+          ) : (
+            <StepRun key={`run-${i}`} steps={liveSteps(it.steps)} />
+          )
+        ) : i === lastText ? (
+          <div key={`text-${i}`} data-testid="harness-live-text" className={HARNESS_REPLY_PROSE}>
+            <Markdown content={it.text} />
+          </div>
+        ) : (
+          <div key={`text-${i}`} data-testid="harness-live-text-part" className={HARNESS_REPLY_PROSE}>
+            <MemoMarkdown content={it.text} />
+          </div>
+        ),
+      )}
       {!text && !stream.tools.length && !settling ? (
         <div className="flex items-center gap-2 text-[13px] text-zinc-500">
           <Loader2 size={12} className="animate-spin" />
@@ -362,6 +413,16 @@ function LiveText({
     </>
   );
 }
+
+/** v1.418.0 (fix plan C2.6): what the start composer hands a session it
+ *  made: the words and the pictures, sent once as its first message. */
+export interface FirstMessage {
+  text: string;
+  files: HarnessFile[];
+}
+
+/** What a send into an archived session says (the daemon's own sentence). */
+export const ARCHIVED_SEND_WORDS = "This session is archived. Bring it back before you continue it.";
 
 /** v1.417.0 (C2.4): the finish check while it runs, as ONE quiet line. */
 export const FINISH_CHECKING_WORDS = "Checking the work…";
@@ -475,7 +536,32 @@ export function HarnessSession({
   onFindSessions,
   onScreen = true,
   panesInto,
+  freshView = null,
+  firstMessage = null,
+  onFirstTaken,
+  onFirstStarted,
+  onFirstRefused,
+  rereadRequest = 0,
 }: {
+  /** v1.418.0 review: the first message's turn STARTED (its first frame). */
+  onFirstStarted?: () => void;
+  /** v1.418.0 review: the first message was refused BEFORE its turn started
+   *  (the daemon wrote nothing): the host takes the words back to the start
+   *  composer and removes this empty session. Absent: the words go back in
+   *  this session's box, as for any message. */
+  onFirstRefused?: (problem: string) => void;
+  /** v1.418.0 (C2.8): each change reads the session again (it was brought
+   *  back from the list's Archived fold while open here). */
+  rereadRequest?: number;
+  /** v1.418.0 (fix plan C2.6): the view the create route answered for a
+   *  session the start composer just made — the session opens on it with
+   *  no read of its own. */
+  freshView?: BuildSessionView | null;
+  /** v1.418.0 (C2.6): the start composer's words (and pictures), sent to
+   *  this session ONCE when it opens. */
+  firstMessage?: FirstMessage | null;
+  /** v1.418.0 (C2.6): the first message was taken (it is not handed again). */
+  onFirstTaken?: () => void;
   threadId: string;
   terminal: SessionTerminalApi;
   /** The session list says a turn runs (a resumed wait, another window). */
@@ -526,6 +612,12 @@ export function HarnessSession({
   // v1.417.0 (C2.1): neither the text nor "when it last moved" lives in this
   // component's state — a streamed word never redraws the whole session.
   const stream = useChatStream({ textInState: false, clockInState: false, seed: kept?.stream ?? null });
+  // v1.418.0 (C2.3): read by the frame tap (the place of each tool call).
+  // v1.418.0 review: the reply's words AS THE FRAMES SAY THEM (the tap's own
+  // count): the text store does not move while a replay is folded
+  // (`resume` .. `caught_up`), so a replayed step read the store's length
+  // BEFORE the replay and every step landed above every word.
+  const tapLenRef = useRef(0);
   // v1.390.0 (the Timeline): the running reply folded from its frames — a
   // store, never React state (the Timeline tab reads it once a second while
   // it is shown); carried on from where this window left it (lib/turnCache).
@@ -544,6 +636,15 @@ export function HarnessSession({
   // (or the read gave up), so the answer never blinks out and back in.
   const [held, setHeld] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // v1.418.0 (C2.6): the start composer's first message went out (once).
+  const firstTakenRef = useRef(false);
+  // v1.418.0 review: that first message's turn has not started yet (a
+  // refusal now sends the user back to the start composer).
+  const firstPendingRef = useRef(false);
+  const onFirstStartedRef = useRef(onFirstStarted);
+  onFirstStartedRef.current = onFirstStarted;
+  const onFirstRefusedRef = useRef(onFirstRefused);
+  onFirstRefusedRef.current = onFirstRefused;
   // v1.412.0 review: "Choose…" is moving this empty session to a folder —
   // nothing is sent (or attached) until the move is done ("Moving to …").
   const movingRef = useRef<string | null>(null);
@@ -952,6 +1053,7 @@ export function HarnessSession({
       // not drawn; `resumed: false` is the whole turn — fold it from nothing.
       replayingRef.current = true;
       if (data.resumed !== true) {
+        tapLenRef.current = 0;
         pageRef.current = { helpers: [], questions: [], attempts: [] };
         timeline.reset(turnRef.current ?? "");
       }
@@ -963,6 +1065,26 @@ export function HarnessSession({
       replayingRef.current = false;
       drawPage();
       return;
+    }
+    // v1.418.0 (C2.3): where a tool call sits in the reply's words — the
+    // words streamed BEFORE its frame. Review: counted HERE, frame by frame
+    // (the store stands still through a replay), the finish check's own
+    // words left out as the stream leaves them out; a `reset` throws the
+    // words away, so every step placed so far sits before the new ones.
+    if (data.check !== "finish") {
+      if (event === "token") {
+        tapLenRef.current += typeof data.text === "string" ? data.text.length : 0;
+      } else if (event === "reset") {
+        tapLenRef.current = 0;
+        if (turnRef.current) {
+          const offs = liveOffsetsFor(turnRef.current);
+          for (const k of offs.keys()) offs.set(k, 0);
+        }
+      } else if (event === "tool_call" && turnRef.current) {
+        const cid = typeof data.id === "string" ? data.id : "";
+        const offs = liveOffsetsFor(turnRef.current);
+        if (cid && !offs.has(cid)) offs.set(cid, tapLenRef.current);
+      }
     }
     const page = pageRef.current;
     if (event === "ask_user") {
@@ -1181,6 +1303,8 @@ export function HarnessSession({
       if (!resume) timeline.reset(id);
       replayingRef.current = false;
       posRef.current = resume?.after ?? "";
+      // v1.418.0 review: the tap counts the words from where this run starts.
+      tapLenRef.current = resume ? (resume.seed.text ?? "").length : 0;
       limitSeenRef.current = false;
       let started = !!rejoinId;
       // A NEW turn retires the limit card at its first real frame (once —
@@ -1239,6 +1363,10 @@ export function HarnessSession({
                 onPosition,
                 onFrame: (e, d) => {
                   started = true;
+                  if (firstPendingRef.current) {
+                    firstPendingRef.current = false;
+                    onFirstStartedRef.current?.();
+                  }
                   if (!retired && e !== "phase" && e !== "resume" && e !== "caught_up") {
                     retired = true;
                     setLimit(null);
@@ -1271,7 +1399,16 @@ export function HarnessSession({
           // frame), so the note below steps aside once that line is read.
           setErrorTech({ text: line, technical: turnErrorTechnical(e), turn: started ? id : null });
         }
-        if (!started && text !== null) {
+        if (!started && text !== null && firstPendingRef.current && onFirstRefusedRef.current) {
+          // v1.418.0 review: the START COMPOSER's first message never
+          // started: this session holds nothing — the host removes it and
+          // puts the words (and the refusal) back in the composer.
+          firstPendingRef.current = false;
+          setPending(null);
+          setError(null);
+          setErrorTech(null);
+          onFirstRefusedRef.current(turnErrorText(e));
+        } else if (!started && text !== null) {
           // Never started: the words and what rode them go back in the box,
           // nothing was lost (v1.373.0: a file-only message too).
           setPending(null);
@@ -1339,8 +1476,23 @@ export function HarnessSession({
     setRewindNote(null);
     setBranchError(null);
     void refreshAccounts();
-    void load().then(async (v) => {
+    // v1.418.0 (C2.6): a session the start composer just made opens on the
+    // create's own answer (no second read) and sends its first message.
+    const fresh = freshView && freshView.id === threadId ? freshView : null;
+    if (fresh) adopt(fresh);
+    void (fresh ? Promise.resolve<BuildSessionView | null>(fresh) : load()).then(async (v) => {
       if (!live) return;
+      if (v && firstMessage && !firstTakenRef.current) {
+        firstTakenRef.current = true;
+        onFirstTaken?.();
+        // v1.418.0 review: until its turn starts (or the send ends some other
+        // way — a "/" command, a refusal), a refusal goes back to the start.
+        firstPendingRef.current = true;
+        void send({ text: firstMessage.text, attachments: firstMessage.files }).finally(() => {
+          firstPendingRef.current = false;
+        });
+        return;
+      }
       if (!v) {
         // Unreadable (offline, gone): a kept reply is not left "working".
         if (kept) {
@@ -1411,6 +1563,13 @@ export function HarnessSession({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
+
+  // v1.418.0 (C2.8): brought back from the list while open — read it again
+  // (the archived banner goes).
+  useEffect(() => {
+    if (rereadRequest > 0) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rereadRequest]);
 
   // The list saw a turn start here (a resumed wait, another window).
   // v1.384.0: never a SECOND follow of the turn this screen already follows
@@ -1540,7 +1699,7 @@ export function HarnessSession({
       return;
     }
     if (view.archived) {
-      setError("This session is archived. Bring it back before you continue it.");
+      setError(ARCHIVED_SEND_WORDS);
       return;
     }
     const paths = files.map((f) => f.path);
@@ -2127,6 +2286,24 @@ export function HarnessSession({
     }
   }
 
+  // v1.418.0 (fix plan C2.8): an archived session opened (a link, the
+  // Archived fold) comes back with ONE press: the banner's "Bring back".
+  const [bringingBack, setBringingBack] = useState(false);
+  async function bringBack() {
+    if (bringingBack) return;
+    setBringingBack(true);
+    try {
+      await unarchiveSession(threadId);
+      setError((cur) => (cur === ARCHIVED_SEND_WORDS ? null : cur));
+      await load();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBringingBack(false);
+    }
+  }
+
   async function remove() {
     setMenuOpen(false);
     try {
@@ -2478,6 +2655,12 @@ export function HarnessSession({
   // after it — one stopped before a word — means it is no longer the one to
   // retry or to fix).
   const newestReply = lastReply && shown[shown.length - 1] === lastReply ? lastReply : undefined;
+  // v1.418.0 (C2.3): the live tool cards that are the reply's own (a
+  // helper's call is drawn by the helper's own row).
+  const liveCards = useMemo(() => {
+    const ids = helperCallIds(helpers);
+    return ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;
+  }, [helpers, stream.tools]);
   // v1.391.0: the replies a restart cut off that the app carried on by
   // itself (a later line names them — lib/buildResume).
   const carried = carriedOnTurns(view?.messages ?? []);
@@ -2528,6 +2711,16 @@ export function HarnessSession({
   // v1.378.0: a message the daemon wrote can be rewound to (the refusal's
   // press opens the "/rewind" list only when there is one).
   const canRewindHere = !view?.archived && shown.some((m) => m.role === "user" && !m.steer && !!m.turnId);
+  // v1.406.0 part 4: where things stand under the newest settled reply —
+  // never while a turn runs, nor while the daemon carries the session on by
+  // itself (an approved plan's act turn about to start, or a turn this window
+  // has not followed yet behind a hidden continuation): the reply above is
+  // not where things stand. v1.418.0 (C2.5): read once here — its recap goes
+  // in the newest reply's line, its buttons in the box below it.
+  const nextStep =
+    !view || busy || holding || view.archived || view.running || view.planRun || !newestReply
+      ? null
+      : codeNextStep(codeReplyFacts(newestReply), gitFacts(view.git, branchStatus));
   const choice = view?.setup.provider && view?.setup.model ? `${view.setup.provider}::${view.setup.model}` : "";
   // v1.376.0: the chip names the session's ACCOUNT after the model ("Opus 4.8
   // · Work"). A session on a provider with no model of its own (an account
@@ -2889,6 +3082,7 @@ export function HarnessSession({
           ) : null}
           {shown.map((m, i) => (
             <HarnessMessageRow
+              nextRecap={m === newestReply && nextStep ? nextStep.recap : ""}
               key={i}
               m={m}
               index={i}
@@ -2921,12 +3115,10 @@ export function HarnessSession({
               questions" is on) render inside it — a press puts the words in
               the box; nothing is sent. */}
           {(() => {
-            // Review: nor while the daemon carries the session on by itself
-            // (an approved plan's act turn about to start, or a turn this
-            // window has not followed yet behind a hidden continuation):
-            // the reply above is not where things stand.
             if (busy || holding || view.archived || view.running || view.planRun || !newestReply) return null;
-            const step = codeNextStep(codeReplyFacts(newestReply), gitFacts(view.git, branchStatus));
+            // v1.418.0 (C2.5): the recap is folded into the reply's ONE line
+            // (HarnessMessageRow `nextRecap`); the buttons stay visible here.
+            const step = nextStep ? { ...nextStep, recap: "" } : null;
             const chips = nextSteps.length ? (
               <div data-testid="harness-next-steps" className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[12px] text-zinc-500">Next:</span>
@@ -2944,6 +3136,7 @@ export function HarnessSession({
                 ))}
               </div>
             ) : null;
+            if (!step?.actions.length && !chips) return null;
             return (
               <NextStepBox step={step} hidden={!!input.trim()} onAction={onNextAction}>
                 {chips}
@@ -2962,12 +3155,17 @@ export function HarnessSession({
               />
               {/* v1.397.0: each attempt is ONE row while it runs. */}
               <LiveAttemptRows attempts={attempts} />
-              {(() => {
-                const ids = helperCallIds(helpers);
-                const cards = ids.size ? stream.tools.filter((t) => !ids.has(t.id)) : stream.tools;
-                return cards.length ? <LiveToolRows cards={cards} since={stream.startedAt ?? null} /> : null;
-              })()}
-              <LiveText stream={stream} onGrow={followLive} settling={!busy} />
+              {/* v1.418.0 (C2.3): the words and the steps IN ORDER (each
+                  earlier run folded to one line; the run it is in shows its
+                  rows) — not every step above all of the text. */}
+              <LiveText
+                stream={stream}
+                onGrow={followLive}
+                settling={!busy}
+                cards={liveCards}
+                since={stream.startedAt ?? null}
+                turnId={turnId}
+              />
               {/* v1.417.0 (C2.4): the finish check, one quiet line. */}
               <LiveFinishLine stream={stream} />
               {/* v1.392.0: the reply summarized its own older rounds. */}
@@ -3085,6 +3283,27 @@ export function HarnessSession({
 
         {/* --------------------------------------------- the dock + composer */}
         <div className={`shrink-0 px-1 pb-1 ${HARNESS_COLUMN}`}>
+          {view.archived ? (
+            // v1.418.0 (C2.8): an archived session says so where the user
+            // types, and brings itself back with one press.
+            <div
+              data-testid="harness-archived-banner"
+              role="status"
+              className="mb-1.5 flex min-w-0 flex-wrap items-center gap-2 px-2 text-[12px] text-zinc-400"
+            >
+              <span className="min-w-0">{ARCHIVED_BANNER_WORDS}</span>
+              <button
+                type="button"
+                data-testid="harness-bring-back"
+                disabled={bringingBack}
+                onClick={() => void bringBack()}
+                className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[12px] text-zinc-200 transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-50"
+              >
+                {bringingBack ? <Loader2 size={12} aria-hidden className="animate-spin" /> : null}
+                {BRING_BACK_WORDS}
+              </button>
+            </div>
+          ) : null}
           {asking ? (
             <DockAsk
               asks={asks}

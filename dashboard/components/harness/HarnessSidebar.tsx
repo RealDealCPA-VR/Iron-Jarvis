@@ -3,11 +3,13 @@
 /**
  * The IJ harness view's LEFT PANE (v1.369.0, plan Phase 6).
  *
- *  - New session (v1.412.0): a session starts AT ONCE, with no folder, and
- *    opens on its composer — no form first (the user: "it should start
- *    automatically with a no folder chosen in the chat bar"). The folder is
- *    chosen there, under the composer (components/harness/HarnessStartFolder:
- *    "Choose…" opens Windows' own folder picker), before the first message.
+ *  - New session (v1.418.0, fix plan C2.6): opens the START COMPOSER
+ *    (components/harness/HarnessStartComposer) with the caret in its box —
+ *    the folder, branch, model, posture and Local only are chips under it,
+ *    and NOTHING is made on the daemon until Send (one create, then the
+ *    words). A folder heading's "+" opens it with that folder chosen.
+ *    (v1.412.0 made an empty session at once and moved it when a folder was
+ *    chosen: a second create and a delete before the first reply.)
  *    A session with no folder keeps its files in a folder of its own under
  *    the chat files folder, made with its first message (v1.379.0). All of
  *    them share one plain "No folder" group.
@@ -22,13 +24,29 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Columns2, FolderOpen, FolderX, Loader2, Moon, Pencil, Plus, Search, SquareTerminal, Sunrise, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Check,
+  ChevronRight,
+  Columns2,
+  FolderOpen,
+  FolderX,
+  Loader2,
+  Moon,
+  Pencil,
+  Plus,
+  Search,
+  SquareTerminal,
+  Sunrise,
+  X,
+} from "lucide-react";
 import { filterFolders } from "@/lib/buildNext";
 import { CODING_SESSIONS_LIST } from "@/lib/buildWords";
 import { PaneDot, stateWord } from "@/components/terminal/PaneState";
 import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
-import type { BuildFolder } from "@/lib/buildSessions";
+import { archivedCount, BRING_BACK_WORDS, type BuildFolder } from "@/lib/buildSessions";
 import { SESSION_DRAG_TYPE } from "@/lib/codeSplit";
 
 /** v1.406.0 part 7: the "Open beside" button's words. */
@@ -244,6 +262,96 @@ function FolderGroup({
   );
 }
 
+/**
+ * v1.418.0 (fix plan C2.8): the ARCHIVED sessions, folded at the bottom of
+ * the list ("Archived (N)", as Build › Code keeps them). A row opens the
+ * session (its banner offers Bring back too); its own "Bring back" press puts
+ * it back in the list. Nothing here deletes.
+ */
+function ArchivedFold({
+  folders,
+  selectedId,
+  onSelect,
+  onBringBack,
+}: {
+  folders: BuildFolder[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onBringBack: (id: string) => Promise<string | null>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const n = archivedCount(folders);
+  if (!n) return null;
+  async function bringBack(id: string) {
+    setBusy(id);
+    setProblem(null);
+    const err = await onBringBack(id);
+    setBusy(null);
+    if (err) setProblem(err);
+  }
+  return (
+    <section data-testid="harness-archived" className="space-y-0.5 pt-1">
+      <button
+        type="button"
+        data-testid="harness-archived-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[12px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        <ChevronRight
+          size={12}
+          aria-hidden
+          className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+        />
+        <Archive size={12} aria-hidden className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate">Archived ({n})</span>
+      </button>
+      {open ? (
+        <ul data-testid="harness-archived-list" className="space-y-0.5">
+          {folders.flatMap((f) =>
+            f.sessions.map((s) => (
+              <li key={s.id} className="group/row relative">
+                <button
+                  type="button"
+                  data-testid={`harness-archived-row-${s.id}`}
+                  aria-current={s.id === selectedId ? "true" : undefined}
+                  onClick={() => onSelect(s.id)}
+                  title={f.noFolder ? `${s.title} (no folder)` : `${s.title} · ${f.name}`}
+                  className={`${ROW} pr-24 ${s.id === selectedId ? "bg-white/[0.07] text-zinc-200" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"}`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                </button>
+                <button
+                  type="button"
+                  data-testid={`harness-bring-back-${s.id}`}
+                  disabled={busy !== null}
+                  onClick={() => void bringBack(s.id)}
+                  title="Put this session back in the list"
+                  className="absolute right-1 top-1/2 inline-flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[11px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50"
+                >
+                  {busy === s.id ? (
+                    <Loader2 size={11} aria-hidden className="animate-spin" />
+                  ) : (
+                    <ArchiveRestore size={11} aria-hidden />
+                  )}
+                  {BRING_BACK_WORDS}
+                </button>
+              </li>
+            )),
+          )}
+        </ul>
+      ) : null}
+      {problem ? (
+        <p role="alert" className="px-2 text-[12px] text-tone-danger">
+          {problem}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function HarnessSidebar({
   folders,
   listError,
@@ -261,7 +369,17 @@ export function HarnessSidebar({
   onTonight,
   lastNightOpen = false,
   onLastNight,
+  archived = null,
+  onBringBack,
+  newOpen = false,
 }: {
+  /** v1.418.0 (C2.6): the start composer is the view in front. */
+  newOpen?: boolean;
+  /** v1.418.0 (C2.8): the archived sessions (null: not read / not offered). */
+  archived?: BuildFolder[] | null;
+  /** v1.418.0 (C2.8): put an archived session back; resolves to the refusal
+   *  in words, or null. Absent: no archived fold. */
+  onBringBack?: (id: string) => Promise<string | null>;
   /** v1.398.0 (night shift N1): Tonight is the view in front. */
   tonightOpen?: boolean;
   /** v1.398.0: open the Tonight list (absent: no Tonight row). */
@@ -341,9 +459,10 @@ export function HarnessSidebar({
       <button
         type="button"
         data-testid="harness-new-session"
+        aria-current={newOpen ? "page" : undefined}
         onClick={() => void startBlank()}
         disabled={startingBlank}
-        title="A new session, ready to type — choose its folder under the box, or keep none"
+        title="A new session, ready to type: choose its folder under the box, or keep none"
         className="flex h-8 w-full shrink-0 items-center gap-2 rounded-[10px] px-2.5 text-left text-[13px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-60"
       >
         {startingBlank ? <Loader2 size={14} className="shrink-0 animate-spin" /> : <Plus size={14} className="shrink-0" />}
@@ -445,6 +564,9 @@ export function HarnessSidebar({
           <p role="alert" className="px-2 text-[12px] text-tone-danger">
             {groupProblem}
           </p>
+        ) : null}
+        {archived && onBringBack ? (
+          <ArchivedFold folders={archived} selectedId={selectedId} onSelect={onSelect} onBringBack={onBringBack} />
         ) : null}
       </div>
 

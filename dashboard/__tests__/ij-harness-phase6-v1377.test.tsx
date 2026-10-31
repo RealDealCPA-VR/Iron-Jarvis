@@ -498,12 +498,25 @@ describe("the keys: inside the IJ harness only", () => {
 
   // v1.412.0 (moved on purpose): Ctrl+N STARTS a session at once (no form).
   it("Ctrl+N starts a new session in the view; outside the harness it does not", async () => {
-    api.gets["/build/sessions"] = { folders: [] };
+    // v1.418.0 (moved on purpose, fix plan C2.6): Ctrl+N opens the START
+    // COMPOSER (nothing is made until Send), so the view begins on a session.
+    api.gets["/build/sessions"] = {
+      folders: [
+        {
+          path: FOLDER,
+          name: "shop",
+          is_project: false,
+          project_id: null,
+          sessions: [{ id: "s1", title: "Add a cart", updated_at: "2026-10-22T10:00:00", running: false, waiting: false, archived: false }],
+        },
+      ],
+    };
+    api.gets["/build/sessions/s1"] = view();
     render(
       <div>
         <button data-testid="app-outside">outside</button>
         <IjHarnessView
-          initialSession={null}
+          initialSession="s1"
           terminals={[]}
           onOpenTerminal={() => {}}
           defaultFolder={null}
@@ -512,20 +525,18 @@ describe("the keys: inside the IJ harness only", () => {
       </div>,
     );
     const newBtn = await screen.findByTestId("harness-new-session");
+    await screen.findByTestId("harness-input");
     const outside = screen.getByTestId("app-outside");
     outside.focus();
     fireEvent.keyDown(outside, { key: "n", ctrlKey: true });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
-    expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions")).toHaveLength(0);
+    expect(screen.queryByTestId("harness-new-box")).toBeNull();
     newBtn.focus();
     fireEvent.keyDown(newBtn, { key: "n", ctrlKey: true });
-    await waitFor(() =>
-      expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions").map((c) => c.body)).toEqual([
-        { folder: "" },
-      ]),
-    );
+    expect(await screen.findByTestId("harness-new-box")).toBeInTheDocument();
+    expect(api.calls.filter((c) => c.method === "POST" && c.path === "/build/sessions")).toHaveLength(0);
   });
 
   it("a page with no IJ harness (the chat page) keeps every key: nothing of the harness answers", () => {

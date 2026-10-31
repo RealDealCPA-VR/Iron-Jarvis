@@ -452,7 +452,11 @@ describe("a coding session's next-step box", () => {
     renderSession();
     await screen.findByTestId("harness-step-limit");
     const next = await screen.findByTestId("next-step-box");
-    expect(within(next).getByTestId("next-step-recap")).toHaveTextContent("Changed 1 file. It stopped before it finished.");
+    // v1.418.0 (moved on purpose, fix plan C2.5): the recap folds into the
+    // newest reply's ONE line; the box keeps its buttons in sight.
+    expect(within(next).queryByTestId("next-step-recap")).toBeNull();
+    fireEvent.click(screen.getAllByTestId("reply-line-toggle").at(-1)!);
+    expect(screen.getByTestId("next-step-recap")).toHaveTextContent("Changed 1 file. It stopped before it finished.");
     expect(screen.getAllByTestId("harness-keep-going")).toHaveLength(1);
     expect(within(next).getByTestId("harness-keep-going")).toHaveAttribute("data-recommended", "true");
     expect(within(screen.getByTestId("harness-step-limit")).queryByRole("button")).toBeNull();
@@ -466,7 +470,9 @@ describe("a coding session's next-step box", () => {
     });
     renderSession();
     const next = await screen.findByTestId("next-step-box");
-    expect(within(next).getByTestId("next-step-recap")).toHaveTextContent("Offered next: add tests.");
+    // v1.418.0 (moved on purpose): the recap is in the reply's line.
+    fireEvent.click(screen.getAllByTestId("reply-line-toggle").at(-1)!);
+    expect(screen.getByTestId("next-step-recap")).toHaveTextContent("Offered next: add tests.");
     fireEvent.click(within(next).getByRole("button", { name: "Yes, do it" }));
     await waitFor(() => expect(sentTexts()).toEqual([YES_TEXT]));
   });
@@ -598,8 +604,10 @@ describe("a coding session's next-step box", () => {
     api.posts["/build/sessions/s1/git/draft"] = { drafted: true, message: "Fix the cart total", note: "" };
     renderSession();
     const next = await screen.findByTestId("next-step-box");
+    // v1.418.0 (moved on purpose): the recap is in the reply's line.
+    fireEvent.click(screen.getAllByTestId("reply-line-toggle").at(-1)!);
     await waitFor(() =>
-      expect(within(next).getByTestId("next-step-recap")).toHaveTextContent(
+      expect(screen.getByTestId("next-step-recap")).toHaveTextContent(
         "Changed 1 file. The changes on ij/cart-3f2a are not committed yet.",
       ),
     );

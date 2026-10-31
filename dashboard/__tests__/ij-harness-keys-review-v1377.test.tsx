@@ -164,6 +164,10 @@ describe("Esc stops a reply even when a disclosure in the harness is open", () =
       String(url).endsWith("/turn") ? stream.response : new Response("", { status: 200 }),
     );
     renderShell();
+    // v1.418.0 (moved on purpose, fix plan C2.5): the plan is inside the
+    // reply's ONE line — itself an opened disclosure that must not take Esc.
+    fireEvent.click(await screen.findByTestId("reply-line-toggle"));
+    expect(screen.getByTestId("reply-line-toggle")).toHaveAttribute("aria-expanded", "true");
     const planLine = await screen.findByTestId("harness-reply-plan");
     fireEvent.click(within(planLine).getByRole("button"));
     expect(within(planLine).getByRole("button")).toHaveAttribute("aria-expanded", "true");

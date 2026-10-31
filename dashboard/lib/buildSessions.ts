@@ -624,6 +624,30 @@ export function unarchiveSession(id: string): Promise<unknown> {
   return post(`/build/sessions/${encodeURIComponent(id)}/unarchive`, {});
 }
 
+/** v1.418.0 (fix plan C2.8): the ARCHIVED sessions only, grouped by folder as
+ *  the list groups them (GET /build/sessions?archived=1 answers every session,
+ *  each row saying whether it is archived; a folder with none archived is
+ *  left out). Read when the list is read again after an archive or a bring
+ *  back, never on the 4 s poll. */
+export async function listArchivedSessions(): Promise<BuildFolder[]> {
+  const all = await listSessions(true);
+  const out: BuildFolder[] = [];
+  for (const f of all) {
+    const sessions = f.sessions.filter((s) => s.archived);
+    if (sessions.length) out.push({ ...f, sessions });
+  }
+  return out;
+}
+
+/** v1.418.0 (C2.8): how many archived sessions a grouped list holds. */
+export function archivedCount(folders: readonly BuildFolder[] | null): number {
+  return folders ? folders.reduce((n, f) => n + f.sessions.length, 0) : 0;
+}
+
+/** v1.418.0 (C2.8): the words of the archived-session banner and its press. */
+export const ARCHIVED_BANNER_WORDS = "This session is archived.";
+export const BRING_BACK_WORDS = "Bring back";
+
 /** The user's answer to a question the session's turn asked (`ask_user`). */
 export function answerQuestion(
   sessionThreadId: string,

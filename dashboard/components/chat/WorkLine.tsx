@@ -111,6 +111,7 @@ import {
   stepCounts,
   stepHint,
   stepPhrase,
+  runWords,
   type FinishRecord,
 } from "@/lib/stepWords";
 import { appToolParts } from "@/lib/toolWords";
@@ -1119,3 +1120,57 @@ function WorkLineImpl(props: WorkInput) {
 /** v1.417.0 (C2.1): memoised — a coding session's transcript row and the chat
  *  page redraw it only when its own props change. */
 export const WorkLine = memo(WorkLineImpl);
+
+/* ------------------------------------------- a run of steps (v1.418.0) */
+
+/**
+ * v1.418.0 (fix plan C2.3): ONE RUN of a coding reply's steps, between two
+ * pieces of its text — folded to one quiet line ("3 steps · read 2 files,
+ * edited 1 file", lib/stepWords runWords) that opens to the same rows the
+ * "Worked for" fold shows (StepRow: target, duration, detail, Open in
+ * editor). `open` starts it opened (the run a live reply is in). The steps
+ * are read the way the fold reads them (workSteps: targets and details made
+ * safe again). Memoised: a settled run redraws only when its steps change.
+ */
+export const StepRun = memo(function StepRun({
+  steps: saved,
+  open: startOpen = false,
+}: {
+  steps: ReadonlyArray<{ name: string; ok?: boolean | null; ms?: number | null; target?: unknown; detail?: unknown }>;
+  open?: boolean;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  const panelId = useId();
+  const steps = useMemo(() => workSteps({ steps: saved as WorkInput["steps"], toolsUsed: null }), [saved]);
+  if (!steps.length) return null;
+  const failed = failedSteps(steps) > 0;
+  return (
+    <div data-testid="step-run" data-count={steps.length} className="min-w-0">
+      <button
+        type="button"
+        data-testid="step-run-toggle"
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 text-left text-[13px] leading-5 text-zinc-500 transition-colors hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none motion-reduce:transition-none"
+      >
+        <ChevronRight
+          size={14}
+          aria-hidden="true"
+          className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+        />
+        {failed ? <TriangleAlert size={14} aria-hidden="true" className="shrink-0 text-tone-warn" /> : null}
+        <span data-testid="step-run-words" className="min-w-0 truncate">
+          {runWords(steps)}
+        </span>
+      </button>
+      {open ? (
+        <div id={panelId} data-testid="step-run-rows" className="mt-1 grid gap-1 pl-[22px]">
+          {steps.map((st, i) => (
+            <StepRow key={`${st.name}-${i}`} step={st} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+});

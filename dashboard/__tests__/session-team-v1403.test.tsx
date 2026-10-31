@@ -627,9 +627,12 @@ describe("a team reply's line", () => {
     const did = await screen.findByTestId("harness-team-lead-did");
     expect(did).toHaveTextContent("The team lead did this itself");
     // The work line is closed: the warn line is not one of its rows.
-    const work = screen.getByTestId("work-line");
-    expect(within(work).getByRole("button").getAttribute("aria-expanded")).toBe("false");
-    expect(work.contains(did)).toBe(false);
+    // v1.418.0 (moved on purpose, fix plan C2.5): the work line lives in the
+    // reply's ONE line, which is closed; the team's lines are outside it.
+    const line = screen.getByTestId("reply-line");
+    expect(within(line).getByTestId("reply-line-toggle").getAttribute("aria-expanded")).toBe("false");
+    expect(line.contains(did)).toBe(false);
+    expect(screen.queryByTestId("work-line")).toBeNull();
     expect(screen.getByTestId("harness-team-members")).toHaveTextContent("Team: lead Opus 5.5");
   });
 

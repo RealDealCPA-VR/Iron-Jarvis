@@ -30,9 +30,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
-import { Columns2, MessageSquarePlus, X } from "lucide-react";
-import { HarnessSidebar, type StartExtra } from "@/components/harness/HarnessSidebar";
-import { HarnessSession } from "@/components/harness/HarnessSession";
+import { Columns2, X } from "lucide-react";
+import { HarnessSidebar } from "@/components/harness/HarnessSidebar";
+import { HarnessSession, type FirstMessage } from "@/components/harness/HarnessSession";
+import {
+  HarnessStartComposer,
+  startCreateBody,
+  type StartAgain,
+  type StartRequest,
+  type StartSeed,
+} from "@/components/harness/HarnessStartComposer";
 import { TonightList } from "@/components/harness/TonightList";
 import { LastNightList } from "@/components/harness/LastNightList";
 import { choosePaneNext, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
@@ -41,8 +48,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
-import { sessionUsed } from "@/lib/emptySessions";
-import { cachedFolders, dropEndedTurns, keepFolders, viewFor } from "@/lib/turnCache";
+import { cachedFolders, dropEndedTurns, keepFolders, keepView, viewFor } from "@/lib/turnCache";
 import {
   ONE,
   SESSION_DRAG_TYPE,
@@ -65,9 +71,12 @@ import {
   LAST_SESSION_KEY,
   createSession,
   deleteSession,
+  listArchivedSessions,
   listSessionsWithRoot,
   renameFolder,
+  unarchiveSession,
   type BuildFolder,
+  type BuildSessionView,
 } from "@/lib/buildSessions";
 
 /** v1.417.0 (C2.1): is the session list the same as the one on screen?
@@ -220,9 +229,34 @@ export function IjHarnessView({
   // v1.398.0 (night shift N1): Tonight in the middle instead of a session
   // (this window's memory only; picking a session leaves it). v1.399.0 (N2):
   // or Last night — opened by its row, or by a link to it.
-  const [middle, setMiddle] = useState<"session" | "tonight" | "night">(nightLink ? "night" : "session");
+  // v1.418.0 (fix plan C2.6): or "new" — the start composer (New session,
+  // a folder's "+", "/clear"): nothing is made on the daemon until Send.
+  const [middle, setMiddle] = useState<"session" | "tonight" | "night" | "new">(nightLink ? "night" : "session");
+  const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState(0);
+  // The session Send just made, its create answer and its first message —
+  // handed to that session ONCE (it sends the words; no second read).
+  const [first, setFirst] = useState<{ id: string; view: BuildSessionView; message: FirstMessage } | null>(null);
+  // v1.418.0 review: New session pressed again while the composer is open
+  // (it keeps its words), and what a refused first message hands back to it.
+  const [newAgain, setNewAgain] = useState<StartAgain | null>(null);
+  const [newSeed, setNewSeed] = useState<StartSeed | null>(null);
+  // The request each session the start made was made with (until its first
+  // message's turn started or was refused): handed back on a refusal.
+  const startedRef = useRef<Map<string, StartRequest>>(new Map());
   const tonight = middle === "tonight";
   const lastNight = middle === "night";
+  // v1.418.0 (C2.6): the start composer is in front (New session, or no
+  // session to show).
+  const composerShown = middle === "new" || (middle === "session" && !selected);
+  // v1.418.0 review: what was handed to ONE composer (a refused message's
+  // words, a press while it was open) is never handed to a later one — the
+  // view showing anything else forgets it.
+  useEffect(() => {
+    if (composerShown) return;
+    setNewSeed(null);
+    setNewAgain(null);
+  }, [composerShown]);
   const nightPress = nightLink?.n ?? 0;
   useEffect(() => {
     if (nightPress > 0) setMiddle("night");
@@ -281,6 +315,42 @@ export function IjHarnessView({
   }, []);
 
   useVisibleInterval(() => void refresh(), SESSION_LIST_POLL_MS);
+
+  // v1.418.0 (fix plan C2.8): the ARCHIVED sessions — read at mount and
+  // after anything that can archive or bring one back (never on the poll).
+  // An Iron Jarvis that cannot list them (or any failure) shows no fold.
+  const [archived, setArchived] = useState<BuildFolder[] | null>(null);
+  const refreshArchived = useCallback(async () => {
+    try {
+      const list = await listArchivedSessions();
+      setArchived((prev) => (sameFolders(prev, list) ? prev : list));
+    } catch {
+      setArchived(null);
+    }
+  }, []);
+  useEffect(() => {
+    void refreshArchived();
+  }, [refreshArchived]);
+  const changed = useCallback(() => {
+    void refresh();
+    void refreshArchived();
+  }, [refresh, refreshArchived]);
+  // A session brought back while it is open reads itself again (its
+  // archived banner goes).
+  const [reread, setReread] = useState<{ id: string; n: number }>({ id: "", n: 0 });
+  const bringBack = useCallback(
+    async (id: string): Promise<string | null> => {
+      try {
+        await unarchiveSession(id);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+      setReread((r) => ({ id, n: r.n + 1 }));
+      changed();
+      return null;
+    },
+    [changed],
+  );
 
   // A link to a session pressed while this view is showing (the bell): the
   // page keeps its state on that navigation, so the link announces the
@@ -361,54 +431,71 @@ export function IjHarnessView({
   const [searchRequest, setSearchRequest] = useState(0);
   useHarnessKeys({ onNew: () => setNewRequest((n) => n + 1) }, () => ({ busy: false, asking: false }));
 
-  // v1.412.0 review: New session makes a server row at once, so an abandoned
-  // one piled up as an empty "New session" row. A session THIS view made (New
-  // session, a folder's "+", "/clear", or the folder move) that the user
-  // LEAVES — another session opened, New session again, the view closed —
-  // while nothing was put into it (lib/emptySessions) is deleted with the
-  // daemon's `only_if_empty` guard (a message, a waiting message or a running
-  // reply refuses it). Anything with content stays.
-  const madeEmptyRef = useRef<Set<string>>(new Set());
-  const shownRef = useRef<string[]>([]);
-  const liveRef = useRef(true);
-  const abandon = useCallback(
-    (id: string) => {
-      if (!madeEmptyRef.current.delete(id) || sessionUsed(id)) return;
-      void deleteSession(id, { onlyIfEmpty: true }).then(
-        () => {
-          if (liveRef.current) void refresh();
-        },
-        () => undefined, // refused (it holds something) or gone: it stays as it is
-      );
-    },
-    [refresh],
-  );
-  useEffect(() => {
-    const now = [split.left, split.right].filter((x): x is string => !!x);
-    for (const id of shownRef.current) if (!now.includes(id)) abandon(id);
-    shownRef.current = now;
-  }, [split.left, split.right, abandon]);
-  useEffect(() => {
-    liveRef.current = true;
-    return () => {
-      liveRef.current = false;
-      for (const id of shownRef.current) abandon(id);
-    };
-  }, [abandon]);
+  // v1.418.0 (fix plan C2.6): the v1.412.0 clean-up of ABANDONED New
+  // sessions is gone with its cause — New session no longer makes a server
+  // row (the start composer makes one only on Send, with a message in it),
+  // so leaving it leaves nothing behind.
 
-  async function start(folder: string, extra?: StartExtra): Promise<string | null> {
+  /** v1.418.0 (C2.6): New session, a folder's "+" and "/clear" open the
+   *  START COMPOSER (the folder chosen, or none) — nothing is made until the
+   *  user sends. */
+  function openNew(folder: string): Promise<string | null> {
+    // v1.418.0 review: the composer already open keeps what was typed in it
+    // (opening it afresh dropped the words and the chosen folder).
+    if (composerShown) {
+      setNewAgain((a) => ({ n: (a?.n ?? 0) + 1, folder: folder || null }));
+      if (middle !== "new") setMiddle("new");
+      return Promise.resolve(null);
+    }
+    setNewFolder(folder || null);
+    setNewSeed(null);
+    setNewAgain(null);
+    setNewKey((k) => k + 1);
+    setMiddle("new");
+    return Promise.resolve(null);
+  }
+
+  /** v1.418.0 review: the first message of a session the start just made was
+   *  refused BEFORE its turn started. That session holds nothing, so it is
+   *  removed (the daemon's `only_if_empty` guard: anything in it keeps it)
+   *  and the user is back at the composer with the words, the chips and the
+   *  refusal, as if nothing had been made. */
+  function firstRefused(id: string, problem: string) {
+    const req = startedRef.current.get(id);
+    startedRef.current.delete(id);
+    if (!req) return;
+    void deleteSession(id, { onlyIfEmpty: true }).then(
+      () => void refresh(),
+      () => void refresh(), // it holds something (or is gone): it stays as it is
+    );
+    setFirst((f) => (f && f.id === id ? null : f));
+    setSplit((s) => dropSession(s, id));
+    setNewFolder(req.folder || null);
+    setNewSeed({ request: req, problem });
+    setNewAgain(null);
+    setNewKey((k) => k + 1);
+    setMiddle("new");
+  }
+
+  /** v1.418.0 (C2.6): Send in the start composer — ONE create carrying the
+   *  folder, branch, model, posture and Local only; the create's own answer
+   *  is the session's first view (no second read) and the words go to it as
+   *  its first message. */
+  async function startFromComposer(req: StartRequest): Promise<string | null> {
+    let made: BuildSessionView | null;
     try {
-      // v1.375.0: New session's branch switch rides only when it was shown.
-      const made = await (extra ? createSession(folder, { ...extra }) : createSession(folder));
-      if (!made) return "The session could not be started.";
-      madeEmptyRef.current.add(made.id);
-      setMiddle("session");
-      open(made.id);
-      void refresh();
-      return null;
+      made = await createSession(req.folder, startCreateBody(req));
     } catch (e) {
       return e instanceof Error ? e.message : String(e);
     }
+    if (!made) return "The session could not be started.";
+    keepView(made.id, made);
+    startedRef.current.set(made.id, req);
+    setFirst({ id: made.id, view: made, message: { text: req.text, files: req.files } });
+    setMiddle("session");
+    open(made.id);
+    void refresh();
+    return null;
   }
 
   async function rename(path: string, name: string): Promise<string | null> {
@@ -470,6 +557,7 @@ export function IjHarnessView({
       folders={folders}
       listError={listError}
       selectedId={middle === "session" ? front : null}
+      newOpen={composerShown}
       besideId={middle === "session" && two ? (front === split.left ? split.right : split.left) : null}
       onSelect={(id) => {
         setMiddle("session");
@@ -490,8 +578,10 @@ export function IjHarnessView({
         setMiddle("night");
         if (listSlot) onListNavigate?.();
       }}
-      onStart={start}
+      onStart={(folder) => openNew(folder)}
       onRename={rename}
+      archived={archived}
+      onBringBack={bringBack}
       terminals={terminals}
       onOpenTerminal={onOpenTerminal}
       newRequest={newRequest}
@@ -523,7 +613,20 @@ export function IjHarnessView({
         </aside>
       )}
       <div className="min-w-0 flex-1 xl:min-h-0">
-        {tonight ? (
+        {composerShown ? (
+          // v1.418.0 (C2.6): the empty view and New session ARE the box.
+          <div data-testid="harness-no-session" className="h-full min-h-0 overflow-y-auto">
+            <HarnessStartComposer
+              key={newKey}
+              initialFolder={middle === "new" ? newFolder : null}
+              seed={newSeed}
+              again={newAgain}
+              pickFrom={pickFrom}
+              workRoot={workRoot}
+              onStart={startFromComposer}
+            />
+          </div>
+        ) : tonight ? (
           <div className="h-full overflow-y-auto">
             <TonightList
               folders={(folders ?? []).filter((f) => !f.noFolder && f.path).map((f) => f.path)}
@@ -597,26 +700,27 @@ export function IjHarnessView({
                       threadId={id}
                       terminal={terminal}
                       listRunning={runningIds.has(id)}
-                      onChanged={() => void refresh()}
+                      onChanged={changed}
                       onGone={() => {
                         setSplit((s) => dropSession(s, id));
-                        void refresh();
+                        changed();
                       }}
                       onBranched={(next, draft) => openBranched(side, next, draft)}
-                      onMoved={(next, draft) => {
-                        // The move deleted the old one itself; the new one is
-                        // still an empty session this view made.
-                        if (madeEmptyRef.current.delete(id)) madeEmptyRef.current.add(next);
-                        openBranched(side, next, draft);
-                      }}
+                      onMoved={(next, draft) => openBranched(side, next, draft)}
                       initialDraft={draftFor && draftFor.id === id ? draftFor.draft : null}
+                      freshView={first && first.id === id ? first.view : null}
+                      firstMessage={first && first.id === id ? first.message : null}
+                      onFirstTaken={() => setFirst((f) => (f && f.id === id ? null : f))}
+                      onFirstStarted={() => startedRef.current.delete(id)}
+                      onFirstRefused={(problem) => firstRefused(id, problem)}
+                      rereadRequest={reread.id === id ? reread.n : 0}
                       onOpenSession={(next) => {
                         pickedRef.current = true;
                         setSplit((s) => openSession(focusSide(s, side), next));
                       }}
                       // v1.379.0: "/clear" starts a new session on the same folder (or
                       // with no folder), "/resume" puts the caret in the search.
-                      onNewSession={(folder) => start(folder)}
+                      onNewSession={(folder) => openNew(folder)}
                       onFindSessions={() => setSearchRequest((n) => n + 1)}
                       folderPickFrom={pickFrom}
                       onScreen={!hiddenTab}
@@ -644,22 +748,7 @@ export function IjHarnessView({
               </aside>
             ) : null}
           </div>
-        ) : (
-          <div
-            data-testid="harness-no-session"
-            className="grid h-full min-h-[240px] place-items-center rounded-2xl px-6 text-center"
-          >
-            <div className="max-w-sm space-y-2">
-              <MessageSquarePlus size={24} className="mx-auto text-zinc-600" aria-hidden />
-              <p className="text-[14px] font-medium text-zinc-200">Start a session to build in a folder</p>
-              <p className="text-[13px] text-zinc-500">
-                A session works in one folder (or in a folder of its own, when you start it with no folder)
-                with the coding tools, keeps going when you leave, and shows its plan, its terminal and
-                what it changed beside the conversation.
-              </p>
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
       {dragging && selected && middle === "session" && wide ? (
         <div

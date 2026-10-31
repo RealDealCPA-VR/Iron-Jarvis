@@ -14,8 +14,8 @@
  * state must redraw them. The DOM is exactly the one HarnessSession drew.
  */
 
-import { memo, useMemo, type ComponentProps } from "react";
-import { CircleAlert, GitFork, Loader2 } from "lucide-react";
+import { memo, useId, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { Check, ChevronDown, CircleAlert, GitFork, Loader2, TriangleAlert } from "lucide-react";
 import { HarnessFailureLine } from "@/components/harness/HarnessFailure";
 import { retryOffered } from "@/lib/buildRetry";
 import { RESUMED_LINE, resumedFrom } from "@/lib/buildResume";
@@ -23,7 +23,9 @@ import { receiptFacts } from "@/lib/receiptFacts";
 import { answeredModelName } from "@/lib/answeredModel";
 import type { ModelOption } from "@/lib/types";
 import { MemoMarkdown } from "@/components/Markdown";
-import { WorkLine } from "@/components/chat/WorkLine";
+import { StepRun, WorkLine, workDuration } from "@/components/chat/WorkLine";
+import { failedSteps, finishWarn, finishWords } from "@/lib/stepWords";
+import { replyShapeFor, replyWorkSteps, settledReplyItems } from "@/lib/replyItems";
 import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
@@ -86,6 +88,106 @@ function BranchButton({
   );
 }
 
+/** One piece of the reply line's summary; `warn` = said in the warn tone. */
+export interface ReplyLinePart {
+  key: string;
+  text: string;
+  warn?: boolean;
+}
+
+/**
+ * v1.418.0 (fix plan C2.5): the words of a settled reply's ONE line, read off
+ * its own record — how long it worked, how many steps, the finish check's
+ * verdict, what failed, a cut-off — each only when present:
+ *   "Worked for 2 min 14 s · 7 steps · Checked: tests passed"
+ * ("answered by …", the tools and the files are the receipt's own words,
+ * drawn right after it on the same line). Pure.
+ */
+export function replyLineParts(m: BuildMessage): ReplyLinePart[] {
+  const steps = replyWorkSteps(m.steps);
+  const parts: ReplyLinePart[] = [];
+  const dur = workDuration(m.timing ?? null);
+  const thought = typeof m.thinking === "string" && m.thinking.trim().length > 0;
+  if (dur) parts.push({ key: "time", text: steps.length || thought ? `Worked for ${dur}` : `Answered in ${dur}` });
+  if (steps.length) parts.push({ key: "steps", text: steps.length === 1 ? "1 step" : `${steps.length} steps` });
+  const fin = decodeFinish(m.finish);
+  if (fin) parts.push({ key: "finish", text: finishWords(fin), warn: finishWarn(fin) });
+  const failed = failedSteps(steps as { ok?: boolean | null }[]);
+  if (failed) parts.push({ key: "failed", text: `${failed} failed`, warn: true });
+  if (m.truncated || m.interrupted) parts.push({ key: "cut", text: "cut off", warn: true });
+  return parts;
+}
+
+/**
+ * v1.418.0 (fix plan C2.5): ONE line under a settled reply. Its summary
+ * (replyLineParts) is a press that opens everything that used to stack under
+ * the reply — the "Worked for" fold with every step and the finish check,
+ * the task list, the changed files (with Undo) and, under the newest reply,
+ * the next-step recap — and the receipt ("answered by …", its warnings
+ * always visible) and Branch from here sit on the same line.
+ */
+function ReplyLine({
+  parts,
+  hasPanel,
+  panel,
+  after,
+}: {
+  parts: ReplyLinePart[];
+  hasPanel: boolean;
+  panel: () => ReactNode;
+  after: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const warn = parts.some((p) => p.warn);
+  return (
+    <div data-testid="reply-line" className="mt-1 flex min-w-0 flex-wrap items-center">
+      {hasPanel ? (
+        <button
+          type="button"
+          data-testid="reply-line-toggle"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => setOpen((v) => !v)}
+          title={open ? "Hide what this reply did" : "Show what this reply did: its steps, the check, the plan and the files"}
+          className="inline-flex min-h-7 min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+        >
+          {warn ? (
+            <TriangleAlert size={12} aria-hidden="true" className="shrink-0 text-tone-warn" />
+          ) : (
+            <Check size={12} aria-hidden="true" className="shrink-0" />
+          )}
+          <span data-testid="reply-line-words" className="min-w-0 truncate">
+            {parts.length
+              ? parts.map((p, i) => (
+                  <span key={p.key} className={p.warn ? "text-tone-warn" : undefined}>
+                    {i > 0 ? " · " : ""}
+                    {p.text}
+                  </span>
+                ))
+              : "Details"}
+          </span>
+          <ChevronDown
+            size={12}
+            aria-hidden="true"
+            className={`shrink-0 transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      ) : null}
+      {after}
+      {open && hasPanel ? (
+        <div
+          id={panelId}
+          data-testid="reply-line-panel"
+          className="ml-1.5 mt-1 min-w-0 basis-full space-y-2 border-l border-white/[0.08] py-1 pl-3"
+        >
+          {panel()}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** What a row hands back to its session — one object, stable for the
  *  session's life (HarnessSession builds it once). */
 export interface HarnessRowHandlers {
@@ -133,6 +235,10 @@ export interface HarnessMessageRowProps {
   health: Health;
   /** The session's provider (a reply that kept none is read on it). */
   provider: string;
+  /** v1.418.0 (C2.5): the next-step box's recap, under the NEWEST settled
+   *  reply only ("" elsewhere) — folded into this reply's line (the box keeps
+   *  its buttons visible). */
+  nextRecap?: string;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   h: HarnessRowHandlers;
@@ -155,10 +261,18 @@ function HarnessMessageRowImpl({
   models,
   health,
   provider,
+  nextRecap = "",
   undoFor,
   onUndo,
   h,
 }: HarnessMessageRowProps) {
+  // v1.418.0 (C2.3): the reply in order — its text and its runs of steps,
+  // placed the way this window saw them run (lib/replyItems).
+  const items = useMemo(
+    () => (m.role === "assistant" ? settledReplyItems(m.content ?? "", m.steps, replyShapeFor(m.turnId)) : []),
+    [m],
+  );
+  const lineParts = useMemo(() => (m.role === "assistant" ? replyLineParts(m) : []), [m]);
   // v1.405.0: the reply's changes window (the user message before it, its
   // own timing and documents) — read once per message, never per render.
   const turnWin = useMemo(() => {
@@ -231,12 +345,6 @@ function HarnessMessageRowImpl({
             </p>
           ) : null;
         })()}
-        <WorkLine
-          {...paneWorkInput(m)}
-          cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
-          // Part 3, Phase 2: the reply's finish check, in one sentence.
-          finish={decodeFinish(m.finish)}
-        />
         {/* v1.403.0: a team reply says who led, worked and reviewed —
             and, in the warn tone and never folded away, every time
             the lead did a piece itself. */}
@@ -261,13 +369,19 @@ function HarnessMessageRowImpl({
             onKept={h.onAttemptKept}
           />
         ) : null}
-        {m.content ? (
-          <div className={HARNESS_REPLY_PROSE}>
-            <MemoMarkdown content={m.content} />
-          </div>
-        ) : null}
-        {/* v1.374.0: the turn's task list, folded into its reply. */}
-        <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
+        {/* v1.418.0 (C2.3): the reply IN ORDER — its words and its runs of
+            steps (each run one folded line that opens to its rows). */}
+        <div data-testid="harness-reply-items" className="min-w-0 space-y-2">
+          {items.map((it, k) =>
+            it.kind === "text" ? (
+              <div key={k} data-testid="harness-reply-text" className={HARNESS_REPLY_PROSE}>
+                <MemoMarkdown content={it.text} />
+              </div>
+            ) : (
+              <StepRun key={k} steps={it.steps as { name: string }[]} />
+            ),
+          )}
+        </div>
         {/* v1.384.0: the reply met its STEP LIMIT — said plainly.
             v1.406.0 part 4: its ONE press to carry on ("Keep going",
             the same as typing "continue"; never automatic) is the
@@ -325,12 +439,40 @@ function HarnessMessageRowImpl({
           onRewind={h.onOpenRewind}
           carriedOn={carriedOn}
         />
-        <ReplyChanges
-          turn={turnWin}
-          undoFor={undoFor}
-          onUndo={onUndo}
-        />
-        <div className="mt-1 flex min-w-0 flex-wrap items-center empty:hidden">
+        <ReplyLine
+          parts={lineParts}
+          hasPanel={
+            lineParts.length > 0 ||
+            !!turnWin ||
+            !!nextRecap ||
+            !!replyPlan(m.plan, !!m.error) ||
+            (typeof m.thinking === "string" && !!m.thinking.trim()) ||
+            (Array.isArray(m.steps) && m.steps.length > 0) ||
+            (Array.isArray(m.toolsUsed) && m.toolsUsed.length > 0)
+          }
+          panel={() => (
+            <>
+              <WorkLine
+                {...paneWorkInput(m)}
+                // The line above already says how long it worked ("Worked
+                // for" is said once): the fold lists what it did.
+                timing={null}
+                cutOff={m.truncated ? "truncated" : m.interrupted ? "interrupted" : null}
+                // Part 3, Phase 2: the reply's finish check, in one sentence.
+                finish={decodeFinish(m.finish)}
+              />
+              {/* v1.374.0: the turn's task list, folded into its reply. */}
+              <SettledPlan plan={replyPlan(m.plan, !!m.error)} />
+              <ReplyChanges turn={turnWin} undoFor={undoFor} onUndo={onUndo} />
+              {nextRecap ? (
+                <p data-testid="next-step-recap" className="text-[13px] leading-relaxed text-zinc-400">
+                  {nextRecap}
+                </p>
+              ) : null}
+            </>
+          )}
+          after={
+            <>
           <TurnReceipt
             inline
             modelName={answeredModelName(m.route, models)}
@@ -366,7 +508,9 @@ function HarnessMessageRowImpl({
               onBranch={h.onBranch}
             />
           ) : null}
-        </div>
+            </>
+          }
+        />
         {/* v1.414.0: a repeated correction, offered as a standing
             preference — the chat's own quiet Keep · Edit · Not this
             line (components/chat/PreferenceSuggestion). Its answer

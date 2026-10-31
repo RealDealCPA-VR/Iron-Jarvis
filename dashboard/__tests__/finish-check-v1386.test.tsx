@@ -15,7 +15,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class ApiError extends Error {
@@ -222,6 +222,12 @@ describe("a Build session's saved reply", () => {
       "/build/accounts": new api.ApiError("no such route", 404),
     };
     render(<HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />);
+    // v1.418.0 (moved on purpose, fix plan C2.5): the sentence is on the
+    // reply's ONE line, and the work line (with its own copy) is one press away.
+    expect(await screen.findByTestId("reply-line-words")).toHaveTextContent(
+      "Checked: tests failed, then fixed, 1 scratch file removed, 1 point needed more work",
+    );
+    fireEvent.click(screen.getByTestId("reply-line-toggle"));
     const line = await screen.findByTestId("work-line-finish");
     expect(line).toHaveTextContent("Checked: tests failed, then fixed, 1 scratch file removed, 1 point needed more work");
   });
@@ -232,7 +238,10 @@ describe("a Build session's saved reply", () => {
       "/build/accounts": new api.ApiError("no such route", 404),
     };
     render(<HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />);
+    // v1.418.0 (moved on purpose): the work line is behind the reply's line.
+    fireEvent.click(await screen.findByTestId("reply-line-toggle"));
     await screen.findByTestId("work-line");
     expect(screen.queryByTestId("work-line-finish")).toBeNull();
+    expect(screen.getByTestId("reply-line-words").textContent ?? "").not.toContain("Checked");
   });
 });

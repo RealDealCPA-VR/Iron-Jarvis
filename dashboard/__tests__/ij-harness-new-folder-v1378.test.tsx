@@ -7,6 +7,10 @@
  * no form, no folder box. The folder of the session in front (v1.378.0) is
  * now where the session's "Choose…" opens the folder picker
  * (`folderPickFrom`); with no session open, the Terminals view's folder.
+ *
+ * v1.418.0 (MOVED ON PURPOSE, fix plan C2.6): New session opens the START
+ * COMPOSER — nothing is made until Send — and it is the composer's Choose…
+ * that opens where the user was (the folder of the session in front).
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +76,16 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
+/** v1.418.0: where the start composer's Choose… opens Windows' own picker. */
+async function pickerOpensAt(): Promise<string> {
+  const pickFolder = vi.fn(async (_start: string) => ({ cancelled: true }));
+  (window as unknown as { ironjarvis?: unknown }).ironjarvis = { isDesktop: true, dialog: { pickFolder } };
+  fireEvent.click(screen.getByTestId("harness-new-folder-choose"));
+  await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+  delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
+  return pickFolder.mock.calls[0][0];
+}
+
 async function startNew(initialSession: string | null, defaultFolder: string | null): Promise<HTMLElement> {
   render(
     <IjHarnessView
@@ -89,20 +103,20 @@ async function startNew(initialSession: string | null, defaultFolder: string | n
     await waitFor(() => expect(screen.getByTestId("harness-new-session")).toBeInTheDocument());
   }
   fireEvent.click(screen.getByTestId("harness-new-session"));
-  await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
-  return screen.getByTestId("session-stub");
+  return screen.findByTestId("harness-new-box");
 }
 
 describe("New session (v1.412.0): at once, no folder; Choose… opens where the user was", () => {
-  it("starts a session with no folder at once — no form — whatever the session in front", async () => {
+  it("opens the start composer with no folder — no form, nothing made — whatever the session in front", async () => {
     await startNew("b1", "C:\\somewhere\\else");
     expect(screen.queryByTestId("harness-new-session-form")).toBeNull();
-    expect(api.posts.filter((p) => p.path === "/build/sessions").map((p) => p.body)).toEqual([{ folder: "" }]);
+    expect(screen.getByTestId("harness-new-folder")).toHaveAttribute("data-folder", "");
+    expect(api.posts.filter((p) => p.path === "/build/sessions")).toEqual([]);
   });
 
-  it("the new session's picker opens on the folder of the session in front, not the Terminals view's", async () => {
-    const stub = await startNew("b1", "C:\\somewhere\\else");
-    expect(stub).toHaveAttribute("data-pick-from", "C:\\work\\tools");
+  it("the composer's picker opens on the folder of the session in front, not the Terminals view's", async () => {
+    await startNew("b1", "C:\\somewhere\\else");
+    expect(await pickerOpensAt()).toBe("C:\\work\\tools");
   });
 
   it("follows the session the user opens", async () => {
@@ -114,13 +128,13 @@ describe("New session (v1.412.0): at once, no folder; Choose… opens where the 
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "a1"));
     expect(screen.getByTestId("session-stub")).toHaveAttribute("data-pick-from", "C:\\work\\shop");
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
-    expect(screen.getByTestId("session-stub")).toHaveAttribute("data-pick-from", "C:\\work\\shop");
+    await screen.findByTestId("harness-new-box");
+    expect(await pickerOpensAt()).toBe("C:\\work\\shop");
   });
 
   it("with no session open, the picker opens on the Terminals view's folder", async () => {
     api.gets = { "/build/sessions": { folders: [] } };
-    const stub = await startNew(null, "C:\\last");
-    expect(stub).toHaveAttribute("data-pick-from", "C:\\last");
+    await startNew(null, "C:\\last");
+    expect(await pickerOpensAt()).toBe("C:\\last");
   });
 });

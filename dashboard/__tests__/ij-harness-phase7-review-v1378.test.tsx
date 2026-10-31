@@ -171,10 +171,16 @@ describe("New session in a session on its own branch", () => {
     );
     await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "s1"));
     await screen.findAllByTestId("harness-folder-group");
-    api.postAnswers["/build/sessions"] = { id: "new1", title: "New session", folder: "", no_folder: true };
+    // v1.418.0 (moved on purpose, fix plan C2.6): New session opens the start
+    // composer; ITS Choose… opens where the user was.
     fireEvent.click(screen.getByTestId("harness-new-session"));
-    await waitFor(() => expect(screen.getByTestId("session-stub")).toHaveAttribute("data-id", "new1"));
-    const from = screen.getByTestId("session-stub").getAttribute("data-pick-from") ?? "";
+    await screen.findByTestId("harness-new-box");
+    const pickFolder = vi.fn(async (_start: string) => ({ cancelled: true }));
+    (window as unknown as { ironjarvis?: unknown }).ironjarvis = { isDesktop: true, dialog: { pickFolder } };
+    fireEvent.click(screen.getByTestId("harness-new-folder-choose"));
+    await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+    delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
+    const from = pickFolder.mock.calls[0][0];
     expect(from).toBe(REPO);
     expect(from).not.toContain(".ij-worktrees");
   });
