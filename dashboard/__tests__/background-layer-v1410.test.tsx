@@ -242,12 +242,20 @@ describe("C2. the app's own drifting glow stops while a background shows", () =>
     H.list = H.list.map((r) => (r.id === "grid-beams" ? row("grid-beams", "ready") : r));
     useTheme({ id: "grid-beams", motion: "animated" });
     const view = render(<BackgroundLayer />);
-    const frame = (await screen.findByTestId("app-background-frame")) as HTMLIFrameElement;
+    await screen.findByTestId("app-background-frame");
     expect(document.documentElement.dataset.background).toBeUndefined();
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", { data: { type: "ij-bg-ready" }, source: frame.contentWindow }));
-    });
-    await waitFor(() => expect(document.documentElement.dataset.background).toBe("on"));
+    // v1.414.2: the Release gate read `undefined` here once. The page's ready
+    // message is checked against the frame ON SCREEN when it arrives, and a
+    // frame re-rendered after this test captured it (its address settles a
+    // render later on a loaded runner) dropped the single message sent from
+    // the old one. The page says it again from the frame as it is now.
+    await waitFor(() => {
+      const frame = screen.getByTestId("app-background-frame") as HTMLIFrameElement;
+      act(() => {
+        window.dispatchEvent(new MessageEvent("message", { data: { type: "ij-bg-ready" }, source: frame.contentWindow }));
+      });
+      expect(document.documentElement.dataset.background).toBe("on");
+    }, { timeout: 10_000 });
     view.unmount();
     expect(document.documentElement.dataset.background).toBeUndefined();
   });

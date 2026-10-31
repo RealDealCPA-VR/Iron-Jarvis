@@ -4732,6 +4732,18 @@ does not need a bump, stop and bump it.
   purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
   tick per act — two ticks in one synchronous jump are one read now).
 
+- **A Build › Code tool signed out on this PC is still offered when an
+  Iron-Proxy account can run it** (v1.414.2, a USER BUG: "it states that I'm
+  signed out of Claude, but I am signed in"). `signed_in` on GET
+  /build/app/harnesses is THIS PC's own login only (`cli_auth` on the default
+  home); the user's sessions ran on the Iron-Proxy account TSI. The dashboard's
+  `lib/buildApp.toolUnavailable` greyed the tool out on `signedIn === false`
+  alone; it now keeps the tool available when any of its Iron-Proxy accounts
+  is usable (`accountStatusWords(...).usable`). A start with no pick already
+  went to Iron-Proxy's first free account (`service._resolve_account` →
+  `pane_accounts.resolve`). Pin:
+  `dashboard/__tests__/build-code-signin-accounts-v1414-2.test.ts` (red on the
+  old rule).
 - **A Build › Code reply ends on the answer to ITS message, never on earlier
   work** (v1.414.0, a USER BUG: "0 in 0 out, it didn't work at all"). The
   live process still held background agents a usage limit had stopped; on the

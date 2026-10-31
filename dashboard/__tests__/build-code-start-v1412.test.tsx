@@ -300,7 +300,10 @@ describe("the tool and its account", () => {
     window.localStorage.setItem(LAST_ACCOUNT_KEY + "claude-code", "p_home");
     willMake("n4", { account: "p_home" });
     await ready();
-    expect(screen.getByTestId("code-start-account").textContent).toContain("Home");
+    // v1.414.2: the remembered account is set by an effect AFTER the tool's
+    // chip shows, so wait for the account itself (the Tests gate read
+    // "Choose an account" once on a loaded runner).
+    await waitFor(() => expect(screen.getByTestId("code-start-account").textContent).toContain("Home"), { timeout: 10_000 });
     // Not asked at the start: one is remembered for it.
     expect(screen.queryByTestId("code-start-account-menu")).toBeNull();
     type("go");

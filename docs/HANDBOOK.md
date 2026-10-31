@@ -2543,6 +2543,11 @@ Rest the pointer on an icon to see its name.
   starts again with your next message.
 
 
+**Your Iron-Proxy accounts count as signed in.** If this PC's own Claude Code
+or Codex login is signed out but one of your Iron-Proxy accounts for that tool
+is ready, Build › Code still offers the tool, and a new session runs on that
+account.
+
 **A reply waits for its own answer.** If Claude Code still has older work in
 hand when you send a message (for example, helpers a usage limit stopped),
 it may finish that first. The reply now stays open until Claude Code has

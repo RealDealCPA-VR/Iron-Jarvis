@@ -341,10 +341,14 @@ export function effortsFor(tool: CodingTool | null | undefined, model: string): 
 }
 
 /** Why a coding tool cannot start a session, in words; null when it can.
- *  Signed-in "not known" is never a reason (the tool says so itself). */
+ *  Signed-in "not known" is never a reason (the tool says so itself).
+ *  v1.414.2 (a USER BUG: "it states that I'm signed out of Claude, but I am
+ *  signed in"): `signedIn` is THIS PC's own login only. An Iron-Proxy account
+ *  that is ready runs the tool all the same (a session started with no pick
+ *  goes to Iron-Proxy's first free account), so the tool stays available. */
 export function toolUnavailable(t: CodingTool): string | null {
   if (!t.installed) return `${t.label} is not installed on this PC.`;
-  if (t.signedIn === false)
+  if (t.signedIn === false && !t.accounts.some((a) => accountStatusWords(a.status).usable))
     return `${t.label} is signed out. Open a terminal, run it, and sign in there first.`;
   return null;
 }
