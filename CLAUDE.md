@@ -4676,7 +4676,18 @@ does not need a bump, stop and bump it.
   driver with `notes_started_on_stop` (Grok only), BEFORE `session/cancel`;
   `stop()` reads them again and `process.kill_left` ends whatever is still
   the SAME process (start time checked — a reused pid is never touched).
-  Live-proven: before the fix a ping survived Stop; after, 0 left. NOTES: a second `session/prompt` is QUEUED as its own turn
+  Live-proven: before the fix a ping survived Stop; after, 0 left. REVIEW
+  (pins `tests/test_build_app_grok_review_v1416.py`, 7 mutations red): the
+  sweep is OPT-IN (`HarnessProcess(ends_left_behind=)`, set from the
+  driver's `notes_started_on_stop`) — the other four tools stop exactly as
+  before; `descendants` reads a child only when it is not older than ITS OWN
+  parent (psutil's recursive walk checks only the top process, so the user's
+  process behind a REUSED parent pid was read as Grok's) and is bounded
+  (`MAX_DESCENDANTS`); `kill_left` needs the start time EXACTLY and spares a
+  visible-window owner or a Windows-GUI program (the keep-windows rule); and
+  a Stop with a card open calls `GrokDriver.stopping()` BEFORE the card's
+  deny, because Grok ends its reply on that reject before the cancel lands
+  (it read "You declined" and `completed`). NOTES: a second `session/prompt` is QUEUED as its own turn
   (measured), so a note is Grok's own `_x.ai/interject` {sessionId, text}
   (answered `{status: queued}`, echoed at once as `_x.ai/session/interjection`
   — read on that echo; registered BEFORE the request, the echo outruns its
