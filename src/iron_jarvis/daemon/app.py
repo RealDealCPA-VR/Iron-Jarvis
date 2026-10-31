@@ -3615,6 +3615,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app as _build_app_routes
 
     _build_app_routes.register(app, d)
+    # v1.414.0: Build › Code's right panes (Changes, Usage, Session) — reads
+    # only, each off the loop.
+    from .routes import build_app_panes as _build_app_panes_routes
+
+    _build_app_panes_routes.register(app, d)
     # Brain Profiles (v1.406.0, brain/): which memory base is the durable
     # brain, app-wide and per project, and the saves that are still waiting.
     from .routes import brain as _brain_routes

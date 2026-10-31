@@ -53,7 +53,7 @@ import {
   type SessionProgram,
 } from "@/lib/sessionRail";
 
-function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+export function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section data-testid={`session-rail-${id}`} className="space-y-1.5">
       <h3 className="text-[12px] font-medium text-zinc-400">{title}</h3>
@@ -62,7 +62,7 @@ function Section({ id, title, children }: { id: string; title: string; children:
   );
 }
 
-function Row({ icon, children, title }: { icon?: ReactNode; children: ReactNode; title?: string }) {
+export function Row({ icon, children, title }: { icon?: ReactNode; children: ReactNode; title?: string }) {
   return (
     <div className="flex min-w-0 items-start gap-2 text-[13px] text-zinc-300" title={title}>
       {icon ? <span className="mt-0.5 shrink-0 text-zinc-500">{icon}</span> : null}

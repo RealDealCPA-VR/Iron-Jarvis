@@ -79,6 +79,10 @@
     "output": 3,
     "cache_read": 15232,
     "list_price": false,
+    "context": {
+     "used": 15733,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -173,6 +177,10 @@
     "output": 3,
     "cache_read": 15232,
     "list_price": false,
+    "context": {
+     "used": 15661,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -250,6 +258,10 @@
     "output": 12,
     "cache_read": 0,
     "list_price": false,
+    "context": {
+     "used": 15559,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -370,6 +382,10 @@
     "output": 3,
     "cache_read": 15232,
     "list_price": false,
+    "context": {
+     "used": 15604,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -587,6 +603,10 @@
     "output": 6,
     "cache_read": 15232,
     "list_price": false,
+    "context": {
+     "used": 15935,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -677,6 +697,10 @@
     "output": 6,
     "cache_read": 0,
     "list_price": false,
+    "context": {
+     "used": 15630,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {
@@ -730,6 +754,10 @@
     "output": 44,
     "cache_read": 0,
     "list_price": false,
+    "context": {
+     "used": 15857,
+     "window": 200000
+    },
     "turn": "turn-1"
    },
    {

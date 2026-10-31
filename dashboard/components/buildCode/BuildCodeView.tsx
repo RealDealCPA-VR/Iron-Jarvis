@@ -79,6 +79,7 @@ import { SessionEditorProvider } from "@/components/harness/OpenInEditor";
 import { scrollToLatest } from "@/lib/transcriptRepin";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { CodeConversation } from "@/components/buildCode/CodeConversation";
+import { CodePanes } from "@/components/buildCode/CodePanes";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
 import {
   AttachButton,
@@ -944,7 +945,19 @@ function SessionPane({
   const accountName = accountWords(session, tools);
   return (
     <SessionEditorProvider folder={session.folder}>
-      <div data-testid="code-session" data-session={session.id} className="flex h-full min-h-0 flex-col">
+      {/* v1.414.0: the conversation and, to its right, the panes (Changes,
+          Usage, Files, Session) — side by side from xl, the panes BELOW it
+          under xl (the row scrolls; the conversation keeps the stage's whole
+          height, so its box works at 390 px). Chat › Code's own rule. */}
+      <div
+        data-testid="code-session-row"
+        className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto xl:flex-row xl:gap-0 xl:overflow-hidden"
+      >
+      <div
+        data-testid="code-session"
+        data-session={session.id}
+        className="flex h-full min-h-0 flex-none flex-col xl:min-w-0 xl:flex-1"
+      >
         <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] px-4 py-2">
           <div className="min-w-0 flex-1">
             <p className="truncate text-[14px] text-zinc-100" data-testid="code-session-title">
@@ -1284,6 +1297,14 @@ function SessionPane({
             </p>
           ) : null}
         </div>
+      </div>
+      <aside
+        aria-label="Changes, usage, files and session"
+        data-testid="code-panes-aside"
+        className="flex h-[70vh] w-full shrink-0 flex-col border-t border-white/[0.06] p-2 xl:h-auto xl:min-h-0 xl:w-[320px] xl:border-l xl:border-t-0 2xl:w-[400px]"
+      >
+        <CodePanes session={session} tools={tools} events={events} running={running} />
+      </aside>
       </div>
     </SessionEditorProvider>
   );

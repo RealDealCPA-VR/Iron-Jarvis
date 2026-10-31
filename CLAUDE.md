@@ -4618,6 +4618,58 @@ does not need a bump, stop and bump it.
   Pins:
   `tests/test_build_app_spine_review_v1414.py`,
   `dashboard/__tests__/build-code-spine-review-v1414.test.tsx`.
+  SAME RELEASE, THE RIGHT COLUMN (the user: "the icons for changes,
+  remaining usage, files and sessions to right just as in the native
+  harness"): `components/buildCode/CodePanes.tsx` — Changes · Usage · Files ·
+  Session, HarnessPanes' icon-tab look byte for byte (32 px, the tip IS the
+  accessible name, `group-hover:delay-300`; `ij.code.pane`); BuildCodeView's
+  ONE layout seam: `code-session-row` (side by side from xl, the aside
+  `xl:w-[320px] 2xl:w-[400px]`; below xl the row scrolls and the
+  conversation keeps the stage's height, `flex-none` — a `flex-1` there is
+  the v1.369.0 squeeze). Each pane mounted only on its tab; reads repeat
+  every `CODE_PANES_POLL_MS` only while a reply runs (`useVisibleInterval`)
+  and once when it ends. DAEMON (new modules only; read-only, off the loop,
+  never the tool's binary, a model or a probe): `daemon/routes/
+  build_app_panes.py` → `hosted/panes.py`: `GET /build/app/sessions/{id}/
+  changes | usage | overview`. CHANGES SOURCE: the real CLI writes outside
+  the undo journal, so `git` when the folder is a repository — every file
+  differing from the newest FIRST-PARENT commit no later than the row's
+  `created_at` MINUS ONE SECOND (git dates are whole seconds and `--before`
+  includes its second), `--relative`, untracked via `ls-files --others
+  --exclude-standard`, empty tree when no commit predates it; limits SAID in
+  `words`: includes the user's / other programs' changes, ignored files not
+  listed, rewritten commit dates can land wrong; `by_tool` marks files the
+  tool's own edit/write events name. Else `tool`: those events (status done)
+  per file, every edit's hunks under ONE header (`_hunks_only` — a second
+  header inside a hunk reads as lines); limits said (commands' writes
+  unseen). A `\\host` folder is refused from its TEXT first (v1.379.0); no
+  Undo (`no_undo` words), `ChangesReview` without `hint`. USAGE: the Iron-
+  Proxy CACHED row (`build_accounts.session_account` + `state_of` windows,
+  expired ones dropped) + what the TOOL last reported: `hosted/seen.py`
+  parses Claude Code's `rate_limit_event.unifiedWindows` (utilization →
+  percent; a window with none is left out, never 0%) and `result`'s last
+  `usage.iterations` over `modelUsage[*].contextWindow`, Codex's
+  `account/rateLimits/updated` (primary/secondary + `planType`) and
+  `thread/tokenUsage/updated` (`last.totalTokens` / `modelContextWindow`),
+  OpenCode's `usage_update` (`used`/`size`); the driver keeps the newest and
+  `seen.attach` puts `windows`/`plan`/`context` on the turn's `usage` event
+  (one line each in claude/codex/opencode; Pi reports none — the tab says
+  so) — so the 1409 and 1413 goldens moved (usage events only). Totals sum
+  the `usage` events; list price is never "spent". SESSION: branch, rule
+  files present (CLAUDE.md, AGENTS.md…), context, `psutil` children of the
+  LIVE tool process (its MCP servers included, said so; `one_line` masks
+  then cuts), nothing while it is not running. `HarnessSessionRail` exports
+  `Section`/`Row` (shared look). Pins: `tests/test_build_code_panes_v1414.py`
+  (11; 11 mutations red), `dashboard/__tests__/build-code-panes-v1414.test.tsx`
+  (13; 10 mutations red), e2e `dashboard/e2e/build-code-panes.spec.ts`
+  (1280 × 800, 390 × 844). Live: scratch daemon 8911, real claude 2.1.311
+  haiku low, Auto edits, an edit of a scratch repo's `calc.py`: Changes
+  listed it from git with its diff and "1 of these was edited by Claude
+  Code"; Usage "7-day window 49% left" as Claude Code reported; Session 16%
+  of 200k, branch main. OPEN: a stale tool report is shown with its age, not
+  refreshed; Codex context counts the last call's total tokens; the git base
+  ignores a branch switch during the session; Terminal/Browser tabs not
+  added.
 
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon

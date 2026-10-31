@@ -112,6 +112,24 @@
     "cache_read": 90645,
     "list_price": true,
     "cost_usd": 0.176685,
+    "windows": [
+     {
+      "key": "five_hour",
+      "label": "5-hour window",
+      "percent": 24,
+      "resets_at": "2026-10-30T00:00:00Z"
+     },
+     {
+      "key": "seven_day",
+      "label": "7-day window",
+      "percent": 27,
+      "resets_at": "2026-11-01T03:00:00Z"
+     }
+    ],
+    "context": {
+     "used": 39055,
+     "window": 1000000
+    },
     "turn": "turn-1"
    },
    {
@@ -269,6 +287,24 @@
     "cache_read": 70871,
     "list_price": true,
     "cost_usd": 0.331354,
+    "windows": [
+     {
+      "key": "five_hour",
+      "label": "5-hour window",
+      "percent": 24,
+      "resets_at": "2026-10-30T00:00:00Z"
+     },
+     {
+      "key": "seven_day",
+      "label": "7-day window",
+      "percent": 27,
+      "resets_at": "2026-11-01T03:00:00Z"
+     }
+    ],
+    "context": {
+     "used": 39077,
+     "window": 1000000
+    },
     "turn": "turn-1"
    },
    {
@@ -394,6 +430,24 @@
     "cache_read": 50032,
     "list_price": true,
     "cost_usd": 0.18009,
+    "windows": [
+     {
+      "key": "five_hour",
+      "label": "5-hour window",
+      "percent": 24,
+      "resets_at": "2026-10-30T00:00:00Z"
+     },
+     {
+      "key": "seven_day",
+      "label": "7-day window",
+      "percent": 27,
+      "resets_at": "2026-11-01T03:00:00Z"
+     }
+    ],
+    "context": {
+     "used": 38926,
+     "window": 1000000
+    },
     "turn": "turn-1"
    },
    {
@@ -678,6 +732,24 @@
     "cache_read": 50069,
     "list_price": true,
     "cost_usd": 0.180246,
+    "windows": [
+     {
+      "key": "five_hour",
+      "label": "5-hour window",
+      "percent": 24,
+      "resets_at": "2026-10-30T00:00:00Z"
+     },
+     {
+      "key": "seven_day",
+      "label": "7-day window",
+      "percent": 27,
+      "resets_at": "2026-11-01T03:00:00Z"
+     }
+    ],
+    "context": {
+     "used": 38972,
+     "window": 1000000
+    },
     "turn": "turn-1"
    },
    {
@@ -1043,6 +1115,25 @@
     "output": 234,
     "cache_read": 36096,
     "list_price": true,
+    "windows": [
+     {
+      "key": "primary",
+      "label": "5-hour window",
+      "percent": 3,
+      "resets_at": "2026-10-30T03:25:30Z"
+     },
+     {
+      "key": "secondary",
+      "label": "7-day window",
+      "percent": 0,
+      "resets_at": "2026-11-05T22:25:30Z"
+     }
+    ],
+    "plan": "plus",
+    "context": {
+     "used": 18525,
+     "window": 258400
+    },
     "turn": "turn-1"
    },
    {
@@ -1258,6 +1349,25 @@
     "output": 142,
     "cache_read": 18944,
     "list_price": true,
+    "windows": [
+     {
+      "key": "primary",
+      "label": "5-hour window",
+      "percent": 2,
+      "resets_at": "2026-10-30T03:25:30Z"
+     },
+     {
+      "key": "secondary",
+      "label": "7-day window",
+      "percent": 0,
+      "resets_at": "2026-11-05T22:25:30Z"
+     }
+    ],
+    "plan": "plus",
+    "context": {
+     "used": 21257,
+     "window": 258400
+    },
     "turn": "turn-1"
    },
    {
@@ -1311,6 +1421,21 @@
     "output": 0,
     "cache_read": 0,
     "list_price": true,
+    "windows": [
+     {
+      "key": "primary",
+      "label": "5-hour window",
+      "percent": 1,
+      "resets_at": "2026-10-30T03:25:30Z"
+     },
+     {
+      "key": "secondary",
+      "label": "7-day window",
+      "percent": 0,
+      "resets_at": "2026-11-05T22:25:30Z"
+     }
+    ],
+    "plan": "plus",
     "turn": "turn-1"
    },
    {

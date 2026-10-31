@@ -835,6 +835,9 @@ class ClaudeDriver(Driver):
             self.emit(ev)
 
     def _on_rate_limit(self, info: dict[str, Any]) -> None:
+        from . import seen as _seen  # v1.414.0: the Usage tab's windows
+
+        _seen.note_windows(self, _seen.claude_windows(info))
         status = str(info.get("status") or "")
         if status in ("", "allowed", "allowed_warning"):
             return
@@ -877,7 +880,10 @@ class ClaudeDriver(Driver):
         )
         if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
             ev["cost_usd"] = round(float(cost), 6)
-        self.emit(ev)
+        from . import seen as _seen  # v1.414.0: windows + how full, as seen
+
+        _seen.note_context(self, _seen.claude_context(obj))
+        self.emit(_seen.attach(ev, self))
         sub = str(obj.get("subtype") or "")
         reason = str(obj.get("terminal_reason") or "")
         if self._interrupting or reason.startswith("aborted"):
