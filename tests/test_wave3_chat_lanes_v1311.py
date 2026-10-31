@@ -500,13 +500,13 @@ def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, mon
 
 
 def test_a_dropped_grounding_hop_is_reported_never_silent(tmp_path, monkeypatch):
-    """OPTIONAL behaviour: only if the implementer adds a soft deadline. Its
-    name must be ``chat_turn._GROUNDING_SOFT_DEADLINE_S`` and a hop that misses
-    it must be NAMED in ``context.grounding_dropped`` (never a silent drop —
-    the verifier's correction). Skips while no deadline exists."""
-    if not hasattr(chat_turn, "_GROUNDING_SOFT_DEADLINE_S"):
-        pytest.skip("no grounding soft deadline introduced (allowed)")
-    monkeypatch.setattr(chat_turn, "_GROUNDING_SOFT_DEADLINE_S", 0.05)
+    """v1.418.0 (C3.4) added the soft deadline this optional pin waited for —
+    moved on purpose to the names it shipped with: ``chat_turn.
+    GROUNDING_SOFT_S`` (was ``_GROUNDING_SOFT_DEADLINE_S``) and
+    ``context.late`` (was ``grounding_dropped``). A hop that misses it is
+    NAMED (never a silent drop — the verifier's correction). The full pins:
+    ``tests/test_grounding_deadline_v1418.py``."""
+    monkeypatch.setattr(chat_turn, "GROUNDING_SOFT_S", 0.05)
     client = _client(tmp_path)
     release = threading.Event()
 
@@ -523,7 +523,7 @@ def test_a_dropped_grounding_hop_is_reported_never_silent(tmp_path, monkeypatch)
         })
     finally:
         release.set()
-    assert "fabric" in (body["context"].get("grounding_dropped") or []), body["context"]
+    assert "fabric" in (body["context"].get("late") or []), body["context"]
 
 
 # =========================================================================== #

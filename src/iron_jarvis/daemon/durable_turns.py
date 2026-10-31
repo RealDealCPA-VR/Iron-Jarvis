@@ -53,6 +53,18 @@ ends with ``event: caught_up`` (``{"id": <position>}``), so a page can draw a
 whole replay in ONE pass. A position this log does not hold (another turn's,
 past its end, mid-text past what is stored) and a turn replayed from its
 record are the full replay (``resumed: false``).
+
+THE COST PER TOKEN (v1.418.0, C3.6). A merged token/thinking frame used to be
+parsed and serialised again on EVERY token (``json.loads`` of the whole text
+so far, then ``json.dumps``): O(L²) on the loop over a long reply. A frame of
+the canonical shape ``{"text": "<escaped>"}`` (what the lanes send) now keeps
+its text as a list of ESCAPED chunks (``_live``) — JSON escaping is per
+character, so the chunks joined are exactly the escaped whole — and is joined
+only when the frames are READ (:attr:`TurnLog.frames`: a persist, a rejoin, a
+replay). A plain token makes no ``json.loads`` at all; a token that needs
+escaping is parsed ALONE (for its length), never the frame it joins. Any
+other shape takes the old path, byte for byte. The record's ``json.dumps``
+runs on the worker thread that writes it, from a snapshot taken on the loop.
 """
 
 from __future__ import annotations
@@ -98,6 +110,38 @@ INTERRUPTED_DETAIL = (
 
 _MERGEABLE = ("token", "thinking")
 _END = object()
+#: The canonical text frame (``json.dumps({"text": t})``) the fast path keeps
+#: as escaped chunks (v1.418.0, C3.6).
+_TEXT_HEAD = '{"text": "'
+_TEXT_TAIL = '"}'
+
+
+def _escaped_text(data: str) -> "str | None":
+    """The ESCAPED text of a canonical text frame (``{"text": "<esc>"}``
+    exactly as ``json.dumps`` writes it, ASCII only), or None for any other
+    shape (another key, a raw non-ASCII character, not JSON). No parse: a
+    quote that is not escaped (after dropping escaped backslashes and escaped
+    quotes) means the value ended early — another shape."""
+    if not (data.startswith(_TEXT_HEAD) and data.endswith(_TEXT_TAIL)) or len(data) < len(_TEXT_HEAD) + 2:
+        return None
+    esc = data[len(_TEXT_HEAD):-len(_TEXT_TAIL)]
+    if not (esc.isascii() and esc.isprintable()):
+        return None  # a raw character json.dumps would have escaped
+    plain = esc.replace("\\\\", "").replace('\\"', "") if "\\" in esc else esc
+    if '"' in plain or (plain.endswith("\\") and "\\" in esc):
+        return None
+    return esc
+
+
+def _escaped_len(esc: str) -> int:
+    """The decoded length of an escaped chunk: its own length when nothing in
+    it is escaped (no parse), else the chunk ALONE is parsed."""
+    if "\\" not in esc:
+        return len(esc)
+    try:
+        return len(json.loads('"' + esc + '"'))
+    except ValueError:
+        return -1  # not a JSON string after all: the old path decides
 
 
 def sse(event: str, data: Any) -> str:
@@ -177,7 +221,13 @@ class TurnLog:
         #: below says which, so a surface that opens it can tell a Build
         #: session from a chat (Phase 6 routes it to Build).
         self.surface = ""
-        self.frames: list[list[str]] = []  # [event, data_json], merged
+        self._frames: list[list[str]] = []  # [event, data_json], merged
+        #: v1.418.0 (C3.6): the LAST frame's escaped text chunks while it is a
+        #: canonical text frame still growing (None otherwise), how many of
+        #: them :attr:`frames` already joined into it, and its decoded length.
+        self._live: "list[str] | None" = None
+        self._live_joined = 0
+        self._live_len = 0
         self.status = "running"
         self.started_at = utcnow()
         self._chars = 0
@@ -207,6 +257,46 @@ class TurnLog:
         self._viewers: dict[asyncio.Queue, str] = {}
         self._away: set[str] = set()
 
+    # -- the stored frames ---------------------------------------------------
+    @property
+    def frames(self) -> list[list[str]]:
+        """The stored frames (``[event, data_json]``, merged), the growing
+        text frame joined first (v1.418.0, C3.6)."""
+        self._settle()
+        return self._frames
+
+    @frames.setter
+    def frames(self, value: list[list[str]]) -> None:
+        self._frames = value
+        self._live = None
+        self._live_joined = 0
+        self._live_len = 0
+        if value:
+            self._track(value[-1][0], value[-1][1])
+
+    def _settle(self) -> None:
+        live = self._live
+        if live is not None and self._live_joined != len(live):
+            joined = "".join(live)
+            live[:] = [joined]
+            self._live_joined = 1
+            self._frames[-1][1] = _TEXT_HEAD + joined + _TEXT_TAIL
+
+    def _track(self, event: str, data: str) -> None:
+        """Start keeping the last frame as chunks when it is a canonical text
+        frame (else stop). O(frame) — only when a frame is appended or taken
+        the old way, never per token."""
+        esc = _escaped_text(data) if event in _MERGEABLE else None
+        length = _escaped_len(esc) if esc is not None else -1
+        if esc is None or length < 0:
+            self._live = None
+            self._live_joined = 0
+            self._live_len = 0
+            return
+        self._live = [esc]
+        self._live_joined = 1
+        self._live_len = length
+
     # -- writing --------------------------------------------------------------
     def add(self, chunk: str) -> None:
         # Stored FIRST (v1.384.0): each frame's position is the store's state
@@ -226,9 +316,9 @@ class TurnLog:
         nothing is stored yet). The last frame's text length is kept as it is
         stored (``_tail``), so a long reply's thousands of deltas never parse
         its growing text again just to say where they landed."""
-        if not self.frames:
+        if not self._frames:
             return ""
-        last = len(self.frames) - 1
+        last = len(self._frames) - 1
         if self._tail is not None and self._tail[0] == last:
             return f"{last}:{self._tail[1]}"
         return position_of(self.frames, last)
@@ -302,6 +392,23 @@ class TurnLog:
         return [(aid, tool, at) for aid, (tool, at) in asks if aid in pending]
 
     def _store(self, event: str, data: str) -> None:
+        frames = self._frames
+        # v1.418.0 (C3.6): a canonical token joining a canonical frame of its
+        # kind is one more chunk — no parse, no serialisation (see the module
+        # doc). Exactly the bytes, length and cap of the old path below.
+        if self._live is not None and event in _MERGEABLE and frames and frames[-1][0] == event:
+            esc = _escaped_text(data)
+            more = _escaped_len(esc) if esc is not None else -1
+            if esc is not None and more >= 0:
+                if self._chars + more > MAX_STORED_CHARS:
+                    return
+                self._live.append(esc)
+                self._live_len += more
+                self._chars += more
+                self._dirty = True
+                self._tail = (len(frames) - 1, self._live_len)
+                return
+        self._settle()
         if event in _MERGEABLE and self.frames and self.frames[-1][0] == event:
             try:
                 prev = json.loads(self.frames[-1][1])
@@ -313,18 +420,23 @@ class TurnLog:
                 self._chars += len(more.get("text") or "")
                 self._dirty = True
                 self._tail = (len(self.frames) - 1, len(prev["text"]))
+                self._track(event, self._frames[-1][1])
                 return
             except (ValueError, AttributeError, TypeError):
                 pass
         if self._chars + len(data) > MAX_STORED_CHARS and event in _MERGEABLE:
             return
-        self.frames.append([event, data])
+        self._frames.append([event, data])
         self._chars += len(data)
         self._dirty = True
-        self._tail = (len(self.frames) - 1, _text_len(event, data))
+        self._track(event, data)
+        self._tail = (
+            len(self._frames) - 1,
+            self._live_len if self._live is not None else _text_len(event, data),
+        )
 
     def last_event(self) -> str:
-        return self.frames[-1][0] if self.frames else ""
+        return self._frames[-1][0] if self._frames else ""
 
     # -- following ------------------------------------------------------------
     def watched(self) -> bool:
@@ -423,10 +535,15 @@ class TurnLog:
 
     # -- the record -----------------------------------------------------------
     def _row_values(self) -> dict[str, Any]:
+        """The record's values. v1.418.0 (C3.6): the frames as a SNAPSHOT
+        (a copy of each pair, taken on the loop — a token added while the
+        write runs is in the next one, never half in this one); the
+        ``json.dumps`` of them runs in :func:`_write_record`, on the worker
+        thread that writes it."""
         return {
             "thread_id": self.thread_id,
             "status": self.status,
-            "frames_json": json.dumps(self.frames),
+            "frames_json": [[e, d] for e, d in self.frames],
             "updated_at": utcnow(),
         }
 
@@ -487,6 +604,9 @@ class TurnLog:
 
 def _write_record(engine: Any, turn_id: str, started_at: Any, values: dict[str, Any]) -> None:
     try:
+        if not isinstance(values.get("frames_json", ""), str):
+            # v1.418.0 (C3.6): serialised HERE, off the loop.
+            values = {**values, "frames_json": json.dumps(values["frames_json"])}
         with session_scope(engine) as db:
             row = db.get(ChatTurnRecord, turn_id)
             if row is None:

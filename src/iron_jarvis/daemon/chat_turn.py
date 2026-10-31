@@ -7995,7 +7995,7 @@ class _Grounding:
         "project", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness", "apps_phone",
+        "harness", "apps_phone", "late",
     )
 
     def __init__(self) -> None:
@@ -8042,6 +8042,18 @@ class _Grounding:
         #: conversation cannot use (their names) — the POST lane puts
         #: ``app_names.phone_apps_note`` under the reply. [] everywhere else.
         self.apps_phone: list[str] = []
+        #: v1.418.0 (C3.4): the grounding hops still running at
+        #: :data:`GROUNDING_SOFT_S` — left out of THIS turn and named on the
+        #: receipt (``context.late``, :meth:`late_receipt`). [] = every hop
+        #: answered in time (the prompt and the receipt are as before).
+        self.late: list[str] = []
+
+    def late_receipt(self) -> dict[str, Any]:
+        """``{"late": [hop names]}`` when a hop missed the soft deadline, else
+        ``{}`` — so a turn whose hops all answered carries the receipt it
+        always did, byte for byte. MIRROR NOTE (lock-step): both lanes merge
+        it into their ``context`` object."""
+        return {"late": list(self.late)} if self.late else {}
 
     def before_attachments(self) -> str:
         # The folder's own instructions ride RIGHT AFTER the project block they
@@ -8060,6 +8072,32 @@ class _Grounding:
         note = packs_starting_note(self.packs_starting)
         roster = "" if (self.text_only or self.harness) else self.roster
         return roster + self.workflows + (("\n\n" + note) if note else "")
+
+
+#: v1.418.0 (C3.4): how long a turn waits for its grounding hops before it
+#: goes on without the ones still running. The hops it waited for before
+#: (a remote memory base, a query embed with a 10 s HTTP timeout) held every
+#: turn's first word for the SLOWEST of them; now a hop past this is left out
+#: of THIS turn and NAMED on the receipt (``context.late``) and in the log —
+#: never dropped in silence, never raised. Read at call time (a test sets it).
+GROUNDING_SOFT_S = 2.5
+#: The hops the soft deadline never drops — each keeps its own budget and is
+#: awaited to the end: the project block (its instructions, scanned), the
+#: project folder's own instruction files, and the connector toggles the user
+#: switched on for this chat (their tools are armed from it; both raise, and a
+#: failure is re-raised in hop order as before).
+GROUNDING_REQUIRED_HOPS = frozenset({"project", "folder_rules", "connector"})
+
+
+def _drop_late_hop(task: "asyncio.Future[Any]") -> None:
+    """A hop left out at the soft deadline finishes on its own thread; its
+    answer (or its error) is read here so nothing is reported as never
+    retrieved, and nothing else is done with it."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.debug("a grounding hop that finished after its turn went on failed", exc_info=exc)
 
 
 async def _gather_grounding(
@@ -8092,9 +8130,12 @@ async def _gather_grounding(
       day-one TypeError for a whole life), and the project-text scan and the
       connector resolution raise exactly as they did. The first error in HOP
       order is the one re-raised, so a failure is deterministic.
-    * no soft deadline. Dropping a slow hop's grounding would change answers
-      non-deterministically and silently; a slow hop still costs its own
-      latency, but no longer everyone else's.
+    * (v1.418.0, C3.4 — supersedes "no soft deadline") a SOFT DEADLINE,
+      :data:`GROUNDING_SOFT_S`: a hop still running then is left out of THIS
+      turn — never silently: it is named on the receipt (``context.late``)
+      and in the log, so the dropped grounding is reviewable. The hops in
+      :data:`GROUNDING_REQUIRED_HOPS` are never dropped (each keeps its own
+      budget); an optional hop's late answer is discarded on its own thread.
     * attachments, the "/" skill playbook and workspace resolution stay with
       the lanes, outside this gather: they carry their own error and consent
       semantics (the user's own files are never skipped).
@@ -8397,13 +8438,39 @@ async def _gather_grounding(
     if _apps_named or _clis_named:
         hops.append(("apps", _apps))
 
-    results = await asyncio.gather(
-        *(asyncio.to_thread(fn) for _name, fn in hops), return_exceptions=True,
-    )
+    # Every hop at once, off the loop; the turn waits at most GROUNDING_SOFT_S
+    # for the optional ones (v1.418.0, C3.4) and to the end for the required
+    # ones. A cancelled turn (Stop races this) cancels what it was waiting on.
+    tasks = [asyncio.ensure_future(asyncio.to_thread(fn)) for _name, fn in hops]
+    try:
+        await asyncio.wait(tasks, timeout=GROUNDING_SOFT_S)
+        required = [
+            t for (name, _fn), t in zip(hops, tasks)
+            if name in GROUNDING_REQUIRED_HOPS and not t.done()
+        ]
+        if required:
+            await asyncio.wait(required)
+    except BaseException:
+        for t in tasks:
+            t.cancel()
+        raise
+    results: list[Any] = []
+    for (name, _fn), t in zip(hops, tasks):
+        if t.done():
+            results.append(t.exception() or t.result())
+        else:
+            out.late.append(name)
+            t.add_done_callback(_drop_late_hop)
+            results.append(None)
+    if out.late:
+        log.info(
+            "chat grounding: %s not read in time (%g s); this turn goes on without %s",
+            ", ".join(out.late), GROUNDING_SOFT_S, "it" if len(out.late) == 1 else "them",
+        )
     for r in results:  # the first failure in HOP order, as the serial code did
         if isinstance(r, BaseException):
             raise r
-    got = {name: r for (name, _fn), r in zip(hops, results)}
+    got = {name: r for (name, _fn), r in zip(hops, results) if name not in out.late}
 
     if resolved_proj is not None:
         instructions, brief, recent = got["project"]
@@ -8421,7 +8488,7 @@ async def _gather_grounding(
                 block += f"\n\nProject folder (this session's worktree of it): {_proj_seen}"
             else:
                 block += f"\n\nProject folder: {resolved_proj.root.strip()}"
-        if got["knowledge"]:
+        if got.get("knowledge"):
             block += f"\n\nProject knowledge (reference):\n{got['knowledge']}"
         if recent:
             block += (
@@ -8432,11 +8499,11 @@ async def _gather_grounding(
     if "folder_rules" in got:
         out.folder_rules, out.folder_rules_used = got["folder_rules"]
     out.lessons = got.get("lessons", "")
-    out.index = got["index"]
+    out.index = got.get("index", "")
     out.fabric = got.get("fabric", "")
     out.conn_tools, out.connector = got["connector"]
-    out.roster = got["roster"]
-    out.workflows = got["workflows"]
+    out.roster = got.get("roster", "")
+    out.workflows = got.get("workflows", "")
     out.apps, out.apps_on, out.apps_offer, out.apps_phone = got.get("apps", ("", [], [], []))
     return out
 
@@ -10726,7 +10793,7 @@ async def run_chat_turn(
         # v1.153.0 EXTENDS THE SAME KEY rather than adding a rival one: fill
         # level, thresholds, and whether a compaction was applied. Every
         # v1.146.0 field keeps its meaning, so existing clients are untouched.
-        "context": {**plan.as_dict(), **context_report},
+        "context": {**plan.as_dict(), **context_report, **_grounding.late_receipt()},
         # REFIT (v1.355.0, G55): {"dropped": n} when the model refused the
         # request as too long and older messages were left out to retry it
         # (`refit_receipt`), else null — ALWAYS PRESENT, beside `context`,

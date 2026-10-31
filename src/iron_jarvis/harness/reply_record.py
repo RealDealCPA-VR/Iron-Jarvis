@@ -34,6 +34,22 @@ command is never run again blindly). Every write is off the loop, on ONE
 writer thread (so two writes of a turn never land out of order), awaited for
 at most :data:`SAVE_WAIT_S`.
 
+WHAT A SAVE COSTS (v1.418.0, C3.6). A save used to encode the WHOLE list and
+rewrite its row — up to 4 M chars, twice a round — for a round that added two
+messages. Now a turn's FIRST save writes the list whole; every later one
+APPENDS only the messages added since: they alone are encoded, and SQLite
+joins them onto the stored text in one ``UPDATE`` (guarded by the length the
+row had, so a row someone else moved or changed is never appended to). Both
+of a round's saves stay — each covers a moment a restart can land in (the
+model's call; the tools' run), and :mod:`tests.test_build_resume_v1391` pins
+both — but each is now the size of what the round added. Anything that would
+make an append wrong falls back to the whole write, so the row is always
+byte-identical to what a whole write would have stored: an earlier message
+changed in place (``trim_tool_images``), the row changed or gone, or the cap
+(the whole write then leaves the earliest rounds out). SQLite has no
+partial-value write: the ``UPDATE`` still rewrites the row's pages (in C),
+but Python no longer encodes, reads or sends the whole list.
+
 BOUNDED. A list over ``agents.transcript.MAX_TRANSCRIPT_CHARS`` (4 M chars)
 keeps its question and its NEWEST whole rounds, with one note saying how many
 of its earliest tool calls are left out (review: :func:`_fit` — the long
@@ -141,6 +157,22 @@ class _Snap:
         self.images = bool(getattr(m, "images", None))
 
 
+def _fingerprint(m: Any) -> tuple[int, str, int, int, bool, int]:
+    """What a kept message looked like when it was written (v1.418.0): the
+    object, its role, its text's length AND hash, whether it carried a
+    picture and how many calls — enough to see the in-place changes the
+    lanes make to an earlier message (``trim_tool_images``; ``attach_check``,
+    whose cut text can come out the SAME length — review: a length alone
+    missed it) and any replacement. A ``str`` caches its own hash, so an
+    unchanged message costs nothing on the next save."""
+    content = getattr(m, "content", "") or ""
+    text = content if isinstance(content, str) else str(content)
+    return (
+        id(m), str(getattr(m, "role", "") or ""), len(text), hash(text),
+        bool(getattr(m, "images", None)), len(getattr(m, "tool_calls", None) or []),
+    )
+
+
 #: v1.391.0 review: what stands right after the question when a kept list
 #: had to leave its EARLIEST steps out to stay under the cap (see
 #: :func:`_fit`). The model reads it on a resume.
@@ -215,10 +247,11 @@ def _fit(rows: list[dict[str, Any]], cap: int) -> "str | None":
 
 
 def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
-           real: dict[str, str]) -> str:
+           real: dict[str, str], sizes: "dict[str, int] | None" = None) -> str:
     """"ok", "over" (over the cap even after leaving the earliest rounds out:
     the row is removed), or "failed" (the row is removed when it can be). On
-    the writer thread."""
+    the writer thread. ``sizes`` (v1.418.0) receives the stored text's length
+    (``"len"``) on "ok" — what the next save's append is guarded by."""
     from ..agents import transcript as _transcript
 
     try:
@@ -238,11 +271,60 @@ def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
             row.updated_at = utcnow()
             db.add(row)
             db.commit()
+        if sizes is not None:
+            sizes["len"] = len(text)
         return "ok"
     except Exception:  # noqa: BLE001 — a kept list never fails a reply
         log.warning("could not keep the conversation of %s", run_id, exc_info=True)
         _delete(engine, run_id)
         return "failed"
+
+
+def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
+            real: dict[str, str], start: int, expect: int,
+            sizes: "dict[str, int] | None" = None) -> str:
+    """v1.418.0 (C3.6): add ``snaps[start:]`` to the stored list, whose text
+    is ``expect`` chars long: only those messages are encoded, and SQLite
+    joins them onto the row (``messages_json`` minus its closing ``]``, then
+    ``, <rows>]`` — exactly the text :func:`_fit` writes for the whole list,
+    because :func:`_encode` encodes each message on its own and every row is
+    ASCII JSON). Falls back to :func:`_write` (the whole list) when the
+    result would pass the cap, or when the row is not the one this record
+    wrote (gone, moved, changed: the length guard). Same outcomes as
+    :func:`_write`. On the writer thread."""
+    from sqlalchemy import func, update
+
+    from ..agents import transcript as _transcript
+
+    try:
+        rows = _encode_rows(snaps[start:], real)
+        delta = "".join(", " + json.dumps(r) for r in rows) + "]"
+    except Exception:  # noqa: BLE001 — the whole write decides
+        return _write(engine, run_id, session_id, snaps, real, sizes)
+    new_len = expect - 1 + len(delta)
+    if new_len > _transcript.MAX_TRANSCRIPT_CHARS:
+        return _write(engine, run_id, session_id, snaps, real, sizes)
+    try:
+        with session_scope(engine) as db:
+            col = RunTranscript.messages_json
+            res = db.exec(  # type: ignore[call-overload]
+                update(RunTranscript)
+                .where(RunTranscript.run_id == run_id)
+                .where(RunTranscript.session_id == session_id)
+                .where(func.length(col) == expect)
+                .values(messages_json=func.substr(col, 1, expect - 1).op("||")(delta),
+                        updated_at=utcnow())
+            )
+            db.commit()
+            appended = int(getattr(res, "rowcount", 0) or 0) == 1
+    except Exception:  # noqa: BLE001
+        log.warning("could not add to the conversation of %s; writing it whole", run_id, exc_info=True)
+        appended = False
+    if not appended:
+        return _write(engine, run_id, session_id, snaps, real, sizes)
+    if sizes is not None:
+        sizes["len"] = new_len
+    return "ok"
 
 
 def _mark(engine: Any, run_id: str, waiting: bool) -> None:
@@ -295,6 +377,12 @@ class ReplyRecord:
         self._real: dict[str, str] = {}
         self._last: "tuple[int, int] | None" = None
         self._waiting = False
+        #: v1.418.0 (C3.6): what the row holds now — a fingerprint of each
+        #: message it was written from (identity, role, content length and
+        #: hash, picture, calls) and the stored text's length — so the next save
+        #: appends only what was added. None: the next save writes it whole.
+        self._kept: "list[tuple[int, str, int, int, bool, int]] | None" = None
+        self._kept_len = 0
 
     def note_calls(self, model_calls: Any, calls: Any) -> None:
         """The REAL tool behind each call the model made (same ids): kept
@@ -321,9 +409,23 @@ class ReplyRecord:
         if mark == self._last:
             return
         snaps = [_Snap(m) for m in tail]
+        prints = [_fingerprint(m) for m in tail]
         real = dict(self._real)
         loop = asyncio.get_running_loop()
-        fut = loop.run_in_executor(_writer(), _write, self.engine, self.run_id, self.session_id, snaps, real)
+        sizes: dict[str, int] = {}
+        kept = self._kept
+        # v1.418.0 (C3.6): append when every message the row was written from
+        # is still there, unchanged and in place; else the whole list.
+        if kept is not None and len(prints) > len(kept) and prints[:len(kept)] == kept:
+            fut = loop.run_in_executor(
+                _writer(), _append, self.engine, self.run_id, self.session_id, snaps, real,
+                len(kept), self._kept_len, sizes,
+            )
+        else:
+            fut = loop.run_in_executor(
+                _writer(), _write, self.engine, self.run_id, self.session_id, snaps, real, sizes,
+            )
+        self._kept = None  # until this write is known to have landed
         try:
             outcome = await asyncio.wait_for(asyncio.shield(fut), SAVE_WAIT_S)
         except asyncio.TimeoutError:
@@ -331,6 +433,8 @@ class ReplyRecord:
             loop.run_in_executor(_writer(), _delete, self.engine, self.run_id)
         if outcome == "ok":
             self._last = mark
+            if "len" in sizes:
+                self._kept, self._kept_len = prints, sizes["len"]
             return
         # Over its cap, or the write failed: the list is gone (the writer
         # removed it), and this reply is no longer resumable.

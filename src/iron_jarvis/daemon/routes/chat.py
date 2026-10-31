@@ -7283,7 +7283,10 @@ async def chat_stream(
             # v1.146.0 + v1.153.0 — same shape POST /chat returns, so the
             # composer's headroom meter and the compaction offer behave
             # identically on both lanes.
-            "context": {**plan.as_dict(), **context_report},
+            # v1.418.0 (C3.4): `late` — the grounding hops left out at the
+            # soft deadline — only when there were any. MIRROR NOTE
+            # (lock-step): chat_turn.py's response merges the same receipt.
+            "context": {**plan.as_dict(), **context_report, **_grounding.late_receipt()},
             # REFIT (v1.355.0, G55): {"dropped": n} | null, ALWAYS present —
             # older messages left out to retry a too-long refusal. MIRROR
             # NOTE (lock-step): chat_turn.py's response carries it too.

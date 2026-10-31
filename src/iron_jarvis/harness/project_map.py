@@ -28,10 +28,19 @@ THE RULES IT KEEPS:
   entries), and the map's last line names exactly what was left out — never a
   silent cut. Added to the system prompt BEFORE the history planner, so its
   cost is counted like every other part of the prompt.
-* CACHED UNTIL THE FILES CHANGE: every turn re-walks the folder (the walk is
-  the change detection: each file's size and modification time), and a file
-  is parsed again only when those changed (:data:`_NAMES`); an unchanged
-  folder reuses its rendered map (:data:`_MAPS`). Built OFF the event loop.
+* CACHED UNTIL THE FILES CHANGE: a file is parsed again only when its size or
+  modification time changed (:data:`_NAMES`), and a folder whose files did
+  not change reuses its rendered map (:data:`_MAPS`). v1.418.0 (C3.4): the
+  folder is no longer WALKED at the start of every turn either — the map is
+  kept per (folder, the TOP TWO LEVELS' signature, :data:`MAP_VERSION`)
+  (:data:`_MAP_CACHE`, at most :data:`MAP_CACHE_MAX` maps), and a turn reads
+  only the folder's own listing and one listing per top-level folder it keeps
+  (:func:`_top_signature`: every entry's name, kind, size and modification
+  time there — a folder's time moves when a file is added to, removed from or
+  renamed in it). A change deeper than that (an edit inside ``a/b/c.py``)
+  shows in the map at the next change of the top two levels: the map is a
+  starting point, and the model reads the files it works on. Built OFF the
+  event loop.
 * UNTRUSTED TEXT: file and symbol names are the folder's words, so the map
   goes through ``core.promptguard`` like every folder text.
 * NOT IN THE FINGERPRINT: the map is per folder and per turn, like the date
@@ -104,6 +113,16 @@ for _category in (SyntaxWarning, DeprecationWarning):
 #: How many folders' maps / files' names are remembered.
 _MAX_MAPS = 16
 _MAX_NAMED_FILES = 20_000
+#: v1.418.0 (C3.4): how a map is made — part of the turn cache's key, so a
+#: change to the rendering never serves a map an older version made.
+MAP_VERSION = 1
+#: The turn cache's bound (maps kept per folder, share and top signature).
+MAP_CACHE_MAX = 64
+#: Review (v1.418.0): the most entries the top-two-levels check reads before
+#: it gives up (the turn then walks, bounded, as before) — a folder holding
+#: 100,000 files at level two must not be listed whole before every turn. The
+#: walk's own file cap; the check also stops at :data:`WALK_DEADLINE_S`.
+TOP_SIGNATURE_MAX_ENTRIES = 5000
 
 
 @dataclass
@@ -524,6 +543,9 @@ def render(
 _LOCK = threading.Lock()
 #: (folder, limit, depth) -> (signature, MapResult)
 _MAPS: "OrderedDict[tuple[str, int, int], tuple[str, MapResult]]" = OrderedDict()
+#: v1.418.0 (C3.4): (folder, limit, depth, top-two-levels signature,
+#: MAP_VERSION) -> MapResult — the turn cache that spares the WALK.
+_MAP_CACHE: "OrderedDict[tuple[str, int, int, str, int], MapResult]" = OrderedDict()
 #: absolute file path -> (mtime_ns, size, names)
 _NAMES: "OrderedDict[str, tuple[int, int, list[str]]]" = OrderedDict()
 
@@ -534,6 +556,86 @@ def _signature(entries: list[_Entry], note: str) -> str:
         h.update(("\0".join(e.parts) + f"\0{int(e.is_dir)}\0{e.mtime_ns}\0{e.size}\n").encode("utf-8", "replace"))
     h.update(note.encode("utf-8"))
     return h.hexdigest()
+
+
+def _top_signature(base: Path) -> "str | None":
+    """A signature of the folder's TOP TWO LEVELS (v1.418.0, C3.4): the name,
+    kind, size and modification time of every entry the map's walk would keep
+    in the folder itself and in each folder directly inside it (pruned as
+    :func:`_walk` prunes — heavy and ``.``-folders, links and junctions never
+    followed). One listing of the folder and one per top-level folder kept;
+    nothing deeper is listed. None when the folder cannot be listed, or
+    (review) when the check passes :data:`TOP_SIGNATURE_MAX_ENTRIES` entries
+    or :data:`WALK_DEADLINE_S` — the turn then walks, bounded, as before.
+    BLOCKING."""
+    from ..tools.builtins import _SKIP_DIRS
+
+    h = hashlib.sha1()
+    started = _now()
+    seen = [0]
+
+    class _TooBig(Exception):
+        pass
+
+    def listing(here: Path, parts: tuple[str, ...]) -> "list[Path] | None":
+        if _now() - started >= WALK_DEADLINE_S:
+            raise _TooBig
+        try:
+            with os.scandir(here) as it:
+                children = sorted(it, key=lambda e: (e.name.lower(), e.name))
+        except OSError:
+            return None
+        seen[0] += len(children)
+        if seen[0] > TOP_SIGNATURE_MAX_ENTRIES:
+            raise _TooBig
+        subdirs: list[Path] = []
+        for child in children:
+            try:
+                if child.is_symlink() or (hasattr(child, "is_junction") and child.is_junction()):
+                    continue
+                is_dir = child.is_dir(follow_symlinks=False)
+                if is_dir and (child.name in _SKIP_DIRS or child.name.startswith(".")):
+                    continue
+                if not is_dir and child.name in _SKIP_DIRS:
+                    continue
+                # A folder's time is read from the FOLDER (one stat): on NTFS
+                # the copy in its parent's listing is updated lazily, so it
+                # can lag a file just added inside it — and the next turn
+                # would read a different signature for an unchanged folder.
+                st = os.stat(child.path, follow_symlinks=False) if is_dir else child.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            key = "\0".join(parts + (child.name,))
+            h.update(f"{key}\0{int(is_dir)}\0{int(st.st_mtime_ns)}\0{int(st.st_size)}\n"
+                     .encode("utf-8", "replace"))
+            if is_dir:
+                subdirs.append(Path(child.path))
+        return subdirs
+
+    try:
+        top = listing(base, ())
+        if top is None:
+            return None
+        for sub in top:
+            if listing(sub, (sub.name,)) is None:
+                h.update(f"{sub.name}\0unreadable\n".encode("utf-8", "replace"))
+    except _TooBig:
+        return None
+    return h.hexdigest()
+
+
+def _remember(ckey: "tuple[str, int, int, str, int] | None", result: MapResult) -> None:
+    """Keep ``result`` in the turn cache (bounded). Under :data:`_LOCK`."""
+    if ckey is None:
+        return
+    _MAP_CACHE[ckey] = result
+    _MAP_CACHE.move_to_end(ckey)
+    while len(_MAP_CACHE) > MAP_CACHE_MAX:
+        _MAP_CACHE.popitem(last=False)
+
+
+def _copy(result: MapResult) -> MapResult:
+    return MapResult(**{**result.__dict__, "left_out": list(result.left_out)})
 
 
 def _names_for(
@@ -614,15 +716,28 @@ def build(folder: Any, *, limit: int, depth: int = MAP_DEPTH) -> "MapResult | No
             return None
     except (OSError, ValueError):
         return None
+    key = (os.path.normcase(str(base)), int(limit), int(depth))
+    # v1.418.0 (C3.4): the top two levels unchanged -> the map this process
+    # already made, with NO walk. (Read before the walk below, so a change
+    # made while it walks is stored under the OLD signature and the next
+    # turn walks again.)
+    top = _top_signature(base)
+    ckey = (*key, top, MAP_VERSION) if top is not None else None
+    if ckey is not None:
+        with _LOCK:
+            fast = _MAP_CACHE.get(ckey)
+            if fast is not None:
+                _MAP_CACHE.move_to_end(ckey)
+                return _copy(fast)
     entries, files, note = _walk(base)
     sig = _signature(entries, note)
-    key = (os.path.normcase(str(base)), int(limit), int(depth))
     with _LOCK:
         hit = _MAPS.get(key)
         if hit is not None and hit[0] == sig:
             _MAPS.move_to_end(key)
             cached = hit[1]
-            return MapResult(**{**cached.__dict__, "left_out": list(cached.left_out)})
+            _remember(ckey, cached)
+            return _copy(cached)
     # Only the levels a tree WITHOUT names could even fit are read for names
     # (Phase 3 review): a deeper file can only ever be inside a "(N files)"
     # count at this share, so reading it is wasted time. The test is the
@@ -642,7 +757,8 @@ def build(folder: Any, *, limit: int, depth: int = MAP_DEPTH) -> "MapResult | No
             _MAPS.move_to_end(key)
             while len(_MAPS) > _MAX_MAPS:
                 _MAPS.popitem(last=False)
-    return MapResult(**{**result.__dict__, "left_out": list(result.left_out)})
+            _remember(ckey, result)
+    return _copy(result)
 
 
 def forget() -> None:
@@ -650,6 +766,7 @@ def forget() -> None:
     with _LOCK:
         _MAPS.clear()
         _NAMES.clear()
+        _MAP_CACHE.clear()
 
 
 async def for_turn(
@@ -687,6 +804,7 @@ async def for_turn(
 
 
 __all__ = [
-    "BUILDS", "HEADING", "MAP_DEPTH", "MAP_MAX_CHARS", "MAP_MIN_CHARS", "MAP_SHARE", "MapResult",
+    "BUILDS", "HEADING", "MAP_CACHE_MAX", "MAP_DEPTH", "MAP_MAX_CHARS", "MAP_MIN_CHARS", "MAP_SHARE",
+    "MAP_VERSION", "MapResult", "TOP_SIGNATURE_MAX_ENTRIES",
     "build", "for_turn", "forget", "python_names", "render", "script_names", "share_chars",
 ]

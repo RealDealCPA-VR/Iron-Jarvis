@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 
 import pytest
@@ -504,4 +505,22 @@ def _network_guard_when_asked(request):
         yield
         return
     request.getfixturevalue("no_network")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _grounding_deadline_is_not_a_bar_here(request, monkeypatch):
+    """v1.418.0: the chat lanes wait at most ``chat_turn.GROUNDING_SOFT_S``
+    (2.5 s) for the optional grounding hops and leave a late one OUT of the
+    turn. That is a wall-clock bar (the v1.286.0 rule): on a loaded runner a
+    correct lessons or roster hop could miss it and a prompt pin would then
+    read a prompt with a section missing. Every test therefore runs with the
+    deadline widened — except the file that tests the deadline itself, whose
+    tests set their own value."""
+    if "grounding_deadline" in request.node.nodeid:
+        yield
+        return
+    mod = sys.modules.get("iron_jarvis.daemon.chat_turn")
+    if mod is not None and hasattr(mod, "GROUNDING_SOFT_S"):
+        monkeypatch.setattr(mod, "GROUNDING_SOFT_S", 60.0)
     yield
