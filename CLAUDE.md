@@ -4220,7 +4220,14 @@ does not need a bump, stop and bump it.
   the service's `on_message`), so a self-started reply counts. Open tasks
   never make the session `busy` (that refuses a message — Claude Code takes
   one while helpers run). The session row carries `background` (count).
-  Pins: `tests/test_build_app_background_tasks_v1417.py` (8 mutations, all red).
+  REVIEW: the reaper was not the only way they died. A restart (effort,
+  model back to default, tools) waits while tasks are open (`restart` stays
+  set, a notice says so) and runs on the first message after; Open in
+  terminal is refused in words (`W.BACKGROUND_OPEN_TERMINAL`); the cap-6
+  evictor sorts by `max(last_active, last_heard)` like the reaper (Claude
+  Code's self-started reply after helpers finish owns no turn). Archive,
+  delete, shutdown and the account move still stop the process as before.
+  Pins: `tests/test_build_app_background_tasks_v1417.py` (12 mutations, all red).
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control
