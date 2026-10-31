@@ -4671,6 +4671,91 @@ does not need a bump, stop and bump it.
   ignores a branch switch during the session; Terminal/Browser tabs not
   added.
 
+- **A project KNOWS its coding sessions: resolved by FOLDER at read time,
+  merged into "Recent activity", and a repeated correction in Chat › Code is
+  the chat's own Keep line** (v1.414.0, the context spine). THE READER:
+  `projects/coding_sessions.py` (read-only, never raises, BLOCKING — routes
+  call it off the loop): one read of the projects + the newest `SCAN_MAX`
+  (300) rows of EACH view — Chat › Code (`ChatThreadRecord` surface
+  "build", columns only; whether the last reply finished/failed/was cut is
+  ONE SQLite `json_extract(messages_json, '$[#-1]…')`, never the
+  transcript) and Build › Code (`HostedSessionRecord` read with a plain
+  SELECT — never `hosted.store.list_rows`, which CREATES the table; a
+  missing table = no rows; `hosted/` unchanged) — each folder (Chat › Code:
+  `harness/sessions.checkout_of`, a folderless session none) resolved by
+  `projects/locate.best_project` (THE rule, lifted pure out of
+  `project_for_path`, which now calls it). Live state is COPIED from
+  `TURNS.thread_states()` and the hosted service's `live` map via
+  `getattr(platform, "hosted")` — never `service_for` (it would make one).
+  Row: `{kind: "coding_session", view: chat_code|build_code, id, key, title,
+  tool, state: working|waiting|finished|idle, outcome, updated_at, link,
+  local_only, folder}`; links are `CHAT_CODE_HREF` / `BUILD_CODE_HREF`, the
+  exact strings of `lib/buildLinks.buildSessionHref` /
+  `lib/buildApp.buildCodeHref` (pinned on both sides; the dashboard builds
+  the href with those producers, never from the wire). ROUTES: `GET
+  /projects/{id}` adds `coding_sessions`; `GET /projects/{id}/world` adds
+  `coding_sessions`, `waiting` gains `kind: "coding_session"` rows (state
+  waiting) and `completed` too (state finished; `world._completed(db, pid,
+  coding)`, `waiting_items(..., coding)`). `counts` and `/agents/worlds`
+  are UNCHANGED (agent work only). DASHBOARD: `lib/codingSessions.ts`
+  (whitelist decoder, words, href), `components/projects/
+  ProjectCodingSessions.tsx` (renders NOTHING when empty) on the project
+  page's Board tab and `ProjectWork`'s Board; `waitingKindLabel
+  ("coding_session")` and CompletedList name it ("Coding session · Codex").
+  RECENT ACTIVITY: `projects/recent_activity.recent_lines(engine, pid, runs,
+  platform=, exclude_thread=)` — the ONE builder for both chat lanes (the
+  `_gather_grounding` project hop, so before the planner) and
+  `runtime._project_context`: the caller's run rows (`run_line`, the old
+  format) merged with the project's newest chats (`chat_surface_only`,
+  not archived, ≤ 5) and coding sessions (≤ 5, `RECENT_SCAN` 60), newest
+  first, ≤ `RECENT_MAX` 8; `- [chat] <title> · <age>` / `- [coding session
+  · Codex] …`, coarse ages ("within the hour", "N h ago", "N d ago");
+  EVERY title through `scan_context` (a flagged one is LEFT OUT); a
+  local-only chat/session is left out unless `egress.
+  may_recall_local_only_chats()` (the fabric recall's rule, read from the
+  hop's copied scope); the turn's own `body.thread_id` excluded.
+  BYTE-IDENTICAL with no chats/coding sessions (pinned in both lanes and the
+  runtime). PREFERENCES: `start_build_turn` passes `suggest_preferences=
+  started_by == "person" and not continuation`; both lanes pass
+  `suggest_for_turn(platform, body, session_id=session_id)` (lock-step,
+  pinned flattened); a `build:` session quotes `where: "code"` (`WHERES`,
+  dashboard `whereWord` → "coding session"), passed to the core ONLY when
+  set (two-argument test doubles). The look-back is UNCHANGED:
+  coding sessions stay out of the "other conversations" scan (the v1.367.0
+  pin), so a session's own stored copy — whose first line a Compact can drop
+  from the body — can never double-count one correction. The reply line
+  keeps `suggestion` (a LINE_KEY both sides); `GET /build/sessions/{id}`
+  folds each one's CURRENT answer from the row
+  (`preferences.fold_suggestion_states`: kept + kept text / declined /
+  gone); `HarnessSession` renders the chat's `PreferenceSuggestion` under
+  the reply. `corrections._ONE_OFF` refuses code-scoped corrections ("in
+  this repo/module/package/workspace/session/case", "right now", "today",
+  "here"). Build › Code (the real CLI) offers none: its words never pass
+  through a lane. REVIEW (each red first): (1) a LOCAL-ONLY agent run's task
+  + summary still rode every project turn's run lines — `recent_lines` now
+  withholds a run whose `options_json.local_only` is true by the same rule,
+  and the runtime's fallback (`run_line` per sibling) always leaves it out;
+  (2) Retry of a failed or cut-off question minted from ONE correction (the
+  question sits in the history once already) — `routes/build.
+  retries_failed_question` turns the ask off for that turn; (3) the moment
+  words ("right now", "today", "here") live in `corrections._MOMENT` and give
+  way to a lasting marker in the same message (`_LASTING`: "you keep",
+  "anywhere", "every day", "forever"…); "our" scopes CODE nouns only ("no
+  emoji in our chat" is every chat); (4) a waiting coding session reads "it
+  is waiting for your answer" / "Waiting for you" (a question waits too, not
+  only a card); (5) a Build › Code session on Pi or OpenCode (any tool but
+  `coding_sessions.VENDOR_TOOLS` = claude-code, codex) may run on a local
+  model and that view has no Local only switch, so its title is withheld
+  from work that leaves this network by the same rule (private
+  `_may_stay_local`; the API's `local_only` is unchanged and the project
+  page still lists it). Pins: `tests/test_project_spine_review_v1414.py`,
+  `tests/test_{project_coding_sessions,
+  project_recent_activity,code_preferences}_v1414.py`,
+  `dashboard/__tests__/{project-coding-sessions,project-page-coding-sessions,
+  harness-preference-suggestion}-v1414.test.tsx`; moved on purpose:
+  `test_preferences_v1305` (the call's shape) and `test_build_turns_v1367`
+  (`suggest_preferences` True for a typed turn).
+
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon
   builds the editor's URL, never a client** (v1.405.0; the user: "Live where

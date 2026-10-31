@@ -77,6 +77,8 @@ import { Markdown, MemoMarkdown } from "@/components/Markdown";
 import { WorkLine, LiveToolRows } from "@/components/chat/WorkLine";
 import { ReplyChanges } from "@/components/chat/ReplyChanges";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
+import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
+import { decodeSuggestion } from "@/lib/preferences";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
 import { DockAsk } from "@/components/chat/DockAsk";
 import { PermissionChip } from "@/components/chat/PermissionChip";
@@ -2917,6 +2919,17 @@ export function HarnessSession({
                     />
                   ) : null}
                 </div>
+                {/* v1.414.0: a repeated correction, offered as a standing
+                    preference — the chat's own quiet Keep · Edit · Not this
+                    line (components/chat/PreferenceSuggestion). Its answer
+                    comes back folded into the line by the daemon on the next
+                    read; the line keeps it meanwhile. */}
+                {(() => {
+                  const sug = decodeSuggestion(m.suggestion);
+                  return sug && sug.state !== "gone" ? (
+                    <PreferenceSuggestion key={sug.id} suggestion={sug} />
+                  ) : null;
+                })()}
                 <DoorsStrip doors={m.doors} />
               </div>
             ),

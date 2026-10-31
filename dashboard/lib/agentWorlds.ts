@@ -15,6 +15,7 @@
 // a mission's root?" rule every session link uses instead of forking it.
 
 import { isMissionRow } from "./missionLinks";
+import { CODING_SESSION_LABEL } from "./buildWords";
 
 /** Mirrors components/agents/identity.tsx — kept as a string union here so
  *  this module stays import-free. */
@@ -88,6 +89,8 @@ export interface WaitingItem {
 
 export interface CompletedItem {
   id?: string;
+  /** "session" | "assignment" | v1.414.0 "coding_session". */
+  kind?: string;
   title: string;
   agent?: string | null;
   finished_at?: string | null;
@@ -104,6 +107,9 @@ export interface WorldDetail {
   counts: WorldCounts;
   waiting: WaitingItem[];
   completed: CompletedItem[];
+  /** v1.414.0: the project's coding sessions, both Code views (raw;
+   *  lib/codingSessions). Absent from an older daemon. */
+  coding_sessions?: unknown;
 }
 
 /** GET /projects/{id}/team. */
@@ -272,6 +278,9 @@ export function waitingKindLabel(kind: string): string {
       return "Stopped. It needs your answer";
     case "interrupted":
       return "Cut off by a restart. Continue?";
+    // v1.414.0: a coding session parked on the user (a card or a question).
+    case "coding_session":
+      return CODING_SESSION_LABEL;
     default:
       return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Waiting";
   }

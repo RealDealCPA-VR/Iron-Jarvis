@@ -148,7 +148,33 @@ _ARTIFACT = re.compile(
 _ONE_OFF = re.compile(
     r"\b(?:for (?:this|that|these|those)\b|this (?:time|once)\b|for now\b|just once\b|"
     r"for the client\b|on my phone\b|(?:this|it) goes (?:in|into|to)\b|"
-    r"(?:more|less) (?:detail )?on (?:the |my |this )?\w+)",
+    r"(?:more|less) (?:detail )?on (?:the |my |this )?\w+|"
+    # v1.414.0 (coding sessions): a correction scoped to ONE place in the
+    # code — "too verbose in this repo", "no caveats in this workspace",
+    # "stop explaining yourself in this package" — belongs in that repo's
+    # own rules file, never a standing preference for every answer.
+    r"(?:in|inside|within|on|across|throughout) (?:(?:this|that|the current) "
+    r"(?:repo|repository|project|codebase|code ?base|module|package|crate|workspace|"
+    r"monorepo|app|service|session|conversation|chat|case|one|thread|pr|pull request)|"
+    # v1.414.0 review: "our" scopes a piece of CODE ("in our repo"), never
+    # the user's chats with Jarvis — "no emoji in our chat" is every chat.
+    r"our (?:repo|repository|project|codebase|code ?base|module|package|crate|workspace|"
+    r"monorepo|app|service|pr|pull request))\b)",
+    re.IGNORECASE,
+)
+
+#: v1.414.0 (coding sessions): a correction scoped to ONE moment — "be brief
+#: right now", "too long today", "too long here" — is not a standing
+#: preference either, UNLESS the user says in the same breath that it lasts
+#: (:data:`_LASTING`: "you keep using tables, even here", "no emoji anywhere,
+#: including here", "today and every day"). Review, v1.414.0.
+_MOMENT = re.compile(
+    r"\b(?:right now|at the moment|for the moment|today|in here)\b|\bhere[\s.!]*$",
+    re.IGNORECASE,
+)
+_LASTING = re.compile(
+    r"\b(?:you keep|you always|you still|every (?:day|time|reply|answer|response|message)|"
+    r"forever|anywhere|everywhere|from now on|going forward|from here on|ever again)\b",
     re.IGNORECASE,
 )
 
@@ -211,6 +237,8 @@ def is_correction(text: str) -> bool:
         if _ARTIFACT.search(body):
             return False
         if _ONE_OFF.search(body):
+            return False
+        if _MOMENT.search(body) and not _LASTING.search(body):
             return False
         if not _TARGET.search(body):
             return False

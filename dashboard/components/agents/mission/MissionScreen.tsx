@@ -244,7 +244,13 @@ export function MissionScreen({
                 projectName={projectName}
               />
               {projectId ? (
-                <ProjectWork key={projectId} projectId={projectId} waiting={waiting} completed={completed} />
+                <ProjectWork
+                  key={projectId}
+                  projectId={projectId}
+                  waiting={waiting}
+                  completed={completed}
+                  coding={world.data?.coding_sessions}
+                />
               ) : (
                 <ProjectTeams onOpen={onProject} />
               )}

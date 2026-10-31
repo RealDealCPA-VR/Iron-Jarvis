@@ -327,7 +327,13 @@ def test_both_lanes_call_the_same_helper_lock_step():
     turn = (SRC / "daemon/chat_turn.py").read_text(encoding="utf-8").replace("\r\n", "\n")
     stream = (SRC / "daemon/routes/chat.py").read_text(encoding="utf-8").replace("\r\n", "\n")
     for src in (turn, stream):
-        assert "await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None" in src
+        # v1.414.0 (moved on purpose): the turn's session id rides along, so a
+        # coding session's correction is quoted as said in a coding session.
+        flat = " ".join(src.split())
+        assert (
+            "await _prefs.suggest_for_turn(platform, body, session_id=session_id)"
+            " if suggest_preferences else None"
+        ) in flat
         assert '"suggestion": suggestion,' in src
     # only the dashboard's two routes ask for it — and not for a Build pane
     # (v1.336.0: the stream route computes it ONCE as `suggest`, used by both

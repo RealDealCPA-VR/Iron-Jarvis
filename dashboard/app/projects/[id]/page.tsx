@@ -66,6 +66,7 @@ import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { missionPath } from "@/lib/mission";
 import { sessionHref } from "@/lib/missionLinks";
+import { ProjectCodingSessions } from "@/components/projects/ProjectCodingSessions";
 import { modelPickTitle, modelPickWords } from "@/lib/onboarding";
 
 /** GET /projects/{id} → the project (plus workspace fields) and recent sessions. */
@@ -81,6 +82,9 @@ interface ProjectWorkspace extends Project {
 interface ProjectDetail {
   project: ProjectWorkspace;
   sessions: SessionView[];
+  /** v1.414.0: the project's coding sessions from both Code views (raw;
+   *  lib/codingSessions decodeCodingSessions). Absent from an older daemon. */
+  coding_sessions?: unknown;
 }
 
 // Chat is no longer a tab: project conversations live in the main /chat
@@ -1204,7 +1208,15 @@ function ProjectWorkspaceInner({
                     />
                   )
                 )}
-                {tab === "board" && <ProjectBoard projectId={id} />}
+                {tab === "board" && (
+                  // v1.414.0: the project's coding sessions (Chat › Code and
+                  // Build › Code, found by folder) above its board — nothing
+                  // at all when it has none.
+                  <div className="space-y-4">
+                    <ProjectCodingSessions items={detail.data?.coding_sessions} />
+                    <ProjectBoard projectId={id} />
+                  </div>
+                )}
                 {tab === "media" && <ProjectMedia projectId={id} />}
                 {tab === "activity" && <ActivityList projectId={id} />}
               </div>

@@ -8136,10 +8136,19 @@ async def _gather_grounding(
                         .limit(5)
                     )
                 )
-            recent = [
-                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
-                for s in _siblings
-            ]
+            # v1.414.0: merged with the project's recent CHATS and CODING
+            # SESSIONS (both Code views, by folder), newest first under a small
+            # cap — byte-identical when the project has neither. Titles only,
+            # each scanned; a local-only chat or session keeps its title home
+            # from a turn that leaves this network (the fabric recall's rule,
+            # read from THIS hop's copied scope). One helper for both lanes
+            # (this gather) and the agent runtime.
+            from ..projects.recent_activity import recent_lines
+
+            recent = recent_lines(
+                platform.engine, pid, _siblings, platform=platform,
+                exclude_thread=str(getattr(body, "thread_id", "") or ""),
+            )
         except Exception:  # noqa: BLE001 — the recap must never break a turn
             recent = []
         return instructions, brief, recent
@@ -10453,7 +10462,9 @@ async def run_chat_turn(
     from ..learning import preferences as _prefs
 
     suggestion = (
-        await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
+        await _prefs.suggest_for_turn(platform, body, session_id=session_id)
+        if suggest_preferences
+        else None
     )
     # CONNECT DOOR (v1.359.0, G41): an app the message named for the user's
     # own data that is not connected gets its Connect door whatever the model

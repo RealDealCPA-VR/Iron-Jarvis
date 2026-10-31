@@ -32,6 +32,31 @@ def _norm(path: str) -> str:
     return str(path or "").replace("\\", "/").rstrip("/").lower()
 
 
+def best_project(projects: Any, path: str) -> Any:
+    """THE rule, pure (v1.414.0): of ``projects`` (anything with ``root`` and
+    ``status``), the most specific ACTIVE one whose root contains ``path``,
+    or None. :func:`project_for_path` and the project's coding-session list
+    (``projects/coding_sessions``, which resolves hundreds of folders against
+    ONE read of the projects) both go through it, so the two can never
+    disagree about which project a folder belongs to."""
+    target = _norm(path)
+    if not target:
+        return None
+    best: Any = None
+    best_len = -1
+    for p in projects:
+        if (getattr(p, "status", "active") or "active") == "archived":
+            continue
+        root = _norm(getattr(p, "root", "") or "")
+        if not root:
+            continue
+        if target != root and not target.startswith(root + "/"):
+            continue
+        if len(root) > best_len:
+            best, best_len = p, len(root)
+    return best
+
+
 def project_for_path(engine: Any, path: str) -> Project | None:
     """The most specific ACTIVE project whose root contains ``path``, or None."""
     target = _norm(path)
@@ -40,18 +65,7 @@ def project_for_path(engine: Any, path: str) -> Project | None:
     try:
         with session_scope(engine) as db:
             rows = list(db.exec(select(Project)))
-            best: Project | None = None
-            best_len = -1
-            for p in rows:
-                if (getattr(p, "status", "active") or "active") == "archived":
-                    continue
-                root = _norm(getattr(p, "root", "") or "")
-                if not root:
-                    continue
-                if target != root and not target.startswith(root + "/"):
-                    continue
-                if len(root) > best_len:
-                    best, best_len = p, len(root)
+            best: Project | None = best_project(rows, path)
             if best is None:
                 return None
             # Detach a plain copy so the caller never touches an expired row.
@@ -86,4 +100,4 @@ def project_context_block(project: Project | None) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["project_for_path", "project_context_block"]
+__all__ = ["best_project", "project_for_path", "project_context_block"]

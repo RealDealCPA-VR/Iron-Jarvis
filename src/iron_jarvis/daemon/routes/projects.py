@@ -253,6 +253,15 @@ def register(app: FastAPI, d) -> None:
                     .limit(20)
                 )
             )
+        # v1.414.0: the project's CODING SESSIONS from both Code views, found
+        # by folder at read time (projects/coding_sessions — one bounded read;
+        # this route is a sync def, so it already runs off the loop).
+        from ...projects.coding_sessions import for_project as _coding_for_project
+        from ...projects.coding_sessions import public as _coding_public
+
+        coding = _coding_public(
+            _coding_for_project(d.platform.engine, project_id, platform=d.platform)
+        )
         return {
             "project": {
                 **project.model_dump(),
@@ -262,6 +271,7 @@ def register(app: FastAPI, d) -> None:
                 "active": project.id == getattr(d.platform.config, "active_project_id", None),
             },
             "sessions": [_session_view(s, d) for s in sessions],
+            "coding_sessions": coding,
         }
 
     @app.patch("/projects/{project_id}")
@@ -1034,9 +1044,15 @@ def register(app: FastAPI, d) -> None:
         if data is None:
             raise HTTPException(status_code=404, detail="no such project")
         snap = data.pop("snap")
+        coding = data.pop("coding_rows", None) or []
         asks = _world_asks(d, [s["id"] for s in snap["active"]])
         data["counts"] = _world.counts_for(snap, asks)
-        data["waiting"] = _world.waiting_items(project_id, snap, asks)
+        data["waiting"] = _world.waiting_items(project_id, snap, asks, coding)
+        # v1.414.0: the project's coding sessions (both Code views), for the
+        # Board's list — each with its state and the link to its own view.
+        from ...projects.coding_sessions import public as _coding_public
+
+        data["coding_sessions"] = _coding_public(coding)
         return data
 
     @app.post("/projects/{project_id}/world/room")

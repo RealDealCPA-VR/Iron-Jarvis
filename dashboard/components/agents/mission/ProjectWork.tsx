@@ -15,6 +15,7 @@ import type { CompletedItem, WaitingItem } from "@/lib/agentWorlds";
 import { WorldBoard } from "@/components/agents/world/WorldBoard";
 import { WaitingList } from "@/components/agents/world/WaitingList";
 import { CompletedList } from "@/components/agents/world/CompletedList";
+import { ProjectCodingSessions } from "@/components/projects/ProjectCodingSessions";
 
 type Tab = "waiting" | "board" | "completed";
 
@@ -22,10 +23,13 @@ export function ProjectWork({
   projectId,
   waiting,
   completed,
+  coding,
 }: {
   projectId: string;
   waiting: WaitingItem[];
   completed: CompletedItem[];
+  /** v1.414.0: the world's `coding_sessions` (raw) — listed on the Board. */
+  coding?: unknown;
 }) {
   const [tab, setTab] = useState<Tab>(waiting.length > 0 ? "waiting" : "board");
   const tabs: { key: Tab; label: string }[] = [
@@ -53,7 +57,12 @@ export function ProjectWork({
         ))}
       </div>
       <div className="px-1 py-3">
-        {tab === "board" && <WorldBoard projectId={projectId} />}
+        {tab === "board" && (
+          <div className="space-y-4">
+            <ProjectCodingSessions items={coding} />
+            <WorldBoard projectId={projectId} />
+          </div>
+        )}
         {tab === "waiting" && <WaitingList projectId={projectId} items={waiting} />}
         {tab === "completed" && <CompletedList projectId={projectId} items={completed} />}
       </div>
