@@ -79,6 +79,12 @@ _SIGN_IN_PATTERNS = (
     r"run `?codex login`?",
     r"please (?:log|sign) ?in",
     r"authentication required",
+    # v1.414.0 (fix): a login that EXPIRED and could not be renewed — the
+    # live Claude Code text was "Failed to authenticate: OAuth session expired
+    # and could not be refreshed"; Codex says "Your access token could not be
+    # refreshed". Retry cannot fix either; signing in again does.
+    r"oauth (?:session|token) (?:has )?(?:expired|been revoked|revoked)",
+    r"(?:token|session)\b[^.\n]{0,40}\bcould not be refreshed",
 )
 _SIGN_IN_RE = re.compile("|".join(_SIGN_IN_PATTERNS), re.IGNORECASE)
 

@@ -39,12 +39,36 @@ MEASURED for v1.412.0 (codex 0.157.0, live; ``generate-json-schema``):
 * ``localImage`` {path} input is SEEN (the model read a word drawn only in a
   PNG's pixels). The approval policy is a per-TURN setting (``turn/start``):
   a mode chosen mid-turn applies from the next message.
+
+READ for v1.414.0 (fix), from codex 0.157.0's own ``app-server
+generate-json-schema`` (``McpServerElicitationRequestParams`` / ``…Response``)
+and its source at tag ``rust-v0.157.0`` (``core/src/mcp_tool_call.rs``,
+``protocol/src/mcp_approval_meta.rs``) — found LIVE first: Codex with the
+Memory box ticked asked before ``memory_search`` and the old code declined it:
+
+* Before an MCP tool call under ``untrusted`` (Ask first) Codex sends
+  ``mcpServer/elicitation/request`` {threadId, turnId, serverName, mode:
+  "form", message: 'Allow the <server> MCP server to run tool "<tool>"?',
+  requestedSchema: {type: object, properties: {}}, _meta:
+  {codex_approval_kind: "mcp_tool_call", persist?: "session" | "always" |
+  ["session", "always"], tool_title?, tool_description?, tool_params?,
+  tool_params_display?}}. The tool's own ``mcpToolCall`` item has started
+  BEFORE the request (``notify_mcp_tool_call_started`` runs first).
+* It reads ``{"action": "accept"}`` as allow once, ``accept`` with
+  ``_meta: {persist: "session"}`` as allow for this session, ``persist:
+  "always"`` as a change to Codex's OWN config (never sent from here), and
+  ``{"action": "decline"}`` as "user rejected MCP tool call".
+* Full access (``never`` + full disk) never asks
+  (``mcp_permission_prompt_is_auto_approved``).
+* Anything else on that method (a server's own form with fields, a page to
+  open) is not a yes/no question: declined, said in words.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 from typing import Any
 
@@ -133,6 +157,68 @@ def offers_session(params: dict[str, Any]) -> bool:
     if not isinstance(offered, list):
         return False
     return any(d == "acceptForSession" for d in offered)
+
+
+#: v1.414.0 (fix): Codex's mark on an MCP tool-call approval
+#: (``codex_protocol::mcp_approval_meta``).
+MCP_APPROVAL_KIND_KEY = "codex_approval_kind"
+MCP_APPROVAL_KIND = "mcp_tool_call"
+MCP_PERSIST_KEY = "persist"
+MCP_PERSIST_SESSION = "session"
+_MCP_TOOL_IN_MESSAGE = re.compile(r'run tool "([^"]{1,200})"')
+
+
+def mcp_tool_approval(p: dict[str, Any]) -> dict[str, Any] | None:
+    """``{server, tool, args, can_session, title}`` when ``p`` (an
+    ``mcpServer/elicitation/request``) is Codex asking before an MCP tool
+    call — a ``form`` with NOTHING to fill and ``_meta.codex_approval_kind ==
+    "mcp_tool_call"`` — else None (a server's own form: not a yes/no)."""
+    meta = p.get("_meta")
+    if not isinstance(meta, dict) or meta.get(MCP_APPROVAL_KIND_KEY) != MCP_APPROVAL_KIND:
+        return None
+    if p.get("mode") != "form":
+        return None
+    schema = p.get("requestedSchema")
+    if not isinstance(schema, dict) or schema.get("properties"):
+        return None
+    persist = meta.get(MCP_PERSIST_KEY)
+    offers = persist == MCP_PERSIST_SESSION or (isinstance(persist, list) and MCP_PERSIST_SESSION in persist)
+    args = meta.get("tool_params")
+    found = _MCP_TOOL_IN_MESSAGE.search(str(p.get("message") or ""))
+    return {"server": str(p.get("serverName") or ""), "tool": found.group(1) if found else "",
+            "args": args if isinstance(args, dict) else {}, "can_session": offers,
+            "title": str(meta.get("tool_title") or "")}
+
+
+def _mcp_input(args: Any) -> str:
+    """An MCP call's arguments as JSON (Codex sends an object; a Python
+    repr of it read "{'query': …}" on the step — live check)."""
+    if isinstance(args, (dict, list)):
+        import json
+
+        return json.dumps(args, ensure_ascii=False, sort_keys=True)
+    return str(args or "")
+
+
+def _mcp_output(item: dict[str, Any]) -> str:
+    """An ``mcpToolCall`` item's result in words: Codex's own error message,
+    else the text of the result's content blocks (never a Python dict)."""
+    err = item.get("error")
+    if isinstance(err, dict):
+        return str(err.get("message") or "")
+    if err:
+        return str(err)
+    res = item.get("result")
+    if isinstance(res, dict):
+        texts = [str(b.get("text") or "") for b in res.get("content") or [] if isinstance(b, dict)]
+        if any(texts):
+            return "\n".join(t for t in texts if t)
+        if res.get("structuredContent") is not None:
+            import json
+
+            return json.dumps(res["structuredContent"], ensure_ascii=False)
+        return ""
+    return str(res or "")
 
 
 def _token_numbers(raw: Any) -> dict[str, int]:
@@ -314,6 +400,14 @@ class CodexDriver(Driver):
                     "permissions": ask.data.get("permissions") or {},
                     "scope": "session" if decision == "allow_session" else "turn",
                 }
+        elif method == "mcpServer/elicitation/request":
+            # Never "always": that writes Codex's own config for good.
+            if decision == "deny":
+                result = {"action": "decline"}
+            elif decision == "allow_session":
+                result = {"action": "accept", "_meta": {MCP_PERSIST_KEY: MCP_PERSIST_SESSION}}
+            else:
+                result = {"action": "accept"}
         elif method == "item/tool/requestUserInput":
             if decision == "deny":
                 result = {"answers": {}}
@@ -444,9 +538,33 @@ class CodexDriver(Driver):
                                {"method": method, "questions": raw}, ev, ev["at"]))
             return
         if method == "mcpServer/elicitation/request":
-            self.emit(make("notice", text="An app asked Codex for input; the Code view cannot answer that yet, "
-                                          "so it was declined."))
-            asyncio.ensure_future(self._safe(self.respond(rid, {"action": "decline"})))
+            call = mcp_tool_approval(p)
+            if call is None:
+                server = one_line(p.get("serverName"), 60) or "An app"
+                self.emit(make("notice", text=W.MCP_FORM_DECLINED.format(server=server)))
+                asyncio.ensure_future(self._safe(self.respond(rid, {"action": "decline"})))
+                return
+            # v1.414.0 (fix): Codex asking before an MCP tool call is a card.
+            # The tool's own item started first: it names the tool and the
+            # arguments when Codex's message and _meta do not.
+            server, tool, args = call["server"], call["tool"], call["args"]
+            item = next((it for it in reversed(list(self._items.values()))
+                         if it.get("type") == "mcpToolCall" and str(it.get("server") or "") == server
+                         and (not tool or it.get("tool") == tool)), None)
+            if item is not None:
+                tool = tool or str(item.get("tool") or "")
+                if not args and isinstance(item.get("arguments"), dict):
+                    args = item["arguments"]
+            tool = tool or call["title"]
+            name = f"{server}.{tool}" if tool else server
+            can_session = bool(call["can_session"])
+            ev = make("approval", request_id=ask_id, kind="tool", title=W.mcp_call_title(server, tool, args),
+                      detail=clip(W.mcp_args_lines(args), DETAIL_CHARS), can_session=can_session,
+                      tool=clip(name, 120))
+            if not can_session:
+                ev["once_only"] = True
+            self.raise_ask(Ask(ask_id, "approval", clip(name, 120) or "mcp", rid, {"method": method}, ev,
+                               ev["at"], can_session))
             return
         asyncio.ensure_future(self._safe(self.respond_error(rid, "Iron Jarvis does not handle this request")))
 
@@ -564,9 +682,9 @@ class CodexDriver(Driver):
             name = f"{item.get('server') or ''}.{item.get('tool') or ''}"
             ev = make("tool", item=iid, kind="mcp", name=clip(name, 120),
                       title=f"Use {item.get('server') or 'an app'} › {item.get('tool') or 'a tool'}",
-                      input=clip(item.get("arguments") or "", INPUT_CHARS), status=status)
+                      input=clip(_mcp_input(item.get("arguments")), INPUT_CHARS), status=status)
             if status != "running":
-                ev["output"] = clip(item.get("error") or item.get("result") or "", OUTPUT_CHARS)
+                ev["output"] = clip(_mcp_output(item), OUTPUT_CHARS)
             return ev
         if t == "webSearch":
             q = one_line(item.get("query"), 80)

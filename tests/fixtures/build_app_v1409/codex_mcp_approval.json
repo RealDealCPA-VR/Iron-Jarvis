@@ -1,0 +1,715 @@
+{
+ "harness": "codex",
+ "source": "built 2026-10-30 for v1.414.0: the opening is the recorded codex_deny session (codex-cli 0.157.0, masked); the MCP tool-call approval is the request codex 0.157.0 sends under approvalPolicy untrusted (core/src/mcp_tool_call.rs build_mcp_tool_approval_elicitation_request + generate-json-schema McpServerElicitationRequestParams), and the answers it reads (parse_mcp_tool_approval_elicitation_response)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "on-request",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312757116
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759382
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759384
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "item": {
+      "type": "mcpToolCall",
+      "id": "call_mcp_memory_search_1",
+      "server": "iron-jarvis-code",
+      "tool": "memory_search",
+      "status": "inProgress",
+      "arguments": {
+       "query": "project codename"
+      },
+      "pluginId": null,
+      "readOnlyHint": null,
+      "result": null,
+      "error": null,
+      "durationMs": null,
+      "appContext": null,
+      "mcpAppUi": null,
+      "mcpAppResourceUri": null
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "id": 0,
+    "method": "mcpServer/elicitation/request",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "serverName": "iron-jarvis-code",
+     "mode": "form",
+     "message": "Allow the iron-jarvis-code MCP server to run tool \"memory_search\"?",
+     "requestedSchema": {
+      "type": "object",
+      "properties": {}
+     },
+     "_meta": {
+      "codex_approval_kind": "mcp_tool_call",
+      "persist": [
+       "session",
+       "always"
+      ],
+      "tool_description": "Search Iron Jarvis's layered memory.",
+      "tool_params": {
+       "query": "project codename"
+      },
+      "tool_params_display": [
+       {
+        "name": "query",
+        "value": "project codename",
+        "display_name": "query"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0,
+   "on": {
+    "accept": [
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "mcpToolCall",
+         "id": "call_mcp_memory_search_1",
+         "server": "iron-jarvis-code",
+         "tool": "memory_search",
+         "status": "completed",
+         "arguments": {
+          "query": "project codename"
+         },
+         "pluginId": null,
+         "readOnlyHint": null,
+         "result": {
+          "content": [
+           {
+            "type": "text",
+            "text": "The project codename is BLUEHERON."
+           }
+          ],
+          "structuredContent": null
+         },
+         "error": null,
+         "durationMs": 12,
+         "appContext": null,
+         "mcpAppUi": null,
+         "mcpAppResourceUri": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/started",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_ok",
+         "text": "",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/agentMessage/delta",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "itemId": "msg_mcp_ok",
+        "delta": "The codename is BLUEHERON."
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_ok",
+         "text": "The codename is BLUEHERON.",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "turn/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turn": {
+         "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+         "items": [],
+         "itemsView": "notLoaded",
+         "status": "completed",
+         "error": null,
+         "startedAt": 1793312757,
+         "completedAt": 1793312780,
+         "durationMs": 23000
+        }
+       }
+      }
+     }
+    ],
+    "accept+session": [
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "mcpToolCall",
+         "id": "call_mcp_memory_search_1",
+         "server": "iron-jarvis-code",
+         "tool": "memory_search",
+         "status": "completed",
+         "arguments": {
+          "query": "project codename"
+         },
+         "pluginId": null,
+         "readOnlyHint": null,
+         "result": {
+          "content": [
+           {
+            "type": "text",
+            "text": "The project codename is BLUEHERON."
+           }
+          ],
+          "structuredContent": null
+         },
+         "error": null,
+         "durationMs": 12,
+         "appContext": null,
+         "mcpAppUi": null,
+         "mcpAppResourceUri": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/started",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_ok",
+         "text": "",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/agentMessage/delta",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "itemId": "msg_mcp_ok",
+        "delta": "The codename is BLUEHERON."
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_ok",
+         "text": "The codename is BLUEHERON.",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "turn/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turn": {
+         "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+         "items": [],
+         "itemsView": "notLoaded",
+         "status": "completed",
+         "error": null,
+         "startedAt": 1793312757,
+         "completedAt": 1793312780,
+         "durationMs": 23000
+        }
+       }
+      }
+     }
+    ],
+    "decline": [
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "mcpToolCall",
+         "id": "call_mcp_memory_search_1",
+         "server": "iron-jarvis-code",
+         "tool": "memory_search",
+         "status": "failed",
+         "arguments": {
+          "query": "project codename"
+         },
+         "pluginId": null,
+         "readOnlyHint": null,
+         "result": null,
+         "error": {
+          "message": "user rejected MCP tool call"
+         },
+         "durationMs": 12,
+         "appContext": null,
+         "mcpAppUi": null,
+         "mcpAppResourceUri": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/started",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_no",
+         "text": "",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/agentMessage/delta",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "itemId": "msg_mcp_no",
+        "delta": "I could not search Iron Jarvis memory: the call was rejected."
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_no",
+         "text": "I could not search Iron Jarvis memory: the call was rejected.",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "turn/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turn": {
+         "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+         "items": [],
+         "itemsView": "notLoaded",
+         "status": "completed",
+         "error": null,
+         "startedAt": 1793312757,
+         "completedAt": 1793312780,
+         "durationMs": 23000
+        }
+       }
+      }
+     }
+    ],
+    "cancel": [
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "mcpToolCall",
+         "id": "call_mcp_memory_search_1",
+         "server": "iron-jarvis-code",
+         "tool": "memory_search",
+         "status": "failed",
+         "arguments": {
+          "query": "project codename"
+         },
+         "pluginId": null,
+         "readOnlyHint": null,
+         "result": null,
+         "error": {
+          "message": "user rejected MCP tool call"
+         },
+         "durationMs": 12,
+         "appContext": null,
+         "mcpAppUi": null,
+         "mcpAppResourceUri": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/started",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_no",
+         "text": "",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/agentMessage/delta",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "itemId": "msg_mcp_no",
+        "delta": "I could not search Iron Jarvis memory: the call was rejected."
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_mcp_no",
+         "text": "I could not search Iron Jarvis memory: the call was rejected.",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "turn/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turn": {
+         "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+         "items": [],
+         "itemsView": "notLoaded",
+         "status": "completed",
+         "error": null,
+         "startedAt": 1793312757,
+         "completedAt": 1793312780,
+         "durationMs": 23000
+        }
+       }
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

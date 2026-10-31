@@ -178,7 +178,8 @@ MAX_MODELS = 300
 LAST_MODELS: list[dict[str, Any]] = []
 
 _SIGN_IN_RX = re.compile(r"auth(?:entication)? required|not logged in|opencode auth login|no api key|"
-                         r"\b401\b|unauthori[sz]ed|invalid api key|authentication (?:failed|error)", re.I)
+                         r"\b401\b|unauthori[sz]ed|invalid api key|authentication (?:failed|error)|"
+                         r"oauth.*(?:expired|refresh)|could not be refreshed", re.I)
 _LIMIT_RX = re.compile(r"usage limit|rate limit|\b429\b|quota|too many requests", re.I)
 SIGN_IN_FIX = "Open a Build terminal and run opencode auth login, or choose another model."
 LIMIT_FIX = "Wait until it resets, or choose another model."

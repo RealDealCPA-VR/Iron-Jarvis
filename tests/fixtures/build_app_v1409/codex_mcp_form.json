@@ -1,0 +1,349 @@
+{
+ "harness": "codex",
+ "source": "built 2026-10-30 for v1.414.0: an MCP server's OWN form (not a tool-call approval) — McpServerElicitationRequestParams mode form with a field; no codex_approval_kind",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "on-request",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "workspaceWrite",
+      "writableRoots": [],
+      "networkAccess": false,
+      "excludeTmpdirEnvVar": false,
+      "excludeSlashTmp": false
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "await": "request",
+   "method": "turn/start"
+  },
+  {
+   "out": {
+    "id": 3,
+    "result": {
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   },
+   "reply_to": "turn/start"
+  },
+  {
+   "out": {
+    "method": "thread/started",
+    "params": {
+     "thread": {
+      "id": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312757,
+      "updatedAt": 1793312757,
+      "recencyAt": 1793312757,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-25-56-01a189c5-1504-7e62-b678-bbe12e6638f9.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     }
+    },
+    "emittedAtMs": 1793312757116
+   }
+  },
+  {
+   "out": {
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turn": {
+      "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793312757,
+      "completedAt": null,
+      "durationMs": null
+     }
+    },
+    "emittedAtMs": 1793312757143
+   }
+  },
+  {
+   "out": {
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "startedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759382
+   }
+  },
+  {
+   "out": {
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "userMessage",
+      "id": "01a189c5-1e55-78a3-a23d-07cf9fcff5ef",
+      "clientId": null,
+      "content": [
+       {
+        "type": "text",
+        "text": "Create a file named deny.txt containing the word no. Be brief.",
+        "text_elements": []
+       }
+      ]
+     },
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "completedAtMs": 1793312759382
+    },
+    "emittedAtMs": 1793312759384
+   }
+  },
+  {
+   "out": {
+    "id": 0,
+    "method": "mcpServer/elicitation/request",
+    "params": {
+     "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+     "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+     "serverName": "github",
+     "mode": "form",
+     "message": "Which repository should I use?",
+     "requestedSchema": {
+      "type": "object",
+      "properties": {
+       "repo": {
+        "type": "string",
+        "title": "Repository"
+       }
+      },
+      "required": [
+       "repo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0,
+   "on": {
+    "*": [
+     {
+      "out": {
+       "method": "item/started",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_form",
+         "text": "",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/agentMessage/delta",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "itemId": "msg_form",
+        "delta": "The app's form was declined."
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "item/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turnId": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+        "item": {
+         "type": "agentMessage",
+         "id": "msg_form",
+         "text": "The app's form was declined.",
+         "phase": "final_answer",
+         "memoryCitation": null,
+         "delivery": null,
+         "questions": null
+        }
+       }
+      }
+     },
+     {
+      "out": {
+       "method": "turn/completed",
+       "params": {
+        "threadId": "01a189c5-1504-7e62-b678-bbe12e6638f9",
+        "turn": {
+         "id": "01a189c5-157d-76e0-9b93-24cc98729fe5",
+         "items": [],
+         "itemsView": "notLoaded",
+         "status": "completed",
+         "error": null,
+         "startedAt": 1793312757,
+         "completedAt": 1793312780,
+         "durationMs": 23000
+        }
+       }
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

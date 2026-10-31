@@ -34,6 +34,15 @@ v1.412.0 (pictures, notes while it works, modes mid-session):
   started with ``--allow-dangerously-skip-permissions`` (or in that mode);
   anything else is applied. It never waits on the script (which may still
   ``await`` it, to go on only after the mode changed).
+
+v1.414.0 (Codex asking before an MCP tool call): an ``await`` step may carry
+``on`` — ``{"<answer>": [steps]}`` — and the fake then plays the steps named by
+the host's answer: a JSON-RPC response's ``result.action`` (Codex's
+``mcpServer/elicitation/request`` answer: ``accept`` / ``decline`` /
+``cancel``), with ``accept+session`` when the accept carried ``_meta.persist ==
+"session"``. Codex goes on differently for each (it runs the tool, or reports
+``user rejected MCP tool call``), so the fake does too; an answer with no branch
+plays ``on["*"]`` when there is one.
 """
 
 import json
@@ -169,15 +178,15 @@ def remember(obj):
 
 
 def wait_for(step, within=None):
-    """True when the awaited message came; False when the host closed stdin;
-    None when ``within`` seconds passed first."""
+    """The awaited message (truthy) when it came; False when the host closed
+    stdin; None when ``within`` seconds passed first."""
     deadline = time.monotonic() + within if within else None
     while True:
         for i, obj in enumerate(buffer):
             if matches(step, obj):
                 buffer.pop(i)
                 remember(obj)
-                return True
+                return obj
         try:
             obj = inbox.get(timeout=max(0.0, deadline - time.monotonic()) if deadline else None)
         except queue.Empty:
@@ -220,6 +229,16 @@ def emit(step):
     out(obj)
 
 
+def branch(on, obj):
+    """The steps ``on`` names for the host's answer ``obj`` (see the module doc)."""
+    result = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+    answer = str(result.get("action") or "")
+    meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
+    if answer == "accept" and meta.get("persist") == "session" and "accept+session" in on:
+        answer = "accept+session"
+    return on.get(answer) or on.get("*") or []
+
+
 def run(script):
     """``{"sleep": s}`` pauses; an ``await`` with ``within`` (s) that does not
     come in time plays its ``otherwise`` steps instead (a harness that went
@@ -233,6 +252,8 @@ def run(script):
                 sys.exit(0)
             if got is None:
                 run(step.get("otherwise") or [])
+            elif step.get("on"):
+                run(branch(step["on"], got))
         else:
             emit(step)
 

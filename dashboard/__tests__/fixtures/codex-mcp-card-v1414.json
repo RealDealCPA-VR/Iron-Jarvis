@@ -1,0 +1,19 @@
+{
+ "_about": "v1.414.0 (fix): written by tests/test_build_app_codex_mcp_v1414.py from the real daemon; IJ_REGEN_CODEX_MCP=1 to regenerate.",
+ "approval": {
+  "type": "approval",
+  "request_id": "ask-1",
+  "kind": "tool",
+  "title": "Search Iron Jarvis memory for \"project codename\"",
+  "detail": "query: project codename",
+  "can_session": true,
+  "tool": "iron-jarvis-code.memory_search"
+ },
+ "sign_in_error": {
+  "type": "error",
+  "title": "Claude Code needs to sign in again",
+  "fix": "Press Sign in beside Claude Code in Settings › Connections.",
+  "technical": "Failed to authenticate: OAuth session expired and could not be refreshed",
+  "fix_kind": "sign_in"
+ }
+}

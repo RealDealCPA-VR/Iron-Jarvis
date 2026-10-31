@@ -2474,6 +2474,23 @@ never mix.
 Build › Code sessions have no Local only setting; when you want nothing to
 reach a cloud model, leave Memory off.
 
+**Codex asks before it uses one of these tools.** In **Ask first**, Codex
+asks before every call to a connected tool server — Iron Jarvis's Memory and
+Browser, and any server you set up in Codex yourself. That question is an
+ordinary card in the Code view, for example *Codex wants to: Search Iron
+Jarvis memory for "project codename"*, with the call's details underneath:
+**Allow once**, **Allow for this session** (only when Codex offers it for
+that call), or **Deny**. Pressing Stop while the card waits says no. In
+**Full access** Codex does not ask. When a tool server asks Codex to fill in
+a form or open a web page, the Code view cannot answer that yet: it says so
+and declines it.
+
+**When a tool has to sign in again.** If Claude Code, Codex, Pi or OpenCode
+stops because its sign-in ran out (for example "OAuth session expired and
+could not be refreshed"), the reply says that tool needs to sign in again,
+with a **Sign in** button for Claude Code and Codex, instead of suggesting
+Retry — trying again cannot fix an expired sign-in.
+
 **Share your profile with every tool.** Settings › Memory & you › Share with
 Build now has a switch for **Pi** and **OpenCode** too (off by default):
 

@@ -4618,6 +4618,40 @@ does not need a bump, stop and bump it.
   Pins:
   `tests/test_build_app_spine_review_v1414.py`,
   `dashboard/__tests__/build-code-spine-review-v1414.test.tsx`.
+  SAME RELEASE, TWO DEFECTS A LIVE CHECK FOUND (real codex 0.157.0 / claude
+  2.1.311): (1) in Ask first Codex asks before EVERY MCP tool call (the Memory
+  box's `iron-jarvis-code` server and the user's own Codex servers) through
+  `mcpServer/elicitation/request`, and the driver declined every one, so Codex
+  read "user rejected MCP tool call" and the Memory box did nothing for Codex.
+  The shape is Codex's own (generate-json-schema + `core/src/mcp_tool_call.rs`
+  at `rust-v0.157.0`): `mode: "form"`, an EMPTY `requestedSchema`, `_meta.
+  codex_approval_kind == "mcp_tool_call"`, `persist` ("session" / "always" /
+  both), `tool_params`; the tool's `mcpToolCall` item starts BEFORE it.
+  `codex.mcp_tool_approval` reads it into an ordinary card (kind `tool`,
+  `words.mcp_call_title`: Iron Jarvis's own tools in words — `Search Iron
+  Jarvis memory for "<query>"` —, any other server "Use <server> › <tool>";
+  arguments as "name: value" lines, `words.mcp_args_lines`); Allow once =
+  `{"action": "accept"}`, Allow for this session = accept + `_meta: {persist:
+  "session"}` (offered ONLY when Codex's `persist` names "session"; else the
+  card is `once_only`), Deny / Stop = `{"action": "decline"}`; "always" (a
+  write to Codex's own config) is NEVER sent. A server's own form (fields to
+  fill, a page to open) is still declined, said with the server's name
+  (`words.MCP_FORM_DECLINED`). Full access never asks (Codex auto-approves
+  under `never` + full disk). A finished MCP step's output is Codex's own
+  error message or the result's text (`codex._mcp_output`), never a Python
+  dict. (2) A sign-in failure Retry cannot fix read as the generic "Press
+  Retry…": `cli_auth._SIGN_IN_PATTERNS` gains an expired/revoked OAuth login
+  and "token/session … could not be refreshed" (the live text: "Failed to
+  authenticate: OAuth session expired and could not be refreshed"), OpenCode's
+  own regex too (Pi's had it); `words.sign_in_error` titles a lapsed login
+  "<Tool> needs to sign in again" and keeps the one Sign in press
+  (`fix_kind: "sign_in"`). Claude Code's, OpenCode's and Pi's own MCP asks
+  were already cards. Fake: `fake_harness_v1409.py` `await … "on":
+  {accept|accept+session|decline|cancel|"*": [steps]}` plays the branch the
+  host's answer names. Pins: `tests/test_build_app_codex_mcp_v1414.py`,
+  `tests/test_build_app_signin_words_v1414.py`,
+  `dashboard/__tests__/codex-mcp-card-v1414.test.tsx` (+ fixture
+  `codex-mcp-card-v1414.json`, `IJ_REGEN_CODEX_MCP=1`).
   SAME RELEASE, THE RIGHT COLUMN (the user: "the icons for changes,
   remaining usage, files and sessions to right just as in the native
   harness"): `components/buildCode/CodePanes.tsx` — Changes · Usage · Files ·

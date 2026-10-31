@@ -12,6 +12,7 @@ to this model" (CLAUDE.md v1.300.0).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .events import clip, make
@@ -219,6 +220,66 @@ def label(harness: str) -> str:
     return LABELS.get(harness, harness or "The harness")
 
 
+#: v1.414.0 (fix): Iron Jarvis's OWN server's tools (``jarvis_tools.SERVER_NAME``)
+#: in plain words on a card — ``{q}`` is the call's ``query``. Any other
+#: server's tool reads "Use <server> › <tool>" (the tool row's own words).
+JARVIS_TOOL_TITLES: dict[str, tuple[str, str]] = {
+    # tool -> (with a query, without one)
+    "memory_search": ('Search Iron Jarvis memory for "{q}"', "Search Iron Jarvis memory"),
+    "memory_read": ("Read a note from Iron Jarvis memory", "Read a note from Iron Jarvis memory"),
+    "ltm_search": ('Search your memory bases for "{q}"', "Search your memory bases"),
+    "brain_search": ('Search your memory base for "{q}"', "Search your memory base"),
+    "brain_read": ("Read a note from your memory base", "Read a note from your memory base"),
+}
+#: How many of a call's arguments a card lists (the rest are counted).
+MCP_ARG_LINES = 12
+#: v1.414.0 (fix): an MCP server's OWN form (a question with fields to fill,
+#: or a web page to open) — not a "may I run this tool" question.
+MCP_FORM_DECLINED = (
+    "{server} asked Codex to fill in a form or open a page; the Code view cannot answer an app's "
+    "form yet, so it was declined."
+)
+
+
+def mcp_call_title(server: str, tool: str, args: Any) -> str:
+    """A card's one line for an MCP tool call: Iron Jarvis's own tools in
+    words, any other server's as "Use <server> › <tool>"."""
+    from .events import one_line
+    from .jarvis_tools import SERVER_NAME
+
+    tool = str(tool or "")
+    if server == SERVER_NAME and tool in JARVIS_TOOL_TITLES:
+        with_q, plain = JARVIS_TOOL_TITLES[tool]
+        q = one_line((args or {}).get("query") if isinstance(args, dict) else "", 80)
+        return with_q.format(q=q) if q else plain
+    if server == SERVER_NAME:
+        return f"Use Iron Jarvis › {tool}" if tool else "Use an Iron Jarvis tool"
+    if not tool:
+        return f"Use a {server} tool" if server else "Use an app's tool"
+    return f"Use {server} › {tool}" if server else f"Use {tool}"
+
+
+def mcp_args_lines(args: Any) -> str:
+    """A call's arguments as "name: value" lines (sorted; long values on one
+    cut line; past :data:`MCP_ARG_LINES` the rest counted) — masked by the
+    caller's ``clip``."""
+    import json
+
+    from .events import one_line
+
+    if not isinstance(args, dict) or not args:
+        return ""
+    lines = []
+    for k in sorted(args)[:MCP_ARG_LINES]:
+        v = args[k]
+        text = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, sort_keys=True)
+        lines.append(f"{one_line(k, 60)}: {one_line(text, 200)}")
+    more = len(args) - MCP_ARG_LINES
+    if more > 0:
+        lines.append(f"…and {more} more")
+    return "\n".join(lines)
+
+
 #: harness id -> the command that quits it in a terminal (Pi's is /quit).
 EXIT_COMMANDS: dict[str, str] = {"pi": "/quit"}  # OpenCode: /exit
 
@@ -256,6 +317,11 @@ def error(title: str, fix: str, technical: Any = "", **extra: Any) -> dict[str, 
     return out
 
 
+#: v1.414.0 (fix): a login that was there and ran out (expired, revoked, or
+#: could not be renewed) — the title then says "needs to sign in again".
+_EXPIRED_LOGIN = re.compile(r"expired|revoked|could not be refreshed", re.I)
+
+
 def sign_in_error(harness: str, technical: Any) -> dict[str, Any]:
     from ..providers.cli_auth import SIGN_IN_FIX
 
@@ -265,6 +331,8 @@ def sign_in_error(harness: str, technical: Any) -> dict[str, Any]:
     # SIGN_IN_FIX opens with the title's own sentence; the card says it once.
     if fix.startswith(title + ". "):
         fix = fix[len(title) + 2:]
+    if _EXPIRED_LOGIN.search(str(technical or "")):
+        title = f"{name} needs to sign in again"
     return error(title, fix, technical, fix_kind="sign_in")
 
 
