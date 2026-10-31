@@ -553,6 +553,25 @@ async def test_two_helpers_and_twenty_steps_add_up_to_the_reply(app, work, monke
     and the time it spent getting ready before its first call, which the
     reply's card names) add up to the reply's measured time within one
     second, and its calls' costs to its receipt."""
+    # v1.414.3 (the v1.414.2 Tests gate read 1478 ms uncovered of 6742 on a
+    # loaded runner, all of it bookkeeping between bars): every clock the
+    # bars and the reply's length are read from is an injected one that moves
+    # ONLY while the scripted model "thinks" (MODEL_S per call), so the
+    # runner's speed adds no gap and a missing bar still leaves its whole
+    # model time uncovered (a pair of helpers is ~1 s here).
+    import importlib
+
+    clock = _StepClock()
+    monkeypatch.setattr(importlib.import_module("iron_jarvis.daemon.routes.chat"), "time", clock)
+    monkeypatch.setattr(TL, "time", clock)
+    real_move = Timed._move
+
+    async def advancing(self, system, messages, tools):
+        move = await real_move(self, system, messages, tools)
+        clock.now += MODEL_S
+        return move
+
+    monkeypatch.setattr(Timed, "_move", advancing)
     sid = new_session(app, work, approval_mode="yolo")
     slow_reads(app, monkeypatch)
     for i in range(16):
@@ -591,7 +610,9 @@ async def test_two_helpers_and_twenty_steps_add_up_to_the_reply(app, work, monke
     for a, b in bars:
         assert 0 <= a <= b <= duration
     getting_ready = line["calls"][0]["start"]
-    assert duration - _covered(bars + [(0, getting_ready)]) < 1000, (duration, _covered(bars))
+    # Injected time: nothing but the model moves the clock, so nothing may be
+    # left uncovered (a dropped helper pair leaves 800 ms here).
+    assert duration - _covered(bars + [(0, getting_ready)]) < 50, (duration, _covered(bars))
     total = sum(c["usage"]["cost_usd"] for c in line["calls"])
     assert abs(total - line["usage"]["cost_usd"]) <= 1e-6
 

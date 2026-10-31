@@ -382,7 +382,9 @@ async def test_a_second_process_reopens_the_same_session_and_draws_no_replay(app
         s = await new_session(c, work, harness="opencode", model=MODEL, mode="full", confirm=True)
         await asyncio.wait_for(c.post(f"/build/app/sessions/{s['id']}/turn", json={"text": "x", "turn_id": "t1"}), 30)
         svc = S.service_for(app.state.platform)
-        hid = store.get(app.state.platform.engine, s["id"]).harness_session_id
+        # v1.414.3: OpenCode's id is saved in the background when it reports it
+        # (service._on_session_id); the v1.414.2 gates read it before it landed.
+        hid = await until(lambda: store.get(app.state.platform.engine, s["id"]).harness_session_id)
         await svc._stop_process(svc.live[s["id"]])
         monkeypatch.setenv("IJ_FAKE_SCENARIO", str(FIX_OC / "oc_resume_2.json"))
         evs = frames((await asyncio.wait_for(c.post(f"/build/app/sessions/{s['id']}/turn",
