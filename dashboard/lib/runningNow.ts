@@ -228,8 +228,9 @@ function buildAppItem(r: RunningReplyRow, now: number): RunningItem {
   const started = startedMs(r.started_at);
   const parts: string[] = [];
   if (r.background === true) {
-    // v1.417.0: no reply runs; its helpers do (or the tool's own report).
-    parts.push(typeof r.helpers === "number" && r.helpers > 0 ? "helpers working" : "writing its report");
+    // v1.417.0: no reply runs; its helpers do (or the tool replies on its
+    // own — Claude Code's report, Pi's own run: "report" is not true of both).
+    parts.push(typeof r.helpers === "number" && r.helpers > 0 ? "helpers working" : "replying on its own");
   } else if (started != null) parts.push(elapsedWords(now - started));
   if (waiting) parts.push(statusWords("waiting"));
   const when = parts.filter(Boolean).join(" · ");

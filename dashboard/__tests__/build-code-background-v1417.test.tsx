@@ -297,6 +297,6 @@ describe("Running now", () => {
     const [report] = buildAppReplyItems([
       { turn_id: "bg:a1", thread_id: "a1", surface: "build_app", harness: "claude-code", started_at: "", waiting: false, title: "Teams", background: true, helpers: 0 },
     ]);
-    expect(report.line).toBe("Coding session · Claude Code · writing its report");
+    expect(report.line).toBe("Coding session · Claude Code · replying on its own");
   });
 });

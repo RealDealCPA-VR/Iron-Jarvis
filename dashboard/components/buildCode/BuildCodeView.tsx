@@ -260,6 +260,11 @@ function SessionPane({
   const cancelFrameRef = useRef<(() => void) | null>(null);
   /** Bumped by each send: a read started before it never undoes it. */
   const sendSeqRef = useRef(0);
+  /** v1.417.0 review: bumped by each answer to a card. A read that was out
+   *  when the user answered still holds the card as open (a helper asks while
+   *  the view reads every few seconds): it never puts it back — the session
+   *  is read again instead. */
+  const answerSeqRef = useRef(0);
   const prevItemsRef = useRef<ConvItem[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
@@ -355,12 +360,19 @@ function SessionPane({
     async (opts: { follow: boolean }) => {
       const gen = genRef.current;
       const seq = sendSeqRef.current;
+      const aseq = answerSeqRef.current;
       try {
         const raw = await get<unknown>(`${SESSIONS}/${encodeURIComponent(sessionId)}`);
         if (gen !== genRef.current) return;
         // A message sent while this read was out: the read is older than
         // what is on screen, so it decides nothing about the reply.
         if (seq !== sendSeqRef.current) return;
+        // A card answered while it was out: read again (this one would put
+        // the answered card back).
+        if (aseq !== answerSeqRef.current) {
+          void load(opts);
+          return;
+        }
         setLost(false);
         const view = decodeCodeSessionView(raw);
         if (!view) {
@@ -522,7 +534,21 @@ function SessionPane({
   // meanwhile (only while the window is seen) so that report appears as it
   // is written — and stop once nothing is happening.
   const bgRereadMs = backgroundRereadMs(session, running);
-  useVisibleInterval(() => void load({ follow: true }), bgRereadMs, bgRereadMs > 0 && !lost);
+  // v1.417.0 review: one such read at a time — a slow answer is never
+  // stacked under the next tick (nor overtaken by it, which would draw an
+  // older record over a newer one).
+  const bgReadOutRef = useRef(false);
+  useVisibleInterval(
+    () => {
+      if (bgReadOutRef.current) return;
+      bgReadOutRef.current = true;
+      void load({ follow: true }).finally(() => {
+        bgReadOutRef.current = false;
+      });
+    },
+    bgRereadMs,
+    bgRereadMs > 0 && !lost,
+  );
   // The read that said "nothing is happening" any more: one more read, so
   // the end of the report is on screen (never on a send, a switch or a lost
   // daemon — those read for themselves).
@@ -713,6 +739,7 @@ function SessionPane({
           ...(a.answers ? { answers: a.answers } : {}),
         });
         answeredRef.current.add(ask.requestId);
+        answerSeqRef.current += 1;
         // The stream's own line may have landed first: one line, never two.
         setEvents((prev) =>
           prev.some((e) => e.type === "resolved" && e.requestId === ask.requestId)
@@ -731,6 +758,7 @@ function SessionPane({
         if (e instanceof ApiError && e.status === 404) {
           // Answered elsewhere, or the tool stopped asking.
           answeredRef.current.add(ask.requestId);
+          answerSeqRef.current += 1;
           setEvents((prev) =>
             prev.some((e) => e.type === "resolved" && e.requestId === ask.requestId)
               ? prev

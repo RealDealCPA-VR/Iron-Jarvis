@@ -141,6 +141,18 @@ _WEB_TOOLS = {"WebFetch", "WebSearch"}
 _TASK_TOOLS = {"Task", "Agent"}
 
 
+#: v1.417.0 review: the background task types that are helper AGENTS (Claude
+#: Code 2.1.316's own task table: local_agent and local_workflow are "agent",
+#: remote_agent and in_process_teammate are agents too). Everything else — a
+#: shell command, a monitor, an MCP task — is a background command.
+HELPER_TASK_TYPES = frozenset({"local_agent", "local_workflow", "remote_agent", "in_process_teammate"})
+
+
+def is_helper_task(kind: str) -> bool:
+    kind = str(kind or "")
+    return kind in HELPER_TASK_TYPES or "agent" in kind or "teammate" in kind
+
+
 def tool_kind(name: str) -> str:
     if name in _COMMAND_TOOLS:
         return "command"
@@ -456,8 +468,13 @@ class ClaudeDriver(Driver):
     @property
     def background_helpers(self) -> int:
         """v1.417.0: the open background tasks that are helper AGENTS (a
-        background command — a dev server — is not a helper)."""
-        return sum(1 for kind in self._tasks.values() if "agent" in kind)
+        background command — a dev server — is not a helper). v1.417.0
+        review: Claude Code's own task table calls ``local_workflow`` an agent
+        too, and an agent team's member (``in_process_teammate``) is a helper
+        (task types read from the 2.1.316 binary). Read from a worker thread
+        (``GET /chat/turns/running``) while the loop changes the table: a copy
+        is taken in one step, never walked live."""
+        return sum(1 for kind in self._tasks.copy().values() if is_helper_task(kind))
 
     @property
     def replying_alone(self) -> bool:
