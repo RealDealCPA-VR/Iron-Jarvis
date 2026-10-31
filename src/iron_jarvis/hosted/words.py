@@ -18,15 +18,18 @@ from typing import Any
 from .events import clip, make
 
 #: harness id -> how a person names it.
-LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi", "opencode": "OpenCode"}
+LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi", "opencode": "OpenCode",
+                          "grok": "Grok"}
 #: harness id -> the Iron Jarvis provider whose CLI it is.
-PROVIDERS: dict[str, str] = {"claude-code": "claude-cli", "codex": "codex-cli"}
+PROVIDERS: dict[str, str] = {"claude-code": "claude-cli", "codex": "codex-cli", "grok": "grok-cli"}
 #: harness id -> the Iron-Proxy provider of its accounts. Pi has none: it
 #: signs in by itself, per model provider (its own `/login`); OpenCode too
-#: (`opencode auth login`).
-PROXY: dict[str, str] = {"claude-code": "anthropic", "codex": "openai"}
+#: (`opencode auth login`). v1.416.0: a Grok account is its home
+#: (``GROK_HOME``, Iron-Proxy's ``xai`` provider), as for a Build terminal.
+PROXY: dict[str, str] = {"claude-code": "anthropic", "codex": "openai", "grok": "xai"}
 #: harness id -> the Build terminal Launch id (``terminals/ai_clis``).
-CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode"}
+CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode",
+                       "grok": "grok"}
 
 BUSY = (
     "This session is still working on your last message — wait for it to finish, "
@@ -45,6 +48,7 @@ STEER_HOW: dict[str, str] = {
     "codex": "Codex reads it at its next step.",
     "pi": "Pi reads it after its current step.",
     "opencode": "OpenCode reads it at its next step.",
+    "grok": "Grok takes it at once and reads it at its next step.",
 }
 STEER_READ = "Read by {label}."
 STEER_RETURNED = "{label} did not read this note before it stopped — it is back in your message box."
@@ -120,6 +124,26 @@ OPENCODE_OWN_SIGN_IN = (
 OPENCODE_CONTINUE = (
     "OpenCode signs in by itself, per provider, so it has no other account to continue on — "
     "choose another model instead."
+)
+#: v1.416.0: Grok — a Deny ENDS its reply (measured: ``reject-once`` answers
+#: the prompt "cancelled", category PermissionRejected).
+GROK_DECLINED_ENDS = (
+    "You declined, so Grok stopped this reply — tell it what to do differently in your next message."
+)
+#: v1.416.0: Grok's cancel leaves a running command running (measured), so a
+#: Stop then closes Grok, whose process tree takes the command with it.
+GROK_STOP_CLOSED = (
+    "Grok was running a command when you pressed Stop, so Grok was closed to end it — the "
+    "conversation is kept and reopens with your next message."
+)
+GROK_NO_SUCH_EFFORT = 'This Grok model does not take the effort "{effort}", so it runs on its own default.'
+#: v1.416.0: Grok keeps a reopened conversation's last model (measured).
+GROK_KEEPS_LAST = (
+    "This Grok conversation keeps the model it last used — choose a model from the list instead."
+)
+GROK_CONTINUE = (
+    "Continue on another account works for Claude Code sessions only for now — "
+    "open a new Grok session on the other account instead."
 )
 #: v1.413.0: how each tool that signs in BY ITSELF does it (the account
 #: chip's title on the page says THIS tool's way, never Pi's for OpenCode).

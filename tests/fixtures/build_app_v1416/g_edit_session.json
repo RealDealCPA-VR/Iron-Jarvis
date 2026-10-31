@@ -1,0 +1,1145 @@
+{
+ "harness": "grok",
+ "source": "recorded live 2026-10-31, grok 1.0.70 (grok agent --no-leader stdio), this PC, through the real Code-view service via a logging proxy, scratch folder (masked: paths, Grok's own _x.ai notifications and agent _meta dropped)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+       "image": true,
+       "audio": false,
+       "embeddedContext": true
+      },
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "sessionCapabilities": {
+       "list": {},
+       "resume": {},
+       "close": {}
+      },
+      "auth": {},
+      "_meta": {
+       "x.ai/fs_notify": true,
+       "x.ai/hooks": {
+        "blockingEvents": [
+         "pre_tool_use",
+         "stop",
+         "subagent_stop"
+        ],
+        "decisions": [
+         "deny",
+         "block"
+        ],
+        "stopSignals": [
+         "continue",
+         "stopReason",
+         "additionalContext"
+        ]
+       },
+       "x.ai/capabilities": {
+        "toolOverrides": {
+         "x_keyword_search": true,
+         "x_semantic_search": true,
+         "x_user_search": false,
+         "x_thread_fetch": false
+        }
+       }
+      }
+     },
+     "authMethods": [
+      {
+       "id": "cached_token",
+       "name": "cached_token",
+       "description": "Cached token from ~/.grok/auth.json"
+      },
+      {
+       "id": "grok.com",
+       "name": "Grok",
+       "description": "Sign in with Grok"
+      }
+     ],
+     "_meta": {
+      "agentVersion": "1.0.70"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/new"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "models": {
+      "currentModelId": "grok-4.7",
+      "availableModels": [
+       {
+        "modelId": "grok-4.7",
+        "name": "Grok 4.7",
+        "description": "SpaceXAI's latest frontier model",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Maximum reasoning for the hardest tasks.",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Thorough reasoning and quality. Recommended.",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Strong quality with a faster turnaround.",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Fastest responses. Best for simple tasks.",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.7-build-fast",
+        "name": "Grok 4.7 Fast",
+        "description": "Fast variant. 2x the price.",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Maximum reasoning for the hardest tasks.",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Thorough reasoning and quality. Recommended.",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Strong quality with a faster turnaround.",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Fastest responses. Best for simple tasks.",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.6",
+        "name": "Grok 4.6",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Highest effort and reasoning level",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Higher implementation quality with extensive reasoning",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Balanced effort with standard implementation and testing",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Quick, fast implementations",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.5",
+        "name": "Grok 4.5",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Highest implementation quality with extensive reasoning",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Balanced effort with standard implementation and testing",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Quick, fast implementations",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       }
+      ]
+     },
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "grok-4.7",
+       "options": [
+        {
+         "value": "grok-4.7",
+         "name": "Grok 4.7"
+        },
+        {
+         "value": "grok-4.7-build-fast",
+         "name": "Grok 4.7 Fast"
+        },
+        {
+         "value": "grok-4.6",
+         "name": "Grok 4.6"
+        },
+        {
+         "value": "grok-4.5",
+         "name": "Grok 4.5"
+        }
+       ]
+      },
+      {
+       "id": "reasoning_effort",
+       "name": "Reasoning Effort",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "high",
+       "options": [
+        {
+         "value": "xhigh",
+         "name": "Extra High",
+         "description": "Maximum reasoning for the hardest tasks."
+        },
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Thorough reasoning and quality. Recommended."
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Strong quality with a faster turnaround."
+        },
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Fastest responses. Best for simple tasks."
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/new"
+  },
+  {
+   "await": "request",
+   "method": "session/set_model"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "config_option_update",
+      "configOptions": [
+       {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "grok-4.5",
+        "options": [
+         {
+          "value": "grok-4.7",
+          "name": "Grok 4.7"
+         },
+         {
+          "value": "grok-4.7-build-fast",
+          "name": "Grok 4.7 Fast"
+         },
+         {
+          "value": "grok-4.6",
+          "name": "Grok 4.6"
+         },
+         {
+          "value": "grok-4.5",
+          "name": "Grok 4.5"
+         }
+        ]
+       },
+       {
+        "id": "reasoning_effort",
+        "name": "Reasoning Effort",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "high",
+        "options": [
+         {
+          "value": "high",
+          "name": "High",
+          "description": "Highest implementation quality with extensive reasoning"
+         },
+         {
+          "value": "medium",
+          "name": "Medium",
+          "description": "Balanced effort with standard implementation and testing"
+         },
+         {
+          "value": "low",
+          "name": "Low",
+          "description": "Quick, fast implementations"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "_meta": {
+      "model": {
+       "Ok": "grok-4.5"
+      }
+     }
+    }
+   },
+   "reply_to": "session/set_model"
+  },
+  {
+   "await": "request",
+   "method": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "grok-4.5",
+       "options": [
+        {
+         "value": "grok-4.7",
+         "name": "Grok 4.7"
+        },
+        {
+         "value": "grok-4.7-build-fast",
+         "name": "Grok 4.7 Fast"
+        },
+        {
+         "value": "grok-4.6",
+         "name": "Grok 4.6"
+        },
+        {
+         "value": "grok-4.5",
+         "name": "Grok 4.5"
+        }
+       ]
+      },
+      {
+       "id": "reasoning_effort",
+       "name": "Reasoning Effort",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Highest implementation quality with extensive reasoning"
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Balanced effort with standard implementation and testing"
+        },
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Quick, fast implementations"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/set_config_option"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "config_option_update",
+      "configOptions": [
+       {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "grok-4.5",
+        "options": [
+         {
+          "value": "grok-4.7",
+          "name": "Grok 4.7"
+         },
+         {
+          "value": "grok-4.7-build-fast",
+          "name": "Grok 4.7 Fast"
+         },
+         {
+          "value": "grok-4.6",
+          "name": "Grok 4.6"
+         },
+         {
+          "value": "grok-4.5",
+          "name": "Grok 4.5"
+         }
+        ]
+       },
+       {
+        "id": "reasoning_effort",
+        "name": "Reasoning Effort",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": "low",
+        "options": [
+         {
+          "value": "high",
+          "name": "High",
+          "description": "Highest implementation quality with extensive reasoning"
+         },
+         {
+          "value": "medium",
+          "name": "Medium",
+          "description": "Balanced effort with standard implementation and testing"
+         },
+         {
+          "value": "low",
+          "name": "Low",
+          "description": "Quick, fast implementations"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "session_info_update",
+      "title": "Create a.md and b.md files"
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "I'll"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": " create"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": " both"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": " files"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": " now"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "."
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-0",
+      "title": "write",
+      "rawInput": {
+       "file_path": "C:\\work\\demo\\a.md",
+       "content": "one\n"
+      },
+      "_meta": {
+       "x.ai/tool": {
+        "version": 1,
+        "name": "write",
+        "kind": "write",
+        "namespace": "grok_build",
+        "label": "Write",
+        "read_only": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-0",
+      "kind": "edit",
+      "title": "Write `C:\\work\\demo\\a.md`",
+      "content": [
+       {
+        "type": "diff",
+        "path": "C:\\work\\demo\\a.md",
+        "oldText": "",
+        "newText": "one\n"
+       }
+      ],
+      "locations": [
+       {
+        "path": "C:\\work\\demo\\a.md"
+       }
+      ],
+      "rawInput": {
+       "variant": "Write",
+       "file_path": "C:\\work\\demo\\a.md",
+       "content": "one\n"
+      },
+      "_meta": {
+       "x.ai/tool": {
+        "version": 1,
+        "name": "write",
+        "kind": "write",
+        "namespace": "grok_build",
+        "label": "Write",
+        "read_only": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "session/request_permission",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "toolCall": {
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-0",
+      "kind": "edit",
+      "title": "Write `C:\\work\\demo\\a.md`",
+      "rawInput": {
+       "variant": "Write",
+       "file_path": "C:\\work\\demo\\a.md",
+       "content": "one\n"
+      },
+      "_meta": {
+       "x.ai/tool": {
+        "version": 1,
+        "name": "write",
+        "kind": "write",
+        "namespace": "grok_build",
+        "label": "Write",
+        "read_only": false,
+        "input": {
+         "path": "C:\\work\\demo\\a.md"
+        }
+       }
+      }
+     },
+     "options": [
+      {
+       "optionId": "allow-edits-session",
+       "name": "Yes, allow all edits during this session",
+       "kind": "allow_always"
+      },
+      {
+       "optionId": "allow-once",
+       "name": "Yes",
+       "kind": "allow_once"
+      },
+      {
+       "optionId": "reject-once",
+       "name": "No, and tell Grok what to do differently",
+       "kind": "reject_once"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "await": "response",
+   "id": 0
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-1",
+      "title": "write",
+      "rawInput": {
+       "file_path": "C:\\work\\demo\\b.md",
+       "content": "two\n"
+      },
+      "_meta": {
+       "x.ai/tool": {
+        "version": 1,
+        "name": "write",
+        "kind": "write",
+        "namespace": "grok_build",
+        "label": "Write",
+        "read_only": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-1",
+      "kind": "edit",
+      "title": "Write `C:\\work\\demo\\b.md`",
+      "content": [
+       {
+        "type": "diff",
+        "path": "C:\\work\\demo\\b.md",
+        "oldText": "",
+        "newText": "two\n"
+       }
+      ],
+      "locations": [
+       {
+        "path": "C:\\work\\demo\\b.md"
+       }
+      ],
+      "rawInput": {
+       "variant": "Write",
+       "file_path": "C:\\work\\demo\\b.md",
+       "content": "two\n"
+      },
+      "_meta": {
+       "x.ai/tool": {
+        "version": 1,
+        "name": "write",
+        "kind": "write",
+        "namespace": "grok_build",
+        "label": "Write",
+        "read_only": false
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-1",
+      "status": "completed",
+      "content": [
+       {
+        "type": "diff",
+        "path": "C:\\work\\demo\\b.md",
+        "oldText": "",
+        "newText": "two\n",
+        "_meta": {
+         "details": [
+          {
+           "old_string": "",
+           "old_line": 1,
+           "new_string": "two\n",
+           "new_line": 1,
+           "context_before": "",
+           "context_after": "",
+           "line_prefix": ""
+          }
+         ]
+        }
+       }
+      ],
+      "rawOutput": {
+       "type": "SearchReplace",
+       "EditsApplied": {
+        "old_string": "",
+        "new_string": "two\n",
+        "tool_output_for_prompt": "The file C:\\work\\demo\\b.md has been created.",
+        "tool_output_for_prompt_concise": "The file C:\\work\\demo\\b.md has been created.",
+        "absolute_path": "C:\\work\\demo\\b.md",
+        "edits": {
+         "details": [
+          {
+           "old_string": "",
+           "old_line": 1,
+           "new_string": "two\n",
+           "new_line": 1,
+           "context_before": "",
+           "context_after": "",
+           "line_prefix": ""
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "call-bbf0af21-934e-4ad1-bbb6-95d0b8057161-0",
+      "status": "completed",
+      "content": [
+       {
+        "type": "diff",
+        "path": "C:\\work\\demo\\a.md",
+        "oldText": "",
+        "newText": "one\n",
+        "_meta": {
+         "details": [
+          {
+           "old_string": "",
+           "old_line": 1,
+           "new_string": "one\n",
+           "new_line": 1,
+           "context_before": "",
+           "context_after": "",
+           "line_prefix": ""
+          }
+         ]
+        }
+       }
+      ],
+      "rawOutput": {
+       "type": "SearchReplace",
+       "EditsApplied": {
+        "old_string": "",
+        "new_string": "one\n",
+        "tool_output_for_prompt": "The file C:\\work\\demo\\a.md has been created.",
+        "tool_output_for_prompt_concise": "The file C:\\work\\demo\\a.md has been created.",
+        "absolute_path": "C:\\work\\demo\\a.md",
+        "edits": {
+         "details": [
+          {
+           "old_string": "",
+           "old_line": 1,
+           "new_string": "one\n",
+           "new_line": 1,
+           "context_before": "",
+           "context_after": "",
+           "line_prefix": ""
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "done"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19367-40e7-70d1-b06c-b026552cce56",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+     "stopReason": "end_turn",
+     "_meta": {
+      "modelId": "grok-4.5",
+      "totalTokens": 20723,
+      "usage": {
+       "inputTokens": 40287,
+       "outputTokens": 241,
+       "totalTokens": 40528,
+       "cachedReadTokens": 28800,
+       "cacheCreationTokens": 0,
+       "reasoningTokens": 49,
+       "modelCalls": 2,
+       "apiDurationMs": 9173,
+       "costUsdTicks": 112404000,
+       "numTurns": 2
+      }
+     }
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

@@ -248,7 +248,28 @@ export function toolLabel(id: string, tools?: readonly CodingTool[] | null): str
   if (id === "codex") return "Codex";
   if (id === "pi") return "Pi";
   if (id === "opencode") return "OpenCode";
+  if (id === "grok") return "Grok";
   return id || "Coding tool";
+}
+
+/** The four tools the Code view always names (each listed, installed or not). */
+const ALWAYS_NAMED: readonly [string, string][] = [
+  ["claude-code", "Claude Code"],
+  ["codex", "Codex"],
+  ["pi", "Pi"],
+  ["opencode", "OpenCode"],
+];
+
+/** v1.416.0: the tools a session can start, in words ("Claude Code, Codex,
+ *  Pi, OpenCode or Grok"): the four always, then any other tool the daemon
+ *  lists — Grok only when it is installed (lib/buildApp decodeCodingTools). */
+export function toolChoiceWords(tools?: readonly CodingTool[] | null): string {
+  const known = new Set(ALWAYS_NAMED.map(([id]) => id));
+  const names = [
+    ...ALWAYS_NAMED.map(([, name]) => name),
+    ...(tools ?? []).filter((t) => !known.has(t.id)).map((t) => t.label).filter(Boolean),
+  ];
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
 export function decodeCodingTools(raw: unknown): CodingTool[] {
@@ -258,6 +279,9 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
     if (!r) continue;
     const id = str(r.id, 64).trim();
     if (!id) continue;
+    // v1.416.0: a tool the daemon lists only when it is installed (Grok) is
+    // never offered, nor named, on a PC that does not have it.
+    if (r.only_when_installed === true && r.installed !== true) continue;
     const modes: ToolMode[] = [];
     for (const m of Array.isArray(r.modes) ? r.modes : []) {
       const mo = obj(m);
@@ -404,6 +428,7 @@ export function toolVendor(tool: string): string {
   if (tool === "codex") return "OpenAI";
   if (tool === "pi") return "the model provider you chose in Pi";
   if (tool === "opencode") return "the model provider you chose in OpenCode";
+  if (tool === "grok") return "xAI";
   return "the coding tool's model provider";
 }
 
@@ -985,6 +1010,7 @@ export const KEEPS_LAST_TITLE =
 
 /** v1.413.0: the keeps-last title for a tool (Pi's words stay Pi's). */
 export function keepsLastTitle(tool: string): string {
+  if (tool === "grok") return "This conversation keeps the model it last used: Grok keeps it when it reopens it.";
   return tool === "opencode"
     ? "This conversation keeps the model and effort it last used: OpenCode keeps them when it reopens it."
     : KEEPS_LAST_TITLE;

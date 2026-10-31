@@ -1,0 +1,474 @@
+{
+ "harness": "grok",
+ "source": "recorded live 2026-10-31, grok 1.0.70 (grok agent --no-leader stdio), this PC, through the real Code-view service via a logging proxy, scratch folder (masked: paths, Grok's own _x.ai notifications and agent _meta dropped)",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+     "protocolVersion": 1,
+     "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+       "image": true,
+       "audio": false,
+       "embeddedContext": true
+      },
+      "mcpCapabilities": {
+       "http": true,
+       "sse": true
+      },
+      "sessionCapabilities": {
+       "list": {},
+       "resume": {},
+       "close": {}
+      },
+      "auth": {},
+      "_meta": {
+       "x.ai/fs_notify": true,
+       "x.ai/hooks": {
+        "blockingEvents": [
+         "pre_tool_use",
+         "stop",
+         "subagent_stop"
+        ],
+        "decisions": [
+         "deny",
+         "block"
+        ],
+        "stopSignals": [
+         "continue",
+         "stopReason",
+         "additionalContext"
+        ]
+       },
+       "x.ai/capabilities": {
+        "toolOverrides": {
+         "x_keyword_search": true,
+         "x_semantic_search": true,
+         "x_user_search": false,
+         "x_thread_fetch": false
+        }
+       }
+      }
+     },
+     "authMethods": [
+      {
+       "id": "cached_token",
+       "name": "cached_token",
+       "description": "Cached token from ~/.grok/auth.json"
+      },
+      {
+       "id": "grok.com",
+       "name": "Grok",
+       "description": "Sign in with Grok"
+      }
+     ],
+     "_meta": {
+      "agentVersion": "1.0.70"
+     }
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "session/resume"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19366-8cea-7361-97d2-84add5db6831",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+     "models": {
+      "currentModelId": "grok-4.5",
+      "availableModels": [
+       {
+        "modelId": "grok-4.7",
+        "name": "Grok 4.7",
+        "description": "SpaceXAI's latest frontier model",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Maximum reasoning for the hardest tasks.",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Thorough reasoning and quality. Recommended.",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Strong quality with a faster turnaround.",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Fastest responses. Best for simple tasks.",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.7-build-fast",
+        "name": "Grok 4.7 Fast",
+        "description": "Fast variant. 2x the price.",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Maximum reasoning for the hardest tasks.",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Thorough reasoning and quality. Recommended.",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Strong quality with a faster turnaround.",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Fastest responses. Best for simple tasks.",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.6",
+        "name": "Grok 4.6",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "high",
+         "reasoningEfforts": [
+          {
+           "id": "xhigh",
+           "value": "xhigh",
+           "label": "Extra High",
+           "description": "Highest effort and reasoning level",
+           "default": false
+          },
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Higher implementation quality with extensive reasoning",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Balanced effort with standard implementation and testing",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Quick, fast implementations",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       },
+       {
+        "modelId": "grok-4.5",
+        "name": "Grok 4.5",
+        "_meta": {
+         "totalContextTokens": 256000,
+         "agentType": "grok-build-plan",
+         "supportsReasoningEffort": true,
+         "reasoningEffort": "low",
+         "reasoningEfforts": [
+          {
+           "id": "high",
+           "value": "high",
+           "label": "High",
+           "description": "Highest implementation quality with extensive reasoning",
+           "default": true
+          },
+          {
+           "id": "medium",
+           "value": "medium",
+           "label": "Medium",
+           "description": "Balanced effort with standard implementation and testing",
+           "default": false
+          },
+          {
+           "id": "low",
+           "value": "low",
+           "label": "Low",
+           "description": "Quick, fast implementations",
+           "default": false
+          }
+         ],
+         "contextWindows": [
+          256000,
+          500000
+         ]
+        }
+       }
+      ]
+     },
+     "configOptions": [
+      {
+       "id": "model",
+       "name": "Model",
+       "category": "model",
+       "type": "select",
+       "currentValue": "grok-4.5",
+       "options": [
+        {
+         "value": "grok-4.7",
+         "name": "Grok 4.7"
+        },
+        {
+         "value": "grok-4.7-build-fast",
+         "name": "Grok 4.7 Fast"
+        },
+        {
+         "value": "grok-4.6",
+         "name": "Grok 4.6"
+        },
+        {
+         "value": "grok-4.5",
+         "name": "Grok 4.5"
+        }
+       ]
+      },
+      {
+       "id": "reasoning_effort",
+       "name": "Reasoning Effort",
+       "category": "thought_level",
+       "type": "select",
+       "currentValue": "low",
+       "options": [
+        {
+         "value": "high",
+         "name": "High",
+         "description": "Highest implementation quality with extensive reasoning"
+        },
+        {
+         "value": "medium",
+         "name": "Medium",
+         "description": "Balanced effort with standard implementation and testing"
+        },
+        {
+         "value": "low",
+         "name": "Low",
+         "description": "Quick, fast implementations"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "reply_to": "session/resume"
+  },
+  {
+   "await": "request",
+   "method": "session/prompt"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19366-8cea-7361-97d2-84add5db6831",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19366-8cea-7361-97d2-84add5db6831",
+     "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+       "type": "text",
+       "text": "apple"
+      }
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+     "sessionId": "01a19366-8cea-7361-97d2-84add5db6831",
+     "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+       {
+        "name": "compact",
+        "description": "Compress conversation history to save context window",
+        "input": null
+       },
+       {
+        "name": "always-approve",
+        "description": "Toggle always-approve mode (skip all permission prompts)",
+        "input": {
+         "hint": "on|off"
+        }
+       },
+       {
+        "name": "context",
+        "description": "Show context window usage and session stats",
+        "input": null
+       },
+       {
+        "name": "session-info",
+        "description": "Show session details (model, turns, context usage)",
+        "input": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+     "stopReason": "end_turn",
+     "_meta": {
+      "modelId": "grok-4.5",
+      "totalTokens": 20477,
+      "usage": {
+       "inputTokens": 20445,
+       "outputTokens": 23,
+       "totalTokens": 20468,
+       "cachedReadTokens": 20224,
+       "cacheCreationTokens": 0,
+       "reasoningTokens": 22,
+       "modelCalls": 1,
+       "apiDurationMs": 2148,
+       "costUsdTicks": 22600480,
+       "numTurns": 1
+      }
+     }
+    }
+   },
+   "reply_to": "session/prompt"
+  }
+ ]
+}

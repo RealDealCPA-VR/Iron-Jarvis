@@ -388,6 +388,28 @@ def _isolate_opencode_sessions():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_grok_home():
+    """v1.416.0: the Code view reads Grok's own saved sessions, model list and
+    sign-in file from its home (``hosted.grok.default_home``). A test must
+    never read the developer's real ``~/.grok``: the folder is an empty
+    scratch one for the session. Only Iron Jarvis's READS follow it; a Grok
+    process is never told."""
+    import tempfile
+
+    from iron_jarvis.hosted import grok as _hg
+
+    old = os.environ.get(_hg.HOME_ENV)
+    os.environ[_hg.HOME_ENV] = tempfile.mkdtemp(prefix="ij-test-no-grok-home-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_hg.HOME_ENV, None)
+        else:
+            os.environ[_hg.HOME_ENV] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

@@ -1,0 +1,1146 @@
+{
+ "_about": "v1.416.0 Build Code view, Grok: the normalized events the REAL daemon sends for each scenario, produced by tests/test_build_app_grok_v1416.py from recorded Grok output (tests/fixtures/build_app_v1416, masked live runs of grok 1.0.70 `grok agent --no-leader stdio` on this PC). `at` is dropped; request ids are ask-N; item ids are item-N; every turn id is turn-1; a note's id is note-1. Regenerate with IJ_REGEN_BUILD_APP_GROK=1.",
+ "scenarios": {
+  "grok_reads_a_file": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19366-8cea-7361-97d2-84add5db6831",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "read",
+    "name": "read_file",
+    "title": "Read hello.txt",
+    "input": "{\"target_file\": \"hello.txt\"}",
+    "status": "running",
+    "path": "hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "read",
+    "name": "read_file",
+    "title": "Read hello.txt",
+    "input": "{\"target_file\": \"hello.txt\", \"variant\": \"ReadFile\"}",
+    "status": "running",
+    "path": "hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "read",
+    "name": "read_file",
+    "title": "Read hello.txt",
+    "input": "{\"target_file\": \"hello.txt\", \"variant\": \"ReadFile\"}",
+    "status": "done",
+    "path": "hello.txt",
+    "output": "1→apple pie\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "apple",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "apple",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 39892,
+    "output": 45,
+    "cache_read": 20096,
+    "list_price": false,
+    "cost_usd": 0.015603,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20340,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_asks_before_an_edit": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19367-2015-7440-a30f-673a1f67cc7c",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "Creating",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "notes",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": ".md",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " with",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " requested",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " content",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "Creating `notes.md` with the requested content.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write notes.md",
+    "input": "{\"content\": \"banana\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\notes.md\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\notes.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/notes.md\n@@ -0,0 +1,1 @@\n+banana",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write notes.md",
+    "input": "{\"content\": \"banana\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\notes.md\", \"variant\": \"Write\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\notes.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/notes.md\n@@ -0,0 +1,1 @@\n+banana",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Write notes.md",
+    "detail": "Write `C:\\work\\demo\\notes.md`",
+    "can_session": true,
+    "tool": "write",
+    "path": "C:\\work\\demo\\notes.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/notes.md\n@@ -0,0 +1,1 @@\n+banana",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write notes.md",
+    "input": "{\"content\": \"banana\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\notes.md\", \"variant\": \"Write\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\notes.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/notes.md\n@@ -0,0 +1,1 @@\n+banana",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 40092,
+    "output": 148,
+    "cache_read": 19584,
+    "list_price": false,
+    "cost_usd": 0.016245,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20535,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_edits_allowed_for_the_session": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19367-40e7-70d1-b06c-b026552cce56",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "I'll",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " create",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " both",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " files",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " now",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "I'll create both files now.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write a.md",
+    "input": "{\"content\": \"one\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\a.md\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\a.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/a.md\n@@ -0,0 +1,1 @@\n+one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write a.md",
+    "input": "{\"content\": \"one\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\a.md\", \"variant\": \"Write\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\a.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/a.md\n@@ -0,0 +1,1 @@\n+one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "edit",
+    "title": "Write a.md",
+    "detail": "Write `C:\\work\\demo\\a.md`",
+    "can_session": true,
+    "tool": "write",
+    "path": "C:\\work\\demo\\a.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/a.md\n@@ -0,0 +1,1 @@\n+one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow_session",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "write",
+    "name": "write",
+    "title": "Write b.md",
+    "input": "{\"content\": \"two\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\b.md\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\b.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/b.md\n@@ -0,0 +1,1 @@\n+two",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "write",
+    "name": "write",
+    "title": "Write b.md",
+    "input": "{\"content\": \"two\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\b.md\", \"variant\": \"Write\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\b.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/b.md\n@@ -0,0 +1,1 @@\n+two",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "write",
+    "name": "write",
+    "title": "Write b.md",
+    "input": "{\"content\": \"two\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\b.md\", \"variant\": \"Write\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\b.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/b.md\n@@ -0,0 +1,1 @@\n+two",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write a.md",
+    "input": "{\"content\": \"one\\n\", \"file_path\": \"C:\\\\work\\\\demo\\\\a.md\", \"variant\": \"Write\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\a.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/a.md\n@@ -0,0 +1,1 @@\n+one",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 40287,
+    "output": 241,
+    "cache_read": 28800,
+    "list_price": false,
+    "cost_usd": 0.01124,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20723,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_command_denied": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19367-7551-7e61-ad3a-8e5adf00f6aa",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "running",
+    "output": "Check Python version",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run python --version",
+    "detail": "Execute `python --version`",
+    "can_session": false,
+    "tool": "run_terminal_command",
+    "command": "python --version",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "deny",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "failed",
+    "output": "User rejected the execution for tool `run_terminal_command`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "You declined, so Grok stopped this reply — tell it what to do differently in your next message.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 19578,
+    "output": 38,
+    "cache_read": 640,
+    "list_price": false,
+    "cost_usd": 0.013021,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 19619,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_command_allowed_once": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19367-8c93-7163-abd2-e887b6898db9",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "running",
+    "output": "Check Python version",
+    "turn": "turn-1"
+   },
+   {
+    "type": "approval",
+    "request_id": "ask-1",
+    "kind": "command",
+    "title": "Run python --version",
+    "detail": "Execute `python --version`",
+    "can_session": false,
+    "tool": "run_terminal_command",
+    "command": "python --version",
+    "once_only": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "resolved",
+    "request_id": "ask-1",
+    "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run python --version",
+    "input": "{\"command\": \"python --version\", \"description\": \"Check Python version\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "done",
+    "output": "Python 3.12.11\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "Python",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " ",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "3",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "12",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "11",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "Python 3.12.11",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 39915,
+    "output": 54,
+    "cache_read": 28800,
+    "list_price": false,
+    "cost_usd": 0.010606,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20361,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_stop": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19368-17dd-7f70-8c5a-4f75e57653c1",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": "Running the ping command",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " to 127.0.0.1 for 30",
+    "turn": "turn-1"
+   },
+   {
+    "type": "thinking",
+    "item": "item-1",
+    "delta": " seconds.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "Running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " ping",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " and",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " waiting",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " for",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " to",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " complete",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "Running the ping and waiting for it to complete.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 30 127.0.0.1",
+    "input": "{\"block_until_ms\": 45000, \"command\": \"ping -n 30 127.0.0.1\", \"description\": \"Ping localhost 30 times and wait\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 30 127.0.0.1",
+    "input": "{\"block_until_ms\": 45000, \"command\": \"ping -n 30 127.0.0.1\", \"description\": \"Ping localhost 30 times and wait\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "running",
+    "output": "Ping localhost 30 times and wait",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-3",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 30 127.0.0.1",
+    "input": "{\"block_until_ms\": 45000, \"command\": \"ping -n 30 127.0.0.1\", \"description\": \"Ping localhost 30 times and wait\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "failed",
+    "output": "Stopped when you pressed Stop.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 19587,
+    "output": 142,
+    "cache_read": 640,
+    "list_price": false,
+    "cost_usd": 0.013239,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 19735,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Grok was running a command when you pressed Stop, so Grok was closed to end it — the conversation is kept and reopens with your next message.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "interrupted",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_note_while_it_works": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19368-44da-7f21-aab9-961626eba3fa",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 8 127.0.0.1",
+    "input": "{\"command\": \"ping -n 8 127.0.0.1\", \"description\": \"Ping localhost 8 times and wait\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 8 127.0.0.1",
+    "input": "{\"command\": \"ping -n 8 127.0.0.1\", \"description\": \"Ping localhost 8 times and wait\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "running",
+    "output": "Ping localhost 8 times and wait",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "sent",
+    "text": "Also end your reply with the word BANANA.",
+    "how": "Grok takes it at once and reads it at its next step.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "steer",
+    "id": "note-1",
+    "state": "read",
+    "text": "Also end your reply with the word BANANA.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-1",
+    "kind": "command",
+    "name": "run_terminal_command",
+    "title": "Run ping -n 8 127.0.0.1",
+    "input": "{\"command\": \"ping -n 8 127.0.0.1\", \"description\": \"Ping localhost 8 times and wait\", \"is_background\": false, \"variant\": \"Bash\"}",
+    "status": "done",
+    "output": "\r\nPinging 127.0.0.1 with 32 bytes of data:\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\nReply from 127.0.0.1: bytes=32 time<1ms TTL=128\r\n\r\nPing statistics for 127.0.0.1:\r\n    Packets: Sent = 8, Received = 8, Lost = 0 (0% loss),\r\nApproximate round trip times in milli-seconds:\r\n    Minimum = 0ms, Maximum = 0ms, Average = 0ms\r\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "first",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": " done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": ".\n",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "BAN",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-2",
+    "delta": "ANA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-2",
+    "text": "first done.\nBANANA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 40255,
+    "output": 84,
+    "cache_read": 28800,
+    "list_price": false,
+    "cost_usd": 0.010898,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20705,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_auto": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a19367-b310-73a1-bbba-e41ece0e6977",
+    "model": "grok-4.5",
+    "cwd": "C:\\work\\demo",
+    "mode": "auto",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "I'll",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " create",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "auto",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": ".md",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " with",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " content",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "I'll create `auto.md` with the content `ok`.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write auto.md",
+    "input": "{\"content\": \"ok\", \"file_path\": \"C:\\\\work\\\\demo\\\\auto.md\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\auto.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/auto.md\n@@ -0,0 +1,1 @@\n+ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write auto.md",
+    "input": "{\"content\": \"ok\", \"file_path\": \"C:\\\\work\\\\demo\\\\auto.md\", \"variant\": \"Write\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\auto.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/auto.md\n@@ -0,0 +1,1 @@\n+ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "item-2",
+    "kind": "write",
+    "name": "write",
+    "title": "Write auto.md",
+    "input": "{\"content\": \"ok\", \"file_path\": \"C:\\\\work\\\\demo\\\\auto.md\", \"variant\": \"Write\"}",
+    "status": "done",
+    "path": "C:\\work\\demo\\auto.md",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/auto.md\n@@ -0,0 +1,1 @@\n+ok",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 40068,
+    "output": 144,
+    "cache_read": 20096,
+    "list_price": false,
+    "cost_usd": 0.015925,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20520,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ],
+  "grok_reads_a_picture": [
+   {
+    "type": "user",
+    "text": "do it",
+    "files": [
+     "C:\\work\\demo\\word.png"
+    ],
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "grok",
+    "harness_session_id": "01a1936c-20d7-7793-a625-9f17daa6a3f4",
+    "model": "grok-4.7",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "ZE",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "item-1",
+    "delta": "BRA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "item-1",
+    "text": "ZEBRA",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 20909,
+    "output": 38,
+    "cache_read": 1664,
+    "list_price": false,
+    "cost_usd": 0.013447,
+    "cost_reported_by": "Grok",
+    "context": {
+     "used": 20956,
+     "window": 256000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "turn": "turn-1"
+   }
+  ]
+ }
+}

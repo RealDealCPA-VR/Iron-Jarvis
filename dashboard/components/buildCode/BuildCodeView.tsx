@@ -122,6 +122,7 @@ import {
   sessionTitle,
   steerPlaceholder,
   STEER_RETURNED_WORDS,
+  toolChoiceWords,
   toolLabel,
   type CodeEvent,
   type CodeSession,
@@ -1705,7 +1706,7 @@ export function BuildCodeView({
             <p className="px-2 py-2 text-[12px] text-zinc-500">Reading your sessions…</p>
           ) : groups.length === 0 ? (
             <p data-testid="code-list-empty" className="px-2 py-2 text-[12px] text-zinc-500">
-              No sessions yet. Type a task to start Claude Code, Codex, Pi or OpenCode.
+              No sessions yet. Type a task to start {toolChoiceWords(tools)}.
             </p>
           ) : (
             groups.map((g) => (
