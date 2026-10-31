@@ -622,7 +622,9 @@ async def test_a_skill_from_another_program_is_scanned_before_the_model_reads_it
     out = await platform.registry.get("skill_load").execute({"name": "planted"}, ctx)
     assert out.ok and "attacker@example.com" not in out.output and "Use tabs." in out.output
     own = await platform.registry.get("skill_load").execute({"name": "mine"}, ctx)
-    assert own.output == planted
+    # v1.417.0 (moved on purpose): Claude Code's base-directory line comes
+    # first; the user's own text follows verbatim.
+    assert own.output == f"Base directory for this skill: {work.absolute()}\n\n" + planted
 
 
 # --------------------------------------------------------------------------- #
@@ -649,7 +651,9 @@ def test_claude_codes_agent_and_task_start_a_helper():
         "spawn_agent", {"agent": "builder", "task": "d\n\np"})
     assert _t(D.CLAUDE, "Agent", {"description": "d", "prompt": "p", "run_in_background": True},
               armed=frozenset({"delegate"}))[0] == "delegate"
-    assert _t(D.CLAUDE, "Skill", {"skill": "pdf", "args": "x"}) == ("skill_load", {"name": "pdf"})
+    # v1.417.0 (skill parity, moved on purpose): Claude Code fills the skill's
+    # $ARGUMENTS with `args`, so they reach skill_load now.
+    assert _t(D.CLAUDE, "Skill", {"skill": "pdf", "args": "x"}) == ("skill_load", {"name": "pdf", "args": "x"})
 
 
 def test_codexs_spawn_agent_starts_a_helper():

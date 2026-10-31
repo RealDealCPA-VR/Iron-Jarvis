@@ -391,6 +391,12 @@ def test_the_skill_registry_never_reads_claude_codes_trash(tmp_path, monkeypatch
           "---\nname: only-trash\n---\nGONE")
     write(fake / ".claude" / "plugins" / "synced" / "a" / "cowork" / "skills" / "brief" / "SKILL.md",
           "---\nname: brief\n---\nTHE INSTALLED COPY")
+    # v1.417.0 (moved on purpose): a synced plugin is one Claude Code would
+    # load — it has its manifest (skills/native reads plugins the way
+    # claude_commands.enabled_plugins does).
+    write(fake / ".claude" / "plugins" / "synced" / "a" / "cowork" / ".claude-plugin" / "plugin.json",
+          '{"name": "cowork"}')
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     write(fake / ".claude" / "skills" / ".trash" / "x" / "aside" / "SKILL.md", "---\nname: aside\n---\nASIDE")
     monkeypatch.setattr(Path, "home", lambda: fake)
     reg = SkillRegistry().repopulate(tmp_path / "ij-home")

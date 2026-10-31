@@ -650,6 +650,14 @@ class HarnessTurn:
         #: (:meth:`unlock_lead`).
         self.team: Any = None
         self.full_plan: "ToolPlan | None" = None
+        #: v1.417.0 (skill parity, ``skills/native.listing``): the skills
+        #: this turn's model may load, listed up front in the words of the
+        #: harness its dialect speaks (Claude Code's "The following skills
+        #: are available…", Codex's list with each SKILL.md's location) —
+        #: set only when ``skill_load`` is in the turn's gate. Per turn,
+        #: never part of the fingerprint; "" (a byte-identical prompt) when
+        #: there is none.
+        self.skill_listing: str = ""
 
     # -- the team lead ------------------------------------------------------ #
 
@@ -702,8 +710,10 @@ class HarnessTurn:
             project_map = "\n\n" + _map_text
         # v1.394.0: the model team the turn's helpers may run on ("" = none).
         team = ("\n\n" + self.team_section) if self.team_section else ""
+        # v1.417.0: the skills the model may load, listed up front ("" = none).
+        skills = ("\n\n" + self.skill_listing) if self.skill_listing else ""
         return (
-            "\n\n" + self.rendered + date + prompt_line(self.plan.gate) + prompt_section()
+            "\n\n" + self.rendered + skills + date + prompt_line(self.plan.gate) + prompt_section()
             + summary_section() + branch_line() + team + project_map
         )
 

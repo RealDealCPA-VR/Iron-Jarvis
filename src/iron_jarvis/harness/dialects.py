@@ -741,6 +741,10 @@ def _skill(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str, Any]]
     knows the folder's skills; this table does not."""
     out: dict[str, Any] = {}
     _put(out, "name", _first(args, "skill", "name"))
+    # v1.417.0 (skill parity): Claude Code fills the skill's $ARGUMENTS with
+    # ``args`` — dropped here before, so a skill that reads its arguments got
+    # none.
+    _put(out, "args", args.get("args") if isinstance(args.get("args"), str) else None)
     return "skill_load", out
 
 

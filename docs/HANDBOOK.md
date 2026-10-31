@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.417.1 (2026-10-30).*
+holds itself to. Current as of v1.418.1 (2026-10-30).*
 
 ---
 
@@ -4566,6 +4566,70 @@ It is used for the desktop and Start-menu shortcuts, the taskbar button, the
 tray icon and the installer, each drawn from a size made for it (16 to 256
 pixels). After the update installs, Windows may keep showing the old picture
 on a shortcut for a while; signing out and back in refreshes it.
+
+## Coding sessions keep going while Claude Code's helpers work (v1.418.0)
+
+When Claude Code hands work to helper agents in the background and its reply
+ends ("I'll report as the teams finish"), Iron Jarvis now keeps Claude Code
+running until the helpers are done. Before, it stopped Claude Code fifteen
+minutes after the last reply, and every helper stopped with it, so the
+session looked stuck.
+
+- **You can see it.** A quiet line under the conversation says how many
+  helpers are still working. When they finish, Claude Code writes its report
+  by itself, and it appears in the session as it is written: you do not have
+  to send anything or reopen the session.
+- **Running now** lists the session ("helpers working"), and the PC stays
+  awake while they run, like any other work.
+- **You can still send a message** while helpers work. A change of model,
+  effort or tools waits until they finish (a note says so), and Open in
+  terminal is refused until then, because both would stop the helpers.
+- **It is bounded.** If Claude Code says nothing at all for two hours, the
+  session counts as idle again.
+
+Only Claude Code reports its helpers; Codex, OpenCode and Grok sessions do
+not show the line.
+
+## Grok in the Code view (v1.418.0)
+
+If the Grok CLI is installed and signed in on this PC, the Code view offers
+Grok beside Claude Code, Codex, Pi and OpenCode. Iron Jarvis asks Grok to
+ask before it edits files or runs commands (your own Grok setting to approve
+everything is not used here), and never chooses Grok's "always allow" or
+"always reject", which would save a rule into your project. Auto edits and
+Plan are not offered for Grok. Stop also ends the command Grok was running.
+
+## Skills from your other coding tools work the same here (v1.418.0)
+
+A skill you installed for Claude Code, Codex, Grok, Pi or OpenCode works in
+a coding session (Chat › Code) the way it works in that tool:
+
+- **The same skills.** Claude Code's skills folder, the skills of the
+  plugins Claude Code really loads (installed and switched on — not one you
+  only browsed or turned off), the claude.ai skills of the account Claude
+  Code is signed in to, Codex's skills (`CODEX_HOME` respected),
+  `~/.agents/skills`, Grok's, Pi's and OpenCode's own folders — and the
+  skills the session's folder brings (`.claude/skills`, `.agents/skills`,
+  `.grok/skills`, `.opencode/skills`, `.pi/skills`, from the folder up to
+  its repository). Skills synced for a different claude.ai account no
+  longer appear.
+- **The model is told which skills it can use**, up front, the way its
+  tool lists them (Claude Code's list, or Codex's with where each SKILL.md
+  is), so it no longer has to search for them first.
+- **A loaded skill says where it lives.** The model gets "Base directory for
+  this skill: …" first, so a skill that ships scripts or reference files
+  (`node scripts/run.mjs`) runs them from the skill's own folder. Words
+  after the name fill the skill's `$ARGUMENTS` (and `$0`, `$1`, named
+  arguments, `${CLAUDE_SKILL_DIR}`), for `/name words` and when the model
+  loads it.
+- **Their own switches are respected.** `disable-model-invocation: true`
+  (Codex: `allow_implicit_invocation: false`) means only your `/name` runs
+  it; `user-invocable: false` keeps it out of the `/` menu. A skill's
+  `allowed-tools` never grants anything — every action still goes through
+  your approval setting — and a skill that is not your own is checked for
+  hidden instructions before the model reads it.
+- **`/name` sends the whole skill** (up to 100,000 characters; it used to
+  stop at 8,000).
 
 ## Claude Code's `/` commands, and sessions with no folder (v1.380.0)
 

@@ -5728,6 +5728,17 @@ async def _build_harness(
     # (a) One tool result may hold more than the chat's fixed 12,000
     # characters in a harness turn, and a cut is SAID (`tool_message_text`).
     turn.tool_message_chars = harness_tool_message_chars(_window)
+    if "skill_load" in turn.plan.gate:
+        # v1.417.0 (SKILL PARITY, ``skills/native``): every skill the model
+        # may load — the user's library and the folder's own (``.claude/
+        # skills``, ``.agents/skills`` … up to the repository root) — listed
+        # up front as the harness its dialect speaks lists them, within its
+        # share of the window. Off the loop; BEFORE the planner, so its cost
+        # is counted. MIRROR NOTE (lock-step): both lanes build their harness
+        # turn here.
+        turn.skill_listing = await asyncio.to_thread(
+            _skill_listing, d.platform, folder, turn, _window,
+        )
     if build_call and folder and not text_only:
         # (b) A Build session's turn starts with the PROJECT MAP of its
         # folder (harness/project_map): built off the loop, cached until the
@@ -5747,6 +5758,96 @@ async def _build_harness(
 
             turn.checkers = await _checkers.for_turn(folder, harness_turn=turn)
     return turn, rules_section
+
+
+def skill_invocation_args(body: Any, name: str) -> str:
+    """v1.417.0 (skill parity): the ARGUMENTS of a "/name" skill this turn —
+    ``body.skill_args`` when the caller sent them (a coding session does),
+    else the turn's last user message (the chat page sends the words typed
+    after "/name" as the message). A skill picked alone ("Follow the X
+    skill.") has none."""
+    raw = getattr(body, "skill_args", None)
+    if raw is not None:
+        return str(raw)
+    from ..harness.sessions import SKILL_ALONE
+
+    for m in reversed(list(getattr(body, "messages", None) or [])):
+        if str(getattr(m, "role", "")) != "user":
+            continue
+        text = str(getattr(m, "content", "") or "").strip()
+        return "" if text == SKILL_ALONE.format(name=name) else text
+    return ""
+
+
+def skill_playbook(platform: Any, body: Any, skill: Any, window_tokens: "int | None" = None) -> str:
+    """v1.417.0 (skill parity): what a "/name" skill hands the model — Claude
+    Code's own: ``Base directory for this skill: <dir>`` and the body with its
+    arguments filled (``skills/native.invocation_text``; scanned first when
+    the skill is not the user's own). Review: it rides the SYSTEM prompt,
+    which the history planner cannot shrink, so it is cut at
+    ``native.invoke_cap`` of the answering model's window (a quarter of it,
+    between the old 8,000 characters and ``native.INVOKE_CHARS``) and the cut
+    is said. BLOCKING (reads + the scan): the lanes run it off the loop.
+    MIRROR NOTE (lock-step): both lanes call this one function, each with
+    the turn's own ``_context_window``."""
+    from ..skills import native as _native
+
+    return _native.invocation_text(
+        skill, skill_invocation_args(body, getattr(skill, "name", "")),
+        event_bus=getattr(platform, "event_bus", None), session_id="chat",
+        cap=_native.invoke_cap(window_tokens),
+    )
+
+
+def turn_skill(platform: Any, body: Any) -> Any:
+    """v1.417.0: the skill a "/name" turn invokes — the registry's, else (a
+    turn bound to a folder: a coding session, a Build pane) the folder's own
+    (``.claude/skills``, ``.agents/skills`` … — ``skills/native.find``). None
+    when there is no such skill. BLOCKING when it reads the folder: async
+    callers use :func:`turn_skill_async`."""
+    name = (getattr(body, "skill", "") or "").strip()
+    if not name:
+        return None
+    reg = getattr(platform, "skills", None)
+    got = reg.get(name) if reg is not None else None
+    folder = (getattr(body, "workspace_dir", "") or "").strip()
+    if got is None and folder:
+        from ..skills.native import find
+
+        got = find(reg, name, folder)
+    return got
+
+
+async def turn_skill_async(platform: Any, body: Any) -> Any:
+    """:func:`turn_skill` without blocking the loop (the registry lookup is a
+    dictionary read; only a folder read hops to a thread)."""
+    name = (getattr(body, "skill", "") or "").strip()
+    if not name:
+        return None
+    reg = getattr(platform, "skills", None)
+    got = reg.get(name) if reg is not None else None
+    if got is None and (getattr(body, "workspace_dir", "") or "").strip():
+        got = await asyncio.to_thread(turn_skill, platform, body)
+    return got
+
+
+def _skill_listing(platform: Any, folder: str, turn: Any, window: "int | None") -> str:
+    """v1.417.0: the harness turn's skills list (``skills/native.listing``) —
+    the registry's and the folder's own skills that a model may load, minus
+    the folder's harness-layer skills (the tree lists those itself). Never
+    raises ("" on any failure)."""
+    from ..skills import native as _native
+
+    try:
+        own = {str(getattr(s, "name", "")).lower() for s in getattr(turn.tree, "skills", ()) or ()}
+        skills = [
+            s for s in _native.session_skills(getattr(platform, "skills", None), folder)
+            if s.name.lower() not in own
+        ]
+        return _native.listing(skills, dialect=turn.plan.dialect.id, window_tokens=window)
+    except Exception:  # noqa: BLE001 — a skill file never breaks a turn
+        log.warning("listing the turn's skills failed", exc_info=True)
+        return ""
 
 
 #: Every chat lane's cut of ONE tool result the model reads (unchanged since
@@ -8958,9 +9059,10 @@ async def run_chat_turn(
     # was made, the apps were read and events were published for a turn that
     # never ran. The stream lane refuses it even earlier (`_eager_checks`,
     # before the response opens); same 404, same words.
-    _skill_early = (
-        d.platform.skills.get(body.skill.strip()) if (body.skill or "").strip() else None
-    )
+    # v1.417.0 (skill parity): a turn bound to a folder may name a skill of
+    # that FOLDER (``.claude/skills``, ``.agents/skills`` …) as well as the
+    # registry's — ``turn_skill_async``. MIRROR NOTE (lock-step).
+    _skill_early = await turn_skill_async(d.platform, body)
     if (body.skill or "").strip() and _skill_early is None:
         raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
     _prep = _PREP_GROUP.get() or _PrepGroup()
@@ -8993,12 +9095,11 @@ async def run_chat_turn(
             provider=provider_choice or d.platform.config.default_provider,
         ))
     if _skill_early is not None:
-        from ..skills.framework import guarded_instructions
-
+        # v1.417.0: Claude Code's own invocation — the base directory line and
+        # the body with its ARGUMENTS filled (``skill_playbook``).
         _prep.start("skill", asyncio.to_thread(
-            guarded_instructions,
-            _skill_early, event_bus=getattr(d.platform, "event_bus", None),
-            session_id="chat", cap=8000,
+            skill_playbook, d.platform, body, _skill_early,
+            _context_window(d, provider_choice, model_choice),
         ))
     if (getattr(body, "workspace_dir", "") or "").strip():
         _prep.start("workspace", _none_on_error(asyncio.to_thread(
@@ -9095,29 +9196,28 @@ async def run_chat_turn(
     # "/" skill invocation: the chosen skill's playbook rides the system
     # prompt (provider-agnostic, same as the terminal assist).
     if (body.skill or "").strip():
-        sk = d.platform.skills.get(body.skill.strip())
+        sk = _skill_early if _skill_early is not None else await turn_skill_async(d.platform, body)
         if sk is None:
             raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
         # v1.298.0: an external-root or agent/proposal-made skill is SCANNED
         # (skills/framework.guarded_instructions — the inject rule); the
-        # user's own and builtin skills ride verbatim. MIRROR NOTE (lock-step).
-        from ..skills.framework import guarded_instructions
-
-        # Off the loop, clipped to the playbook's 8,000 BEFORE the scan
-        # (PERF, wave-4a review). MIRROR NOTE (lock-step): routes/chat.py.
+        # user's own and builtin skills ride verbatim. v1.417.0: what rides
+        # is Claude Code's own invocation (``skill_playbook``: the base
+        # directory line and the body with its ARGUMENTS filled), whole up to
+        # ``native.INVOKE_CHARS`` — the old 8,000 cut a real skill at a
+        # fifth. MIRROR NOTE (lock-step): routes/chat.py.
         # v1.332.0: started with the other prep steps above; read inline only
         # when the registry gained the skill since then.
         _playbook = await (
             _prep.take("skill") if _prep.has("skill") else asyncio.to_thread(
-                guarded_instructions,
-                sk, event_bus=getattr(d.platform, "event_bus", None), session_id="chat",
-                cap=8000,
+                skill_playbook, d.platform, body, sk,
+                _context_window(d, provider_choice, model_choice),
             )
         )
         _skill_text = (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
             "FOLLOW this playbook for this request.\n"
-            + _playbook[:8000]
+            + _playbook
         )
         system += _skill_text
         _ctx_pieces.setdefault("skills", []).append(_skill_text)

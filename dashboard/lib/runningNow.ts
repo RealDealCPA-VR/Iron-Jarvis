@@ -80,6 +80,12 @@ export interface RunningReplyRow {
   waiting?: boolean | null;
   /** The chat's or the coding session's title. */
   title?: string | null;
+  /** v1.417.0: a Build › Code session whose reply ENDED while its helpers
+   *  work on in the background (or the tool writes a report of its own). */
+  background?: boolean | null;
+  /** v1.417.0: how many helper agents are still at work (0 = the tool is
+   *  writing its own report). */
+  helpers?: number | null;
 }
 
 export interface RunningItem {
@@ -221,7 +227,11 @@ function buildAppItem(r: RunningReplyRow, now: number): RunningItem {
   const waiting = r.waiting === true;
   const started = startedMs(r.started_at);
   const parts: string[] = [];
-  if (started != null) parts.push(elapsedWords(now - started));
+  if (r.background === true) {
+    // v1.417.0: no reply runs; its helpers do (or the tool replies on its
+    // own — Claude Code's report, Pi's own run: "report" is not true of both).
+    parts.push(typeof r.helpers === "number" && r.helpers > 0 ? "helpers working" : "replying on its own");
+  } else if (started != null) parts.push(elapsedWords(now - started));
   if (waiting) parts.push(statusWords("waiting"));
   const when = parts.filter(Boolean).join(" · ");
   const h = String(r.harness ?? "").trim();

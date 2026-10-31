@@ -4204,6 +4204,48 @@ does not need a bump, stop and bump it.
   and Build's Code view (`hosted/`, the real CLI with its own tools) is a
   different path and is untouched. Pin: `tests/test_claude_slash_text_v1416.py`.
 
+- **A Code-view session whose tool still runs BACKGROUND work is never reaped
+  or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died
+  together twice in one day, each ~15 min after the reply that said "I'll
+  report as teams finish"). The pool's idle reaper (`IDLE_S`) looked only at
+  whether a reply ran. Claude Code says `system` `task_started` (task_id,
+  task_type local_agent | local_bash …) and `task_notification` (completed |
+  failed | stopped) — measured live on 2.1.316: the reply's `result` comes
+  while the task is open, then the notification, then Claude Code WAKES
+  ITSELF with a second reply. `ClaudeDriver.background_tasks` counts the open
+  ones; `LiveSession.keeps_working(now)` (open tasks AND the tool heard from
+  within `BACKGROUND_SILENT_MAX_S`, 2 h — a forgotten dev server must not
+  hold a process forever) keeps the reaper and the cap-6 evictor off it; idle
+  is measured from the tool's newest frame of ANY kind (`last_heard`, set in
+  the service's `on_message`), so a self-started reply counts. Open tasks
+  never make the session `busy` (that refuses a message — Claude Code takes
+  one while helpers run). The session row carries `background` (count).
+  REVIEW: the reaper was not the only way they died. A restart (effort,
+  model back to default, tools) waits while tasks are open (`restart` stays
+  set, a notice says so) and runs on the first message after; Open in
+  terminal is refused in words (`W.BACKGROUND_OPEN_TERMINAL`); the cap-6
+  evictor sorts by `max(last_active, last_heard)` like the reaper (Claude
+  Code's self-started reply after helpers finish owns no turn). Archive,
+  delete, shutdown and the account move still stop the process as before.
+  Pins: `tests/test_build_app_background_tasks_v1417.py` (12 mutations, all red).
+  SHOWN, not only kept alive (same release): the session row carries
+  `background_helpers` (task types in `claude.HELPER_TASK_TYPES` — agents,
+  workflows, team members; never a background command) and `self_reply`
+  (the tool is writing a reply no message owns: `_alone`, cleared by its
+  result, a new message or exit; stops counting after `SELF_REPLY_QUIET_S`
+  10 min of silence). `view()` reads the live flags BEFORE the events, so a
+  "nothing is happening" answer always carries the whole report. The Code
+  view says ONE quiet line (`backgroundWorkWords`; commands are never promised
+  a report), re-reads every 4 s (20 s for commands only) through
+  `useVisibleInterval`, ONE read at a time, never while a reply the user
+  started runs, a read that was out across a card answer is dropped
+  (`answerSeqRef`), then one last read when it ends. Running now lists it
+  ("helpers working" / "replying on its own") and the busy counts include
+  helpers (keep-awake, install-when-idle), bounded by the 2-h silence rule.
+  OPEN: frames a helper writes (`parent_tool_use_id` set) are drawn as Claude
+  Code's own. Pins: `tests/test_build_app_background_report_v1417.py`,
+  `test_build_app_background_review_v1417.py`,
+  `dashboard/__tests__/build-code-background{,-review}-v1417.test.tsx`.
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control
@@ -4712,6 +4754,109 @@ does not need a bump, stop and bump it.
   pins live there too),
   `build-code-start-v1412` (the heading). Live-proven on a scratch daemon
   (real opencode 1.18.18, opencode/glm-5.3-flash-free): see the Handbook.
+
+- **Grok is the FIFTH tool in Build › Code: `grok agent --no-leader stdio`
+  (ACP, the core OpenCode speaks, LIFTED into `hosted/acp.py`); a mode is the
+  session's own `_meta`, ALWAYS stated; Iron Jarvis never picks an option Grok
+  SAVES** (v1.416.0, `hosted/grok.py`, grok 1.0.5 -> 1.0.70 measured — the CLI
+  UPDATED ITSELF during the first scratch run, its own background updater).
+  `AcpDriver` (requests, prompts, cards, the update stream, the turn's end)
+  is shared; `OpenCodeDriver` keeps its behaviour on it (its 74 tests
+  unchanged, green) and `opencode.py` still re-exports the lifted names.
+  START: `G.ARGV` = `agent --no-leader stdio` (Grok's `[cli] use_leader`
+  would hand the session to a SHARED leader that outlives the process and that
+  no tree kill reaches); no port. POSTURE: Grok's ACP `session/new` /
+  `session/resume` take `_meta {yoloMode, autoMode}` (its documented options);
+  with no `_meta` the user's own `[ui] permission_mode` decides — on THIS PC
+  `always-approve`, and a write ran with no card (measured). So
+  `G.session_meta(mode)` is sent on EVERY open and resume: ask = both false,
+  auto = Grok's own safety check, full = yolo (two presses). `session/set_mode`
+  answers `{}` for ANY id, even a made-up one, and changes nothing (measured);
+  the top-level `--permission-mode` / `--allow` are not honoured by `agent
+  stdio` (measured) — so Auto edits and Plan are HIDDEN with reasons
+  (`G.HIDDEN_MODES`). A mode change is a new process before the next message
+  (`restart_needed`, `session/resume` with the new `_meta`). CARDS: an edit
+  offers `allow-edits-session` (in memory, per Grok's docs) / `allow-once` /
+  `reject-once`; a command offers `always-allow` and `reject-always`, which
+  Grok SAVES for the project — `G.SESSION_ONLY_OPTIONS` is the only Allow for
+  this session, Deny is `reject-once` only (a card with none answers
+  cancelled), so a command card is Allow once only. A `reject-once` ENDS the
+  reply (`stopReason cancelled`, `cancellationCategory PermissionRejected`):
+  drawn `completed` + `W.GROK_DECLINED_ENDS`, never the user's Stop. STOP:
+  `session/cancel` ends the reply and LEAVES THE RUNNING COMMAND RUNNING (a
+  `ping` outlived the cancel and Grok itself; `_x.ai/terminal/kill` with the
+  tool call id said "terminal not found") — the driver draws each running tool
+  failed (`G.STOPPED_TOOL`), sets `close_after_stop` when one was a command,
+  and `service._end_turn` stops the process BEFORE the done, with
+  `W.GROK_STOP_CLOSED`; the conversation reopens with the next message. THE
+  JOB DOES NOT REACH GROK'S COMMANDS: Grok runs each one as `pwsh
+  -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <cmd>` — on this
+  PC the Store pwsh (WindowsApps alias), which Windows never puts in our Job
+  (the v1.407.1 AppX lesson) — so the `ping` was in NO job and outlived the
+  Job's close (measured with `IsProcessInJob`, live). And Grok's cancel kills
+  that pwsh, leaving the command with a dead parent, where a tree read at stop
+  time no longer finds it. So `HarnessProcess.note_started()` reads the
+  descendants (psutil, pid + start time) when the service sends a Stop to a
+  driver with `notes_started_on_stop` (Grok only), BEFORE `session/cancel`;
+  `stop()` reads them again and `process.kill_left` ends whatever is still
+  the SAME process (start time checked — a reused pid is never touched).
+  Live-proven: before the fix a ping survived Stop; after, 0 left. REVIEW
+  (pins `tests/test_build_app_grok_review_v1416.py`, 7 mutations red): the
+  sweep is OPT-IN (`HarnessProcess(ends_left_behind=)`, set from the
+  driver's `notes_started_on_stop`) — the other four tools stop exactly as
+  before; `descendants` reads a child only when it is not older than ITS OWN
+  parent (psutil's recursive walk checks only the top process, so the user's
+  process behind a REUSED parent pid was read as Grok's) and is bounded
+  (`MAX_DESCENDANTS`); `kill_left` needs the start time EXACTLY and spares a
+  visible-window owner or a Windows-GUI program (the keep-windows rule); and
+  a Stop with a card open calls `GrokDriver.stopping()` BEFORE the card's
+  deny, because Grok ends its reply on that reject before the cancel lands
+  (it read "You declined" and `completed`). NOTES: a second `session/prompt` is QUEUED as its own turn
+  (measured), so a note is Grok's own `_x.ai/interject` {sessionId, text}
+  (answered `{status: queued}`, echoed at once as `_x.ai/session/interjection`
+  — read on that echo; registered BEFORE the request, the echo outruns its
+  answer). RESUME: `session/resume` (no replay; keeps the last model —
+  `keeps_last` from `summary.json` `num_messages`), else `session/load` with
+  the replay hidden. MODELS / EFFORT: `models.availableModels` (each with its
+  own `reasoningEfforts`), `session/set_model`, `session/set_config_option
+  reasoning_effort`; the list is what a Grok process last said
+  (`<home>/hosted/grok_models.json`), else Grok's own `models_cache.json`
+  (names only). USAGE: the prompt answer's `_meta.usage`, `costUsdTicks /
+  10^10` (xAI's unit — NOT cross-checked against a bill), `cost_reported_by:
+  "Grok"`, never list price; context = `_meta.totalTokens` over the model's
+  `totalContextTokens`. Every other `_x.ai/...` notification is DROPPED unread
+  (`_x.ai/mcp/servers_updated` carries the user's MCP config, keys in URLs).
+  SIGN-IN / ACCOUNTS: Grok's own `auth.json` read as a FILE (`G.signed_in`,
+  never a process); an Iron-Proxy `xai` account is its `GROK_HOME`
+  (`W.PROXY`, `BA.proxy_account_rows` on `BA.status_of`, lifted out of
+  `row_of`); `continue-on` refuses (`W.GROK_CONTINUE`). SAVED SESSIONS:
+  `<home>/sessions/*/<uuid>/summary.json` matched by its `cwd` (the encoded
+  folder name is never recomputed); `grok --resume <id>` in a terminal.
+  LISTED ONLY WHEN INSTALLED: the row carries `only_when_installed` and the
+  dashboard's `decodeCodingTools` drops it when not installed;
+  `toolChoiceWords` names the four always plus Grok when listed. TESTS NEVER
+  READ THE USER'S ~/.grok: `tests/conftest.py` `_isolate_grok_home` sets
+  `IRONJARVIS_GROK_HOME` (`G.HOME_ENV`, Iron Jarvis's reads only — the process
+  is never told). OPEN: grok-4.5 did not read an attached picture (it tried
+  `read_file`, then a PowerShell search; grok-4.7 read it) — which models
+  see pictures is not known in advance; a note interjected in a reply's LAST
+  step was not measured (it may run as its own turn); Grok's
+  `x.ai/ask_user_question` / `exit_plan_mode` client requests are answered
+  "not handled"; Grok's subagent permission requests not measured; Iron
+  Jarvis's own MCP tools over Grok's ACP not measured live; the cost tick unit;
+  the CLI auto-updates itself (a recording may stop matching a newer Grok).
+  Pins: `tests/test_build_app_grok_v1416.py` (recordings
+  `tests/fixtures/build_app_v1416`, contract `dashboard/__tests__/fixtures/
+  build-app-events-v1416.json`, `IJ_REGEN_BUILD_APP_GROK=1`),
+  `dashboard/__tests__/build-app-grok-v1416.test.tsx`; moved on purpose:
+  `test_build_app_routes_v1409` (five tools; the from-terminal words).
+  Every guarantee mutation-checked (19 daemon + 4 dashboard, all red).
+  Live-proven on a scratch daemon (8797, scratch root, real grok 1.0.70,
+  grok-4.5 effort low): an answer ("pong", cost reported), an edit card
+  allowed (the file written), a command card (Allow once only) allowed then
+  Stop (no command left running), and the next message resumed the same
+  conversation. NOT driven live: Open in terminal / back (pinned with the
+  fake only), an Iron-Proxy account, Iron Jarvis's MCP tools.
 
 - **Build › Code is part of the app: its running work is seen everywhere,
   its card reaches the phone, and the REAL tool may get Iron Jarvis's own MCP
@@ -7633,6 +7778,114 @@ does not need a bump, stop and bump it.
   taskbar). Windows' icon cache can keep the old picture on a shortcut until
   it refreshes. `desktop/assets/README.md` says how to remake the files. Pin:
   `tests/test_app_icon_v1380.py` (red on the old files: 4 of 5).
+
+- **A skill works in a coding session the way the harness it came from runs
+  it: the same discovery, listed up front, Claude Code's base-directory line
+  and argument filling, the harnesses' own switches; `allowed-tools` grants
+  nothing** (v1.418.0; the user: "skills that are native across different
+  harnesses to work exactly the same way inside our native harness").
+  MEASURED, not recalled: Claude Code 2.1.316 (a probe with a throwaway
+  CLAUDE_CONFIG_DIR — its `skill_listing` attachment and the expanded
+  `/name` turn in the saved transcript), Codex 0.157.0 (`codex debug
+  prompt-input`, no model call — its skill roots table), Grok 1.0.5 / Pi
+  1.3.0 / OpenCode 1.18 (their docs and binaries). `skills/native.py` is THE
+  module. DISCOVERY (`external_skill_roots()` now returns `(path, tag, how)`,
+  `how` one|tree|skill; a caller's 2-tuple reads as tree): Claude Code's
+  `skills/` ONE level deep (`discover_first`, first-wins), its
+  `skills/synced/<bucket>` of the SIGNED-IN account only
+  (`claude_commands.signed_in_bucket`; every bucket when unknown), and the
+  skill folders of `claude_commands.enabled_plugins([])` only (installed in
+  `installed_plugins.json`, synced, or skills-dir; `enabledPlugins` not
+  false) — the old recursive read of `~/.claude/plugins` and `skills/`
+  loaded 32 skills on the user's PC from OTHER accounts' synced buckets and
+  synced plugins; `$CODEX_HOME/skills` (default `~/.codex`),
+  `~/.agents/skills` (source "agents"), `~/.grok/skills`,
+  `~/.config/opencode/skill(s)`, `~/.pi/agent/skills`. NOT read: Grok's
+  vendor-bundled `~/.grok/bundled/skills` (Grok-specific; Codex's `.system`
+  still is). A session FOLDER's own skills (`project_skills`): `.claude/
+  skills` (one level), `.agents/skills`, `.grok/skills`, `.opencode/
+  skill(s)`, `.pi/skills` from the folder up to the first folder holding
+  `.git` (none: the folder alone; never the home), nearest first; source
+  `project` = SCANNED; the registry wins a name (Claude Code: personal
+  before project). FRONTMATTER (`loader.Skill`): `when_to_use`/`when-to-use`,
+  `model_invocable` (`disable-model-invocation`, and Codex's
+  `agents/openai.yaml` `policy.allow_implicit_invocation: false`),
+  `user_invocable`, `argument_names`, `argument_hint` (a YAML list joined
+  like JavaScript's String), `allowed_tools` (READ, NEVER OBEYED). LISTING
+  (`native.listing`, `HarnessTurn.skill_listing`, built in
+  `chat_turn._build_harness` off the loop when `skill_load` is in the gate,
+  after the rendered harness and before the date, NOT in the fingerprint):
+  claude dialect = Claude Code's "The following skills are available for
+  use with the Skill tool:" + `- name: description - when to use`; gpt =
+  Codex's `## Skills` list with `(file: …/SKILL.md)` and its how-to;
+  generic/qwen = Claude Code's shape naming `skill_load`; 1% of the window ×
+  4 chars, 1,536 a description, shortened evenly, names only last;
+  model-invocable only; harness-layer folder skills stay in the tree's own
+  list. INVOCATION (`native.invocation_text` — ONE function for
+  `skill_load` and both chat lanes' `/name`): `Base directory for this
+  skill: <dir>\n\n` + the body (scanned first when not the user's) with
+  `${CLAUDE_SKILL_DIR}` (forward slashes) then `claude_commands.substitute`
+  (`$ARGUMENTS`, `$N` 0-based, named, `ARGUMENTS: …` appended when nothing
+  filled). `skill_load` takes `args` (Claude Code's `Skill` passes them —
+  dropped before), resolves registry → the session folder (`ctx.workspace`)
+  → `<plugin>:<skill>`, refuses a non-model-invocable skill in words;
+  `skill_search` never finds one and also searches the folder. `/name`:
+  `chat_turn.skill_playbook` (both lanes, lock-step) — args =
+  `ChatBody.skill_args` (the build route sends the typed words; "" picked
+  alone), else the last user message unless it is `SKILL_ALONE`; whole up to
+  `INVOKE_CHARS` 100,000 (was 8,000 — a real 37 KB skill was cut at a
+  fifth; a cut is said); `turn_skill_async` finds a folder skill
+  (`workspace_dir`) and the stream lane's 404 for an unknown one is still
+  before the response opens (`_eager_checks` defers only the folder case to
+  an off-loop check). MENUS: `GET /skills` rows carry `user_invocable`,
+  `model_invocable`, `argument_hint`; `GET /build/sessions/{id}/skills`
+  adds the folder's own as `kind: "project"` (dashboard `decodeSkills` →
+  `source: "yours"`, `origin: "project"`, sent as `skill`); both menus drop
+  `user_invocable: false` (`buildComposer.decodeSkills`, the chat page's
+  `slashSkills`). PLAIN CHAT CHANGED TOO (shared path): its `/skill`
+  playbook carries the base directory and filled arguments, and
+  `skill_load`/`skill_search` everywhere follow the new rules. Goldens:
+  `team_first_off_golden_v1400.json` regenerated (only the listing and
+  `skill_load`'s spec moved; the capture reads no skill folder of the PC and
+  writes `<SRC>`). Moved on purpose: `test_plugin_catalog_not_installed`,
+  the trash tests of `test_build_slash_commands_v1379` /
+  `_nofolder_review_v1379` (their plugins are now INSTALLED Claude Code's
+  way), two pins of `test_harness_helpers_v1372` (`Skill`'s args now reach
+  `skill_load`; the base-directory line leads the user's own text). LIVE (scratch daemon 8797, real claude-cli Haiku 4.5): a coding
+  session loaded the installed `pixio-skill` and answered its script's path
+  `C:\Users\VR\.claude\skills\pixio-skill\scripts\pixio-run.mjs`. OPEN:
+  Claude Code's managed settings and `skillOverrides` are not read; Grok's
+  `[skills] paths/ignore/disabled` and its `[compat.claude]` switch are not
+  read; Codex's `[[skills.config]] enabled = false` is not read; Claude
+  Code's `!` shell lines in a SKILL body are not expanded (the model sees
+  them as text); synced skills when no account is readable load from every
+  bucket. Pins: `tests/test_skill_parity_v1417.py` (28 mutations, all red),
+  `dashboard/__tests__/skill-parity-v1417.test.ts` (4 mutations, all red).
+  REVIEW (each red first, `tests/test_skill_parity_review_v1417.py`, 10
+  mutations red): (1) the LIST and `skill_search`'s answer go through
+  `native.shown_entry` — a skill `scans_skill` marks (another program's
+  folder, a plugin, a session folder's own) has its description (and the
+  Codex list's `(file: …)`) promptguard-scanned and is left out when its
+  NAME is flagged; the planted description reached the system prompt
+  verbatim. (2) a session folder's skills stay IN the folder: no part of
+  the way, skill folder or SKILL.md that is a link or junction is followed
+  (never opened, so a link to a share is never touched — a deliberate
+  difference from Claude Code, which follows them), TREE roots are walked
+  by hand (≤ 8 deep, ≤ 2,000 folders), and every file passes `fs_read_ok`
+  (the walk goes UP to the repository root, past "Folders Jarvis may
+  read"). (3) the "/name" playbook rides the SYSTEM prompt, which the
+  planner cannot shrink: `native.invoke_cap(window)` = a quarter of the
+  answering model's window, between the old 8,000 and `INVOKE_CHARS`, both
+  lanes passing their own `_context_window` (lock-step), and the cap bounds
+  the FILLED text (a pasted message filled in as `ARGUMENTS:` is not copied
+  whole a second time). Checked fine: synced skills read the signed-in
+  account through the shared `claude_commands.signed_in_bucket`
+  (`CLAUDE_CODE_*_UUID` ignored, pinned); `codex debug prompt-input` on a
+  scratch CODEX_HOME confirmed `.agents/skills` from the folder up to the
+  repo root, nested. OPEN: blocks in the list publish no `context.blocked`;
+  `user-invocable: false` is only hidden from the menus (a typed API
+  `skill` still runs it); terminal assist's auto skills
+  (`routes/terminals`) still inject `sk.instructions` unscanned (older).
 
 - **Claude Code's `/` in the IJ harness: a typed `/name words` RUNS it;
   Claude Code's own command files are read, never executed; a Build session

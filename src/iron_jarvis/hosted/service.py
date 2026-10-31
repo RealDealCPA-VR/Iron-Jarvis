@@ -84,6 +84,9 @@ from .pi import PiDriver
 from . import opencode as O
 from .opencode import HARNESS as OPENCODE
 from .opencode import OpenCodeDriver
+from . import grok as G
+from .grok import HARNESS as GROK
+from .grok import GrokDriver
 from . import jarvis_tools as JT
 from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
@@ -93,15 +96,34 @@ from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
 log = logging.getLogger(__name__)
 
-HARNESSES: tuple[str, ...] = (CLAUDE, CODEX, PI, OPENCODE)
+HARNESSES: tuple[str, ...] = (CLAUDE, CODEX, PI, OPENCODE, GROK)
 #: The tools that sign in by themselves (no Iron-Proxy account applies).
 OWN_SIGN_IN: tuple[str, ...] = (PI, OPENCODE)
+#: v1.416.0: the tools whose model list is what their PROCESS last said (never
+#: a start just to ask), each model with its own effort levels, and which keep
+#: a reopened conversation's last model.
+LISTED_MODELS: tuple[str, ...] = (PI, OPENCODE, GROK)
+#: v1.416.0: the tools listed only when installed (Grok is newer to the view;
+#: the four before it are always listed, with "not installed" said).
+ONLY_WHEN_INSTALLED: tuple[str, ...] = (GROK,)
 #: At most this many harness processes at once.
 MAX_LIVE = 6
 #: A process with no turn for this long is stopped by the reaper.
 IDLE_S = 15 * 60.0
 #: How often the reaper looks.
 REAP_EVERY_S = 60.0
+#: v1.417.0 (a USER BUG): a process whose tool still runs BACKGROUND tasks
+#: (Claude Code's helper agents and background commands, which outlive the
+#: reply that started them) is never reaped or evicted — stopping it killed
+#: every helper. Bounded: once the tool has said nothing for this long the
+#: reaper treats the session as idle again (a forgotten dev server must not
+#: hold a process forever).
+BACKGROUND_SILENT_MAX_S = 2 * 60 * 60.0
+#: v1.417.0: a reply the tool started BY ITSELF (Claude Code's report once its
+#: helpers end) counts as being written while the tool was heard from within
+#: this long — the Code view reads the session again meanwhile, and a reply
+#: whose end never came stops being one.
+SELF_REPLY_QUIET_S = 10 * 60.0
 #: How long a finished turn stays in memory for a rejoin.
 FINISHED_KEEP_S = 600.0
 #: v1.414.3: how long a reply's end waits for the tool's session id to be
@@ -151,6 +173,7 @@ EFFORTS: dict[str, tuple[str, ...]] = {
     CODEX: ("minimal", "low", "medium", "high", "xhigh"),
     PI: P.EFFORTS,
     OPENCODE: O.EFFORTS,
+    GROK: G.EFFORTS,
 }
 _MODEL_RX = re.compile(r"^[A-Za-z0-9._:/\-\[\]]{1,120}$")
 #: A harness session id typed into a terminal: a UUID (Claude) or Codex's
@@ -197,6 +220,8 @@ def modes_for(harness: str) -> dict[str, Any]:
         return P.MODES
     if harness == OPENCODE:
         return O.MODES
+    if harness == GROK:
+        return G.MODES
     return CLAUDE_MODES if harness == CLAUDE else CODEX_MODES
 
 
@@ -212,6 +237,8 @@ def mode_about(harness: str, mode: str) -> str:
         return P.MODE_ABOUT.get(mode, "")
     if harness == OPENCODE:
         return O.MODE_ABOUT.get(mode, "")
+    if harness == GROK:
+        return G.MODE_ABOUT.get(mode, "")
     if harness == CODEX:
         return CODEX_ABOUT.get(mode, "")
     return CLAUDE_ABOUT.get(mode, "")
@@ -255,7 +282,8 @@ def mode_rows(harness: str) -> list[dict[str, Any]]:
 def hidden_mode_rows(harness: str) -> list[dict[str, str]]:
     if harness == CLAUDE:
         return []
-    hidden = P.HIDDEN_MODES if harness == PI else O.HIDDEN_MODES if harness == OPENCODE else CODEX_HIDDEN
+    hidden = (P.HIDDEN_MODES if harness == PI else O.HIDDEN_MODES if harness == OPENCODE
+              else G.HIDDEN_MODES if harness == GROK else CODEX_HIDDEN)
     return [{"id": m, "label": MODE_LABELS.get(m, m), "reason": why} for m, why in hidden.items()]
 
 
@@ -294,13 +322,13 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
             known = None
         if known is not None:
             return tuple(x for x in EFFORTS[CLAUDE] if x in known)
-    if harness in (PI, OPENCODE) and pi_rows and (model or harness == OPENCODE):
-        # (OpenCode: the default row "" carries its default model's levels.)
+    if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK)):
+        # (OpenCode, Grok: the default row "" carries its default model's levels.)
         for r in pi_rows:
             if r.get("id") == model and isinstance(r.get("efforts"), list):
                 if harness == OPENCODE:
                     return tuple(str(x) for x in r["efforts"])  # OpenCode's own names, its order
-                return tuple(x for x in EFFORTS[PI] if x in r["efforts"])
+                return tuple(x for x in EFFORTS[harness] if x in r["efforts"])
     return EFFORTS[harness]
 
 
@@ -328,6 +356,8 @@ def default_home(harness: str) -> str:
         return str(P.agent_dir())
     if harness == OPENCODE:
         return str(O.data_dir())
+    if harness == GROK:
+        return str(G.default_home())
     if harness == CLAUDE:
         return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
@@ -377,6 +407,9 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
     if harness == OPENCODE:
         # OpenCode keeps sessions in its own database (read-only here).
         return O.disk_sessions(home, folder, since=since, limit=DISK_FILES)
+    if harness == GROK:
+        # Grok keeps each session's summary.json in its own folder (read-only here).
+        return G.disk_sessions(home, folder, since=since, limit=DISK_FILES)
     out = []
     for path in _conversation_files(harness, home, folder):
         try:
@@ -406,6 +439,11 @@ def pi_keeps_last(row: Any) -> bool:
     thinking level it last used (Pi: core/sdk.js; OpenCode: ``session/load``
     keeps them, measured), so "its default" no longer applies to it."""
     hid = str(getattr(row, "harness_session_id", "") or "")
+    if getattr(row, "harness", "") == GROK and hid:
+        try:
+            return G.has_messages(home_of(GROK, store.account_record(row)), hid)
+        except Exception:  # noqa: BLE001 — not known: the default stays offered
+            return False
     if getattr(row, "harness", "") == OPENCODE and hid:
         try:
             return O.has_messages(home_of(OPENCODE, None), hid)
@@ -430,7 +468,7 @@ def pane_harness(pane: Any) -> str | None:
             cli = str(pane.activity().cli or "").lower()
         except Exception:  # noqa: BLE001
             cli = ""
-    return {"claude": CLAUDE, "codex": CODEX, "pi": PI, "opencode": OPENCODE}.get(cli)
+    return {"claude": CLAUDE, "codex": CODEX, "pi": PI, "opencode": OPENCODE, "grok": GROK}.get(cli)
 
 
 def pane_exited(pane: Any) -> bool:
@@ -619,6 +657,9 @@ class LiveSession:
         self.turn: HostedTurn | None = None
         self.asks: dict[str, Ask] = {}
         self.last_active = time.monotonic()
+        #: v1.417.0: when the running tool last sent anything (any frame,
+        #: owned by a reply or not) — the background-work bound reads it.
+        self.last_heard = self.last_active
         self.lock = asyncio.Lock()
         #: The process must restart before the next message (an effort change).
         self.restart = False
@@ -666,6 +707,50 @@ class LiveSession:
         return bool(self.driver is not None and getattr(self.driver, "busy_alone", False))
 
     @property
+    def background_tasks(self) -> int:
+        """v1.417.0: how many background tasks the tool says are still open
+        (Claude Code's helper agents and background commands). A new message
+        is still welcome; only the reaper and the pool leave the process be."""
+        try:
+            return int(getattr(self.driver, "background_tasks", 0) or 0) if self.driver is not None else 0
+        except Exception:  # noqa: BLE001 — a driver's count must never break the pool
+            return 0
+
+    def keeps_working(self, now: float) -> bool:
+        """Open background tasks the tool was heard from within
+        :data:`BACKGROUND_SILENT_MAX_S`."""
+        return self.background_tasks > 0 and now - self.last_heard < BACKGROUND_SILENT_MAX_S
+
+    @property
+    def background_helpers(self) -> int:
+        """v1.417.0: the open background tasks that are helper AGENTS."""
+        try:
+            return int(getattr(self.driver, "background_helpers", 0) or 0) if self.driver is not None else 0
+        except Exception:  # noqa: BLE001 — a driver's count must never break a view
+            return 0
+
+    def replying_alone(self, now: float) -> bool:
+        """v1.417.0: the tool is writing a reply no message of the user's
+        owns (Claude Code's report after its helpers ended; Pi's run of its
+        own), heard from within :data:`SELF_REPLY_QUIET_S`. Never while a
+        reply the user started runs (that reply shows itself)."""
+        if not self.running or (self.turn is not None and self.turn.running):
+            return False
+        try:
+            alone = self.working_alone or bool(getattr(self.driver, "replying_alone", False))
+        except Exception:  # noqa: BLE001
+            return False
+        return alone and now - self.last_heard < SELF_REPLY_QUIET_S
+
+    def helpers_working(self, now: float) -> bool:
+        """v1.417.0: helpers still at work (the tool heard from within
+        :data:`BACKGROUND_SILENT_MAX_S`) with no reply of the user's running —
+        what Running now and the busy counts list beside the replies."""
+        if not self.running or (self.turn is not None and self.turn.running):
+            return False
+        return self.background_helpers > 0 and now - self.last_heard < BACKGROUND_SILENT_MAX_S
+
+    @property
     def busy(self) -> bool:
         return ((self.turn is not None and self.turn.running) or bool(self.asks) or bool(self.claim)
                 or self.working_alone)
@@ -689,6 +774,8 @@ class HostedService:
         self._pi_catalog = self.home / "hosted" / "pi_models.json"
         #: The model list an OpenCode process last said (v1.413.0).
         self._oc_catalog = self.home / "hosted" / "opencode_models.json"
+        #: The model list a Grok process last said (v1.416.0).
+        self._grok_catalog = self.home / "hosted" / "grok_models.json"
         #: v1.414.0: how long a card waits in the app before the phone gets
         #: it (``harness/stall.PHONE_AFTER_S``; a test sets it short).
         from ..harness.stall import PHONE_AFTER_S
@@ -750,14 +837,23 @@ class HostedService:
             # Pi signs in by ITSELF, per provider (`/login`, its own auth
             # file): there is no one verdict to read, and Iron-Proxy's
             # accounts are other tools' homes. "Not known" is honest.
-            if h not in OWN_SIGN_IN:
+            if h == GROK:
+                # v1.416.0: Grok's own sign-in file (one small read, never a
+                # process); the token is never kept.
+                try:
+                    signed = G.signed_in() if installed else None
+                except Exception:  # noqa: BLE001
+                    signed = None
+            elif h not in OWN_SIGN_IN:
                 with never_probe():
                     try:
                         signed = DEFAULT_PROBE.verdict(cli)
                     except Exception:  # noqa: BLE001
                         signed = None
             accounts = []
-            if snap is not None and h not in OWN_SIGN_IN:
+            if snap is not None and h == GROK:
+                accounts = BA.proxy_account_rows(snap, W.PROXY[GROK])
+            elif snap is not None and h not in OWN_SIGN_IN:
                 for r in BA.vendor_rows(snap, "claude" if h == CLAUDE else "codex"):
                     accounts.append({"id": r["id"], "name": r["name"], "status": r["status"]})
             out.append({
@@ -772,6 +868,8 @@ class HostedService:
                 "efforts": list(EFFORTS[h]),
                 "accounts": accounts,
                 "own_sign_in": h in OWN_SIGN_IN,
+                # v1.416.0: a tool the page lists only when it is installed.
+                "only_when_installed": h in ONLY_WHEN_INSTALLED,
                 # v1.413.0: how THIS tool signs in by itself (the chip's title).
                 "sign_in_hint": W.SIGN_IN_HINTS.get(h, ""),
                 "commands": self.commands_for(h),
@@ -793,7 +891,7 @@ class HostedService:
                     known = None
                 if known is not None:
                     r["efforts"] = [x for x in EFFORTS[CLAUDE] if x in known]
-        elif harness not in (PI, OPENCODE):
+        elif harness not in LISTED_MODELS:
             for r in rows:
                 r.pop("efforts", None)
         return rows
@@ -803,10 +901,11 @@ class HostedService:
         if harness == PI:
             # What a Pi process last listed (never a start just to ask).
             rows += P.cached_models(self._pi_catalog)
-        if harness == OPENCODE:
-            # What an OpenCode process last listed (never a start just to ask);
-            # the default row takes the levels of the model OpenCode starts on.
-            listed, default = O.cached_models(self._oc_catalog)
+        if harness in (OPENCODE, GROK):
+            # What an OpenCode (Grok) process last listed (never a start just to
+            # ask); the default row takes the levels of the model it starts on.
+            listed, default = (O.cached_models(self._oc_catalog) if harness == OPENCODE
+                               else G.cached_models(self._grok_catalog))
             rows += listed
             known = next((r for r in listed if r.get("id") == default), None)
             if known is not None and isinstance(known.get("efforts"), list):
@@ -927,7 +1026,7 @@ class HostedService:
     async def create(self, body: dict[str, Any]) -> dict[str, Any]:
         harness = str(body.get("harness") or "").strip().lower()
         if harness not in HARNESSES:
-            raise Refused('Choose "claude-code", "codex", "pi" or "opencode".', 400, field="tool")
+            raise Refused('Choose "claude-code", "codex", "pi", "opencode" or "grok".', 400, field="tool")
         folder = str(body.get("folder") or "").strip()
         resume_id = str(body.get("harness_session_id") or "").strip()
         # v1.412.0: no folder chosen is a session of its own — its first
@@ -953,7 +1052,7 @@ class HostedService:
         except Refused as r:
             r.field = r.field or "model"
             raise
-        pi_rows = await asyncio.to_thread(self._models, harness) if harness in (PI, OPENCODE) else None
+        pi_rows = await asyncio.to_thread(self._models, harness) if harness in LISTED_MODELS else None
         effort = check_effort(harness, body.get("effort"), model, pi_rows)
         title = clip(body.get("title") or "", 120)
         account = str(body.get("account") or "").strip()
@@ -1135,6 +1234,12 @@ class HostedService:
         view["running"] = bool(live and live.turn and live.turn.running)
         view["process"] = bool(live and live.running)
         view["waiting"] = bool(live and live.asks)
+        view["background"] = live.background_tasks if live and live.running else 0
+        # v1.417.0: of those, the helper agents (the words say "helpers" only
+        # for these), and whether the tool is writing a reply of its own —
+        # the Code view reads the session again while either holds.
+        view["background_helpers"] = live.background_helpers if live and live.running else 0
+        view["self_reply"] = bool(live and live.replying_alone(self.clock()))
         return view
 
     def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
@@ -1165,6 +1270,12 @@ class HostedService:
 
     async def view(self, sid: str, *, limit: int = DEFAULT_EVENTS) -> dict[str, Any]:
         row = await self._row(sid)
+        # v1.417.0: the live flags (helpers, a reply of the tool's own) are
+        # taken BEFORE the events are read: a "nothing is happening" answer
+        # then always comes with every event that work wrote, so the Code
+        # view's last read never misses the end of the report. (v1.418.0's
+        # memory view below replaced the file read that followed this line.)
+        session = self._with_live(store.view(row))
         live = self.live.get(sid)
         # v1.418.0 (C4.11): from memory when this daemon drove the session
         # (the file is read once); else the file.
@@ -1175,7 +1286,7 @@ class HostedService:
         events = await self._with_transcript(row, live, got["events"], cut=bool(got["older"]))
         dropped = got["dropped"]
         out: dict[str, Any] = {
-            "session": self._with_root(self._with_live(store.view(row))),
+            "session": self._with_root(session),
             "events": events,
             "events_total": got["events_total"] + (len(events) - len(got["events"])),
             "dropped": dropped,
@@ -1186,7 +1297,7 @@ class HostedService:
             "pending": [a.event for a in (live.asks.values() if live else [])],
         }
         out["commands"] = self.commands_for(row.harness, live)
-        if row.harness in (PI, OPENCODE):
+        if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         # v1.418.0 (C4.6): "Load earlier" reads the page before this cursor.
         out["older"] = got["older"]
@@ -1404,7 +1515,8 @@ class HostedService:
                 applied["mode"] = "next"
             if row.harness == CODEX and running_turn and live is not None:
                 self._emit(live, make("notice", text=W.CODEX_MODE_NEXT.format(mode=MODE_LABELS[mode])))
-            elif row.harness == OPENCODE and running_turn and live is not None and applied["mode"] == "next":
+            elif row.harness in (OPENCODE, GROK) and running_turn and live is not None \
+                    and applied["mode"] == "next":
                 self._emit(live, make("notice", text=W.MODE_NEXT.format(
                     label=W.label(row.harness), mode=mode_label(row.harness, mode))))
             elif applied["mode"] == "now" and live is not None and live.asks and mode != row.mode:
@@ -1414,8 +1526,8 @@ class HostedService:
                     label=W.label(row.harness), mode=mode_label(row.harness, mode))))
             fields["mode"] = mode
         next_model = check_model(body["model"]) if body.get("model") is not None else row.model
-        pi_rows = await asyncio.to_thread(self._models, row.harness) if row.harness in (PI, OPENCODE) else None
-        if row.harness in (PI, OPENCODE) and (
+        pi_rows = await asyncio.to_thread(self._models, row.harness) if row.harness in LISTED_MODELS else None
+        if row.harness in LISTED_MODELS and (
             (body.get("model") is not None and not check_model(body["model"]) and row.model)
             or (body.get("effort") is not None
                 and not check_effort(row.harness, body["effort"], next_model, pi_rows) and row.effort)
@@ -1423,7 +1535,8 @@ class HostedService:
             # Back to "Pi's default" would change nothing: reopening a
             # conversation with messages, Pi restores its LAST model and
             # thinking level (core/sdk.js) — said, never pretended.
-            raise Refused(W.PI_KEEPS_LAST if row.harness == PI else W.OPENCODE_KEEPS_LAST)
+            raise Refused(W.PI_KEEPS_LAST if row.harness == PI
+                          else W.GROK_KEEPS_LAST if row.harness == GROK else W.OPENCODE_KEEPS_LAST)
         if body.get("model") is not None:
             model = check_model(body["model"])
             if live and live.running and live.driver and model:
@@ -1433,7 +1546,7 @@ class HostedService:
                     raise Refused(str(exc)) from None
             else:
                 applied["model"] = "next"
-                if live and live.running and row.harness in (CLAUDE, PI, OPENCODE):
+                if live and live.running and row.harness in (CLAUDE, PI, OPENCODE, GROK):
                     live.restart = True  # back to the CLI's default: a restart
             fields["model"] = model
         if body.get("effort") is None and body.get("model") is not None and row.effort \
@@ -1455,7 +1568,7 @@ class HostedService:
                     raise Refused(str(exc)) from None
             elif live and live.driver:
                 live.driver.effort = effort
-            if (row.harness == CLAUDE or (row.harness in (PI, OPENCODE) and not effort)) and live and live.running:
+            if (row.harness == CLAUDE or (row.harness in LISTED_MODELS and not effort)) and live and live.running:
                 # --effort is read at start only; Pi's own default (no
                 # --thinking) applies only to a process started without one.
                 live.restart = True
@@ -1482,7 +1595,7 @@ class HostedService:
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
-        if row.harness in (PI, OPENCODE):
+        if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
         return out
 
@@ -1539,6 +1652,13 @@ class HostedService:
     async def _ensure_running(self, live: LiveSession, row: Any) -> None:
         if live.running and not live.restart:
             return
+        if live.running and live.restart and live.keeps_working(self.clock()):
+            # v1.417.0 review: a restart is a tree kill — it would stop every
+            # helper still working in the background. It waits (``restart``
+            # stays set) and this message runs on the process as it is.
+            self._emit(live, make("notice", text=W.RESTART_WAITS.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks))))
+            return
         if live.running and live.restart:
             # v1.413.0: the old process goes WITHOUT ending the turn that is
             # starting now (it is already ``live.turn``) — this stop used to
@@ -1563,7 +1683,11 @@ class HostedService:
                     raise Refused(W.HELD_BY_ROW)
             others = [lv for lv in self.live.values() if lv is not live and lv.running]
             if len(others) >= MAX_LIVE:
-                idle = sorted((lv for lv in others if not lv.busy), key=lambda lv: lv.last_active)
+                now = self.clock()
+                # v1.417.0 review: least recently HEARD first, like the reaper
+                # (a reply the tool started by itself owns no turn).
+                idle = sorted((lv for lv in others if not lv.busy and not lv.keeps_working(now)),
+                              key=lambda lv: max(lv.last_active, lv.last_heard))
                 if not idle:
                     raise Refused(W.POOL_FULL)
                 await self._stop_process(idle[0])
@@ -1601,7 +1725,8 @@ class HostedService:
         # Claude Code and Pi take the id to save under (`--session-id`): minted
         # here, so the row names the conversation before it starts.
         sid = row.harness_session_id or (str(uuid.uuid4()) if row.harness in (CLAUDE, PI) else "")
-        cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver, OPENCODE: OpenCodeDriver}[row.harness]
+        cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver, OPENCODE: OpenCodeDriver,
+               GROK: GrokDriver}[row.harness]
         proc_holder: dict[str, HarnessProcess] = {}
 
         async def write(obj: dict[str, Any]) -> None:
@@ -1622,10 +1747,15 @@ class HostedService:
             driver.catalog_path = self._oc_catalog
             driver.rules_note = rules_note
             driver.mcp_servers = list(connection.acp_servers)
+        if isinstance(driver, GrokDriver):
+            driver.catalog_path = self._grok_catalog
+            driver.mcp_servers = list(connection.acp_servers)
         driver.steer_read = lambda ref: self._steer_read(live, ref)
         proc = HarnessProcess(
             argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv, env=env, cwd=row.folder,
             name=f"hosted-{row.id}",
+            # v1.416.0 review: only Grok's stop ends what it left outside its Job.
+            ends_left_behind=bool(getattr(driver, "notes_started_on_stop", False)),
         )
         proc_holder["p"] = proc
 
@@ -1633,6 +1763,7 @@ class HostedService:
             self._on_exit(live, proc, code)
 
         def on_message(obj: dict[str, Any]) -> None:
+            live.last_heard = self.clock()
             # A frame the parser cannot read must never end the session.
             try:
                 driver.on_message(obj)
@@ -1687,6 +1818,7 @@ class HostedService:
             # own words, never the other tools' sign-in or account presses.
             ev = (P.failure_event(technical) if live.harness == PI
                   else O.failure_event(technical) if live.harness == OPENCODE
+                  else G.failure_event(technical) if live.harness == GROK
                   else W.failure_for(live.harness, technical))
             ev["title"] = W.GONE_DURING_TURN.format(label=W.label(live.harness))
             self._emit(live, ev)
@@ -1765,6 +1897,18 @@ class HostedService:
             return
         turn.ending = True
         self._return_steers(live)
+        drv = live.driver
+        if stop == "interrupted" and getattr(drv, "close_after_stop", False) and live.proc is not None:
+            # v1.416.0: Grok's cancel ends the reply and leaves the command it
+            # was running RUNNING (measured). The process goes (its Job takes
+            # the command with it) before the done; the conversation is on
+            # disk and reopens with the next message.
+            drv.close_after_stop = False
+            try:
+                await self._stop_process(live, end_turn=False)
+            except Exception:  # noqa: BLE001 — the done still goes out
+                log.warning("could not close Grok after a Stop", exc_info=True)
+            self._emit(live, make("notice", text=W.GROK_STOP_CLOSED))
         pending = live.id_save
         if pending is not None and not pending.done():
             # v1.414.3: the tool's session id is on the row before the reply
@@ -2212,6 +2356,11 @@ class HostedService:
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:
+                stopping = getattr(driver, "stopping", None)
+                if callable(stopping):
+                    # v1.416.0 review: Grok ends its reply on the deny below,
+                    # before the cancel — the driver knows it is a Stop first.
+                    stopping()
                 for ask_id in list(live.asks):  # an unanswered card goes with the stop
                     ask = live.asks.pop(ask_id, None)
                     if ask is None:
@@ -2222,6 +2371,12 @@ class HostedService:
                         pass
                     self._note_answered(live, ask_id, "stopped", "app")
                     self._emit(live, make("resolved", request_id=ask_id, decision="deny"))
+                proc = live.proc
+                if getattr(driver, "notes_started_on_stop", False) and proc is not None:
+                    # v1.416.0: Grok's cancel leaves its command running with
+                    # no parent — what it started is read BEFORE it is told.
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(proc.note_started)
                 try:
                     await driver.interrupt()
                 except Exception:  # noqa: BLE001 — a gone process ends the turn
@@ -2276,7 +2431,8 @@ class HostedService:
         now = self.clock() if now is None else now
         stopped = []
         for live in list(self.live.values()):
-            if live.running and not live.busy and now - live.last_active >= IDLE_S:
+            quiet = now - max(live.last_active, live.last_heard)
+            if live.running and not live.busy and not live.keeps_working(now) and quiet >= IDLE_S:
                 await self._stop_process(live)
                 live.stopped_why = "idle"  # v1.417.0 (C4.7): said at the next start
                 stopped.append(live.sid)
@@ -2320,6 +2476,9 @@ class HostedService:
         live = self.live.get(sid)
         if live and ((live.turn and live.turn.running) or live.claim):
             raise Refused(W.RUNNING)
+        if live and live.running and live.keeps_working(self.clock()):
+            raise Refused(W.BACKGROUND_OPEN_TERMINAL.format(
+                label=W.label(row.harness), tasks=W.background_count(live.background_tasks)))
         row = await self._row_with_saved_id(sid)  # v1.417.0 review
         hid = row.harness_session_id
         if not hid:
@@ -2352,6 +2511,11 @@ class HostedService:
             # OpenCode's own way back into a saved session: `--session <id>`
             # (its TUI, in the session's folder).
             command = f"{entry['command']} --session {hid}"
+            return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
+                               accounts=accounts, command=command)
+        if row.harness == GROK:
+            # Grok's own way back into a saved session: `--resume <id>` (its TUI).
+            command = f"{entry['command']} --resume {hid}"
             return launch_pane(self.platform, TerminalLaunch(cli=cli, cwd=row.folder),
                                accounts=accounts, command=command)
         if row.harness == PI:
@@ -2401,7 +2565,7 @@ class HostedService:
         among several."""
         harness = pane_harness(pane)
         if harness is None:
-            raise Refused("This terminal is not running Claude Code, Codex, Pi or OpenCode.")
+            raise Refused("This terminal is not running Claude Code, Codex, Pi, OpenCode or Grok.")
         if not pane_exited(pane):
             raise Refused(
                 f"{W.label(harness)} is still running in this terminal — exit it there first "
@@ -2428,7 +2592,8 @@ class HostedService:
         row = await self._row(sid)
         if row.harness != CLAUDE:
             raise Refused(W.PI_CONTINUE if row.harness == PI
-                          else W.OPENCODE_CONTINUE if row.harness == OPENCODE else W.CODEX_CONTINUE)
+                          else W.OPENCODE_CONTINUE if row.harness == OPENCODE
+                          else W.GROK_CONTINUE if row.harness == GROK else W.CODEX_CONTINUE)
         if not row.harness_session_id:
             row = await self._row_with_saved_id(sid)  # v1.417.0 review
         if not row.harness_session_id:

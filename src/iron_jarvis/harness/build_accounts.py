@@ -221,29 +221,54 @@ def row_of(profile: Mapping[str, Any], state: Mapping[str, Any] | None, *,
         "plan": (str(st.get("plan")).strip().lower() or None) if st.get("plan") else None,
     }
     row["plan_label"] = plan_label(row["plan"])
+    row.update(status_of(profile, st, now))
+    return row
+
+
+def status_of(profile: Mapping[str, Any], state: Mapping[str, Any] | None,
+              now: datetime | None = None) -> dict[str, Any]:
+    """v1.416.0 (lifted from :func:`row_of`): an account's ``status`` and the
+    fields that go with it (``resets_at`` / ``limit_kind`` for a limit,
+    ``usage`` for a known window) — the same words for every vendor."""
+    st = state if isinstance(state, Mapping) else {}
+    now = now or datetime.now(timezone.utc)
     if not _is_on(profile, st):
-        row["status"] = OFF
-        return row
+        return {"status": OFF}
     if _acc.needs_sign_in(st):
-        row["status"] = NEEDS_SIGN_IN
-        return row
+        return {"status": NEEDS_SIGN_IN}
     parked, until = _parked_until(st, now)
     if parked:
-        row["status"] = LIMIT
-        row["resets_at"] = _iso(until)
         kind = _reason_kind(st)
-        row["limit_kind"] = (
-            "usage" if kind in ("quota-exhausted", "billing")
-            else "rate" if kind == "rate-limit" else "busy" if kind == "overloaded" else "other"
-        )
-        return row
+        return {
+            "status": LIMIT,
+            "resets_at": _iso(until),
+            "limit_kind": (
+                "usage" if kind in ("quota-exhausted", "billing")
+                else "rate" if kind == "rate-limit" else "busy" if kind == "overloaded" else "other"
+            ),
+        }
     usage = _usage_of(st, now)
     if usage is not None:
-        row["status"] = USAGE
-        row["usage"] = usage
-    else:
-        row["status"] = READY
-    return row
+        return {"status": USAGE, "usage": usage}
+    return {"status": READY}
+
+
+def proxy_account_rows(snap: tuple[list[dict[str, Any]], dict[str, Any]], proxy: str) -> list[dict[str, Any]]:
+    """v1.416.0: ``{id, name, status}`` of Iron-Proxy's CLI accounts for one
+    Iron-Proxy provider (Grok's ``xai``), in Iron-Proxy's order, turned-off
+    ones left out — for a tool that is not a Build-accounts vendor."""
+    profiles, states = snap
+    mine = sorted((p for p in profiles
+                   if p.get("provider") == proxy and (p.get("lane") or "cli") == "cli"),
+                  key=lambda p: (p.get("order") or 0))
+    now = datetime.now(timezone.utc)
+    out = []
+    for p in mine:
+        st = status_of(p, states.get(p.get("id")), now)
+        if st["status"] != OFF:
+            pid = str(p.get("id") or "")
+            out.append({"id": pid, "name": str(p.get("title") or pid), "status": st["status"]})
+    return out
 
 
 def vendor_rows(snap: tuple[list[dict[str, Any]], dict[str, Any]], vendor: str, *,

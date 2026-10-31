@@ -492,6 +492,11 @@ class ChatBody(BaseModel):
     thread_files: list[str] = []
     #: A skill to invoke this turn (the "/" picker) — instructions injected.
     skill: str = ""
+    #: v1.417.0 (skill parity): the words typed after "/name" — the skill's
+    #: ARGUMENTS (``$ARGUMENTS``, ``$0``…; Claude Code's own filling). None:
+    #: the turn's last user message is (the chat page sends the words as the
+    #: message itself).
+    skill_args: "str | None" = Field(default=None, max_length=100_000)
     #: Tools the user ARMED via the "+" menu (registry names, max 6). When set,
     #: the chat runs a small tool loop (up to 4 rounds) with JUST these tools.
     tools: list[str] = []

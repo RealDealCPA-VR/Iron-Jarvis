@@ -1657,6 +1657,13 @@ def register(app: FastAPI, d) -> None:
                 "source": s.source,
                 "created_by": str(getattr(s, "created_by", "") or "user"),
                 "pinned": bool(getattr(s, "pinned", False)),
+                # v1.417.0 (skill parity): the harnesses' own switches —
+                # ``user-invocable: false`` keeps a skill out of every "/"
+                # menu; ``disable-model-invocation`` (Codex's
+                # ``allow_implicit_invocation: false``) out of a model's reach.
+                "user_invocable": bool(getattr(s, "user_invocable", True)),
+                "model_invocable": bool(getattr(s, "model_invocable", True)),
+                "argument_hint": str(getattr(s, "argument_hint", "") or ""),
             }
             for s in d.platform.skills.list()
         ]

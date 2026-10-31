@@ -337,6 +337,8 @@ async def test_the_reaper_and_the_eviction_say_why_the_process_went(app, work):
 
     live.proc = _Proc()
     live.last_active = 0.0
+    # v1.418.0 (moved on purpose): idle also counts from the tool's last frame.
+    live.last_heard = 0.0
     assert await svc.reap_once(now=S.IDLE_S + 1) == [row.id]
     assert live.stopped_why == "idle"
 

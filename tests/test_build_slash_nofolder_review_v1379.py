@@ -508,6 +508,11 @@ def test_only_claude_codes_two_trash_folders_are_skipped(tmp_path, monkeypatch):
     write(fake / ".claude" / "skills" / "trash-cleanup" / "SKILL.md", "---\nname: trash-cleanup\n---\nKEEP")
     write(fake / ".claude" / "plugins" / "cache" / ".trashy" / "p" / "skills" / "tidy" / "SKILL.md",
           "---\nname: tidy\n---\nKEEP")
+    # v1.417.0 (moved on purpose): the plugin is INSTALLED the way Claude Code
+    # records one (installed_plugins.json) — only a recorded plugin loads now.
+    write(fake / ".claude" / "plugins" / "installed_plugins.json", json.dumps({"plugins": {"p@m": [
+        {"installPath": str(fake / ".claude" / "plugins" / "cache" / ".trashy" / "p"), "scope": "user"},
+    ]}}))
     write(fake / ".claude" / "skills" / ".trash" / "x" / "aside" / "SKILL.md", "---\nname: aside\n---\nGONE")
     write(fake / ".claude" / "plugins" / ".trash" / "x" / "old" / "skills" / "old" / "SKILL.md",
           "---\nname: old\n---\nGONE")

@@ -202,6 +202,18 @@ _WEB_TOOLS = {"WebFetch", "WebSearch"}
 _TASK_TOOLS = {"Task", "Agent"}
 
 
+#: v1.417.0 review: the background task types that are helper AGENTS (Claude
+#: Code 2.1.316's own task table: local_agent and local_workflow are "agent",
+#: remote_agent and in_process_teammate are agents too). Everything else — a
+#: shell command, a monitor, an MCP task — is a background command.
+HELPER_TASK_TYPES = frozenset({"local_agent", "local_workflow", "remote_agent", "in_process_teammate"})
+
+
+def is_helper_task(kind: str) -> bool:
+    kind = str(kind or "")
+    return kind in HELPER_TASK_TYPES or "agent" in kind or "teammate" in kind
+
+
 def tool_kind(name: str) -> str:
     if name in _COMMAND_TOOLS:
         return "command"
@@ -689,6 +701,38 @@ class ClaudeDriver(Driver):
         #: end the reply — the answer to the user's message came after it.
         self._turn_mid = ""
         self._turn_started = False
+        #: v1.417.0 (a USER BUG): the background tasks Claude Code says are
+        #: open (``system`` ``task_started`` .. ``task_notification``; read
+        #: from the 2.1.316 binary): helper agents and background commands
+        #: that outlive the reply which started them. task_id -> task_type.
+        self._tasks: dict[str, str] = {}
+        #: v1.417.0: Claude Code is writing a reply NO message of the user's
+        #: owns — it woke itself when a background task ended (measured:
+        #: task_notification -> a second system init -> a new assistant reply
+        #: -> result). Set by the notice and by any reply frame with no turn
+        #: open; cleared by that reply's result, a new message, the exit.
+        self._alone = False
+
+    @property
+    def background_tasks(self) -> int:
+        return len(self._tasks)
+
+    @property
+    def background_helpers(self) -> int:
+        """v1.417.0: the open background tasks that are helper AGENTS (a
+        background command — a dev server — is not a helper). v1.417.0
+        review: Claude Code's own task table calls ``local_workflow`` an agent
+        too, and an agent team's member (``in_process_teammate``) is a helper
+        (task types read from the 2.1.316 binary). Read from a worker thread
+        (``GET /chat/turns/running``) while the loop changes the table: a copy
+        is taken in one step, never walked live."""
+        return sum(1 for kind in self._tasks.copy().values() if is_helper_task(kind))
+
+    @property
+    def replying_alone(self) -> bool:
+        """v1.417.0: a reply of Claude Code's own is being written (see
+        ``_alone``)."""
+        return self._alone and not self.turn_open
 
     # -- the command line ------------------------------------------------------
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
@@ -764,6 +808,7 @@ class ClaudeDriver(Driver):
         self._turn_mid = str(msg.get("uuid") or "")
         self._turn_started = False
         self.turn_open = True
+        self._alone = False
         self._errored = False
         self._interrupting = False
         await self.write(msg)
@@ -906,10 +951,15 @@ class ClaudeDriver(Driver):
             self._hold_timer.cancel()
             self._hold_timer = None
         self._held = None
+        self._tasks.clear()
+        self._alone = False
 
     # -- the harness's side (ON THE LOOP) ---------------------------------------
     def on_message(self, obj: dict[str, Any]) -> None:
         kind = obj.get("type")
+        if kind in ("stream_event", "assistant") and not self.turn_open:
+            # A reply no message owns (Claude Code woke itself).
+            self._alone = True
         if kind == "control_response":
             r = obj.get("response") or {}
             rid = r.get("request_id")
@@ -1056,6 +1106,15 @@ class ClaudeDriver(Driver):
                 model=clip(obj.get("model") or self.model, 120), cwd=clip(obj.get("cwd") or self.cwd, 500),
                 mode=mode,
             ))
+        elif sub == "task_started":
+            tid = str(obj.get("task_id") or "")
+            if tid:
+                self._tasks[tid] = str(obj.get("task_type") or "")
+        elif sub == "task_notification":
+            self._tasks.pop(str(obj.get("task_id") or ""), None)
+            if not self.turn_open:
+                # Claude Code wakes itself to report what the task did.
+                self._alone = True
         elif sub == "compact_boundary":
             self._compacting = False
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))
@@ -1322,6 +1381,9 @@ class ClaudeDriver(Driver):
             # v1.414.0: Claude Code has not started on the user's message yet,
             # so this result ends earlier work, not this reply.
             return
+        if not self.turn_open:
+            # The end of a reply of Claude Code's own.
+            self._alone = False
         usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
 
         def num(key: str) -> int:

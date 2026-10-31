@@ -210,8 +210,8 @@ export function agoWords(iso: string, now: number = Date.now()): string {
 }
 
 /** Tools that never report their account's windows over their machine
- *  protocol (Pi's RPC, OpenCode's ACP). */
-export const NO_WINDOWS_TOOLS: readonly string[] = ["pi", "opencode"];
+ *  protocol (Pi's RPC, OpenCode's and Grok's ACP). */
+export const NO_WINDOWS_TOOLS: readonly string[] = ["pi", "opencode", "grok"];
 
 /** Why there are no window numbers (never "0%"). */
 export function noWindowsWords(tool: string, toolName: string): string {

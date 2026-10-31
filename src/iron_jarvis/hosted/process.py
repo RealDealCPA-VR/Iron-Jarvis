@@ -37,7 +37,8 @@ from ..core import procs
 log = logging.getLogger(__name__)
 
 #: harness id -> the command it is started with.
-BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode"}
+BINARIES: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode",
+                            "grok": "grok"}
 
 #: How long a graceful stop waits for the harness to exit on its own.
 EXIT_GRACE_S = 3.0
@@ -52,7 +53,7 @@ def binary_for(harness: str) -> list[str] | None:
     installed. THE chokepoint tests replace."""
     name = BINARIES.get(harness)
     exe = shutil.which(name) if name else None
-    if exe is None and name in ("pi", "opencode"):
+    if exe is None and name in ("pi", "opencode", "grok"):
         # Pi's installer puts pi.cmd in %LOCALAPPDATA%\pi-node\current and
         # adds it to the USER PATH, which a daemon started before the install
         # never sees — the Launch menu's own lookup (``ai_clis._find``).
@@ -98,6 +99,87 @@ def decode_line(raw: bytes) -> Any:
     return obj if isinstance(obj, dict) else None
 
 
+#: At most this many processes are read below a harness (a bound, not a guess).
+MAX_DESCENDANTS = 500
+
+
+def descendants(pid: int | None) -> list[tuple[int, float]]:
+    """BLOCKING: ``(pid, start time)`` of every process below ``pid`` now (the
+    parent links as Windows keeps them). [] when it cannot be read.
+
+    v1.416.0 review: Windows keeps a process's parent pid after that parent
+    has gone and hands the pid out again, so a link can point at a NEWER
+    process that merely got the old parent's number. A child is read only
+    when it is not older than ITS OWN parent (psutil's recursive walk checks
+    the top process only): the user's own process behind a reused pid is
+    never taken for something the harness started."""
+    if not pid:
+        return []
+    try:
+        import psutil
+
+        reader = getattr(psutil, "_ppid_map", None)
+        if callable(reader):
+            links = dict(reader())
+        else:  # pragma: no cover - an older psutil
+            links = {p.pid: p.ppid() for p in psutil.process_iter()}
+        below: dict[int, list[int]] = {}
+        for child, parent in links.items():
+            below.setdefault(parent, []).append(child)
+        out: list[tuple[int, float]] = []
+        seen = {pid}
+        stack = [(pid, psutil.Process(pid).create_time())]
+        while stack and len(out) < MAX_DESCENDANTS:
+            parent, parent_made = stack.pop()
+            for child in below.get(parent, ()):
+                if child in seen:
+                    continue
+                try:
+                    made = psutil.Process(child).create_time()
+                except (psutil.Error, OSError):
+                    continue
+                if made < parent_made:
+                    continue  # older than its "parent": that parent's pid was reused
+                seen.add(child)
+                out.append((child, made))
+                stack.append((child, made))
+        return out
+    except Exception:  # noqa: BLE001 — nothing known: nothing extra is ended
+        return []
+
+
+def kill_left(started: list[tuple[int, float]]) -> list[int]:
+    """BLOCKING: end each process of ``started`` that is STILL the same
+    process (same pid AND exactly the same start time — a reused pid is never
+    touched) and shows the user nothing: a process with a visible window, or a
+    Windows-GUI program (Notepad, a browser), is the user's now and is spared
+    (``core.procs``' keep-windows rule, v1.333.0). Returns the pids ended.
+    Never raises."""
+    if not started:
+        return []
+    ended = []
+    try:
+        import psutil
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        windowed = procs._pids_with_visible_windows()
+    except Exception:  # noqa: BLE001
+        windowed = set()
+    for pid, created in started:
+        try:
+            p = psutil.Process(pid)
+            if p.create_time() != created:
+                continue
+            if pid in windowed or procs._is_window_program(pid):
+                continue
+            p.kill()
+            ended.append(pid)
+        except (psutil.Error, OSError):
+            continue
+    return ended
+
+
 class HarnessGone(RuntimeError):
     """The harness process is not running (it ended, or could not start)."""
 
@@ -106,7 +188,8 @@ class HarnessProcess:
     """One running harness. ``on_message(obj)`` and ``on_exit(code)`` run ON
     THE LOOP the process was started from."""
 
-    def __init__(self, argv: list[str], *, env: dict[str, str], cwd: str, name: str) -> None:
+    def __init__(self, argv: list[str], *, env: dict[str, str], cwd: str, name: str,
+                 ends_left_behind: bool = False) -> None:
         self.argv = list(argv)
         self.env = env
         self.cwd = cwd
@@ -118,6 +201,13 @@ class HarnessProcess:
         self._stop_lock = threading.Lock()
         self._threads: list[threading.Thread] = []
         self._stderr: deque[bytes] = deque(maxlen=64)
+        #: v1.416.0: (pid, start time) of what the harness started, noted before
+        #: a Stop (:meth:`note_started`).
+        self._started: list[tuple[int, float]] = []
+        #: v1.416.0 review: only a harness that asks for it (Grok, whose
+        #: commands run outside the Job) has what it left outside its Job
+        #: ended at the stop; every other tool stops exactly as before.
+        self.ends_left_behind = bool(ends_left_behind)
 
     @property
     def alive(self) -> bool:
@@ -196,6 +286,18 @@ class HarnessProcess:
     def stderr_text(self) -> str:
         return b"".join(self._stderr).decode("utf-8", errors="replace")[-2000:]
 
+    def note_started(self) -> None:
+        """BLOCKING: remember what the harness has started RIGHT NOW (v1.416.0)
+        — read before it is told to stop a turn: Grok's cancel ends the shell
+        it ran a command in and leaves the command itself running with no
+        parent, where a later read of the tree no longer finds it (measured).
+        :meth:`stop` ends whatever of it is still the same process."""
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return
+        seen = {pid for pid, _ in self._started}
+        self._started.extend(p for p in descendants(proc.pid) if p[0] not in seen)
+
     # -- stop (BLOCKING, idempotent) ------------------------------------------
     def stop(self, *, graceful: bool = True) -> None:
         """Stop the harness and everything it started. ``graceful``: its stdin
@@ -208,6 +310,15 @@ class HarnessProcess:
         proc = self.proc
         if proc is None:
             return
+        # v1.416.0: what the harness started, read BEFORE it is told to go (a
+        # child is re-parented away from the tree once its parent exits).
+        # Grok runs each command as its own `pwsh -Command …` that is NOT a
+        # member of the Job (measured: a `ping` outlived the Job's close), so
+        # whatever of it is still alive after the Job is ended by name below.
+        started = list(self._started) if self.ends_left_behind else []
+        if self.ends_left_behind and proc.poll() is None:
+            known = {pid for pid, _ in started}
+            started += [p for p in descendants(proc.pid) if p[0] not in known]
         if graceful and self._wlock.acquire(timeout=1.0):
             try:
                 if proc.stdin and not proc.stdin.closed:
@@ -227,6 +338,7 @@ class HarnessProcess:
         except Exception:  # noqa: BLE001 — a wedged reap must not hang a stop
             pass
         procs.release(proc)
+        kill_left(started)
         # Bounded: a reader still blocked means something still holds the pipe;
         # closing a pipe another thread is reading can block on Windows, so
         # only the pipes whose reader has finished are closed.
