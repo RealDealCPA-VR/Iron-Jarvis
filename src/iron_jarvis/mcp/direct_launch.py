@@ -88,6 +88,15 @@ RECORDS_NAME = "direct-launch.json"
 _NPX_STEMS = {"npx"}
 _UVX_STEMS = {"uvx"}
 _LAUNCHER_SUFFIXES = {"", ".cmd", ".exe", ".bat"}
+#: A ``.cmd``/``.bat`` launcher (npm's ``npx.cmd``) is run by ``cmd.exe``, which
+#: REWRITES its command line before npx sees it: ``%NAME%`` is expanded, ``^``
+#: is removed (measured: ``%USERPROFILE%\\x`` arrives expanded, ``pkg@^1.2.3``
+#: as ``pkg@1.2.3``), ``&``/``|``/``<``/``>`` split or redirect an unquoted
+#: line, ``!`` expands under delayed expansion, and ``"`` changes what is
+#: quoted. A direct start hands the text to the server untouched, so a line
+#: carrying any of these is the launcher's to run (review, v1.415.0).
+_CMD_SUFFIXES = {".cmd", ".bat"}
+_CMD_SPECIAL = frozenset('%^!"&|<>\r\n')
 _YES = {"-y", "--yes", "--yes=true"}
 _NPM_NAME = r"[A-Za-z0-9][A-Za-z0-9._~-]*"
 _NPM_SPEC_RX = re.compile(
@@ -226,6 +235,8 @@ def parse(
     if suffix not in _LAUNCHER_SUFFIXES:
         return None
     argv = [str(a) for a in (args or [])]
+    if suffix in _CMD_SUFFIXES and any(ch in _CMD_SPECIAL for a in argv for ch in a):
+        return None  # cmd.exe would change these words; never imitate cmd
     view = _env_view(env)
     if stem in _NPX_STEMS:
         i, saw_yes = 0, False
@@ -273,16 +284,22 @@ def parse(
 _LOCK = threading.RLock()
 _STATE_DIR: Path | None = None
 _RECORDS: dict[str, dict[str, Any]] | None = None
+#: Whether this process may ASK a launcher in the background (review): only
+#: the daemon. A CLI one-shot also builds a platform and loads packs, and an
+#: npm/uv install it started would be killed half way when the command exits.
+_ASKS = False
 
 
-def set_state_dir(home: str | os.PathLike[str] | None) -> None:
-    """Where answers are kept (``<home>/mcp/direct-launch.json``). Set by
-    ``build_platform``; unset, answers live in memory only and no background
-    ask is ever made (a CLI one-shot, a unit test)."""
-    global _STATE_DIR, _RECORDS
+def set_state_dir(home: str | os.PathLike[str] | None, *, ask: bool = True) -> None:
+    """Where answers are kept (``<home>/mcp/direct-launch.json``) and whether
+    this process may ask. ``build_platform`` passes ``ask=defer_mcp`` (only the
+    daemon defers its packs): every process READS the kept answers, only the
+    daemon asks. Unset, answers live in memory only and no ask is made."""
+    global _STATE_DIR, _RECORDS, _ASKS
     with _LOCK:
         _STATE_DIR = Path(home) if home is not None else None
         _RECORDS = None
+        _ASKS = bool(ask) and _STATE_DIR is not None
 
 
 def _records_path() -> Path | None:
@@ -507,7 +524,10 @@ def _plan_npx(spec: LaunchSpec, rec: dict[str, Any]) -> "tuple[DirectPlan | None
         return None, "npm could not pick one command from the package"
     bname, bpath = chosen
     target = (pkg_dir / bpath).resolve(strict=False)
-    if not _inside(target, pkg_dir) or not target.is_file():
+    # Both sides RESOLVED (review): a cache behind a junction or a subst drive
+    # resolves the target to its real folder, and an unresolved package folder
+    # then read as "missing" — a stale answer re-asked after EVERY start.
+    if not _inside(target, pkg_dir.resolve(strict=False)) or not target.is_file():
         return None, _stale(f"the package's {bname} command file is missing")
     if target.suffix.lower() not in _JS_EXT:
         return None, f"the package's {bname} command is not a JavaScript file"
@@ -570,6 +590,22 @@ def _dist_versions(prefix: Path, name: str) -> list[str]:
     return found
 
 
+def _uv_same_version(installed: str, wanted: str) -> bool:
+    """Whether uv's ``==wanted`` (what ``pkg@wanted`` / ``pkg==wanted`` ask
+    for) is met by ``installed``: PEP 440 equality, so ``1.2`` is met by
+    ``1.2.0`` (review: a string compare called that stale and re-asked uv after
+    every start). Unreadable versions fall back to an exact string compare."""
+    if installed == wanted:
+        return True
+    try:
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version
+
+        return SpecifierSet(f"=={wanted}").contains(Version(installed), prereleases=True)
+    except Exception:  # noqa: BLE001 — not PEP 440 / no packaging: exact only
+        return False
+
+
 def _plan_uvx(spec: LaunchSpec, rec: dict[str, Any]) -> "tuple[DirectPlan | None, str]":
     try:
         prefix = Path(str(rec["prefix"]))
@@ -585,7 +621,7 @@ def _plan_uvx(spec: LaunchSpec, rec: dict[str, Any]) -> "tuple[DirectPlan | None
     versions = _dist_versions(prefix, spec.name)
     if len(versions) != 1:
         return None, _stale(f"uv's environment does not hold exactly one {spec.name}")
-    if spec.version and spec.version != "latest" and versions[0] != spec.version:
+    if spec.version and spec.version != "latest" and not _uv_same_version(versions[0], spec.version):
         return None, _stale(f"uv's environment holds {versions[0]}, not {spec.version}")
     view = _env_view(spec.env)
     for tools in _uv_tool_dirs(view):
@@ -789,7 +825,7 @@ def note_started(spec: LaunchSpec | None, *, plan_failed: bool = False) -> bool:
     (the daemon): a CLI one-shot or a unit test never asks. Returns whether
     an ask was queued."""
     global _WORKER
-    if spec is None or not enabled() or _STATE_DIR is None:
+    if spec is None or not enabled() or _STATE_DIR is None or not _ASKS:
         return False
     if not (plan_failed or needs_ask(spec)):
         return False

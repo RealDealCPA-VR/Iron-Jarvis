@@ -2622,9 +2622,12 @@ answer, and from then on starts the server from those files itself.
   start after that check instead of on every start.
 - **Never a guess.** If anything is not certain (a copy installed globally or
   in the pack's folder, a version the saved copy does not match, an unusual
-  launcher command line), the pack starts through its launcher as before.
-  If a direct start does not answer within 10 seconds, the pack is started
-  through its launcher right away, and the pack's record says what happened.
+  launcher command line, or a `%NAME%` or `^` in its arguments that the
+  Windows command line would change), the pack starts through its launcher as
+  before. If a direct start stops before answering, the pack is started
+  through its launcher right away; if it is still silent when the pack's
+  start time runs out (15 seconds), it is tried once more through its
+  launcher. Either way the pack's record says what happened.
 - **Turning it off.** Set the environment variable
   `IRONJARVIS_MCP_DIRECT=off` before starting Iron Jarvis to start every
   pack through its launcher.

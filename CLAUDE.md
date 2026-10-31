@@ -11477,6 +11477,30 @@ does not need a bump, stop and bump it.
   on exit and on hang; shutdown mid-handshake), 20 mutations, all red; moved
   on purpose: the `StdioTransport` doubles in `test_mcp_launcher_v1233`,
   `test_connections_honest_v13580`, `test_microsoft_365_v13560`.
+  REVIEW (each red first, `tests/test_mcp_direct_launch_review_v14150.py`, 8
+  mutations red): (1) npm's `npx.cmd` runs through cmd.exe, which EXPANDS
+  `%NAME%` and STRIPS `^` before npx sees the line (measured), so a direct
+  start handed the server different args and still answered; `parse` returns
+  None for a `.cmd`/`.bat` line carrying any of `% ^ ! " & | < > CR LF`
+  (`_CMD_SPECIAL`; an `.exe` launcher has no cmd layer and keeps them). (2) a
+  cache behind a junction/subst read as stale (target resolved, package folder
+  not) and re-asked npx after EVERY start: both sides resolved now. (3) `uvx
+  pkg@1.2` (uv: `==1.2`, met by `1.2.0`) was stale forever: PEP 440 equality
+  (`_uv_same_version`). (4) the 10 s cap killed a slow-but-healthy direct
+  start and the launcher restart could no longer fit the 15 s connect probe
+  (a pack that loaded before failed): the probe sets `transport.start_budget`,
+  so the FIRST direct handshake gets the probe's whole bound; if it runs out
+  still silent, `give_up_direct_start` holds the pack and `_connect_with_
+  timeout` retries the load ONCE through the launcher with a fresh bound
+  (worst case 2x the bound at boot). A respawn inside a call (no caller bound)
+  keeps the cap. (5) `build_platform` armed background asks in every process,
+  CLI one-shots too (an npm/uv install killed half way on exit): `set_state_
+  dir(home, ask=defer_mcp)` — every process READS answers, only the daemon
+  asks. OPEN: two processes writing `direct-launch.json` share one `.tmp`
+  name and last-writer-wins (answers lost are re-asked); a daily refresh ask
+  can upgrade npx's `_npx/<hash>` folder under a RUNNING direct server (a
+  launcher start only upgraded at start); daemon exit mid-ask kills an npm
+  install half way.
 
 ## Map (where things live)
 

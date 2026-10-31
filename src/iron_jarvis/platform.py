@@ -696,7 +696,10 @@ def build_platform(
     # server can be started without the launcher idling beside it.
     from .mcp.direct_launch import set_state_dir as _mcp_direct_state
 
-    _mcp_direct_state(config.home)
+    # Only the daemon (defer_mcp) ASKS a launcher in the background; a CLI
+    # one-shot reads the kept answers but never starts an npm/uv install it
+    # would kill half way on exit (review, v1.415.0).
+    _mcp_direct_state(config.home, ask=defer_mcp)
     streams = StreamHub()  # FX-01: ephemeral token/tool stream side-channel
     # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
     # boots instead of wedging on a malformed file.

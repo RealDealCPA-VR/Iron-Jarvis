@@ -662,6 +662,14 @@ class StdioTransport:
         self._shut = False
         #: A tighter bound for the read in flight (a direct handshake only).
         self._read_cap: float | None = None
+        #: v1.415.0 review: the caller's own bound on the NEXT start (the boot
+        #: connect probe sets it). With it, a direct start is not cut at
+        #: ``DIRECT_INIT_TIMEOUT_S``: the launcher would need longer still, so a
+        #: slow-but-healthy server is waited for and the caller decides
+        #: (:meth:`give_up_direct_start`). Used once, then cleared.
+        self.start_budget: float | None = None
+        #: The plan of a direct start whose handshake is in flight, else None.
+        self._direct_starting: Any = None
         #: Seconds one answer may take before the server is killed. ``None``
         #: means no deadline (the caller carries its own and aborts through
         #: :meth:`abort`); left unset it is :data:`DEFAULT_REQUEST_TIMEOUT_S`
@@ -846,8 +854,17 @@ class StdioTransport:
             return
         from . import direct_launch
 
+        budget, self.start_budget = self.start_budget, None
+        self._direct_starting = plan
         try:
-            self._handshake(timeout=direct_launch.DIRECT_INIT_TIMEOUT_S)
+            try:
+                # With a caller's bound (the connect probe), the direct start
+                # gets all of it; without one (a respawn in a call), the cap.
+                self._handshake(
+                    timeout=None if budget is not None else direct_launch.DIRECT_INIT_TIMEOUT_S
+                )
+            finally:
+                self._direct_starting = None
         except MCPServerStopped as exc:
             if (cancel is not None and cancel.is_set()) or self._shut:
                 raise  # the caller gave up: never start anything else
@@ -921,6 +938,31 @@ class StdioTransport:
             direct_launch.note_started(self.direct, plan_failed=plan_failed)
         except Exception:  # noqa: BLE001 — bookkeeping never breaks a start
             pass
+
+    def give_up_direct_start(self, budget: float) -> bool:
+        """The caller's bound ran out while a DIRECT start had not answered
+        yet (v1.415.0 review): hold this pack on its launcher (here, and in the
+        kept answer for a day), say so in ``launch_info`` and return True so
+        the caller tries the load ONCE more through the launcher. False when
+        no direct start was in flight (then nothing is noted)."""
+        plan = self._direct_starting
+        if plan is None:
+            return False
+        from . import direct_launch
+
+        why = f"the MCP server did not answer within {float(budget):g} s"
+        self._direct_failed = True
+        direct_launch.note_direct_failed(plan.spec, why)
+        name = plan.spec.launcher_name
+        self.launch_info = {
+            "direct": False,
+            "how": name,
+            "note": (
+                f"The direct start ({plan.describe()}) did not answer ({why}), "
+                f"so it was started through {name} instead."
+            ),
+        }
+        return True
 
     def shutdown(self) -> None:
         """Close for good from OUTSIDE a start (the connect timeout, a closed

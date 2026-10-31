@@ -87,8 +87,9 @@ def make_npx_cache(root: Path, spec: str, name: str, version: str = "1.0.0", *,
 
 
 def npx_spec(root: Path, spec: str, args: list[str] | None = None, *, cwd: Path | None = None,
-             env: dict | None = None, flags: list[str] | None = None) -> dl.LaunchSpec:
-    launcher = root / "npx.cmd"
+             env: dict | None = None, flags: list[str] | None = None,
+             launcher_name: str = "npx.cmd") -> dl.LaunchSpec:
+    launcher = root / launcher_name
     s = dl.parse(str(launcher), [*(flags or ["-y"]), spec, *(args or [])],
                  cwd=str(cwd) if cwd else None, env=env)
     assert s is not None
@@ -227,7 +228,10 @@ def test_a_version_the_cached_copy_does_not_satisfy_keeps_the_launcher(
     tmp_path, state, spec, installed, ok
 ):
     c = make_npx_cache(tmp_path, spec, "pkg", installed)
-    s = npx_spec(tmp_path, spec)
+    # review v1.415.0: npm's npx.cmd runs through cmd.exe, which strips the
+    # `^` before npx sees it, so a `^` range is only ever direct for an npx
+    # with no cmd layer (volta's npx.exe); the ranges are pinned there.
+    s = npx_spec(tmp_path, spec, launcher_name="npx.exe" if "^" in spec else "npx.cmd")
     dl.put_record(s, npx_record(c))
     plan, why = dl.plan(s)
     assert (plan is not None) is ok, why
@@ -526,6 +530,10 @@ def test_a_direct_start_that_does_not_answer_falls_back_to_npx_once(
     tmp_path, state, monkeypatch, broken
 ):
     monkeypatch.setattr(dl, "DIRECT_INIT_TIMEOUT_S", 2.0)
+    # review v1.415.0: at boot the connect probe bounds the start, so a direct
+    # start that hangs is given that whole bound (not the 2 s cap) and the load
+    # is then tried ONCE more through npx on a fresh transport.
+    monkeypatch.setenv("IRONJARVIS_MCP_CONNECT_TIMEOUT", "4")
     c = make_npx_cache(tmp_path, "pkg", "pkg",
                        sources={"dist/index.js": EXITS if broken == "exits" else HANGS})
     cfg = pack_cfg(tmp_path, c, "pkg")  # the launcher runs the GOOD server
@@ -536,14 +544,14 @@ def test_a_direct_start_that_does_not_answer_falls_back_to_npx_once(
     try:
         assert time.monotonic() - t0 < 14  # inside the 15 s connect bound
         assert sorted(t.name.split("__")[-1] for t in tools) == ["ping_tool", "whoami"]
-        assert client.transport.spawn_count == 2
+        assert client.transport.spawn_count == (2 if broken == "exits" else 1)
         launch = mcp_tools_mod.load_status("directpack")["launch"]
         assert launch["direct"] is False and launch["how"] == "npx"
         assert "direct start" in launch["note"] and "through npx instead" in launch["note"]
         if broken == "exits":
             assert "exit code 3" in launch["note"] and "direct copy is broken" in launch["note"]
         else:
-            assert "did not answer within 2 s" in launch["note"]
+            assert "did not answer within 4 s" in launch["note"]
         assert (tmp_path / "npx.log").read_text().split()[0] == "start"
         plan, why = dl.plan(spec)
         assert plan is None and "failed recently" in why
@@ -623,4 +631,5 @@ def test_a_pack_that_is_not_npx_or_uvx_has_no_launch_key(tmp_path, state):
 def test_the_platform_keeps_answers_in_its_home():
     src = (Path(__file__).parents[1] / "src" / "iron_jarvis" / "platform.py").read_text(
         encoding="utf-8")
-    assert "_mcp_direct_state(config.home)" in src
+    # review v1.415.0: only the daemon (defer_mcp) asks; every build reads.
+    assert "_mcp_direct_state(config.home, ask=defer_mcp)" in src

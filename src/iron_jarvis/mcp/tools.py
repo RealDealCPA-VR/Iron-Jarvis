@@ -555,40 +555,67 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
     while the transport is still in hand."""
     import threading
 
-    box: dict[str, Any] = {}
+    # v1.415.0 review: a DIRECT start is given this whole bound (a slow but
+    # healthy server must not be killed at a shorter cap and restarted through
+    # a launcher that needs even longer — it could no longer fit); when the
+    # bound runs out while a direct start is still silent, the pack is held on
+    # its launcher and the load is tried ONCE more through it, with a fresh
+    # bound. ``given_up`` is that first start's note, carried to the record.
+    given_up: "dict[str, Any] | None" = None
+    for attempt in range(2):
+        box: dict[str, Any] = {}
 
-    def work() -> None:
-        try:
-            transport = _build_transport(cfg, secret_resolver)
-            box["transport"] = transport
-            client = MCPClient(transport, name=name)
-            box["specs"] = _run_sync(client.list_tools())
-            box["client"] = client
-        except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
-            box["error"] = exc
-
-    th = threading.Thread(target=work, daemon=True)
-    th.start()
-    th.join(timeout)
-    if th.is_alive():
-        transport = box.get("transport")
-        # `shutdown` (stdio, v1.415.0) also stops the start still running in
-        # `work` from starting anything after this; else `close` as before.
-        closer = getattr(transport, "shutdown", None) or getattr(transport, "close", None)
-        if callable(closer):
+        def work(box: dict[str, Any] = box) -> None:
             try:
-                closer()  # terminate the hung child; unblocks readline
-            except Exception:  # noqa: BLE001
-                pass
-        raise PackLoadFailed(
-            TimeoutError(f"did not respond within {timeout:g}s"),
-            _transport_tail(transport),
-            _launch_info(transport),
-        )
-    if "error" in box:
+                transport = _build_transport(cfg, secret_resolver)
+                if hasattr(transport, "start_budget"):
+                    transport.start_budget = timeout
+                box["transport"] = transport
+                client = MCPClient(transport, name=name)
+                box["specs"] = _run_sync(client.list_tools())
+                box["client"] = client
+            except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
+                box["error"] = exc
+
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        th.join(timeout)
+        if th.is_alive():
+            transport = box.get("transport")
+            give_up = getattr(transport, "give_up_direct_start", None)
+            retry = False
+            if attempt == 0 and callable(give_up):
+                try:
+                    retry = bool(give_up(timeout))
+                except Exception:  # noqa: BLE001 — bookkeeping never breaks a load
+                    retry = False
+            # `shutdown` (stdio, v1.415.0) also stops the start still running in
+            # `work` from starting anything after this; else `close` as before.
+            closer = getattr(transport, "shutdown", None) or getattr(transport, "close", None)
+            if callable(closer):
+                try:
+                    closer()  # terminate the hung child; unblocks readline
+                except Exception:  # noqa: BLE001
+                    pass
+            if retry:
+                given_up = _launch_info(transport)
+                log.warning("MCP server %r: its direct start did not answer within %gs; "
+                            "trying once more through its launcher", name, timeout)
+                continue
+            raise PackLoadFailed(
+                TimeoutError(f"did not respond within {timeout:g}s"),
+                _transport_tail(transport),
+                given_up or _launch_info(transport),
+            )
         transport = box.get("transport")
-        raise PackLoadFailed(box["error"], _transport_tail(transport), _launch_info(transport))
-    return box["client"], box["specs"]
+        if given_up is not None and transport is not None and hasattr(transport, "launch_info"):
+            transport.launch_info = dict(given_up)
+        if "error" in box:
+            raise PackLoadFailed(
+                box["error"], _transport_tail(transport), given_up or _launch_info(transport)
+            )
+        return box["client"], box["specs"]
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _launch_info(transport: Any) -> "dict[str, Any] | None":
