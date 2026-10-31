@@ -169,7 +169,7 @@ PASSING = (
 
 
 async def test_the_finish_checks_own_test_run_is_marked_on_the_line_and_the_frames(app, work):
-    (work / "app.py").write_text("X = 11\n", encoding="utf-8")  # v1.386.1 shape: a different LENGTH, so the re-run never reuses a stale .pyc
+    (work / "app.py").write_text("X = 100\n", encoding="utf-8")  # v1.386.1 shape: a different LENGTH from the X = 2 the model writes (6 bytes LF, 7 bytes CRLF on Windows), so the re-run never reuses a stale .pyc
     (work / "test_mini.py").write_text(PASSING, encoding="utf-8")
     sid = new_session(app, work, approval_mode="yolo")
     # v1.417.0 (moved on purpose): the finish check REUSES a test run that

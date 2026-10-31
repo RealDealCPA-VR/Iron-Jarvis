@@ -253,7 +253,10 @@ describe("C2.2 the reply never blinks out while its saved copy is read back", ()
         stream.end();
         await new Promise((r) => setTimeout(r, 30));
       });
-      await waitFor(() => expect(screen.queryByTestId("harness-live")).toBeNull(), { timeout: 5_000 });
+      // The hold gives up after its own retries (4 × 500 ms of real time), and
+      // the Release runner is a smaller machine: v1.417.1's gate read this at
+      // 5 s. 10 s is a hang detector, well under vitest's 15 s budget.
+      await waitFor(() => expect(screen.queryByTestId("harness-live")).toBeNull(), { timeout: 10_000 });
       expect(screen.queryAllByTestId("harness-reply")).toHaveLength(0);
     });
   }
