@@ -368,11 +368,24 @@ class _Ids:
         return original if original and _SAFE.fullmatch(original) else "toolu_ij_orphan"
 
 
+def not_a_command(text: str) -> str:
+    """The user's words, never read by the CLI as ITS OWN slash command.
+
+    v1.416.0 (a USER BUG): "/goal complete what remains and push" made Claude
+    Code run its built-in /goal — a synthetic reply, then a goal check that
+    needs requests the one-request relay refuses — so every such turn ended
+    "Claude Code couldn't finish this answer" (measured on 2.1.309: /goal and
+    /help fail every time). Iron Jarvis runs the loop and every tool; the CLI
+    only answers. One leading space is enough (measured) and is the same on
+    every replay, so the cache pin still holds."""
+    return " " + text if text.startswith("/") else text
+
+
 def _user_blocks(message: Any) -> list[dict]:
     blocks: list[dict] = []
     text = getattr(message, "content", "") or ""
     if text.strip():
-        blocks.append({"type": "text", "text": text})
+        blocks.append({"type": "text", "text": not_a_command(text)})
     for image in getattr(message, "images", None) or []:
         data = image.get("data_b64") if isinstance(image, dict) else None
         media = image.get("media_type") if isinstance(image, dict) else None

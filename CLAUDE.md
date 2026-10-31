@@ -4193,6 +4193,17 @@ does not need a bump, stop and bump it.
   it can answer then); Codex/Pi compact not wired; the Chat › Code breakdown
   is from the newest reply (a later setting change shows on the next reply).
 
+- **A user's words never run one of Claude Code's OWN slash commands**
+  (v1.416.0, a USER BUG): "/goal complete what remains and push" in a coding
+  session failed three times with "Claude Code couldn't finish this answer" —
+  claude-cli ran its built-in /goal (a synthetic reply, then a goal check
+  needing requests the one-request relay refuses). `claude_native/frames.
+  not_a_command` sends every user text that starts with "/" with ONE leading
+  space (measured on 2.1.309: "/goal …" and "/help …" failed every time,
+  " /goal …" answered). Iron Jarvis's own "/" menu is resolved before this,
+  and Build's Code view (`hosted/`, the real CLI with its own tools) is a
+  different path and is untouched. Pin: `tests/test_claude_slash_text_v1416.py`.
+
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control
