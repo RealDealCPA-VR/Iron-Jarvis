@@ -4732,6 +4732,16 @@ does not need a bump, stop and bump it.
   purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
   tick per act — two ticks in one synchronous jump are one read now).
 
+- **A stream response CLOSES its stream when it stops** (v1.414.6; the
+  Release gate's Pi bell test). `routes/chat.HeartbeatStreamingResponse`
+  read the body in a plain `async for`; a cancel that landed during `send`
+  (not in the stream's own wait) left the generator suspended, so a Build ›
+  Code follower stayed registered for as long as anything held the cancelled
+  request — the reply still counted as watched and its card never reached the
+  bell or the phone. Its `finally` now schedules `body_iterator.aclose()`
+  (`_close_quietly`). Pin: `tests/test_build_app_follow_close_v14146.py`
+  (every body send takes 0.5 s, so the cancel lands in a send; old code times
+  out waiting for "not watched").
 - **A Build › Code reply ends only after the tool's own session id is on the
   row** (v1.414.4; three CI gates read it empty). `service._on_session_id`
   saves the id in the background (`live.id_save`), and `_end_turn` now waits

@@ -547,7 +547,23 @@ class HeartbeatStreamingResponse(StreamingResponse):
                     last = time.monotonic()
         finally:
             beat.cancel()
+            # v1.414.6: a cancel that lands during a `send` (not inside the
+            # stream's own wait) leaves the stream suspended — its follower
+            # stayed registered for as long as anything held the cancelled
+            # request, so the reply still counted as watched and its card never
+            # reached the bell or the phone. Close it here, always.
+            aclose = getattr(self.body_iterator, "aclose", None)
+            if aclose is not None:
+                asyncio.ensure_future(_close_quietly(aclose))
         await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
+async def _close_quietly(aclose) -> None:
+    """Close a response's stream; one already finished or running is fine."""
+    try:
+        await aclose()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class ChatReplyStreamingResponse(HeartbeatStreamingResponse):
