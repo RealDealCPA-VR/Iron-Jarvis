@@ -4510,6 +4510,100 @@ does not need a bump, stop and bump it.
   `build-code-start-v1412` (the heading). Live-proven on a scratch daemon
   (real opencode 1.18.18, opencode/glm-5.3-flash-free): see the Handbook.
 
+- **Build › Code is part of the app: its running work is seen everywhere,
+  its card reaches the phone, and the REAL tool may get Iron Jarvis's own MCP
+  connection — per process, behind the same five boxes a terminal has, all
+  off** (v1.414.0). SEEN: `hosted/news.py` is the one in-memory source —
+  `running_rows` (`surface: "build_app"`, the hosted session id as
+  `thread_id`, `harness`, `waiting` = a card or question open) rides `GET
+  /chat/turns/running` (Running now: `lib/runningNow.buildAppReplyItems`,
+  "Coding session · <tool> · 12 min", `buildCodeHref`), `/health.replies.
+  build_app` (the orb's `repliesRunning`), `routes/ui.build_replies_running`
+  (home line, Status map); `/system/activity` gains `code_replies` +
+  `code_tools`: RUNNING counts toward `busy` (the update warning, main.js
+  `describeBusyWork` "N coding sessions in Build › Code working (Claude
+  Code)"), only the part NOT parked on a card is `working` (keep-awake — the
+  v1.391.0 rule). FINISH: `_end_turn` (after the done, never at shutdown,
+  never beside an account-limit card, `HostedTurn.started_mono` on the
+  service's injectable clock) publishes the SAME `build.turn_finished` with
+  `surface: "build_app"`, `harness`, session id `build_app:<id>` for a reply
+  > 60 s that ended completed / max_turns (done) or failed — never
+  interrupted; `bell_pings` is unchanged (thread_id present), the bell and
+  main.js `runOutcomeNotice` link `/terminals?view=code&code=<id>`; the one-
+  notice fixture has `build-app-turn-finished`. The Code view's SessionPane
+  writes the shared `lib/buildWatching` note (the session id) while mounted
+  and focused, so a watched finish stays quiet. PHONE: `_ask` arms a
+  `news.PhoneWatch` per approval (`svc.phone_after_s` = `stall.PHONE_AFTER_S`);
+  past it, if the card is still open and `phone_may_send` (approval only —
+  never a question, never `once_only`, priced or local-only cards, never
+  while the row's mode is `full`), it files an entry in `platform.approvals`
+  (names only, session `build_app:<id>`) and publishes through
+  `stall.PhoneAsk` (`surface: "build"`, the row's title) — the pending
+  listing still shows only the session's own `waiting_rows` row; the phone's
+  answer resolves the entry and is delivered as `allow` (ONCE) or `deny` via
+  `HostedService.answer`; ANY `resolved` event of that card (`_emit`) closes
+  the watch (the entry popped, the phone prompt closed) — the watch never
+  cancels the task delivering its own answer (`_answering`). JARVIS TOOLS:
+  `HostedSessionRecord.capabilities_json` (additive; the pane's five keys,
+  `terminals/session.normalise_pane_capabilities`), PATCH `capabilities`
+  MERGES; `hosted/jarvis_tools.py`: a token only when a SERVED box (Browser,
+  Memory — `mcpserver.CAPABILITY_TOOLS`) is ticked (`wanted`), minted in
+  `_start_process` from `HostedTokens` — a `PaneTokenStore` of its OWN
+  (`purge_dead` would revoke `code:<sid>` ids in the terminals' store) whose
+  lookup reads `live.caps` LIVE (a box off → the next call 403s) and
+  `live.running`; revoked in `_stop_process` (before the stop) / `_on_exit` /
+  a failed start, with the MCP sessions it opened; `routes/mcpserver._tokens`
+  resolves through `_EitherStore` (same `authorize_mcp` door). The first box
+  on / last box off sets `live.restart` ("next"); switching between served
+  boxes is "now". Per CLI, MEASURED with a logging stand-in server and a
+  scratch home (no model call): Claude Code 2.1.311 `--mcp-config
+  <home>/hosted/<id>/jarvis-mcp.json` with `Bearer ${IRONJARVIS_MCP_TOKEN}`
+  (Claude expands it), NO `--strict-mcp-config`; Codex 0.157.0 `codex
+  app-server -c mcp_servers.iron-jarvis.url=… -c …bearer_token_env_var=
+  "IRONJARVIS_MCP_TOKEN"`; Pi 1.3.0 `-e <home>/hosted/<id>/jarvis-mcp.js`
+  (an extension calling `pi.registerMcpServer`, `exposure: "direct"`, header
+  `${…}` expanded by Pi); OpenCode 1.18.18 ACP `session/new|load`
+  `mcpServers: [{type: "http", name, url, headers: [{name, value}]}]` only
+  when `mcpCapabilities.http` (else a notice) — the token on stdin, NOT its
+  env. Our two files hold no credential and go with the process. The user's
+  own config files are never written. MCP SERVER: `MEMORY_READ_TOOLS` gains
+  `brain_search` / `brain_read` (exact names; `brain_save`/`brain_change`
+  never); a MEMORY-capability tool with `returns_untrusted_content` (memory_
+  search, ltm_search, brain_*) crosses `/mcp` inside `wrap_untrusted` (a
+  browser tool's page text keeps its v1.238.0 shape); a code grant's
+  workspace is the session's folder and its `ToolContext.project_id` comes
+  from `projects/locate.project_for_path` (terminal grants unchanged). NOT
+  ENFORCED HERE: Build › Code has no Local only and no trust posture (none of
+  the four tools) — the Memory box says what it reads goes to the tool's
+  vendor. PROFILE SHARE: `profile/share.CLIS` gains `pi` (`PI_CODING_AGENT_DIR`
+  or `~/.pi/agent`; `pick="exists"`: Pi reads the first of
+  AGENTS.override.md / AGENTS.md / CLAUDE.md that EXISTS — an empty override
+  still wins) and `opencode` (`home_fn`: `$XDG_CONFIG_HOME/opencode` else
+  `~/.config/opencode`, AGENTS.md; `create_guard`: never CREATE it while
+  `~/.claude/CLAUDE.md` exists and OpenCode's own
+  `OPENCODE_DISABLE_CLAUDE_CODE[_PROMPT]` is unset — measured: OpenCode's
+  AGENTS.md REPLACES that fallback; the row says `OPENCODE_FALLBACK_ERROR`).
+  Both measured by a sentinel reaching a local stand-in endpoint. Config
+  `profile_share_pi` / `profile_share_opencode` (off; schema rows ask-tier,
+  `put=False`; `settings/writer._SHARE_KEYS` pinned equal to CLIS).
+  DASHBOARD: `components/buildCode/JarvisTools.tsx` — `JarvisToolsChip`
+  (header; `code-jarvis-tools`, Memory/Browser boxes with
+  `lib/buildApp.jarvisToolHint`, PATCHes one key) and `ProfileShareOffer`
+  (a new session's empty state; `PUT /profile/share`; "No thanks" =
+  localStorage `ij.code.shareOffer.dismissed.<cli>`; hidden on 404, on, not
+  installed). OPEN: an account-limit card + finish suppression and the
+  MCP-off restart for a running reply are unpinned; Browser over a code grant
+  was not driven live; the phone path was not driven with a real phone.
+  Pins: `tests/test_build_app_spine{,_desktop}_v1414.py`,
+  `tests/test_profile_share_pi_opencode_v1414.py`,
+  `dashboard/__tests__/build-code-spine{,-view}-v1414.test.tsx`, the
+  one-notice fixture; moved on purpose: `test_harness_gaps_running_v1389`
+  (`replies` gains `build_app`). Live-proven (scratch daemon 8901, real
+  claude 2.1.311 haiku low, Memory ticked): Running now / activity / health
+  listed the reply for 75 s, Claude called `mcp__iron-jarvis__memory_search`
+  (ledger row `mcp:code:<id>`), answered from it, and `build.turn_finished`
+  (`seconds: 75`) was recorded.
+
 - **A coding session's Changes tab is ONE scrolling review, and every file,
   hunk, step and finding opens in VS Code / Cursor at its line — the daemon
   builds the editor's URL, never a client** (v1.405.0; the user: "Live where

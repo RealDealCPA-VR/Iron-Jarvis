@@ -42,6 +42,10 @@ class AppSessionPatch(BaseModel):
     confirm: bool = False
     model: str | None = None
     effort: str | None = None
+    #: v1.414.0: the session's Capabilities, merged (a box not named keeps
+    #: its value). Browser and Memory give the coding tool Iron Jarvis's own
+    #: tools; all five are off until ticked.
+    capabilities: dict[str, Any] | None = None
 
 
 class AppTurn(BaseModel):

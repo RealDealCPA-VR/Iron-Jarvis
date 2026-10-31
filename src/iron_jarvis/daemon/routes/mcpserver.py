@@ -107,11 +107,32 @@ def _tokens(d) -> Any:
     lane's edit and this route must not be the reason a boot fails. It is a
     lookup, never a policy: with no store, nothing is authorised at all.
     """
+    store = None
     for holder in (getattr(d, "platform", None), d):
         store = getattr(holder, "pane_tokens", None)
         if store is not None:
-            return store
-    return None
+            break
+    # v1.414.0: a Build › Code session's tokens live in a store of their own
+    # (``hosted/jarvis_tools.HostedTokens``: a terminal's ``purge_dead``
+    # revokes every pane id it does not know). One door still: the same
+    # ``authorize_mcp`` checks, then either store's grant.
+    code = getattr(getattr(getattr(d, "platform", None), "hosted", None), "tokens", None)
+    if store is None or code is None:
+        return store
+    return _EitherStore(store, code)
+
+
+class _EitherStore:
+    """``resolve`` through the terminals' store, then Build › Code's. Both are
+    random 32-byte tokens checked in constant time; a token is in one store."""
+
+    def __init__(self, panes: Any, code: Any) -> None:
+        self._panes = panes
+        self._code = code
+
+    def resolve(self, token: str) -> Any:
+        grant = self._panes.resolve(token)
+        return grant if grant is not None else self._code.resolve(token)
 
 
 def _sessions(d) -> Any:

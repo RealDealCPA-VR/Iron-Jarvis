@@ -3519,9 +3519,14 @@ function runOutcomeNotice(entry) {
   }
   if (entry.type === "build.turn_finished") {
     // v1.374.0: a long Build turn that ended (the bell's row, word for word).
+    // v1.414.0: a Build › Code reply too (`surface: "build_app"`, session id
+    // "build_app:<id>"): the same words, opened on that session in
+    // Build › Code.
     const sid = typeof entry.session_id === "string" ? entry.session_id : "";
+    const app = p.surface === "build_app" || sid.startsWith("build_app:");
     const thread =
       (typeof p.thread_id === "string" && p.thread_id.trim()) ||
+      (sid.startsWith("build_app:") ? sid.slice("build_app:".length) : "") ||
       (sid.startsWith("build:") ? sid.slice("build:".length) : "");
     if (!thread) return null;
     const title = typeof p.title === "string" ? p.title.trim() : "";
@@ -3533,7 +3538,9 @@ function runOutcomeNotice(entry) {
       ts: runOutcomeTsMs(entry.ts),
       title: p.outcome === "failed" ? "Your coding session could not finish" : "Your coding session finished",
       body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
-      href: `/chat?view=code&session=${encodeURIComponent(thread)}`,
+      href: app
+        ? `/terminals?view=code&code=${encodeURIComponent(thread)}`
+        : `/chat?view=code&session=${encodeURIComponent(thread)}`,
     };
   }
   if (entry.type === "workflow.completed") {
@@ -4210,6 +4217,18 @@ function describeBusyWork(activity) {
     }
     parts.push(
       `${plural(panes, "Build terminal", "Build terminals")} working${seen.length ? ` (${seen.join(", ")})` : ""}`
+    );
+  }
+  // v1.414.0: a reply of the user's own coding tool in Build › Code.
+  const code = n("code_replies");
+  if (code) {
+    const seen = [];
+    for (const raw of Array.isArray(a.code_tools) ? a.code_tools : []) {
+      const name = String(raw || "").trim();
+      if (name && !seen.includes(name)) seen.push(name);
+    }
+    parts.push(
+      `${plural(code, "coding session", "coding sessions")} in Build › Code working${seen.length ? ` (${seen.join(", ")})` : ""}`
     );
   }
   const sessions = n("active_sessions");

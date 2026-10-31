@@ -96,7 +96,8 @@ async def test_a_running_build_reply_is_listed_counted_and_named_outside_build(a
 
     # The orb's count rides the one shared /health poll.
     status, health = await asgi_get(app, "/health")
-    assert status == 200 and health["replies"] == {"chat": 0, "build": 1}, health.get("replies")
+    # v1.414.0 (moved on purpose): /health also counts Build › Code replies.
+    assert status == 200 and health["replies"] == {"chat": 0, "build": 1, "build_app": 0}, health.get("replies")
 
     # The home line and Everything › Status count it.
     status, line = await asgi_get(app, "/ui/status-line")
@@ -117,7 +118,7 @@ async def test_a_running_build_reply_is_listed_counted_and_named_outside_build(a
     status, body = await asgi_get(app, "/chat/turns/running")
     assert [r for r in body["replies"] if r["turn_id"] == "hg-run"] == []
     status, health = await asgi_get(app, "/health")
-    assert health["replies"] == {"chat": 0, "build": 0}
+    assert health["replies"] == {"chat": 0, "build": 0, "build_app": 0}
     status, line = await asgi_get(app, "/ui/status-line")
     assert line["running"] == 0
 

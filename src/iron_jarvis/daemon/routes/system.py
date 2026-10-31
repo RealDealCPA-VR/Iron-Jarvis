@@ -124,9 +124,24 @@ def _replies_running(d) -> dict[str, int]:
     try:
         from ..durable_turns import reply_counts
 
-        return reply_counts(getattr(d.platform, "turn_logs", None))
+        out = dict(reply_counts(getattr(d.platform, "turn_logs", None)))
     except Exception:  # noqa: BLE001 — /health must never fail
-        return {"chat": 0, "build": 0}
+        out = {"chat": 0, "build": 0}
+    # v1.414.0: a Build › Code reply (the user's real Claude Code / Codex /
+    # Pi / OpenCode) — in memory, never a database read.
+    out["build_app"] = _code_counts(d)["running"]
+    return out
+
+
+def _code_counts(d) -> dict[str, Any]:
+    """``hosted/news.counts``: Build › Code replies running / working / the
+    tools' names. Never raises."""
+    try:
+        from ...hosted.news import counts
+
+        return counts(d.platform)
+    except Exception:  # noqa: BLE001
+        return {"running": 0, "working": 0, "tools": []}
 
 
 def activity_snapshot(d) -> dict[str, Any]:
@@ -189,6 +204,11 @@ def activity_snapshot(d) -> dict[str, Any]:
                     busy_pane_clis.append(str(cli))
     except Exception:  # noqa: BLE001 — an unreadable pane list is "none known", never a 500
         pass
+    # v1.414.0: Build › Code replies. RUNNING counts toward `busy` (the update
+    # would cut them off, so its warning names them — a reply parked on a
+    # card included); only the part NOT parked on the user is `working`
+    # (keeps the PC awake) — the v1.391.0 rule, unchanged.
+    code = _code_counts(d)
     return {
         "active_sessions": sessions,
         "running_workflow_runs": len(run_states),
@@ -196,7 +216,9 @@ def activity_snapshot(d) -> dict[str, Any]:
         "chat_replies": chat_replies,
         "busy_panes": busy_panes,
         "busy_pane_clis": busy_pane_clis,
-        "busy": bool(sessions or run_states or chat_replies or busy_panes),
+        "code_replies": code["running"],
+        "code_tools": code["tools"],
+        "busy": bool(sessions or run_states or chat_replies or busy_panes or code["running"]),
         # v1.391.0 (long jobs, Phase 2, decision 1): the "Keep this PC awake
         # while work runs" setting, read LIVE by the desktop app beside
         # `working` (it holds off sleep only while both are true).
@@ -207,7 +229,7 @@ def activity_snapshot(d) -> dict[str, Any]:
         # cuts it off); the desktop's sleep blocker reads `working` — decision
         # 1 holds sleep off "only while ... is working", and the plan's own
         # words tell working from "waiting on you" (decision 2).
-        "working": _working(d, live_sessions, writing, chat_replies, working_panes),
+        "working": _working(d, live_sessions, writing, chat_replies, working_panes) or code["working"] > 0,
         # v1.398.0 (night shift N1): a night task is running, or one is queued
         # while the night window is open — the desktop keeps the PC awake for
         # it too (a night task parked on a question still waits only its card

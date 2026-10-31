@@ -942,15 +942,21 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // unless the user is looking at that session (the ping effect below);
     // the desktop app says it from the tray in these same words
     // (desktop/main.js runOutcomeNotice, one fixture).
+    // v1.414.0: a Build › Code reply too (`surface: "build_app"`, session id
+    // "build_app:<id>") — the same words, opened on that session in
+    // Build › Code; the Code view says "looking" by that id.
+    const sidRaw = typeof e.session_id === "string" ? e.session_id : "";
+    const app = p.surface === "build_app" || sidRaw.startsWith("build_app:");
     const thread =
       (typeof p.thread_id === "string" && p.thread_id.trim()) ||
-      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      (sidRaw.startsWith("build_app:") ? sidRaw.slice("build_app:".length) : "") ||
+      buildThreadOf(sidRaw) ||
       "";
     if (!thread) return null;
     return {
       id: e.id,
       ts: e.ts,
-      href: buildSessionHref(thread),
+      href: app ? buildCodeHref(thread) : buildSessionHref(thread),
       icon: p.outcome === "failed" ? AlertTriangle : CheckCircle2,
       title: buildFinishedHeadline(p.outcome),
       body: buildFinishedBody(p.title, p.seconds),

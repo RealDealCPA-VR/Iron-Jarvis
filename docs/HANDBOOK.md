@@ -2423,6 +2423,69 @@ asks into a card you answer.
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
 
+## Build › Code is part of the app (v1.414.0)
+
+A coding session in Build's **Code** view (your own Claude Code, Codex, Pi or
+OpenCode) is now seen, and can know you, everywhere else in Iron Jarvis.
+
+**Seen everywhere.**
+
+- **Running now** (the status orb's list) shows a Build › Code reply while it
+  runs, as "Coding session · <tool> · 12 min", with "Waiting on you" when a
+  card is open. Pressing it opens that session in Build › Code. The status
+  orb, the home line and Everything › Status count it too.
+- **Your PC stays awake** while a reply is working, like any other coding
+  reply. A reply waiting on your card does not keep the PC awake: nothing
+  happens until you answer.
+- **Updates**: if you install an update while a reply runs, the warning
+  names it ("1 coding session in Build › Code working (Claude Code)").
+- **When a long reply ends**: a reply that ran longer than a minute and
+  finished (or could not finish) rings the bell once, "Your coding session
+  finished", and says so from the tray when the window is closed. Not when
+  you were looking at that session, and never for a reply you stopped.
+- **On your phone**: a card nobody answers in the app for five minutes goes
+  to your phone (when a phone is set up in Settings › Connections), the same
+  way a Chat › Code card does. Reply **approve** to allow it once, or
+  **deny**. Never sent: a question that needs words, a card that must be
+  allowed once every time, and any card while the session is in Full access.
+
+**Iron Jarvis's own tools, if you want them.** The session's header has an
+**Iron Jarvis tools** button with two boxes, both off until you tick one:
+
+- **Memory**: the coding tool may search and read your memory and your
+  memory profile (read-only; it can never write). What it reads goes to the
+  tool's model provider (Anthropic for Claude Code, OpenAI for Codex, the
+  provider you chose in Pi or OpenCode) with the conversation.
+- **Browser**: the coding tool may use your browser through Iron Jarvis;
+  every click, typing or page change asks you first.
+
+These are the same two boxes a Build terminal has. Ticking the first box (or
+unticking the last) applies from your next message: the tool starts again on
+the same conversation, connected to Iron Jarvis. Unticking a box takes effect
+on the tool's very next call. Iron Jarvis never changes your own config files
+for this: Claude Code gets a configuration file of Iron Jarvis's own, Codex
+gets the setting on its command line, Pi gets a small extension of Iron
+Jarvis's own, and OpenCode gets it when the conversation opens. None of them
+holds a password: the connection's key lives only while that process runs.
+Build › Code sessions have no Local only setting; when you want nothing to
+reach a cloud model, leave Memory off.
+
+**Share your profile with every tool.** Settings › Memory & you › Share with
+Build now has a switch for **Pi** and **OpenCode** too (off by default):
+
+- Pi reads `AGENTS.md` in its own folder (`%USERPROFILE%\.pi\agent`, or
+  `PI_CODING_AGENT_DIR`). If you keep an `AGENTS.override.md` there, Pi reads
+  that one instead, so the profile goes there.
+- OpenCode reads `AGENTS.md` in `%USERPROFILE%\.config\opencode` (or
+  `XDG_CONFIG_HOME`). While that file does not exist, OpenCode reads your
+  Claude Code instructions (`.claude\CLAUDE.md`) instead, so Iron Jarvis
+  will not create it then: making it would stop OpenCode reading your Claude
+  Code file. Turn on **Share with Claude Code** instead, and OpenCode reads
+  your profile there.
+- A new session for a tool whose switch is off shows one quiet line under
+  the box: **Share your profile with <tool>** turns the switch on;
+  **No thanks** hides the offer for good.
+
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron

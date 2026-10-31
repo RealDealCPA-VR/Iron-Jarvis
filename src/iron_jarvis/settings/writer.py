@@ -51,8 +51,19 @@ _REARM_GROUPS = ("autonomy", "sentinels", "calendar", "fleet", "browser")
 _LOCAL_ENDPOINT_KEYS = ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
 #: Keys applied by their own service's setter (they persist themselves).
 _HOOK_KEYS = frozenset(
-    {"iron_proxy_enabled", "profile_share_claude_code", "profile_share_codex", "agent_browser_enabled"}
+    {"iron_proxy_enabled", "profile_share_claude_code", "profile_share_codex",
+     "profile_share_pi", "profile_share_opencode", "agent_browser_enabled"}
 )
+
+
+#: v1.414.0: each "Share my profile with <tool>" setting and its CLI id
+#: (``profile/share.CLIS`` — pinned equal).
+_SHARE_KEYS: dict[str, str] = {
+    "profile_share_claude_code": "claude-code",
+    "profile_share_codex": "codex",
+    "profile_share_pi": "pi",
+    "profile_share_opencode": "opencode",
+}
 
 
 class SettingError(ValueError):
@@ -193,7 +204,7 @@ class ConfigWriter:
             )
             if problem:
                 raise SettingError(f"{_label('account_groups')}: {problem}.")
-        for cli_key, cli in (("profile_share_claude_code", "claude-code"), ("profile_share_codex", "codex")):
+        for cli_key, cli in _SHARE_KEYS.items():
             if clean.get(cli_key) is True:
                 share = getattr(self.platform, "profile_share", None)
                 if share is not None and not share.available(cli):
@@ -241,10 +252,8 @@ class ConfigWriter:
                     profile[d.field_name] = value
                 elif key == "iron_proxy_enabled":
                     self._iron_proxy(bool(value))
-                elif key in ("profile_share_claude_code", "profile_share_codex"):
-                    self.platform.profile_share.set_on(
-                        "claude-code" if key.endswith("claude_code") else "codex", bool(value)
-                    )
+                elif key in _SHARE_KEYS:
+                    self.platform.profile_share.set_on(_SHARE_KEYS[key], bool(value))
                 elif key == "agent_browser_enabled":
                     self._agent_browser(bool(value))
                 elif d.pattern and key.startswith("permissions."):

@@ -147,6 +147,8 @@ export const CODE_LOST_REREAD_MS = 3_000;
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
+import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
 /** "At the bottom" for the transcript, in pixels. */
 const BOTTOM_SLACK_PX = 48;
 
@@ -718,6 +720,16 @@ function SessionPane({
     [session],
   );
 
+  /** v1.414.0: a session the daemon answered with (the Iron Jarvis tools
+   *  chip's change). */
+  const adoptSession = useCallback(
+    (next: CodeSession) => {
+      setSession(next);
+      onChanged(next);
+    },
+    [onChanged],
+  );
+
   const change = useCallback(
     async (patchIn: Record<string, unknown>) => {
       if (!session) return;
@@ -888,6 +900,29 @@ function SessionPane({
     wasAsking.current = askingNow;
   }, [askingNow]);
 
+  // v1.414.0: while this session is on screen and its window has focus, the
+  // bell knows the user is LOOKING at it (lib/buildWatching — the same note
+  // Chat › Code writes): a long reply that ends here says nothing, they
+  // watched it end. The pane is mounted only while Build shows Code.
+  useEffect(() => {
+    const look = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) noteLooking(sessionId);
+      else stopLooking(sessionId);
+    };
+    look();
+    const beat = window.setInterval(look, LOOKING_BEAT_MS);
+    window.addEventListener("focus", look);
+    window.addEventListener("blur", look);
+    document.addEventListener("visibilitychange", look);
+    return () => {
+      window.clearInterval(beat);
+      window.removeEventListener("focus", look);
+      window.removeEventListener("blur", look);
+      document.removeEventListener("visibilitychange", look);
+      stopLooking(sessionId);
+    };
+  }, [sessionId]);
+
   if (loadError && !session) {
     return (
       <div className="grid h-full place-items-center px-4">
@@ -919,6 +954,14 @@ function SessionPane({
               {sessionRowLine(session, tools)} · {sessionFolderWords(session)}
             </p>
           </div>
+          {/* v1.414.0: Iron Jarvis's own tools for this session (all off
+              until ticked) — the same two boxes a Build terminal has. */}
+          <JarvisToolsChip
+            session={session}
+            toolName={toolName}
+            onChanged={adoptSession}
+            onInfo={setInfo}
+          />
           <div className="relative">
             <button
               type="button"
@@ -970,6 +1013,9 @@ function SessionPane({
               <p data-testid="code-dropped" className="mb-3 text-center text-[11px] text-zinc-600">
                 {droppedWords(dropped)}
               </p>
+            ) : null}
+            {conv.items.length === 0 && session.source !== "disk" ? (
+              <ProfileShareOffer tool={session.tool} toolName={toolName} />
             ) : null}
             {conv.items.length === 0 ? (
               <p data-testid="code-empty" className="py-10 text-center text-[13px] text-zinc-500">

@@ -148,8 +148,17 @@ def view(row: HostedSessionRecord) -> dict[str, Any]:
         "archived": row.archived_at is not None,
         "archived_at": _iso(row.archived_at),
         "last_error": row.last_error,
+        # v1.414.0: the five Capabilities (all off by default) — Browser and
+        # Memory give the coding tool Iron Jarvis's own tools.
+        "capabilities": _capabilities(row),
         "source": "app",
     }
+
+
+def _capabilities(row: HostedSessionRecord) -> dict[str, bool]:
+    from .jarvis_tools import load
+
+    return load(getattr(row, "capabilities_json", "") or "")
 
 
 def set_folder_if_empty(engine: Any, sid: str, path: str) -> HostedSessionRecord | None:

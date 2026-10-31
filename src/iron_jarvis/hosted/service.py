@@ -51,6 +51,7 @@ the harness offers one (and never one that would switch on Full access).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -83,6 +84,8 @@ from .pi import PiDriver
 from . import opencode as O
 from .opencode import HARNESS as OPENCODE
 from .opencode import OpenCodeDriver
+from . import jarvis_tools as JT
+from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
@@ -495,6 +498,12 @@ class HostedTurn:
         self.finished_at: float | None = None
         self.task: asyncio.Task | None = None
         self.started_at = utcnow()
+        #: v1.414.0: the service clock when the turn began (its length for the
+        #: "Your coding session finished" notice — :mod:`.news`).
+        self.started_mono: float | None = None
+        #: v1.414.0: an account's limit card was shown in this turn (that card
+        #: is the news: no finish notice beside it).
+        self.account_limit = False
         self._chars = 0
         #: True once the turn's end is being written (the done follows).
         self.ending = False
@@ -574,6 +583,15 @@ class LiveSession:
         #: v1.412.0: the notes sent to the running turn (ref -> {text, files,
         #: shown, read}); what was never read goes back to the box at its end.
         self.steers: dict[str, dict[str, Any]] = {}
+        #: v1.414.0: the session's title, for Running now and the notices.
+        self.title = ""
+        #: v1.414.0: ask id -> the card's way to the phone (:class:`.news.PhoneWatch`).
+        self.phones: dict[str, Any] = {}
+        #: v1.414.0: the session's Capabilities (five boxes, the pane's shape),
+        #: read LIVE by its Iron Jarvis token (:mod:`.jarvis_tools`), and its
+        #: folder (where a tool call through that token runs).
+        self.caps: dict[str, bool] = {}
+        self.folder = ""
 
     @property
     def running(self) -> bool:
@@ -609,6 +627,14 @@ class HostedService:
         self._pi_catalog = self.home / "hosted" / "pi_models.json"
         #: The model list an OpenCode process last said (v1.413.0).
         self._oc_catalog = self.home / "hosted" / "opencode_models.json"
+        #: v1.414.0: how long a card waits in the app before the phone gets
+        #: it (``harness/stall.PHONE_AFTER_S``; a test sets it short).
+        from ..harness.stall import PHONE_AFTER_S
+
+        self.phone_after_s = PHONE_AFTER_S
+        #: v1.414.0: Iron Jarvis's own tools for a session — tokens of their
+        #: own (memory only), revoked with the process.
+        self.tokens = JT.HostedTokens(self)
 
     # -- helpers -----------------------------------------------------------------
     def _lock(self) -> asyncio.Lock:
@@ -1109,6 +1135,25 @@ class HostedService:
                 # --thinking) applies only to a process started without one.
                 live.restart = True
             fields["effort"] = effort
+        if isinstance(body.get("capabilities"), dict):
+            # v1.414.0: the session's Capabilities, a MERGE (the pane's own
+            # rule: a box not named keeps its value). Read LIVE by the
+            # session's Iron Jarvis token, so a box turned OFF takes effect on
+            # the tool's next call; a change of whether the connection is
+            # needed at all (the first box on, the last one off) reaches the
+            # tool with a new process before the next message.
+            before = JT.load(getattr(row, "capabilities_json", "") or "")
+            merged = dict(before)
+            for key, value in body["capabilities"].items():
+                if key in merged:
+                    merged[key] = JT.normalise({key: value})[key]
+            if merged != before:
+                fields["capabilities_json"] = json.dumps(merged, sort_keys=True)
+                if live is not None:
+                    live.caps = merged
+                    if live.running and JT.wanted(merged) != JT.wanted(before):
+                        live.restart = True
+                applied["capabilities"] = "next" if live is not None and live.running                     and JT.wanted(merged) != JT.wanted(before) else "now"
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
@@ -1214,6 +1259,18 @@ class HostedService:
             # v1.413.0: the mode's permission rules, for THIS process only (the
             # user's own config files are read, never written).
             env, rules_note = await asyncio.to_thread(O.child_env, env, row.mode, row.folder)
+        # v1.414.0: Iron Jarvis's own tools (Memory, Browser) — ONLY when the
+        # user ticked one this server serves; else no token, no configuration.
+        live.caps = JT.load(getattr(row, "capabilities_json", "") or "")
+        live.folder = row.folder or ""
+        connection = JT.Connection()
+        url = str(getattr(getattr(self.platform, "terminals", None), "mcp_url", "") or "")
+        if JT.wanted(live.caps) and url:
+            token = self.tokens.mint(row.id, live.caps)
+            connection = await asyncio.to_thread(
+                JT.connect, row.harness, url=url, token=token, session_dir=session_dir(self.home, row.id),
+            )
+            env.update(connection.env)
         resume = bool(row.harness_session_id)
         # Claude Code and Pi take the id to save under (`--session-id`): minted
         # here, so the row names the conversation before it starts.
@@ -1238,9 +1295,10 @@ class HostedService:
         if isinstance(driver, OpenCodeDriver):
             driver.catalog_path = self._oc_catalog
             driver.rules_note = rules_note
+            driver.mcp_servers = list(connection.acp_servers)
         driver.steer_read = lambda ref: self._steer_read(live, ref)
         proc = HarnessProcess(
-            argv0 + driver.argv(session_id=sid, resume=resume), env=env, cwd=row.folder,
+            argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv, env=env, cwd=row.folder,
             name=f"hosted-{row.id}",
         )
         proc_holder["p"] = proc
@@ -1258,6 +1316,7 @@ class HostedService:
         try:
             await asyncio.to_thread(proc.start, loop, on_message, on_exit)
         except OSError as exc:
+            self.tokens.revoke(row.id)
             # The program could not be started at all (v1.411.0: npm's POSIX
             # `pi` shim beside pi.cmd is not a Windows program, WinError 193):
             # one plain sentence, never a bare OSError.
@@ -1284,6 +1343,7 @@ class HostedService:
     def _on_exit(self, live: LiveSession, proc: HarnessProcess, code: int | None) -> None:
         if live.proc is not proc:
             return
+        self.tokens.revoke(live.sid)  # v1.414.0: the token dies with the process
         drv = live.driver
         if drv is not None:
             drv.on_exit()
@@ -1310,8 +1370,12 @@ class HostedService:
         proc = live.proc
         live.proc = None
         drv, live.driver = live.driver, None
+        # v1.414.0: the token dies with the process (before the stop: a call
+        # made while it ends is refused, never served).
+        self.tokens.revoke(live.sid)
         if proc is not None:
             await asyncio.to_thread(proc.stop)
+            await asyncio.to_thread(JT.remove_files, session_dir(self.home, live.sid))
         if drv is not None:
             drv.on_exit()
         self._expire_asks(live)
@@ -1330,9 +1394,17 @@ class HostedService:
             return
         if turn is not None and turn.running:
             ev["turn"] = turn.id
+        if ev.get("type") == "resolved":
+            # v1.414.0: a card answered (anywhere), expired or stopped: its way
+            # to the phone closes with it.
+            phone = live.phones.pop(str(ev.get("request_id") or ""), None)
+            if phone is not None:
+                phone.close(str(ev.get("decision") or ""))
         if ev.get("type") == "error":
             live.last_error = str(ev.get("title") or "")
             if ev.get("fix_kind") == "account_limit":
+                if turn is not None:
+                    turn.account_limit = True
                 ev.setdefault("account", live.account)
                 live.limit = getattr(live.driver, "limit", None)
                 live.limit_since = datetime.now(timezone.utc).isoformat()
@@ -1366,6 +1438,19 @@ class HostedService:
         turn.end("done" if done.get("stop") == "completed" else str(done.get("stop")))
         if live.turn is turn:
             live.turn = None
+        # v1.414.0: a long reply that ENDED is told to the bell and the tray
+        # (never for a Stop or a cut-off, never beside an account's limit
+        # card) — after its done is on the record.
+        if turn.started_mono is not None and not turn.account_limit and not self._closing:
+            elapsed = self.clock() - turn.started_mono
+            if elapsed > NEWS.FINISH_NOTICE_AFTER_S and NEWS.outcome_of(str(done.get("stop"))):
+                from ..harness.stall import keep
+
+                with contextlib.suppress(RuntimeError):
+                    keep(asyncio.ensure_future(NEWS.announce_finished(
+                        self.platform, live.sid, turn.id, live.title, live.harness,
+                        str(done.get("stop")), elapsed,
+                    )))
 
     def _expire_asks(self, live: LiveSession) -> None:
         """Every open card closes when its process goes (nobody can answer it)."""
@@ -1381,6 +1466,13 @@ class HostedService:
     def _ask(self, live: LiveSession, ask: Ask) -> None:
         live.asks[ask.id] = ask
         self._emit(live, ask.event)
+        # v1.414.0: a card nobody answers in the app goes to the phone after
+        # ``stall.PHONE_AFTER_S`` (only the kinds :func:`.news.phone_may_send`
+        # allows); it closes with the card's ``resolved``.
+        if ask.kind == "approval":
+            watch = NEWS.PhoneWatch(self, live, ask, after_s=self.phone_after_s)
+            live.phones[ask.id] = watch
+            watch.start()
 
     # -- notes sent while it works (v1.412.0) -------------------------------------
     def _steer_event(self, live: LiveSession, ref: str, state: str) -> None:
@@ -1550,6 +1642,8 @@ class HostedService:
             if live.claim or (live.turn is not None and live.turn.running):
                 raise Refused(W.BUSY)
         turn = HostedTurn(turn_id, sid)
+        turn.started_mono = self.clock()
+        live.title = (row.title or "").strip() or first_message_title(text)
         self.turns[turn_id] = turn
         live.turn = turn
         live.last_active = self.clock()

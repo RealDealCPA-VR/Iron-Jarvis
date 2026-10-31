@@ -58,9 +58,17 @@ def build_replies_running(d) -> int:
     try:
         from ..durable_turns import reply_counts
 
-        return int(reply_counts(getattr(d.platform, "turn_logs", None)).get("build", 0))
+        n = int(reply_counts(getattr(d.platform, "turn_logs", None)).get("build", 0))
     except Exception:  # noqa: BLE001 — a count we cannot read is zero
-        return 0
+        n = 0
+    # v1.414.0: and a Build › Code reply (the user's real coding tool).
+    try:
+        from ...hosted.news import counts
+
+        n += int(counts(d.platform)["running"])
+    except Exception:  # noqa: BLE001
+        pass
+    return n
 
 
 def status_line(d) -> dict[str, int]:

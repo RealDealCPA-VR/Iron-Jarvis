@@ -34,7 +34,7 @@ export interface Health {
   /** Harness gaps (fix 1): how many replies the daemon is writing right now
    *  — a chat's and a Build coding session's (the durable turn registry, in
    *  memory). Absent on an older Iron Jarvis. */
-  replies?: { chat?: number; build?: number } | null;
+  replies?: { chat?: number; build?: number; /** v1.414.0: Build › Code. */ build_app?: number } | null;
 }
 
 export interface Metrics {

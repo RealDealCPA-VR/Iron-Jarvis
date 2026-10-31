@@ -112,11 +112,18 @@ CAPABILITY_MEMORY = "memory"
 #:   definition carries. Included because a user who ticks Memory means the
 #:   memory the Memory page shows them, and that page's Long-term tab IS this.
 #:
-#: Deliberately OUT: ``memory_write``, ``memory_propose``, ``ltm_append`` (they
-#: write), ``recall`` (it also searches indexed FILE roots — that is Files, which
-#: is not enforced here) and ``history_search`` (past conversations, not memory).
+#: * ``brain_search`` / ``brain_read`` (v1.414.0) — the user's MEMORY PROFILE
+#:   (``brain/tools.py``, v1.406.0): the durable memory base their profile
+#:   names, searched and read. Both ``Reversibility.READONLY`` and
+#:   ``returns_untrusted_content``; their output crosses this server inside the
+#:   untrusted-content fence (:func:`_call_tool`).
+#:
+#: Deliberately OUT: ``memory_write``, ``memory_propose``, ``ltm_append``,
+#: ``brain_save``, ``brain_change`` (they write), ``recall`` (it also searches
+#: indexed FILE roots — that is Files, which is not enforced here) and
+#: ``history_search`` (past conversations, not memory).
 MEMORY_READ_TOOLS: frozenset[str] = frozenset(
-    {"memory_search", "memory_read", "ltm_search"}
+    {"memory_search", "memory_read", "ltm_search", "brain_search", "brain_read"}
 )
 
 
@@ -318,6 +325,12 @@ def instructions_heading(pane_id: str) -> str:
     without the id every pane's block reads identically and a support question
     about "the wrong tools" has no evidence in it.
     """
+    from ..hosted.jarvis_tools import session_of
+
+    code = session_of(pane_id)
+    if code:
+        # v1.414.0: a Build › Code session's grant.
+        return f"Iron Jarvis tools for Build › Code session {code}."
     return f"Iron Jarvis tools for Build pane {pane_id}."
 
 
@@ -517,9 +530,19 @@ def _pane_workspace(d, pane_id: str) -> Path:
     confined to a throwaway scratch dir would refuse every file the user can see.
     """
     try:
-        terminals = getattr(getattr(d, "platform", None), "terminals", None)
-        pane = terminals.get(pane_id) if terminals is not None else None
-        cwd = str(getattr(pane, "cwd", "") or "")
+        from ..hosted.jarvis_tools import session_of
+
+        code = session_of(pane_id)
+        if code:
+            # v1.414.0: a Build › Code session works in ITS folder.
+            hosted = getattr(getattr(d, "platform", None), "hosted", None)
+            live = hosted.live.get(code) if hosted is not None else None
+            pane = live
+            cwd = str(getattr(live, "folder", "") or "")
+        else:
+            terminals = getattr(getattr(d, "platform", None), "terminals", None)
+            pane = terminals.get(pane_id) if terminals is not None else None
+            cwd = str(getattr(pane, "cwd", "") or "")
         if cwd and Path(cwd).is_dir():
             return Path(cwd)
     except Exception:  # noqa: BLE001 — an unreadable pane is not a failed call
@@ -527,6 +550,24 @@ def _pane_workspace(d, pane_id: str) -> Path:
     fallback = Path(getattr(d.platform, "config").home) / "uploads"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
+
+
+def _code_project(d, pane_id: str, workspace: Path) -> "str | None":
+    """v1.414.0: a Build › Code session's project — the one whose folder holds
+    the session's (``projects/locate.project_for_path``), so ``brain_search``
+    reads THAT project's memory profile. None for a terminal's grant (its
+    behaviour is unchanged) and for no project. BLOCKING; never raises."""
+    from ..hosted.jarvis_tools import session_of
+
+    if not session_of(pane_id):
+        return None
+    try:
+        from ..projects.locate import project_for_path
+
+        project = project_for_path(d.platform.engine, str(workspace))
+        return getattr(project, "id", None) if project is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def harness_session_id(pane_id: str) -> str:
@@ -705,6 +746,7 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
             d, tool, name, perm, arguments, grant.pane_id
         )
     workspace = await asyncio.to_thread(_pane_workspace, d, grant.pane_id)
+    project_id = await asyncio.to_thread(_code_project, d, grant.pane_id, workspace)
     ctx = ToolContext(
         workspace=workspace,
         session_id=harness_session_id(grant.pane_id),
@@ -718,6 +760,7 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
         config=platform.config,
         event_bus=platform.event_bus,
         engine=platform.engine,
+        project_id=project_id,
     )
     result = await registry.invoke(
         name,
@@ -732,6 +775,16 @@ async def _call_tool(d, grant, name: str, arguments: dict[str, Any]) -> dict[str
         **({"deny_reason": deny_reason} if deny_reason else {}),
     )
     text = (result.output if result.ok else (result.error or "error")) or ""
+    if result.ok and tool is not None and getattr(tool, "returns_untrusted_content", False)             and CAPABILITY_TOOLS[CAPABILITY_MEMORY].admits(name):
+        # v1.414.0: what a MEMORY tool returns from stored text (memory, the
+        # memory profile's base) crosses this server inside the same
+        # untrusted-content fence the chat lanes put around it — the
+        # instructions say it too, but a fence travels with the text. (A
+        # browser tool's page text keeps its v1.238.0 shape: its own
+        # instruction line covers it.)
+        from ..computeruse.safety import wrap_untrusted
+
+        text = wrap_untrusted(str(text))
     return {"content": [{"type": "text", "text": str(text)}], "isError": not result.ok}
 
 # --------------------------------------------------------------------------- #

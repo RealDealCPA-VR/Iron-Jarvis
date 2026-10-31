@@ -1,5 +1,5 @@
 {
-  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert). v1.393.0 review (the long-jobs plan's Phase 4): a coding reply that WAITS for its account's reset by itself (`build.account_limit` with `waiting: true` — armed with no press, or a group with nothing usable) and a reply carried on by ANOTHER account of its group (`build.resumed` with `moved_from_name`) are news, not questions: the bell pings them uncounted (no badge), so the tray says nothing; desktop only (not a default alert, never the phone). v1.399.0 (night shift N2): a night's Last night summary (`build.night_summary`, ONE per night) rings and counts on the badge, is said from the tray once, and is the phone's ONE message of the night (a default alert: a short line per task); its words are the daemon's own (harness/night_morning.notice_words), and it opens Coding sessions › Last night. v1.406.0 part 3: a coding session's pull-request NEWS (`build.ci_done`: Iron Jarvis stopped fixing its failing checks, or they pass now after the reviewed fix it pushed) rings, counts, is said from the tray and reaches the phone once; its quiet steps (`build.ci_step`) are bell rows only and have no case here (they are not default alerts).",
+  "_about": "v1.360.0 lane 10A: ONE notice per run outcome. Each case is a persisted event (the audit's shape: id, type, session_id, ts, payload). `pings` = the dashboard bell raises a desktop ping for it while a window is open (so the daemon keeps 'This PC' quiet: comm/notifier.bell_pings); `attention` = it counts on the bell's badge, and the desktop app says it while it sits in the tray (comm/notifier.bell_attention, desktop/main.js runOutcomeNotice); `title` / `body` / `href` = the bell row's words, which the tray notice repeats. Read by tests/test_one_notice_v13600.py (Python + main.js under node) and dashboard/__tests__/one-notice-v13600.test.tsx (the real bell). v1.374.0 (IJ harness part 2, Phase 3): a Build turn that ran longer than a minute and ended (`build.turn_finished`) is a ringing row too, said from the tray once; `phone` (default true) = the default notifier also sends it to a phone destination; a Build turn's notice is desktop only (not a default alert). v1.392.0 (the long-jobs plan's Phase 3): a Build reply that made no progress for ten minutes (`build.turn_stalled`, once per stall episode) rings the same way and is said from the tray once; desktop only (not a default alert). v1.393.0 review (the long-jobs plan's Phase 4): a coding reply that WAITS for its account's reset by itself (`build.account_limit` with `waiting: true` — armed with no press, or a group with nothing usable) and a reply carried on by ANOTHER account of its group (`build.resumed` with `moved_from_name`) are news, not questions: the bell pings them uncounted (no badge), so the tray says nothing; desktop only (not a default alert, never the phone). v1.399.0 (night shift N2): a night's Last night summary (`build.night_summary`, ONE per night) rings and counts on the badge, is said from the tray once, and is the phone's ONE message of the night (a default alert: a short line per task); its words are the daemon's own (harness/night_morning.notice_words), and it opens Coding sessions › Last night. v1.406.0 part 3: a coding session's pull-request NEWS (`build.ci_done`: Iron Jarvis stopped fixing its failing checks, or they pass now after the reviewed fix it pushed) rings, counts, is said from the tray and reaches the phone once; its quiet steps (`build.ci_step`) are bell rows only and have no case here (they are not default alerts). v1.414.0: a Build › Code reply (the user's own Claude Code, Codex, Pi or OpenCode) that ran longer than a minute and ended is the SAME `build.turn_finished` with `surface: \"build_app\"` (session id `build_app:<id>`): the same words and ring, opened on that session in Build › Code (`/terminals?view=code&code=<id>`).",
   "cases": [
     {
       "case": "schedule-failed",
@@ -304,6 +304,30 @@
       "title": "Your coding session could not finish",
       "body": "Move the tests · took 2 min",
       "href": "/chat?view=code&session=bs_err"
+    },
+    {
+      "case": "build-app-turn-finished",
+      "event": {
+        "id": "evt_build_app_done",
+        "type": "build.turn_finished",
+        "session_id": "build_app:app_long",
+        "ts": "2026-10-19T03:13:00",
+        "payload": {
+          "thread_id": "app_long",
+          "turn_id": "turn-app1",
+          "title": "Fix the nav bar",
+          "seconds": 192,
+          "outcome": "done",
+          "surface": "build_app",
+          "harness": "claude-code"
+        }
+      },
+      "pings": true,
+      "attention": true,
+      "phone": false,
+      "title": "Your coding session finished",
+      "body": "Fix the nav bar · took 3 min 12 s",
+      "href": "/terminals?view=code&code=app_long"
     },
     {
       "case": "build-turn-stalled",

@@ -13,6 +13,19 @@ user-level instruction file, so every session the CLI starts reads it:
   — but ``AGENTS.override.md`` in the same folder WINS when it holds anything
   but whitespace (measured with ``codex debug prompt-input``), so the block
   goes into the file Codex actually reads.
+* Pi 1.3.0 (v1.414.0): ``<home>/AGENTS.md``, home = ``PI_CODING_AGENT_DIR`` or
+  ``~/.pi/agent``. Pi reads the FIRST of ``AGENTS.override.md``,
+  ``AGENTS.md``, ``CLAUDE.md`` that EXISTS there (its
+  ``core/resource-loader.js`` — an empty override still wins), so the block
+  goes into that one (measured: a scratch agent dir's AGENTS.md reached the
+  request Pi sent to a local stand-in endpoint).
+* OpenCode 1.18.18 (v1.414.0): ``<XDG_CONFIG_HOME or ~/.config>/opencode/
+  AGENTS.md`` (measured the same way). OpenCode reads it INSTEAD of
+  ``~/.claude/CLAUDE.md`` when it exists (measured: with both, only the
+  AGENTS.md reached the request) — so a missing AGENTS.md is NEVER created
+  while OpenCode falls back to the user's Claude Code file: that would stop
+  OpenCode reading it. The row says so (:data:`OPENCODE_FALLBACK_ERROR`);
+  sharing with Claude Code reaches OpenCode then.
 
 Rules (pinned by ``tests/test_profile_share_v1306.py``):
 
@@ -97,6 +110,56 @@ class CliSpec:
     files: tuple[str, ...]
     proxy_provider: str
     config_key: str
+    #: v1.414.0: how the CLI picks among ``files``: ``non_blank`` (the first
+    #: holding anything but whitespace — Codex) or ``exists`` (the first that
+    #: exists at all — Pi).
+    pick: str = "non_blank"
+    #: v1.414.0: the file created when none is read ("" = ``files[-1]``).
+    create: str = ""
+    #: v1.414.0: the CLI's home when it is not ``$home_var`` / ``~/<default_dir>``
+    #: (OpenCode's XDG folder).
+    home_fn: Any = None
+    #: v1.414.0: ``(path) -> sentence`` refusing to CREATE a missing file (""
+    #: = may create).
+    create_guard: Any = None
+
+    @property
+    def create_name(self) -> str:
+        return self.create or self.files[-1]
+
+
+def _opencode_home() -> Path:
+    """OpenCode's global config folder (``xdg-basedir``): ``$XDG_CONFIG_HOME/
+    opencode``, else ``~/.config/opencode`` (Windows included)."""
+    xdg = (os.environ.get("XDG_CONFIG_HOME") or "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else Path(os.path.expanduser("~")) / ".config"
+    return base / "opencode"
+
+
+#: v1.414.0: why OpenCode's AGENTS.md is not created (see the module doc).
+OPENCODE_FALLBACK_ERROR = (
+    "OpenCode reads your Claude Code instructions file (CLAUDE.md) while it has no "
+    "AGENTS.md of its own; making one would stop it reading that file, so nothing was "
+    "written — share with Claude Code instead, and OpenCode reads it there"
+)
+
+
+def _truthy_env(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _opencode_create_guard(path: Path) -> str:
+    """OpenCode falls back to ``~/.claude/CLAUDE.md`` while ITS AGENTS.md is
+    missing (unless ``OPENCODE_DISABLE_CLAUDE_CODE`` /
+    ``OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`` is set — OpenCode's own switches,
+    read from its program)."""
+    if _truthy_env("OPENCODE_DISABLE_CLAUDE_CODE") or _truthy_env("OPENCODE_DISABLE_CLAUDE_CODE_PROMPT"):
+        return ""
+    claude = Path(os.path.expanduser("~")) / ".claude" / "CLAUDE.md"
+    try:
+        return OPENCODE_FALLBACK_ERROR if claude.is_file() else ""
+    except OSError:
+        return OPENCODE_FALLBACK_ERROR
 
 
 CLIS: dict[str, CliSpec] = {
@@ -107,6 +170,17 @@ CLIS: dict[str, CliSpec] = {
     "codex": CliSpec(
         "codex", "Codex", "OpenAI", "codex", "CODEX_HOME", ".codex",
         ("AGENTS.override.md", "AGENTS.md"), "openai", "profile_share_codex",
+    ),
+    # v1.414.0. Pi signs in by itself (no Iron-Proxy accounts: proxy "").
+    "pi": CliSpec(
+        "pi", "Pi", "the model provider you chose in Pi", "pi", "PI_CODING_AGENT_DIR",
+        str(Path(".pi") / "agent"), ("AGENTS.override.md", "AGENTS.md", "CLAUDE.md"), "",
+        "profile_share_pi", pick="exists", create="AGENTS.md",
+    ),
+    "opencode": CliSpec(
+        "opencode", "OpenCode", "the model provider you chose in OpenCode", "opencode", "",
+        "", ("AGENTS.md",), "", "profile_share_opencode",
+        home_fn=_opencode_home, create_guard=_opencode_create_guard,
     ),
 }
 
@@ -344,7 +418,9 @@ def _read(path: Path) -> bytes | None:
 
 def default_home(spec: CliSpec) -> Path:
     """The CLI's home as the CLI resolves it: its variable, else ``~/.<cli>``."""
-    override = (os.environ.get(spec.home_var) or "").strip()
+    if spec.home_fn is not None:
+        return Path(spec.home_fn())
+    override = (os.environ.get(spec.home_var) or "").strip() if spec.home_var else ""
     if override:
         return Path(os.path.expanduser(override))
     return Path(os.path.expanduser("~")) / spec.default_dir
@@ -352,7 +428,17 @@ def default_home(spec: CliSpec) -> Path:
 
 def target_file(spec: CliSpec, home: Path) -> Path:
     """The file the CLI READS in ``home``: the first candidate that holds
-    anything but whitespace, else the last one (the one to create)."""
+    anything but whitespace, else the last one (the one to create). v1.414.0:
+    a CLI that reads the first file that merely EXISTS (Pi) is answered so."""
+    if spec.pick == "exists":
+        for name in spec.files:
+            p = home / name
+            try:
+                if p.is_file():
+                    return p
+            except OSError:
+                continue
+        return home / spec.create_name
     for name in spec.files[:-1]:
         p = home / name
         try:
@@ -440,6 +526,8 @@ class ProfileShare:
         out = [{"home": base, "account": None, "account_id": None}]
         seen = {_key(base)}
         ip = self._iron_proxy
+        if not spec.proxy_provider:
+            return out, True  # v1.414.0: signs in by itself (Pi, OpenCode)
         if ip is None or not getattr(ip, "enabled", False):
             return out, True
         try:
@@ -549,6 +637,13 @@ class ProfileShare:
         else:
             if rec.get("hash") and not force:
                 rec["drift"] = "removed"
+                return rec
+            guard = CLIS[cli].create_guard if cli in CLIS else None
+            refusal = guard(path) if guard is not None else ""
+            if refusal:
+                # v1.414.0: creating this file would change what the CLI
+                # reads beyond our block (OpenCode's CLAUDE.md fallback).
+                rec["error"] = refusal
                 return rec
             out = new_block
             rec["created"] = True
@@ -739,7 +834,7 @@ class ProfileShare:
                 "vendor": spec.vendor,
                 "available": self.available(cid),
                 "on": on,
-                "file_name": spec.files[-1],
+                "file_name": spec.create_name,
                 "files": rows,
                 "targets": targets,
                 "last_written": max(written) if written else None,

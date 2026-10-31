@@ -39,6 +39,7 @@ import {
   type RunningSessionRow,
 } from "@/lib/runningNow";
 import { announceBuildSessionLink } from "@/lib/buildLinks";
+import { announceBuildCodeLink } from "@/lib/buildApp";
 import { announceChatViewLink } from "@/lib/chatSurface";
 
 /** The frames that start or end a run (the run half of the orb's
@@ -130,6 +131,9 @@ export function RunningNow({
                       // Next keeps the page on a query-only change, so the
                       // session is announced (lib/buildLinks).
                       if (it.kind === "build") announceBuildSessionLink(it.href);
+                      // v1.414.0: a Build › Code session pressed while Build
+                      // is already open (the same query-only rule).
+                      else if (it.kind === "build_app") announceBuildCodeLink(it.href);
                       // v1.406.0 review: a chat pressed while the chat page
                       // shows its Code view brings the Chat view forward.
                       else if (it.kind === "chat") announceChatViewLink(it.href);

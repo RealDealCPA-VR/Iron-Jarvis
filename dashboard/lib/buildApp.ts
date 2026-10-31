@@ -379,6 +379,53 @@ export interface CodeSession {
   /** v1.412.0: where such a session's own folder goes (the chat files
    *  folder); "" otherwise. */
   workRoot: string;
+  /** v1.414.0: which of Iron Jarvis's own tools the coding tool may use in
+   *  this session (all off until the user ticks one). Absent from an older
+   *  Iron Jarvis and from a conversation found on disk. */
+  jarvisTools?: JarvisTools;
+}
+
+/** v1.414.0: the two Capabilities Iron Jarvis serves to a coding tool (the
+ *  same two a Build terminal's boxes give: mcpserver CAPABILITY_TOOLS). */
+export interface JarvisTools {
+  memory: boolean;
+  browser: boolean;
+}
+
+export const JARVIS_TOOL_KEYS: readonly (keyof JarvisTools)[] = ["memory", "browser"];
+
+/** Who sees what the coding tool reads (the privacy line on the boxes). */
+export function toolVendor(tool: string): string {
+  if (tool === "claude-code") return "Anthropic";
+  if (tool === "codex") return "OpenAI";
+  if (tool === "pi") return "the model provider you chose in Pi";
+  if (tool === "opencode") return "the model provider you chose in OpenCode";
+  return "the coding tool's model provider";
+}
+
+/** The chip's words: which of Iron Jarvis's tools are on. */
+export function jarvisToolsWords(t: JarvisTools | null | undefined): string {
+  const on = JARVIS_TOOL_KEYS.filter((k) => t?.[k]).map((k) => (k === "memory" ? "Memory" : "Browser"));
+  return on.length ? `Iron Jarvis tools: ${on.join(", ")}` : "Iron Jarvis tools: off";
+}
+
+/** What each box gives, and what it costs (said before the press). */
+export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: string): string {
+  if (key === "memory") {
+    return `${toolName} may search and read your memory and your memory profile (read-only). What it reads goes to ${toolVendor(tool)} with the conversation.`;
+  }
+  return `${toolName} may use your browser through Iron Jarvis. Every click, typing or page change asks you first.`;
+}
+
+/** v1.414.0: the "Share my profile with" switch (profile/share.CLIS) of a
+ *  coding tool. */
+export function shareCliOf(tool: string): string {
+  return tool === "claude-code" || tool === "codex" || tool === "pi" || tool === "opencode" ? tool : "";
+}
+
+/** localStorage: the share offer was dismissed for good, per tool. */
+export function shareOfferDismissKey(cli: string): string {
+  return `ij.code.shareOffer.dismissed.${cli}`;
 }
 
 /** Archived: the daemon's flag, or a stamp. */
@@ -412,6 +459,14 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     waiting: r.waiting === true,
     noFolder: r.no_folder === true,
     workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
+    ...(obj(r.capabilities)
+      ? {
+          jarvisTools: {
+            memory: obj(r.capabilities)!.memory === true,
+            browser: obj(r.capabilities)!.browser === true,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1349,7 +1404,13 @@ export function diskListPath(folder: string): string {
 
 // ── a change that waits for the next message (PATCH … `applied`) ────────────
 
-const FIELD_WORDS: Record<string, string> = { model: "The model", effort: "The effort", mode: "The mode" };
+const FIELD_WORDS: Record<string, string> = {
+  model: "The model",
+  effort: "The effort",
+  mode: "The mode",
+  // v1.414.0: turning Iron Jarvis's tools on or off for the session.
+  capabilities: "The change to Iron Jarvis's tools",
+};
 
 /** "The effort applies from your next message." for every field the daemon
  *  applied `next` (a running tool reads it when it starts again); "" when

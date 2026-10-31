@@ -904,6 +904,11 @@ class Config(BaseModel):
     # flip the flag without writing or removing anything.
     profile_share_claude_code: bool = False
     profile_share_codex: bool = False
+    #: v1.414.0: Pi and OpenCode too (each verified against the installed
+    #: program: Pi reads ``<PI_CODING_AGENT_DIR or ~/.pi/agent>/AGENTS.md``,
+    #: OpenCode ``<XDG_CONFIG_HOME or ~/.config>/opencode/AGENTS.md``).
+    profile_share_pi: bool = False
+    profile_share_opencode: bool = False
 
     @field_validator("autonomy_level")
     @classmethod

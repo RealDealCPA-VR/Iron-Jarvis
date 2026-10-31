@@ -52,6 +52,11 @@ class HostedSessionRecord(SQLModel, table=True):
     archived_at: datetime | None = None
     #: The last failure in plain words ("" = none).
     last_error: str = ""
+    #: v1.414.0: the session's Capabilities — the five boxes a Build
+    #: terminal has (``terminals/session.PANE_CAPABILITY_KEYS``), JSON, ALL
+    #: OFF until the user ticks one. Browser and Memory give the coding tool
+    #: Iron Jarvis's own MCP connection (``hosted/jarvis_tools``). "" = none.
+    capabilities_json: str = ""
     #: The Build terminal "Open in terminal" started on this conversation;
     #: the row takes no message while that terminal's CLI still runs.
     terminal_id: str = ""

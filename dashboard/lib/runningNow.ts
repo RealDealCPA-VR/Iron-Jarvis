@@ -29,6 +29,7 @@
 
 import { originLabel } from "@/components/sessions/OriginChip";
 import { agentLabel } from "./agentWorlds";
+import { buildCodeHref, toolLabel } from "./buildApp";
 import { buildSessionHref } from "./buildLinks";
 import { CODING_SESSION_LABEL } from "./buildWords";
 import { normalizeIso } from "./format";
@@ -68,8 +69,11 @@ export interface RunningSessionRow {
 export interface RunningReplyRow {
   turn_id: string;
   thread_id?: string | null;
-  /** "chat" | "build". */
+  /** "chat" | "build" | (v1.414.0) "build_app" — Build › Code, the user's
+   *  own coding tool. */
   surface?: string | null;
+  /** v1.414.0: a Build › Code reply's tool ("claude-code", "codex"…). */
+  harness?: string | null;
   /** When the reply started (ISO, UTC). */
   started_at?: string | null;
   /** Parked on the user (an approval card, a question). */
@@ -80,7 +84,7 @@ export interface RunningReplyRow {
 
 export interface RunningItem {
   key: string;
-  kind: "session" | "chat" | "build";
+  kind: "session" | "chat" | "build" | "build_app";
   href: string;
   /** Who or what: "Schedule · nightly-brief", "Mission", "Builder", "Chat". */
   who: string;
@@ -209,6 +213,49 @@ function buildItem(r: RunningReplyRow, now: number): RunningItem {
   };
 }
 
+/** v1.414.0: a Build › Code reply (the user's own Claude Code, Codex, Pi or
+ *  OpenCode): "Coding session · Claude Code · 12 min", its title under it,
+ *  opened on that session in Build › Code. */
+function buildAppItem(r: RunningReplyRow, now: number): RunningItem {
+  const session = String(r.thread_id ?? "").trim();
+  const waiting = r.waiting === true;
+  const started = startedMs(r.started_at);
+  const parts: string[] = [];
+  if (started != null) parts.push(elapsedWords(now - started));
+  if (waiting) parts.push(statusWords("waiting"));
+  const when = parts.filter(Boolean).join(" · ");
+  const h = String(r.harness ?? "").trim();
+  const tool = h ? toolLabel(h) : "";
+  const who = tool ? `${CODING_SESSION_LABEL} · ${tool}` : CODING_SESSION_LABEL;
+  const title = (r.title || "").trim();
+  return {
+    key: `a:${r.turn_id}`,
+    kind: "build_app",
+    href: buildCodeHref(session),
+    who,
+    when,
+    detail: oneLine(title) || `Untitled ${CODING_SESSION_LABEL.toLowerCase()}`,
+    line: when ? `${who} · ${when}` : who,
+    title: title || who,
+    waiting,
+    queued: false,
+  };
+}
+
+/** v1.414.0: the Build › Code rows of GET /chat/turns/running, newest start
+ *  first (`surface: "build_app"`, each naming its session). */
+export function buildAppReplyItems(
+  replies: RunningReplyRow[] | null | undefined,
+  now: number = Date.now(),
+): RunningItem[] {
+  return (replies ?? [])
+    .filter(
+      (r) => r && typeof r.turn_id === "string" && r.surface === "build_app" && String(r.thread_id ?? "").trim() !== "",
+    )
+    .sort((a, b) => (startedMs(b.started_at) ?? 0) - (startedMs(a.started_at) ?? 0))
+    .map((r) => buildAppItem(r, now));
+}
+
 /** The Build rows of GET /chat/turns/running, newest start first: only a
  *  coding session's reply that names its session (a chat's comes from the
  *  chat list, so it is never listed twice). */
@@ -245,7 +292,7 @@ export function runningItems(
   const chats = (threads ?? [])
     .filter((t) => t && typeof t.id === "string" && (t.running === true || t.waiting === true))
     .map(chatItem);
-  const builds = buildReplyItems(replies, now);
+  const builds = [...buildReplyItems(replies, now), ...buildAppReplyItems(replies, now)];
   const waiting = [
     ...runs.filter((i) => i.waiting),
     ...chats.filter((i) => i.waiting),

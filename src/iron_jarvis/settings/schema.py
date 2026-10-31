@@ -600,6 +600,13 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("profile_share_codex", "Share my profile with Codex", "memory", "bool",
       "Write your profile into Codex's own instructions file on this PC.",
       tier="ask", put=False, section="Share with Build"),
+    # v1.414.0: Pi and OpenCode (profile/share.CLIS).
+    S("profile_share_pi", "Share my profile with Pi", "memory", "bool",
+      "Write your profile into Pi's own instructions file on this PC.",
+      tier="ask", put=False, section="Share with Build"),
+    S("profile_share_opencode", "Share my profile with OpenCode", "memory", "bool",
+      "Write your profile into OpenCode's own instructions file on this PC.",
+      tier="ask", put=False, section="Share with Build"),
     # v1.370.0 (IJ harness Phase 7): the Build experience library.
     S("build_reflect", "Learn from Build sessions", "memory", "bool",
       "When a Build session has been idle for 10 minutes after replies that changed files or ran "

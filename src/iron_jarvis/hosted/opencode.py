@@ -160,6 +160,11 @@ SESSION_ID_RX = re.compile(r"^ses_[A-Za-z0-9]{10,60}$")
 ACP_ARGV: tuple[str, ...] = ("acp", "--hostname", "127.0.0.1", "--port", "0", "--mdns=false")
 
 REQUEST_TIMEOUT_S = 60.0
+#: v1.414.0: an OpenCode that does not take an HTTP MCP server over ACP.
+JARVIS_TOOLS_NOT_TAKEN = (
+    "This OpenCode does not take an MCP server from Iron Jarvis, so the Iron Jarvis "
+    "tools you turned on are not in this session."
+)
 #: A running command's output is redrawn at most this often.
 UPDATE_EVERY_S = 1.0
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -732,6 +737,9 @@ class OpenCodeDriver(Driver):
         self.catalog_path: Path | None = None
         #: A notice to say once the session is open (a rule of the user's own).
         self.rules_note = ""
+        #: v1.414.0: ACP ``mcpServers`` entries (Iron Jarvis's own tools for
+        #: this session, set by the service when the user turned them on).
+        self.mcp_servers: list[dict[str, Any]] = []
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         # The folder is the process's own working folder (never an argument:
@@ -787,18 +795,25 @@ class OpenCodeDriver(Driver):
         self.can_load = bool(caps.get("loadSession"))
         prompt_caps = caps.get("promptCapabilities") if isinstance(caps.get("promptCapabilities"), dict) else {}
         self.takes_pictures = bool(prompt_caps.get("image"))
+        # v1.414.0: Iron Jarvis's own tools for THIS session (``hosted/
+        # jarvis_tools``), given the ACP way — only to an OpenCode that says
+        # it takes an HTTP MCP server (``mcpCapabilities.http``).
+        mcp_caps = caps.get("mcpCapabilities") if isinstance(caps.get("mcpCapabilities"), dict) else {}
+        servers = list(self.mcp_servers) if mcp_caps.get("http") else []
+        if self.mcp_servers and not servers:
+            self.emit(make("notice", text=JARVIS_TOOLS_NOT_TAKEN))
         if resume and session_id:
             if not self.can_load:
                 raise ControlRefused("this OpenCode cannot reopen a saved session")
             self._loading = True
             try:
                 res = await self.request("session/load", {"sessionId": session_id, "cwd": self.cwd,
-                                                          "mcpServers": []})
+                                                          "mcpServers": servers})
             finally:
                 self._loading = False
             sid = session_id
         else:
-            res = await self.request("session/new", {"cwd": self.cwd, "mcpServers": []})
+            res = await self.request("session/new", {"cwd": self.cwd, "mcpServers": servers})
             sid = str((res or {}).get("sessionId") or "") if isinstance(res, dict) else ""
         if not sid:
             raise ControlRefused("OpenCode did not open a session")

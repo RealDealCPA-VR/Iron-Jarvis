@@ -77,7 +77,8 @@ export function repliesRunning(health: Health | null | undefined): number {
   const r = health?.replies;
   if (!r || typeof r !== "object") return 0;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
-  return n(r.chat) + n(r.build);
+  // v1.414.0: and a Build › Code reply (the user's own coding tool).
+  return n(r.chat) + n(r.build) + n(r.build_app);
 }
 
 /** The /events types the orb reads (v1.311.0, wave 3): reviews and

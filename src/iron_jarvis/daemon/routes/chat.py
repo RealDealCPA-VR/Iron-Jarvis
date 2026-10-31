@@ -2968,7 +2968,12 @@ def register(app: FastAPI, d) -> None:
         titles = _durable.reply_titles(d.platform.engine, [r["thread_id"] for r in rows])
         for r in rows:
             r["title"] = titles.get(r["thread_id"], "")
-        return {"replies": rows}
+        # v1.414.0: a Build › Code reply (``surface: "build_app"``, its
+        # session's own id and title, in memory) — opened on that session in
+        # Build › Code.
+        from ...hosted.news import running_rows as _code_rows
+
+        return {"replies": rows + _code_rows(d.platform)}
 
     @app.get("/chat/turns")
     def list_chat_turns(thread_id: str, limit: int = 3) -> dict[str, Any]:
