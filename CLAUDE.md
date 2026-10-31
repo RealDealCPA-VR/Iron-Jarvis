@@ -4559,7 +4559,7 @@ does not need a bump, stop and bump it.
   scratch home (no model call): Claude Code 2.1.311 `--mcp-config
   <home>/hosted/<id>/jarvis-mcp.json` with `Bearer ${IRONJARVIS_MCP_TOKEN}`
   (Claude expands it), NO `--strict-mcp-config`; Codex 0.157.0 `codex
-  app-server -c mcp_servers.iron-jarvis.url=… -c …bearer_token_env_var=
+  app-server -c mcp_servers.iron-jarvis-code.url=… -c …bearer_token_env_var=
   "IRONJARVIS_MCP_TOKEN"`; Pi 1.3.0 `-e <home>/hosted/<id>/jarvis-mcp.js`
   (an extension calling `pi.registerMcpServer`, `exposure: "direct"`, header
   `${…}` expanded by Pi); OpenCode 1.18.18 ACP `session/new|load`
@@ -4600,7 +4600,8 @@ does not need a bump, stop and bump it.
   one-notice fixture; moved on purpose: `test_harness_gaps_running_v1389`
   (`replies` gains `build_app`). Live-proven (scratch daemon 8901, real
   claude 2.1.311 haiku low, Memory ticked): Running now / activity / health
-  listed the reply for 75 s, Claude called `mcp__iron-jarvis__memory_search`
+  listed the reply for 75 s, Claude called `mcp__iron-jarvis__memory_search` (the
+  server is `iron-jarvis-code` since the review)
   (ledger row `mcp:code:<id>`), answered from it, and `build.turn_finished`
   (`seconds: 75`) was recorded. REVIEW (each red first; 12 mutations of the fixes and 11 of the first cut's claims, all red):
   a process that ends BY ITSELF also removes our two connection files
@@ -4610,7 +4611,11 @@ does not need a bump, stop and bump it.
   `capability_refused_message(name, pane_id)`), never "this Build
   terminal"; the share offer reads the PUT's answer and says a refused
   write (OpenCode's fallback guard) instead of "shared"; the account-limit
-  finish suppression is pinned. Pins:
+  finish suppression is pinned; the hosted server is named
+  `iron-jarvis-code` for all four tools (`hosted/jarvis_tools.SERVER_NAME`),
+  never the recipes' `iron-jarvis`: Codex MERGES `-c mcp_servers.<name>.url`
+  into a recipe's stdio table of the same name (both `command` and `url`).
+  Pins:
   `tests/test_build_app_spine_review_v1414.py`,
   `dashboard/__tests__/build-code-spine-review-v1414.test.tsx`.
 

@@ -2467,6 +2467,10 @@ for this: Claude Code gets a configuration file of Iron Jarvis's own, Codex
 gets the setting on its command line, Pi gets a small extension of Iron
 Jarvis's own, and OpenCode gets it when the conversation opens. None of them
 holds a password: the connection's key lives only while that process runs.
+The connection is named `iron-jarvis-code` (the tools show up as, for
+example, `mcp__iron-jarvis-code__memory_search`), never the `iron-jarvis`
+name a Build terminal writes into a Codex or Claude Code config, so the two
+never mix.
 Build › Code sessions have no Local only setting; when you want nothing to
 reach a cloud model, leave Memory off.
 

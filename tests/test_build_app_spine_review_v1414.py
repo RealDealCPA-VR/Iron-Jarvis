@@ -20,6 +20,7 @@ unpinned) and is mutation-checked:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 from pathlib import Path
@@ -217,3 +218,71 @@ async def test_a_card_on_the_phone_answered_in_the_app_closes_the_phone_prompt(a
     await stop_all(app)
     decisions = [e["decision"] for e in evs if e["type"] == "resolved" and e["request_id"] == ask]
     assert decisions == ["deny"], decisions
+
+
+# --------------------------------------------------------------------------- #
+# the hosted connection never merges into a Build terminal's recipe table
+# --------------------------------------------------------------------------- #
+def _apply_codex_overrides(config: dict, argv: list[str]) -> dict:
+    """Codex's ``-c key.path=<toml value>``: each value set at its dotted path
+    over the config it read (its own merge, for the keys this test needs)."""
+    import tomllib
+
+    merged = json.loads(json.dumps(config))
+    for i, arg in enumerate(argv):
+        if arg != "-c":
+            continue
+        key, _, raw = argv[i + 1].partition("=")
+        node = merged
+        parts = key.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = tomllib.loads(f"v = {raw}")["v"]
+    return merged
+
+
+async def test_a_codex_session_never_targets_the_terminal_recipes_own_server(app, work, tmp_path, monkeypatch):
+    """A Build terminal's Codex recipe writes ``[mcp_servers."iron-jarvis"]``
+    (command + args, a stdio bridge) into a Codex config — which can be the
+    user's own. A hosted Codex session's ``-c mcp_servers.<name>.url=…`` on
+    that SAME name would leave one server with both ``command`` and ``url``."""
+    import tomllib
+
+    from iron_jarvis.terminals.recipes import SERVER_NAME as RECIPE_NAME
+    from iron_jarvis.terminals.recipes import CodexRecipe
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        CodexRecipe().config_text("http://127.0.0.1:1/mcp", "unused"), encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    log = tmp_path / "codex.log"
+    use_fake(monkeypatch, "codex_allow", log)
+    svc = S.service_for(app.state.platform)
+    async with client(app) as c:
+        sid = (await new_session(c, work, harness="codex"))["id"]
+        await c.patch(f"/build/app/sessions/{sid}", json={"capabilities": {"memory": True}})
+        asyncio.ensure_future(c.post(f"/build/app/sessions/{sid}/turn", json={"text": "go", "turn_id": "tc"}))
+        await until(lambda: starts(log))
+        argv = starts(log)[0]["argv"]
+        await svc._stop_process(svc.live[sid])
+    await stop_all(app)
+    keys = [argv[i + 1].split("=", 1)[0] for i, a in enumerate(argv) if a == "-c"]
+    assert keys, argv
+    assert not any(k.startswith(f"mcp_servers.{RECIPE_NAME}.") for k in keys), keys
+    config = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    merged = _apply_codex_overrides(config, argv)["mcp_servers"]
+    assert "url" not in merged[RECIPE_NAME], "the recipe's stdio server gained a url"
+    ours = merged[JT.SERVER_NAME]
+    assert "command" not in ours and ours["bearer_token_env_var"] == "IRONJARVIS_MCP_TOKEN"
+
+
+def test_the_hosted_server_name_is_its_own():
+    """No recipe uses the hosted connection's name, so neither Codex's ``-c``
+    nor Claude Code's project ``.mcp.json`` (the Claude recipe's) can share it."""
+    import re
+
+    from iron_jarvis.terminals.recipes import SERVER_NAME as RECIPE_NAME
+
+    assert JT.SERVER_NAME != RECIPE_NAME
+    assert re.fullmatch(r"[a-z0-9-]+", JT.SERVER_NAME), "a bare TOML key and a sensible tool prefix"

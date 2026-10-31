@@ -23,8 +23,8 @@ scratch home and a logging stand-in server; no model call):
   — a REFERENCE Claude Code expands from the child's environment (measured:
   the header arrived equal to the token). No ``--strict-mcp-config``: the
   user's own servers stay on.
-* Codex 0.157.0 — ``codex app-server -c mcp_servers.iron-jarvis.url=…
-  -c mcp_servers.iron-jarvis.bearer_token_env_var="IRONJARVIS_MCP_TOKEN"``
+* Codex 0.157.0 — ``codex app-server -c mcp_servers.iron-jarvis-code.url=…
+  -c mcp_servers.iron-jarvis-code.bearer_token_env_var="IRONJARVIS_MCP_TOKEN"``
   (measured: initialize / tools/list arrived with the token on a
   ``thread/start``).
 * Pi 1.3.0 — no flag for an MCP server, but ``-e <extension>`` loads an
@@ -64,8 +64,17 @@ log = logging.getLogger(__name__)
 
 #: A Build › Code session's grant id (the pane id a pane token names).
 GRANT_PREFIX = "code:"
-#: The server's name in every tool's configuration (the recipes' constant).
-SERVER_NAME = "iron-jarvis"
+#: The server's name in every tool's configuration for a Build › Code
+#: session. DELIBERATELY NOT the Build terminal recipes' ``iron-jarvis``
+#: (``terminals/recipes.SERVER_NAME``, v1.414.0 review): the Codex recipe
+#: writes a ``[mcp_servers."iron-jarvis"]`` stdio table (command + args) into
+#: a Codex config — possibly the user's own — and Codex MERGES ``-c
+#: mcp_servers.<name>.url=…`` into a table of the same name, leaving one server
+#: with both ``command`` and ``url``; the Claude recipe likewise writes
+#: ``iron-jarvis`` into a project's ``.mcp.json``. One name for all four tools
+#: keeps the rule simple. The model sees it as the tools' prefix
+#: (``mcp__iron-jarvis-code__memory_search`` in Claude Code).
+SERVER_NAME = "iron-jarvis-code"
 #: Our own files in the session's folder under Iron Jarvis's home.
 CLAUDE_FILE = "jarvis-mcp.json"
 PI_FILE = "jarvis-mcp.js"
