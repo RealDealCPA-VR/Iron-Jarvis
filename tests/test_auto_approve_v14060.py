@@ -235,7 +235,7 @@ def test_a_tool_named_for_sending_or_deleting_asks():
 
 
 def test_the_rest_is_judged_and_a_destructive_word_in_its_arguments_asks():
-    assert _auto("shell", {"command": "ls -la"}).kind == A.JUDGE
+    assert _auto("shell", {"command": "npm run build"}).kind == A.JUDGE
     assert _auto("web_fetch", {"url": "https://example.com"}).kind == A.JUDGE
     # (v1.406.0 part 2 review: rest_call itself is on the low-trust list now
     # read as "standing", so a neutral tool name carries the argument check.)

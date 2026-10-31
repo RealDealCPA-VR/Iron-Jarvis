@@ -33,6 +33,9 @@ being trusted here.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the command these pins card on runs Python; it was
+# `echo approved-run`, which now runs with no card as a read-only command.
+
 import asyncio
 import json
 
@@ -53,7 +56,7 @@ from iron_jarvis.tools.autoselect import (
 _ASK_MSG = "run the command `echo approved-run` in the terminal for me"
 
 
-def _shell_call_stream(command: str = "echo approved-run"):
+def _shell_call_stream(command: str = "python -c \"print('approved-run')\""):
     """A router.stream stub: round 0 requests one shell call, round 1 answers."""
     rounds = {"n": 0}
 
@@ -212,7 +215,7 @@ async def test_allow_once_pauses_then_runs_exactly_that_call(tmp_path):
         assert data["tool"] == "shell"
         # The user sees the exact command before deciding — approving a call
         # you cannot read is not a decision.
-        assert data["args"]["command"] == "echo approved-run"
+        assert data["args"]["command"] == "python -c \"print('approved-run')\""
         status, _ = await _asgi_post(
             app, f"/chat/approvals/{data['id']}", {"decision": "once"}
         )
@@ -281,7 +284,7 @@ async def test_conversation_grant_covers_the_rest_of_the_turn(tmp_path):
             rounds["n"] += 1
             resp = LLMResponse(text="", tool_calls=[
                 ToolCall(id=f"c{rounds['n']}", name="shell",
-                         arguments={"command": f"echo call-{rounds['n']}"}),
+                         arguments={"command": "python -c \"print(" + str(rounds['n']) + ")\""}),
             ])
             yield {"type": "final", "response": resp,
                    "provider": "mock", "model": "mock"}

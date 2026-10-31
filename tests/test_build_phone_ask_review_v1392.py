@@ -14,6 +14,9 @@ The five minutes are read through ``harness.stall.CLOCK`` (moved by the test).
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import asyncio
 
 import pytest
@@ -102,8 +105,8 @@ async def test_an_in_app_answer_closes_the_phone_prompt_and_the_phone_answers_on
     pstore = app.state.pending_prompt_store
     sid = new_session(app, work, title="Two steps")["id"]  # approve-for-me: each command cards
     wire(app, Script([
-        [ToolCall(id="a1", name="Bash", arguments={"command": "echo one"})],
-        [ToolCall(id="b1", name="Bash", arguments={"command": "echo two"})],
+        [ToolCall(id="a1", name="Bash", arguments={"command": "python -c \"print('one')\""})],
+        [ToolCall(id="b1", name="Bash", arguments={"command": "python -c \"print('two')\""})],
         # With nothing waiting on the phone, its "approve" is an ordinary
         # message to Jarvis (the bare words resolve only an open prompt).
         "Nothing of yours is waiting.",
@@ -153,8 +156,8 @@ async def test_a_batch_card_on_the_phone_says_how_many_calls_ride_on_it(app, wor
     sid = new_session(app, work, title="Batch")["id"]
     wire(app, Script([
         [
-            ToolCall(id="m1", name="Bash", arguments={"command": "echo one"}),
-            ToolCall(id="m2", name="Bash", arguments={"command": "echo two"}),
+            ToolCall(id="m1", name="Bash", arguments={"command": "python -c \"print('one')\""}),
+            ToolCall(id="m2", name="Bash", arguments={"command": "python -c \"print('two')\""}),
         ],
         "Both ran.",
     ]))

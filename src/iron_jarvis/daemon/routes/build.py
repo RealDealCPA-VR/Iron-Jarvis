@@ -2226,6 +2226,9 @@ async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
         try:
             lg = await start_build_turn(
                 d, thread_id, PLAN_RUN_TEXT, new_turn, continuation=True,
+                # v1.417.0 (C1.6): the user's Allow is the press — Accept
+                # edits / Auto stay as they chose them.
+                pressed=True,
                 **({"low_trust": low} if low else {}),
             )
         except SessionBusy:
@@ -2621,6 +2624,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            resume_turn: str = "",
                            account_move: "dict[str, Any] | None" = None,
                            started_by: str = "person",
+                           pressed: bool = False,
                            model_note: str = "",
                            low_trust: str = "",
                            on_night_note: Any = None) -> Any:
@@ -3031,9 +3035,14 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # ITSELF (restart resume, Resume when ready, an account move, an
             # approved plan's act turn, the night) runs Accept edits / Auto as
             # Ask first — nobody is watching it start (core/auto_approve).
+            # v1.417.0 (C1.6, decision D2): a PERSON's press keeps the
+            # posture they chose — the plan they just allowed (`pressed`) and
+            # the "Resume when ready" they pressed (a wait not armed by
+            # itself). The night, CI and a restart resume still fall back.
             approval_mode=_auto_approve.unwatched_mode(
                 str(setup.get("approval_mode") or ""),
                 started_by=started_by, continuation=continuation,
+                pressed=pressed or (isinstance(resume_of, dict) and not resume_of.get("auto")),
             ),
             # v1.404.1: what any card of the session granted — its helpers'
             # too — and running a command as one approval (session_grants).

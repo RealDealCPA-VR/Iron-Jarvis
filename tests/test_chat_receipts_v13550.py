@@ -137,7 +137,7 @@ def _two_separate_shell_calls():
             rounds["n"] += 1
             resp = LLMResponse(text="", tool_calls=[
                 ToolCall(id=f"c{rounds['n']}", name="shell",
-                         arguments={"command": f"echo call-{rounds['n']}"}),
+                         arguments={"command": "python -c \"print(" + str(rounds['n']) + ")\""}),
             ])
             yield {"type": "final", "response": resp, "provider": "mock", "model": "mock"}
         else:

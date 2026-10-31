@@ -17,6 +17,9 @@ daemon to get somewhere, bounded as hang detectors.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these pins card on run Python; `echo …`
+# now runs with no card as a read-only command.
+
 import asyncio
 import json
 import sys
@@ -168,7 +171,7 @@ async def test_a_hung_step_is_said_once_at_ten_minutes_and_stop_the_step_ends_on
     script = wire(app, Script([
         [
             ToolCall(id="c1", name="Bash", arguments={"command": _hang(pidfile)}),
-            ToolCall(id="c2", name="Bash", arguments={"command": "echo second ran"}),
+            ToolCall(id="c2", name="Bash", arguments={"command": "python -c \"print('second ran')\""}),
         ],
         "Moved on without it.",
     ]))
@@ -275,7 +278,7 @@ async def test_stop_the_step_answers_404_for_a_step_that_is_not_running(app, wor
 async def test_a_reply_waiting_on_the_user_is_never_a_stall(app, work, clock, checks):
     """The card is the notice: an hour on an unanswered card says nothing."""
     sid = new_session(app, work)["id"]  # approve-for-me: a command cards
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "python -c \"print('hi')\""})], "ok"]))
     drop = asyncio.Event()
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-wait"}, drop=drop))
     try:

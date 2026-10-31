@@ -26,6 +26,9 @@ its grant into the registry, and a stubbed invoke cannot see that it did not).
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the command these pins card on runs Python; it was
+# `echo approved-run`, which now runs with no card as a read-only command.
+
 import asyncio
 import json
 from datetime import timedelta
@@ -519,7 +522,7 @@ async def test_the_stream_lane_offers_always_mints_a_chat_grant_and_skips_the_ne
     async def approve(data):
         seen.append(data)
         assert data["can_always"] is True
-        assert data["args_hash"] == args_hash("shell", {"command": "echo approved-run"})
+        assert data["args_hash"] == args_hash("shell", {"command": "python -c \"print('approved-run')\""})
         status, _ = await _asgi_post(app, f"/chat/approvals/{data['id']}", {"decision": "always"})
         assert status == 200
 
@@ -530,11 +533,11 @@ async def test_the_stream_lane_offers_always_mints_a_chat_grant_and_skips_the_ne
     resolved = next(d for ev, d in frames if ev == "approval_resolved")
     assert resolved["decision"] == "always"
     finished = next(d for ev, d in frames if ev == "tool_call" and d.get("status") == "finished")
-    assert finished["ok"] is True and ran == [{"command": "echo approved-run"}]
+    assert finished["ok"] is True and ran == [{"command": "python -c \"print('approved-run')\""}]
     await store.flush()
     live = store.list()
     assert [(g.scope_kind, g.scope_id, g.tool) for g in live] == [("chat", "chat", "shell")]
-    assert live[0].args_hash == args_hash("shell", {"command": "echo approved-run"})
+    assert live[0].args_hash == args_hash("shell", {"command": "python -c \"print('approved-run')\""})
     # the next turn: the identical call is covered — no card, and it RUNS
     # through the real registry (the ledger row names the grant)
     platform.router.stream = _shell_call_stream()
@@ -546,7 +549,7 @@ async def test_the_stream_lane_offers_always_mints_a_chat_grant_and_skips_the_ne
     chat_rows = [r for r in _rows(platform.engine, "chat") if r.ok and r.tool == "shell"]
     assert chat_rows and chat_rows[-1].grant_id == live[0].id
     # a different command still cards (the control for the next card)
-    platform.router.stream = _shell_call_stream("echo other")
+    platform.router.stream = _shell_call_stream('python -c "print(2)"')
     cards: list[dict] = []
 
     async def deny(data):

@@ -21,6 +21,9 @@ under node) — never a stub of the thing under test:
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the command these pins card on runs Python; it was
+# `echo approved-run`, which now runs with no card as a read-only command.
+
 import asyncio
 import json
 from pathlib import Path
@@ -110,7 +113,7 @@ def _chat_rows(rows: list[dict]) -> list[dict]:
     return [r for r in rows if r.get("kind") == "chat"]
 
 
-_SECRET_ARG = "echo approved-run SECRET-CLIENT-SMITH-1040"
+_SECRET_ARG = "python -c \"print('approved-run')\" SECRET-CLIENT-SMITH-1040"
 
 
 # --------------------------------------------------------------------------- #

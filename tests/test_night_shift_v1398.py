@@ -20,6 +20,9 @@ The whole night, end to end, is ``test_night_shift_run_v1398.py``.
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the commands these stream-lane pins card on run Python;
+# `echo …` now runs with no card as a read-only command.
+
 import asyncio
 import json
 import os
@@ -484,7 +487,7 @@ async def test_a_card_outside_a_night_task_still_waits_with_no_clock(app, tmp_pa
     work = tmp_path / "w"
     work.mkdir()
     sid = new_session(app, work)["id"]
-    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": "echo hi"})], "ok"]))
+    wire(app, Script([[ToolCall(id="s1", name="Bash", arguments={"command": 'python -c "print(1)"'})], "ok"]))
     drop = asyncio.Event()
     follower = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-day"}, drop=drop))
     card = await until(lambda: [d for e, d in turn_frames(app, "bt-day") if e == "approval"])

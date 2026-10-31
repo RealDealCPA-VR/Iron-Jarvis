@@ -23,6 +23,9 @@ model is scripted: it asks for one shell call, which cards).
 
 from __future__ import annotations
 
+# v1.417.0 (C1.4): the command these pins card on runs Python; it was
+# `echo approved-run`, which now runs with no card as a read-only command.
+
 import asyncio
 import json
 import os
@@ -124,7 +127,7 @@ async def _pending_chats(app) -> list[dict]:
 async def _parked(app, viewer: str) -> tuple[_Follower, dt.TurnLog, dict]:
     """A chat page (named ``viewer``) started a turn that is parked on its
     approval card, the card on screen."""
-    app.state.platform.router.stream = _shell_call_stream("echo approved-run")
+    app.state.platform.router.stream = _shell_call_stream("python -c \"print('approved-run')\"")
     win = await _Follower(app, "POST", "/chat/stream", viewer, {
         "messages": [{"role": "user", "content": _ASK_MSG}], "auto_tools": True,
         "turn_id": TURN, "thread_id": THREAD,

@@ -4,7 +4,11 @@ Each pin drives the REAL pieces (a real platform: registry, permission engine,
 cards, ledger, shell tool; the real claude-cli adapter against the fake CLI;
 the real detections ledger and rules) with only the model scripted.
 
-1. A PROJECT CHECKER NEEDS A PERSON, EVEN UNDER YOLO. A checker (ruff, mypy,
+1. A PROJECT CHECKER NEEDS A PERSON. (v1.417.0, the user's decision D1:
+   EXCEPT under "Don't ask" — there Iron Jarvis's own checker runs with no
+   card; the pins below that were about yolo now run under Ask first, and
+   ``test_yolo_runs_the_project_checker_with_no_card`` pins the new rule.)
+   A checker (ruff, mypy,
    eslint, tsc) is a command the APP writes and the PROJECT supplies: its own
    ``.venv`` / ``node_modules`` program, an ESLint JS config, a mypy plugin —
    and cmd.exe runs a bare ``ruff`` from the folder itself first. That is the
@@ -103,25 +107,37 @@ def _checker_cards(asked: list[dict]) -> list[dict]:
     return [f for f in asked if str(f.get("call_id", "")).startswith(C.CALL_ID_PREFIX)]
 
 
-async def test_yolo_cards_a_project_checker_and_a_declined_card_runs_nothing(env, monkeypatch):
+async def test_yolo_runs_the_project_checker_with_no_card(env, monkeypatch):
+    """v1.417.0 (C1.3, decision D1): under "Don't ask" Iron Jarvis's own
+    checker after an edit runs with no card."""
+    platform, ws, log = env
+    model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
+    await stream(platform, body(ws, approval_mode="yolo"))  # any card fails
+    assert log.exists()
+    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+
+
+async def test_ask_first_cards_a_project_checker_and_a_declined_card_runs_nothing(env, monkeypatch):
+    # v1.417.0: was the yolo pin (moved on purpose — decision D1).
     platform, ws, log = env
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
-    await stream(platform, body(ws, approval_mode="yolo"), answer=lambda f: (asked.append(f) or "deny"))
+    await stream(platform, body(ws, approval_mode="approve_for_me"), answer=lambda f: (asked.append(f) or "deny"))
     cards = _checker_cards(asked)
     assert [(f["tool"], _program_of(f["args"]["command"])) for f in cards] == [("shell", "ruff")], asked
-    # The model's own edit did not card (yolo), only the project's checker.
+    # The model's own edit did not card (an allow-tier edit), only the checker.
     assert len(asked) == 1
     assert not log.exists(), "the project's checker ran with nobody asked"
     assert "Check (ruff) was not run: " in model.tool_messages(1)["w1"]
 
 
-async def test_yolo_allowed_once_runs_it_and_the_rounds_checkers_share_one_card(env, monkeypatch):
+async def test_ask_first_allowed_once_runs_it_and_the_rounds_checkers_share_one_card(env, monkeypatch):
+    # v1.417.0: was the yolo pin (moved on purpose — decision D1).
     platform, ws, log = env
     (ws / "mypy.ini").write_text("[mypy]\n", encoding="utf-8")
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
-    await stream(platform, body(ws, approval_mode="yolo"), answer=lambda f: (asked.append(f) or "once"))
+    await stream(platform, body(ws, approval_mode="approve_for_me"), answer=lambda f: (asked.append(f) or "once"))
     # ONE card for the round's two checkers (v1.247.0), naming both commands.
     assert len(asked) == 1 and asked[0].get("count") == 2, asked
     assert [_program_of(e["command"]) for e in asked[0]["examples"]] == ["ruff", "mypy"]
@@ -130,9 +146,10 @@ async def test_yolo_allowed_once_runs_it_and_the_rounds_checkers_share_one_card(
     assert len(_check_rows(platform)) == 2 and all(r.ok is False for r in _check_rows(platform))
 
 
-async def test_yolo_allow_for_this_chat_covers_the_next_rounds_checker(env, monkeypatch):
+async def test_ask_first_allow_for_this_chat_covers_the_next_rounds_checker(env, monkeypatch):
     """The least noisy honest form: ONE card per session — "Allow for this
-    chat" is a grant wider than one call, and covers every later run."""
+    chat" is a grant wider than one call, and covers every later run.
+    (v1.417.0: was the yolo pin, moved on purpose — decision D1.)"""
     platform, ws, log = env
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [
@@ -140,7 +157,8 @@ async def test_yolo_allow_for_this_chat_covers_the_next_rounds_checker(env, monk
         [call("write_file", "w2", path="app.py", content="import sys\n")],
         "Done.",
     ])
-    await stream(platform, body(ws, approval_mode="yolo"), answer=lambda f: (asked.append(f) or "conversation"))
+    await stream(platform, body(ws, approval_mode="approve_for_me"),
+                 answer=lambda f: (asked.append(f) or "conversation"))
     assert len(asked) == 1, asked
     assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
     assert "Check (ruff): 1 problem" in model.tool_messages(2)["w2"]
@@ -177,8 +195,9 @@ async def test_the_users_permission_table_allowing_the_command_tool_runs_it_with
 
 
 async def test_the_models_own_command_still_runs_with_no_card_under_yolo(env, monkeypatch):
-    """Only the APP's command for the project needs a person: the model's
-    own shell call in the same round keeps yolo's per-call grant."""
+    """The model's own shell call in the same round keeps yolo's per-call
+    grant — and (v1.417.0, decision D1) so does Iron Jarvis's own checker:
+    nothing cards."""
     platform, ws, log = env
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [[
@@ -186,8 +205,9 @@ async def test_the_models_own_command_still_runs_with_no_card_under_yolo(env, mo
         call("shell", "s1", command="echo hello-from-the-model"),
     ], "Done."])
     await stream(platform, body(ws, approval_mode="yolo"), answer=lambda f: (asked.append(f) or "deny"))
-    assert [f["call_id"] for f in asked] == [f"{C.CALL_ID_PREFIX}1"]
+    assert asked == []
     assert "hello-from-the-model" in model.tool_messages(1)["s1"]
+    assert log.exists()
 
 
 @pytest.mark.parametrize("mode", ["approve_for_me", "always_ask"])
@@ -545,7 +565,8 @@ async def test_a_checker_found_on_the_path_is_named_by_its_full_path_so_the_fold
         "@echo app.py:1:1: F999 HIJACKED-BY-THE-FOLDER\r\n@exit /b 1\r\n", encoding="utf-8")
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
-    await stream(platform, body(ws, approval_mode="yolo"), answer=lambda f: (asked.append(f) or "once"))
+    # v1.417.0: under Ask first, so the card shows the command (decision D1).
+    await stream(platform, body(ws, approval_mode="approve_for_me"), answer=lambda f: (asked.append(f) or "once"))
     found = shutil.which("ruff", path=os.environ["PATH"])
     assert found and Path(found).parent != ws
     command = asked[0]["args"]["command"]

@@ -2086,6 +2086,9 @@ class _Run:
     #: own shell: a folder's own check (the user's words, for every dialect)
     #: and a command of any other dialect.
     syntax: str = ""
+    #: v1.417.0 (C1.3): the model's own run already passed after the reply's
+    #: last change, so the check did not run it again.
+    reused: bool = False
 
 
 def _posix(syntax: str) -> "bool | None":
@@ -2166,6 +2169,13 @@ class FinishCheck:
         #: process handle a ``process_start`` answered — "" for ``shell``,
         #: the shell language it was written in — "bash" or "")
         self._commands: list[tuple[str, dict[str, Any], str, str]] = []
+        #: v1.417.0 (C1.3): beside each of ``_commands`` — (its place in the
+        #: reply's settled calls, its own verdict), and the place of the last
+        #: call that may have changed a file: a test run that PASSED after
+        #: the last change is not run again (:meth:`_reusable`).
+        self._cmd_meta: list[tuple[int, str]] = []
+        self._seq = 0
+        self._last_change_seq = 0
         #: process handle -> its exit code, once it ended
         self._ended: dict[str, int] = {}
         #: handles of test runs started after the note, still running
@@ -2302,6 +2312,12 @@ class FinishCheck:
             # A call the HARNESS made (a project's checker, part 3 Phase 3):
             # neither a command the model ran nor the reply's own work.
             return
+        if not self.ran:
+            # v1.417.0 (C1.3): the reply's settled calls, in order, and the
+            # last one that may have changed a file.
+            self._seq += 1
+            if self._may_change_files(name, call, result):
+                self._last_change_seq = self._seq
         data = dict(getattr(result, "data", None) or {})
         if not self._may_write and _wrote_unjournaled(name, result, self._custom):
             # A command, a program, a hand-off or an app's tool RAN: what it
@@ -2331,6 +2347,7 @@ class FinishCheck:
         syntax = self._syntax_of(call)
         if not self.ran:
             self._commands.append((name, dict(args), handle, syntax))
+            self._cmd_meta.append((self._seq, _verdict(name, result)))
             return
         if not self._note_sent:
             return
@@ -2350,6 +2367,59 @@ class FinishCheck:
         elif handle:
             # still running: its later process_read decides
             self._after_handles.add(handle)
+
+    def _may_change_files(self, name: str, call: Any, result: Any) -> bool:
+        """v1.417.0 (C1.3): may this settled model call have changed a file?
+        A journaled edit, a hand-off, an app's tool, code, typing into a
+        program — yes; a command — yes, unless its own exit status is its
+        tests' (``status_is_tests``: the run the skip rule is about) or it
+        only reads (``core.auto_approve.read_only_command``); a reading
+        tool — no. Never raises: cannot tell ⇒ yes."""
+        try:
+            from .folder_changes import JOURNALED_TOOLS
+
+            if name in JOURNALED_TOOLS:
+                return True
+            if name in COMMAND_TOOLS:
+                if _never_ran(name, result):
+                    return False
+                args = getattr(call, "arguments", None) or {}
+                command = str(args.get("command") or "") if isinstance(args, dict) else ""
+                if not command.strip():
+                    return True
+                syntax = self._syntax_of(call)
+                if status_is_tests(command, self._named_names(), posix=_posix(syntax)):
+                    return False
+                from ..core.auto_approve import read_only_command
+
+                return not read_only_command(command)
+            return _wrote_unjournaled(name, result, self._custom)
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _reusable(self, index: int) -> bool:
+        """v1.417.0 (C1.3, decision D1): did the model's test command at
+        ``index`` of ``_commands`` run AFTER the reply's last change and exit
+        0, with its OWN exit status its tests' (``status_is_tests``)? Then the
+        check does not run it again: it already says what a re-run would."""
+        try:
+            seq, verdict = self._cmd_meta[index]
+            name, args, handle, syntax = self._commands[index]
+        except (IndexError, ValueError):
+            return False
+        if seq <= self._last_change_seq:
+            return False
+        command = str(args.get("command") or "")
+        if not status_is_tests(command, self._named_names(), posix=_posix(syntax)):
+            return False
+        if name == "process_start":
+            return self._ended.get(handle) == 0
+        return verdict == TESTS_PASSED
+
+    @property
+    def answer_heard(self) -> bool:
+        """v1.417.0 (C2.4): has the model's answer to the note arrived?"""
+        return self._answer_heard
 
     def heard(self, text: str) -> None:
         """A model answer arrived. The FIRST one after the note is its
@@ -2800,11 +2870,16 @@ class FinishCheck:
                 runs.append(_Run(command=str(c.command), args={}, source="folder",
                                  timeout_s=int(getattr(c, "timeout_s", 0) or 0) or None))
         else:
-            mine = self._last_test_run()
-            if mine is not None:
-                name, args, part, syntax = mine
-                runs.append(_Run(command=part, args=args, source="yours",
-                                 timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax))
+            pick = self._last_test_pick()
+            if pick is not None:
+                index, name, args, part, syntax = pick
+                run = _Run(command=part, args=args, source="yours",
+                           timeout_s=_int_or_none(args.get("timeout_s")), syntax=syntax)
+                if self._reusable(index):
+                    # v1.417.0 (C1.3): it passed after the last change —
+                    # recorded as passed, not run again (no card, no wait).
+                    run.verdict, run.exit_code, run.reused = TESTS_PASSED, 0, True
+                runs.append(run)
         if low_trust:
             # Before "no tests found": in low trust the model's own commands
             # are refused before they run (no sandbox), so none is ever the
@@ -2816,6 +2891,9 @@ class FinishCheck:
             self.tests = TESTS_NONE
             return []
         self.runs = runs
+        if all(r.reused for r in runs):
+            self.tests = TESTS_PASSED
+            return []
         if self.carrier not in self.gate:
             self._not_run_all("this reply has no command tool")
             return []
@@ -2841,13 +2919,19 @@ class FinishCheck:
         """``(tool, args, test part, shell language)`` of the last command the
         model ran that has a test part. A bash-written command is read with
         bash's rules (a backslash escapes)."""
+        pick = self._last_test_pick()
+        return None if pick is None else pick[1:]
+
+    def _last_test_pick(self) -> "tuple[int, str, dict[str, Any], str, str] | None":
+        """:meth:`_last_test_run` with its index in ``_commands`` first."""
         named = self._named_names()
-        for name, args, handle, syntax in reversed(self._commands):
+        for index in range(len(self._commands) - 1, -1, -1):
+            name, args, handle, syntax = self._commands[index]
             if name == "process_start" and handle not in self._ended:
                 continue  # it never ended: no exit status to judge a run by
             part = test_part(str(args.get("command") or ""), named, posix=_posix(syntax))
             if part:
-                return name, args, part, syntax
+                return index, name, args, part, syntax
         return None
 
     def _args_for(self, run: _Run) -> dict[str, Any]:
@@ -3162,6 +3246,13 @@ class FinishCheck:
                 "the test part of a command you ran in this reply"
             )
             shown = f"`{run.command}` ({where})"
+            if run.verdict == TESTS_PASSED and run.reused:
+                # v1.417.0 (C1.3): not run again — it passed after the change.
+                lines.append(
+                    f"{shown} passed (exit code 0) when you ran it after your last change, "
+                    "so Iron Jarvis did not run it again."
+                )
+                continue
             if run.verdict == TESTS_PASSED:
                 code = f" (exit code {run.exit_code})" if run.exit_code is not None else ""
                 lines.append(f"{shown} passed{code}.")
@@ -3391,6 +3482,11 @@ class FinishCheck:
         }
         if out["tests"] == TESTS_NOT_RUN and self.why:
             out["why"] = _clip(self.why, 200)
+        if self.runs and all(r.reused for r in self.runs):
+            # v1.417.0 (C1.3): the tests were not run again — the model's own
+            # run passed after the last change. Only then (every other record
+            # is byte-identical).
+            out["reused"] = True
         if self._review_pending:
             # Handed out and never settled (nothing ran it): said, not guessed.
             self._settle_review(REVIEW_NOT_RUN, why="the review did not run")
@@ -3401,7 +3497,7 @@ class FinishCheck:
 
 
 #: The record's keys, in order (the reply line keeps exactly these).
-RECORD_KEYS = ("tests", "command", "removed", "kept", "points", "unmet", "after", "why", "review")
+RECORD_KEYS = ("tests", "command", "removed", "kept", "points", "unmet", "after", "why", "reused", "review")
 
 
 def saved_review(raw: Any) -> "dict[str, Any] | None":
@@ -3451,6 +3547,8 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
     why = raw.get("why")
     if tests == TESTS_NOT_RUN and isinstance(why, str) and why.strip():
         out["why"] = _clip(why, 200)
+    if raw.get("reused") is True and tests == TESTS_PASSED:
+        out["reused"] = True  # v1.417.0 (C1.3)
     review = saved_review(raw.get("review"))
     if review is not None:
         out["review"] = review
