@@ -214,7 +214,9 @@ async def test_opencode_starts_its_own_acp_with_nothing_switched_off(app, work, 
     assert msgs[2]["params"]["configId"] == "model" and msgs[2]["params"]["value"] == MODEL
     assert msgs[3]["params"]["prompt"] == [{"type": "text", "text": "do it"}]
     assert row["harness_session_id"].startswith("ses_"), "the row names OpenCode's own saved session"
-    assert evs[1]["type"] == "session" and evs[1]["harness"] == "opencode"
+    # v1.417.0 (C4.7, moved on purpose): "Starting OpenCode…" is said first.
+    assert evs[1]["type"] == "notice" and evs[1]["text"] == "Starting OpenCode…"
+    assert evs[2]["type"] == "session" and evs[2]["harness"] == "opencode"
 
 
 async def test_ask_first_is_opencodes_own_permission_rules_for_this_process_only(app, work, tmp_path, monkeypatch):

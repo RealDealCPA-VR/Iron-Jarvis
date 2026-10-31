@@ -303,7 +303,8 @@ for (const size of [
     await expect(card).toBeVisible({ timeout: 90_000 });
     await expect(card.getByTestId("code-ask-diff")).toBeVisible();
     await expect(card.getByTestId("code-ask-allow-session")).toHaveCount(0);
-    await expect(card.getByTestId("code-ask-keys")).toHaveText("Click Allow once to allow it · Esc to deny");
+    // v1.417.0 (C1.7, moved on purpose): no safety reason — Enter allows once.
+    await expect(card.getByTestId("code-ask-keys")).toHaveText("Enter to allow once · Esc to deny");
     await page.waitForTimeout(300);
     expect(await widest(page)).toBeLessThanOrEqual(1);
     // New session for Pi: no account to choose, Pi's own rules (v1.412.0:

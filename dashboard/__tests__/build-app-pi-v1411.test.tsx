@@ -235,7 +235,8 @@ describe("Pi's events from the real parser", () => {
     expect(ev.diff).toContain("+pear");
     expect(ev.canSession).toBe(false);
     expect(ev.onceOnly).toBe(true);
-    expect(enterAllowsCodeAsk(ev, false)).toBe(false);
+    // v1.417.0 (C1.7, moved on purpose): no safety reason — Enter allows ONCE.
+    expect(enterAllowsCodeAsk(ev, false)).toBe(true);
   });
 
   it("a select is a question with the extension's choices; an input is a free answer", () => {
@@ -341,7 +342,7 @@ describe("the view", () => {
     });
   });
 
-  it("an extension's confirm shows the edit it is about; Enter never allows it; Allow once posts the answer", async () => {
+  it("an extension's confirm shows the edit it is about; Enter allows it ONCE (v1.417.0 C1.7); the answer posts", async () => {
     waitingOn("pi_extension_confirm_before_an_edit");
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
     const card = await screen.findByTestId("code-ask");
@@ -349,12 +350,10 @@ describe("the view", () => {
     expect(within(card).getByTestId("code-ask-diff")).toBeInTheDocument();
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
-    expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
+    // Moved on purpose: Chat › Code's rule — no safety reason, Enter allows once.
+    expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.keyDown(window, { key: "Enter" });
-    await act(() => new Promise((r) => setTimeout(r, 30)));
-    expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
-    fireEvent.click(within(card).getByTestId("code-ask-allow"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/build/app/sessions/p1/answer")?.body).toEqual({
         request_id: "ask-1",

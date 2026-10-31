@@ -10,11 +10,16 @@
  *
  * TWO KINDS:
  *  - an APPROVAL (Claude Code's "can I use this tool", Codex's "can I run
- *    this command / apply this change"): Allow once · Allow for this session
- *    (only when the tool offers a session-wide allow) · Deny. Enter NEVER
- *    allows one that asks once every time, nor any card while the session
- *    runs in Full access (lib/buildApp.enterAllowsCodeAsk): Allow is a click
- *    there, Esc still denies.
+ *    this command / apply this change"): Allow once · Allow all commands
+ *    this session (v1.417.0, a command card that offers it — Iron Jarvis's
+ *    own whole-tool rule; the tool's own narrower allow then reads "Allow
+ *    similar commands") · Allow for this session (only when the tool offers
+ *    a session-wide allow) · Deny · "No, tell it what to do instead"
+ *    (v1.417.0, a tool that reads the words). A plan card shows the plan.
+ *    Enter allows ONCE on every card except a safety once-only one and any
+ *    card while the session runs in Full access
+ *    (lib/buildApp.enterAllowsCodeAsk): Allow is a click there, Esc still
+ *    denies.
  *  - a QUESTION (the tool asking the user to choose): each question's
  *    choices lettered A, B, C… (a letter key picks, never sends), an optional
  *    "Something else" field, Send · Skip.
@@ -25,6 +30,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Button } from "@/components/ui";
 import { DiffBody } from "@/components/chat/DiffView";
+import { MemoMarkdown } from "@/components/Markdown";
+import { HARNESS_REPLY_PROSE } from "@/components/harness/harnessLook";
 import { ALLOW_ONCE, DENY } from "@/lib/approvalWords";
 import { DOCK_KEY_ARM_MS } from "@/components/chat/DockAsk";
 import { dockKeyAction, TAKES_TYPING } from "@/lib/dockAsk";
@@ -40,7 +47,20 @@ import {
 } from "@/lib/buildApp";
 
 export type CodeAnswer =
-  | { decision: "allow" | "allow_session" | "deny"; message?: string; answers?: Record<string, string> };
+  | {
+      decision: "allow" | "allow_session" | "allow_commands" | "deny";
+      message?: string;
+      answers?: Record<string, string>;
+    };
+
+/** v1.417.0 (C1.1): the answer that allows every command for the session
+ *  (Iron Jarvis's own rule), beside the tool's own narrower one. */
+export const ALLOW_ALL_COMMANDS = "Allow all commands this session";
+/** v1.417.0 (C1.1): the tool's own session-wide allow when the one above
+ *  is offered too (it covers commands LIKE this one). */
+export const ALLOW_SIMILAR = "Allow similar commands";
+/** v1.417.0 (C4.1): a "no" that tells the tool what to do instead. */
+export const REDIRECT_WORDS = "No, tell it what to do instead";
 
 const EDGE_WARN =
   "shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.55),0_6px_24px_rgb(0_0_0/0.35)] [[data-scheme=light]_&]:shadow-[0_0_0_0.5px_rgb(var(--tone-warn)/0.6),0_4px_18px_rgb(var(--white)/0.08)]";
@@ -57,15 +77,35 @@ function ApprovalBody({
   toolName,
   busy,
   onAnswer,
+  takesWords = false,
 }: {
   ask: ApprovalEvent;
   toolName: string;
   busy: boolean;
   onAnswer: (a: CodeAnswer) => void;
+  /** v1.417.0 (C4.1): the tool reads a "no" with the user's own words. */
+  takesWords?: boolean;
 }) {
+  const [redirect, setRedirect] = useState<string | null>(null);
+  const redirectRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (redirect !== null) redirectRef.current?.focus({ preventScroll: true });
+  }, [redirect !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sendRedirect = () => {
+    const words = (redirect ?? "").trim();
+    if (words) onAnswer({ decision: "deny", message: words });
+  };
   return (
     <div data-testid="code-ask-approval" data-kind={ask.kind} className="space-y-2.5 px-4 pb-4 pt-3">
       <p className="text-[13px] font-medium text-zinc-100">{approvalHeading(ask, toolName)}</p>
+      {ask.plan ? (
+        <div
+          data-testid="code-ask-plan"
+          className={`max-h-80 overflow-auto rounded-lg bg-white/[0.03] px-3 py-2 ${HARNESS_REPLY_PROSE}`}
+        >
+          <MemoMarkdown content={ask.plan} />
+        </div>
+      ) : null}
       {ask.command ? (
         <pre
           data-testid="code-ask-command"
@@ -101,6 +141,17 @@ function ApprovalBody({
         >
           {ALLOW_ONCE}
         </Button>
+        {ask.canAllCommands ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="code-ask-allow-commands"
+            disabled={busy}
+            onClick={() => onAnswer({ decision: "allow_commands" })}
+          >
+            {ALLOW_ALL_COMMANDS}
+          </Button>
+        ) : null}
         {ask.canSession ? (
           <Button
             variant="secondary"
@@ -109,7 +160,7 @@ function ApprovalBody({
             disabled={busy}
             onClick={() => onAnswer({ decision: "allow_session" })}
           >
-            Allow for this session
+            {ask.canAllCommands ? ALLOW_SIMILAR : "Allow for this session"}
           </Button>
         ) : null}
         <Button
@@ -122,7 +173,54 @@ function ApprovalBody({
         >
           {DENY}
         </Button>
+        {takesWords && redirect === null ? (
+          <button
+            type="button"
+            data-testid="code-ask-redirect"
+            disabled={busy}
+            onClick={() => setRedirect("")}
+            className="rounded-md px-2 py-1 text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 disabled:opacity-50"
+          >
+            {REDIRECT_WORDS}
+          </button>
+        ) : null}
       </div>
+      {takesWords && redirect !== null ? (
+        <div className="flex items-center gap-2">
+          <input
+            ref={redirectRef}
+            type="text"
+            data-testid="code-ask-redirect-input"
+            aria-label={`What ${toolName} should do instead`}
+            placeholder={`Tell ${toolName} what to do instead…`}
+            value={redirect}
+            maxLength={2000}
+            onChange={(e) => setRedirect(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                sendRedirect();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setRedirect(null);
+              }
+            }}
+            className="field h-8 min-w-0 flex-1 text-[13px]"
+          />
+          <Button
+            variant="primary"
+            size="sm"
+            data-testid="code-ask-redirect-send"
+            disabled={busy || !(redirect ?? "").trim()}
+            onClick={sendRedirect}
+          >
+            Send
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -230,7 +328,11 @@ export function CodeAskCard({
   onStop,
   error,
   armDelayMs = DOCK_KEY_ARM_MS,
+  takesWords = false,
 }: {
+  /** v1.417.0 (C4.1): the tool reads a "no" with the user's own words
+   *  (Claude Code): the card offers "No, tell it what to do instead". */
+  takesWords?: boolean;
   /** The open asks in asking order; the first is shown. */
   asks: readonly OpenAsk[];
   toolName: string;
@@ -369,7 +471,14 @@ export function CodeAskCard({
         </div>
       )}
       {head.type === "approval" ? (
-        <ApprovalBody key={head.requestId} ask={head} toolName={toolName} busy={busy} onAnswer={answer} />
+        <ApprovalBody
+          key={head.requestId}
+          ask={head}
+          toolName={toolName}
+          busy={busy}
+          onAnswer={answer}
+          takesWords={takesWords}
+        />
       ) : (
         <QuestionBody key={head.requestId} ask={head} toolName={toolName} busy={busy} onAnswer={answer} />
       )}

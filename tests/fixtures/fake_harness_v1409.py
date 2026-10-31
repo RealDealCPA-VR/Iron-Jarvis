@@ -231,6 +231,26 @@ def emit(step):
 
 def branch(on, obj):
     """The steps ``on`` names for the host's answer ``obj`` (see the module doc)."""
+    if obj.get("type") == "control_response":
+        # v1.417.0: a Claude Code can_use_tool answer — its ``behavior``,
+        # "allow+all_commands" when it carries a SESSION rule for the whole
+        # Bash / PowerShell tool (no ruleContent), "allow+session" for any
+        # other updatedPermissions. The fake cannot evaluate Claude Code's
+        # rules; the scenario's branch plays what Claude Code then does.
+        resp = (obj.get("response") or {}).get("response") or {}
+        answer = str(resp.get("behavior") or "")
+        perms = [p for p in resp.get("updatedPermissions") or [] if isinstance(p, dict)]
+        whole = any(
+            p.get("type") == "addRules" and p.get("destination") == "session" and p.get("behavior") == "allow"
+            and any(isinstance(r, dict) and r.get("toolName") in ("Bash", "PowerShell") and not r.get("ruleContent")
+                    for r in p.get("rules") or [])
+            for p in perms
+        )
+        if answer == "allow" and whole and "allow+all_commands" in on:
+            answer = "allow+all_commands"
+        elif answer == "allow" and perms and "allow+session" in on:
+            answer = "allow+session"
+        return on.get(answer) or on.get("*") or []
     result = obj.get("result") if isinstance(obj.get("result"), dict) else {}
     answer = str(result.get("action") or "")
     meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}

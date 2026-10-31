@@ -441,7 +441,8 @@ describe("every event kind draws (the contract fixture)", () => {
     expect(screen.getByTestId("code-resolved").textContent).toContain("Denied");
     expect(screen.getAllByTestId("code-tool").map((t) => t.dataset.status)).toEqual(["failed"]);
     expect(screen.getAllByTestId("code-done").find((d) => d.dataset.stop === "interrupted")?.textContent).toBe("Stopped.");
-    expect(screen.getByTestId("code-notice").textContent).toContain("retrying");
+    // v1.417.0 (moved on purpose): each turn now opens with "Starting Codex…".
+    expect(screen.getAllByTestId("code-notice").some((n) => (n.textContent ?? "").includes("retrying"))).toBe(true);
     expect(within(screen.getByTestId("code-error")).getByTestId("code-sign-in-codex-cli")).toBeInTheDocument();
   });
 });
@@ -503,8 +504,9 @@ describe("an approval, in the composer's place", () => {
     const card = await screen.findByTestId("code-ask");
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
     expect(within(card).getByTestId("code-ask-command").textContent).toContain("Get-ChildItem -Force");
-    // Asked once every time: Enter never allows it.
-    expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
+    // v1.417.0 (C1.7, moved on purpose): asked once every time, but for no
+    // safety reason — Enter allows it ONCE, as in Chat › Code.
+    expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
   });
 
   it("Enter allows an ordinary card (after the first moment); Esc denies", async () => {
@@ -553,10 +555,16 @@ describe("an approval, in the composer's place", () => {
     );
   });
 
-  it("Enter NEVER allows a card that asks once every time", () => {
+  it("Enter allows a once-only card ONCE, never a SAFETY once-only one (v1.417.0 C1.7, moved on purpose)", () => {
     const ask = decodeCodeEvent({ type: "approval", request_id: "r", once_only: true }) as Extract<CodeEvent, { type: "approval" }>;
-    expect(enterAllowsCodeAsk(ask, false)).toBe(false);
-    expect(codeAskKeyHint(ask, false)).toBe("Click Allow once to allow it · Esc to deny");
+    expect(enterAllowsCodeAsk(ask, false)).toBe(true);
+    expect(codeAskKeyHint(ask, false)).toBe("Enter to allow once · Esc to deny");
+    const safety = decodeCodeEvent({ type: "approval", request_id: "r", once_only: true, once_reason: "git" }) as Extract<
+      CodeEvent,
+      { type: "approval" }
+    >;
+    expect(enterAllowsCodeAsk(safety, false)).toBe(false);
+    expect(codeAskKeyHint(safety, false)).toBe("Click Allow once to allow it · Esc to deny");
     const plain = decodeCodeEvent({ type: "approval", request_id: "r" }) as Extract<CodeEvent, { type: "approval" }>;
     expect(enterAllowsCodeAsk(plain, false)).toBe(true);
     expect(enterAllowsCodeAsk(plain, true)).toBe(false);

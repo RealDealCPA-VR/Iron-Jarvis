@@ -23,6 +23,8 @@
  * what a user reads never says "app view" or "harness" (VOCABULARY.md).
  */
 
+import { onceReasonOf } from "./onceReason";
+
 // ── the view and the address ────────────────────────────────────────────────
 
 export type BuildView = "code" | "terminal";
@@ -696,6 +698,15 @@ type CodeEventBody =
       onceOnly: boolean;
       /** The tool's own name for what it wants to use ("PowerShell"). */
       tool: string;
+      /** v1.417.0 (C1.1): the card takes "Allow all commands this session"
+       *  (the answer `allow_commands`). */
+      canAllCommands: boolean;
+      /** v1.417.0 (C4.1): the plan the tool asks to start on (Markdown),
+       *  "" for any other card. */
+      plan: string;
+      /** v1.417.0 (C1.7): WHY a once-only card asks every time
+       *  (lib/onceReason); a safety reason keeps Enter from allowing it. */
+      onceReason: string;
     }
   | { type: "question"; at: string; requestId: string; questions: QuestionItem[] }
   | { type: "resolved"; at: string; requestId: string; decision: string }
@@ -815,6 +826,9 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         canSession: r.can_session === true,
         onceOnly: r.once_only === true,
         tool: str(r.tool, 120),
+        canAllCommands: r.can_all_commands === true,
+        plan: str(r.plan, 20_000),
+        onceReason: str(r.once_reason, 40),
       };
     }
     case "question": {
@@ -1024,11 +1038,63 @@ export type ConvItem =
       costUsd: number | null;
       listPrice: boolean;
       costReportedBy: string;
+      /** v1.417.0 (C4.9): this turn's `done` carries it in its receipt (the
+       *  line then draws nothing of its own). */
+      folded?: boolean;
     }
-  | { kind: "done"; key: string; stop: Extract<CodeEvent, { type: "done" }>["stop"]; result: string }
+  | {
+      kind: "done";
+      key: string;
+      stop: Extract<CodeEvent, { type: "done" }>["stop"];
+      result: string;
+      /** v1.417.0 (C4.9): what the turn did, read off its own events. */
+      receipt?: TurnReceipt | null;
+    }
   /** v1.412.0: a note sent while it worked, at the place it was sent, with
    *  its newest state. */
   | { kind: "steer"; key: string; id: string; text: string; files: string[]; state: SteerState; how: string };
+
+/** v1.417.0 (C4.9): one turn's receipt, read off its own events — the model
+ *  the newest `session` event named, how long it took (its `user` to its
+ *  `done`, null when either time is missing), the steps it took (a plan
+ *  update is not a step), the files it changed (edits and writes that
+ *  finished), and its usage line. */
+export interface TurnReceipt {
+  model: string;
+  seconds: number | null;
+  actions: number;
+  files: number;
+  usage: { input: number; output: number; costUsd: number | null; listPrice: boolean; costReportedBy: string } | null;
+}
+
+function secondsBetween(a: string, b: string): number | null {
+  const x = Date.parse(a);
+  const y = Date.parse(b);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || y < x) return null;
+  return Math.round((y - x) / 1000);
+}
+
+/** "2 m 14 s", "14 s", "1 h 3 m". */
+export function receiptDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} m ${s % 60} s`;
+  return `${Math.floor(m / 60)} h ${m % 60} m`;
+}
+
+/** v1.417.0 (C4.9): the reply line — "answered by <model> on <account> ·
+ *  2 m 14 s · 7 actions · 3 files changed", the way Chat › Code's receipt
+ *  reads. A part with nothing to say is left out; "" when nothing is known. */
+export function receiptLine(r: TurnReceipt, account = ""): string {
+  const parts: string[] = [];
+  const who = r.model ? `answered by ${r.model}${account ? ` on ${account}` : ""}` : account ? `on ${account}` : "";
+  if (who) parts.push(who);
+  if (r.seconds !== null) parts.push(receiptDuration(r.seconds));
+  if (r.actions > 0) parts.push(`${r.actions} action${r.actions === 1 ? "" : "s"}`);
+  if (r.files > 0) parts.push(`${r.files} file${r.files === 1 ? "" : "s"} changed`);
+  return parts.join(" · ");
+}
 
 export interface Conversation {
   items: ConvItem[];
@@ -1060,15 +1126,37 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
   let settled = true;
   let n = 0;
   const key = (p: string) => `${p}-${n++}`;
+  // v1.417.0 (C4.9): what the current turn did, for its receipt.
+  let model = "";
+  let turnAt = "";
+  let usageAt: number | null = null;
+  const turnSteps = new Set<string>();
+  const turnFiles = new Set<string>();
+  // (review) the turn's last moment of WORK: a turn the daemon's restart cut
+  // off gets its error and done only when Iron Jarvis starts again
+  // (service.reconcile_at_boot), hours later — such a turn is timed to its
+  // last step, never to the next start. The app's own words (a notice, an
+  // error) are not work.
+  let workAt = "";
   for (const ev of events) {
+    if (turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
+      && Number.isFinite(Date.parse(ev.at))) {
+      workAt = ev.at;
+    }
     switch (ev.type) {
       case "session":
         if (ev.harnessSessionId) toolSessionId = ev.harnessSessionId;
+        if (ev.model) model = ev.model;
         break;
       case "user":
         items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files });
         planAt = null;
         settled = false;
+        turnAt = ev.at;
+        workAt = "";
+        usageAt = null;
+        turnSteps.clear();
+        turnFiles.clear();
         break;
       case "text": {
         const i = textAt.get(ev.item);
@@ -1104,7 +1192,13 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
         break;
       }
       case "tool": {
+        if (ev.kind !== "todo") turnSteps.add(ev.item);
         const i = toolAt.get(ev.item);
+        if ((ev.kind === "edit" || ev.kind === "write") && ev.status === "done") {
+          // (review) the step's END may name no path: the one it began with.
+          const p = ev.path || (i === undefined ? "" : (items[i] as Extract<ConvItem, { kind: "tool" }>).tool.path);
+          if (p) turnFiles.add(p);
+        }
         if (i === undefined) {
           toolAt.set(ev.item, items.length);
           items.push({ kind: "tool", key: key("x"), tool: ev });
@@ -1168,6 +1262,7 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
         });
         break;
       case "usage":
+        usageAt = items.length;
         items.push({
           kind: "usage",
           key: key("g"),
@@ -1189,12 +1284,39 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
         }
         break;
       }
-      case "done":
-        items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result });
+      case "done": {
+        // v1.417.0 (C4.9): the turn's receipt; its usage line folds into it.
+        let usage: TurnReceipt["usage"] = null;
+        if (usageAt !== null) {
+          const u = items[usageAt] as Extract<ConvItem, { kind: "usage" }>;
+          usage = { input: u.input, output: u.output, costUsd: u.costUsd, listPrice: u.listPrice, costReportedBy: u.costReportedBy };
+          items[usageAt] = { ...u, folded: true };
+        }
+        const receipt: TurnReceipt = {
+          model,
+          // (review) a turn that was stopped (or cut off by a restart) is
+          // timed to its last step: its done may be written much later.
+          seconds: !turnAt
+            ? null
+            : ev.stop === "interrupted"
+              ? workAt ? secondsBetween(turnAt, workAt) : null
+              : ev.at ? secondsBetween(turnAt, ev.at) : null,
+          actions: turnSteps.size,
+          files: turnFiles.size,
+          usage,
+        };
+        const worth = !!(receipt.model || receipt.seconds !== null || receipt.actions || receipt.files || receipt.usage);
+        items.push({ kind: "done", key: key("d"), stop: ev.stop, result: ev.result, receipt: worth ? receipt : null });
+        usageAt = null;
+        turnSteps.clear();
+        turnFiles.clear();
+        turnAt = "";
+        workAt = "";
         // A turn that ended asks nothing any more.
         asks.clear();
         settled = true;
         break;
+      }
     }
   }
   if (!settled) {
@@ -1253,14 +1375,20 @@ export function cutForRejoin(
 
 // ── the questions' keys and words ───────────────────────────────────────────
 
-/** Whether Enter may press an ask's main answer. NEVER for an approval that
- *  asks once, every time, and never while the session runs in a dangerous
- *  mode (Full access: a card that still comes up there is the one the tool
- *  itself would not run alone). Esc still declines; Allow is a click. A
- *  question (the tool asking the user to choose) keeps Enter = Send. */
+/** Whether Enter may press an ask's main answer (Allow once). v1.417.0
+ *  (C1.7): the same rule as Chat › Code (lib/dockAsk.enterAllows) — Enter
+ *  allows ONCE on every card EXCEPT one that asks every time for a SAFETY
+ *  reason (`once_reason`, lib/onceReason; none comes from a coding tool yet,
+ *  the hook is kept), and never while the session runs in a dangerous mode
+ *  (Full access: a card that still comes up there is the one the tool itself
+ *  would not run alone). It used to do nothing on any card with no
+ *  session-wide allow, silently. Esc still declines; the first moment after
+ *  a card appears still takes no key (DOCK_KEY_ARM_MS). A question keeps
+ *  Enter = Send. */
 export function enterAllowsCodeAsk(ask: OpenAsk | null | undefined, dangerousMode: boolean): boolean {
   if (!ask || ask.type !== "approval") return true;
-  return !(ask.onceOnly || dangerousMode);
+  if (dangerousMode) return false;
+  return !(ask.onceOnly && onceReasonOf(ask.onceReason) !== undefined);
 }
 
 export const CODE_CLICK_TO_ALLOW_HINT = "Click Allow once to allow it · Esc to deny";
@@ -1310,6 +1438,7 @@ export function resolvedWords(decision: string, question = false): string {
   if (question) return decision === "deny" || decision === "denied" ? "Skipped" : "Answered";
   if (decision === "deny" || decision === "denied") return "Denied";
   if (decision === "allow_session") return "Allowed for this session";
+  if (decision === "allow_commands") return "Allowed all commands for this session";
   if (decision === "answered") return "Answered";
   return "Allowed";
 }

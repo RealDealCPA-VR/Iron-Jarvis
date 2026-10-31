@@ -41,6 +41,13 @@ SCENARIOS: dict[str, tuple[str, str, list]] = {
     "codex_deny": ("codex_deny", "codex", [("answer", "deny", None)]),
     "codex_interrupt": ("codex_interrupt", "codex", [("interrupt",)]),
     "codex_sign_in": ("codex_signin", "codex", []),
+    # v1.417.0 (fix plan wave 1): "Allow all commands this session" (C1.1),
+    # the plan on its card + a deny with the user's words (C4.1), a failure
+    # that names the tool (C4.9).
+    "claude_allow_all_commands": ("claude_all_commands_v1417", "claude-code", [("answer", "allow_commands", None)]),
+    "claude_plan_deny_with_words": ("claude_plan_v1417", "claude-code",
+                                    [("answer", "deny", None, "Write it in one file instead.")]),
+    "claude_failed_generic": ("claude_failed_v1417", "claude-code", []),
 }
 
 
@@ -95,12 +102,14 @@ async def run_scenario(tmp_path: Path, monkeypatch, name: str) -> list[dict]:
                     await until(lambda: svc.turn("t") and any(e["type"] == "text" for e in svc.turn("t").events))
                 await c.post(f"/build/app/sessions/{sid}/interrupt")
                 continue
-            _, decision, answers = act
+            decision, answers = act[1], act[2]
+            message = act[3] if len(act) > 3 else None  # v1.417.0: a deny's own words
             ask = await until(lambda: next((a for a in (svc.live.get(sid).asks if svc.live.get(sid) else {})
                                             if a not in done_asks), None))
             done_asks.add(ask)
             r = await c.post(f"/build/app/sessions/{sid}/answer",
-                             json={"request_id": ask, "decision": decision, "answers": answers})
+                             json={"request_id": ask, "decision": decision, "answers": answers,
+                                   **({"message": message} if message else {})})
             assert r.status_code == 200, r.text
         evs = frames((await asyncio.wait_for(task, 30)).text)
     await stop_all(app)

@@ -8,6 +8,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Pi…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "pi",
     "harness_session_id": "harness-session-1",
@@ -79,6 +84,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Pi…",
     "turn": "turn-1"
    },
    {
@@ -166,6 +176,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Pi…",
     "turn": "turn-1"
    },
    {
@@ -259,6 +274,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Pi…",
     "turn": "turn-1"
    },
    {
@@ -357,6 +377,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Pi…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "pi",
     "harness_session_id": "harness-session-1",
@@ -399,6 +424,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Pi…",
     "turn": "turn-1"
    },
    {
@@ -453,6 +483,11 @@
     "turn": "turn-1"
    },
    {
+    "type": "notice",
+    "text": "Starting Pi…",
+    "turn": "turn-1"
+   },
+   {
     "type": "session",
     "harness": "pi",
     "harness_session_id": "harness-session-1",
@@ -478,6 +513,11 @@
    {
     "type": "user",
     "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Pi…",
     "turn": "turn-1"
    },
    {

@@ -252,7 +252,8 @@ class PhoneWatch:
             # must never cancel the task that is delivering the answer.
             self._answering = True
             try:
-                await self.svc.answer(self.live.sid, self.ask.id, mapped)
+                # v1.417.0 (C1.11): the metrics say WHO answered (the phone).
+                await self.svc.answer(self.live.sid, self.ask.id, mapped, actor="phone")
             except Exception:  # noqa: BLE001 — answered elsewhere meanwhile
                 log.info("a Build › Code card answered from the phone was already gone")
             if not self.closed:
