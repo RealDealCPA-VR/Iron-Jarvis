@@ -599,7 +599,7 @@ def test_a_stop_ends_a_process_the_tool_started_outside_its_job(tmp_path, monkey
         made = psutil.Process(escaped.pid).create_time()
         monkeypatch.setattr(PR, "descendants", lambda pid: [(escaped.pid, made)])
         hp = PR.HarnessProcess([sys.executable, "-c", "import sys; sys.stdin.read()"], env=dict(os.environ),
-                               cwd=str(tmp_path), name="t")
+                               cwd=str(tmp_path), name="t", ends_left_behind=True)
         loop = asyncio.new_event_loop()
         try:
             hp.start(loop, lambda m: None, lambda c: None)

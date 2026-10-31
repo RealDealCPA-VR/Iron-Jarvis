@@ -1436,6 +1436,8 @@ class HostedService:
         proc = HarnessProcess(
             argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv, env=env, cwd=row.folder,
             name=f"hosted-{row.id}",
+            # v1.416.0 review: only Grok's stop ends what it left outside its Job.
+            ends_left_behind=bool(getattr(driver, "notes_started_on_stop", False)),
         )
         proc_holder["p"] = proc
 
