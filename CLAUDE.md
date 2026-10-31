@@ -4173,7 +4173,23 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/context-breakdown-v1415-0.test.tsx` (+ fixture
   `context-breakdown-v1415-0.json`, `IJ_REGEN_CONTEXT_BREAKDOWN=1`; the
   Python test compares the SHAPE — numbers move with every prompt wording and
-  the date). OPEN: Claude Code is never asked mid-reply (not measured whether
+  the date). REVIEW (each red first, `tests/test_context_breakdown_review_
+  v14150.py`, `dashboard/__tests__/context-breakdown-review-v1415-0.test.tsx`):
+  (1) `get_context_usage` defaults to `detail: "full"`, which (claude
+  2.1.316's own schema) "counts each category with the token-count API" —
+  the conversation sent to Anthropic per category on every read, through a
+  queue Claude Code serialises and waits up to 300 s for at teardown; the
+  driver asks `detail: "summary"` (same shape, measured 0.5 s, no network).
+  (2) `harness_breakdown` counts a string ONCE (a brain base that cannot be
+  used renders `block` == `without_tools()`, both handed in: memory doubled).
+  (3) Pi's `tokens: null` right after it compacts is
+  `breakdown.NOT_KNOWN_NOW`: the service drops the kept reading and the seen
+  total (it showed the pre-compaction 90 % as current). (4) Words: the
+  "Sent with each message" heading is Chat › Code's only (Claude Code's
+  extras are DEFERRED tools, not sent); Chat › Code's press is
+  `COMPACTION_OFFER_BUTTON` ("Summarize", the G75/v1.389.0 word) — "Compact
+  session" stays Build › Code's, for Claude Code's own `/compact`.
+  OPEN: Claude Code is never asked mid-reply (not measured whether
   it can answer then); Codex/Pi compact not wired; the Chat › Code breakdown
   is from the newest reply (a later setting change shows on the next reply).
 

@@ -848,7 +848,7 @@ class PiDriver(Driver):
         actual current context-window estimate used for compaction"). A total
         only — Pi says nothing about what fills it; ``tokens`` is null right
         after a compaction, until Pi's next answer (then: no reading)."""
-        from ..context.breakdown import total_only
+        from ..context.breakdown import NOT_KNOWN_NOW, total_only
 
         try:
             got = await self.request("get_session_stats")
@@ -857,6 +857,10 @@ class PiDriver(Driver):
         usage = got.get("contextUsage") if isinstance(got, dict) else None
         if not isinstance(usage, dict):
             return None
+        if usage.get("tokens") is None:
+            # v1.415.0 review: Pi ANSWERED that it does not know yet (right
+            # after a compaction) — an older reading must not stand in.
+            return dict(NOT_KNOWN_NOW)
         return total_only(usage.get("tokens"), usage.get("contextWindow"))
 
     def on_exit(self) -> None:

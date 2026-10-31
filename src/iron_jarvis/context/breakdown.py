@@ -115,12 +115,18 @@ def harness_breakdown(
             return None
         sys_text = system or ""
         counted: dict[str, int] = {}
+        # v1.415.0 review: one string is counted ONCE, whichever part names it
+        # first (a brain base that cannot be used renders ``block`` ==
+        # ``without_tools()``; both are handed in, and the memory part was
+        # counted twice while "System prompt" shrank by the same amount).
+        taken: set[str] = set()
         for key, texts in (pieces or {}).items():
             if key not in HARNESS_LABELS or key in ("messages", "system"):
                 continue
             n = 0
             for t in texts or ():
-                if isinstance(t, str) and t and t in sys_text:
+                if isinstance(t, str) and t and t not in taken and t in sys_text:
+                    taken.add(t)
                     n += estimate_tokens(t)
             if n:
                 counted[key] = counted.get(key, 0) + n
@@ -324,6 +330,16 @@ def claude_breakdown(resp: Any) -> dict[str, Any] | None:
         return out
     except Exception:  # noqa: BLE001
         return None
+
+
+#: v1.415.0 review: a driver's answer meaning "the tool ANSWERED: it does not
+#: know right now" (Pi right after it compacts) — unlike None ("could not
+#: ask"), it retires any older reading kept for the session.
+NOT_KNOWN_NOW: dict[str, Any] = {"not_known_now": True}
+
+
+def is_not_known_now(raw: Any) -> bool:
+    return isinstance(raw, dict) and raw.get("not_known_now") is True
 
 
 def total_only(used: Any, window: Any, *, at: Any = None) -> dict[str, Any] | None:

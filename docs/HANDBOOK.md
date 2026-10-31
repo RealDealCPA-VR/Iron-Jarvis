@@ -2438,32 +2438,36 @@ remembers that for the window.
   automatic summary, and free space. The bar above the rows shows the same
   parts; each segment is named on the bar and in its row, so the colour is
   never the only way to tell them apart.
-- **Sent with each message, not counted above**: the descriptions of the tools
-  the model can use. Iron Jarvis has always measured how full a conversation
-  is without them, so they are listed apart and the percent stays the one the
-  Compact offer uses.
+- **Not counted above**: in Chat › Code, the descriptions of the tools the
+  model can use, which are sent with each message ("Sent with each message,
+  not counted above"). Iron Jarvis has always measured how full a
+  conversation is without them, so they are listed apart and the percent
+  stays the one the Summarize offer uses. In Build › Code, Claude Code's tools
+  that load only when needed.
 - **Lists** you can open: the instruction files, the extension tools by
   extension, and (for Claude Code) its skills.
 - **How far the automatic summary is** ("240k until earlier messages are
-  summarized") and **Compact session**, which you can press only when no
-  reply is running.
+  summarized") and the button that summarizes the earlier messages now
+  (**Summarize** in Chat › Code, **Compact session** in Build › Code), which
+  you can press only when no reply is running.
 
 **Chat › Code** (Iron Jarvis's own coding sessions) counts every part itself,
 from the very text each reply sent, so the parts add up exactly to the
 percent. **Summarize earlier messages at** is a real setting (Auto is 92%;
 85%, 80% and 75% keep more room free). It applies to every chat and coding
-session. Compact session writes the same checked summary as the box's
-Summarize.
+session. Summarize writes the same checked summary as the box's Summarize.
 
 **Build › Code** asks the coding tool itself, and never starts it to ask:
 
-- **Claude Code** answers with its own `/context` breakdown, asked only while
-  no reply is running (while one runs, the last answer shows, and Claude Code
+- **Claude Code** answers with its own `/context` breakdown (its quick
+  reading, which sends nothing over the internet), asked only while no reply
+  is running (while one runs, the last answer shows, and Claude Code
   is asked again when the reply ends). Its tools that load only when needed
   are listed apart. **Compact session** sends Claude Code's own `/compact` as
   a message.
 - **Pi** says how full the conversation is, but not what fills it, and the
-  tab says so.
+  tab says so. Right after Pi summarizes by itself it does not know yet, so
+  the tab shows no number until its next answer.
 - **Codex** and **OpenCode** say only the total after each reply, and the tab
   says so.
 - Codex, Pi and OpenCode summarize by themselves when the conversation is

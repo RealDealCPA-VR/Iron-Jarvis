@@ -810,7 +810,7 @@ class HostedService:
         reading is kept in memory with the time it was taken; otherwise the
         total the tool said after its last reply (``panes.seen_context``).
         Codex and OpenCode say only a total. Never a model call."""
-        from ..context.breakdown import clean, total_only
+        from ..context.breakdown import clean, is_not_known_now, total_only
         from . import panes as PN
 
         sid = row.id
@@ -820,6 +820,7 @@ class HostedService:
         driver = live.driver if live is not None and live.running else None
         reading: dict[str, Any] | None = None
         waiting = False
+        unknown_now = False
         if driver is not None:
             if live.busy and not getattr(driver, "context_while_working", False):
                 waiting = True
@@ -828,12 +829,18 @@ class HostedService:
                     got = await asyncio.wait_for(driver.context_breakdown(), timeout=CONTEXT_READ_S)
                 except Exception:  # noqa: BLE001 — no reading, never an error
                     got = None
+                if is_not_known_now(got):
+                    # v1.415.0 review: the tool ANSWERED that it does not
+                    # know right now (Pi just compacted): every older reading
+                    # — kept or seen — is out of date.
+                    self._context_seen.pop(sid, None)
+                    unknown_now = True
                 got = clean(got)
                 if got is not None:
                     got["at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                     self._context_seen[sid] = got
                     reading = got
-        seen = PN.seen_context(events)
+        seen = None if unknown_now else PN.seen_context(events)
         kept = self._context_seen.get(sid)
         if reading is None and kept is not None:
             # A kept reading is shown only while no newer total says otherwise.

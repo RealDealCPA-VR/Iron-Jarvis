@@ -181,7 +181,7 @@ describe("Chat › Code: the Session tab's Context drop-down", () => {
     expect(screen.getByTestId("session-rail-context-toggle").getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("Compact session runs the session's own Compact, and waits while a reply runs", () => {
+  it("Summarize runs the session's own Compact, and waits while a reply runs", () => {
     const onCompact = vi.fn();
     renderRail(view(), { onCompact });
     fireEvent.click(screen.getByTestId("session-rail-context-compact"));
@@ -190,7 +190,8 @@ describe("Chat › Code: the Session tab's Context drop-down", () => {
     renderRail(view(), { onCompact, busy: true });
     expect((screen.getByTestId("session-rail-context-compact") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId("session-rail-context-compact-why").textContent).toBe(
-      "Wait for the reply to finish, then compact.",
+      // v1.415.0 review (moved on purpose): Chat › Code says the app's word.
+      "Wait for the reply to finish, then summarize the earlier turns.",
     );
   });
 

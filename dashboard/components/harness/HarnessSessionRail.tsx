@@ -24,6 +24,7 @@ import { post } from "@/lib/api";
 import { fetchTurnChangeSet } from "@/components/chat/ChangedFiles";
 import { latestContext, decodeCompaction, meterTitle, offersCompact, readingIsBeforeSummary } from "@/lib/buildContext";
 import { latestReading } from "@/lib/contextBreakdown";
+import { COMPACTION_OFFER_BUTTON } from "@/lib/chatControlWords";
 import { AutoCompactChoice, ContextBreakdown, type CompactPress } from "@/components/harness/ContextBreakdown";
 import { accountStatusLine, type BuildAccount } from "@/lib/buildAccounts";
 import { decodeFolderRules } from "@/lib/turnReads";
@@ -303,7 +304,10 @@ function HowFull({
       ? {
           onPress: onCompact,
           busy: compacting,
-          blocked: busy ? "Wait for the reply to finish, then compact." : "",
+          // v1.415.0 review: the app's word for its own summary — the box's
+          // meter and "/compact"'s refusal say the same (HarnessSession).
+          label: COMPACTION_OFFER_BUTTON,
+          blocked: busy ? "Wait for the reply to finish, then summarize the earlier turns." : "",
         }
       : null;
   return (

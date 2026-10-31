@@ -63,6 +63,10 @@ export interface CompactPress {
   /** Why it cannot be pressed now ("" = it can). */
   blocked: string;
   busy?: boolean;
+  /** The press's words (v1.415.0 review): the TOOL's own word in Build ›
+   *  Code ("Compact session" — Claude Code's `/compact`); Chat › Code passes
+   *  the app's word ("Summarize", v1.356.0 G75 / v1.389.0). */
+  label?: string;
 }
 
 export function ContextBreakdown({
@@ -186,7 +190,12 @@ export function ContextBreakdown({
             ) : null}
             {reading.extra.length ? (
               <div data-testid={`${prefix}-context-extra`} className="space-y-1">
-                <p className={QUIET}>Sent with each message, not counted above:</p>
+                <p className={QUIET}>
+                  {/* v1.415.0 review: only Iron Jarvis's OWN tool descriptions
+                      go with each message; a tool's extras are what it loads
+                      only when needed (Claude Code's deferred tools). */}
+                  {reading.source === "app" ? "Sent with each message, not counted above:" : "Not counted above:"}
+                </p>
                 <ul className="space-y-1">
                   {reading.extra.map((e) => (
                     <li key={e.key} className="flex items-center gap-2 text-[12px]">
@@ -225,7 +234,7 @@ export function ContextBreakdown({
                 className={PRESS}
               >
                 {compact.busy ? <Loader2 size={12} className="mr-1 inline animate-spin" aria-hidden /> : null}
-                Compact session
+                {compact.label || "Compact session"}
               </button>
             ) : null}
           </div>
