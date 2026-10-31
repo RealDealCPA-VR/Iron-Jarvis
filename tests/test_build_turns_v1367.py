@@ -130,7 +130,9 @@ async def test_a_build_turn_is_a_harness_turn_on_the_sessions_folder_under_its_o
     # v1.384.0: no step limit by default — the 1,000-step safety stop (was 60).
     assert kw["harness"] == "auto" and kw["round_budget"] == 1000 and kw["stay_in_chat"] is True
     assert kw["session_id"] == f"build:{sid}" and kw["plan_mode"] is False
-    assert kw["suggest_preferences"] is False
+    # v1.414.0 (moved on purpose): a turn the USER typed asks for a
+    # preference suggestion, like a chat turn (tests/test_code_preferences_v1414.py).
+    assert kw["suggest_preferences"] is True
     body = kw["body"]
     assert body.workspace_dir == str(work) and body.thread_id == sid and body.turn_id == "bt-1"
     assert body.mcp_cards is True and body.provider == CLAUDE[0] and body.model == CLAUDE[1]

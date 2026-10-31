@@ -2423,6 +2423,51 @@ asks into a card you answer.
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
 
+## A project knows its coding sessions (v1.414.0)
+
+A project now sees the coding work done in its own folder.
+
+- **Its page lists its coding sessions.** On a project's **Board** tab, and
+  on the Board of its team screen (Agents › the project), a **Coding
+  sessions** list shows every coding session whose folder is inside the
+  project's folder: the ones in **Chat › Code** and the ones in **Build ›
+  Code** (your own Claude Code, Codex, Pi or OpenCode). Each row says its
+  title, which tool, what it is doing (Working, Waiting for your OK,
+  Finished, Failed, Stopped, No reply yet) and when. **Open** takes you into
+  that session in its own view. A project with no coding sessions looks
+  exactly as before.
+- **Waiting on you and Completed include them.** A coding session parked on
+  a card is listed under **Waiting on you**; one whose last reply finished is
+  listed under **Completed**, named as a coding session.
+- **How a session finds its project.** Nothing is stored. A coding session
+  belongs to the project whose folder holds the session's folder (the most
+  specific one when projects sit inside each other; never an archived
+  project). Make a project over a folder and the coding sessions already
+  there appear in it; archive the project and they leave it. A session on
+  its own branch counts by the folder you picked, and a session started with
+  no folder belongs to no project. Archived sessions are not listed.
+- **Jarvis knows about them too.** The "Recent activity in this project"
+  part of what Jarvis reads in a project chat or an agent run now includes
+  the project's recent **chats** and **coding sessions**, newest first, up to
+  eight lines: a title, what it is and how long ago. It never includes what
+  was said in them. A title that reads like an attempt to give Jarvis
+  instructions is left out. A chat or coding session you keep **on this PC
+  only** (Local only) is never named to a model that is not on this
+  network. A project with no chats and no coding sessions gets exactly the
+  same lines as before.
+- **Corrections in a coding session become a one-press preference.** When
+  you correct how Jarvis works in a coding session in Chat › Code ("stop
+  explaining every step") and then say it again, the reply gets the same
+  quiet **Keep · Edit · Not this** line a chat reply gets. Your answer is
+  remembered on the Memory page and shown the next time you open the
+  session. A correction you tie to one place or moment ("too long in this
+  repo", "be brief right now", "no caveats in this module") is never offered
+  as a standing preference: put that in the repository's own AGENTS.md or
+  CLAUDE.md instead. A turn Jarvis started by itself (carrying on after a
+  restart, the night shift, fixing a check) never asks. Build › Code runs
+  your own Claude Code or Codex, whose words do not pass through Jarvis, so
+  it does not offer these.
+
 ## Jarvis fixes its own pull request's failing checks (v1.407.0)
 
 When a coding session on its own branch has opened a pull request, Iron

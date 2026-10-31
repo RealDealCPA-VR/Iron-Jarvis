@@ -6915,7 +6915,9 @@ async def chat_stream(
         from ...learning import preferences as _prefs
 
         suggestion = (
-            await _prefs.suggest_for_turn(platform, body) if suggest_preferences else None
+            await _prefs.suggest_for_turn(platform, body, session_id=session_id)
+            if suggest_preferences
+            else None
         )
         # CONNECT DOOR (v1.359.0, G41): an app the message named for the
         # user's own data that is not connected gets its Connect door

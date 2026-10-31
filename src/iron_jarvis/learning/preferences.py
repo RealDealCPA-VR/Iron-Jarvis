@@ -75,7 +75,8 @@ TURN_BUDGET_S = 2.0
 #: Newest sessions per source the deeper look reads.
 SCAN_SESSIONS = 20
 
-WHERES = ("chat", "phone", "build", "claude-code", "codex")
+#: v1.414.0: "code" — said in a coding session (Chat › Code).
+WHERES = ("chat", "phone", "build", "code", "claude-code", "codex")
 SCAN_SOURCES = {"claude-code": "Claude Code", "codex": "Codex"}
 
 #: Sources the prompt never reads (task reflections — see learning.engine).
@@ -503,8 +504,10 @@ def _since(evidence: list[dict[str, Any]]) -> str:
     return min(stamps) if stamps else ""
 
 
-def suggest_from_turn(engine, body: Any) -> dict[str, Any] | None:
-    """The synchronous core of :func:`suggest_for_turn` (call OFF the loop)."""
+def suggest_from_turn(engine, body: Any, *, where: str = "") -> dict[str, Any] | None:
+    """The synchronous core of :func:`suggest_for_turn` (call OFF the loop).
+    ``where`` (v1.414.0) names where THIS turn was said ("code" for a coding
+    session); "" = read off the body (a Build pane's chat, else chat)."""
     msgs = list(getattr(body, "messages", None) or [])
     body_user = [
         _norm(getattr(m, "content", "")) for m in msgs if getattr(m, "role", "") == "user"
@@ -518,7 +521,9 @@ def suggest_from_turn(engine, body: Any) -> dict[str, Any] | None:
     if not cur_sig:
         return None
     now = utcnow()
-    where_now = "build" if str(getattr(body, "pane_id", "") or "").strip() else "chat"
+    where_now = where if where in WHERES else (
+        "build" if str(getattr(body, "pane_id", "") or "").strip() else "chat"
+    )
     earlier = chat_occurrences(engine, body_user, cur_sig, now=now, where_now=where_now)
     if not earlier:
         return None
@@ -538,8 +543,26 @@ def suggest_from_turn(engine, body: Any) -> dict[str, Any] | None:
     }
 
 
-async def suggest_for_turn(platform: Any, body: Any) -> dict[str, Any] | None:
+#: The session id a coding session's turn runs under (``build:<thread>`` —
+#: harness/sessions.session_id_for).
+_CODING_SESSION_PREFIX = "build:"
+
+
+def where_for_session(session_id: Any) -> str:
+    """"code" for a coding session's turn (v1.414.0), else ""."""
+    return "code" if str(session_id or "").startswith(_CODING_SESSION_PREFIX) else ""
+
+
+async def suggest_for_turn(platform: Any, body: Any, *, session_id: Any = None) -> dict[str, Any] | None:
     """THE lock-step helper both chat lanes call once per finished turn.
+
+    v1.414.0: ``session_id`` — the turn's session; a coding session's
+    (``build:<thread>``) quotes its words as said in a coding session. Its
+    look-back is the CHAT one, unchanged: the session's own earlier turns
+    count from the body (as a chat's do), and coding sessions are never read
+    as "another conversation" (``chat_surface_only``), so one correction can
+    never be counted twice — once from the body and once from its own stored
+    copy, whose first message a Compact summary may have changed.
 
     Returns the ``suggestion`` value for the done frame / POST response —
     ``None`` almost always. The detector runs here first (pure, cheap); only a
@@ -560,8 +583,12 @@ async def suggest_for_turn(platform: Any, body: Any) -> dict[str, Any] | None:
         engine = getattr(platform, "engine", None)
         if engine is None:
             return None
+        where = where_for_session(session_id)
+        # ``where`` is passed ONLY when set (a coding session), so a chat turn
+        # calls the core exactly as before (test doubles take two arguments).
         suggestion = await asyncio.wait_for(
-            asyncio.to_thread(suggest_from_turn, engine, body), timeout=TURN_BUDGET_S
+            asyncio.to_thread(suggest_from_turn, engine, body, **({"where": where} if where else {})),
+            timeout=TURN_BUDGET_S,
         )
         if suggestion is not None:
             await _publish_suggested(platform, suggestion["id"], suggestion["text"], suggestion["count"], "chat")
@@ -571,6 +598,51 @@ async def suggest_for_turn(platform: Any, body: Any) -> dict[str, Any] | None:
         # INSERT's parameters — the user's quoted words (reviewer).
         log.warning("preference suggestion skipped (%s)", type(exc).__name__)
         return None
+
+
+def fold_suggestion_states(engine, messages: Any) -> Any:
+    """v1.414.0: the CURRENT answer of every suggestion a coding session's
+    reply lines carry. A chat page stores the user's answer ON the message
+    (it owns the thread and PUTs it); a coding session's lines are written by
+    the daemon only, so its view reads the answer from the row itself: kept
+    (with the words kept), declined, or gone (the row no longer exists).
+    One indexed read for every id; BLOCKING; never raises (unreadable = the
+    lines as stored)."""
+    if not isinstance(messages, list):
+        return messages
+    ids = [
+        str(m["suggestion"].get("id"))
+        for m in messages
+        if isinstance(m, dict) and isinstance(m.get("suggestion"), dict) and m["suggestion"].get("id")
+    ]
+    if not ids:
+        return messages
+    try:
+        with session_scope(engine) as db:
+            rows = {
+                str(r.id): (lesson_status(r), r.text)
+                for r in db.exec(select(LessonRecord).where(LessonRecord.id.in_(ids)))  # type: ignore[attr-defined]
+            }
+    except Exception:  # noqa: BLE001
+        return messages
+    out = []
+    for m in messages:
+        sug = m.get("suggestion") if isinstance(m, dict) else None
+        if not isinstance(sug, dict) or not sug.get("id"):
+            out.append(m)
+            continue
+        found = rows.get(str(sug["id"]))
+        sug = dict(sug)
+        if found is None:
+            sug["state"] = "gone"
+        elif found[0] == STATUS_CONFIRMED:
+            sug.update(state="kept", text=found[1])
+        elif found[0] == STATUS_DECLINED:
+            sug["state"] = "declined"
+        else:
+            sug.pop("state", None)
+        out.append({**m, "suggestion": sug})
+    return out
 
 
 async def _publish(platform: Any, event: str, payload: dict[str, Any]) -> None:

@@ -11,6 +11,7 @@
 // and a decoder living there would vanish under every one of those mocks.
 // Nothing here fetches; the components own their own calls.
 import { timeAgo } from "./format";
+import { CODING_SESSION } from "./buildWords";
 
 /** One piece of evidence: the user's own words, where and when. */
 export interface PrefQuote {
@@ -214,6 +215,9 @@ export function whereWord(where: string): string {
       return "phone";
     case "build":
       return "Build";
+    // v1.414.0: said in a coding session (Chat › Code).
+    case "code":
+      return CODING_SESSION;
     case "claude-code":
       return "Claude Code";
     case "codex":

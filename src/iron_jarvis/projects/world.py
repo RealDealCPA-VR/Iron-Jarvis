@@ -817,13 +817,34 @@ def _snapshot(db, project_ids: list[str], review_ids: Iterable[str]) -> dict[str
 
 
 def waiting_items(
-    project_id: str, snap: dict, asks: dict[str, dict]
+    project_id: str, snap: dict, asks: dict[str, dict],
+    coding: "list[dict[str, Any]] | None" = None,
 ) -> list[dict[str, Any]]:
     """What needs the USER in one project, oldest first (the longest wait
     leads). ``asks`` = ``{session id: {"waiting_on": <the listing view —
     numbers, never arguments>, "since": datetime|None}}`` for the ACTIVE
-    sessions the route found parked on the approvals registry."""
+    sessions the route found parked on the approvals registry.
+
+    v1.414.0: ``coding`` — the project's coding sessions
+    (``projects/coding_sessions.for_project``); one parked on a card (its
+    state ``waiting``) is listed, linking to that session in its own view."""
     items: list[dict[str, Any]] = []
+    for c in coding or ():
+        if c.get("state") != "waiting":
+            continue
+        items.append(
+            {
+                "kind": "coding_session",
+                "id": c["id"],
+                "key": c["key"],
+                "title": c["title"],
+                "agent": c.get("tool") or "",
+                "since": c.get("_updated"),
+                "reason": "it is waiting for your OK on a card",
+                "link": c["link"],
+                "view": c["view"],
+            }
+        )
     for s in snap["active"]:
         ask = asks.get(s["id"])
         if not ask:
@@ -1121,11 +1142,15 @@ def _created_names(db, session_ids: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def _completed(db, project_id: str) -> list[dict[str, Any]]:
+def _completed(
+    db, project_id: str, coding: "list[dict[str, Any]] | None" = None
+) -> list[dict[str, Any]]:
     """Finished work in one project, newest first, at most
     :data:`COMPLETED_MAX`: completed/failed sessions (with their outcome and
     created file names) and done/failed assignments whose session is not
-    already one of those rows."""
+    already one of those rows. v1.414.0: plus the project's coding sessions
+    whose last reply FINISHED (``coding`` — not working, not waiting), each
+    linking to that session in its own view."""
     from ..agents.roster import session_roster_name
     from ..assignments.models import AssignmentRecord
 
@@ -1231,6 +1256,25 @@ def _completed(db, project_id: str) -> list[dict[str, Any]]:
                 "error": one_sentence(a.last_error or "", ERROR_CHARS),
             }
         )
+    for c in coding or ():
+        if c.get("state") != "finished":
+            continue
+        items.append(
+            {
+                "kind": "coding_session",
+                "id": c["id"],
+                "key": c["key"],
+                "title": c["title"],
+                "agent": c.get("tool") or "",
+                "finished_at": c.get("_updated"),
+                "status": c.get("outcome") or "completed",
+                "outcome": c.get("outcome") or "completed",
+                "files": [],
+                "files_total": 0,
+                "link": c["link"],
+                "view": c["view"],
+            }
+        )
     # Newest first; the sort is stable, so a same-tick tie keeps the query's
     # rowid-DESC order (sessions before the assignments merged after them).
     items.sort(key=lambda i: i["finished_at"] or datetime.min, reverse=True)
@@ -1243,15 +1287,24 @@ def _completed(db, project_id: str) -> list[dict[str, Any]]:
 def gather_world(platform, project_id: str, review_ids: Iterable[str]) -> dict[str, Any] | None:
     """The DB half of ``GET /projects/{id}/world`` (None = unknown project):
     the project, its full team rows (health folded), its room, the snapshot
-    and the completed list. The ROUTE adds the asks and assembles."""
+    and the completed list. The ROUTE adds the asks and assembles.
+
+    v1.414.0: ``coding_rows`` — the project's coding sessions, both Code views
+    (``projects/coding_sessions``; resolved by folder at read time). The route
+    turns them into ``coding_sessions`` (the Board's list) and folds the
+    waiting ones into ``waiting``; the finished ones are in ``completed``."""
+    from .coding_sessions import for_project as _coding_for_project
+
     with session_scope(platform.engine) as db:
         project = db.get(Project, project_id)
         if project is None:
             return None
         db.expunge(project)
+    coding = _coding_for_project(platform.engine, project.id, platform=platform)
+    with session_scope(platform.engine) as db:
         snap = _snapshot(db, [project.id], review_ids)[project.id]
         room = _room_ids(db, [project.id]).get(project.id)
-        completed = _completed(db, project.id)
+        completed = _completed(db, project.id, coding)
     members = decode_team(project.team_json)
     return {
         "project": _project_view(project),
@@ -1260,6 +1313,7 @@ def gather_world(platform, project_id: str, review_ids: Iterable[str]) -> dict[s
         "thread_id": room,
         "snap": snap,
         "completed": completed,
+        "coding_rows": coding,
     }
 
 

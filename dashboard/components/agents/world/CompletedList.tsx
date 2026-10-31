@@ -11,6 +11,7 @@ import { ArrowRight, FileText, Inbox } from "lucide-react";
 import { Badge } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 import { bareMemberName, completedHref, type CompletedItem } from "@/lib/agentWorlds";
+import { CODING_SESSION_LABEL } from "@/lib/buildWords";
 
 export function CompletedList({
   projectId,
@@ -42,6 +43,8 @@ export function CompletedList({
               <span className="min-w-0 flex-1">
                 <span className="block text-sm text-zinc-100">{it.title || "Untitled"}</span>
                 <span className="block text-[11px] text-zinc-500">
+                  {/* v1.414.0: a coding session's row says it is one. */}
+                  {it.kind === "coding_session" ? `${CODING_SESSION_LABEL} · ` : ""}
                   {it.agent ? `${bareMemberName(it.agent)} · ` : ""}
                   {timeAgo(it.finished_at ?? null)}
                 </span>

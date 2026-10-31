@@ -1091,6 +1091,13 @@ class _ReplyWatch:
             refs = [r for r in (done.get("thread_refs") or []) if isinstance(r, dict)]
             if refs:
                 line["threadRefs"] = refs
+            # v1.414.0: a repeated correction, asked about under the reply
+            # (learning/preferences). The line keeps the question; the
+            # session's view reads its CURRENT answer from the row
+            # (``fold_suggestion_states``) — nothing but the daemon writes
+            # a coding session's lines.
+            if isinstance(done.get("suggestion"), dict) and done["suggestion"].get("id"):
+                line["suggestion"] = done["suggestion"]
             # v1.374.0: how full the conversation was for the model this turn
             # — the planner's own numbers, never a guess on the screen.
             ctx = context_receipt(done.get("context"))
@@ -3127,7 +3134,12 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                     # v1.384.0: NEVER the orphan guard — a Build reply keeps
                     # working while nobody watches (see `_never_orphaned`).
                     should_stop=_never_orphaned,
-                    suggest_preferences=False,
+                    # v1.414.0: a correction the USER typed in a coding
+                    # session ("stop explaining every step" … again) becomes
+                    # the one-press Keep line under the reply, as in chat —
+                    # never for a turn Iron Jarvis started by itself (a
+                    # carry-on, the night, a check fix, a restart).
+                    suggest_preferences=started_by == "person" and not continuation,
                     harness="auto",
                     round_budget=rounds,
                     stay_in_chat=True,
@@ -3962,6 +3974,11 @@ def register(app: FastAPI, d: Any) -> None:
         except (TypeError, ValueError):
             queued = []
         view["queued"] = [q for q in queued if isinstance(q, dict)] if isinstance(queued, list) else []
+        # v1.414.0: each reply's preference question with its CURRENT answer
+        # (kept / declined / gone), read from the row — one indexed read.
+        from ...learning.preferences import fold_suggestion_states
+
+        view["messages"] = fold_suggestion_states(engine_of(), view.get("messages"))
         view["turn_id"] = _running_turn(d, row.id) if view["running"] else ""
         # v1.377.0 (part 2, Phase 6): Compact is writing this session's summary
         # right now — a screen that comes back to it mid-Compact says

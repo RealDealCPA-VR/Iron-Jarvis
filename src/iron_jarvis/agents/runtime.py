@@ -1826,10 +1826,18 @@ class AgentRuntime:
                 lines.append("Project knowledge (reference material):\n" + know)
         except Exception:  # noqa: BLE001 — grounding must never break a run
             pass
-        recent = [
-            f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
-            for s in siblings
-        ]
+        # v1.414.0: the project's recent chats and coding sessions merged in
+        # (projects/recent_activity — the chat lanes' own helper; titles only,
+        # scanned; a local-only one withheld from a run that leaves this
+        # network). Byte-identical when the project has neither.
+        try:
+            from ..projects.recent_activity import recent_lines
+
+            recent = recent_lines(self.p.engine, session.project_id, siblings, platform=self.p)
+        except Exception:  # noqa: BLE001 — the recap must never break a run
+            from ..projects.recent_activity import run_line
+
+            recent = [run_line(s) for s in siblings]
         if recent:
             lines.append("Recent activity in this project (newest first):")
             lines.extend(recent)

@@ -108,6 +108,9 @@ LINE_KEYS: tuple[str, ...] = (
     # preference and the earlier chats read.
     "adapted", "remembered", "threadRefs",
     "folderRules",
+    # v1.414.0: a repeated correction offered as a standing preference
+    # (learning/preferences — the chat's own Keep line).
+    "suggestion",
     "approved", "refit", "doors", "trust", "trustReason", "trustNote",
     "timing",
     # v1.368.0 (Phase 5): a continuation question the DAEMON wrote ("Resume

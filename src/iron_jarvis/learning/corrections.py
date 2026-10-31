@@ -148,7 +148,16 @@ _ARTIFACT = re.compile(
 _ONE_OFF = re.compile(
     r"\b(?:for (?:this|that|these|those)\b|this (?:time|once)\b|for now\b|just once\b|"
     r"for the client\b|on my phone\b|(?:this|it) goes (?:in|into|to)\b|"
-    r"(?:more|less) (?:detail )?on (?:the |my |this )?\w+)",
+    r"(?:more|less) (?:detail )?on (?:the |my |this )?\w+|"
+    # v1.414.0 (coding sessions): a correction scoped to ONE place in the
+    # code — "too verbose in this repo", "no caveats in this workspace",
+    # "stop explaining yourself in this package" — belongs in that repo's
+    # own rules file, never a standing preference for every answer.
+    r"(?:in|inside|within|on|across|throughout) (?:this|that|the current|our) "
+    r"(?:repo|repository|project|codebase|code ?base|module|package|crate|workspace|"
+    r"monorepo|app|service|session|conversation|chat|case|one|thread|pr|pull request)\b|"
+    # … or to ONE moment: "be brief right now", "too long today", "too long here".
+    r"right now\b|at the moment\b|for the moment\b|today\b|in here\b|here[\s.!]*$)",
     re.IGNORECASE,
 )
 
