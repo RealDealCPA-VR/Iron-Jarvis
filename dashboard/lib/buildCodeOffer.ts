@@ -20,7 +20,7 @@
 
 export interface CodeViewOffer {
   paneId: string;
-  /** "Claude Code", "Codex", "Pi" or "OpenCode". */
+  /** "Claude Code", "Codex", "Pi", "OpenCode" or "Grok". */
   toolName: string;
 }
 
@@ -33,6 +33,8 @@ function toolOf(cli: unknown): string | null {
   if (c === "pi") return "Pi";
   // v1.413.0: OpenCode (exactly "opencode").
   if (c === "opencode") return "OpenCode";
+  // v1.416.0: Grok (exactly "grok").
+  if (c === "grok") return "Grok";
   return null;
 }
 
