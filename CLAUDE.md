@@ -4228,6 +4228,24 @@ does not need a bump, stop and bump it.
   Code's self-started reply after helpers finish owns no turn). Archive,
   delete, shutdown and the account move still stop the process as before.
   Pins: `tests/test_build_app_background_tasks_v1417.py` (12 mutations, all red).
+  SHOWN, not only kept alive (same release): the session row carries
+  `background_helpers` (task types in `claude.HELPER_TASK_TYPES` — agents,
+  workflows, team members; never a background command) and `self_reply`
+  (the tool is writing a reply no message owns: `_alone`, cleared by its
+  result, a new message or exit; stops counting after `SELF_REPLY_QUIET_S`
+  10 min of silence). `view()` reads the live flags BEFORE the events, so a
+  "nothing is happening" answer always carries the whole report. The Code
+  view says ONE quiet line (`backgroundWorkWords`; commands are never promised
+  a report), re-reads every 4 s (20 s for commands only) through
+  `useVisibleInterval`, ONE read at a time, never while a reply the user
+  started runs, a read that was out across a card answer is dropped
+  (`answerSeqRef`), then one last read when it ends. Running now lists it
+  ("helpers working" / "replying on its own") and the busy counts include
+  helpers (keep-awake, install-when-idle), bounded by the 2-h silence rule.
+  OPEN: frames a helper writes (`parent_tool_use_id` set) are drawn as Claude
+  Code's own. Pins: `tests/test_build_app_background_report_v1417.py`,
+  `test_build_app_background_review_v1417.py`,
+  `dashboard/__tests__/build-code-background{,-review}-v1417.test.tsx`.
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control

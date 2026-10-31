@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.416.0 (2026-10-30).*
+holds itself to. Current as of v1.417.0 (2026-10-30).*
 
 ---
 
@@ -4335,6 +4335,38 @@ It is used for the desktop and Start-menu shortcuts, the taskbar button, the
 tray icon and the installer, each drawn from a size made for it (16 to 256
 pixels). After the update installs, Windows may keep showing the old picture
 on a shortcut for a while; signing out and back in refreshes it.
+
+## Coding sessions keep going while Claude Code's helpers work (v1.417.0)
+
+When Claude Code hands work to helper agents in the background and its reply
+ends ("I'll report as the teams finish"), Iron Jarvis now keeps Claude Code
+running until the helpers are done. Before, it stopped Claude Code fifteen
+minutes after the last reply, and every helper stopped with it, so the
+session looked stuck.
+
+- **You can see it.** A quiet line under the conversation says how many
+  helpers are still working. When they finish, Claude Code writes its report
+  by itself, and it appears in the session as it is written: you do not have
+  to send anything or reopen the session.
+- **Running now** lists the session ("helpers working"), and the PC stays
+  awake while they run, like any other work.
+- **You can still send a message** while helpers work. A change of model,
+  effort or tools waits until they finish (a note says so), and Open in
+  terminal is refused until then, because both would stop the helpers.
+- **It is bounded.** If Claude Code says nothing at all for two hours, the
+  session counts as idle again.
+
+Only Claude Code reports its helpers; Codex, OpenCode and Grok sessions do
+not show the line.
+
+## Grok in the Code view (v1.417.0)
+
+If the Grok CLI is installed and signed in on this PC, the Code view offers
+Grok beside Claude Code, Codex, Pi and OpenCode. Iron Jarvis asks Grok to
+ask before it edits files or runs commands (your own Grok setting to approve
+everything is not used here), and never chooses Grok's "always allow" or
+"always reject", which would save a rule into your project. Auto edits and
+Plan are not offered for Grok. Stop also ends the command Grok was running.
 
 ## Skills from your other coding tools work the same here (v1.417.0)
 
