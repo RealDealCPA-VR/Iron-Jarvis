@@ -114,14 +114,22 @@ describe("A. the layer is sealed off", () => {
       window.dispatchEvent(new MessageEvent("message", { data: { type: "ij-bg-ready" }, source: window }));
     });
     expect(screen.queryByTestId("app-background-scrim")).toBeNull();
-    act(() => {
-      window.dispatchEvent(
-        new MessageEvent("message", { data: { type: "ij-bg-ready", id: "waves" }, source: frame.contentWindow }),
-      );
-    });
-    const scrim = await screen.findByTestId("app-background-scrim");
+    // v1.414.5: the frame's address settles a render later on a loaded
+    // runner (its palette hash), which gives it a new inner window; a ready
+    // message sent once from the window captured above was rightly ignored
+    // (the v1.414.4 Release gate). The page says it from the frame as it is now.
+    await waitFor(() => {
+      const now = screen.getByTestId("app-background-frame") as HTMLIFrameElement;
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent("message", { data: { type: "ij-bg-ready", id: "waves" }, source: now.contentWindow }),
+        );
+      });
+      expect(screen.getByTestId("app-background-scrim")).toBeTruthy();
+    }, { timeout: 10_000 });
+    const scrim = screen.getByTestId("app-background-scrim");
     expect(scrim.style.background).toContain(`/ ${SCRIM_ALPHA.dark})`);
-    expect(Number(frame.style.opacity)).toBeCloseTo(0.6);
+    expect(Number((screen.getByTestId("app-background-frame") as HTMLIFrameElement).style.opacity)).toBeCloseTo(0.6);
   });
 });
 
