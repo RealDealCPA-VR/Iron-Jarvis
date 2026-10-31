@@ -26,6 +26,17 @@
     "item": "toolu_017N95z45uqXc3vyTw4CYh1f",
     "kind": "read",
     "name": "Read",
+    "title": "Read a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_017N95z45uqXc3vyTw4CYh1f",
+    "kind": "read",
+    "name": "Read",
     "title": "Read hello.txt",
     "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\hello.txt\"}",
     "status": "running",
@@ -42,6 +53,17 @@
     "status": "done",
     "output": "1\thi",
     "path": "C:\\work\\demo\\hello.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01RSB5g2SLEpPjvvfwSjCXLV",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
     "turn": "turn-1"
    },
    {
@@ -169,17 +191,29 @@
     "item": "toolu_01UQXF9457SGwDH86USrTKYy",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "title": "Run a command",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01UQXF9457SGwDH86USrTKYy",
+    "kind": "command",
+    "name": "PowerShell",
+    "title": "List files in current directory",
     "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Mode, Length, Name\", \"description\": \"List files in current directory\"}",
     "status": "running",
+    "subtitle": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
     "turn": "turn-1"
    },
    {
     "type": "approval",
     "request_id": "ask-1",
     "kind": "command",
-    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
-    "detail": "List files in current directory",
+    "title": "List files in current directory",
+    "detail": "",
     "can_session": false,
     "can_all_commands": true,
     "once_only": true,
@@ -197,10 +231,22 @@
     "item": "toolu_01UQXF9457SGwDH86USrTKYy",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "title": "List files in current directory",
     "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Mode, Length, Name\", \"description\": \"List files in current directory\"}",
     "status": "done",
     "output": "Mode  Length Name\r\n----  ------ ----\r\n-a---      7 a.txt",
+    "subtitle": "Get-ChildItem -Force | Select-Object Mode, Length, Name",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KATgkcH3RU75uFi9t5ry1W",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
     "turn": "turn-1"
    },
    {
@@ -343,6 +389,17 @@
     "model": "claude-opus-5-5",
     "cwd": "C:\\work\\demo",
     "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01KDaiQvW3XjPz1Sh3LtC5Lx",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
     "turn": "turn-1"
    },
    {
@@ -696,6 +753,17 @@
     "kind": "other",
     "name": "AskUserQuestion",
     "title": "Ask you a question",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_015i6Mu8n5F1yYuh8vNy5HQL",
+    "kind": "other",
+    "name": "AskUserQuestion",
+    "title": "Ask you a question",
     "input": "{\"questions\": [{\"header\": \"Colour\", \"multiSelect\": false, \"options\": [{\"description\": \"The colour red\", \"label\": \"Red\"}, {\"description\": \"The colour blue\", \"label\": \"Blue\"}], \"question\": \"Which colour do you prefer?\"}]}",
     "status": "running",
     "turn": "turn-1"
@@ -1000,6 +1068,18 @@
     "type": "resolved",
     "request_id": "ask-1",
     "decision": "allow",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "exec-02efa402-6381-4e76-80ac-f1e397e267b7",
+    "kind": "command",
+    "name": "shell",
+    "title": "Run Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoS…",
+    "input": "Get-ChildItem -Force | Select-Object Mode,Length,LastWriteTime,Name | Format-Table -AutoSize",
+    "status": "running",
+    "output": "\r\n",
+    "partial": true,
     "turn": "turn-1"
    },
    {
@@ -1567,17 +1647,18 @@
     "item": "toolu_A1",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-ChildItem -Force | Select-Object Name",
+    "title": "List files",
     "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Name\", \"description\": \"List files\"}",
     "status": "running",
+    "subtitle": "Get-ChildItem -Force | Select-Object Name",
     "turn": "turn-1"
    },
    {
     "type": "approval",
     "request_id": "ask-1",
     "kind": "command",
-    "title": "Run Get-ChildItem -Force | Select-Object Name",
-    "detail": "List files\n\nAllow similar commands always allows PowerShell(Get-ChildItem *) for the rest of this session.",
+    "title": "List files",
+    "detail": "Allow similar commands always allows PowerShell(Get-ChildItem *) for the rest of this session.",
     "can_session": true,
     "can_all_commands": true,
     "command": "Get-ChildItem -Force | Select-Object Name",
@@ -1594,10 +1675,11 @@
     "item": "toolu_A1",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-ChildItem -Force | Select-Object Name",
+    "title": "List files",
     "input": "{\"command\": \"Get-ChildItem -Force | Select-Object Name\", \"description\": \"List files\"}",
     "status": "done",
     "output": "a.txt",
+    "subtitle": "Get-ChildItem -Force | Select-Object Name",
     "turn": "turn-1"
    },
    {
@@ -1605,9 +1687,10 @@
     "item": "toolu_A2",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-Content a.txt",
+    "title": "Read a.txt",
     "input": "{\"command\": \"Get-Content a.txt\", \"description\": \"Read a.txt\"}",
     "status": "running",
+    "subtitle": "Get-Content a.txt",
     "turn": "turn-1"
    },
    {
@@ -1615,10 +1698,11 @@
     "item": "toolu_A2",
     "kind": "command",
     "name": "PowerShell",
-    "title": "Run Get-Content a.txt",
+    "title": "Read a.txt",
     "input": "{\"command\": \"Get-Content a.txt\", \"description\": \"Read a.txt\"}",
     "status": "done",
     "output": "hello",
+    "subtitle": "Get-Content a.txt",
     "turn": "turn-1"
    },
    {
@@ -1774,6 +1858,522 @@
    {
     "type": "done",
     "stop": "failed",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_full_mode_helper": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-haiku-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01X6cbqKzedRJJmTEPWTh4bu",
+    "kind": "read",
+    "name": "Read",
+    "title": "Read a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01X6cbqKzedRJJmTEPWTh4bu",
+    "kind": "read",
+    "name": "Read",
+    "title": "Read note.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\note.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\note.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01X6cbqKzedRJJmTEPWTh4bu",
+    "kind": "read",
+    "name": "Read",
+    "title": "Read note.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\note.txt\"}",
+    "status": "done",
+    "output": "1\tone apple a day\n2\tkeeps the doctor away\n3\t",
+    "path": "C:\\work\\demo\\note.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01A2otbyJF8CRgCKnL5ynaM1",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit a file",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01A2otbyJF8CRgCKnL5ynaM1",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit note.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\note.txt\", \"new_string\": \"pear\", \"old_string\": \"apple\", \"replace_all\": false}",
+    "status": "running",
+    "path": "C:\\work\\demo\\note.txt",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01A2otbyJF8CRgCKnL5ynaM1",
+    "kind": "edit",
+    "name": "Edit",
+    "title": "Edit note.txt",
+    "input": "{\"file_path\": \"C:\\\\work\\\\demo\\\\note.txt\", \"new_string\": \"pear\", \"old_string\": \"apple\", \"replace_all\": false}",
+    "status": "done",
+    "output": "The file C:\\work\\demo\\note.txt has been updated successfully. (file state is current in your context — no need to Read it back)",
+    "path": "C:\\work\\demo\\note.txt",
+    "line": 1,
+    "diff": "--- a/C:/work/demo/note.txt\n+++ b/C:/work/demo/note.txt\n@@ -1,2 +1,2 @@\n-one apple a day\n+one pear a day\n keeps the doctor away",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "kind": "task",
+    "name": "Agent",
+    "title": "Hand a task to a helper",
+    "input": "",
+    "status": "running",
+    "partial": true,
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "kind": "task",
+    "name": "Agent",
+    "title": "Helper: Create new.txt containing hi",
+    "input": "{\"description\": \"Create new.txt containing hi\", \"prompt\": \"Create a new file at C:\\\\work\\\\demo\\\\new.txt whose entire contents are the single word: hi\\n\\nDo nothing else. Do not modify any other file. Reply with just \\\"created\\\" when finished.\", \"subagent_type\": \"general-purpose\"}",
+    "status": "running",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "kind": "task",
+    "name": "Agent",
+    "title": "Helper: Create new.txt containing hi",
+    "input": "{\"description\": \"Create new.txt containing hi\", \"prompt\": \"Create a new file at C:\\\\work\\\\demo\\\\new.txt whose entire contents are the single word: hi\\n\\nDo nothing else. Do not modify any other file. Reply with just \\\"created\\\" when finished.\", \"subagent_type\": \"general-purpose\"}",
+    "status": "done",
+    "output": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: ab87f8d0b9aaa40fe (internal ID - do not mention to user. Use SendMessage with to: 'ab87f8d0b9aaa40fe', summary: '<5-10 word recap>' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work — avoid working with the same files or topics it is using.\noutput_file: C:\\temp\\claude\\C--work-demo\\session\\tasks\\ab87f8d0b9aaa40fe.output\nDo NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "The",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " edit is",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " done:",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " `note.txt` now re",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ads \"one pear a day /",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " keeps the doctor away",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "\". The helper that",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " cre",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ates `new.txt` is",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " still running in the background,",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " so I haven't confirm",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ed the file ex",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ists yet. I'll re",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ply \"done\" once it re",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ports back.\n\nTwo",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " not",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "es:",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " this session",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "'s tool is named",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " Agent r",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "ather than Task, so I used",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " that",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01SSTN3dEvQb1jDRY6okfiPy",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write new.txt",
+    "input": "{\"content\": \"hi\", \"file_path\": \"C:\\\\work\\\\demo\\\\new.txt\"}",
+    "status": "running",
+    "path": "C:\\work\\demo\\new.txt",
+    "parent": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " with",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_01SSTN3dEvQb1jDRY6okfiPy",
+    "kind": "write",
+    "name": "Write",
+    "title": "Write new.txt",
+    "input": "{\"content\": \"hi\", \"file_path\": \"C:\\\\work\\\\demo\\\\new.txt\"}",
+    "status": "done",
+    "output": "File created successfully at: C:\\work\\demo\\new.txt (file state is current in your context — no need to Read it back)",
+    "path": "C:\\work\\demo\\new.txt",
+    "diff": "--- /dev/null\n+++ b/C:/work/demo/new.txt\n@@ -0,0 +1,1 @@\n+hi",
+    "line": 1,
+    "parent": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "subagent_type`",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " general-purpose. Also",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": ", the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " Edit tool need",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "s the",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " file read first, so I read",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": " `",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": "note.txt` before editing",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "delta": ".",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011Cgb6q3LYPVRVpxSWEVbun:1",
+    "text": "The edit is done: `note.txt` now reads \"one pear a day / keeps the doctor away\". The helper that creates `new.txt` is still running in the background, so I haven't confirmed the file exists yet. I'll reply \"done\" once it reports back.\n\nTwo notes: this session's tool is named Agent rather than Task, so I used that with `subagent_type` general-purpose. Also, the Edit tool needs the file read first, so I read `note.txt` before editing.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011Cgb6qATREmVvBQQ3qmXgV:t0",
+    "text": "created",
+    "parent": "toolu_01C2ykXYSx2B2DMzAqfHZEGc",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "A helper finished: created",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-haiku-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "full",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text",
+    "item": "msg_011Cgb6qCzU9Gj8TA1DRHQg8:1",
+    "delta": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_011Cgb6qCzU9Gj8TA1DRHQg8:1",
+    "text": "done",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 151105,
+    "output": 1086,
+    "cache_read": 129507,
+    "list_price": true,
+    "cost_usd": 0.010859,
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 39534,
+    "output": 89,
+    "cache_read": 38620,
+    "list_price": true,
+    "cost_usd": 0.010859,
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "The edit is done: `note.txt` now reads \"one pear a day / keeps the doctor away\". The helper that creates `new.txt` is still running in the background, so I haven't confirmed the file exists yet. I'll reply \"done\" once it reports back.\n\nTwo notes: this session's tool is named Agent rather than Task, so I used that with `subagent_type` general-purpose. Also, the Edit tool needs the file read first, so I read `note.txt` before editing.",
+    "turn": "turn-1"
+   }
+  ],
+  "claude_hooks_and_long_output": [
+   {
+    "type": "user",
+    "text": "do it",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Starting Claude Code…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "session",
+    "harness": "claude-code",
+    "harness_session_id": "harness-session-1",
+    "model": "claude-opus-5-5",
+    "cwd": "C:\\work\\demo",
+    "mode": "ask",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Hook SessionStart:startup (SessionStart) ran: Loaded the team's notes.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Claude Code asked Iron Jarvis to answer one of its hooks; Iron Jarvis does not answer that here, so it was refused.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_H1",
+    "kind": "command",
+    "name": "Bash",
+    "title": "List tracked files and remotes",
+    "input": "{\"command\": \"git ls-files && git remote -v\", \"description\": \"List tracked files and remotes\"}",
+    "status": "running",
+    "subtitle": "git ls-files && git remote -v",
+    "turn": "turn-1"
+   },
+   {
+    "type": "tool",
+    "item": "toolu_H1",
+    "kind": "command",
+    "name": "Bash",
+    "title": "List tracked files and remotes",
+    "input": "{\"command\": \"git ls-files && git remote -v\", \"description\": \"List tracked files and remotes\"}",
+    "status": "done",
+    "output": "0000 tracked/file_0000.py\n0001 tracked/file_0001.py\n0002 tracked/file_0002.py\n0003 tracked/file_0003.py\n0004 tracked/file_0004.py\n0005 tracked/file_0005.py\n0006 tracked/file_0006.py\n0007 tracked/file_0007.py\n0008 tracked/file_0008.py\n0009 tracked/file_0009.py\n0010 tracked/file_0010.py\n0011 tracked/file_0011.py\n0012 tracked/file_0012.py\n0013 tracked/file_0013.py\n0014 tracked/file_0014.py\n0015 tracked/file_0015.py\n0016 tracked/file_0016.py\n0017 tracked/file_0017.py\n0018 tracked/file_0018.py\n0019 tracked/file_0019.py\n0020 tracked/file_0020.py\n0021 tracked/file_0021.py\n0022 tracked/file_0022.py\n0023 tracked/file_0023.py\n0024 tracked/file_0024.py\n0025 tracked/file_0025.py\n0026 tracked/file_0026.py\n0027 tracked/file_0027.py\n0028 tracked/file_0028.py\n0029 tracked/file_0029.py\n0030 tracked/file_0030.py\n0031 tracked/file_0031.py\n0032 tracked/file_0032.py\n0033 tracked/file_0033.py\n0034 tracked/file_0034.py\n0035 tracked/file_0035.py\n0036 tracked/file_0036.py\n0037 tracked/file_0037.py\n0038 tracked/file_0038.py\n0039 tracked/file_0039.py\n0040 tracked/file_0040.py\n0041 tracked/file_0041.py\n0042 tracked/file_0042.py\n0043 tracked/file_0043.py\n0044 tracked/file_0044.py\n0045 tracked/file_0045.py\n0046 tracked/file_0046.py\n0047 tracked/file_0047.py\n0048 tracked/file_0048.py\n0049 tracked/file_0049.py\n0050 tracked/file_0050.py\n0051 tracked/file_0051.py\n0052 tracked/file_0052.py\n0053 tracked/file_0053.py\n0054 tracked/file_0054.py\n0055 tracked/file_0055.py\n0056 tracked/file_0056.py\n0057 tracked/file…",
+    "output_chars": 6759,
+    "more": true,
+    "subtitle": "git ls-files && git remote -v",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Hook PostToolUse:Bash (PostToolUse) failed: lint: 2 warnings in file_0003.py",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Claude Code is compacting the conversation to make room…",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Claude Code could not compact the conversation: The conversation is too short to compact.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "Claude Code refused WebFetch: Fetching that page is outside this task.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "notice",
+    "text": "A hook stopped Claude Code from carrying on: Tests must pass before stopping.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "text_done",
+    "item": "msg_H2:t0",
+    "text": "Listed them.",
+    "turn": "turn-1"
+   },
+   {
+    "type": "usage",
+    "input": 109914,
+    "output": 243,
+    "cache_read": 70871,
+    "list_price": true,
+    "context": {
+     "used": 39077,
+     "window": 1000000
+    },
+    "turn": "turn-1"
+   },
+   {
+    "type": "done",
+    "stop": "completed",
+    "result": "Listed them.",
     "turn": "turn-1"
    }
   ]

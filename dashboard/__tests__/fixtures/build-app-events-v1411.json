@@ -211,6 +211,7 @@
     "input": "{\"command\": \"echo hello-from-bash\", \"timeout\": null}",
     "status": "running",
     "output": "hello-from-bash\n",
+    "partial": true,
     "turn": "turn-1"
    },
    {

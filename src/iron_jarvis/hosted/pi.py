@@ -94,6 +94,7 @@ from .events import (
     one_line,
     unified_new_file,
     unified_replace,
+    with_full,
 )
 
 log = logging.getLogger(__name__)
@@ -997,6 +998,7 @@ class PiDriver(Driver):
             self._updated[tid] = now
             ev = self._tool_event(tid, name, args, "running")
             ev["output"] = clip(out[-OUTPUT_CHARS * 2:], OUTPUT_CHARS)
+            ev["partial"] = True  # v1.418.0 (C4.2): still arriving
             self.emit(ev)
 
     def _tool_ended(self, obj: dict[str, Any]) -> None:
@@ -1006,7 +1008,8 @@ class PiDriver(Driver):
         result = obj.get("result")
         failed = bool(obj.get("isError"))
         ev = self._tool_event(tid, name, args, "failed" if failed else "done")
-        ev["output"] = clip(result_text(result), OUTPUT_CHARS)
+        # v1.418.0 (C4.4): the first part on screen, the rest kept in the log.
+        with_full(ev, output_text=result_text(result))
         patch = result_patch(result)
         if patch:
             ev["diff"] = clip(patch, DIFF_CHARS)

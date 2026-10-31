@@ -48,6 +48,12 @@ SCENARIOS: dict[str, tuple[str, str, list]] = {
     "claude_plan_deny_with_words": ("claude_plan_v1417", "claude-code",
                                     [("answer", "deny", None, "Write it in one file instead.")]),
     "claude_failed_generic": ("claude_failed_v1417", "claude-code", []),
+    # v1.418.0 (fix plan wave 2, C4.2-C4.5): ONE real Full-access run (claude
+    # 2.1.316, haiku) with a helper (Agent) whose steps nest under it and an
+    # edit that came with no tool_use_result (its diff read off its input);
+    # hooks, a refused hook callback, compacting and a long command output.
+    "claude_full_mode_helper": ("claude_full_mode_edit_v1418", "claude-code", []),
+    "claude_hooks_and_long_output": ("claude_hooks_v1418", "claude-code", []),
 }
 
 
@@ -80,6 +86,14 @@ async def run_scenario(tmp_path: Path, monkeypatch, name: str) -> list[dict]:
     work = base / "work"
     work.mkdir(parents=True)
     use_fake(monkeypatch, fixture, base / "fake.log")
+    # v1.418.0: a step's input as it is written is sent at most 4 times a
+    # second — by the clock, so the golden pins only the updates that do
+    # not depend on it (the first and the last).
+    from iron_jarvis.hosted import claude as _claude
+    from iron_jarvis.hosted import codex as _codex
+
+    monkeypatch.setattr(_claude, "PARTIAL_EVERY_S", 3600.0)
+    monkeypatch.setattr(_codex, "OUTPUT_EVERY_S", 3600.0)
     app = create_app(str(base / "home"))
     svc = S.service_for(app.state.platform)
     if fixture == "claude_limit":

@@ -416,3 +416,61 @@ def start_notice(harness: str, *, why: str = "", resumed: bool = False, idle_min
     if resumed:
         return f"Resuming {name}…"
     return f"Starting {name}…"
+
+
+# --------------------------------------------------------------------------- #
+# v1.418.0 (C4.6, C4.8): history that stays, and messages that wait
+# --------------------------------------------------------------------------- #
+#: C4.8: a message queued when no reply runs any more (the page sends it as a
+#: message instead).
+QUEUE_NOT_WORKING = "{label} is not working on anything right now — send it as a message."
+#: C4.8: the queue is full.
+QUEUE_FULL = "{n} messages are already waiting — send this one once {label} has taken them."
+#: C4.8: a queued message the daemon could not send when the reply ended.
+QUEUE_NOT_SENT = "Your waiting message was not sent: {why} It is back in your message box."
+#: C4.6: a "Load earlier" cursor this daemon did not write.
+BAD_CURSOR = "That place in the conversation is not one Iron Jarvis knows — load the session again."
+#: C4.6: the item asked for is not in this session's record.
+NO_SUCH_ITEM = "That step is not in this session's record any more."
+
+
+# --------------------------------------------------------------------------- #
+# v1.418.0 (C4.2, C4.3): what Claude Code says about its own work
+# --------------------------------------------------------------------------- #
+#: C4.2: a helper step's title (Claude Code's Task / Agent tool), with the
+#: tool's own short description of the job.
+HELPER_TITLE = "Helper: {what}"
+HELPER_TITLE_PLAIN = "Hand a task to a helper"
+#: C4.3: Claude Code's ``status: compacting`` (sent every 30 s while it lasts:
+#: said once) and a compaction that failed (its own reason).
+SYS_COMPACTING = "Claude Code is compacting the conversation to make room…"
+SYS_COMPACT_FAILED = "Claude Code could not compact the conversation: {why}"
+#: C4.3: a hook Claude Code ran (its own log line's words: "Hook <name>
+#: (<event>) <outcome>").
+SYS_HOOK = "Hook {name} ({event}) {outcome}{said}"
+HOOK_OUTCOMES = {"success": "ran", "error": "failed", "cancelled": "was cancelled", "blocking": "blocked the step"}
+#: C4.3: a hook that stopped Claude Code from carrying on (its stop hook summary).
+SYS_STOP_HOOK = "A hook stopped Claude Code from carrying on{why}"
+#: C4.3: a task Claude Code runs in the background, and how one ended (its
+#: own summary).
+SYS_TASK_STARTED = "Claude Code started a background task: {what}"
+SYS_TASK_DONE = {
+    "completed": "A helper finished: {summary}",
+    "failed": "A helper failed: {summary}",
+    "killed": "A helper was stopped: {summary}",
+    "stopped": "A helper was stopped: {summary}",
+}
+#: C4.3: an action Claude Code refused on its own (Auto's safety check, a rule).
+SYS_REFUSED = "Claude Code refused {tool}: {why}"
+#: C4.3: a model-service error Claude Code is retrying.
+SYS_API_ERROR = "Claude Code got an error from the model service ({error}) and is trying again{attempt}."
+#: C4.3: a request Claude Code sends that Iron Jarvis does not answer — it is
+#: refused, and the screen says what was asked.
+CONTROL_REFUSED = "Claude Code asked Iron Jarvis to {what}; Iron Jarvis does not answer that here, so it was refused."
+CONTROL_ASKS = {
+    "hook_callback": "answer one of its hooks",
+    "mcp_message": "pass a message to one of its added tools",
+    "elicitation": "fill in a form for one of its added tools",
+    "request_user_dialog": "show you one of its own dialogs",
+}
+CONTROL_ASK_OTHER = "answer a request it calls {subtype}"

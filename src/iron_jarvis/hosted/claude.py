@@ -84,7 +84,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
+import re
+import time
 import uuid
 from typing import Any
 
@@ -93,15 +96,18 @@ from .driver import Ask, AskRefused, ControlRefused, ControlWaiter, Driver, new_
 from .events import (
     DETAIL_CHARS,
     DIFF_CHARS,
+    FULL_KEY,
     INPUT_CHARS,
-    OUTPUT_CHARS,
     TEXT_CHARS,
     clip,
+    clip_tail,
     make,
+    now_iso,
     one_line,
     unified_from_hunks,
     unified_new_file,
     unified_replace,
+    with_full,
 )
 
 HARNESS = "claude-code"
@@ -166,6 +172,8 @@ MODE_ABOUT: dict[str, str] = {
 #: Every process may be switched to Full access later (the flag only makes it
 #: AVAILABLE; the mode still starts as ``--permission-mode`` says).
 ALLOW_FULL_FLAG = "--allow-dangerously-skip-permissions"
+#: v1.418.0 (C4.3): hook output in the stream (see :meth:`ClaudeDriver.argv`).
+INCLUDE_HOOKS_FLAG = "--include-hook-events"
 #: Pictures Claude Code takes as image blocks, and the most one may weigh.
 IMAGE_TYPES: dict[str, str] = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                                ".gif": "image/gif", ".webp": "image/webp"}
@@ -216,6 +224,18 @@ def tool_kind(name: str) -> str:
     return "other"
 
 
+def _parent_of(obj: dict[str, Any]) -> str:
+    """v1.418.0 (C4.2): the helper step (Task / Agent tool_use id) a frame
+    belongs to — Claude Code's ``parent_tool_use_id`` — or ""."""
+    return str(obj.get("parent_tool_use_id") or "")
+
+
+def _with_parent(ev: dict[str, Any], parent: str) -> dict[str, Any]:
+    if parent:
+        ev["parent"] = clip(parent, 200)
+    return ev
+
+
 def _base(path: Any) -> str:
     return os.path.basename(str(path or "").replace("\\", "/")) or str(path or "")
 
@@ -232,6 +252,13 @@ def tool_title(name: str, inp: dict[str, Any]) -> str:
     kind = tool_kind(name)
     path = inp.get("file_path") or inp.get("notebook_path") or inp.get("path") or ""
     if kind == "command":
+        # v1.418.0 (C4.4): Claude Code's Bash / PowerShell input carries the
+        # model's own short description of the command — the title; the
+        # command itself goes under it (:func:`tool_subtitle`). A cut title
+        # ends in "…".
+        desc = one_line(inp.get("description"), 90)
+        if desc:
+            return desc
         cmd = one_line(inp.get("command"), 90)
         return f"Run {cmd}" if cmd else "Run a command"
     if kind == "edit":
@@ -252,7 +279,8 @@ def tool_title(name: str, inp: dict[str, Any]) -> str:
     if kind == "mcp":
         return f"Use {_mcp_name(name)}"
     if kind == "task":
-        return "Hand a task to a helper"
+        what = one_line(inp.get("description"), 90)
+        return W.HELPER_TITLE.format(what=what) if what else W.HELPER_TITLE_PLAIN
     if kind == "todo":
         return "Update the plan"
     if name == "AskUserQuestion":
@@ -262,13 +290,98 @@ def tool_title(name: str, inp: dict[str, Any]) -> str:
     return f"Use {name}"
 
 
-def _input_line(inp: dict[str, Any]) -> str:
-    import json
+def tool_subtitle(name: str, inp: dict[str, Any]) -> str:
+    """v1.418.0 (C4.4): the second line of a command whose title is its
+    description — the command itself ("" when the title is the command)."""
+    if tool_kind(name) == "command" and one_line(inp.get("description"), 90):
+        return one_line(inp.get("command"), 300)
+    return ""
 
+
+def _input_json(inp: dict[str, Any]) -> str:
+    """The whole input as one JSON line (unmasked, uncut: :func:`clip` or
+    :func:`with_full` does both)."""
     try:
-        return clip(json.dumps(inp, ensure_ascii=False, sort_keys=True), INPUT_CHARS)
+        return json.dumps(inp, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError):
         return ""
+
+
+def _input_line(inp: dict[str, Any]) -> str:
+    return clip(_input_json(inp), INPUT_CHARS)
+
+
+#: v1.418.0 (C4.2): a tool row whose input is still being written is updated
+#: at most this often (seconds): ≤ 4 a second.
+PARTIAL_EVERY_S = 0.25
+#: How much of an input being written the driver keeps to read its fields
+#: (file path, command, description …: they come first) and to show its end.
+PARTIAL_HEAD_CHARS = 4_000
+PARTIAL_TAIL_CHARS = 2_000
+_PARTIAL_FIELD = re.compile(
+    r'"(file_path|notebook_path|path|command|description|pattern|url|query|subagent_type)"\s*:\s*"((?:[^"\\]|\\.)*)'
+)
+
+
+def partial_input(head: str) -> dict[str, Any]:
+    """The plain fields an input still being written already holds (a
+    string value may be cut — what came so far)."""
+    out: dict[str, Any] = {}
+    for m in _PARTIAL_FIELD.finditer(head or ""):
+        raw = m.group(2)
+        if raw.endswith("\\") and not raw.endswith("\\\\"):
+            raw = raw[:-1]
+        try:
+            out.setdefault(m.group(1), json.loads(f'"{raw}"'))
+        except ValueError:
+            out.setdefault(m.group(1), raw)
+    return out
+
+
+#: v1.418.0 (C4.5): the most of a file read back to find where an edit landed.
+LINE_READ_BYTES = 2 * 1024 * 1024
+
+
+def line_of(path: str, needle: str) -> int | None:
+    """BLOCKING: the line (1-based) where ``needle`` starts in the file at
+    ``path`` — read at most :data:`LINE_READ_BYTES` — else None."""
+    if not path or not needle:
+        return None
+    # v1.418.0 review: a model-written path is judged by its SPELLING before
+    # anything touches the disk — opening ``\\host\share\x`` (or a link that
+    # leads there) is an SMB connection that hands out a sign-in hash (the
+    # v1.379.0 lesson); links are walked one hop at a time, never resolved.
+    from ..harness import code_editor as _ce
+
+    if _ce._network_or_device(path):
+        return None
+    try:
+        path = _ce._walk_links(path)
+    except (_ce.EditorRefusal, OSError, ValueError):
+        return None
+    if _ce._network_or_device(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(LINE_READ_BYTES + 1)
+    except OSError:
+        return None
+    if len(data) > LINE_READ_BYTES:
+        return None
+    text = data.decode("utf-8", "replace").replace("\r\n", "\n")
+    at = text.find(needle.replace("\r\n", "\n"))
+    return text.count("\n", 0, at) + 1 if at >= 0 else None
+
+
+def _edit_needle(name: str, inp: dict[str, Any]) -> str:
+    """What an Edit / MultiEdit left in the file, to find its line by."""
+    if name == "Edit":
+        return str(inp.get("new_string") or "")
+    if name == "MultiEdit":
+        for e in inp.get("edits") or []:
+            if isinstance(e, dict) and str(e.get("new_string") or ""):
+                return str(e["new_string"])
+    return ""
 
 
 def _edit_diff(name: str, inp: dict[str, Any]) -> str:
@@ -284,6 +397,77 @@ def _edit_diff(name: str, inp: dict[str, Any]) -> str:
         ]
         return "\n".join(p for p in parts if p)
     return ""
+
+
+def _first_words(text: Any, cap: int = 300) -> str:
+    return one_line(text, cap)
+
+
+def system_notice(obj: dict[str, Any]) -> str:
+    """v1.418.0 (C4.3): what one of Claude Code's ``system`` messages says, in
+    its own words ("" = nothing worth a line: ``requesting``, progress ticks,
+    bookkeeping). ``init``, ``compact_boundary``, ``api_retry`` and the
+    ``compacting`` status are the driver's own (they need its state).
+
+    READ from claude 2.1.316's own bundle (read-only): ``hook_response``
+    {hook_name, hook_event, output, stdout, stderr, exit_code?, outcome:
+    success|error|cancelled}; ``stop_hook_summary`` {preventedContinuation,
+    stopReason, hookErrors}; ``task_started`` {description, is_backgrounded,
+    tool_use_id}; ``task_notification`` {status, summary, tool_use_id};
+    ``notification`` {text}; ``informational`` / ``local_command`` /
+    ``model_fallback`` / ``model_refusal_fallback`` / ``model_consent_fallback``
+    {content}; ``permission_denied`` {tool_name, message, decision_reason};
+    ``api_error`` {error, retryAttempt, maxRetries}."""
+    sub = str(obj.get("subtype") or "")
+    if sub == "hook_response":
+        outcome = str(obj.get("outcome") or "success")
+        said = _first_words(obj.get("output") or obj.get("stdout") or obj.get("stderr") or "")
+        if outcome == "success" and not said:
+            return ""
+        return W.SYS_HOOK.format(
+            name=clip(obj.get("hook_name") or "a hook", 80), event=clip(obj.get("hook_event") or "?", 60),
+            outcome=W.HOOK_OUTCOMES.get(outcome, clip(outcome, 40)), said=f": {said}" if said else ".",
+        )
+    if sub == "stop_hook_summary":
+        if not obj.get("preventedContinuation"):
+            return ""
+        why = _first_words(obj.get("stopReason") or "")
+        return W.SYS_STOP_HOOK.format(why=f": {why}" if why else ".")
+    if sub == "task_started":
+        if not obj.get("is_backgrounded") or obj.get("tool_use_id"):
+            # A helper step already has its own row (C4.2).
+            return ""
+        return W.SYS_TASK_STARTED.format(what=_first_words(obj.get("description") or "a task", 200))
+    if sub == "task_notification":
+        words = W.SYS_TASK_DONE.get(str(obj.get("status") or ""))
+        summary = _first_words(obj.get("summary") or obj.get("reason") or "", 300)
+        if not words or not summary:
+            return ""
+        return words.format(summary=summary)
+    if sub in ("notification",):
+        return _first_words(obj.get("text"), 500)
+    if sub in ("informational", "local_command", "model_fallback", "model_refusal_fallback", "model_consent_fallback"):
+        text = re.sub(r"</?[a-z][a-z0-9-]*>", " ", str(obj.get("content") or ""))
+        return _first_words(text, 500)
+    if sub == "permission_denied":
+        why = _first_words(obj.get("message") or obj.get("decision_reason") or "", 300)
+        tool = clip(obj.get("tool_name") or "an action", 80)
+        return W.SYS_REFUSED.format(tool=tool, why=why) if why else ""
+    if sub == "api_error":
+        n, most = obj.get("retryAttempt"), obj.get("maxRetries")
+        attempt = f" (attempt {n} of {most})" if n and most else f" (attempt {n})" if n else ""
+        error = obj.get("error")
+        if isinstance(error, dict):
+            error = error.get("message") or error.get("type") or ""
+        return W.SYS_API_ERROR.format(error=_first_words(error or "an error", 160), attempt=attempt)
+    return ""
+
+
+def control_refused_words(req: dict[str, Any]) -> str:
+    """v1.418.0 (C4.3): a control request Iron Jarvis refuses, said."""
+    sub = str(req.get("subtype") or "")
+    what = W.CONTROL_ASKS.get(sub) or W.CONTROL_ASK_OTHER.format(subtype=clip(sub or "?", 60))
+    return W.CONTROL_REFUSED.format(what=what)
 
 
 def session_suggestions(raw: Any) -> list[dict[str, Any]]:
@@ -469,10 +653,23 @@ class ClaudeDriver(Driver):
         #: message id -> stream text items in order / how many are settled.
         self._stream_text: dict[str, list[str]] = {}
         self._settled: dict[str, int] = {}
-        self._blocks: dict[int, dict[str, Any]] = {}
-        self._msg = ""
+        #: v1.418.0 (C4.2): per stream ("" = the main conversation, else the
+        #: helper step it runs inside): its message id and its blocks.
+        self._streams: dict[str, dict[str, Any]] = {}
+        #: message ids whose blocks came as stream deltas (their thinking is
+        #: never said twice).
+        self._streamed: set[str] = set()
+        #: message id -> thinking blocks said from whole messages so far.
+        self._thought: dict[str, int] = {}
         #: tool_use id -> (name, input).
         self._tools: dict[str, tuple[str, dict[str, Any]]] = {}
+        #: tool_use id -> the helper step it ran inside ("" = none).
+        self._tool_parent: dict[str, str] = {}
+        #: v1.418.0 (C4.3): a compaction said "compacting" already.
+        self._compacting = False
+        #: v1.418.0 review: the edits' line reads in flight (asyncio holds a
+        #: task only weakly: one nobody holds can be collected unrun).
+        self._line_tasks: set[asyncio.Task] = set()
         #: The account limit the harness reported (``terminals.limit_state``).
         self.limit: Any = None
         #: v1.412.0: the uuid each message went out with -> the note's ref
@@ -497,7 +694,13 @@ class ClaudeDriver(Driver):
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         out = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--include-partial-messages", "--permission-prompts", "host",
+            "--include-partial-messages",
+            # v1.418.0 (C4.3): every hook's output in the stream (without it
+            # Claude Code reports only SessionStart / Setup hooks — read from
+            # claude 2.1.316's own bundle: "Include all hook lifecycle events
+            # in the output stream").
+            INCLUDE_HOOKS_FLAG,
+            "--permission-prompts", "host",
             "--permission-prompt-tool", "stdio",
             "--permission-mode", MODES.get(self.mode, "default"),
             # v1.412.0: Full access can be CHOSEN later in the session (the
@@ -722,7 +925,7 @@ class ClaudeDriver(Driver):
             self._on_system(obj)
             return
         if kind == "stream_event":
-            self._on_stream(obj.get("event") or {})
+            self._on_stream(obj.get("event") or {}, _parent_of(obj))
             return
         if kind == "assistant":
             self._on_assistant(obj)
@@ -773,7 +976,10 @@ class ClaudeDriver(Driver):
         req = obj.get("request") or {}
         rid = obj.get("request_id")
         if req.get("subtype") != "can_use_tool":
-            # hook callbacks, MCP messages … Iron Jarvis registered none: say so.
+            # hook callbacks, MCP messages … Iron Jarvis registered none: say so
+            # — to Claude Code, and (v1.418.0, C4.3) on the screen, with what
+            # it asked.
+            self.emit(make("notice", text=control_refused_words(req)))
             asyncio.ensure_future(self._refuse_control(rid, "Iron Jarvis does not handle this request"))
             return
         name = str(req.get("tool_name") or "")
@@ -791,10 +997,14 @@ class ClaudeDriver(Driver):
         # Auto or Plan (:data:`ALL_COMMANDS_NOT_IN`).
         all_commands = akind == "command" and name in ALL_COMMANDS_TOOLS and self.mode not in ALL_COMMANDS_NOT_IN
         detail = clip(req.get("description") or req.get("decision_reason") or "", DETAIL_CHARS)
+        title = W.PLAN_CARD_TITLE if name == "ExitPlanMode" else tool_title(name, inp)
+        if detail.strip() == title.strip():
+            # v1.418.0 (C4.4): a command's title IS its description now —
+            # never said twice on the card.
+            detail = ""
         effect = suggestion_words(sugg, W.ALLOW_SIMILAR if all_commands else "Allow for this session")
         if effect:
             detail = f"{detail}\n\n{effect}" if detail else effect
-        title = W.PLAN_CARD_TITLE if name == "ExitPlanMode" else tool_title(name, inp)
         ev = make(
             "approval", request_id=ask_id, kind=akind, title=title,
             detail=detail, can_session=bool(sugg),
@@ -847,33 +1057,104 @@ class ClaudeDriver(Driver):
                 mode=mode,
             ))
         elif sub == "compact_boundary":
+            self._compacting = False
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))
         elif sub == "api_retry":
             n = obj.get("attempt")
             self.emit(make("notice", text=f"Claude Code is retrying the request{f' (attempt {n})' if n else ''}."))
+        elif sub == "status":
+            # v1.418.0 (C4.3): ``compacting`` comes every 30 s while it lasts
+            # (claude 2.1.316's bundle): said once; a failed one says why.
+            status = obj.get("status")
+            if status == "compacting":
+                if not self._compacting:
+                    self._compacting = True
+                    self.emit(make("notice", text=W.SYS_COMPACTING))
+            elif status is None or status == "":
+                self._compacting = False
+                if obj.get("compact_result") == "failed":
+                    why = one_line(obj.get("compact_error") or "no reason given", 300)
+                    self.emit(make("notice", text=W.SYS_COMPACT_FAILED.format(why=why)))
+        else:
+            text = system_notice(obj)
+            if text:
+                self.emit(make("notice", text=text))
 
-    def _on_stream(self, ev: dict[str, Any]) -> None:
+    def _stream(self, parent: str) -> dict[str, Any]:
+        return self._streams.setdefault(parent, {"msg": "", "blocks": {}})
+
+    def _on_stream(self, ev: dict[str, Any], parent: str = "") -> None:
+        st = self._stream(parent)
         t = ev.get("type")
         if t == "message_start":
-            self._msg = str((ev.get("message") or {}).get("id") or "")
-            self._blocks = {}
+            st["msg"] = str((ev.get("message") or {}).get("id") or "")
+            st["blocks"] = {}
+            if st["msg"]:
+                self._streamed.add(st["msg"])
         elif t == "content_block_start":
             idx = int(ev.get("index") or 0)
             block = ev.get("content_block") or {}
-            item = f"{self._msg}:{idx}"
-            self._blocks[idx] = {"type": block.get("type"), "item": item}
+            msg = st["msg"]
+            item = f"{msg}:{idx}"
+            st["blocks"][idx] = {"type": block.get("type"), "item": item}
             if block.get("type") == "text":
-                self._stream_text.setdefault(self._msg, []).append(item)
+                self._stream_text.setdefault(msg, []).append(item)
+            elif block.get("type") == "tool_use":
+                # v1.418.0 (C4.2): the step's row from the moment the model
+                # starts writing it, not once the whole input has arrived.
+                tid = str(block.get("id") or "")
+                name = str(block.get("name") or "")
+                st["blocks"][idx].update(tool=tid, name=name, head="", tail="", n=0, sent=-1.0, dirty=False)
+                if tid and tid not in self._tools:
+                    self._partial_tool(st["blocks"][idx], parent)
         elif t == "content_block_delta":
             idx = int(ev.get("index") or 0)
-            block = self._blocks.get(idx) or {}
+            block = st["blocks"].get(idx) or {}
+            item = block.get("item") or f"{st['msg']}:{idx}"
             delta = ev.get("delta") or {}
             if delta.get("type") == "text_delta" and delta.get("text"):
-                self.emit(make("text", item=block.get("item") or f"{self._msg}:{idx}",
-                               delta=clip(delta["text"], TEXT_CHARS)))
+                self.emit(_with_parent(make("text", item=item, delta=clip(delta["text"], TEXT_CHARS)), parent))
             elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-                self.emit(make("thinking", item=block.get("item") or f"{self._msg}:{idx}",
-                               delta=clip(delta["thinking"], TEXT_CHARS)))
+                self.emit(_with_parent(make("thinking", item=item, delta=clip(delta["thinking"], TEXT_CHARS)), parent))
+            elif delta.get("type") == "input_json_delta" and block.get("tool"):
+                piece = str(delta.get("partial_json") or "")
+                if not piece:
+                    return
+                if len(block["head"]) < PARTIAL_HEAD_CHARS:
+                    block["head"] = (block["head"] + piece)[:PARTIAL_HEAD_CHARS]
+                block["tail"] = (block["tail"] + piece)[-PARTIAL_TAIL_CHARS:]
+                block["n"] += len(piece)
+                block["dirty"] = True
+                if block["tool"] not in self._tools and time.monotonic() - block["sent"] >= PARTIAL_EVERY_S:
+                    self._partial_tool(block, parent)
+        elif t == "content_block_stop":
+            idx = int(ev.get("index") or 0)
+            block = st["blocks"].get(idx) or {}
+            if block.get("tool") and block.get("dirty") and block["tool"] not in self._tools:
+                # The last words written since the previous update.
+                self._partial_tool(block, parent)
+
+    def _partial_tool(self, block: dict[str, Any], parent: str) -> None:
+        """v1.418.0 (C4.2): a running row for a step whose input is still
+        being written: the title from the fields that arrived (a path, a
+        command, a description …), the newest part of the input, how much
+        has been written, ``partial: true``."""
+        name = str(block.get("name") or "")
+        tid = str(block.get("tool") or "")
+        fields = partial_input(block.get("head") or "")
+        ev = make("tool", item=tid, kind=tool_kind(name), name=clip(name, 120), title=tool_title(name, fields),
+                  input=clip_tail(block.get("tail") or "", INPUT_CHARS), status="running", partial=True)
+        if block.get("n"):
+            ev["input_chars"] = int(block["n"])
+        sub = tool_subtitle(name, fields)
+        if sub:
+            ev["subtitle"] = sub
+        path = fields.get("file_path") or fields.get("notebook_path")
+        if path:
+            ev["path"] = clip(path, 500)
+        block["sent"] = time.monotonic()
+        block["dirty"] = False
+        self.emit(_with_parent(ev, parent))
 
     def _text_item(self, msg: str) -> str:
         items = self._stream_text.get(msg) or []
@@ -885,6 +1166,7 @@ class ClaudeDriver(Driver):
         message = obj.get("message") if isinstance(obj.get("message"), dict) else {}
         code = obj.get("error") or message.get("error")
         msg = str(message.get("id") or "")
+        parent = _parent_of(obj)
         if code:
             said = _result_text(message.get("content"))
             self._failure(said or str(code))
@@ -894,23 +1176,37 @@ class ClaudeDriver(Driver):
                 continue
             bt = block.get("type")
             if bt == "text" and str(block.get("text") or "").strip():
-                self.emit(make("text_done", item=self._text_item(msg), text=clip(block["text"], TEXT_CHARS)))
+                self.emit(_with_parent(
+                    make("text_done", item=self._text_item(msg), text=clip(block["text"], TEXT_CHARS)), parent))
+            elif bt == "thinking" and msg not in self._streamed and str(block.get("thinking") or "").strip():
+                # v1.418.0 (C4.2): a helper's messages come whole (no stream
+                # deltas, measured on claude 2.1.316): its thinking is said
+                # from the message itself.
+                k = self._thought.get(msg, 0)
+                self._thought[msg] = k + 1
+                self.emit(_with_parent(
+                    make("thinking", item=f"{msg}:k{k}", delta=clip(block["thinking"], TEXT_CHARS)), parent))
             elif bt == "tool_use":
-                self._tool_started(block)
+                self._tool_started(block, parent)
 
-    def _tool_started(self, block: dict[str, Any]) -> None:
+    def _tool_started(self, block: dict[str, Any], parent: str = "") -> None:
         tid = str(block.get("id") or "")
         name = str(block.get("name") or "")
         inp = block.get("input") if isinstance(block.get("input"), dict) else {}
         self._tools[tid] = (name, inp)
+        self._tool_parent[tid] = parent
         kind = tool_kind(name)
         ev = make("tool", item=tid, kind=kind, name=clip(name, 120), title=tool_title(name, inp),
                   input=_input_line(inp), status="running")
+        sub = tool_subtitle(name, inp)
+        if sub:
+            ev["subtitle"] = sub
         path = inp.get("file_path") or inp.get("notebook_path")
         if path:
             ev["path"] = clip(path, 500)
-        self.emit(ev)
-        if kind == "todo":
+        self.emit(_with_parent(ev, parent))
+        if kind == "todo" and not parent:
+            # A helper's own checklist is not the conversation's plan.
             self.emit(make("plan", steps=plan_steps(inp)))
 
     def _on_user(self, obj: dict[str, Any]) -> None:
@@ -921,16 +1217,23 @@ class ClaudeDriver(Driver):
         if not isinstance(content, list):
             return
         meta = obj.get("tool_use_result")
+        parent = _parent_of(obj)
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
             tid = str(block.get("tool_use_id") or "")
             name, inp = self._tools.get(tid, ("", {}))
             failed = bool(block.get("is_error"))
-            ev = make("tool", item=tid, kind=tool_kind(name), name=clip(name, 120),
-                      title=tool_title(name, inp), input=_input_line(inp),
-                      status="failed" if failed else "done",
-                      output=clip(_result_text(block.get("content")), OUTPUT_CHARS))
+            kind = tool_kind(name)
+            ev = make("tool", item=tid, kind=kind, name=clip(name, 120),
+                      title=tool_title(name, inp), input="",
+                      status="failed" if failed else "done", output="")
+            # v1.418.0 (C4.4): the screen gets the first part; the log keeps
+            # up to 20,000 characters of each, read back on a press.
+            with_full(ev, input_text=_input_json(inp), output_text=_result_text(block.get("content")))
+            sub = tool_subtitle(name, inp)
+            if sub:
+                ev["subtitle"] = sub
             path = inp.get("file_path") or inp.get("notebook_path")
             if path:
                 ev["path"] = clip(path, 500)
@@ -945,7 +1248,45 @@ class ClaudeDriver(Driver):
                     diff = unified_new_file(str(meta.get("filePath") or path or ""), str(meta["content"]))
                 if diff:
                     ev["diff"] = clip(diff, DIFF_CHARS)
-            self.emit(ev)
+            later_line = ""
+            if not failed and kind in ("edit", "write") and "diff" not in ev:
+                # v1.418.0 (C4.5): Claude Code sends no ``tool_use_result``
+                # with this step (every edit in Full access in the live log; a
+                # helper's edits, measured) — the change is read off the
+                # step's own input, and its line off the file as it is now.
+                diff = _edit_diff(name, inp)
+                if diff:
+                    ev["diff"] = clip(diff, DIFF_CHARS)
+                    if name == "Write":
+                        ev["line"] = 1
+                    else:
+                        later_line = _edit_needle(name, inp)
+            self.emit(_with_parent(ev, parent or self._tool_parent.get(tid, "")))
+            if later_line and path:
+                self._find_line(ev, str(path), later_line)
+
+    def _find_line(self, ev: dict[str, Any], path: str, needle: str) -> None:
+        """v1.418.0 (C4.5): read (off the loop, bounded) where an edit landed
+        and send the step again with its ``line``."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # no loop (a unit test of the parser): no line
+            return
+        full = path if os.path.isabs(path) or not self.cwd else os.path.join(self.cwd, path)
+        base = {k: v for k, v in ev.items() if k not in (FULL_KEY, "at")}
+
+        async def run() -> None:
+            try:
+                line = await asyncio.to_thread(line_of, full, needle)
+            except Exception:  # noqa: BLE001 — no line is no harm
+                return
+            if line:
+                self.emit({"type": "tool", "at": now_iso(), **{k: v for k, v in base.items() if k != "type"},
+                           "line": line})
+
+        task = loop.create_task(run())
+        self._line_tasks.add(task)
+        task.add_done_callback(self._line_tasks.discard)
 
     def _on_rate_limit(self, info: dict[str, Any]) -> None:
         from . import seen as _seen  # v1.414.0: the Usage tab's windows

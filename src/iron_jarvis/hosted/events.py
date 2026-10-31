@@ -10,7 +10,16 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
   note the user typed while the turn ran; one event per state, in order)
 * ``text`` {item, delta} · ``text_done`` {item, text}
 * ``thinking`` {item, delta}
-* ``tool`` {item, kind, name, title, input, status, output?, path?, line?, diff?}
+* ``tool`` {item, kind, name, title, input, status, output?, path?, line?, diff?,
+  parent?, partial?, more?, input_chars?, output_chars?, subtitle?} (v1.418.0:
+  ``parent`` = the helper (Task / Agent) step this step ran inside, also on
+  that helper's ``text`` / ``text_done`` / ``thinking``; ``partial`` = a running
+  row whose input is still being written (≤ 4 updates a second) or whose
+  output is still arriving; ``more`` = the input or output was cut for the
+  screen and the LOG keeps up to :data:`OUTPUT_FULL_CHARS` of each
+  (:meth:`EventLog.item_text`), ``input_chars`` / ``output_chars`` = how much
+  the log keeps; ``subtitle`` = a command whose title is the tool's own
+  description of it)
 * ``plan`` {steps: [{text, status}]}
 * ``approval`` {request_id, kind, title, detail, command?, path?, diff?, can_session,
   once_only?, tool?, can_all_commands?, plan?} (v1.417.0: ``can_all_commands``
@@ -73,6 +82,17 @@ DIFF_CHARS = 20_000
 TITLE_CHARS = 120
 DETAIL_CHARS = 1500
 TEXT_CHARS = 200_000
+#: v1.418.0 (C4.4): what the LOG keeps of a finished step's input and output
+#: (the event SENT carries the first :data:`INPUT_CHARS` /
+#: :data:`OUTPUT_CHARS` and ``more``; a press reads the rest back).
+INPUT_FULL_CHARS = 20_000
+OUTPUT_FULL_CHARS = 20_000
+#: The key a driver puts those texts under (:func:`with_full`).
+#: :meth:`EventLog.append` takes it OFF the event IN PLACE — before the
+#: service hands the same event to anyone watching — and writes it as
+#: :data:`LOG_FULL_KEY`; :meth:`EventLog.read` leaves that key out.
+FULL_KEY = "_full"
+LOG_FULL_KEY = "full"
 
 #: The log's bounds. Past one, the oldest lines go until the log is back to
 #: :data:`TRIM_TO` of it — hysteresis, so a full log is rewritten once per
@@ -90,6 +110,42 @@ def clip(text: Any, cap: int) -> str:
     if len(value) <= cap:
         return value
     return value[: max(0, cap - 1)] + "…"
+
+
+def clip_tail(text: Any, cap: int) -> str:
+    """``text`` masked, THEN its LAST ``cap`` characters (an ellipsis marks
+    the cut at the front) — a row whose text is still arriving shows its
+    newest part."""
+    value = mask(str(text if text is not None else ""))
+    if len(value) <= cap:
+        return value
+    return "…" + value[len(value) - max(0, cap - 1):]
+
+
+def with_full(ev: dict[str, Any], *, input_text: Any = None, output_text: Any = None) -> dict[str, Any]:
+    """v1.418.0 (C4.4): put a finished step's ``input`` / ``output`` on ``ev``
+    — the first :data:`INPUT_CHARS` / :data:`OUTPUT_CHARS` (masked, then
+    cut) — and, when either was cut, ``more: true``, how much the log keeps
+    (``input_chars`` / ``output_chars``) and the kept texts under
+    :data:`FULL_KEY` (the log's alone: :meth:`EventLog.append` takes them off).
+    ``None`` leaves that field as it is."""
+    full: dict[str, str] = {}
+    for key, raw, cap, keep in (
+        ("input", input_text, INPUT_CHARS, INPUT_FULL_CHARS),
+        ("output", output_text, OUTPUT_CHARS, OUTPUT_FULL_CHARS),
+    ):
+        if raw is None:
+            continue
+        value = mask(str(raw))
+        ev[key] = value if len(value) <= cap else value[: max(0, cap - 1)] + "…"
+        if len(value) > cap:
+            kept = value if len(value) <= keep else value[: max(0, keep - 1)] + "…"
+            full[key] = kept
+            ev[f"{key}_chars"] = len(kept)
+    if full:
+        ev["more"] = True
+        ev[FULL_KEY] = full
+    return ev
 
 
 def one_line(text: Any, cap: int = TITLE_CHARS) -> str:
@@ -167,11 +223,32 @@ def coalesce_into(out: list[dict[str, Any]], ev: dict[str, Any]) -> None:
     deltas of the same item (the first one's ``at``). The merged text is
     MASKED AGAIN: a key split across two deltas was never whole for the mask
     of either."""
+    if FULL_KEY in ev:
+        # v1.418.0: the kept texts are the log's alone (never a replay's).
+        ev = {k: v for k, v in ev.items() if k != FULL_KEY}
     if out and _mergeable(out[-1], ev):
         merged = str(out[-1].get("delta") or "") + str(ev.get("delta") or "")
         out[-1] = {**out[-1], "delta": mask(merged)}
+    elif out and _replaces_partial(out[-1], ev):
+        # v1.418.0 review: a step's update while it is still being written
+        # (or its output still arriving) takes the place of the one before —
+        # a long Write sent ~4 a second for minutes and every one was kept.
+        out[-1] = dict(ev)
     else:
         out.append(dict(ev))
+
+
+def _replaces_partial(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """``b`` is a newer row of the same step as ``a``, and ``a`` is only an
+    update sent while the step was still being written (``partial``)."""
+    return (
+        a.get("type") == "tool"
+        and b.get("type") == "tool"
+        and a.get("partial") is True
+        and bool(a.get("item"))
+        and a.get("item") == b.get("item")
+        and a.get("turn") == b.get("turn")
+    )
 
 
 def coalesce(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -198,11 +275,32 @@ class EventLog:
         self._stop = False
         self._lines: int | None = None
         self._thread: threading.Thread | None = None
+        #: v1.418.0 review: steps whose first update-while-written is in the
+        #: log already (the later ones are not written; the finished row is).
+        self._partial_logged: set[str] = set()
 
     # -- writing ---------------------------------------------------------------
     def append(self, event: dict[str, Any]) -> None:
+        # v1.418.0 (C4.4): a finished step's kept texts (:func:`with_full`)
+        # come OFF the event here, in place — the service hands this same
+        # dict to the turn's watchers right after — and go into the log only.
+        full = event.pop(FULL_KEY, None)
+        row = {**event, LOG_FULL_KEY: full} if isinstance(full, dict) and full else event
+        if event.get("type") == "tool" and event.get("item"):
+            # v1.418.0 review: of a step's updates while it is written (≤ 4 a
+            # second, for as long as it takes) the log keeps the FIRST — a
+            # crash still shows the step — and then the finished row; the
+            # rest filled the session's window and pushed the user's own
+            # messages out of it. (A turn's watchers still get every update.)
+            item = str(event["item"])
+            if event.get("partial") is True:
+                if item in self._partial_logged:
+                    return
+                self._partial_logged.add(item)
+            else:
+                self._partial_logged.discard(item)
         with self._lock:
-            self._pending.append(event)
+            self._pending.append(row)
             if self._thread is None and not self._stop:
                 self._thread = threading.Thread(
                     target=self._run, name=f"hosted-log-{self.dir.name}", daemon=True
@@ -308,8 +406,51 @@ class EventLog:
             except ValueError:
                 continue
             if isinstance(ev, dict) and (not turn or ev.get("turn") == turn):
+                if LOG_FULL_KEY in ev:
+                    ev = {k: v for k, v in ev.items() if k != LOG_FULL_KEY}
                 out.append(ev)
         total = len(out)
         if not turn and limit and len(out) > limit:
             out = out[-limit:]
         return out, total, int(self.meta().get("dropped") or 0)
+
+    def item_text(self, item: str) -> dict[str, Any] | None:
+        """v1.418.0 (C4.4), BLOCKING: one step's whole input and output as the
+        log keeps them (up to :data:`INPUT_FULL_CHARS` /
+        :data:`OUTPUT_FULL_CHARS`, masked) — ``{"item", "input", "output"}`` —
+        or None when the log holds no step ``item``. The newest event of the
+        step that carries its kept texts wins; a step that was never cut
+        answers what was sent."""
+        item = str(item or "")
+        if not item:
+            return None
+        self.flush()
+        try:
+            with open(self.path, "rb") as fh:
+                raw = fh.read().splitlines()
+        except OSError:
+            return None
+        newest: dict[str, Any] | None = None
+        kept: dict[str, Any] | None = None
+        needle = json.dumps(item, ensure_ascii=False).encode("utf-8")
+        for line in raw:
+            if needle not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict) or ev.get("type") != "tool" or ev.get("item") != item:
+                continue
+            newest = ev
+            if isinstance(ev.get(LOG_FULL_KEY), dict):
+                kept = ev
+        if newest is None:
+            return None
+        src = kept or newest
+        full = src.get(LOG_FULL_KEY) if isinstance(src.get(LOG_FULL_KEY), dict) else {}
+        return {
+            "item": item,
+            "input": str(full.get("input", src.get("input") or "")),
+            "output": str(full.get("output", src.get("output") or "")),
+        }

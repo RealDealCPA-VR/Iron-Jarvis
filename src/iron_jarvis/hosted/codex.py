@@ -62,6 +62,16 @@ Memory box ticked asked before ``memory_search`` and the old code declined it:
   (``mcp_permission_prompt_is_auto_approved``).
 * Anything else on that method (a server's own form with fields, a page to
   open) is not a yes/no question: declined, said in words.
+
+READ for v1.418.0 (C4.2), from codex 0.157.0's own ``app-server
+generate-json-schema`` (``ServerNotification.json``,
+``v2/CommandExecutionOutputDeltaNotification.json``): a running command's
+output arrives as ``item/commandExecution/outputDelta`` {threadId, turnId,
+itemId, delta: string} before the item completes with its whole
+``aggregatedOutput``. The row shows the newest part as it arrives
+(``partial: true``, ≤ 4 updates a second); the completed item's output
+replaces it. (``item/fileChange/outputDelta`` is in the schema too, marked
+deprecated: "The server no longer emits this notification".)
 """
 
 from __future__ import annotations
@@ -70,13 +80,32 @@ import asyncio
 import os
 import re
 import sys
+import time
 from typing import Any
 
 from . import words as W
 from .driver import Ask, AskRefused, ControlRefused, ControlWaiter, Driver, new_ask_id
-from .events import DETAIL_CHARS, DIFF_CHARS, INPUT_CHARS, OUTPUT_CHARS, TEXT_CHARS, clip, make, one_line, unified_new_file
+from .events import (
+    DETAIL_CHARS,
+    DIFF_CHARS,
+    INPUT_CHARS,
+    OUTPUT_CHARS,
+    TEXT_CHARS,
+    clip,
+    clip_tail,
+    make,
+    one_line,
+    unified_new_file,
+    with_full,
+)
 
 HARNESS = "codex"
+#: v1.418.0 (C4.2): a running command's output arriving
+#: (``item/commandExecution/outputDelta``) updates its row at most this often
+#: (seconds) — ≤ 4 a second; the row shows the newest part.
+OUTPUT_EVERY_S = 0.25
+#: How much of a running command's output the driver keeps to show.
+OUTPUT_TAIL_CHARS = 4_000
 
 _WINDOWS = sys.platform == "win32"
 
@@ -280,6 +309,9 @@ class CodexDriver(Driver):
         self._interrupting = False
         self._retry_said = False
         self.limit: Any = None
+        #: v1.418.0 (C4.2): item id -> {"tail", "n", "sent", "dirty"} of a
+        #: running command's output.
+        self._out: dict[str, dict[str, Any]] = {}
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         return ["app-server", "--listen", "stdio://"]
@@ -591,6 +623,8 @@ class CodexDriver(Driver):
         elif method == "item/agentMessage/delta":
             if p.get("delta"):
                 self.emit(make("text", item=str(p.get("itemId") or ""), delta=clip(p["delta"], TEXT_CHARS)))
+        elif method == "item/commandExecution/outputDelta":
+            self._output_delta(str(p.get("itemId") or ""), str(p.get("delta") or ""))
         elif method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
             if p.get("delta"):
                 self.emit(make("thinking", item=str(p.get("itemId") or ""), delta=clip(p["delta"], TEXT_CHARS)))
@@ -649,6 +683,7 @@ class CodexDriver(Driver):
             self.emit(make("notice", text="Codex compacted the conversation to make room."))
             return
         self._items[iid] = item
+        self._out.pop(iid, None)
         status = str(item.get("status") or "completed")
         failed = status in ("failed", "declined") or (
             t == "commandExecution" and isinstance(item.get("exitCode"), int) and item["exitCode"] != 0
@@ -656,6 +691,30 @@ class CodexDriver(Driver):
         ev = self._tool_event(item, "failed" if failed else "done")
         if ev is not None:
             self.emit(ev)
+
+    def _output_delta(self, iid: str, delta: str) -> None:
+        """v1.418.0 (C4.2): a running command's output as it arrives — its
+        row updated with the newest part (``partial``), ≤ 4 times a second."""
+        if not iid or not delta:
+            return
+        item = self._items.get(iid)
+        if not isinstance(item, dict) or item.get("type") != "commandExecution":
+            return
+        st = self._out.setdefault(iid, {"tail": "", "n": 0, "sent": None, "dirty": False})
+        st["tail"] = (st["tail"] + delta)[-OUTPUT_TAIL_CHARS:]
+        st["n"] += len(delta)
+        st["dirty"] = True
+        now = time.monotonic()
+        if st["sent"] is not None and now - st["sent"] < OUTPUT_EVERY_S:
+            return
+        ev = self._tool_event(item, "running")
+        if ev is None:
+            return
+        ev["output"] = clip_tail(st["tail"], OUTPUT_CHARS)
+        ev["partial"] = True
+        st["sent"] = now
+        st["dirty"] = False
+        self.emit(ev)
 
     def _tool_event(self, item: dict[str, Any], status: str) -> dict[str, Any] | None:
         iid = str(item.get("id") or "")
@@ -669,7 +728,8 @@ class CodexDriver(Driver):
                 out = str(item.get("aggregatedOutput") or "")
                 if item.get("status") == "declined":
                     out = out or "The user said no to this."
-                ev["output"] = clip(out, OUTPUT_CHARS)
+                # v1.418.0 (C4.4): the first part on screen, the rest kept.
+                with_full(ev, input_text=cmd, output_text=out)
             return ev
         if t == "fileChange":
             rows = _change_rows(item.get("changes"))
@@ -693,7 +753,7 @@ class CodexDriver(Driver):
                       title=f"Use {item.get('server') or 'an app'} › {item.get('tool') or 'a tool'}",
                       input=clip(_mcp_input(item.get("arguments")), INPUT_CHARS), status=status)
             if status != "running":
-                ev["output"] = clip(_mcp_output(item), OUTPUT_CHARS)
+                with_full(ev, input_text=_mcp_input(item.get("arguments")), output_text=_mcp_output(item))
             return ev
         if t == "webSearch":
             q = one_line(item.get("query"), 80)

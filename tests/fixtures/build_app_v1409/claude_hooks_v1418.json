@@ -1,0 +1,432 @@
+{
+ "harness": "claude-code",
+ "source": "v1.418.0, built from the RECORDED claude_failed_v1417 frames (claude 2.1.311) with system frames whose shapes are read from claude 2.1.316's own bundle (read-only): hook_started / hook_response (SessionStart, PostToolUse), a hook_callback control request (refused), status compacting (sent every 30 s while it lasts) and a failed compaction, permission_denied, stop_hook_summary; a Bash call with Claude Code's own description and a 5,000+ character output.",
+ "steps": [
+  {
+   "await": "control",
+   "subtype": "initialize"
+  },
+  {
+   "out": {
+    "type": "control_response",
+    "response": {
+     "subtype": "success",
+     "request_id": "init-1",
+     "response": {
+      "commands": [
+       {
+        "name": "init",
+        "description": "Set up a CLAUDE.md file",
+        "argumentHint": ""
+       }
+      ],
+      "models": []
+     },
+     "pending_permission_requests": [],
+     "pending_user_dialog_requests": []
+    }
+   },
+   "reply_to_control": "initialize"
+  },
+  {
+   "await": "user"
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\work\\demo",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "model": "claude-opus-5-5",
+    "permissionMode": "default",
+    "tools": [
+     "Task",
+     "AskUserQuestion",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "DesignSync",
+     "Edit",
+     "EnterPlanMode",
+     "EnterWorktree",
+     "ExitPlanMode",
+     "ExitWorktree",
+     "Glob",
+     "Grep",
+     "ListAgents",
+     "Monitor",
+     "NotebookEdit",
+     "PowerShell",
+     "PushNotification",
+     "Read",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write"
+    ]
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "hook_started",
+    "hook_id": "h1",
+    "hook_name": "SessionStart:startup",
+    "hook_event": "SessionStart",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "hook_response",
+    "hook_id": "h1",
+    "hook_name": "SessionStart:startup",
+    "hook_event": "SessionStart",
+    "output": "Loaded the team's notes.\n",
+    "stdout": "Loaded the team's notes.\n",
+    "stderr": "",
+    "exit_code": 0,
+    "outcome": "success",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "hook_response",
+    "hook_id": "h0",
+    "hook_name": "SessionStart:startup",
+    "hook_event": "SessionStart",
+    "output": "",
+    "stdout": "",
+    "stderr": "",
+    "exit_code": 0,
+    "outcome": "success",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "control_request",
+    "request_id": "hook-cb-1",
+    "request": {
+     "subtype": "hook_callback",
+     "callback_id": "cb-7",
+     "input": {
+      "hook_event_name": "PreToolUse"
+     }
+    }
+   }
+  },
+  {
+   "await": "response",
+   "request_id": "hook-cb-1"
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_H1",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_H1",
+       "name": "Bash",
+       "input": {
+        "command": "git ls-files && git remote -v",
+        "description": "List tracked files and remotes"
+       }
+      }
+     ],
+     "stop_reason": null,
+     "usage": {
+      "input_tokens": 2,
+      "output_tokens": 5
+     }
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "user",
+    "message": {
+     "role": "user",
+     "content": [
+      {
+       "tool_use_id": "toolu_H1",
+       "type": "tool_result",
+       "content": "0000 tracked/file_0000.py\n0001 tracked/file_0001.py\n0002 tracked/file_0002.py\n0003 tracked/file_0003.py\n0004 tracked/file_0004.py\n0005 tracked/file_0005.py\n0006 tracked/file_0006.py\n0007 tracked/file_0007.py\n0008 tracked/file_0008.py\n0009 tracked/file_0009.py\n0010 tracked/file_0010.py\n0011 tracked/file_0011.py\n0012 tracked/file_0012.py\n0013 tracked/file_0013.py\n0014 tracked/file_0014.py\n0015 tracked/file_0015.py\n0016 tracked/file_0016.py\n0017 tracked/file_0017.py\n0018 tracked/file_0018.py\n0019 tracked/file_0019.py\n0020 tracked/file_0020.py\n0021 tracked/file_0021.py\n0022 tracked/file_0022.py\n0023 tracked/file_0023.py\n0024 tracked/file_0024.py\n0025 tracked/file_0025.py\n0026 tracked/file_0026.py\n0027 tracked/file_0027.py\n0028 tracked/file_0028.py\n0029 tracked/file_0029.py\n0030 tracked/file_0030.py\n0031 tracked/file_0031.py\n0032 tracked/file_0032.py\n0033 tracked/file_0033.py\n0034 tracked/file_0034.py\n0035 tracked/file_0035.py\n0036 tracked/file_0036.py\n0037 tracked/file_0037.py\n0038 tracked/file_0038.py\n0039 tracked/file_0039.py\n0040 tracked/file_0040.py\n0041 tracked/file_0041.py\n0042 tracked/file_0042.py\n0043 tracked/file_0043.py\n0044 tracked/file_0044.py\n0045 tracked/file_0045.py\n0046 tracked/file_0046.py\n0047 tracked/file_0047.py\n0048 tracked/file_0048.py\n0049 tracked/file_0049.py\n0050 tracked/file_0050.py\n0051 tracked/file_0051.py\n0052 tracked/file_0052.py\n0053 tracked/file_0053.py\n0054 tracked/file_0054.py\n0055 tracked/file_0055.py\n0056 tracked/file_0056.py\n0057 tracked/file_0057.py\n0058 tracked/file_0058.py\n0059 tracked/file_0059.py\n0060 tracked/file_0060.py\n0061 tracked/file_0061.py\n0062 tracked/file_0062.py\n0063 tracked/file_0063.py\n0064 tracked/file_0064.py\n0065 tracked/file_0065.py\n0066 tracked/file_0066.py\n0067 tracked/file_0067.py\n0068 tracked/file_0068.py\n0069 tracked/file_0069.py\n0070 tracked/file_0070.py\n0071 tracked/file_0071.py\n0072 tracked/file_0072.py\n0073 tracked/file_0073.py\n0074 tracked/file_0074.py\n0075 tracked/file_0075.py\n0076 tracked/file_0076.py\n0077 tracked/file_0077.py\n0078 tracked/file_0078.py\n0079 tracked/file_0079.py\n0080 tracked/file_0080.py\n0081 tracked/file_0081.py\n0082 tracked/file_0082.py\n0083 tracked/file_0083.py\n0084 tracked/file_0084.py\n0085 tracked/file_0085.py\n0086 tracked/file_0086.py\n0087 tracked/file_0087.py\n0088 tracked/file_0088.py\n0089 tracked/file_0089.py\n0090 tracked/file_0090.py\n0091 tracked/file_0091.py\n0092 tracked/file_0092.py\n0093 tracked/file_0093.py\n0094 tracked/file_0094.py\n0095 tracked/file_0095.py\n0096 tracked/file_0096.py\n0097 tracked/file_0097.py\n0098 tracked/file_0098.py\n0099 tracked/file_0099.py\n0100 tracked/file_0100.py\n0101 tracked/file_0101.py\n0102 tracked/file_0102.py\n0103 tracked/file_0103.py\n0104 tracked/file_0104.py\n0105 tracked/file_0105.py\n0106 tracked/file_0106.py\n0107 tracked/file_0107.py\n0108 tracked/file_0108.py\n0109 tracked/file_0109.py\n0110 tracked/file_0110.py\n0111 tracked/file_0111.py\n0112 tracked/file_0112.py\n0113 tracked/file_0113.py\n0114 tracked/file_0114.py\n0115 tracked/file_0115.py\n0116 tracked/file_0116.py\n0117 tracked/file_0117.py\n0118 tracked/file_0118.py\n0119 tracked/file_0119.py\n0120 tracked/file_0120.py\n0121 tracked/file_0121.py\n0122 tracked/file_0122.py\n0123 tracked/file_0123.py\n0124 tracked/file_0124.py\n0125 tracked/file_0125.py\n0126 tracked/file_0126.py\n0127 tracked/file_0127.py\n0128 tracked/file_0128.py\n0129 tracked/file_0129.py\n0130 tracked/file_0130.py\n0131 tracked/file_0131.py\n0132 tracked/file_0132.py\n0133 tracked/file_0133.py\n0134 tracked/file_0134.py\n0135 tracked/file_0135.py\n0136 tracked/file_0136.py\n0137 tracked/file_0137.py\n0138 tracked/file_0138.py\n0139 tracked/file_0139.py\n0140 tracked/file_0140.py\n0141 tracked/file_0141.py\n0142 tracked/file_0142.py\n0143 tracked/file_0143.py\n0144 tracked/file_0144.py\n0145 tracked/file_0145.py\n0146 tracked/file_0146.py\n0147 tracked/file_0147.py\n0148 tracked/file_0148.py\n0149 tracked/file_0149.py\n0150 tracked/file_0150.py\n0151 tracked/file_0151.py\n0152 tracked/file_0152.py\n0153 tracked/file_0153.py\n0154 tracked/file_0154.py\n0155 tracked/file_0155.py\n0156 tracked/file_0156.py\n0157 tracked/file_0157.py\n0158 tracked/file_0158.py\n0159 tracked/file_0159.py\n0160 tracked/file_0160.py\n0161 tracked/file_0161.py\n0162 tracked/file_0162.py\n0163 tracked/file_0163.py\n0164 tracked/file_0164.py\n0165 tracked/file_0165.py\n0166 tracked/file_0166.py\n0167 tracked/file_0167.py\n0168 tracked/file_0168.py\n0169 tracked/file_0169.py\n0170 tracked/file_0170.py\n0171 tracked/file_0171.py\n0172 tracked/file_0172.py\n0173 tracked/file_0173.py\n0174 tracked/file_0174.py\n0175 tracked/file_0175.py\n0176 tracked/file_0176.py\n0177 tracked/file_0177.py\n0178 tracked/file_0178.py\n0179 tracked/file_0179.py\n0180 tracked/file_0180.py\n0181 tracked/file_0181.py\n0182 tracked/file_0182.py\n0183 tracked/file_0183.py\n0184 tracked/file_0184.py\n0185 tracked/file_0185.py\n0186 tracked/file_0186.py\n0187 tracked/file_0187.py\n0188 tracked/file_0188.py\n0189 tracked/file_0189.py\n0190 tracked/file_0190.py\n0191 tracked/file_0191.py\n0192 tracked/file_0192.py\n0193 tracked/file_0193.py\n0194 tracked/file_0194.py\n0195 tracked/file_0195.py\n0196 tracked/file_0196.py\n0197 tracked/file_0197.py\n0198 tracked/file_0198.py\n0199 tracked/file_0199.py\n0200 tracked/file_0200.py\n0201 tracked/file_0201.py\n0202 tracked/file_0202.py\n0203 tracked/file_0203.py\n0204 tracked/file_0204.py\n0205 tracked/file_0205.py\n0206 tracked/file_0206.py\n0207 tracked/file_0207.py\n0208 tracked/file_0208.py\n0209 tracked/file_0209.py\n0210 tracked/file_0210.py\n0211 tracked/file_0211.py\n0212 tracked/file_0212.py\n0213 tracked/file_0213.py\n0214 tracked/file_0214.py\n0215 tracked/file_0215.py\n0216 tracked/file_0216.py\n0217 tracked/file_0217.py\n0218 tracked/file_0218.py\n0219 tracked/file_0219.py\n0220 tracked/file_0220.py\n0221 tracked/file_0221.py\n0222 tracked/file_0222.py\n0223 tracked/file_0223.py\n0224 tracked/file_0224.py\n0225 tracked/file_0225.py\n0226 tracked/file_0226.py\n0227 tracked/file_0227.py\n0228 tracked/file_0228.py\n0229 tracked/file_0229.py\n0230 tracked/file_0230.py\n0231 tracked/file_0231.py\n0232 tracked/file_0232.py\n0233 tracked/file_0233.py\n0234 tracked/file_0234.py\n0235 tracked/file_0235.py\n0236 tracked/file_0236.py\n0237 tracked/file_0237.py\n0238 tracked/file_0238.py\n0239 tracked/file_0239.py\n0240 tracked/file_0240.py\n0241 tracked/file_0241.py\n0242 tracked/file_0242.py\n0243 tracked/file_0243.py\n0244 tracked/file_0244.py\n0245 tracked/file_0245.py\n0246 tracked/file_0246.py\n0247 tracked/file_0247.py\n0248 tracked/file_0248.py\n0249 tracked/file_0249.py\n0250 tracked/file_0250.py\n0251 tracked/file_0251.py\n0252 tracked/file_0252.py\n0253 tracked/file_0253.py\n0254 tracked/file_0254.py\n0255 tracked/file_0255.py\n0256 tracked/file_0256.py\n0257 tracked/file_0257.py\n0258 tracked/file_0258.py\n0259 tracked/file_0259.py",
+       "is_error": false
+      }
+     ]
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "hook_response",
+    "hook_id": "h2",
+    "hook_name": "PostToolUse:Bash",
+    "hook_event": "PostToolUse",
+    "output": "",
+    "stdout": "",
+    "stderr": "lint: 2 warnings in file_0003.py\n",
+    "exit_code": 1,
+    "outcome": "error",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "compacting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": "compacting",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "status",
+    "status": null,
+    "compact_result": "failed",
+    "compact_error": "The conversation is too short to compact.",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "permission_denied",
+    "tool_name": "WebFetch",
+    "tool_use_id": "toolu_H2",
+    "decision_reason": "classifier",
+    "message": "Fetching that page is outside this task.",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "system",
+    "subtype": "stop_hook_summary",
+    "hookCount": 1,
+    "hookInfos": [],
+    "hookErrors": [],
+    "preventedContinuation": true,
+    "stopReason": "Tests must pass before stopping.",
+    "hasOutput": true,
+    "level": "warning",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "type": "assistant",
+    "message": {
+     "model": "claude-opus-5-5",
+     "id": "msg_H2",
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "Listed them."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 2,
+      "output_tokens": 3
+     }
+    },
+    "parent_tool_use_id": null,
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a"
+   }
+  },
+  {
+   "out": {
+    "duration_api_ms": 5340,
+    "stop_reason": "end_turn",
+    "session_id": "a89d10ad-dffc-4173-b4e3-0f04e9f3370a",
+    "usage": {
+     "input_tokens": 6,
+     "cache_creation_input_tokens": 39037,
+     "cache_read_input_tokens": 70871,
+     "output_tokens": 243,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 39037,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "global",
+     "iterations": [
+      {
+       "input_tokens": 2,
+       "output_tokens": 38,
+       "cache_read_input_tokens": 38867,
+       "cache_creation_input_tokens": 170,
+       "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 170
+       },
+       "type": "message"
+      }
+     ],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "modelUsage": {
+     "claude-opus-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 243,
+      "cacheReadInputTokens": 70871,
+      "cacheCreationInputTokens": 39037,
+      "webSearchRequests": 0,
+      "costUSD": 0.3313542,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39037,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "fast_mode_disabled_reason": "sdk_opt_in_required",
+    "subagent_stats": {
+     "spawned": 0,
+     "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+     },
+     "started_in_background": 0,
+     "max_depth": 0,
+     "spawned_by_subagents": 0,
+     "completed": 0,
+     "failed": 0,
+     "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+     },
+     "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+     },
+     "by_type": {}
+    },
+    "safety_stops": 0,
+    "is_error": false,
+    "num_turns": 3,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "Listed them.",
+    "ttft_ms": 1910,
+    "type": "result",
+    "duration_ms": 8370,
+    "uuid": "9f717459-d6dc-4b9d-aec9-d7555664f1af",
+    "ttft_stream_ms": 1093,
+    "time_to_request_ms": 278,
+    "time_to_request_phases_ms": {
+     "other": 28,
+     "system_prompt": 167,
+     "resume_other": 1,
+     "process_user_input": 4,
+     "input_attachments": 17,
+     "input_hooks": 2,
+     "transcript_persist": 12,
+     "tool_pool_refresh": 1,
+     "init_message": 8,
+     "engine_pickup": 1,
+     "message_prep": 1,
+     "model_config_wait": 1,
+     "autocompact": 2,
+     "query_setup": 0,
+     "model_gates": 1,
+     "tool_schema_build": 14,
+     "message_normalization": 3,
+     "client_creation": 4,
+     "request_build": 11
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 0,
+    "time_to_request_loop_lag_ms": 68,
+    "time_to_request_cpu_ms": 500,
+    "time_to_request_major_faults": 13829,
+    "input_attachments_detail": {
+     "slowest_producer": "queued_commands",
+     "slowest_producer_ms": 11,
+     "cpu_ms": 16,
+     "major_faults": 592
+    },
+    "first_content_frame_ms": 1094,
+    "queued_turn_count": 0,
+    "result_index": 0,
+    "model_usage_since_last_result": {
+     "claude-opus-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 243,
+      "cacheReadInputTokens": 70871,
+      "cacheCreationInputTokens": 39037,
+      "webSearchRequests": 0,
+      "costUSD": 0.3313542,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "cacheCreationEphemeral5mInputTokens": 0,
+      "cacheCreationEphemeral1hInputTokens": 39037,
+      "canonicalModel": "claude-opus-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    }
+   }
+  }
+ ]
+}

@@ -9,7 +9,7 @@
  * and the thinking disclosure. Nothing here talks to Iron Jarvis.
  */
 
-import { memo, useId, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState, type ReactNode } from "react";
 import {
   Bot,
   RotateCcw,
@@ -46,6 +46,10 @@ import {
   steerWords,
   toolLabel,
   usageWords,
+  helperStepsWords,
+  helperSummary,
+  showAllWords,
+  type ItemText,
   type ConvItem,
   type ToolKind,
   type ToolEvent,
@@ -89,23 +93,84 @@ function toolWords(t: ToolEvent): string {
 /** How many times a row drew (tests count these; never read by the app). */
 export const codeRowDraws = { items: 0, tools: 0 };
 
-const ToolStep = memo(function ToolStep({ tool, folder }: { tool: ToolEvent; folder: string }) {
+/** v1.418.0 (C4.4): read one step's whole text back from the session's
+ *  record (BuildCodeView supplies it: `GET …/events/{item}`). */
+export type ExpandStep = (item: string) => Promise<ItemText | null>;
+
+const ToolStep = memo(function ToolStep({
+  tool,
+  folder,
+  kids,
+  onExpand,
+  toolName = "",
+}: {
+  tool: ToolEvent;
+  folder: string;
+  /** v1.418.0 (C4.2): what ran inside a helper step. */
+  kids?: readonly ConvItem[];
+  onExpand?: ExpandStep;
+  toolName?: string;
+}) {
   codeRowDraws.tools += 1;
   const [open, setOpen] = useState(false);
+  const [full, setFull] = useState<ItemText | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readFailed, setReadFailed] = useState(false);
   const panelId = useId();
-  const hasDetail = !!(tool.input || tool.output);
+  const hasKids = !!kids && kids.length > 0;
+  const hasDetail = !!(tool.input || tool.output) || hasKids;
   // Inside the session's folder only (never a share, never `..` out of it).
   const path = tool.path && folder ? resolveInFolder(folder, tool.path, { confine: true }) : null;
+  const helper = hasKids ? helperSummary(kids) : null;
+  const words = toolWords(tool);
+  // v1.418.0 (C4.4): a title the tool's own description had to cut says so.
+  const cut = words.endsWith("…");
+  const meta: ReactNode[] = [];
+  if (helper && helper.steps > 0) {
+    meta.push(
+      <span key="steps" data-testid="code-helper-count" className="shrink-0 text-zinc-600">
+        · {helperStepsWords(helper.steps)}
+      </span>,
+    );
+  }
+  if (tool.partial && tool.status === "running" && tool.inputChars) {
+    meta.push(
+      <span key="partial" data-testid="code-tool-partial" className="shrink-0 text-zinc-600">
+        · {tool.inputChars.toLocaleString("en-US")} characters so far
+      </span>,
+    );
+  }
+  const expand = async () => {
+    if (!onExpand || reading) return;
+    setReading(true);
+    setReadFailed(false);
+    try {
+      const got = await onExpand(tool.item);
+      if (got) setFull(got);
+      else setReadFailed(true);
+    } catch {
+      setReadFailed(true);
+    } finally {
+      setReading(false);
+    }
+  };
   return (
-    <div data-testid="code-tool" data-kind={tool.kind} data-status={tool.status} className="group/step min-w-0">
+    <div
+      data-testid="code-tool"
+      data-kind={tool.kind}
+      data-status={tool.status}
+      data-partial={tool.partial ? "true" : undefined}
+      className="group/step min-w-0"
+    >
       <div className="flex min-w-0 items-center gap-1">
         <div className="min-w-0 flex-1">
           <WorkRow
             icon={TOOL_ICON[tool.kind]}
-            title={toolWords(tool)}
+            title={words}
             running={tool.status === "running"}
             failed={tool.status === "failed"}
-            titleTitle={tool.name || undefined}
+            titleTitle={cut ? `${tool.name || "The tool"}'s own description, cut short` : tool.name || undefined}
+            meta={meta.length ? meta : undefined}
             expand={hasDetail ? { open, onToggle: () => setOpen((v) => !v), controls: panelId } : null}
           />
         </div>
@@ -113,8 +178,57 @@ const ToolStep = memo(function ToolStep({ tool, folder }: { tool: ToolEvent; fol
           <StepOpenInEditor path={path} line={tool.line} />
         ) : null}
       </div>
-      {open && hasDetail ? (
-        <StepDetailPanel id={panelId} name={tool.kind === "command" ? "shell" : tool.name} detail={{ input: tool.input, output: tool.output }} />
+      {tool.subtitle ? (
+        // v1.418.0 (C4.4): the command itself, under the tool's description.
+        <p
+          data-testid="code-tool-subtitle"
+          title={tool.subtitle}
+          className="ml-[22px] min-w-0 truncate font-mono text-[12px] leading-5 text-zinc-600"
+        >
+          {tool.subtitle}
+        </p>
+      ) : null}
+      {helper && !open && helper.finalText ? (
+        // v1.418.0 (C4.2): a folded helper says what it answered.
+        <p data-testid="code-helper-final" className="ml-[22px] line-clamp-2 min-w-0 text-[12px] leading-5 text-zinc-500">
+          {helper.finalText}
+        </p>
+      ) : null}
+      {open && hasKids ? (
+        <div
+          data-testid="code-helper-children"
+          className="ml-[7px] mt-1 grid min-w-0 gap-2 border-l border-white/[0.08] pl-3"
+        >
+          {kids!.map((child) => (
+            <Item key={child.key} item={child} folder={folder} press={null} toolName={toolName} onExpand={onExpand} />
+          ))}
+        </div>
+      ) : null}
+      {open && (tool.input || tool.output) ? (
+        <StepDetailPanel
+          id={panelId}
+          name={tool.kind === "command" ? "shell" : tool.name}
+          detail={{ input: full?.input || tool.input, output: full?.output || tool.output }}
+        />
+      ) : null}
+      {open && tool.more && onExpand && !full ? (
+        // v1.418.0 (C4.4): the screen got the first part; the record keeps more.
+        <div className="ml-[22px] flex items-center gap-2 text-[12px] text-zinc-500">
+          <button
+            type="button"
+            data-testid="code-tool-show-all"
+            disabled={reading}
+            onClick={() => void expand()}
+            className="rounded-sm underline-offset-2 transition-colors hover:text-zinc-300 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50 disabled:opacity-60 motion-reduce:transition-none"
+          >
+            {reading ? "Reading…" : showAllWords(tool)}
+          </button>
+          {readFailed ? (
+            <span data-testid="code-tool-show-all-failed" role="status">
+              The rest could not be read.
+            </span>
+          ) : null}
+        </div>
       ) : null}
       {tool.diff ? (
         <div data-testid="code-tool-diff" className="ml-[22px] mt-1 max-h-80 overflow-auto rounded-md">
@@ -151,12 +265,14 @@ const Item = memo(function Item({
   press,
   toolName,
   facts,
+  onExpand,
 }: {
   item: ConvItem;
   folder: string;
   press: FailurePresses | null;
   toolName: string;
   facts?: ReceiptFacts;
+  onExpand?: ExpandStep;
 }) {
   codeRowDraws.items += 1;
   switch (item.kind) {
@@ -193,11 +309,11 @@ const Item = memo(function Item({
     case "thinking":
       return (
         <div data-testid="code-thinking">
-          <ThinkingDisclosure text={item.text} />
+          <ThinkingDisclosure text={item.text} live={item.live} seconds={item.seconds} />
         </div>
       );
     case "tool":
-      return <ToolStep tool={item.tool} folder={folder} />;
+      return <ToolStep tool={item.tool} folder={folder} kids={item.children} onExpand={onExpand} toolName={toolName} />;
     case "plan":
       return (
         <div data-testid="code-plan">
@@ -310,6 +426,7 @@ export const CodeConversation = memo(function CodeConversation({
   onRetry,
   model = "",
   account = "",
+  onExpand,
 }: {
   items: readonly ConvItem[];
   folder: string;
@@ -323,6 +440,8 @@ export const CodeConversation = memo(function CodeConversation({
   /** v1.417.0 (C4.9): the session's model and account, for the receipt. */
   model?: string;
   account?: string;
+  /** v1.418.0 (C4.4): read a step's whole text back (`GET …/events/{item}`); absent = no "Show all" press. */
+  onExpand?: ExpandStep;
 }) {
   const facts = useMemo(() => ({ model, account }), [model, account]);
   let lastError = -1;
@@ -341,6 +460,7 @@ export const CodeConversation = memo(function CodeConversation({
           press={newest && i === lastError ? { tool, onContinueOn, continuing, onRetry } : null}
           toolName={toolLabel(tool)}
           facts={facts}
+          onExpand={onExpand}
         />
       ))}
     </div>

@@ -664,9 +664,12 @@ export type CodeEvent = CodeEventBody & { turn?: string };
 type CodeEventBody =
   | { type: "session"; at: string; harness: string; harnessSessionId: string; model: string; cwd: string; mode: string }
   | { type: "user"; at: string; text: string; files: string[] }
-  | { type: "text"; at: string; item: string; delta: string }
-  | { type: "text_done"; at: string; item: string; text: string }
-  | { type: "thinking"; at: string; item: string; delta: string }
+  /** v1.418.0 (C4.2): `parent` = the helper step (Claude Code's Task /
+   *  Agent) this text, thinking or step ran inside (absent = the
+   *  conversation itself). */
+  | { type: "text"; at: string; item: string; delta: string; parent?: string }
+  | { type: "text_done"; at: string; item: string; text: string; parent?: string }
+  | { type: "thinking"; at: string; item: string; delta: string; parent?: string }
   | {
       type: "tool";
       at: string;
@@ -680,6 +683,21 @@ type CodeEventBody =
       path: string;
       line: number | null;
       diff: string;
+      /** v1.418.0 (C4.2): the helper step this step ran inside. */
+      parent?: string;
+      /** v1.418.0 (C4.2): a running row whose input is still being written
+       *  or whose output is still arriving. */
+      partial?: boolean;
+      /** v1.418.0 (C4.4): the input or output was cut for the screen; the
+       *  session's record keeps more (read back with `onExpand`). */
+      more?: boolean;
+      /** v1.418.0: how much of the input / output the record keeps (on a
+       *  partial row: how much input has been written so far). */
+      inputChars?: number;
+      outputChars?: number;
+      /** v1.418.0 (C4.4): a command whose title is the tool's own
+       *  description of it carries the command here. */
+      subtitle?: string;
     }
   | { type: "plan"; at: string; steps: { text: string; status: PlanStatus }[] }
   | {
@@ -770,12 +788,12 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
     case "thinking": {
       const item = str(r.item, 200);
       if (!item) return null;
-      return { type, at, item, delta: str(r.delta, 100_000) };
+      return withParent({ type, at, item, delta: str(r.delta, 100_000) }, r);
     }
     case "text_done": {
       const item = str(r.item, 200);
       if (!item) return null;
-      return { type, at, item, text: str(r.text, 200_000) };
+      return withParent({ type, at, item, text: str(r.text, 200_000) }, r);
     }
     case "tool": {
       const item = str(r.item, 200);
@@ -796,6 +814,7 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         path: str(r.path, 1_000),
         line: line !== null && line > 0 ? Math.floor(line) : null,
         diff: str(r.diff, 20_000),
+        ...toolExtras(r),
       };
     }
     case "plan": {
@@ -911,6 +930,59 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
   }
 }
 
+/** v1.418.0 (C4.2): the helper step an event ran inside, when it names one. */
+function withParent<T extends object>(ev: T, r: Record<string, unknown>): T & { parent?: string } {
+  const parent = str(r.parent, 200).trim();
+  return parent ? { ...ev, parent } : ev;
+}
+
+interface ToolExtras {
+  parent?: string;
+  partial?: boolean;
+  more?: boolean;
+  inputChars?: number;
+  outputChars?: number;
+  subtitle?: string;
+}
+
+/** v1.418.0 (C4.2, C4.4): a step's optional keys, each only when it says
+ *  something (an older daemon's events decode exactly as before). */
+function toolExtras(r: Record<string, unknown>): ToolExtras {
+  const out: ToolExtras = {};
+  const parent = str(r.parent, 200).trim();
+  if (parent) out.parent = parent;
+  if (r.partial === true) out.partial = true;
+  if (r.more === true) out.more = true;
+  const ic = num(r.input_chars);
+  if (ic !== null && ic > 0) out.inputChars = Math.floor(ic);
+  const oc = num(r.output_chars);
+  if (oc !== null && oc > 0) out.outputChars = Math.floor(oc);
+  const subtitle = str(r.subtitle, 300).trim();
+  if (subtitle) out.subtitle = subtitle;
+  return out;
+}
+
+/** v1.418.0 (C4.4): the whole text the session's record keeps for one step
+ *  — the answer of `GET /build/app/sessions/{id}/events/{item}`
+ *  (`{item, input, output}`); null for any other shape. */
+export interface ItemText {
+  input: string;
+  output: string;
+}
+
+export function decodeItemText(raw: unknown): ItemText | null {
+  const r = obj(raw);
+  if (!r || (typeof r.input !== "string" && typeof r.output !== "string")) return null;
+  return { input: str(r.input, 25_000), output: str(r.output, 25_000) };
+}
+
+/** v1.418.0 (C4.4): the press under a step whose text was cut for the
+ *  screen ("Show all 6,759 characters"). */
+export function showAllWords(t: { inputChars?: number; outputChars?: number }): string {
+  const n = Math.max(t.outputChars ?? 0, t.inputChars ?? 0);
+  return n > 0 ? `Show all ${n.toLocaleString("en-US")} characters` : "Show all";
+}
+
 export function decodeCodeEvents(raw: unknown): CodeEvent[] {
   const out: CodeEvent[] = [];
   for (const e of listOf(raw, "events")) {
@@ -1024,8 +1096,12 @@ export type OpenAsk = ApprovalEvent | QuestionEvent;
 export type ConvItem =
   | { kind: "user"; key: string; text: string; files: string[] }
   | { kind: "text"; key: string; text: string; done: boolean }
-  | { kind: "thinking"; key: string; text: string }
-  | { kind: "tool"; key: string; tool: ToolEvent }
+  /** v1.418.0 (C4.3): `live` while the thinking is the newest thing the
+   *  running turn said; `seconds` = how long it thought (null = unknown). */
+  | { kind: "thinking"; key: string; text: string; live: boolean; seconds: number | null }
+  /** v1.418.0 (C4.2): a helper step (Task / Agent) carries the steps, text
+   *  and thinking that ran inside it, folded the same way. */
+  | { kind: "tool"; key: string; tool: ToolEvent; children?: ConvItem[] }
   | { kind: "plan"; key: string; steps: { text: string; status: PlanStatus }[] }
   | { kind: "resolved"; key: string; requestId: string; decision: string; about: string; question: boolean }
   | { kind: "notice"; key: string; text: string }
@@ -1110,9 +1186,39 @@ export interface Conversation {
  *  joined per `item`; a tool's later events update its one row; one plan per
  *  turn, at the place it first appeared, showing its newest steps. An ask
  *  is open until its `resolved` (or the turn's `done`) arrives. `extra`:
- *  the session read's open asks, listed when their events were trimmed. */
-export function foldConversation(events: readonly CodeEvent[], extra: readonly CodeEvent[] = []): Conversation {
+ *  the session read's open asks, listed when their events were trimmed.
+ *
+ *  v1.418.0 (C4.2): an event that ran inside a helper step (its `parent`)
+ *  is folded into that step's `children` (`root`: the helper whose own
+ *  events these are — "" = the conversation). (C4.3) a thinking item is
+ *  `live` while it is the newest thing the running turn said, and knows how
+ *  long it lasted (to the next event) once something follows it. */
+export function foldConversation(
+  events: readonly CodeEvent[],
+  extra: readonly CodeEvent[] = [],
+  root = "",
+): Conversation {
   const items: ConvItem[] = [];
+  // v1.418.0 (C4.2): each step's helper, to find the helper of `root` an
+  // event belongs to (a helper's helper folds inside its own row).
+  const parentOf = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.type === "tool" && ev.parent) parentOf.set(ev.item, ev.parent);
+  }
+  const childEvents = new Map<string, CodeEvent[]>();
+  const ownChild = (parent: string): string | null => {
+    let p = parent;
+    for (let depth = 0; depth < 8; depth += 1) {
+      const up = parentOf.get(p) ?? "";
+      if (up === root) return p;
+      if (!up) return root ? null : p;
+      p = up;
+    }
+    return null;
+  };
+  // v1.418.0 (C4.3): the thinking item still going, and when it began.
+  let thinkOpen: number | null = null;
+  let thinkStart = "";
   const textAt = new Map<string, number>();
   const thinkAt = new Map<string, number>();
   const toolAt = new Map<string, number>();
@@ -1142,6 +1248,38 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
     if (turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
       && Number.isFinite(Date.parse(ev.at))) {
       workAt = ev.at;
+    }
+    // v1.418.0 (C4.3): anything said after a thinking item ends it.
+    if (thinkOpen !== null
+      && !(ev.type === "thinking" && (ev.parent ?? "") === root && thinkAt.get(ev.item) === thinkOpen)) {
+      const it = items[thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
+      items[thinkOpen] = { ...it, seconds: secondsBetween(thinkStart, ev.at) };
+      thinkOpen = null;
+    }
+    // v1.418.0 (C4.2): a helper's own events go into its row.
+    const parent = (ev.type === "tool" || ev.type === "text" || ev.type === "text_done" || ev.type === "thinking")
+      ? ev.parent ?? ""
+      : "";
+    if (parent && parent !== root) {
+      const top = ownChild(parent);
+      if (top === null) continue;
+      if (!toolAt.has(top)) {
+        // Its own step was trimmed (or has not arrived): a row to hold it.
+        toolAt.set(top, items.length);
+        items.push({
+          kind: "tool",
+          key: key("x"),
+          tool: { type: "tool", at: ev.at, item: top, kind: "task", name: "", title: "", input: "", status: "running",
+                  output: "", path: "", line: null, diff: "" },
+        });
+      }
+      const list = childEvents.get(top) ?? [];
+      list.push(ev);
+      childEvents.set(top, list);
+      if (ev.type === "tool" && (ev.kind === "edit" || ev.kind === "write") && ev.status === "done" && ev.path && turnAt) {
+        turnFiles.add(ev.path);
+      }
+      continue;
     }
     switch (ev.type) {
       case "session":
@@ -1184,7 +1322,9 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
         const i = thinkAt.get(ev.item);
         if (i === undefined) {
           thinkAt.set(ev.item, items.length);
-          items.push({ kind: "thinking", key: key("k"), text: ev.delta });
+          thinkOpen = items.length;
+          thinkStart = ev.at;
+          items.push({ kind: "thinking", key: key("k"), text: ev.delta, live: false, seconds: null });
         } else {
           const it = items[i] as Extract<ConvItem, { kind: "thinking" }>;
           items[i] = { ...it, text: it.text + ev.delta };
@@ -1319,6 +1459,20 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
       }
     }
   }
+  // v1.418.0 (C4.3): a thinking item nothing has followed yet is live while
+  // the turn runs and it is the newest thing said.
+  if (thinkOpen !== null && !settled && thinkOpen === items.length - 1) {
+    const it = items[thinkOpen] as Extract<ConvItem, { kind: "thinking" }>;
+    items[thinkOpen] = { ...it, live: true };
+  }
+  // v1.418.0 (C4.2): each helper step gets what ran inside it.
+  for (const [top, evs] of childEvents) {
+    const i = toolAt.get(top);
+    if (i === undefined) continue;
+    const row = items[i] as Extract<ConvItem, { kind: "tool" }>;
+    const children = foldConversation(evs, [], top).items;
+    if (children.length) items[i] = { ...row, children };
+  }
   if (!settled) {
     for (const p of extra) {
       if (p.type !== "approval" && p.type !== "question") continue;
@@ -1327,6 +1481,28 @@ export function foldConversation(events: readonly CodeEvent[], extra: readonly C
     }
   }
   return { items, asks: [...asks.values()], toolSessionId, settled };
+}
+
+/** v1.418.0 (C4.2): what a helper step's folded row says before it opens —
+ *  how many steps it took (its own and its helpers') and the last thing it
+ *  wrote (its answer, "" until it wrote one). */
+export function helperSummary(children: readonly ConvItem[] | undefined): { steps: number; finalText: string } {
+  let steps = 0;
+  let finalText = "";
+  for (const c of children ?? []) {
+    if (c.kind === "tool") {
+      if (c.tool.kind !== "todo") steps += 1;
+      steps += helperSummary(c.children).steps;
+    } else if (c.kind === "text" && c.text.trim()) {
+      finalText = c.text;
+    }
+  }
+  return { steps, finalText };
+}
+
+/** "3 steps" · "1 step". */
+export function helperStepsWords(n: number): string {
+  return `${n} step${n === 1 ? "" : "s"}`;
 }
 
 /** The steps of a plan, as the chat's checklist draws them. */
@@ -1600,7 +1776,14 @@ export function reuseItems(prev: readonly ConvItem[] | null, next: ConvItem[]): 
   const byKey = new Map(prev.map((it) => [it.key, it]));
   return next.map((it) => {
     const old = byKey.get(it.key);
-    return old && sameValue(old, it) ? old : it;
+    if (!old) return it;
+    if (sameValue(old, it)) return old;
+    // v1.418.0 review: a helper step that changed keeps the children that
+    // did not (an open helper's rows draw again only for their own change).
+    if (it.kind === "tool" && old.kind === "tool" && it.children && old.children) {
+      return { ...it, children: reuseItems(old.children, it.children) };
+    }
+    return it;
   });
 }
 
