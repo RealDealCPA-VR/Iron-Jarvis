@@ -20,7 +20,7 @@
  * value.
  */
 
-import { toolWords } from "@/lib/toolWords";
+import { EXIT_PLAN_TOOL, PLAN_TOOL, toolWords } from "@/lib/toolWords";
 import { REMOTE_KIND, remoteTaskSubject } from "@/lib/remoteTask";
 
 /** The narrow answer: this one call. */
@@ -61,6 +61,40 @@ export function scopeLabel(scope: ApprovalScope): string {
 export function scopeNoun(scope: ApprovalScope): string {
   if (scope === "session") return "this session";
   return scope === "run" ? "this run" : "this chat";
+}
+
+/**
+ * v1.417.0 (C1.7): does the daemon read EVERY answer to this ask as "once"?
+ * Then the card offers "Allow once" and "Deny" only — a wider button
+ * ("Allow for this chat|run|session", "Allow for this tab", "Always") would
+ * promise a grant the daemon never writes. True for:
+ *  - a once-only card (`onceOnly`: a local-only chat's reaching-out tool, a
+ *    safety card with a `once_reason`);
+ *  - the two plan doors, known by their names (a listing row carries no
+ *    flags): `approve_plan` and a Build session's `exit_plan_mode`;
+ *  - a PRICED card (`costNote`, a spend check's quote): the daemon reads a
+ *    wider answer to a spend as once (src/iron_jarvis/daemon/routes/chat.py,
+ *    the spend-check branch), so "Allow for this session" was a lie there.
+ *    (An agent run's ask — src/iron_jarvis/agents/runtime.py — does keep a
+ *    "conversation" grant, but its spend check is read before any grant, so
+ *    that grant never skips the next priced ask either: the button would
+ *    still promise "stops asking" falsely.)
+ */
+export function answersOnlyOnce(a: {
+  tool?: string;
+  onceOnly?: boolean;
+  costNote?: string;
+}): boolean {
+  if (a.onceOnly === true) return true;
+  if (a.tool === PLAN_TOOL || a.tool === EXIT_PLAN_TOOL) return true;
+  return typeof a.costNote === "string" && a.costNote.trim() !== "";
+}
+
+/** v1.417.0 (C1.7): who is asking, as the card's sentence subject. Iron
+ *  Jarvis's own checks (the finish check re-running the tests, a project's
+ *  checker) say so; everything else is "The assistant", as before. */
+export function askerSubject(asker: unknown): string {
+  return asker === "iron_jarvis" ? "Iron Jarvis" : "The assistant";
 }
 
 /** The card's labels, in one object, for any surface that lists them. */

@@ -112,8 +112,19 @@ describe("the approval card says what a generation would spend", () => {
     const card = screen.getByTestId("chat-approval-card");
     expect(within(card).queryByTestId("approval-cost")).toBeNull();
     const plain = card.textContent ?? "";
-    // The only difference between the two cards is the cost words.
-    expect(withText).toBe(plain.replace("Waiting for you.", `${COST}Waiting for you.`));
+    // v1.417.0 (C1.7, moved on purpose): the daemon reads every answer to a
+    // PRICED call as once, so the priced card no longer offers (or names)
+    // "Allow for this chat" — its difference is the cost words AND the
+    // once-only sentence and buttons (lib/approvalWords.answersOnlyOnce).
+    expect(withText).toBe(
+      plain
+        .replace("Waiting for you.", `${COST}Waiting for you.`)
+        .replace(
+          "“Once” runs only this call; “this chat” stops asking for generate_media here; Deny refuses it and the assistant is told you declined.",
+          "“Allow once” runs only this call; Deny refuses it and the assistant is told you declined.",
+        )
+        .replace("Allow for this chat", ""),
+    );
     // The card's existing wording is pinned as it was before this wave.
     expect(plain).toContain("The assistant wants to");
     expect(plain).toContain("generate_media");
