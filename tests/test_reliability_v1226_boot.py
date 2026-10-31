@@ -283,7 +283,9 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
     # v1.398.0 (night shift N1), MOVED ON PURPOSE: `night_shift` — a night task
     # is running, or one is queued while the night window is open; the sleep
     # blocker holds for it too (tests/test_night_shift_v1398.py). `working`
-    # keeps its own meaning.
+    # keeps its own meaning. v1.414.0, MOVED ON PURPOSE: `code_replies` /
+    # `code_tools` — a Build › Code reply running (the update warning and the
+    # sleep blocker read them; tests/test_build_app_spine_desktop_v1414.py).
     assert idle == {
         "active_sessions": 0,
         "running_workflow_runs": 0,
@@ -295,6 +297,8 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
         "keep_awake": True,
         "working": False,
         "night_shift": False,
+        "code_replies": 0,
+        "code_tools": [],
     }
     with session_scope(app.state.platform.engine) as db:
         s = Session(task="t", status=SessionStatus.ACTIVE)
