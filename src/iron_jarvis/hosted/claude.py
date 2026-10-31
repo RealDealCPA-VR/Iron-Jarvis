@@ -430,6 +430,13 @@ class ClaudeDriver(Driver):
         #: A reply's end held back while a note waits to run (see _on_result).
         self._held: dict[str, Any] | None = None
         self._hold_timer: asyncio.TimerHandle | None = None
+        #: v1.414.0 (a USER BUG): the uuid of the turn's OWN message and
+        #: whether Claude Code has STARTED on it. A `result` that lands before
+        #: that belongs to earlier work (a background task's notice, measured
+        #: live: two results with 0 tokens in and out came first) and must not
+        #: end the reply — the answer to the user's message came after it.
+        self._turn_mid = ""
+        self._turn_started = False
 
     # -- the command line ------------------------------------------------------
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
@@ -496,6 +503,8 @@ class ClaudeDriver(Driver):
 
     async def send_user(self, text: str, files: list[str]) -> None:
         msg = await self._user_message(text, files, "")
+        self._turn_mid = str(msg.get("uuid") or "")
+        self._turn_started = False
         self.turn_open = True
         self._errored = False
         self._interrupting = False
@@ -658,6 +667,13 @@ class ClaudeDriver(Driver):
         if state == "queued":
             self._queued.add(mid)
         if not ref:
+            if mid == self._turn_mid:
+                if state in ("started", "completed"):
+                    self._turn_started = True
+                elif state == "cancelled" and not self._turn_started and self.turn_open:
+                    # Dropped before it ever ran (a Stop with the message still
+                    # waiting): no result will come for it.
+                    self._finish(make("done", stop="interrupted"))
             return
         if state in ("started", "completed"):
             self.note_read(ref)
@@ -864,6 +880,10 @@ class ClaudeDriver(Driver):
         self.emit(ev)
 
     def _on_result(self, obj: dict[str, Any]) -> None:
+        if self.turn_open and self._lifecycle and self._turn_mid and not self._turn_started and not self._interrupting:
+            # v1.414.0: Claude Code has not started on the user's message yet,
+            # so this result ends earlier work, not this reply.
+            return
         usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
 
         def num(key: str) -> int:

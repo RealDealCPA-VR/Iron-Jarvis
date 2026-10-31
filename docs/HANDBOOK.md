@@ -2542,6 +2542,12 @@ Rest the pointer on an icon to see its name.
   own helpers included). When the tool is not running, nothing is listed; it
   starts again with your next message.
 
+
+**A reply waits for its own answer.** If Claude Code still has older work in
+hand when you send a message (for example, helpers a usage limit stopped),
+it may finish that first. The reply now stays open until Claude Code has
+answered your message, instead of ending early with "0 in, 0 out".
+
 ## A project knows its coding sessions (v1.414.0)
 
 A project now sees the coding work done in its own folder.

@@ -4732,6 +4732,21 @@ does not need a bump, stop and bump it.
   purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
   tick per act — two ticks in one synchronous jump are one read now).
 
+- **A Build › Code reply ends on the answer to ITS message, never on earlier
+  work** (v1.414.0, a USER BUG: "0 in 0 out, it didn't work at all"). The
+  live process still held background agents a usage limit had stopped; on the
+  user's next message Claude Code first emitted two `result` frames for that
+  earlier work (0 tokens, before saying it STARTED on the message), the reply
+  ended on the first, and the real answer streamed in after "done". The real
+  CLI says `command_lifecycle` queued → started → … → result for a message
+  (measured on claude 2.1.311): `ClaudeDriver` keeps the turn's own uuid
+  (`_turn_mid`) and ignores a `result` while that message has not
+  `started` (only when lifecycle is known and nothing is being interrupted);
+  a message `cancelled` before it started ends the reply as interrupted.
+  An older CLI with no lifecycle is unchanged. Pin:
+  `tests/test_build_app_leftover_result_v1414.py` (2 of 3 red on the old
+  code).
+
 - **A project KNOWS its coding sessions: resolved by FOLDER at read time,
   merged into "Recent activity", and a repeated correction in Chat › Code is
   the chat's own Keep line** (v1.414.0, the context spine). THE READER:
