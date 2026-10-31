@@ -610,6 +610,20 @@ class ClaudeDriver(Driver):
             self.emit(make("notice", text=f"Claude Code now answers with {clip(res['model'], 80)}."))
         return "now"
 
+    async def context_breakdown(self) -> dict[str, Any] | None:
+        """v1.415.0: Claude Code's OWN ``/context`` — its ``get_context_usage``
+        control request (measured, claude 2.1.316: answered from what the
+        session holds, with NO model call, signed in or not): every part, its
+        tokens, the automatic-summary mark, the instruction files and the
+        extension tools. The service asks only while no reply runs."""
+        from ..context.breakdown import claude_breakdown
+
+        try:
+            res = await self.control("get_context_usage")
+        except Exception:  # noqa: BLE001 — a stopped tool or a refusal: no reading
+            return None
+        return claude_breakdown(res)
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 

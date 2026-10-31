@@ -796,6 +796,68 @@ def _overflow_refit(
     return refit
 
 
+def harness_context_breakdown(
+    d, report: Any, *, system_before: str, system: str, messages: Any, harness: Any,
+    harness_rules: str = "", grounding: Any = None, brain: Any = None,
+    pieces: "dict[str, list[str]] | None" = None, tool_specs: Any = (),
+) -> None:
+    """v1.415.0: put ``breakdown`` — what fills the conversation, part by part
+    (``context.breakdown.harness_breakdown``) — on a HARNESS turn's context
+    report, additively (every key the report already had is unchanged). Only
+    a harness turn (a coding session) gets it; every other turn's report is
+    byte for byte as before. ``system_before`` / ``system`` / ``messages`` are
+    the prompt handed to and returned by :func:`_apply_compaction` (so the
+    parts add up to its ``tokens``); ``pieces`` are the lane's own appended
+    sections (profile, attachments, the "/" skill …). MIRROR NOTE
+    (lock-step): both chat lanes call this at the same seam, OFF the loop
+    (``asyncio.to_thread`` — it estimates the whole prompt). Never raises."""
+    if harness is None or not isinstance(report, dict):
+        return
+    try:
+        from ..context.breakdown import harness_breakdown
+        from ..harness.compact import prompt_section as _summary_section
+        from ..harness.picked_skill import prompt_section as _skill_section
+        from ..harness.branches import prompt_line as _branch_line
+
+        parts: dict[str, list[str]] = {k: list(v) for k, v in (pieces or {}).items()}
+
+        def add(key: str, *texts: Any) -> None:
+            parts.setdefault(key, []).extend(t for t in texts if isinstance(t, str) and t)
+
+        g = grounding
+        add("rules", getattr(g, "folder_rules", ""), harness_rules)
+        add("memory", getattr(g, "lessons", ""), getattr(g, "index", ""), getattr(g, "fabric", ""),
+            getattr(g, "connector", ""))
+        if brain is not None:
+            add("memory", getattr(brain, "block", ""))
+            try:
+                add("memory", brain.without_tools())
+            except Exception:  # noqa: BLE001
+                pass
+        add("project", getattr(g, "project", ""))
+        _map = str(getattr(getattr(harness, "project_map", None), "text", "") or "")
+        if _map:
+            add("project", "\n\n" + _map)
+        add("project", _branch_line())
+        add("skills", _skill_section())
+        add("summary", _summary_section())
+        if system.startswith(system_before) and len(system) > len(system_before):
+            # _apply_compaction's own summary of the older messages.
+            add("summary", system[len(system_before):])
+        _suggest, auto_at = _compaction_thresholds(d)
+        window = report.get("window") or 0
+        b = harness_breakdown(
+            system=system, messages=messages, window=int(window), pieces=parts,
+            tool_specs=list(tool_specs or ()), auto_at=auto_at,
+            rule_files=list(getattr(g, "folder_rules_used", None) or []),
+            enabled=_compaction_enabled(d),
+        )
+        if b:
+            report["breakdown"] = b
+    except Exception:  # noqa: BLE001 — a breakdown never breaks a turn
+        log.debug("context breakdown failed", exc_info=True)
+
+
 def refit_receipt(record: "dict[str, int] | None") -> "dict[str, int] | None":
     """The receipt's ``refit`` (v1.355.0, G55): ``{"dropped": n}`` when a
     too-long refusal was shrunk and retried this turn (n may be 0 — only the
@@ -8713,7 +8775,12 @@ async def run_chat_turn(
     # copy, agents/runtime, the round table); a profile that only reached chat
     # is the bug this wave exists to fix.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    system += _profile_section(platform)
+    # v1.415.0: each section a coding session's Context drop-down names is
+    # kept by name too (``_ctx_pieces``). MIRROR NOTE (lock-step): routes/chat.py.
+    _ctx_pieces: dict[str, list[str]] = {}
+    _profile_text = _profile_section(platform)
+    _ctx_pieces.setdefault("memory", []).append(_profile_text)
+    system += _profile_text
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py. Added here, before
     # the budget planner runs, so its cost is priced like every other section.
     system += DRAFT_BLOCK
@@ -8921,13 +8988,18 @@ async def run_chat_turn(
     images, attach_block = await _prep.take("attachments")
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+        _ctx_pieces.setdefault("attachments", []).append(
+            "\n\n# Attachments (provided by the user this turn)" + attach_block
+        )
     # THE PAGE THE USER IS ASKING ABOUT (v1.325.0): "Ask Jarvis about this
     # page" sends the dashboard page's text with ONE message; it is read here,
     # at the attachments seam, under an attachment's policy (scanned, fenced,
     # no trust change, priced by the planner). MIRROR NOTE (lock-step):
     # routes/chat.py's stream lane calls the same helper at the same seam.
     if _prep.has("page"):
-        system += await _prep.take("page")
+        _page = await _prep.take("page")
+        system += _page
+        _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0): what the user picked with "@"
     # from a pack rides THIS message like an attachment — read off the loop
     # through the pack's client (≤15 s each), promptguard-scanned, injected
@@ -8939,6 +9011,7 @@ async def run_chat_turn(
     )
     if _res_block:
         system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+        _ctx_pieces.setdefault("attachments", []).append(_res_block)
     # EARLIER CHATS THE USER POINTED TO (v1.326.0, "@ another chat"): up to
     # three saved conversations, read off the loop, title + newest messages
     # (role/content only), bounded, promptguard-scanned and fenced as
@@ -8949,6 +9022,8 @@ async def run_chat_turn(
         await _prep.take("refs") if _prep.has("refs") else ("", [])
     )
     system += _refs_block
+    if _refs_block:
+        _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
     # "/" skill invocation: the chosen skill's playbook rides the system
     # prompt (provider-agnostic, same as the terminal assist).
@@ -8972,11 +9047,13 @@ async def run_chat_turn(
                 cap=8000,
             )
         )
-        system += (
+        _skill_text = (
             f"\n\n# Skill invoked by the user: {sk.name}\n"
             "FOLLOW this playbook for this request.\n"
             + _playbook[:8000]
         )
+        system += _skill_text
+        _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0): who could
     # take escalated work (after the skills section, before the tools block,
@@ -9008,7 +9085,9 @@ async def run_chat_turn(
         # (`_none_on_error`) renders the honest "not accessible" wording
         # rather than a grounding claim tools cannot back.
         _ws_resolved = await _prep.take("workspace")
-        system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+        _ws_text = _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+        system += _ws_text
+        _ctx_pieces.setdefault("project", []).append(_ws_text)
 
     # IJ HARNESS (v1.366.0): the folder's own instruction files (when the
     # grounding above did not already carry them) and the component tree, at
@@ -9026,9 +9105,11 @@ async def run_chat_turn(
     # joins the system prompt and shortens the history, both of which the planner
     # then has to price. Signals at 70% and lets the user choose; acts alone only
     # at the ceiling. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    _system_before_compaction = system
     system, _ctx_messages, context_report = await _apply_compaction(
         d, body, system, provider_choice, model_choice
     )
+    _ctx_system = system
     plan = _plan_context(
         d, body, system, provider_choice, model_choice, messages=_ctx_messages
     )
@@ -9100,6 +9181,15 @@ async def run_chat_turn(
                 [n for n in _CODING if d.platform.registry.get(n) is not None]
             )
         tool_specs = _harness.specs(d.platform.registry)
+        # v1.415.0: what fills the conversation, part by part (additive).
+        # MIRROR NOTE (lock-step): routes/chat.py calls it at the same seam.
+        await asyncio.to_thread(
+            harness_context_breakdown,
+            d, context_report, system_before=_system_before_compaction,
+            system=_ctx_system, messages=_ctx_messages, harness=_harness,
+            harness_rules=_harness_rules, grounding=_grounding, brain=_brain,
+            pieces=_ctx_pieces, tool_specs=tool_specs,
+        )
     else:
         # The envelope's tool cap and the arming pass (off the event loop,
         # v1.196.0) were started with the other prep steps above (v1.332.0);

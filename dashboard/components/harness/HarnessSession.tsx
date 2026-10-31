@@ -2449,6 +2449,8 @@ export function HarnessSession({
       }}
       onSessionGone={onGone}
       branchPress={branchPress}
+      onCompact={() => void compact()}
+      compacting={compacting || elsewhereCompacting}
     />
   );
 

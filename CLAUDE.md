@@ -4117,6 +4117,66 @@ does not need a bump, stop and bump it.
   deregister the live base and `/ltm/sources` reports a custom base's kind as
   its name (older than this change).
 
+- **The Session tab's CONTEXT drop-down: what fills the conversation, part
+  by part, in BOTH coding-session views; a part nobody reported is never
+  shown** (v1.415.0; the user, beside Claude Code's own panel). MEASURED on
+  this PC, no model call: Claude Code 2.1.316 answers the stream-json control
+  request `get_context_usage` (signed out too) with `categories` [{id, name,
+  tokens, kind used|buffer|free|deferred}], totalTokens / maxTokens /
+  percentage, memoryFiles, mcpTools {name, serverName, tokens, isLoaded},
+  skills, autoCompactThreshold, isAutoCompactEnabled, messageBreakdown,
+  apiUsage (recorded: `tests/fixtures/claude_context_usage_v14150.json`); Pi
+  1.3.0 `get_session_stats` → `contextUsage {tokens, contextWindow, percent}`
+  (a total only; answered mid-run; `compact` exists but ABORTS a running
+  turn); Codex 0.157.0 `thread/tokenUsage/updated` {last, total,
+  modelContextWindow} (a total) and `thread/compact/start {threadId}` (not
+  wired: never measured live); OpenCode 1.18.18 ACP `usage_update` {used,
+  size} (a total; no compact command). ONE shape, `context/breakdown.py`:
+  {used, window, percent, source app|tool, parts [{key, label, tokens, kind}],
+  extra (sent but NOT in the percent), lists, auto_compact {enabled, at,
+  left, percent}}; `clean()` is what may be stored. CHAT › CODE:
+  `chat_turn.harness_context_breakdown` (both lanes, lock-step, harness turns
+  ONLY) puts `breakdown` on the context report — counted from the very
+  strings appended (`_ctx_pieces`: profile, attachments, page, resources,
+  refs, the "/" skill, workspace; plus the grounding's and the harness
+  block's own parts; a string not in the prompt is not counted), "System
+  prompt" = the rest, messages by `_apply_compaction`'s own rule (content +
+  4), so the used parts add up EXACTLY to the report's `tokens` and the
+  percent is unchanged; tool specs are `extra` (the compaction figure never
+  counted them — do NOT fold them in, the Compact offer keys off that
+  percent); `routes/build.context_receipt` keeps it on the reply line. Every
+  other report key is unchanged and a non-harness turn gets no `breakdown`.
+  "Summarize earlier messages at" is the REAL setting
+  `context_compaction.auto_at` (read via GET, saved via PUT /settings/values
+  with the rest of the dict kept; choices all above the 70 % offer mark).
+  BUILD › CODE: `GET /build/app/sessions/{id}/context` →
+  `HostedService.context_view`: asks `Driver.context_breakdown()` only while
+  the process runs (never started for it) and — unless the driver says
+  `context_while_working` (Pi) — only while no reply runs (`live.busy`;
+  answers `waiting`); a reading is kept in memory with its time and shown
+  only while no newer seen total contradicts it; else the total the tool
+  said after its last reply (`panes.seen_context`). Compact: Claude Code's
+  own `/compact` sent as a MESSAGE through the view's own send (idle only);
+  Codex/Pi/OpenCode answer `compact.why`. THE 1 % FINDING:
+  `seen.claude_context` read `usage.iterations[-1]`; Claude Code's own reader
+  (`Ste`, read from the binary) takes the last iteration that is NOT an
+  `advisor_message` / `compaction` and IS a `message` / `fallback_message` —
+  a side call's small prompt read as the conversation said a long session
+  was ~1 % full (pinned with an advisor iteration: (9400, 1M) on the old
+  code). Not proven to be the user's exact case (their session's events are
+  in the live home, not read). Dashboard: `components/harness/
+  ContextBreakdown.tsx` (one component, `prefix` session-rail|code-session;
+  a disclosure remembered per window in sessionStorage `ij.session.context.
+  open`; stacked bar of the used parts with each label in its accessible
+  name and in a row with tokens + percent; `AutoCompactChoice`),
+  `lib/contextBreakdown.ts`. Pins: `tests/test_context_breakdown_v14150.py`,
+  `dashboard/__tests__/context-breakdown-v1415-0.test.tsx` (+ fixture
+  `context-breakdown-v1415-0.json`, `IJ_REGEN_CONTEXT_BREAKDOWN=1`; the
+  Python test compares the SHAPE — numbers move with every prompt wording and
+  the date). OPEN: Claude Code is never asked mid-reply (not measured whether
+  it can answer then); Codex/Pi compact not wired; the Chat › Code breakdown
+  is from the newest reply (a later setting change shows on the next reply).
+
 - **Build's CODE view drives the user's REAL Claude Code / Codex with their
   OWN tools ON; Iron Jarvis only starts them, draws them and answers their
   permission questions as cards** (v1.409.0; the user: "a TUI … to control

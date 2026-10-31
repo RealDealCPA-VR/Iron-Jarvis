@@ -1409,6 +1409,13 @@ def context_receipt(ctx: Any) -> "dict[str, Any] | None":
         out["window_known"] = False
     if ctx.get("disabled") is True:
         out["disabled"] = True
+    # v1.415.0: what fills the conversation, part by part (the Session tab's
+    # Context drop-down) — kept only in its own shape (``breakdown.clean``).
+    from ...context.breakdown import clean as _clean_breakdown
+
+    parts = _clean_breakdown(ctx.get("breakdown"))
+    if parts is not None:
+        out["breakdown"] = parts
     return out
 
 

@@ -528,8 +528,15 @@ export function HarnessPanes({
   helpers = [],
   busy = false,
   branchPress = null,
+  onCompact,
+  compacting = false,
 }: {
   view: BuildSessionView;
+  /** v1.415.0: the Session tab's Context drop-down's "Compact session"
+   *  (the session's own Compact, `POST /build/sessions/{id}/compact`). */
+  onCompact?: () => void;
+  /** A Compact is under way. */
+  compacting?: boolean;
   livePlan: PlanView | null;
   /** v1.406.0 part 4: the next-step box's Commit / "Open a pull request" —
    *  each new `n` opens the Changes tab on the Branch view and its press. */
@@ -704,6 +711,8 @@ export function HarnessPanes({
             helpers={helpers}
             busy={busy}
             refreshKey={refreshKey}
+            onCompact={onCompact}
+            compacting={compacting}
             onOpenChanges={() => {
               setChangesScope("session");
               choose("changes");
