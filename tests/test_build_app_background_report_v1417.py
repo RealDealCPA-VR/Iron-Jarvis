@@ -152,13 +152,16 @@ async def test_the_flags_are_read_before_the_events(app, work, tmp_path, monkeyp
         drv = live.driver
         _task(drv, "task_started", "a1", task_type="local_agent")
         _task(drv, "task_notification", "a1", status="completed")
-        real_read = live.log.read
+        # v1.418.0 (moved on purpose): a live session's view is served from
+        # the log's MEMORY (`_view_events`, one file read), so the moment the
+        # events are read is that call, not `log.read`.
+        real_events = svc._view_events
 
-        def read_while_it_ends(n):
+        async def read_while_it_ends(*a, **kw):
             drv._alone = False  # the report's result lands during the read
-            return real_read(n)
+            return await real_events(*a, **kw)
 
-        monkeypatch.setattr(live.log, "read", read_while_it_ends)
+        monkeypatch.setattr(svc, "_view_events", read_while_it_ends)
         assert (await _row(c, s["id"]))["session"]["self_reply"] is True
         assert (await _row(c, s["id"]))["session"]["self_reply"] is False
     await stop_all(app)

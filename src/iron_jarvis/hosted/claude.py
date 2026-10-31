@@ -1110,11 +1110,19 @@ class ClaudeDriver(Driver):
             tid = str(obj.get("task_id") or "")
             if tid:
                 self._tasks[tid] = str(obj.get("task_type") or "")
+            # v1.418.0 (C4.3): the start is said too (a backgrounded task with
+            # no row of its own) — the bookkeeping above never swallows it.
+            text = system_notice(obj)
+            if text:
+                self.emit(make("notice", text=text))
         elif sub == "task_notification":
             self._tasks.pop(str(obj.get("task_id") or ""), None)
             if not self.turn_open:
                 # Claude Code wakes itself to report what the task did.
                 self._alone = True
+            text = system_notice(obj)
+            if text:
+                self.emit(make("notice", text=text))
         elif sub == "compact_boundary":
             self._compacting = False
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))
