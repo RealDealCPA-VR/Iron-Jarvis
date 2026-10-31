@@ -109,6 +109,8 @@ export interface CodeUsage {
     planLabel: string;
     status: string;
     windows: UsageWindow[];
+    /** When Iron-Proxy saw its OLDEST number shown ("" = not said). */
+    at: string;
   } | null;
   seen: { windows: UsageWindow[]; at: string; plan: string } | null;
   totals: {
@@ -161,6 +163,7 @@ export function decodeCodeUsage(raw: unknown): CodeUsage | null {
           planLabel: str(a.plan_label, 60),
           status: str(a.status, 40),
           windows: windowsOf(a.windows),
+          at: str(a.at, 40),
         }
       : null,
     seen: s && seenWindows.length ? { windows: seenWindows, at: str(s.at, 40), plan: str(s.plan, 40) } : null,
@@ -227,6 +230,11 @@ export interface CodeOverview {
   context: CodeUsage["context"];
   toolRunning: boolean;
   programs: { pid: number; name: string; command: string }[];
+  /** v1.414.0 review: false = the listing could not be read (never "nothing
+   *  is running"); an older daemon that does not say reads as known. */
+  programsKnown: boolean;
+  /** The listing was cut at its bound: more run than are listed. */
+  programsMore: boolean;
 }
 
 export function decodeCodeOverview(raw: unknown): CodeOverview | null {
@@ -249,6 +257,8 @@ export function decodeCodeOverview(raw: unknown): CodeOverview | null {
     context: decodeContext(r.context),
     toolRunning: r.tool_running === true,
     programs,
+    programsKnown: r.programs_known !== false,
+    programsMore: r.programs_more === true,
   };
 }
 

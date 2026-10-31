@@ -155,6 +155,8 @@ async function inside(page: Page, testid: string): Promise<boolean> {
 
 for (const size of [
   { width: 1280, height: 800 },
+  // v1.414.0 review: 1024 — under xl, the panes below the conversation.
+  { width: 1024, height: 768 },
   { width: 390, height: 844 },
 ]) {
   test(`${size.width} px — Build › Code's right column: four tabs, each pane opens, nothing wider than the window`, async ({
@@ -195,6 +197,18 @@ for (const size of [
     await aside.getByRole("tab", { name: "Session" }).click();
     await expect(page.getByTestId("code-session-branch")).toContainText("On branch");
     await expect(page.getByTestId("code-session-programs")).toContainText("node.exe");
+
+    // The arrow keys move between the tabs (and focus follows).
+    await aside.getByRole("tab", { name: "Session" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(aside.getByRole("tab", { name: "Changes" })).toHaveAttribute("aria-selected", "true");
+    await expect(aside.getByRole("tab", { name: "Changes" })).toBeFocused();
+
+    // The conversation's box still takes words with the column present.
+    const typed = page.getByTestId("code-box");
+    await typed.scrollIntoViewIfNeeded();
+    await typed.fill("check the cart");
+    await expect(typed).toHaveValue("check the cart");
 
     await page.waitForTimeout(300);
     expect(await inside(page, "code-panes-aside")).toBe(true);

@@ -254,9 +254,13 @@ describe("Changes", () => {
     });
     expect(H.calls.filter((p) => p.endsWith("/changes")).length).toBe(idle);
     view.rerender(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running />);
-    await act(async () => {
-      vi.advanceTimersByTime(CODE_PANES_POLL_MS * 2 + 50);
-    });
+    // One poll at a time (v1.414.0 review: a timed read waits for the one
+    // still out, so two ticks in one synchronous jump are one read).
+    for (let i = 0; i < 2; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(CODE_PANES_POLL_MS + 25);
+      });
+    }
     await waitFor(() => expect(H.calls.filter((p) => p.endsWith("/changes")).length).toBeGreaterThanOrEqual(idle + 2));
     // The reply ends: one more read (its last changes), then no more.
     view.rerender(<CodePanes session={SESSION} tools={TOOLS} events={EVENTS} running={false} />);

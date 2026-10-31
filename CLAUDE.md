@@ -4669,7 +4669,34 @@ does not need a bump, stop and bump it.
   of 200k, branch main. OPEN: a stale tool report is shown with its age, not
   refreshed; Codex context counts the last call's total tokens; the git base
   ignores a branch switch during the session; Terminal/Browser tabs not
-  added.
+  added. REVIEW (each red first; 17 + 6 mutations, all red): a program's
+  command goes through `harness/process._shown_command` (the v1.404.0 rule:
+  the word after `--token`/`--api-key` hidden — `one_line` masked shapes
+  only and showed `--token s3cr3t…`); `program_listing` answers `{programs,
+  known, more}` → overview `programs_known` (a psutil refusal read "Nothing
+  is running") and `programs_more` (cut at `MAX_PROGRAMS`, said); a window
+  the TOOL reported whose `resets_at` passed is dropped like Iron-Proxy's
+  (`_now()` is the seam; the 1409 recording's windows are judged at their
+  own time); Iron-Proxy windows carry their `at` and the account its OLDEST
+  (`code-usage-proxy-when` "…, 2 h ago"). GIT THAT DID NOT ANSWER IS NEVER A
+  LIST (`GitUnreadable` → `source: none` + `GIT_UNREADABLE` words): a
+  timed-out/failed name-status ("No files changed yet"), numstat (every file
+  "binary"), ls-files (new files missing), rev-list (only `rev-parse --verify
+  -q HEAD` exiting 1 means no commits — else the empty tree listed every file
+  "created"), and a rev-parse refusal other than "not a git repository"
+  ("dubious ownership" read "not in a git repository"); git missing says so
+  (`NO_GIT_WORDS`). ONE git child for every file's diff (`_patches`: the
+  combined `git diff -- <paths>` cut at `diff --git` lines, each piece
+  checked against the line predicted for its entry, else that file alone;
+  past `PATHSPEC_CHARS` per file; a combined read that TIMED OUT is not
+  retried per file and every row says `DIFF_UNREAD`) — 50 files: 54 children
+  / ~3 s → 6 / ~0.35 s, on every 5 s poll. The page's TIMED reads skip while
+  one is out (`usePaneRead` `inFlight`; a press or a reply's end still reads
+  at once). e2e adds 1024 × 768, the arrow keys and typing into the box.
+  Pins: `tests/test_build_code_panes_review_v1414.py`,
+  `dashboard/__tests__/build-code-panes-review-v1414.test.tsx`; moved on
+  purpose: the v1414 usage test (a FUTURE reset) and the polling test (one
+  tick per act — two ticks in one synchronous jump are one read now).
 
 - **A project KNOWS its coding sessions: resolved by FOLDER at read time,
   merged into "Recent activity", and a repeated correction in Chat › Code is

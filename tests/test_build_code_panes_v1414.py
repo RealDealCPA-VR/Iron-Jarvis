@@ -184,7 +184,9 @@ async def test_usage_sums_the_replies_and_keeps_the_newest_windows_with_their_ti
         sid = (await new_session(c, folder))["id"]
         none = (await c.get(f"/build/app/sessions/{sid}/usage")).json()
         w1 = [{"key": "five_hour", "label": "5-hour window", "percent": 10, "resets_at": None}]
-        w2 = [{"key": "five_hour", "label": "5-hour window", "percent": 31, "resets_at": "2026-10-30T20:00:00Z"}]
+        # v1.414.0 review: a reset in the FUTURE (a past one is over and left out).
+        later = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+        w2 = [{"key": "five_hour", "label": "5-hour window", "percent": 31, "resets_at": later}]
         _log(
             app, sid,
             make("usage", input=100, output=10, cache_read=50, list_price=True, cost_usd=0.5, windows=w1),
@@ -242,6 +244,13 @@ async def test_the_real_parser_puts_the_tools_windows_on_the_reply(tmp_path, mon
     work = tmp_path / "work"
     work.mkdir()
     use_fake(monkeypatch, "claude_edit", tmp_path / "fake.log")
+    # v1.414.0 review: the recorded windows reset long ago, and a window whose
+    # reset has passed is left out — judge them at the time they were recorded.
+    edit = json.loads((FIX / "claude_edit.json").read_text(encoding="utf-8"))["steps"]
+    info = next(r["out"]["rate_limit_info"] for r in edit if isinstance(r.get("out"), dict)
+                and r["out"].get("type") == "rate_limit_event")
+    first_reset = min(w["resetsAt"] for w in info["unifiedWindows"].values() if w.get("resetsAt"))
+    monkeypatch.setattr(PN, "_now", lambda: datetime.fromtimestamp(first_reset - 3600, tz=timezone.utc))
     app = create_app(str(tmp_path / "home"))
     svc = S.service_for(app.state.platform)
     async with client(app) as c:

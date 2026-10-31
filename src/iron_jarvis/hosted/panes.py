@@ -76,6 +76,22 @@ TOOL_WORDS = (
     "files it edited with its file tools. Changes made by commands it ran are not "
     "listed, and lines may have moved since."
 )
+#: v1.414.0 review: git missing is said as git missing (it read "not in a git
+#: repository" of a folder that may well be one).
+NO_GIT_WORDS = (
+    "git is not installed on this PC, so this is {tool}'s own record of the "
+    "files it edited with its file tools. Changes made by commands it ran are not "
+    "listed, and lines may have moved since."
+)
+#: v1.414.0 review: git that did not answer is never "no changes" or "not a
+#: repository" — both were what the first cut said.
+GIT_UNREADABLE = "git could not read this folder's changes, so none are listed: {why}."
+GIT_TIMED_OUT = "it did not answer in time"
+#: v1.414.0 review: past this many characters of pathspec (Windows' command
+#: line holds 32,767) each changed file is read alone, as the first cut did.
+PATHSPEC_CHARS = 16_000
+#: A changed file whose diff git did not give (said on its row).
+DIFF_UNREAD = "its diff could not be read here"
 NO_UNDO = "No Undo here: {tool} made these changes itself, so use git or {tool} to take one back."
 
 
@@ -131,18 +147,56 @@ def _git(args: list[str], cwd: str, *, input: bytes | None = None) -> Any:
     return _g(args, cwd, reads=True, input=input)
 
 
+class GitUnreadable(Exception):
+    """git ran (or may have) in a repository and did not answer: the pane says
+    so in words, never "no changes" or "not a repository" (v1.414.0 review)."""
+
+    def __init__(self, got: Any) -> None:
+        why = GIT_TIMED_OUT if getattr(got, "timed_out", False) else _git_reason(got)
+        super().__init__(why)
+        self.words = GIT_UNREADABLE.format(why=why)
+
+
+def _git_reason(got: Any) -> str:
+    """git's own first error line, masked and cut (``fatal:`` dropped)."""
+    for raw in str(getattr(got, "err", "") or "").splitlines():
+        line = raw.strip()
+        if line:
+            if line.lower().startswith("fatal:"):
+                line = line[6:].strip()
+            return one_line(line, 160).rstrip(".")
+    return "it stopped with an error"
+
+
 def _base_commit(folder: str, since: datetime) -> str | None:
     """The commit HEAD was on when the session started (the newest
     first-parent commit no later than ``since``), the empty tree when every
-    commit is newer (or there is none yet), None when this is no repository."""
+    commit is newer (or there is none yet), None when this is no repository.
+    Raises :class:`GitUnreadable` when git did not answer (a time limit, a
+    repository it refuses to read — "dubious ownership"): that is not "no
+    repository"."""
     inside = _git(["rev-parse", "--is-inside-work-tree"], folder)
-    if not inside.ok or inside.out.strip() != "true":
+    if not inside.ok:
+        if not inside.timed_out and "not a git repository" in str(inside.err or "").lower():
+            return None
+        raise GitUnreadable(inside)
+    if inside.out.strip() != "true":
         return None
     # git dates have whole seconds and ``--before`` includes its second: a
     # commit made in the session's first second must not become the base.
     start = since.astimezone(timezone.utc).replace(microsecond=0) - timedelta(seconds=1)
     stamp = start.strftime("%Y-%m-%d %H:%M:%S +0000")
     got = _git(["rev-list", "-1", "--first-parent", f"--before={stamp}", "HEAD"], folder)
+    if not got.ok:
+        # No commits yet (HEAD names no commit: ``rev-parse --verify -q``
+        # exits 1 and says nothing) reads against the empty tree; anything
+        # else (a time limit) is not that — the empty tree would list every
+        # tracked file as created.
+        if got.timed_out:
+            raise GitUnreadable(got)
+        head = _git(["rev-parse", "--verify", "-q", "HEAD"], folder)
+        if head.ok or head.timed_out or head.code != 1:
+            raise GitUnreadable(got)
     sha = got.out.strip() if got.ok else ""
     if sha:
         return sha
@@ -162,7 +216,12 @@ def git_changes(folder: str, since: datetime) -> dict[str, Any] | None:
         return None
     wt = Path(folder)
     status = _git(["diff", "--no-color", "--no-ext-diff", "-M", "--relative", "--name-status", "-z", base], folder)
+    if not status.ok:
+        raise GitUnreadable(status)
     numstat = _git(["diff", "--no-color", "--no-ext-diff", "-M", "--relative", "--numstat", "-z", base], folder)
+    if not numstat.ok:
+        # Without the counts every file would read as a binary file.
+        raise GitUnreadable(numstat)
     counts: dict[str, tuple[int | None, int | None]] = {}
     if numstat.ok:
         parts = B._split_z(numstat.out)
@@ -181,49 +240,105 @@ def git_changes(folder: str, since: datetime) -> dict[str, Any] | None:
             else:
                 counts[bits[2]] = (added, removed)
     entries: list[tuple[str, str, str]] = []
-    if status.ok:
-        parts = B._split_z(status.out)
-        i = 0
-        while i < len(parts):
-            code = parts[i]
+    parts = B._split_z(status.out)
+    i = 0
+    while i < len(parts):
+        code = parts[i]
+        i += 1
+        if not code:
+            continue
+        if code[:1] in ("R", "C"):
+            entries.append((code[:1], parts[i], parts[i + 1] if i + 1 < len(parts) else ""))
+            i += 2
+        else:
+            entries.append((code[:1], parts[i] if i < len(parts) else "", parts[i] if i < len(parts) else ""))
             i += 1
-            if not code:
-                continue
-            if code[:1] in ("R", "C"):
-                entries.append((code[:1], parts[i], parts[i + 1] if i + 1 < len(parts) else ""))
-                i += 2
-            else:
-                entries.append((code[:1], parts[i] if i < len(parts) else "", parts[i] if i < len(parts) else ""))
-                i += 1
     changes: list[dict[str, Any]] = []
-    more = False
-    for code, old, new in entries:
-        if len(changes) >= MAX_FILES:
-            more = True
-            break
+    more = len(entries) > MAX_FILES
+    shown = entries[:MAX_FILES]
+    for (code, old, new), patch in zip(shown, _patches(folder, base, shown)):
         rel = new or old
         added, removed = counts.get(rel, (None, None))
-        paths = [old, new] if old != new else [new]
-        patch = _git(["diff", "--no-color", "--no-ext-diff", "-M", "--relative", base, "--", *paths], folder)
         row: dict[str, Any] = {
             "path": str(wt / rel), "rel": rel, "name": rel.rsplit("/", 1)[-1],
             "status": {"A": "created", "D": "deleted"}.get(code, "modified"),
-            "added": added, "removed": removed, "diff": patch.out if patch.ok else "",
+            "added": added, "removed": removed, "diff": patch or "",
         }
+        notes = [f"renamed from {old}"] if code == "R" and old != new else []
         if added is None and removed is None:
             row.update(binary=True, diff="binary file", size=B._size_now(wt / rel))
-        if code == "R" and old != new:
-            row["note"] = f"renamed from {old}"
+        elif patch is None:
+            # v1.414.0 review: said, never an empty diff under real counts.
+            notes.append(DIFF_UNREAD)
+        if notes:
+            row["note"] = "; ".join(notes)
         if len(row["diff"]) > DIFF_CAP:
             row["diff"], row["truncated"] = row["diff"][:DIFF_CAP], True
         changes.append(row)
     untracked = _git(["ls-files", "--others", "--exclude-standard", "-z"], folder)
-    for rel in [p for p in B._split_z(untracked.out) if p] if untracked.ok else []:
+    if not untracked.ok:
+        raise GitUnreadable(untracked)
+    for rel in [p for p in B._split_z(untracked.out) if p]:
         if len(changes) >= MAX_FILES:
             more = True
             break
         changes.append(B._new_file_change(wt, rel))
     return {"changes": changes, "truncated_files": more, "base": base[:12]}
+
+
+def _diff_head(old: str, new: str) -> str | None:
+    """The ``diff --git`` line git writes for one entry under
+    ``core.quotepath=off``; None when git would C-quote a name (a quote, a
+    backslash, a control character) — that file is then read alone."""
+    both = old + new
+    if any(c in both for c in ('"', "\\")) or any(ord(c) < 32 or ord(c) == 127 for c in both):
+        return None
+    return f"diff --git a/{old} b/{new}"
+
+
+def _patches(folder: str, base: str, entries: list[tuple[str, str, str]]) -> list[str | None]:
+    """Each entry's unified diff against ``base``, with ONE git child for all
+    of them (v1.414.0 review: the first cut ran one per file — 54 children,
+    ~3 s, for 50 files, on every 5-second poll while a reply ran). The
+    combined output is cut at its ``diff --git`` lines; each piece must START
+    with the line predicted for its entry, in order. Anything else (a name git
+    quotes, a count that does not match, a pathspec too long for a command
+    line) reads that file alone, exactly as the first cut did. None = that
+    file's diff could not be read; a combined read that ran out of TIME is not
+    retried file by file (50 more waits of up to 30 s each)."""
+    if not entries:
+        return []
+    paths: list[str] = []
+    for _code, old, new in entries:
+        for p in ([old, new] if old != new else [new]):
+            if p and p not in paths:
+                paths.append(p)
+    pieces: list[str] = []
+    if sum(len(p) + 3 for p in paths) <= PATHSPEC_CHARS:
+        got = _git(["diff", "--no-color", "--no-ext-diff", "-M", "--relative", base, "--", *paths], folder)
+        if got.timed_out:
+            return [None] * len(entries)
+        if got.ok:
+            cur: list[str] = []
+            for line in got.out.splitlines(keepends=True):
+                if line.startswith("diff --git ") and cur:
+                    pieces.append("".join(cur))
+                    cur = []
+                cur.append(line)
+            if cur:
+                pieces.append("".join(cur))
+    whole = len(pieces) == len(entries)
+    out: list[str | None] = []
+    for i, (_code, old, new) in enumerate(entries):
+        head = _diff_head(old, new)
+        piece = pieces[i] if whole else ""
+        if head is not None and piece.split("\n", 1)[0].rstrip("\r") == head:
+            out.append(piece)
+            continue
+        alone = [old, new] if old != new else [new]
+        one = _git(["diff", "--no-color", "--no-ext-diff", "-M", "--relative", base, "--", *alone], folder)
+        out.append(one.out if one.ok else None)
+    return out
 
 
 def _hunks_only(diff: str) -> str:
@@ -296,15 +411,22 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str) -> dict[str,
     if not os.path.isdir(folder):
         out["words"] = FOLDER_GONE
         return out
-    got = git_changes(folder, since)
+    try:
+        got = git_changes(folder, since)
+    except GitUnreadable as gone:
+        out["words"] = gone.words
+        return out
     if got is not None:
         mine = tool_paths(events, folder)
         for c in got["changes"]:
             c["by_tool"] = _key(c["path"]) in mine
         out.update(source="git", words=GIT_WORDS, base=got["base"])
     else:
+        from ..harness import branches as B
+
         got = tool_changes(events, folder)
-        out.update(source="tool", words=TOOL_WORDS.format(tool=tool))
+        words = NO_GIT_WORDS if B.git_path() is None else TOOL_WORDS
+        out.update(source="tool", words=words.format(tool=tool))
     changes = got["changes"]
     out.update(
         changes=changes,
@@ -355,8 +477,15 @@ def seen_windows(events: list[dict[str, Any]]) -> dict[str, Any] | None:
         w = e.get("windows")
         if isinstance(w, list) and w:
             clean = []
+            now = _now()
             for x in w:
                 if not isinstance(x, dict) or not isinstance(x.get("percent"), (int, float)):
+                    continue
+                # v1.414.0 review: a window whose reset has passed is over —
+                # its old percent is not what is left (Iron-Proxy's windows
+                # are dropped the same way in account_usage).
+                ends = _when(x.get("resets_at"))
+                if ends is not None and ends <= now:
                     continue
                 clean.append({
                     "key": str(x.get("key") or "")[:40],
@@ -367,6 +496,22 @@ def seen_windows(events: list[dict[str, Any]]) -> dict[str, Any] | None:
             if clean:
                 return {"windows": clean, "at": e.get("at"), "plan": str(e.get("plan") or "")[:40]}
     return None
+
+
+def _now() -> datetime:
+    """Now, UTC (a seam: a recorded frame's windows are judged against the
+    time they were recorded in a test)."""
+    return datetime.now(timezone.utc)
+
+
+def _when(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        t = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo is not None else t.replace(tzinfo=timezone.utc)
 
 
 def seen_context(events: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -403,7 +548,7 @@ def account_usage(platform: Any, row: Any) -> dict[str, Any] | None:
         "resets_at": acc.get("resets_at"),
         "windows": [],
     }
-    now = datetime.now(timezone.utc)
+    now = _now()
     for w in BA.state_of(svc, account).get("windows") or []:
         if not isinstance(w, dict):
             continue
@@ -417,7 +562,13 @@ def account_usage(platform: Any, row: Any) -> dict[str, Any] | None:
             "label": SEEN.window_label(w.get("windowMins"), w.get("kind")),
             "percent": int(round(float(used))),
             "resets_at": BA._iso(resets),
+            # v1.414.0 review: when Iron-Proxy SAW this number (its own
+            # ``at``) — a number from a call hours ago is shown with its age.
+            "at": BA._iso(BA._parse(w.get("at"))),
         })
+    seen = [w["at"] for w in out["windows"] if w["at"]]
+    # The account's age is its OLDEST number's: never younger than any shown.
+    out["at"] = min(seen, key=lambda a: BA._parse(a)) if seen else None
     return out
 
 
@@ -466,42 +617,57 @@ def rule_files(folder: str) -> list[str]:
     return out
 
 
-def programs_under(pid: int | None) -> list[dict[str, Any]]:
+def program_listing(pid: int | None) -> dict[str, Any]:
     """The programs running under the tool's own process right now (its
-    helpers included), names and a masked command line."""
+    helpers included), names and a masked command line, as ``{programs,
+    known, more}``. v1.414.0 review: ``known`` False = the listing could not
+    be read (never "nothing is running"); ``more`` = cut at
+    :data:`MAX_PROGRAMS`."""
     if not pid:
-        return []
+        return {"programs": [], "known": True, "more": False}
     try:
         import psutil
     except ImportError:  # pragma: no cover - a dependency
-        return []
+        return {"programs": [], "known": False, "more": False}
     try:
         kids = psutil.Process(int(pid)).children(recursive=True)
     except (psutil.Error, OSError, ValueError):
-        return []
+        return {"programs": [], "known": False, "more": False}
+    from ..harness.process import _shown_command
+
     out: list[dict[str, Any]] = []
+    more = False
     for p in kids:
         try:
             name = p.name()
             if name.lower() in _PLUMBING:
                 continue
+            if len(out) >= MAX_PROGRAMS:
+                more = True
+                break
             try:
                 cmd = subprocess.list2cmdline(p.cmdline())
             except (psutil.Error, OSError):
                 cmd = ""
-            # one_line masks, THEN cuts (events.clip): a key never shows.
-            out.append({"pid": p.pid, "name": name[:80], "command": one_line(cmd, 160)})
+            # v1.414.0 review: the Session tab's v1.404.0 rule — the word after
+            # a secret-named flag (--token VALUE, --api-key VALUE) hidden, the
+            # known shapes masked, THEN the cut (a key never shows).
+            out.append({"pid": p.pid, "name": name[:80], "command": _shown_command(cmd)})
         except (psutil.Error, OSError):
             continue
-        if len(out) >= MAX_PROGRAMS:
-            break
-    return out
+    return {"programs": out, "known": True, "more": more}
+
+
+def programs_under(pid: int | None) -> list[dict[str, Any]]:
+    """:func:`program_listing`'s programs alone."""
+    return program_listing(pid)["programs"]
 
 
 def session_view(row: Any, events: list[dict[str, Any]], pid: int | None, running: bool) -> dict[str, Any]:
     """``GET /build/app/sessions/{id}/overview``. BLOCKING."""
     folder = str(getattr(row, "folder", "") or "")
     present = bool(folder) and not _network(folder) and os.path.isdir(folder)
+    listing = program_listing(pid) if running else {"programs": [], "known": True, "more": False}
     return {
         "folder": folder,
         "folder_exists": present,
@@ -510,5 +676,7 @@ def session_view(row: Any, events: list[dict[str, Any]], pid: int | None, runnin
         "rules": rule_files(folder) if present else [],
         "context": seen_context(events),
         "tool_running": bool(running),
-        "programs": programs_under(pid) if running else [],
+        "programs": listing["programs"],
+        "programs_known": listing["known"],
+        "programs_more": listing["more"],
     }

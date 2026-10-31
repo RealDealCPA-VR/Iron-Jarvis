@@ -109,10 +109,15 @@ function usePaneRead<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const seq = useRef(0);
+  // v1.414.0 review: the read still out. A TIMED read waits for it (a slow git
+  // read of a big repository must not pile reads up on the daemon); a press
+  // or a reply's end reads again at once (the newest answer wins).
+  const inFlight = useRef(0);
   const decodeRef = useRef(decode);
   decodeRef.current = decode;
   const again = useCallback(() => {
     const n = ++seq.current;
+    inFlight.current = n;
     get(`/build/app/sessions/${encodeURIComponent(sessionId)}/${part}`)
       .then((raw) => {
         if (n !== seq.current) return;
@@ -121,12 +126,18 @@ function usePaneRead<T>(
       })
       .catch((e) => {
         if (n === seq.current) setError(errText(e));
+      })
+      .finally(() => {
+        if (inFlight.current === n) inFlight.current = 0;
       });
   }, [sessionId, part]);
   useEffect(() => {
     again();
   }, [again, refresh]);
-  useVisibleInterval(again, CODE_PANES_POLL_MS, running);
+  const tick = useCallback(() => {
+    if (inFlight.current === 0) again();
+  }, [again]);
+  useVisibleInterval(tick, CODE_PANES_POLL_MS, running);
   return { data, error, again };
 }
 
@@ -386,7 +397,11 @@ function UsagePane({
         </p>
         {acc && acc.windows.length ? (
           <>
-            <p className={QUIET}>From Iron-Proxy&apos;s last look at this account.</p>
+            {/* v1.414.0 review: with its age — Iron-Proxy sees a number only
+                when the account makes a call, which can be hours ago. */}
+            <p data-testid="code-usage-proxy-when" className={QUIET}>
+              From Iron-Proxy&apos;s last look at this account{acc.at && agoWords(acc.at) ? `, ${agoWords(acc.at)}` : ""}.
+            </p>
             <WindowRows windows={acc.windows} testid="code-usage-proxy" />
           </>
         ) : null}
@@ -630,6 +645,10 @@ function SessionPaneTab({
           <p data-testid="code-session-tool-stopped" className={QUIET}>
             {toolName} is not running right now; it starts again with your next message.
           </p>
+        ) : !o.programsKnown ? (
+          <p data-testid="code-session-programs-unknown" className={QUIET}>
+            What runs under {toolName} could not be read right now.
+          </p>
         ) : o.programs.length === 0 ? (
           <p data-testid="code-session-programs-none" className={QUIET}>
             Nothing is running under {toolName} right now.
@@ -649,6 +668,11 @@ function SessionPaneTab({
                 </li>
               ))}
             </ul>
+            {o.programsMore ? (
+              <p data-testid="code-session-programs-more" className={QUIET}>
+                More run than are listed here (the first {o.programs.length} are shown).
+              </p>
+            ) : null}
           </>
         )}
       </Section>
