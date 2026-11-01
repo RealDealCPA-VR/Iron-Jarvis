@@ -23,10 +23,10 @@ the builder's code, then fixed and mutation-checked):
 
 from __future__ import annotations
 
+import asyncio
 import ntpath
 import os
 import sys
-from pathlib import Path
 
 import psutil
 import pytest
@@ -36,18 +36,37 @@ from iron_jarvis.hosted import service as S
 from iron_jarvis.terminals import shells as SH
 from tests._build_app_helpers_v1409 import client, new_session, stop_all, until, use_fake
 from tests.test_desktop_reliability_v1249 import _describe, requires_node
-from tests.test_build_app_programs_v14220 import (  # noqa: F401 — fixtures
-    _gone_soon,
-    _notices,
-    _say,
-    _serve_in_tool,
-    _step,
-    app,
-    started,
-    work,
-)
+from tests.test_build_app_programs_v14220 import _alive, _gone_soon, _notices, _say, _serve_in_tool, _step
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="the Code view's Job is a Windows Job")
+
+
+@pytest.fixture()
+def work(tmp_path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    return folder
+
+
+@pytest.fixture()
+def app(tmp_path):
+    from iron_jarvis.daemon.app import create_app
+
+    return create_app(str(tmp_path / "home"))
+
+
+@pytest.fixture()
+def started():
+    """Every process a test starts: ended at the end, and checked gone BY PID."""
+    pids: list[int] = []
+    yield pids
+    for pid in pids:
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
+    for pid in pids:
+        assert not _alive(pid), f"a process the test started ({pid}) is still running"
 
 
 # --------------------------------------------------------------------------- #
@@ -346,7 +365,6 @@ async def test_the_read_never_queues_behind_the_shared_pool(app, work, tmp_path,
     # queued there waited out its bound, read "unknown" minute after minute,
     # and after UNREAD_KEEPS_MAX of those the idle stop ended the dev server
     # it never saw — silently. The pool is held busy here: the read answers.
-    import asyncio
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -371,5 +389,126 @@ async def test_the_read_never_queues_behind_the_shared_pool(app, work, tmp_path,
                 await held
             assert got.known, "the read waited behind the shared pool and answered nothing"
             assert [p.ports for p in got.programs] == [(port,)]
+    finally:
+        await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 7. A session that starts working DURING the read is never stopped
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("how", ["card", "message"])
+async def test_a_session_that_starts_working_during_the_read_is_not_stopped(app, work, tmp_path, monkeypatch, how):
+    # The tree read takes real time off the loop (up to its bound). A card
+    # that opens, or a message that comes, meanwhile: the reaper looks again
+    # before it stops anything — a stop now would cut that work off.
+    import threading
+
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    svc = S.service_for(app.state.platform)
+    real_read = PG.read
+    reading, go = threading.Event(), threading.Event()
+
+    def slow_read(specs):
+        reading.set()
+        go.wait(10)
+        return real_read(specs)
+
+    monkeypatch.setattr(PG, "read", slow_read)
+    try:
+        async with client(app) as c:
+            s = await new_session(c, work)
+            await _say(c, s["id"])
+            live = svc.live[s["id"]]
+            live.driver._alone = False
+            late = max(live.last_active, live.last_heard) + S.IDLE_S + 1
+            task = asyncio.ensure_future(svc.reap_once(now=late))
+            await until(reading.is_set)
+            if how == "card":
+                live.asks["x"] = S.Ask("x", "approval", "Bash")
+            else:
+                live.last_active = late - 5  # a message came (``_drive`` stamps it)
+            go.set()
+            assert await task == [], f"the idle stop cut off work that began during its read ({how})"
+            assert live.proc is not None
+            live.asks.clear()
+    finally:
+        go.set()
+        await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 8. The builder's guarantees a mutation showed unpinned
+# --------------------------------------------------------------------------- #
+async def test_the_pool_stops_the_session_the_user_looks_at_after_the_others(app, work, tmp_path, monkeypatch):
+    # "A looked-at one next-to-last": with no programs anywhere, the session
+    # in front outlives an idle one even when it is the OLDER of the two.
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    monkeypatch.setattr(S, "MAX_LIVE", 2)
+    svc = S.service_for(app.state.platform)
+    try:
+        async with client(app) as c:
+            front = await new_session(c, work)
+            other = await new_session(c, work)
+            third = await new_session(c, work)
+            await _say(c, front["id"], "tf")  # the OLDEST: the old rule stopped it first
+            await _say(c, other["id"], "to")
+            await c.post(f"/build/app/sessions/{front['id']}/seen")
+            await _say(c, third["id"], "tt")
+            assert svc.live[front["id"]].proc is not None, "the pool stopped the session the user is looking at"
+            assert svc.live[other["id"]].proc is None
+    finally:
+        await stop_all(app)
+
+
+async def test_a_program_started_between_two_steps_still_counts(app, work, tmp_path, monkeypatch, started):
+    # "The FIRST step of the current process": a later step never moves the
+    # mark, or a dev server started before the tool's NEXT step reads as one
+    # of its own helpers and dies at the idle stop.
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    monkeypatch.setattr(PG, "STARTED_SLACK_S", 0.0)
+    svc = S.service_for(app.state.platform)
+    try:
+        async with client(app) as c:
+            s = await new_session(c, work)
+            await _say(c, s["id"])
+            live = svc.live[s["id"]]
+            _step(live, "tu1", "npm run dev")
+            first = live.first_step_at
+            pid, port = await _serve_in_tool(live, tmp_path / "srv.txt", started)
+            await asyncio.sleep(0.05)
+            _step(live, "tu2", "curl http://127.0.0.1:3000")  # it checks the server it started
+            live.driver._alone = False
+            assert live.first_step_at == first, "a later step moved the tool's first step"
+            assert await svc.reap_once(now=svc.clock() + S.IDLE_S + 1) == [], \
+                "a dev server started between two steps was not counted"
+            view = (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]
+            assert [p["ports"] for p in view["programs"]] == [[port]]
+            assert psutil.pid_exists(pid)
+    finally:
+        await stop_all(app)
+
+
+async def test_the_keep_line_goes_once_the_session_is_not_at_risk(app, work, tmp_path, monkeypatch, started):
+    # Kept for a dev server, then the user works in it again (and the server
+    # ended meanwhile): the row stops saying it keeps the session open.
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    svc = S.service_for(app.state.platform)
+    try:
+        async with client(app) as c:
+            s = await new_session(c, work)
+            await _say(c, s["id"])
+            live = svc.live[s["id"]]
+            _step(live)
+            live.driver._alone = False
+            pid, _port = await _serve_in_tool(live, tmp_path / "srv.txt", started)
+            late = max(live.last_active, live.last_heard) + S.IDLE_S + 1
+            assert await svc.reap_once(now=late) == []
+            assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]["keep_note"]
+            psutil.Process(pid).kill()
+            assert _gone_soon(pid)
+            live.last_active = late  # a message came and its reply ended
+            assert await svc.reap_once(now=late + 60) == []
+            row = (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]
+            assert row["keep_note"] == "" and row["programs"] == [], "the row still says a stopped program keeps it open"
     finally:
         await stop_all(app)
