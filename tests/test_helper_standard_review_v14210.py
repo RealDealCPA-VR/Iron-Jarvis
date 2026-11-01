@@ -15,6 +15,14 @@ pinned red first, or a guarantee the builder's own pins left unchecked:
   model's KNOWN window (``daemon/chat_turn._context_window``, the one ladder),
   what was shortened or left out is SAID, and an unknown window keeps the
   full section byte for byte.
+
+  INTEGRATION (Wave 1, parts A + C merged): part C made the agent planner
+  price the TOOL LIST at a known window (``plan_agent_transcript(
+  fixed_tokens=)``). A coding helper's tools alone measured 5,866 tokens, so
+  a 4,096-token window can never carry a coding helper whatever the standard
+  does: that run now ENDS with the "too small" sentence before any model
+  call (never a clipped task), and the standard's guarantee is pinned on a
+  window that can carry the tools (16,384).
 * THE NEW LEDGER COLUMN ON AN OLDER DATABASE: ``toolinvocation.shell_syntax``
   is added by the additive reconciler; a row an older app wrote reads (NULL →
   the platform's shell), the finish check's ``helper_commands`` reads it, and
@@ -61,8 +69,13 @@ def _worker_call(w) -> dict:
 # --------------------------------------------------------------------------- #
 
 
+#: A window that carries a coding helper's tools (measured 5,866 tokens) and
+#: still makes the standard smaller than its full size.
+SMALL_WINDOW = 16_384
+
+
 async def test_a_helper_on_a_small_window_keeps_its_task_and_is_told_what_was_cut(world):
-    """The worker's model is known to read 4,096 tokens at once (a pin, the
+    """The worker's model is known to read 16,384 tokens at once (a pin, the
     ladder's top rung): its piece arrives WHOLE, it still gets the standard's
     floor and checks and its own brief (cut to the window's share, said), and
     the section stays within that share and says what was cut to fit."""
@@ -73,7 +86,7 @@ async def test_a_helper_on_a_small_window_keeps_its_task_and_is_told_what_was_cu
         "---\ndescription: The worker's brief.\n---\nBRIEF-HEAD-MARK " + "Write small commits. " * 140,
         encoding="utf-8",
     )
-    world.p.config.model_context_windows = {f"{LOCAL[0]}::{LOCAL[1]}": 4096}
+    world.p.config.model_context_windows = {f"{LOCAL[0]}::{LOCAL[1]}": SMALL_WINDOW}
     members(world.p, reviewer=False)
     world.main = [piece("p1", TASK), "Done.", answer_note(world)]
     world.worker = ["Wrote it."]
@@ -85,12 +98,33 @@ async def test_a_helper_on_a_small_window_keeps_its_task_and_is_told_what_was_cu
     system = call["system"]
     assert STD.STANDARD_HEADER in system and STD.CHECKS_HEADING in system
     assert "taskkill /im" in system, "the guardrail floor is never cut"
-    assert "4,096 tokens at once" in system, "the cut was not said"
+    assert f"{SMALL_WINDOW:,} tokens at once" in system, "the cut was not said"
     assert "BRIEF-HEAD-MARK" in system, "the worker's own brief"
     assert STD.BRIEF_CUT.format(rel=".ironjarvis/harness/sub_agents/qwen.md") in system
     at = system.index(STD.STANDARD_HEADER)
     section = system[at:system.index(STD.CHECKS_CLOSE, at) + len(STD.CHECKS_CLOSE)]
-    assert len(section) <= STD.window_cap(4096), len(section)
+    assert len(section) <= STD.window_cap(SMALL_WINDOW), len(section)
+
+
+async def test_a_helper_whose_window_cannot_hold_its_tools_is_refused_never_clipped(world):
+    """INTEGRATION (parts A + C): a worker on a 4,096-token model cannot hold
+    a coding helper's tool list (measured 5,866 tokens), so its run ends with
+    the "too small" sentence BEFORE any model call: the worker's model is
+    never sent a clipped task, and the lead is told why the piece failed."""
+    _big_folder(world.ws)
+    world.p.config.model_context_windows = {f"{LOCAL[0]}::{LOCAL[1]}": 4096}
+    members(world.p, reviewer=False)
+    world.main = [piece("p1", TASK), "Done.", answer_note(world)]
+    world.worker = ["Wrote it."]
+    out = await stream(world.p, body(world.ws), team=T.SessionTeam(workers=("qwen",)))
+    assert out["done"], out["frames"][-3:]
+    assert not [c for c in world.calls if not c["main"] and c["provider"] == LOCAL[0]], (
+        "the worker's model was called on a window that cannot hold its tools"
+    )
+    told = json.dumps([c["messages"] for c in world.calls if c["main"]], default=str)
+    assert "too small for this job" in told and "4,096 tokens" in told, (
+        "the lead was not told why the piece failed"
+    )
 
 
 async def test_an_unknown_window_keeps_the_full_section(world):

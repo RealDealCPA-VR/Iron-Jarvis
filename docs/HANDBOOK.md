@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.420.2 (2026-11-01).*
+holds itself to. Current as of v1.421.0 (2026-11-01).*
 
 ---
 
@@ -2445,6 +2445,79 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## A team that works (v1.421.0)
+
+- **Helpers run commands the way your coding session does.** When a coding
+  session in Chat › Code hands a piece of work to a helper (a worker on your
+  model team, or a built-in helper), the helper's commands now run in Git
+  for Windows' bash when it is installed: the same shell the session itself
+  uses. Linux-style commands (`head`, `grep`, `sed`, `;`, here-documents)
+  work instead of failing in Windows' Command Prompt. Without Git for
+  Windows, helpers keep the Command Prompt as before. If a helper's test
+  command ran in bash, the finish check runs it again in bash.
+- **Helpers are held to the session's standard.** Each helper now sees what
+  the session's own work is judged by: the folder's AGENTS.md or CLAUDE.md,
+  the guardrails, the lessons you kept for that folder, the folder's brief
+  for its role (`.ironjarvis/harness/sub_agents/<name>.md`) and what the
+  finish check will look at. When a helper runs on a model that can only
+  take in a little at once (a local model loaded with a small window), Iron
+  Jarvis shortens that section to fit and tells the helper what it left
+  out, so the helper never loses its task. When your folder has briefs for
+  helpers, the session now hands a piece that fits one to a helper and
+  tells it to read that brief, instead of doing the piece itself.
+- **Your team's reviewer checks the change with git.** The reviewer can now
+  ask git what changed, see the history and see who wrote a line, as well as
+  read the files. It cannot change anything or run your tests (running the
+  tests is still the finish check's job), and it cannot run any program the
+  folder names. If the folder's own git settings would make git run a
+  program or read outside the folder, the reviewer is told no in one
+  sentence. It lists each problem on its own line, as "R1. file:line — what
+  is wrong — what to change", and it is told which team member changed which
+  file. The session's lead sees every one of those lines even when the
+  report is long, and hands each problem to the worker who changed that
+  file. A reviewer's report that reads like an instruction is held back from
+  the lead, and that reply is treated as untrusted.
+- **Every piece a team member works is on its record.** Work the lead hands
+  to a member by name now counts on that member's record, as well as work
+  asked for by role, so the team's routing and Settings › Models › Model
+  team see all of it. A review that asks for changes counts only against
+  the pieces that changed a file, never against a question a worker only
+  answered.
+- **A step written out as text is turned into a real step in every run.**
+  When a local model writes a step out as text instead of making it (for
+  example GLM's `<tool_call>` markup), Iron Jarvis now tells it once to make
+  the call, in a helper, a teammate or any agent run, not only in a coding
+  session. The written text is never run. This happens at most twice per
+  run and never twice in a row, and each one shows on the Autonomy card as
+  "a step a model wrote out as text and was told to run". A step quoted as
+  an example (inside a code block with more of the report after it) is left
+  alone, so a reviewer quoting a test file keeps its report.
+- **A local model is planned at its real size.** A local model's context
+  window now comes from its own server: vLLM's `max_model_len`, or the
+  window Ollama loaded it with. For a model behind a LiteLLM proxy, it is
+  read from the server the proxy sends it to. Before, these were planned at
+  the 32,000-token default. If Ollama loaded your model with a small window,
+  conversations are trimmed to fit it: raise `OLLAMA_CONTEXT_LENGTH`, or set
+  the window yourself in Settings.
+- **A model too small for the job says so.** When an agent's model has a
+  known window (set by you, measured, or read from its server), Iron Jarvis
+  now counts the agent's tool list against it as well as its instructions
+  and conversation. If the task, or the results the agent has to act on
+  next, cannot fit, the run stops at once with one sentence naming the
+  window ("This model's context window (4,096 tokens) is too small for this
+  job…") instead of repeating itself until its step limit. A window Iron
+  Jarvis only guesses never stops a run. When older steps are left out to
+  fit, a note Iron Jarvis added after a reply is kept or left out together
+  with that reply. A coding helper's tools alone take about 6,000 tokens,
+  so a local model loaded with a 4,096-token window cannot work as a coding
+  helper: give a model you use as a helper a window of at least 16,384
+  tokens.
+- **The Autonomy card counts helpers' approvals in the right place.** A
+  helper's approval card, and a card from "Try on several models", now
+  count under the coding session they belong to instead of "unattributed".
+- **A run whose memory profile cannot be read carries on.** Before, that
+  read failing could fail the whole agent run.
 
 ## The Code views stay in the window (v1.420.2)
 

@@ -13069,6 +13069,153 @@ does not need a bump, stop and bump it.
   moved on purpose: `test_cli_detect`, `test_grok_cli_adapter` ("grok
   login"). 23 mutations, all red (20 daemon/main.js, 3 dashboard).
 
+- **A team that works: a Build session's HELPERS run bash and see the
+  session's standard, every member piece is recorded, the reviewer verifies
+  with read-only git, and an agent run plans at its real window** (v1.421.0,
+  Wave 1 of `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`; the owner's decisions
+  A1/A4 of 2026-11-01; three builders + three reviewers + a fixer).
+  A1 (reverses v1.386.2's "helpers keep cmd"; a glm worker failed 182 of 742
+  Linux-shaped commands in cmd.exe in one day): for `HELPER_ORIGIN` +
+  `is_build_call`, the runtime decides ONCE per run, off the loop, through
+  `command_env.helper_command_facts` (the one source of syntax and words):
+  Windows + `git_bash.find()` → `self._shell_syntax[sid] = "bash"`, carried on
+  every step's `ToolContext.shell_syntax`; `shell` gets bash's words with
+  `native.HELPER_BACKGROUND_WORDS` (process_start, never
+  `run_in_background`), `host_os_line(bash=True)`. No bash, another OS, any
+  non-helper run, a chat's own helper: byte-identical cmd.
+  `ToolInvocation.shell_syntax` (additive; the update rehearsal drops it on
+  its older-table copy) records a command call's language for
+  shell/process_start only (registry `_COMMAND_TOOLS`), and
+  `finish.helper_commands` reads it so a worker's bash test re-runs in bash.
+  The runtime is the ONE other writer of `shell_syntax=` beside
+  `HarnessTurn.ctx_for` (pinned in `test_bash_dialect_v1386`). A test that
+  drives a helper's `shell` pins the native runtime (`SandboxManager.get` →
+  `NativeSandbox`): with Docker reachable the default policy runs it in a
+  Linux container — run shell-touching files here with
+  `DOCKER_HOST=tcp://127.0.0.1:9` (CI's state; `test_harness_helpers_v1372`'s
+  two Stop tests and `test_finish_replay_v1386` fail with Docker up).
+  A3: `harness/standard.HelperStandard` is built once per reply at the end of
+  `_build_harness` (Build session, folder, act mode, a helper door in the
+  gate): the lead's own rules text (never re-read), floor + folder
+  guardrails, accepted lessons, the scanned matching `sub_agents` brief
+  (member → asked agent → role/role-noun → type, ≤ 3,000 chars) and the
+  finish check's items; `STANDARD_CAP` 16,000, and `for_helper(names,
+  provider=, model=)` composes to `window_cap(window)` = 14% of the helper
+  model's KNOWN window (a brief ≤ a quarter, a part under `MIN_PART_CHARS`
+  200 left out, `WINDOW_CUT_LINE` says so; unknown or 32k+ windows keep the
+  full section byte for byte; a budget ≤ 0 leaves parts out — `_shares`
+  answers "no cap" there). It rides `helper_base(standard=)` in BOTH lanes
+  into `HelperParent.standard`; `helper_definition` appends it BEFORE the
+  worker rules, only with a folder and a `build:` session. The section rides
+  the system prompt, which the planner cannot shrink (the old 16k section
+  clipped a 4,096-window worker's piece to 400 chars). A7:
+  `ComponentTree.helpers` picks `SUB_AGENTS_HAND_OUT` vs `SUB_AGENTS_SOLO`;
+  a folder with no briefs renders identically (goldens unmoved). The
+  benchmark's `harness_sha256` includes `harness/standard` and
+  `harness/command_env`.
+  A2: both helper doors call `model_team.piece_role(record, asked=, team=,
+  base_type=)` → `(role, asked)`: an asked role the member holds, else no
+  row; a session's reviewer `review`; a worker `read` for a base type in
+  `helpers.READ_ONLY_TYPES`, else `code` if held, else its first role.
+  `TeamRoleRun` gains additive `asked` (role|name) and `files_json`
+  (`team_record.piece_files` from `outcome.session_result`, masked, ≤ 40;
+  an older table gains both through `open_db`, pinned in a fresh
+  interpreter). A named piece's task is unchanged (no `VERDICT_ASK`).
+  `credit_review` never takes a named review row as its cut-off, and SKIPS a
+  named piece whose session wrote no file (one "changes needed" counted two
+  failed code pieces for a worker that only answered a question); role
+  pieces are judged as before.
+  A4 (the owner: the reviewer gets read-only commands AND names exactly
+  what to fix for the lead to redistribute): `harness/git_read.py`
+  (`git_read`; allow tier, read-only, untrusted output, masked, ≤ 30,000)
+  is armed ONLY through `helpers.REVIEW_ALWAYS` in `helper_definition`'s
+  reviewer-only branch (on no roster, not in `CODING_TOOLS`; permission row,
+  run words, `gen_tool_words` + both fixtures done). IT IS A BLOCKLIST over
+  git's huge option/config surface, and the review found nine more holes
+  against real git 2.50 (each pinned with a trapped repo whose control run
+  proves the trap fires, `tests/test_git_read_review_v14210.py`): `status
+  -v` ran textconv; a filter name holding `=` cannot be emptied by `-c`
+  (such a folder is refused; settings read with `-z`); `format.pretty` /
+  `pretty.<alias>` with `%G?` ran gpg (every `gpg.*program` set empty); a
+  short-option cluster like `-nO<prog>` ran the pager (git reads clusters
+  LETTER BY LETTER); a submodule's `diff.external` via `diff.submodule=diff`
+  or `--submodule` (`diff.submodule=short`, `submodule.recurse=false`
+  forced); `core.worktree` outside the folder (the working folder must
+  contain the session folder; a network path refused by its text);
+  Iron Jarvis's protected folders inside the repository's top
+  (`_place_problem`); `blame.ignoreRevsFile` echoing an outside file;
+  `--remerge-diff` / `log.diffMerges=remerge` ran the merge driver
+  (`log.diffMerges=separate` forced). `describe --dirty` writes the index
+  (refused). Before widening git_read, re-run that trapped-repo harness.
+  KNOWN: a junction inside the folder pointing out is followed by `blame
+  --contents` / `grep --untracked`; a `.git` file's `gitdir:` elsewhere is
+  read; `core.attributesFile` outside can leak invalid attribute names on a
+  failing call's stderr; a user's global filter (Git LFS) still runs; a home
+  folder that is itself a repository refuses git_read everywhere under it.
+  `finish.review_brief(…, who)` ends with `REVIEW_FINDINGS_ASK` (`R<n>.
+  <path>:<line> — … — …` above the UNCHANGED `VERDICT_ASK`; `FINDING_RX` is
+  the stable prefix; `verdict_of` still reads the last line) and lists
+  `who_changed_what` (file → member). The lead's note uses
+  `report_for_lead`: a CLEAN report has its prose cut, findings and verdict
+  whole; a FLAGGED report goes to the fence WHOLE (cutting first moved an
+  instruction out of the scanned text, so the reply stayed at full trust);
+  `TEAM_REVIEW_ASK` routes findings by name. E6: `core/approvals.run_place`
+  reads the bare `build_session` helpers write (every helper card was
+  surface `agent`, no thread); `eval/autonomy.compute` places OLD helper asks
+  by the run's `options.build_session` and attempt asks by `_bare_thread`
+  (the live DB's last week: 0 placed / 12 unattributed → 11 / 1, the
+  sidebar's).
+  A5: `agents/runtime.perceive_act` answers a tool call written as TEXT
+  (`mode.named_text_tool_call`, only for a tool the step OFFERED) with the
+  reply + `mode.TEXT_TOOL_CALL_NUDGE` as plain turns and goes on, never
+  executing the text; with a step left, never twice in a row, ≤
+  `TEXT_CALL_NUDGES_PER_RUN` (2) a run, counted as max(the breaker-state key
+  "text_call_nudges", notes in the run's messages) so it spans both flat
+  allotments, decomposed mini-loops and a resume. A call is read only from
+  bare text or a fenced block that ENDS the reply: inline code and fences
+  with text after them are quotations (`_call_text`; inline spans paired by
+  index in `_blank_inline_code` — never a backtracking regex on a reply, it
+  can be 200,000 chars and is read on the loop; one took 30 s on 80k).
+  `core/nudges.TEXT_TOOL_CALL` is published by the runtime and both chat
+  lanes (`chat_turn.note_text_tool_call`, lock-step); a new `NUDGE_KINDS`
+  entry needs a `dashboard/lib/autonomyMetrics` SYSTEM_WORDS row. NEVER
+  `import logging` inside a runtime method: it makes the name local to the
+  whole method, and the brain block's warning raised `UnboundLocalError` and
+  failed runs (`tests/test_run_body_logging_v14210.py`).
+  D3: the window ladder's "endpoint" rung reads `fleet/windows.probed_window`
+  off `platform.fleet_sampler` — vLLM `max_model_len`, else Ollama's loaded
+  `context_length`, a LiteLLM alias followed to its deployment — below the
+  gateway-stated window; unknown stays unknown; it never makes a request. A
+  test of a fleet window builds the REAL registry + sampler
+  (`tests/_fakes/fleet_window.py`), never a `nodes()[].models` fake (that
+  shape kept a dead rung green for years). RISK: Ollama's `/api/ps`
+  `context_length` may overstate, and the daily driver's glm window becomes
+  vLLM's `max_model_len`. THE PLANNER: `context/agent_window.blocks_of` joins
+  every role=user message after the first to the block before it (the
+  closing-offer, text-call, carry-on, cut-off and resume notes, a steer), so
+  it never sends `[task, note]`; `plan_agent_transcript(fixed_tokens=)`
+  prices tool definitions (0 = as before; the runtime passes it ONLY at a
+  known window with tools; `raw_tokens` and `_maybe_compact` stay
+  transcript-only — and so does the chat lanes' `_fit_turn_transcript`);
+  `TranscriptPlan.lost_newest` + `runtime.ContextTooSmall`: at a KNOWN
+  window a clipped task or a lost newest block ends the run FAILED with
+  `context_too_small_result(...)` before the model call (flat and decomposed
+  alike); a guessed window never raises. A spy on `plan_agent_transcript`
+  must take `**kw`. INTEGRATION (A + C merged): a coding helper's tool list
+  measured 5,866 tokens, so a 4,096-token worker can NEVER carry a coding
+  piece — it is refused "too small" before any model call (pinned in
+  `test_helper_standard_review_v14210`), and A3's standard guarantee is
+  pinned at 16,384. A slimmer tool set for small-window workers is open. Pins: `tests/test_{helper_standard,helper_standard_review,
+  team_named_pieces,git_read,git_read_review,review_findings,
+  review_findings_review,autonomy_attribution,agent_text_tool_call,
+  agent_text_tool_call_review,fleet_probe_window,agent_window_notes,
+  agent_too_small,run_body_logging}_v14210.py`,
+  `dashboard/__tests__/text-tool-call-nudge-v1421-0.test.ts`; moved on
+  purpose: `test_bash_dialect{,_review}_v1386`, `test_team_doors_v1395`,
+  `test_team_review_finish_v1401`, `test_roster_coverage_v1178`, the two
+  v1201 envelope files, `test_agent_context_v1152` (a 3k window → FAILED),
+  `test_compaction_agents_v1153`, `test_update_rehearsal_v1338`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
