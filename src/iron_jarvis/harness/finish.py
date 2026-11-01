@@ -227,6 +227,13 @@ GONE_HEAD = "## Files that were here when this reply began and are gone now"
 #: was checked, and the note promises it "comes once per reply"
 #: (:func:`noted_in`).
 NOTE_OPENING = "FINISH CHECK."
+#: v1.420.0 (C3.3): the note's section with the project's own checkers
+#: (``harness/checkers``), which run once per reply in the check's round.
+CHECKERS_HEAD = "## The project's checkers"
+CHECKERS_ASK = (
+    "If a project checker found a problem in your change, fix that too (the checkers are not "
+    "run again in this reply)."
+)
 
 
 def noted_in(messages: Iterable[Any]) -> bool:
@@ -2228,6 +2235,11 @@ class FinishCheck:
         self._review_mark = 0
         self._second_note_due = False
         self._second_draft = ""
+        #: v1.420.0 (C3.3, decision D1): the project's own checkers
+        #: (``harness/checkers.ProjectCheckers``) when they had something to do
+        #: in this reply's check — their runs ride the check's round, their
+        #: findings its note, their outcome its record (``checkers``).
+        self.project_checks: Any = None
 
     # -- what the lane tells it -------------------------------------------- #
 
@@ -2521,6 +2533,10 @@ class FinishCheck:
                     self.harness.mark_called_as(call.id, CALLED_AS, **extra)
                 except Exception:  # noqa: BLE001 — a double without the method
                     pass
+        # v1.420.0 (C3.3, decision D1): the project's own checkers run HERE,
+        # once per reply, over every file it changed — after the tests, before
+        # the review (a round runs its calls in order).
+        calls = [*calls, *(await self._checker_calls(low_trust=low_trust))]
         review = self._review_call()
         if review is not None:
             # AFTER the test calls: a round runs them in order, so the tests
@@ -2531,6 +2547,24 @@ class FinishCheck:
                 except Exception:  # noqa: BLE001 — a double without the method
                     pass
             calls = [*calls, review]
+        return calls
+
+    async def _checker_calls(self, *, low_trust: bool) -> list[Any]:
+        """v1.420.0 (C3.3): the project's checkers' calls for this round —
+        one per checker that reads a file this reply changed (the journal's
+        and the folder comparison's, ``_changed_rels``). [] without checkers
+        (the turn's ``harness.checkers`` is None: none installed, no command
+        tool), in low trust, or when nothing they read changed. Never raises."""
+        pc = getattr(self.harness, "checkers", None) if self.harness is not None else None
+        if pc is None or not hasattr(pc, "schedule_finish"):
+            return []
+        try:
+            calls = list(await pc.schedule_finish(self._changed_rels, low_trust=low_trust))
+        except Exception:  # noqa: BLE001 — checkers never break the check
+            log.warning("finish check: the project's checkers could not be handed out", exc_info=True)
+            return []
+        if calls or getattr(pc, "used", False):
+            self.project_checks = pc
         return calls
 
     async def _second_review(
@@ -3176,6 +3210,12 @@ class FinishCheck:
         ]
         if self.config.tests:
             parts.append("## Tests\n" + await self._tests_text(fence))
+        checked = ""
+        if self.project_checks is not None:
+            # v1.420.0 (C3.3): what the project's own checkers found, once.
+            checked = await self.project_checks.note_text(fence)
+            if checked:
+                parts.append(CHECKERS_HEAD + "\n" + checked)
         if self.config.new_files:
             parts.append("## Files this reply made that the request does not name\n" + self._files_text())
             if self.gone:
@@ -3194,6 +3234,8 @@ class FinishCheck:
                 'Answer every point above on its own line, in this form: "<number>. met: <how '
                 'you checked>" or "<number>. not met: <what is missing>".'
             )
+        if checked:
+            ask.append(CHECKERS_ASK)
         ask.append(
             TEAM_FIX_ASK if self._lead_locked() else
             "If the tests failed, a point is not met, or a file should not stay, fix it now with "
@@ -3487,6 +3529,13 @@ class FinishCheck:
             # run passed after the last change. Only then (every other record
             # is byte-identical).
             out["reused"] = True
+        if self.project_checks is not None:
+            # v1.420.0 (C3.3): the project's checkers — only when they had
+            # something to do (every other record is byte-identical).
+            try:
+                out["checkers"] = self.project_checks.record()
+            except Exception:  # noqa: BLE001 — a record never breaks a reply
+                log.warning("finish check: the checkers' record could not be read", exc_info=True)
         if self._review_pending:
             # Handed out and never settled (nothing ran it): said, not guessed.
             self._settle_review(REVIEW_NOT_RUN, why="the review did not run")
@@ -3497,7 +3546,13 @@ class FinishCheck:
 
 
 #: The record's keys, in order (the reply line keeps exactly these).
-RECORD_KEYS = ("tests", "command", "removed", "kept", "points", "unmet", "after", "why", "reused", "review")
+RECORD_KEYS = (
+    "tests", "command", "removed", "kept", "points", "unmet", "after", "why", "reused", "checkers", "review",
+)
+#: v1.420.0: a record's ``checkers`` keeps at most this many names per list.
+MAX_RECORD_CHECKERS = 8
+_CHECKER_NAME_CHARS = 40
+_CHECKER_WHY_CHARS = 200
 
 
 def saved_review(raw: Any) -> "dict[str, Any] | None":
@@ -3528,6 +3583,29 @@ def saved_review(raw: Any) -> "dict[str, Any] | None":
     return out
 
 
+def saved_checkers(raw: Any) -> "dict[str, Any] | None":
+    """A record's ``checkers`` as a reply line keeps it (v1.420.0): ``ran``
+    and ``late`` as lists of checker names, ``skipped`` as ``{checker, why}``
+    — capped and typed; else None (dropped)."""
+    if not isinstance(raw, dict):
+        return None
+
+    def names(v: Any) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [_clip(x, _CHECKER_NAME_CHARS) for x in v if isinstance(x, str) and x.strip()][:MAX_RECORD_CHECKERS]
+
+    skipped: list[dict[str, str]] = []
+    for item in raw.get("skipped") if isinstance(raw.get("skipped"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        name, why = item.get("checker"), item.get("why")
+        if isinstance(name, str) and name.strip():
+            skipped.append({"checker": _clip(name, _CHECKER_NAME_CHARS),
+                            "why": _clip(why, _CHECKER_WHY_CHARS) if isinstance(why, str) else ""})
+    return {"ran": names(raw.get("ran")), "skipped": skipped[:MAX_RECORD_CHECKERS], "late": names(raw.get("late"))}
+
+
 def saved_record(raw: Any) -> "dict[str, Any] | None":
     """The done frame's ``finish`` as a Build reply line keeps it: the known
     keys with the right types, else None (an older daemon's line has none —
@@ -3549,6 +3627,9 @@ def saved_record(raw: Any) -> "dict[str, Any] | None":
         out["why"] = _clip(why, 200)
     if raw.get("reused") is True and tests == TESTS_PASSED:
         out["reused"] = True  # v1.417.0 (C1.3)
+    checkers = saved_checkers(raw.get("checkers"))
+    if checkers is not None:
+        out["checkers"] = checkers  # v1.420.0 (C3.3)
     review = saved_review(raw.get("review"))
     if review is not None:
         out["review"] = review
@@ -3773,6 +3854,9 @@ async def start(
 
 __all__ = [
     "CALLED_AS",
+    "CHECKERS_ASK",
+    "CHECKERS_HEAD",
+    "saved_checkers",
     "MAX_REVIEW_ROUNDS",
     "REVIEW_CALLED_AS",
     "REVIEW_CALL_ID",

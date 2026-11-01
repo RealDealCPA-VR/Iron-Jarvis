@@ -140,25 +140,35 @@ def test_the_daemons_startup_reports_the_step_that_is_slow(tmp_path, monkeypatch
     from iron_jarvis.daemon.app import create_app
 
     said: list[str] = []
-    monkeypatch.setitem(bw.BootWatch.__init__.__kwdefaults__, "stall_after_s", (0.3, 1.5))
+    # v1.420.0: the thresholds are a LADDER every 0.3 s, not one bar. The
+    # v1.419.0 Tests gate ran this on a loaded runner where an EARLIER boot
+    # step took longer than 0.3 s, so the watch rightly named that step and
+    # the one-report assertion read it as the wrong step. With a ladder, at
+    # least one report lands INSIDE the held step whatever the earlier steps
+    # cost; the "watch stopped" half counts reports after boot instead of
+    # trusting a single second bar.
+    ladder = tuple(0.3 * i for i in range(1, 200))
+    monkeypatch.setitem(bw.BootWatch.__init__.__kwdefaults__, "stall_after_s", ladder)
     monkeypatch.setitem(bw.BootWatch.__init__.__kwdefaults__, "report", said.append)
     app = create_app(str(tmp_path))
     terminals = app.state.d.platform.terminals
     real = terminals.rehydrate
 
     def slow_rehydrate(*a, **kw):
-        time.sleep(0.8)
+        time.sleep(2.0)
         return real(*a, **kw)
 
     monkeypatch.setattr(terminals, "rehydrate", slow_rehydrate)
     with TestClient(app) as client:
         assert client.get("/health").status_code == 200
-        # Past the second threshold: a watch that boot did not stop would
-        # report again here.
-        time.sleep(1.8)
-    assert len(said) == 1, said
-    assert "still in step rehydrate_terminals" in said[0]
-    assert "slow_rehydrate" in said[0]
+        after_boot = len(said)
+        # Several rungs of the ladder pass here: a watch that boot did not
+        # stop would report again.
+        time.sleep(1.0)
+    assert len(said) == after_boot, said[after_boot:]
+    named = [line for line in said if "still in step rehydrate_terminals" in line]
+    assert named, said
+    assert any("slow_rehydrate" in line for line in named), named
 
 
 # --------------------------------------------------------------------------- #
