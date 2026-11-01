@@ -443,7 +443,19 @@ def _code_host_off_by_default():
 
     if os.environ.get("IJ_TEST_CODE_HOST") == "on":
         os.environ[_hl.ENV_SWITCH] = "on"
-        yield
+        try:
+            yield
+        finally:
+            # v1.422.0 review: a parity run leaves nothing running either. An
+            # ordinary test never quits the host its app reached (its link
+            # stays open for the worker's life, so the host's orphan rules
+            # never start): every host this worker reached is told to quit
+            # here, its tools stopped with it.
+            for key in list(_hl._LINKS):
+                try:
+                    _hl.quit_host(key, 30)
+                except Exception:  # noqa: BLE001 — the host's own bounds remain
+                    pass
         return
     old = os.environ.get(_hl.ENV_SWITCH)
     os.environ[_hl.ENV_SWITCH] = "off"
