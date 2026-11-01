@@ -659,11 +659,16 @@ def prune(engine: Any, *, days: int = KEEP_DAYS) -> int:
 
 
 def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None,
-         failed: bool = False) -> "list[Any] | None":
+         failed: bool = False, session_id: str = "") -> "list[Any] | None":
     """The cut-off turn's messages ready to carry on from (its question first;
     every call with no result answered), or None when none was kept.
     ``failed`` (v1.422.0): read the list a FAILED reply kept
-    (:func:`failed_run_id_for`) instead of a cut-off one's."""
+    (:func:`failed_run_id_for`) instead of a cut-off one's.
+
+    v1.422.0 review: ``session_id`` (``build:<thread id>``) — None unless the
+    list was kept BY THAT SESSION. A turn id alone named the list, and Branch
+    from here copies a failed reply's line (its ``turnId``): Continue in the
+    branch took the ORIGINAL session's kept rounds."""
     from ..agents.transcript import load_for_resume
     from . import sessions as S
 
@@ -672,9 +677,12 @@ def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None,
         row = db.get(RunTranscript, key)
         if row is None:
             return None
-        session_id = str(row.session_id or "")
-    if not session_id.startswith(S.SESSION_PREFIX):
+        owner = str(row.session_id or "")
+    if not owner.startswith(S.SESSION_PREFIX):
         return None
+    if session_id and owner != str(session_id):
+        return None
+    session_id = owner
     out = load_for_resume(
         engine, key, registry,
         ledger_run_id=session_id, since=_naive(since) if since is not None else None,
@@ -684,7 +692,8 @@ def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None,
     return out
 
 
-def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False) -> bool:
+def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False,
+          session_id: str = "") -> bool:
     """TAKE a kept list for the ONE resume that carries it on, in one
     statement, so of two resumes of the same turn (a boot that runs twice, a
     retry racing the first) exactly one sees it. A list marked ``waiting`` is
@@ -699,11 +708,14 @@ def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False)
 
     v1.422.0 (B1): ``failed`` — take a FAILED reply's list instead (the
     user's "Continue from where it stopped": :func:`failed_run_id_for`). The
-    boot's pass never passes it, so it can never carry a failed reply on."""
-    from sqlalchemy import delete, or_, update
+    boot's pass never passes it, so it can never carry a failed reply on.
+    v1.422.0 review: ``session_id`` — only a list that session kept (see
+    :func:`load`)."""
+    from sqlalchemy import delete, or_, true, update
 
     not_waiting = or_(RunTranscript.waiting.is_(None), RunTranscript.waiting == False)  # noqa: E712
     source = failed_run_id_for(turn_id) if failed else run_id_for(turn_id)
+    owned = RunTranscript.session_id == str(session_id) if session_id else true()
     try:
         with session_scope(engine) as db:
             if to_turn:
@@ -711,6 +723,7 @@ def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False)
                     update(RunTranscript)
                     .where(RunTranscript.run_id == source)
                     .where(not_waiting)
+                    .where(owned)
                     .values(run_id=run_id_for(to_turn), updated_at=utcnow(), waiting=None)
                 )
             else:
@@ -718,6 +731,7 @@ def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False)
                     delete(RunTranscript)
                     .where(RunTranscript.run_id == source)
                     .where(not_waiting)
+                    .where(owned)
                 )
             res = db.exec(stmt)  # type: ignore[call-overload]
             db.commit()

@@ -2568,8 +2568,11 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str, *,
         return None
     # v1.422.0 (B1): ``failed`` — the list a reply that ENDED ON AN ERROR
     # kept for "Continue from where it stopped" (its own key).
+    # v1.422.0 review: a failed reply's list only for the session that kept
+    # it (a branch copies the failed line, turn id and all).
     loaded = RR.load(platform.engine, turn_id, getattr(platform, "registry", None),
-                     since=RR.started_at(platform.engine, turn_id), failed=failed)
+                     since=RR.started_at(platform.engine, turn_id), failed=failed,
+                     session_id=S.session_id_for(row.id) if failed else "")
     if not loaded:
         return None
     question = messages[idx]
@@ -3331,6 +3334,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 # first save still leaves the reply resumable.
                 if not await asyncio.to_thread(
                     RR.claim, platform.engine, resume_turn, turn_id, failed=resume_failed,
+                    session_id=S.session_id_for(thread_id) if resume_failed else "",
                 ):
                     with contextlib.suppress(Exception):
                         await gen.aclose()
@@ -4600,6 +4604,12 @@ def register(app: FastAPI, d: Any) -> None:
                 kept_folder = S.folder_of(row)
         if not delete_thread(engine_of(), thread_id):
             raise HTTPException(status_code=404, detail="no such Build session")
+        # v1.422.0 review: a failed reply's kept rounds (a copy of the whole
+        # conversation, tool outputs included) go with the session — nothing
+        # else would remove them for a week.
+        from ...harness import reply_record as _RR
+
+        _RR.drop_failed(engine_of(), S.session_id_for(thread_id))
         out: dict[str, Any] = {"deleted": thread_id}
         if moved is not None:
             out["worktree"] = {**moved, "branch": facts.get("branch", "")}
@@ -4801,6 +4811,10 @@ def register(app: FastAPI, d: Any) -> None:
         from ...harness.attempts import copied_lines
 
         lines = copied_lines(lines, thread_id)
+        # v1.422.0 review: a failed reply's kept rounds belong to THIS session
+        # (worked in its folder) — the copy offers no "Continue from where it
+        # stopped" (the daemon refuses one anyway: `reply_record.load`).
+        lines = [{k: v for k, v in m.items() if k != "canContinue"} for m in lines]
         title = S.BRANCH_TITLE.format(title=(row.title or S.NEW_SESSION_TITLE))
         new_setup: dict[str, Any] = {
             k: setup[k] for k in (
