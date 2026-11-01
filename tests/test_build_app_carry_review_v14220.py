@@ -608,3 +608,32 @@ def test_a_full_window_whose_reset_passed_does_not_hide_the_reset_the_words_name
     said = {"technical": "You've hit your usage limit. Upgrade to Plus to continue, or try again in 2 hours."}
     got = CO.reset_from(Codex(), said)
     assert got is not None and got > datetime.now(timezone.utc) + timedelta(hours=1, minutes=50), got
+
+
+# --------------------------------------------------------------------------- #
+# 10. a wait that gives up says why (it never just disappears)
+# --------------------------------------------------------------------------- #
+async def test_a_wait_that_cannot_carry_on_gives_up_and_says_why(app, home, work, monkeypatch, clock):
+    """At the reset the carry-on is refused (the conversation is open in a
+    Build terminal): it is tried again a few times, then the wait ends — and
+    the card says why, instead of its "waiting" line simply vanishing."""
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    row = _session(app, work)
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, row.id, reset=reset)
+    store.update(app.state.platform.engine, row.id, terminal_id="term-1")
+    monkeypatch.setattr(svc, "_opened_terminal_runs", lambda r: True)
+    when = reset + timedelta(minutes=1)
+    for _ in range(CO.MAX_TRIES + 2):
+        assert await CO.resume_due(svc, now=when) == []
+        when += timedelta(seconds=CO.RECHECK_S + 1)
+    st = CO.read_limits(home, sid := row.id)
+    assert st.get("wait") is None, "the wait never ended"
+    assert len(drivers[sid].sent) == 1
+    note = st["card"].get("note") or ""
+    assert note.startswith(CO.GAVE_UP_NOTE.split("{")[0]) and "open in a Build terminal" in note, note
+    async with client(app) as c:
+        view = (await c.get(f"/build/app/sessions/{sid}")).json()
+    assert "open in a Build terminal" in view["account_limit_note"]
+    await stop_all(app)

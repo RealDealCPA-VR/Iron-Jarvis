@@ -138,6 +138,9 @@ MOVED_NOTE = (
     '"{frm}" reached its limit, so this conversation was copied to "{to}" (in your group '
     '"{group}") and carries on there by itself.'
 )
+#: v1.422.0 review: the carry-on at the reset was refused MAX_TRIES times (the
+#: conversation open in a terminal, …): the wait ends, and the card says why.
+GAVE_UP_NOTE = "It did not carry on by itself: {why}"
 CHAIN_NOTE = (
     "Iron Jarvis carried this on by itself {n} times in a row and the account was at its limit "
     "each time, so it now waits for you."
@@ -768,6 +771,16 @@ def _put_back(home: Any, sid: str, wait: dict[str, Any], **changes: Any) -> None
         _write(_path(home, sid, LIMITS_FILE), st)
 
 
+def _note_card(home: Any, sid: str, note: str) -> None:
+    """The limit card's own note (only while the card is there)."""
+    with _LOCK:
+        st = read_limits(home, sid)
+        if not isinstance(st.get("card"), dict):
+            return
+        st["card"]["note"] = note
+        _write(_path(home, sid, LIMITS_FILE), st)
+
+
 def _bump_chain(home: Any, sid: str) -> None:
     with _LOCK:
         st = read_limits(home, sid)
@@ -905,6 +918,10 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
                 if tries < MAX_TRIES and r.sentence not in _busy_words():
                     await asyncio.to_thread(_put_back, svc.home, sid, taken, tries=tries,
                                             next_check_at=_iso(when + timedelta(seconds=RECHECK_S)))
+                elif r.sentence not in _busy_words():
+                    # v1.422.0 review: the wait gives up — said on the card,
+                    # never a "waiting" line that simply vanishes.
+                    await asyncio.to_thread(_note_card, svc.home, sid, GAVE_UP_NOTE.format(why=clip(r.sentence, 300)))
                 continue
             await _publish(svc.platform, EventType.BUILD_RESUMED, sid, {
                 "title": getattr(svc.live.get(sid), "title", "") or "",
