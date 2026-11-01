@@ -12653,7 +12653,7 @@ does not need a bump, stop and bump it.
   READ `logs/daemon-freeze.txt` after the next "isn't responding"; it names
   the place. Pins: `tests/test_freeze_trace_v14091.py` (a real held GIL via
   `PyDLL("kernel32").Sleep` in a child; 7 mutations, all red).
-  v1.418.1 (a USER BUG: Build › Terminal said "Reopening 3 terminals…" for
+  v1.419.1 (a USER BUG: Build › Terminal said "Reopening 3 terminals…" for
   4+ hours; `GET /terminals` held `restoring: [3 ids]` and the three Store
   pwsh restores never returned). NOTHING WAITS ON A RESTORE FOREVER:
   `manager.RESTORE_GIVE_UP_S` (60 s from the boot's restore start) GIVES UP a
