@@ -156,7 +156,7 @@ GROK_KEEPS_LAST = (
     "This Grok conversation keeps the model it last used — choose a model from the list instead."
 )
 GROK_CONTINUE = (
-    "Continue on another account works for Claude Code sessions only for now — "
+    "Continue on another account works for Claude Code and Codex sessions — "
     "open a new Grok session on the other account instead."
 )
 #: v1.413.0: how each tool that signs in BY ITSELF does it (the account
@@ -207,9 +207,11 @@ PI_CONTINUE = (
     "Pi signs in by itself, per model provider, so it has no other account to continue on — "
     "choose another model instead."
 )
+#: v1.422.0: a Codex conversation moves too (``hosted/codex_move``); this is
+#: said only for a tool the service does not know.
 CODEX_CONTINUE = (
-    "Continue on another account works for Claude Code sessions only for now — "
-    "open a new Codex session on the other account instead."
+    "Continue on another account works for Claude Code and Codex sessions — "
+    "open a new session on the other account instead."
 )
 THIS_PC = (
     "This session runs on this PC's login — start a session on an Iron-Proxy account "

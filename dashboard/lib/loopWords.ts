@@ -34,6 +34,8 @@ import { agentsPath } from "./mission";
 // v1.406.0 review: the coding sessions' loops open the chat page's Code view
 // (where the sessions, Tonight and Last night live now), never Build.
 import { CODE_VIEW_HREF } from "./chatSurface";
+// v1.422.0: Build › Code's own carry-on loop opens Build › Code.
+import { buildCodeHref } from "./buildApp";
 
 /** Everything › Status: the page that lists every failing task by name. */
 export const STATUS_HREF = "/everything#status";
@@ -98,6 +100,14 @@ const ROWS: Readonly<Record<string, Row>> = {
     label: "Carry on after a restart",
     problem: "Coding sessions cut off by a restart weren't carried on",
     href: CODE_VIEW_HREF,
+  },
+  // v1.422.0 (Wave 2, B3 + B5): Build › Code carrying on by itself — a reply
+  // a restart cut off (once, through the tool's own resume) and a reply
+  // waiting for its account's limit to reset (or moving within the group).
+  build_app_carry: {
+    label: "Carry on by itself (Build › Code)",
+    problem: "Build › Code sessions cut off by a restart or an account's limit aren't being carried on",
+    href: buildCodeHref(),
   },
   // v1.398.0 (night shift N1): the loop that starts the Tonight list's
   // coding tasks inside the night window and settles them when they end.

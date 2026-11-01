@@ -59,7 +59,7 @@ import re
 import shutil
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1330,6 +1330,14 @@ class HostedService:
         out["older"] = got["older"]
         # v1.418.0 (C4.8): the messages waiting behind the reply.
         out.update(await self._queue_view(sid, running=bool(running)))
+        # v1.422.0 (B3, B5): a reply a restart cut off (the Continue press)
+        # and a limit's wait (the card: until when, with Cancel).
+        from . import carry_on as CO
+
+        try:
+            out.update(await asyncio.to_thread(CO.view_facts, self.home, sid, row, events, running=bool(running)))
+        except Exception:  # noqa: BLE001 — a view never fails over these
+            log.warning("could not read a Code-view session's carry-on facts", exc_info=True)
         return out
 
     # -- v1.418.0 (C4.6, C4.11): history that stays --------------------------------
@@ -1921,6 +1929,13 @@ class HostedService:
                 ev.setdefault("account", live.account)
                 live.limit = getattr(live.driver, "limit", None)
                 live.limit_since = datetime.now(timezone.utc).isoformat()
+                # v1.422.0 (B5): WHEN it resets, read now (the tool's own
+                # record, the usage windows it reported, or its words) — the
+                # turn's end may arm a wait on it (the view's ``account_wait``
+                # says until when; the event itself is unchanged).
+                from . import carry_on as CO
+
+                live.limit_reset = CO.reset_from(live.driver, ev)
         live.log.append(ev)
         if turn is not None and turn.running:
             turn.add(ev)
@@ -1962,6 +1977,12 @@ class HostedService:
             await asyncio.to_thread(store.update, self.engine, live.sid, last_error=error)
         except Exception:  # noqa: BLE001 — the done still goes out
             log.debug("could not stamp a Code-view session", exc_info=True)
+        # v1.422.0 (B5): an account's limit ARMS its wait by itself (or a turn
+        # that served clears the card) — written before the done, so the
+        # page's re-read right after shows the waiting card. Never raises.
+        from . import carry_on as CO
+
+        await CO.turn_ended(self, live, turn, str((done or {}).get("stop") or stop))
         done = dict(done) if done is not None else make("done", stop=stop)
         done.setdefault("stop", stop)
         done["turn"] = turn.id
@@ -2146,7 +2167,12 @@ class HostedService:
         return {"ok": True, "id": ref, "state": "read" if note.get("read") else "sent", "how": how}
 
     # -- turns -------------------------------------------------------------------
-    async def start_turn(self, sid: str, text: str, turn_id: str, files: list[str] | None = None) -> HostedTurn:
+    async def start_turn(self, sid: str, text: str, turn_id: str, files: list[str] | None = None,
+                         *, carry: dict[str, Any] | None = None) -> HostedTurn:
+        """``carry`` (v1.422.0): a message Iron Jarvis sends BY ITSELF to carry
+        a reply on (``hosted.carry_on``) — its ``user`` event carries it (the
+        page shows a line, not a bubble) and it ends no wait. Any other
+        message is the user's own: it ends a limit's wait (``_drive``)."""
         self._evict_turns()
         turn_id = str(turn_id or "").strip()[:120] or f"turn-{uuid.uuid4().hex[:12]}"
         held = self.turns.get(turn_id)
@@ -2179,14 +2205,15 @@ class HostedService:
             # conversation by that folder, so a new one would lose it.
             made = await asyncio.to_thread(self._remake_own_folder, row.folder)
         try:
-            return await self._start_turn_in(row, sid, turn_id, text, files, made, forget)
+            return await self._start_turn_in(row, sid, turn_id, text, files, made, forget, carry=carry)
         except BaseException:
             if made:
                 await asyncio.to_thread(self._take_back_folder, sid, made, forget=forget)
             raise
 
     async def _start_turn_in(self, row: Any, sid: str, turn_id: str, text: str, files: list[str],
-                             made: str = "", forget: bool = False) -> HostedTurn:
+                             made: str = "", forget: bool = False, *,
+                             carry: dict[str, Any] | None = None) -> HostedTurn:
         live = self._live(row)
         live.account = row.account
         if live.claim:
@@ -2217,16 +2244,21 @@ class HostedService:
                 raise Refused(W.BUSY)
         turn = HostedTurn(turn_id, sid)
         turn.started_mono = self.clock()
-        live.title = (row.title or "").strip() or first_message_title(text)
+        # v1.422.0 review: a turn Iron Jarvis started BY ITSELF (a carry-on) is
+        # one Emergency stop stops (``carry_on.stop_unattended_turns``).
+        turn.carry = dict(carry) if carry else None
+        # v1.422.0: a carry-on Iron Jarvis sends by itself never names the
+        # session (its words are the app's, not the user's).
+        live.title = (row.title or "").strip() or ("" if carry else first_message_title(text))
         self.turns[turn_id] = turn
         live.turn = turn
         live.last_active = self.clock()
-        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget))
+        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget, carry=carry))
         # v1.409.0 (found live): a session is titled by its first message, as
         # a chat is — never "New Claude Code session" forever. Only an EMPTY
         # title (a name the user gave is theirs) and only once the turn is
         # really running (a refused send titles nothing).
-        if not (row.title or "").strip():
+        if not (row.title or "").strip() and not carry:
             title = first_message_title(text)
             if title:
                 try:
@@ -2257,13 +2289,24 @@ class HostedService:
         return ""
 
     async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str],
-                     made: str = "", forget: bool = False) -> None:
+                     made: str = "", forget: bool = False, *, carry: dict[str, Any] | None = None) -> None:
         user = make("user", text=clip(text, TEXT_CHARS))
         if files:
             user["files"] = [clip(f, 500) for f in files]
+        if carry:
+            user["carry"] = dict(carry)  # v1.422.0: Iron Jarvis carried it on
         self._emit(live, user)
         started = False
         try:
+            if not carry:
+                # v1.422.0 (B5): the user's own message ends a limit's wait
+                # (its turn is already ``live.turn``, so the loop skips it).
+                from . import carry_on as CO
+
+                try:
+                    await asyncio.to_thread(CO.on_user_message, self.home, live.sid)
+                except Exception:  # noqa: BLE001 — a wait's file never fails a message
+                    log.warning("could not end a Code-view session's wait", exc_info=True)
             # v1.420.0 (C4.12): the folder's git tree as this message starts,
             # before the tool hears it — the Changes pane's "This message".
             # Off the loop, bounded, never failing the turn; a late tree is
@@ -2408,6 +2451,15 @@ class HostedService:
         live = self.live.get(sid)
         if live is None or live.turn is None or not live.turn.running:
             return {"ok": True, "running": False}
+        # v1.422.0 review: the Stop is KEPT before the tool is told — if the app
+        # goes before the tool confirms it, the reply is never read as one a
+        # restart cut off (never carried on by itself). Never fails a Stop.
+        from . import carry_on as CO
+
+        try:
+            await asyncio.to_thread(CO.note_stopped, self.home, sid, live.turn.id)
+        except Exception:  # noqa: BLE001
+            log.warning("could not keep a Code-view session's Stop", exc_info=True)
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:
@@ -2719,10 +2771,16 @@ class HostedService:
             hid, title = str(found[0].get("id") or ""), str(found[0].get("title") or "")
         return harness, hid, clip(title, 120), acc
 
-    # -- continue on the next account (Claude Code) -------------------------------
-    async def continue_on(self, sid: str, account: str = "") -> dict[str, Any]:
+    # -- continue on the next account (Claude Code; v1.422.0: and Codex) -------
+    async def continue_on(self, sid: str, account: str = "", *, note: str = "") -> dict[str, Any]:
+        """Move the conversation to another account (a COPY) and run the
+        session there from the next message. ``note``: the line said in the
+        conversation (v1.422.0: a move made BY ITSELF within an account group
+        says so, ``hosted.carry_on``). v1.422.0 (B5): Codex too — measured,
+        its rollout file copied into the other ``CODEX_HOME`` resumes there
+        (:mod:`.codex_move`)."""
         row = await self._row(sid)
-        if row.harness != CLAUDE:
+        if row.harness not in (CLAUDE, CODEX):
             raise Refused(W.PI_CONTINUE if row.harness == PI
                           else W.OPENCODE_CONTINUE if row.harness == OPENCODE
                           else W.GROK_CONTINUE if row.harness == GROK else W.CODEX_CONTINUE)
@@ -2734,26 +2792,45 @@ class HostedService:
         self._claim(live, "moving to another account")
         try:
             limit = live.limit
-            plan = await asyncio.to_thread(
-                self._continue_blocking, row, str(account or "").strip(), limit, live.limit_since
-            )
-            lease, source, client, current = plan
-            # The process goes BEFORE the copy: its last write lands first.
-            # v1.422.0 review (B4): what it ran that serves stops with it — said.
+            # v1.422.0 review (B4): what the tool ran that serves stops with it,
+            # so it is read before the stop and said after it (both vendors).
             ended = PG.known_programs((await PG.read_many([live])).get(live.sid), live) if live.running else []
-            await self._stop_process(live, why="moving to another account")
-            if ended:
-                self._said_stopped(live, ended, why="account")
-            await asyncio.to_thread(self._carry, lease, source, client, current, limit)
+            if row.harness == CODEX:
+                from . import codex_move as CM
+
+                src_home = home_of(CODEX, store.account_record(row))
+                try:
+                    lease, source, client, current = await asyncio.to_thread(
+                        CM.plan, self.platform, row, str(account or "").strip(), src_home,
+                    )
+                    # The process goes BEFORE the copy: its last write lands first.
+                    await self._stop_process(live, why="moving to another account")
+                    if ended:
+                        self._said_stopped(live, ended, why="account")
+                    await asyncio.to_thread(CM.carry, lease, source, src_home, client, current, limit,
+                                            self.home / "trash")
+                except CM.MoveRefused as exc:
+                    raise Refused(str(exc)) from None
+            else:
+                plan = await asyncio.to_thread(
+                    self._continue_blocking, row, str(account or "").strip(), limit, live.limit_since
+                )
+                lease, source, client, current = plan
+                # The process goes BEFORE the copy: its last write lands first.
+                await self._stop_process(live, why="moving to another account")
+                if ended:
+                    self._said_stopped(live, ended, why="account")
+                await asyncio.to_thread(self._carry, lease, source, client, current, limit)
             from ..terminals import pane_accounts as PA
 
+            proxy = W.PROXY[row.harness]
             out = PA.PaneAccounts()
-            out.use_lease(W.PROXY[CLAUDE], lease)
-            rec = out.records[W.PROXY[CLAUDE]]
+            out.use_lease(proxy, lease)
+            rec = out.records[proxy]
             row = await asyncio.to_thread(
                 store.update, self.engine, sid, account=str(lease.profile_id), account_json=json.dumps(rec),
             )
-            note = W.CONTINUED.format(title=lease.title)
+            note = note or W.CONTINUED.format(title=lease.title)
             live.limit, live.limit_since = None, ""
             live.account = str(lease.profile_id)
             self._emit(live, make("notice", text=clip(note, 500)))
@@ -2853,43 +2930,64 @@ class HostedService:
 _RECONCILE_TAIL = 256 * 1024
 
 
-def reconcile_cut_turns(home: Any) -> int:
+def reconcile_cut_turns(home: Any, keep: "Collection[str]" = ()) -> int:
     """BLOCKING (boot, off the loop): a turn a crash cut off (its last event
     is not a ``done``) gets its error + ``done`` (interrupted) appended to the
     session's ``events.jsonl``, so a reopened window shows it ended. Returns
-    how many were closed. Never raises."""
+    how many were closed. Never raises.
+
+    v1.422.0 (B3): ``keep`` — sessions to leave ALONE (a host that survived
+    the restart still runs them: nothing is closed, nothing recorded). For
+    every other session whose newest reply a restart cut off — the crash
+    case above, and a reply Iron Jarvis's own stop ended (a graceful
+    shutdown's ``STOPPED_TITLE`` beside an ``interrupted`` done) — what the
+    carry-on pass needs is kept beside the log (``hosted.carry_on``: the
+    turn, whether a card or question was open, whether it was itself a
+    carry-on, whether it stopped on an account's limit)."""
+    from . import carry_on as CO
+
     root = Path(home) / "hosted"
+    skip = CO.reconcile_keep(keep)
     closed = 0
     try:
         logs = list(root.glob("*/events.jsonl"))
     except OSError:
         return 0
     for path in logs[:2000]:
+        sid = path.parent.name
+        if sid in skip:
+            # v1.422.0 review: a session a surviving host still runs was not
+            # cut — an older undecided cut record of it goes (no later pass
+            # acts on it).
+            CO.forget_undecided(home, sid)
+            continue
         try:
             with open(path, "rb") as fh:
                 fh.seek(0, os.SEEK_END)
                 size = fh.tell()
                 fh.seek(max(0, size - _RECONCILE_TAIL))
                 tail = fh.read().splitlines()
-            last = None
-            for raw in reversed(tail):
+            events = []
+            for raw in tail:
                 try:
                     ev = json.loads(raw)
                 except ValueError:
                     continue
-                if isinstance(ev, dict) and ev.get("turn"):
-                    last = ev
-                    break
-            if last is None or last.get("type") == "done":
+                if isinstance(ev, dict):
+                    events.append(ev)
+            facts = CO.analyse_tail(events, stopped_title=STOPPED_TITLE)
+            if facts is None:
                 continue
-            turn = last["turn"]
-            rows = [
-                {**W.error(STOPPED_TITLE, STOPPED_FIX, ""), "turn": turn},
-                {**make("done", stop="interrupted"), "turn": turn},
-            ]
-            with open(path, "ab") as fh:
-                fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8"))
-            closed += 1
+            if not facts["closed"]:
+                turn = facts["turn"]
+                rows = [
+                    {**W.error(STOPPED_TITLE, STOPPED_FIX, ""), "turn": turn},
+                    {**make("done", stop="interrupted"), "turn": turn},
+                ]
+                with open(path, "ab") as fh:
+                    fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8"))
+                closed += 1
+            CO.note_cut(home, sid, facts)
         except OSError:
             continue
     return closed

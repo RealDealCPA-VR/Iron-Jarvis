@@ -1376,12 +1376,21 @@ class ClaudeDriver(Driver):
         self.emit(make("notice", text=f"Claude Code says this account reached its {window} limit."))
 
     def _failure(self, said: str) -> None:
+        from dataclasses import replace
+
         from ..terminals.limit_state import PaneLimit, detect_limit
 
         self._errored = True
         ev = W.failure_for(HARNESS, said)
         if ev.get("fix_kind") == "account_limit":
-            self.limit = detect_limit(said) or PaneLimit(line=one_line(said, 300))
+            prior = getattr(self.limit, "reset_at", None)
+            found = detect_limit(said) or PaneLimit(line=one_line(said, 300))
+            if found.reset_at is None and prior is not None:
+                # v1.422.0 (B5): the words named no reset, but Claude Code's own
+                # ``rate_limit_event`` did (exact, to the second) — kept, so
+                # the reply can wait for it by itself.
+                found = replace(found, reset_at=prior)
+            self.limit = found
         self.emit(ev)
 
     def _on_result(self, obj: dict[str, Any]) -> None:

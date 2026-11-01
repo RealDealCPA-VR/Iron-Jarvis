@@ -177,10 +177,16 @@ export const CODE_RUNNING_REREAD_MS = 2_000;
 /** While Iron Jarvis is not answering mid-reply: how often to look again
  *  (the reply is followed again once it is back). */
 export const CODE_LOST_REREAD_MS = 3_000;
+/** v1.422.0 review: while a limit card WAITS by itself (it carries the reply
+ *  on at the reset, or on another account of the group, with nobody
+ *  pressing anything), how often the open session is read again — so the
+ *  carried-on reply shows here as it runs. */
+export const CODE_WAIT_REREAD_MS = 15_000;
 // v1.412.0: the mode chip lives in its own file (the start composer uses it
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
 /** "At the bottom" for the transcript, in pixels. */
@@ -297,6 +303,10 @@ function SessionPane({
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
+  /** v1.422.0 (B3, B5): a reply a restart cut off (Continue) and a limit's
+   *  wait that carries on by itself (until when; Cancel). */
+  const [carryFacts, setCarryFacts] = useState<CarryFacts>({ cut: null, wait: null, limitNote: "" });
+  const [continuingCut, setContinuingCut] = useState(false);
   /** Iron Jarvis stopped answering while a reply ran: looked for again. */
   const [lost, setLost] = useState(false);
   /** The reader scrolled up while something new arrived. */
@@ -436,6 +446,8 @@ function SessionPane({
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
+        // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
+        setCarryFacts(decodeCarry(raw));
         // v1.418.0 (C4.8): argument hints, and the messages waiting behind
         // the reply (held ones go back to the box).
         setHints(commandHints((raw as { commands?: unknown } | null)?.commands));
@@ -593,6 +605,7 @@ function SessionPane({
     setOlder({ cursor: null, earlier: 0 });
     setQueued([]);
     setHints({});
+    setCarryFacts({ cut: null, wait: null, limitNote: "" });
     followedTurnsRef.current = new Set();
     void load({ follow: true });
     return () => {
@@ -610,6 +623,21 @@ function SessionPane({
   // Iron Jarvis stopped answering mid-reply: look again until it is back,
   // then follow the reply again (the read rejoins a running turn).
   useVisibleInterval(() => void load({ follow: true }), CODE_LOST_REREAD_MS, lost && !following);
+  // v1.422.0 review: a limit card that waits by itself carries the reply on
+  // with nobody pressing anything — read the session again while it waits
+  // (one read at a time), so the carried-on reply is followed here.
+  const waitReadOutRef = useRef(false);
+  useVisibleInterval(
+    () => {
+      if (waitReadOutRef.current) return;
+      waitReadOutRef.current = true;
+      void load({ follow: true }).finally(() => {
+        waitReadOutRef.current = false;
+      });
+    },
+    CODE_WAIT_REREAD_MS,
+    carryFacts.wait !== null && !running && !following && !lost,
+  );
   // v1.417.0 (a USER BUG: "it seems to be getting stuck"): the reply ended
   // while helpers work on in the background; when they finish, the tool
   // writes a report of its own that no message owns. Read the session again
@@ -1042,13 +1070,18 @@ function SessionPane({
    *  next account of the same tool (Iron-Proxy picks it). A refusal (no
    *  other account) is said in its words. */
   /** v1.417.0 (C4.9): Retry on the newest failed reply — the same message
-   *  again, its files by path (they went up already). */
+   *  again, its files by path (they went up already).
+   *  v1.422.0 review: a carry-on Iron Jarvis sent (its `carry`) is run again
+   *  by the daemon, hidden (POST …/continue) — its words are Iron Jarvis's to
+   *  the tool and must never be sent as the user's own message. */
+  const continueCutRef = useRef<(() => Promise<void>) | null>(null);
   const retryFailed = useCallback(() => {
     if (runningRef.current) return;
     for (let i = conv.items.length - 1; i >= 0; i--) {
       const it = conv.items[i];
       if (it.kind === "user") {
-        void sendRef.current?.(it.text, it.files);
+        if (it.carry) void continueCutRef.current?.();
+        else void sendRef.current?.(it.text, it.files);
         return;
       }
     }
@@ -1076,6 +1109,40 @@ function SessionPane({
       setContinuing(false);
     }
   }, [session, continuing, onChanged, tools]);
+
+  /** v1.422.0 (B3): Continue on a reply a restart cut off — the same hidden
+   *  carry-on the app sends by itself, started by this press; the running
+   *  turn is then followed as on any read. */
+  const continueCut = useCallback(async () => {
+    if (!session || continuingCut) return;
+    setContinuingCut(true);
+    setNote(null);
+    setInfo(null);
+    try {
+      await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/continue`, {});
+      setCarryFacts((c) => ({ ...c, cut: null }));
+      await load({ follow: true });
+    } catch (e) {
+      setNote(errorWords(e, "The reply could not be carried on."));
+    } finally {
+      setContinuingCut(false);
+    }
+  }, [session, continuingCut, load]);
+  continueCutRef.current = continueCut;
+
+  /** v1.422.0 (B5): Cancel on a limit card that waits by itself — nothing
+   *  carries on by itself after it; the card and its press stay. */
+  const cancelWait = useCallback(async () => {
+    if (!session) return;
+    setNote(null);
+    try {
+      await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/wait/cancel`, {});
+      setCarryFacts((c) => ({ ...c, wait: null }));
+    } catch (e) {
+      setNote(errorWords(e, "The wait could not be cancelled."));
+      void load({ follow: false });
+    }
+  }, [session, load]);
 
   const openInTerminal = useCallback(async () => {
     if (!session) return;
@@ -1400,6 +1467,12 @@ function SessionPane({
                 onContinueOn={continueOn}
                 continuing={continuing}
                 onRetry={running ? undefined : retryFailed}
+                cut={running ? null : carryFacts.cut}
+                onContinueCut={continueCut}
+                continuingCut={continuingCut}
+                wait={running ? null : carryFacts.wait}
+                onCancelWait={cancelWait}
+                limitNote={carryFacts.limitNote}
                 model={session.model}
                 account={session.account ? accountName : ""}
                 onExpand={expandStep}

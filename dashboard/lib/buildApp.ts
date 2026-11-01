@@ -24,6 +24,7 @@
  */
 
 import { onceReasonOf } from "./onceReason";
+import { type CarryMark, decodeCarryMark } from "./buildCodeCarry";
 
 // ── the view and the address ────────────────────────────────────────────────
 
@@ -794,7 +795,10 @@ export type CodeEvent = CodeEventBody & { turn?: string };
 
 type CodeEventBody =
   | { type: "session"; at: string; harness: string; harnessSessionId: string; model: string; cwd: string; mode: string }
-  | { type: "user"; at: string; text: string; files: string[] }
+  /** v1.422.0: `carry` = a message Iron Jarvis sent BY ITSELF to carry the
+   *  reply on (after a restart, an account's reset, a move) — drawn as a
+   *  quiet line, never as the user's bubble. */
+  | { type: "user"; at: string; text: string; files: string[]; carry?: CarryMark }
   /** v1.418.0 (C4.2): `parent` = the helper step (Claude Code's Task /
    *  Agent) this text, thinking or step ran inside (absent = the
    *  conversation itself). */
@@ -908,13 +912,16 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         cwd: str(r.cwd, 1_000),
         mode: str(r.mode, 64),
       };
-    case "user":
+    case "user": {
+      const carry = decodeCarryMark(r.carry);
       return {
         type,
         at,
         text: str(r.text, 100_000),
         files: Array.isArray(r.files) ? r.files.filter((f): f is string => typeof f === "string").slice(0, 20) : [],
+        ...(carry ? { carry } : {}),
       };
+    }
     case "text":
     case "thinking": {
       const item = str(r.item, 200);
@@ -1226,7 +1233,7 @@ export type QuestionEvent = Extract<CodeEvent, { type: "question" }>;
 export type OpenAsk = ApprovalEvent | QuestionEvent;
 
 export type ConvItem =
-  | { kind: "user"; key: string; text: string; files: string[] }
+  | { kind: "user"; key: string; text: string; files: string[]; carry?: CarryMark }
   | { kind: "text"; key: string; text: string; done: boolean }
   /** v1.418.0 (C4.3): `live` while the thinking is the newest thing the
    *  running turn said; `seconds` = how long it thought (null = unknown). */
@@ -1419,7 +1426,7 @@ export function foldConversation(
         if (ev.model) model = ev.model;
         break;
       case "user":
-        items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files });
+        items.push({ kind: "user", key: key("u"), text: ev.text, files: ev.files, ...(ev.carry ? { carry: ev.carry } : {}) });
         planAt = null;
         settled = false;
         turnAt = ev.at;

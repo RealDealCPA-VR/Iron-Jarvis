@@ -1753,6 +1753,15 @@ class Orchestrator:
             stopped.extend(stop_unattended_turns(self.p.engine))
         except Exception:  # noqa: BLE001 — the rest of the stop still happened
             log.exception("Emergency stop could not stop the coding turns")
+        # v1.422.0 review: and a Build › Code reply Iron Jarvis carried on BY
+        # ITSELF (after a restart, an account's reset, a move) — it has no
+        # Session row and no turn in the chat registry either.
+        try:
+            from ..hosted.carry_on import stop_unattended_turns as _stop_hosted
+
+            stopped.extend(_stop_hosted(self.p))
+        except Exception:  # noqa: BLE001 — the rest of the stop still happened
+            log.exception("Emergency stop could not stop the Code-view carry-ons")
         # v1.406.0 part 3: a REVIEW of a pull request's check fix in flight
         # (its fix turn is stopped above, as a "ci" turn): cancelled, so the
         # fix is neither committed nor pushed.
