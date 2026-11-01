@@ -399,7 +399,10 @@ async def test_a_reply_cut_beside_an_account_limit_is_left_to_its_wait(home, app
     svc = S.service_for(app.state.platform)
     drivers = fake_tool(svc, monkeypatch)
     assert await CO.carry_on_after_restart(svc) == []
-    assert drivers == {} and CO.read_cut(home, row.id)["why_not"] == CO.WHY_LIMIT
+    # v1.422.0 review (moved on purpose): nothing WAITS here (a crash after the
+    # limit wrote no wait), so the words say it had stopped on the limit —
+    # never "it waits" (test_build_app_carry_review_v14220 pins both words).
+    assert drivers == {} and CO.read_cut(home, row.id)["why_not"] == CO.WHY_LIMIT_CARD
 
 
 def test_keep_leaves_the_sessions_a_surviving_host_still_runs_alone(home, app, work):

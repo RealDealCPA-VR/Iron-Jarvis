@@ -1,0 +1,264 @@
+"""v1.422.0 (Wave 2, B3 + B5) REVIEW: what the independent review of Build ›
+Code's carry-on found, each pinned RED on the builder's code first.
+
+1. A reply cut off LONG AGO (a log whose newest turn a shutdown ended weeks
+   ago — every reply an earlier update cut off and the user never came back
+   to) was carried on BY ITSELF at the first start that read it: the boot
+   reconcile recorded every such cut with no age, and the pass spent the
+   user's plan on it. Chat › Code keeps a cut-off reply for
+   ``harness/reply_record.KEEP_DAYS`` (7) only; Build › Code now carries on by
+   itself only a cut that recent, and offers Continue (with the reason) for an
+   older one.
+2. A reply the USER STOPPED, when the app went before the coding tool
+   confirmed the Stop (Stop, then Quit or Restart to update at once), was
+   written as cut by Iron Jarvis's own stop and carried on by itself at the
+   next start — "never for a reply the user stopped". The Stop press is now
+   kept beside the log, and the reconcile never records that turn as cut.
+3. With "Carry on by itself after an account's limit" turned OFF while a
+   wait was already armed, the wait still carried the reply on (or moved it
+   to another account) by itself. OFF means nothing carries on by itself: the
+   loop now ends such a wait; the card and its press stay.
+4. The restart pass judged "too many coding sessions at once" by PROCESSES
+   running, so the replies it had just started (their tool not up yet)
+   counted for nothing: more than six were started, and the seventh failed at
+   once with its record already used up. It now counts every session that is
+   working.
+5. Words: a reply cut beside a limit card with NO wait said "it waits on its
+   account's limit" (nothing waited).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+from iron_jarvis.daemon.app import create_app
+from iron_jarvis.hosted import carry_on as CO
+from iron_jarvis.hosted import service as S
+from iron_jarvis.hosted import store
+from iron_jarvis.hosted.events import make
+
+from ._build_app_helpers_v1409 import client, stop_all, until
+from .test_build_app_carry_on_v14220 import _graceful, _log, _row, _view, _working
+from .test_build_app_history_v1418 import FakeDriver, fake_tool
+from .test_build_app_limits_v14220 import NOW, _limit, _session
+
+
+@pytest.fixture
+def app(tmp_path):
+    return create_app(str(tmp_path / "root"))
+
+
+@pytest.fixture
+def home(app) -> Path:
+    return Path(app.state.platform.config.home)
+
+
+@pytest.fixture
+def work(tmp_path) -> Path:
+    folder = tmp_path / "work"
+    folder.mkdir()
+    return folder
+
+
+def _aged(events: list[dict], days: float) -> list[dict]:
+    when = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    return [{**e, "at": when} for e in events]
+
+
+# --------------------------------------------------------------------------- #
+# 1. a cut from long ago is offered, never carried on by itself
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("how", ["graceful", "crash"])
+async def test_a_reply_cut_off_long_ago_is_offered_never_carried_on_by_itself(home, app, work, monkeypatch, how):
+    row = _row(app, work)
+    _log(home, row.id, _aged(_graceful() if how == "graceful" else _working(), days=30))
+    S.reconcile_cut_turns(home)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    assert await CO.carry_on_after_restart(svc) == [], "a month-old reply was carried on by itself"
+    assert drivers == {}
+    assert CO.read_cut(home, row.id)["why_not"] == CO.WHY_OLD
+    view = await _view(app, row.id)
+    assert view["cut"]["why_not"] == CO.WHY_OLD and view["cut"]["resumable"] is True
+    # The PRESS still carries it on (a person's choice).
+    async with client(app) as c:
+        r = await c.post(f"/build/app/sessions/{row.id}/continue")
+        assert r.status_code == 200, r.text
+    await until(lambda: drivers.get(row.id) and drivers[row.id].sent)
+    assert drivers[row.id].sent[0][0] == CO.CONTINUE_AFTER_RESTART
+    svc._emit(svc.live[row.id], make("done", stop="completed"))
+    await stop_all(app)
+
+
+async def test_a_reply_cut_off_days_ago_within_the_kept_week_still_carries_on(home, app, work, monkeypatch):
+    """The bound is Chat › Code's own (a PC off over a weekend still carries on)."""
+    from iron_jarvis.harness.reply_record import KEEP_DAYS
+
+    assert CO.CUT_KEEP_DAYS == KEEP_DAYS
+    row = _row(app, work)
+    _log(home, row.id, _aged(_graceful(), days=3))
+    S.reconcile_cut_turns(home)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    assert await CO.carry_on_after_restart(svc) == [row.id]
+    await until(lambda: drivers.get(row.id) and drivers[row.id].sent)
+    svc._emit(svc.live[row.id], make("done", stop="completed"))
+    await stop_all(app)
+
+
+async def test_a_cut_whose_time_is_not_known_is_offered_never_carried_on(home, app, work, monkeypatch):
+    """No time on the reply's events (or a record kept without one): its age
+    is NOT known, so it is never carried on by itself."""
+    row = _row(app, work)
+    _log(home, row.id, [{k: v for k, v in e.items() if k != "at"} for e in _graceful()])
+    S.reconcile_cut_turns(home)
+    assert CO.read_cut(home, row.id)["cut_at"] == ""
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    assert await CO.carry_on_after_restart(svc) == []
+    assert drivers == {} and CO.read_cut(home, row.id)["why_not"] == CO.WHY_OLD
+
+
+async def test_the_cuts_age_is_its_own_not_the_reconciles_closing_rows(home, app, work, monkeypatch):
+    """A crash: the reconcile appends its own error + done NOW — the age is
+    read from the reply's own events, before those rows."""
+    row = _row(app, work)
+    _log(home, row.id, _aged(_working(), days=30))
+    S.reconcile_cut_turns(home)
+    rec = CO.read_cut(home, row.id)
+    assert CO._parse(rec["cut_at"]) < datetime.now(timezone.utc) - timedelta(days=29)
+
+
+# --------------------------------------------------------------------------- #
+# 2. a reply the user stopped is never carried on, even when the app went
+#    before the tool confirmed the Stop
+# --------------------------------------------------------------------------- #
+class _SlowStop(FakeDriver):
+    """A coding tool that has not confirmed a Stop yet when the app goes."""
+
+    async def interrupt(self):
+        self.interrupted = True
+
+
+class _Proc:
+    alive = True
+
+    def stop(self):
+        self.alive = False
+
+
+def _slow_tool(svc, monkeypatch) -> dict:
+    drivers: dict = {}
+
+    async def ensure(live, row):
+        if live.driver is None:
+            live.driver = drivers.setdefault(live.sid, _SlowStop(svc, live))
+            live.proc = _Proc()
+
+    monkeypatch.setattr(svc, "_ensure_running", ensure)
+    return drivers
+
+
+@pytest.mark.parametrize("how", ["graceful", "crash"])
+async def test_a_reply_the_user_stopped_is_never_carried_on_after_the_app_went(
+        tmp_path, work, monkeypatch, how):
+    root = tmp_path / "root2"
+    app1 = create_app(str(root))
+    home = Path(app1.state.platform.config.home)
+    svc = S.service_for(app1.state.platform)
+    drivers = _slow_tool(svc, monkeypatch)
+    row = store.create(app1.state.platform.engine, harness="claude-code", folder=str(work),
+                       harness_session_id="6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a21")
+    await svc.start_turn(row.id, "build the parser", "t1")
+    await until(lambda: drivers.get(row.id) and drivers[row.id].sent)
+    async with client(app1) as c:
+        r = await c.post(f"/build/app/sessions/{row.id}/interrupt")
+        assert r.status_code == 200, r.text
+    assert getattr(drivers[row.id], "interrupted", False)
+    assert svc.live[row.id].turn is not None and svc.live[row.id].turn.running, "the tool has not confirmed yet"
+    if how == "graceful":
+        await stop_all(app1)  # Quit / Restart to update right after the Stop
+    else:
+        await asyncio.to_thread(svc.live[row.id].log.flush)  # a crash: no done
+    S.reconcile_cut_turns(home)
+    app2 = create_app(str(root))
+    svc2 = S.service_for(app2.state.platform)
+    drivers2 = fake_tool(svc2, monkeypatch)
+    assert await CO.carry_on_after_restart(svc2) == [], "a reply the user stopped was carried on by itself"
+    assert drivers2 == {}
+    assert "cut" not in await _view(app2, row.id), "nothing to continue: the user stopped it"
+    if how == "crash":
+        svc._emit(svc.live[row.id], make("done", stop="interrupted"))
+        await stop_all(app1)
+
+
+# --------------------------------------------------------------------------- #
+# 3. the setting turned off ends a wait that was already armed
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def clock(monkeypatch):
+    monkeypatch.setattr(CO, "CLOCK", lambda: NOW)
+    return NOW
+
+
+async def test_turning_the_setting_off_ends_a_wait_already_armed(app, home, work, monkeypatch, clock):
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    row = _session(app, work)
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, row.id, reset=reset)
+    assert CO.read_limits(home, row.id)["wait"]["resets_at"] == reset.isoformat()
+    app.state.platform.config.build_auto_resume = False
+    assert await CO.resume_due(svc, now=reset + timedelta(minutes=1)) == [], "carried on with the setting off"
+    assert len(drivers[row.id].sent) == 1
+    st = CO.read_limits(home, row.id)
+    assert st.get("wait") is None and st["card"], "the wait ends; the card (and its press) stays"
+    async with client(app) as c:
+        view = (await c.get(f"/build/app/sessions/{row.id}")).json()
+    assert "account_wait" not in view
+    await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 4. the restart pass never starts more replies than the pool can run
+# --------------------------------------------------------------------------- #
+async def test_the_restart_pass_never_starts_more_replies_than_can_run_at_once(home, app, work, monkeypatch):
+    rows = [_row(app, work, hid=f"6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a{i:02d}") for i in range(S.MAX_LIVE + 2)]
+    for r in rows:
+        _log(home, r.id, _working())
+    S.reconcile_cut_turns(home)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    carried = await CO.carry_on_after_restart(svc)
+    assert len(carried) == S.MAX_LIVE, f"{len(carried)} replies started at once"
+    offered = [r.id for r in rows if r.id not in carried]
+    assert all(CO.read_cut(home, sid)["why_not"] == CO.WHY_POOL for sid in offered)
+    await until(lambda: all(drivers.get(sid) and drivers[sid].sent for sid in carried))
+    for sid in carried:
+        svc._emit(svc.live[sid], make("done", stop="completed"))
+    await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 5. words: a limit card with no wait is not "waiting"
+# --------------------------------------------------------------------------- #
+async def test_a_cut_beside_a_limit_card_with_no_wait_does_not_say_it_waits(home, app, work, monkeypatch):
+    row = _row(app, work)
+    _log(home, row.id, _working())
+    S.reconcile_cut_turns(home)
+    lim = home / "hosted" / row.id / CO.LIMITS_FILE
+    lim.write_text('{"card": {"account": ""}, "wait": null, "chain": 1}', encoding="utf-8")
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    assert await CO.carry_on_after_restart(svc) == []
+    assert drivers == {}
+    assert CO.read_cut(home, row.id)["why_not"] == CO.WHY_LIMIT_CARD
+    lim.write_text('{"card": {"account": ""}, "wait": {"id": "w1", "account": ""}}', encoding="utf-8")
+    CO._amend_cut(home, row.id, "t1", auto="")
+    assert await CO.carry_on_after_restart(svc) == []
+    assert CO.read_cut(home, row.id)["why_not"] == CO.WHY_LIMIT
+    await stop_all(app)

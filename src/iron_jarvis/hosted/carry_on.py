@@ -88,6 +88,12 @@ TICK_S = 30.0
 RECHECK_S = 300.0
 #: ...at most this many times, then the wait ends and the card waits for a press.
 MAX_TRIES = 3
+#: v1.422.0 review: a reply a restart cut off is carried on BY ITSELF only when
+#: the cut is this recent (Chat › Code keeps its cut-off replies this long:
+#: ``harness/reply_record.KEEP_DAYS``). An older cut — every reply an earlier
+#: update cut off that the user never came back to, read by the first start of
+#: this release — is offered (Continue), never carried on with nobody asking.
+CUT_KEEP_DAYS = 7
 
 #: What the TOOL is told (its user message; hidden on the page).
 CONTINUE_AFTER_RESTART = (
@@ -117,6 +123,11 @@ WHY_ARCHIVED = "its session is archived"
 WHY_TERMINAL = "its conversation is open in a terminal"
 WHY_NOT_SAVED = "the coding tool had not saved this conversation yet"
 WHY_LIMIT = "it waits on its account's limit"
+#: v1.422.0 review: the account's limit card is there but nothing waits (the
+#: setting is off, the chain was used up, it was cancelled, or the reply was a
+#: carry-on that had not been served yet) — never "it waits".
+WHY_LIMIT_CARD = "it had stopped on its account's limit"
+WHY_OLD = "it was cut off more than a week ago"
 WHY_NEWER = "a newer message was sent"
 WHY_BUSY = "the session is already working"
 WHY_POOL = "too many coding sessions were working at once"
@@ -215,6 +226,21 @@ def drop_cut(home: Any, sid: str) -> None:
         _write(_path(home, sid, CUT_FILE), {})
 
 
+def note_stopped(home: Any, sid: str, turn: str) -> None:
+    """BLOCKING (v1.422.0 review): the user pressed Stop on ``turn``. Kept
+    beside the log BEFORE the coding tool is told, so a reply the user
+    stopped is never read as one a restart cut off — even when the app goes
+    (a Quit, Restart to update, a crash) before the tool confirms the Stop.
+    A record already kept for an older turn stays as it is."""
+    turn = str(turn or "")
+    if not turn:
+        return
+    with _LOCK:
+        rec = read_cut(home, sid)
+        rec["stopped"] = turn
+        _write(_path(home, sid, CUT_FILE), rec)
+
+
 # --------------------------------------------------------------------------- #
 # boot: what a restart cut off
 # --------------------------------------------------------------------------- #
@@ -268,12 +294,17 @@ def analyse_tail(events: list[dict[str, Any]], *, stopped_title: str) -> dict[st
             limit = True
         if t in _PROGRESS and t not in ("approval", "question"):
             expired_last.clear()
+    # v1.422.0 review: WHEN it was cut — the newest time on the reply's own
+    # events (read before the boot reconcile appends its closing rows, which
+    # carry the boot's time): a cut from long ago is never carried on by itself.
+    times = [t for t in (_parse(ev.get("at")) for ev in mine) if t is not None]
     return {
         "turn": turn,
         "closed": done is not None,
         "waiting": bool(open_asks or expired_last),
         "carried": carried,
         "limit": limit,
+        "cut_at": _iso(max(times)) if times else "",
     }
 
 
@@ -286,12 +317,18 @@ def note_cut(home: Any, sid: str, facts: dict[str, Any]) -> None:
         turn = str(facts.get("turn") or "")
         if old.get("turn") == turn:
             return
+        if turn and old.get("stopped") == turn:
+            # v1.422.0 review: the USER pressed Stop on this reply, and the app
+            # went before the coding tool confirmed it (Iron Jarvis's own stop
+            # then ended it): never a cut — never carried on, never offered.
+            return
         rec = {
             "turn": turn,
             "waiting": bool(facts.get("waiting")),
             "carried": bool(facts.get("carried")) or (bool(turn) and old.get("to") == turn),
             "limit": bool(facts.get("limit")),
             "at": _iso(CLOCK()),
+            "cut_at": str(facts.get("cut_at") or ""),
             "auto": "",
         }
         _write(_path(home, sid, CUT_FILE), rec)
@@ -356,9 +393,14 @@ def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any]) -> str:
         return WHY_WAITING
     if rec.get("carried"):
         return WHY_CARRIED
+    cut_at = _parse(rec.get("cut_at"))
+    if cut_at is None or CLOCK() - cut_at > timedelta(days=CUT_KEEP_DAYS):
+        return WHY_OLD
     st = read_limits(svc.home, sid)
-    if rec.get("limit") or st.get("wait") or st.get("card"):
+    if isinstance(st.get("wait"), dict):
         return WHY_LIMIT
+    if rec.get("limit") or st.get("card"):
+        return WHY_LIMIT_CARD
     live = svc.live.get(sid)
     if live is not None and ((live.turn is not None and live.turn.running) or live.claim):
         return WHY_BUSY
@@ -372,9 +414,13 @@ def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any]) -> str:
 
 
 def _pool_full(svc: Any) -> bool:
+    """v1.422.0 review: every session that is WORKING counts — a reply this
+    pass just started has no process yet (its tool starts in the turn's own
+    task), and counting only running processes let it start more replies than
+    can run at once (the extra ones failed at once, their record used up)."""
     from .service import MAX_LIVE
 
-    busy = [lv for lv in svc.live.values() if lv.running and lv.busy]
+    busy = [lv for lv in svc.live.values() if lv.busy]
     return len(busy) >= MAX_LIVE
 
 
@@ -774,11 +820,19 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
         return []
     cfg = getattr(svc.platform, "config", None)
     groups = getattr(cfg, "account_groups", None) or {}
+    auto_on = bool(getattr(cfg, "build_auto_resume", True))
     done: list[str] = []
     for sid, st in waits:
         wait = st["wait"]
         wid = str(wait.get("id") or "")
         try:
+            if not auto_on and wait.get("auto"):
+                # v1.422.0 review: "Carry on by itself after an account's
+                # limit" was turned OFF after this wait was armed. OFF means
+                # nothing carries on by itself (a move included): the wait
+                # ends; the card and its press stay.
+                await asyncio.to_thread(_amend_wait, svc.home, sid, wid, None)
+                continue
             row = await asyncio.to_thread(store.get, svc.engine, sid)
             if row is None or row.archived_at is not None or str(row.account or "") != str(wait.get("account") or ""):
                 await asyncio.to_thread(_amend_wait, svc.home, sid, wid, None)

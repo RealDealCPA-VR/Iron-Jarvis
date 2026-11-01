@@ -155,9 +155,15 @@ export function cutWords(c: CutFacts): string {
   if (!c.resumable) {
     return "Iron Jarvis restarted before the coding tool saved this conversation, so it cannot be carried on — send your message again.";
   }
-  return c.whyNot
-    ? `It did not carry on by itself because ${c.whyNot}.`
-    : "Iron Jarvis restarted while this was working. Press Continue to carry it on from where it stopped.";
+  if (!c.whyNot) {
+    return "Iron Jarvis restarted while this was working. Press Continue to carry it on from where it stopped.";
+  }
+  // v1.422.0 review: a reason the coding tool's own refusal gave is a whole
+  // SENTENCE ("This conversation is open in a Build terminal — …."), never a
+  // phrase to follow "because" (it read "because This … here..").
+  return /[.!?]$/.test(c.whyNot.trim())
+    ? `It did not carry on by itself: ${c.whyNot.trim()}`
+    : `It did not carry on by itself because ${c.whyNot}.`;
 }
 
 /** The tools whose conversation can move to another account. */

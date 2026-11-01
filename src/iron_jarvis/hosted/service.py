@@ -2400,6 +2400,15 @@ class HostedService:
         live = self.live.get(sid)
         if live is None or live.turn is None or not live.turn.running:
             return {"ok": True, "running": False}
+        # v1.422.0 review: the Stop is KEPT before the tool is told — if the app
+        # goes before the tool confirms it, the reply is never read as one a
+        # restart cut off (never carried on by itself). Never fails a Stop.
+        from . import carry_on as CO
+
+        try:
+            await asyncio.to_thread(CO.note_stopped, self.home, sid, live.turn.id)
+        except Exception:  # noqa: BLE001
+            log.warning("could not keep a Code-view session's Stop", exc_info=True)
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:
