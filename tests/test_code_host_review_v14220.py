@@ -284,3 +284,23 @@ def test_a_deliberate_close_is_never_taken_for_a_broken_link(hosts, tmp_path):
     lk.request = request
     assert HL.quit_host(home, 30)
     assert seen.get("quit") is True and not HL._LOST.get(HL._key(home))
+
+
+# --------------------------------------------------------------------------- #
+# Checked fine: the log's own line stamps never reach a window
+# --------------------------------------------------------------------------- #
+async def test_the_line_stamps_never_reach_any_build_code_view(hosts, tmp_path, monkeypatch):
+    """``htool`` / ``hseq`` are the log's: the session view, a page of
+    history, a step's kept texts, and a reply's stream — live, and followed
+    again after a restart — never carry them."""
+    root, home, log, sid, pid = await _cut_mid_reply(hosts, tmp_path, monkeypatch)
+    stamped = [e for e in events_of(home, sid) if "hseq" in e]
+    assert stamped and all(e.get("htool") for e in stamped), "the log IS stamped (else this guard is empty)"
+    app2 = await boot(root)
+    async with client(app2) as c:
+        rest = (await asyncio.wait_for(c.get(f"/build/app/sessions/{sid}/turns/t1/stream"), 60)).text
+        view = (await c.get(f"/build/app/sessions/{sid}")).text
+        page = (await c.get(f"/build/app/sessions/{sid}/events", params={"limit": 50})).text
+    for name, body in (("the stream", rest), ("the view", view), ("a page", page)):
+        assert "hseq" not in body and "htool" not in body, name
+    await ADOPT.shutdown(app2.state.platform, keep=False)
