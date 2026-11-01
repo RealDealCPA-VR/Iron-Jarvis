@@ -320,6 +320,11 @@ class TerminalManager:
         #: clock); None when nothing is waiting. Tests replace ``_now``.
         self._restore_give_up_at: float | None = None
         self._now = time.monotonic
+        #: v1.418.1 (review): each boot-restored pane's place in the snapshot,
+        #: so panes given up at different moments (one refused behind a
+        #: stuck shell at 15 s, the stuck one itself at the minute) are saved
+        #: and reported in the user's order, not the order they gave up in.
+        self._restore_rank: dict[str, int] = {}
         #: Set by ``kill_all``: a restore that finishes after shutdown began
         #: is closed instead of registered.
         self._closing = False
@@ -969,7 +974,7 @@ class TerminalManager:
         with self._lock:
             held = {e.get("id") for e in entries}
             pending = [
-                dict(e)
+                (rid, dict(e))
                 for table in (
                     getattr(self, "_restoring", {}),
                     # v1.418.1: a pane given up is still the user's pane; the
@@ -979,7 +984,9 @@ class TerminalManager:
                 for rid, e in table.items()
                 if rid not in held
             ]
-        entries.extend(pending)
+            rank = getattr(self, "_restore_rank", {})
+        pending.sort(key=lambda pair: rank.get(pair[0], len(rank)))
+        entries.extend(e for _, e in pending)
         return entries, json.dumps({"terminals": entries})
 
     def restoring_ids(self) -> list[str]:
@@ -1000,6 +1007,8 @@ class TerminalManager:
         self._settle_restores()
         with self._lock:
             ids = list(getattr(self, "_restore_failed", {}))
+            rank = getattr(self, "_restore_rank", {})
+        ids.sort(key=lambda rid: rank.get(rid, len(rank)))
         if not ids:
             return None
         return {
@@ -1321,6 +1330,7 @@ class TerminalManager:
             free = self.max_sessions - live - len(self._pending_panes) - self._reserved
             batch = entries[: max(0, free)]
             self._reserved += len(batch)
+            self._restore_rank = {str(e.get("id")): i for i, e in enumerate(batch) if e.get("id")}
         slots: list[TerminalSession | None] = [None] * len(batch)
         # v1.418.1: a restore whose shell could not even be ASKED to start
         # (another Store shell is stuck starting) is given up, not dropped.
@@ -1461,23 +1471,31 @@ class TerminalManager:
         close_it = False
         keep_failed = False
         with self._lock:
-            given_up = self._restore_failed.pop(rid, None) is not None
-            self._restoring.pop(rid, None)
-            if not given_up:
-                self._reserved -= 1
-            if stuck and session is None and rid and not self._closing:
-                self._restore_failed[rid] = dict(entry)
-                keep_failed = True
-            if session is not None:
-                if self._closing:
-                    close_it = True
-                else:
+            if self._closing:
+                # v1.418.1 (review): shutdown began. `kill_all` sets the flag
+                # and only THEN takes `_lock` again to read these tables for
+                # the shutdown snapshot; popping the pane here (as this did)
+                # dropped it from that snapshot, and the next start had
+                # nothing to reopen. Leave it exactly where it is — still
+                # reopening, or given up — so it is saved as read, and close a
+                # shell that did start (below, outside the lock).
+                close_it = True
+            else:
+                given_up = self._restore_failed.pop(rid, None) is not None
+                self._restoring.pop(rid, None)
+                if not given_up:
+                    self._reserved -= 1
+                if stuck and session is None and rid:
+                    self._restore_failed[rid] = dict(entry)
+                    keep_failed = True
+                if session is not None:
                     self._sessions[session.id] = session
-        if close_it and session is not None:
-            try:
-                session.kill()
-            except Exception:  # noqa: BLE001 — shutdown: nothing to report to
-                pass
+        if close_it:
+            if session is not None:
+                try:
+                    session.kill()
+                except Exception:  # noqa: BLE001 — shutdown: nothing to report to
+                    pass
             return
         if keep_failed:
             return  # the snapshot is unchanged: its entry is kept as read

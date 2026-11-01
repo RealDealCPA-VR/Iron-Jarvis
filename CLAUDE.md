@@ -12395,6 +12395,22 @@ does not need a bump, stop and bump it.
   red), `dashboard/__tests__/build-restore-failed-v14181.test.tsx` (7
   mutations, all red); moved on purpose: `pane-keys-v1280`,
   `terminal-host-v1243` (the kept set gained the given-up ids).
+  REVIEW (2 defects, each red first): (1) `kill_all` sets `_closing`, lets go
+  of `_lock`, then reads the tables for the shutdown snapshot; a late shell
+  starting in that gap made `_finish_late_restore` POP the pane (reopening,
+  given up, or refused behind a stuck shell) before closing it, so the
+  shutdown snapshot lost it. Once `_closing`, the finisher now only closes a
+  started shell and leaves both tables as they are. (2) panes given up at
+  different moments (refused at 15 s, the stuck one at the minute) were saved
+  and reported in give-up order; `_restore_rank` (snapshot order, set by
+  `rehydrate`) sorts the pending entries and `restore_failed.ids`. Pins:
+  `tests/test_restore_give_up_review_v14181.py` (drives the REAL `kill_all`;
+  checks the file was written by the shutdown, never read off the boot's own
+  snapshot); moved on purpose: `test_boot_pane_restore_bound_v1406::
+  test_a_pane_that_starts_after_shutdown_began_is_closed_not_registered`
+  (waits for the finisher, not for `restoring` to empty). OPEN: a pane that
+  opens after the give-up is registered without a cap check (at most the
+  number given up past the cap).
 
 - **Build (`app/terminals/page.tsx`)**: since v1.409.0 a "</> Code | Terminal"
   switch (Code = `components/buildCode/*`, see the v1.409.0 hard rule). The
