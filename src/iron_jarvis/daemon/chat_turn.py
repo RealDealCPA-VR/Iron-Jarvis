@@ -5845,6 +5845,10 @@ async def _build_harness(
             layer=turn.layer, library=turn.tree.library, finish=turn.tree.finish,
             checkers=turn.checkers, reviewer=_reviewer, low_trust=bool(low_trust),
             event_bus=bus, session_id=str(session_id or "chat"),
+            # v1.421.0 review: the ONE window ladder, so a helper whose model
+            # has a small known window gets the section composed to its share
+            # (``standard.window_cap``) — never one that clips its task.
+            window_of=lambda _p, _m: _context_window(d, _p, _m),
         )
     return turn, rules_section
 

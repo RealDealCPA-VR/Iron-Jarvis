@@ -497,7 +497,13 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
         from .standard import helper_names
 
         try:
-            prompt += standard.for_helper(helper_names(parent, definition))
+            # v1.421.0 review: composed to the share of the window of the
+            # model THIS helper runs on (a member's own, else the session's):
+            # the section rides the system prompt, which the run's transcript
+            # planner cannot shrink, so a small window would cost the TASK.
+            prompt += standard.for_helper(
+                helper_names(parent, definition), provider=parent.provider, model=parent.model,
+            )
         except Exception:  # noqa: BLE001 — a helper's prompt never breaks its start
             pass
     # v1.403.0 (the coding-session team): a WORKER is told its part — one
