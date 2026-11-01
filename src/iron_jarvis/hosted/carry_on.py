@@ -555,12 +555,17 @@ def reset_from(driver: Any, ev: dict[str, Any] | None = None) -> datetime | None
         return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
     windows = getattr(driver, "seen_windows", None) if driver is not None else None
     full = []
+    now = CLOCK()
     for w in windows or []:
         if not isinstance(w, dict):
             continue
         pct = w.get("percent")
         when = _parse(w.get("resets_at"))
-        if isinstance(pct, (int, float)) and not isinstance(pct, bool) and pct >= 100 and when is not None:
+        # v1.422.0 review: a window whose reset already PASSED is an older
+        # report, not this limit's reset — it never hides the reset the
+        # message itself names (the reply would wait for nothing).
+        if (isinstance(pct, (int, float)) and not isinstance(pct, bool) and pct >= 100
+                and when is not None and when > now):
             full.append(when)
     if full:
         return max(full)

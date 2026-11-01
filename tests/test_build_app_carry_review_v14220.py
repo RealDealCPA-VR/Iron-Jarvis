@@ -589,3 +589,22 @@ async def test_emergency_stop_engaged_during_a_wait_pass_moves_nothing_more(
     for sid in done:
         svc._emit(svc.live[sid], make("done", stop="completed"))
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 9. a usage window whose reset already passed never hides the words' reset
+# --------------------------------------------------------------------------- #
+def test_a_full_window_whose_reset_passed_does_not_hide_the_reset_the_words_name():
+    """Codex's last ``rateLimits`` can be older than its limit message (a
+    window full hours ago, already reset): that stale reset is in the PAST,
+    so the reply would wait for nothing and the reset the message names
+    ("try again in 2 hours") was never read."""
+    stale = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+
+    class Codex:
+        limit = PaneLimit(line="You've hit your usage limit.")
+        seen_windows = [{"key": "primary", "percent": 100, "resets_at": stale}]
+
+    said = {"technical": "You've hit your usage limit. Upgrade to Plus to continue, or try again in 2 hours."}
+    got = CO.reset_from(Codex(), said)
+    assert got is not None and got > datetime.now(timezone.utc) + timedelta(hours=1, minutes=50), got
