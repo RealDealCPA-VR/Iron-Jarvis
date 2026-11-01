@@ -160,6 +160,12 @@ PLAN_RUN_TEXT = (
 PLAN_RUN_LOW_TRUST = (
     "the planning reply read something flagged earlier, so the plan is carried out at low trust"
 )
+#: v1.422.0 review (B1): why "Continue from where it stopped" carries on at
+#: LOW trust — the failed reply it continues had gone low, and its kept rounds
+#: (which the continue sends again) hold what lowered it.
+CONTINUE_LOW_TRUST = (
+    "the reply it continues read something flagged before it stopped, so it carries on at low trust"
+)
 #: thread id -> {"from": the plan turn's id, "taken": bool, "low_trust": the
 #: reason when the plan turn ended at low trust, else ""} — an approved plan
 #: whose act turn is due (set when the plan turn's clean ``done`` goes out,
@@ -1238,6 +1244,11 @@ class _ReplyWatch:
             technical = failure_detail(err.get("technical"))
             if technical and technical != words:
                 line["errorDetail"] = technical
+            # v1.422.0 review: a failed reply that ran at LOW trust says so
+            # (its continue starts low: `_resume_inputs`).
+            if str(err.get("trust") or "") == "low":
+                line["trust"] = "low"
+                line["trustReason"] = str(err.get("trust_reason") or "")
         else:
             if not partial.strip() and not self.helpers and not self.attempts and not keep_empty:
                 return out  # stopped before a word: nothing to keep
@@ -2604,7 +2615,18 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str, *,
             playbook = ""
         if not playbook.strip():
             folder_skill, playbook = "", ""
+    # v1.422.0 review: a FAILED reply that ran at low trust is continued at
+    # low trust (its kept rounds hold what lowered it).
+    low = ""
+    if failed:
+        line = next((
+            m for m in messages
+            if m.get("role") == "assistant" and m.get("turnId") == turn_id
+        ), None)
+        if isinstance(line, dict) and str(line.get("trust") or "") == "low":
+            low = CONTINUE_LOW_TRUST
     return {
+        "low_trust": low,
         "history": S.history_of(messages[start:idx], last_work=True),
         "summary": _compact.render(standing["summary"]) if standing is not None else "",
         "question": loaded[0],
@@ -3026,6 +3048,11 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 raise ResumeGone(thread_id)
             if resume["folder_skill"]:
                 folder_skill, playbook = resume["folder_skill"], resume["playbook"]
+            # v1.422.0 review: a failed reply that went to LOW trust is
+            # continued at low trust (its kept rounds hold what lowered it —
+            # the night task's and the plan run's own rule).
+            if resume.get("low_trust") and not str(low_trust or "").strip():
+                low_trust = resume["low_trust"]
         # v1.377.0 (part 2, Phase 6): the Browser pane's address is KEPT on the
         # session with every message the screen sends (a local page only, or
         # nothing), so a CONTINUATION the daemon starts itself — "Resume when

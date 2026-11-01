@@ -6898,7 +6898,13 @@ async def chat_stream(
             yield _sse(
                 "error",
                 _refused.payload() if _refused is not None
-                else _chat_turn.error_payload(d, body, exc),
+                else {
+                    **_chat_turn.error_payload(d, body, exc),
+                    # v1.422.0 review: a LOW-trust turn says so — a coding
+                    # session's failed reply is continued at low trust
+                    # (lock-step: chat_turn's 502).
+                    **_chat_turn.failed_trust_keys(_trust_state),
+                },
             )
             return
         except BaseException:

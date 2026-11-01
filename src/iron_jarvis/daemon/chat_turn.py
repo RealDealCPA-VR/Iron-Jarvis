@@ -3575,6 +3575,19 @@ def _trust_receipt(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def failed_trust_keys(state: dict[str, Any]) -> dict[str, Any]:
+    """v1.422.0 review (Wave 2, B1): the trust keys a FAILED turn's error
+    carries — ``{trust: "low", trust_reason}`` when the turn ran at (or went
+    to) LOW trust, else ``{}`` (every other failure's words are unchanged). A
+    coding session's failed reply KEEPS its rounds for "Continue from where it
+    stopped", and those rounds hold whatever lowered the trust: its continue
+    must start low too (``routes/build``). MIRROR NOTE (lock-step): the stream
+    lane's error frame and the POST lane's 502 both add these."""
+    if not (state.get("low") or state.get("tainted")):
+        return {}
+    return {"trust": TRUST_LOW, "trust_reason": str(state.get("reason") or "")}
+
+
 #: v1.323.0 — the most reasoning text POST /chat hands back (display-only).
 THINKING_CAP = 20_000
 
@@ -3915,9 +3928,11 @@ class ChatTurnFailed(HTTPException):
 
     def body(self) -> dict[str, str]:
         """The 502 body: ``detail`` first, then ``title``/``fix``/``technical``
-        and (v1.355.0, G29) ``fix_kind``/``fix_provider`` when a press fixes it."""
+        and (v1.355.0, G29) ``fix_kind``/``fix_provider`` when a press fixes it
+        — v1.422.0 review: and ``trust``/``trust_reason`` for a turn that ran
+        at LOW trust (lock-step: the stream lane's error frame)."""
         out = {"detail": str(self.detail)}
-        for key in ("title", "fix", "technical", "fix_kind", "fix_provider"):
+        for key in ("title", "fix", "technical", "fix_kind", "fix_provider", "trust", "trust_reason"):
             if self.words.get(key):
                 out[key] = str(self.words[key])
         return out
@@ -10835,7 +10850,12 @@ async def run_chat_turn(
         _payload = error_payload(d, body, exc)
         raise ChatTurnFailed(
             _payload["detail"],
-            {k: v for k, v in _payload.items() if k != "detail"},
+            {
+                **{k: v for k, v in _payload.items() if k != "detail"},
+                # v1.422.0 review: a LOW-trust turn says so (lock-step: the
+                # stream lane's error frame).
+                **failed_trust_keys(_trust_state),
+            },
         ) from exc
     finally:
         # The finish check's turn scope (review): nothing is continued after
