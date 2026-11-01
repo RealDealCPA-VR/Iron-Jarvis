@@ -37,6 +37,18 @@ import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
 import {
+  CANCEL_WAIT,
+  CANCEL_WAIT_TITLE,
+  CONTINUE_CUT,
+  CONTINUE_CUT_TITLE,
+  canMoveAccounts,
+  carryLineWords,
+  cutWords,
+  waitWords,
+  type CutFacts,
+  type WaitFacts,
+} from "@/lib/buildCodeCarry";
+import {
   CONTINUE_ON_ANOTHER,
   doneWords,
   signInProvider,
@@ -248,6 +260,16 @@ interface FailurePresses {
   /** v1.417.0 (C4.9): send the reply's message again (same words, same
    *  files) — the failure's own words say "Press Retry". */
   onRetry?: () => void;
+  /** v1.422.0 (B3): the reply was cut off by a restart and not carried on
+   *  by itself — Continue sends the hidden carry-on (in place of Retry). */
+  cut?: CutFacts | null;
+  onContinueCut?: () => void;
+  continuingCut?: boolean;
+  /** v1.422.0 (B5): the limit card waits for its account by itself (until
+   *  when, with Cancel), and its own note. */
+  wait?: WaitFacts | null;
+  onCancelWait?: () => void;
+  limitNote?: string;
 }
 
 /** v1.417.0 (C4.9): who answered, for the receipt (the session row's own
@@ -277,6 +299,17 @@ const Item = memo(function Item({
   codeRowDraws.items += 1;
   switch (item.kind) {
     case "user":
+      if (item.carry) {
+        // v1.422.0: a message Iron Jarvis sent BY ITSELF to carry the reply
+        // on — one quiet line, never the user's bubble (its words are the
+        // app's, written for the tool).
+        return (
+          <p data-testid="code-carry" data-why={item.carry.why} className="flex items-center gap-2 text-[12px] text-zinc-500">
+            <RotateCcw size={13} aria-hidden="true" className="shrink-0" />
+            <span className="min-w-0">{carryLineWords(item.carry)}</span>
+          </p>
+        );
+      }
       // v1.412.0: the pictures a message carried, as thumbnails (the chat's
       // own SentAttachments); other files by name. A picture alone is a
       // message (no empty bubble).
@@ -341,7 +374,30 @@ const Item = memo(function Item({
         <div data-testid="code-error" data-fix-kind={item.fixKind} role="alert" className="text-[13px]" title={item.technical || undefined}>
           <p className="text-tone-danger">{item.title}</p>
           {item.fix ? <p className="text-zinc-400">{item.fix}</p> : null}
-          {press && item.fixKind === "account_limit" && press.onContinueOn ? (
+          {press && item.fixKind === "account_limit" && press.wait ? (
+            // v1.422.0 (B5): it waits (or looks for another account of the
+            // group) and carries on BY ITSELF — said, with until when.
+            <p data-testid="code-limit-waiting" role="status" className="mt-1 flex flex-wrap items-center gap-x-2 text-zinc-300">
+              <span>{waitWords(press.wait)}</span>
+              {press.onCancelWait ? (
+                <button
+                  type="button"
+                  data-testid="code-wait-cancel"
+                  onClick={press.onCancelWait}
+                  title={CANCEL_WAIT_TITLE}
+                  className="inline-flex h-7 items-center rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                >
+                  {CANCEL_WAIT}
+                </button>
+              ) : null}
+            </p>
+          ) : null}
+          {press && item.fixKind === "account_limit" && press.limitNote ? (
+            <p data-testid="code-limit-note" className="mt-1 text-zinc-400">
+              {press.limitNote}
+            </p>
+          ) : null}
+          {press && item.fixKind === "account_limit" && press.onContinueOn && canMoveAccounts(press.tool) ? (
             <button
               type="button"
               data-testid="code-continue-on"
@@ -355,7 +411,27 @@ const Item = memo(function Item({
           {press && item.fixKind === "sign_in" && signInProvider(press.tool) ? (
             <CliSignInPress provider={signInProvider(press.tool)} testIdPrefix="code" />
           ) : null}
-          {press && press.onRetry && item.fixKind !== "account_limit" ? (
+          {press && press.cut && item.fixKind !== "account_limit" ? (
+            // v1.422.0 (B3): a reply a restart cut off that did not carry on
+            // by itself says why, and Continue carries it on (the tool's own
+            // resume, told to check what was already done).
+            <p data-testid="code-cut-why" className="mt-1 text-zinc-400">
+              {cutWords(press.cut)}
+            </p>
+          ) : null}
+          {press && press.cut && press.cut.resumable && press.onContinueCut && item.fixKind !== "account_limit" ? (
+            <button
+              type="button"
+              data-testid="code-continue-cut"
+              disabled={press.continuingCut}
+              onClick={press.onContinueCut}
+              title={CONTINUE_CUT_TITLE}
+              className="mt-1 inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+            >
+              <RotateCcw size={13} aria-hidden="true" /> {CONTINUE_CUT}
+            </button>
+          ) : null}
+          {press && press.onRetry && item.fixKind !== "account_limit" && !(press.cut && press.cut.resumable) ? (
             <button
               type="button"
               data-testid="code-retry"
@@ -424,6 +500,12 @@ export const CodeConversation = memo(function CodeConversation({
   onContinueOn,
   continuing = false,
   onRetry,
+  cut = null,
+  onContinueCut,
+  continuingCut = false,
+  wait = null,
+  onCancelWait,
+  limitNote = "",
   model = "",
   account = "",
   onExpand,
@@ -437,6 +519,14 @@ export const CodeConversation = memo(function CodeConversation({
   /** v1.417.0 (C4.9): send the failed reply's message again (absent while
    *  a reply runs). */
   onRetry?: () => void;
+  /** v1.422.0 (B3): the newest reply was cut off by a restart (Continue). */
+  cut?: CutFacts | null;
+  onContinueCut?: () => void;
+  continuingCut?: boolean;
+  /** v1.422.0 (B5): the limit card waits by itself (until when; Cancel). */
+  wait?: WaitFacts | null;
+  onCancelWait?: () => void;
+  limitNote?: string;
   /** v1.417.0 (C4.9): the session's model and account, for the receipt. */
   model?: string;
   account?: string;
@@ -457,7 +547,11 @@ export const CodeConversation = memo(function CodeConversation({
           key={item.key}
           item={item}
           folder={folder}
-          press={newest && i === lastError ? { tool, onContinueOn, continuing, onRetry } : null}
+          press={
+            newest && i === lastError
+              ? { tool, onContinueOn, continuing, onRetry, cut, onContinueCut, continuingCut, wait, onCancelWait, limitNote }
+              : null
+          }
           toolName={toolLabel(tool)}
           facts={facts}
           onExpand={onExpand}

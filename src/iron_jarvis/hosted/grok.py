@@ -166,12 +166,18 @@ def session_meta(mode: str) -> dict[str, bool]:
 
 def failure_event(said: str) -> dict[str, Any]:
     """The ``error`` event for a failure Grok SAID. No press: Grok signs in in
-    its own screen, and a Grok session has no other account to move to."""
+    its own screen, and a Grok session has no other account to move to.
+
+    v1.422.0 (B5): a usage limit is the ACCOUNT-LIMIT card
+    (``fix_kind: "account_limit"``) like Claude Code's and Codex's, so the
+    reply waits for the reset by itself when the words say when
+    (``hosted.carry_on``) and a waiting message is held. Its fix stays
+    Grok's own (it never moves to another account)."""
     text = str(said or "")
     if _SIGN_IN_RX.search(text):
         return W.error("Grok isn't signed in", SIGN_IN_FIX, text)
     if _LIMIT_RX.search(text):
-        return W.error("Grok hit its usage limit", LIMIT_FIX, text)
+        return W.error("Grok hit its usage limit", LIMIT_FIX, text, fix_kind="account_limit")
     return W.error("Grok's model answered with an error", OTHER_FIX, text)
 
 
@@ -403,7 +409,15 @@ class GrokDriver(AcpDriver):
         return list(ARGV)
 
     def failure_event(self, said: str) -> dict[str, Any]:
-        return failure_event(said)
+        ev = failure_event(said)
+        if ev.get("fix_kind") == "account_limit":
+            # v1.422.0 (B5): the limit, as the other tools keep it (its reset,
+            # when the words say one: ``hosted.carry_on.reset_from``).
+            from ..terminals.limit_state import PaneLimit
+            from .events import one_line
+
+            self.limit = PaneLimit(line=one_line(said, 300))
+        return ev
 
     # -- the session --------------------------------------------------------------
     async def open(self, *, session_id: str, resume: bool) -> None:

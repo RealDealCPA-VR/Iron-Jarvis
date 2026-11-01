@@ -249,7 +249,9 @@ async def test_continue_on_refuses_in_words(app, work, tmp_path, monkeypatch):
     monkeypatch.setattr(app.state.platform, "iron_proxy", _Svc(only_one), raising=False)
     async with client(app) as c:
         r = await c.post(f"/build/app/sessions/{codex.id}/continue-on", json={})
-        assert r.status_code == 409 and "Claude Code sessions only" in r.json()["detail"]
+        # v1.422.0 (B5): a Codex conversation moves too (hosted/codex_move) —
+        # one on this PC's own login has no account to move from.
+        assert r.status_code == 409 and "this PC's login" in r.json()["detail"]
         r = await c.post(f"/build/app/sessions/{mine.id}/continue-on", json={})
         assert r.status_code == 409 and "this PC's login" in r.json()["detail"]
         r = await c.post(f"/build/app/sessions/{fresh.id}/continue-on", json={})

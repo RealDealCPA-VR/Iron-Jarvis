@@ -1754,6 +1754,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         bg_tasks["build_resume"] = asyncio.create_task(_resume_cut_off_replies())
 
+        # v1.422.0 (Wave 2, B3 + B5): Build › Code carries on by itself — FIRST
+        # the replies a restart cut off (the tool's own resume, once each),
+        # then every account limit's wait (the reset, or a move within the
+        # user's account group). Each pass reports ITS OWN outcome on
+        # loop_health["build_app_carry"]; a PC that never used the Code view
+        # costs one folder look per pass.
+        from ..hosted.carry_on import carry_loop as _hosted_carry_loop
+
+        bg_tasks["build_app_carry"] = asyncio.create_task(
+            _hosted_carry_loop(platform, lambda ok, exc: _tick("build_app_carry", ok, exc))
+        )
+
         # NIGHT SHIFT (v1.398.0, N1): the queued coding tasks start by
         # themselves inside the night window, each on its own branch, on THIS
         # loop (never a scheduler thread). Each pass reports ITS OWN outcome on
@@ -2030,6 +2042,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(_night_shift, return_exceptions=True), timeout=5.0
+                    )
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    pass
+            # v1.422.0: Build › Code's carry-on loop stops before its turns are
+            # cut off (a carry-on started now would be cut off at once).
+            _hosted_carry = bg_tasks.pop("build_app_carry", None)
+            if _hosted_carry is not None:
+                _hosted_carry.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(_hosted_carry, return_exceptions=True), timeout=5.0
                     )
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
@@ -3629,6 +3652,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app_panes as _build_app_panes_routes
 
     _build_app_panes_routes.register(app, d)
+    # v1.422.0 (Wave 2): Build › Code's Continue on a reply a restart cut off,
+    # and Cancel on a limit's wait (hosted/carry_on).
+    from .routes import build_app_carry as _build_app_carry_routes
+
+    _build_app_carry_routes.register(app, d)
     # Brain Profiles (v1.406.0, brain/): which memory base is the durable
     # brain, app-wide and per project, and the saves that are still waiting.
     from .routes import brain as _brain_routes

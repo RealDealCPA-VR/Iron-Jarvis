@@ -178,6 +178,7 @@ export const CODE_LOST_REREAD_MS = 3_000;
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
 /** "At the bottom" for the transcript, in pixels. */
@@ -294,6 +295,10 @@ function SessionPane({
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
+  /** v1.422.0 (B3, B5): a reply a restart cut off (Continue) and a limit's
+   *  wait that carries on by itself (until when; Cancel). */
+  const [carry, setCarry] = useState<CarryFacts>({ cut: null, wait: null, limitNote: "" });
+  const [continuingCut, setContinuingCut] = useState(false);
   /** Iron Jarvis stopped answering while a reply ran: looked for again. */
   const [lost, setLost] = useState(false);
   /** The reader scrolled up while something new arrived. */
@@ -433,6 +438,8 @@ function SessionPane({
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
+        // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
+        setCarry(decodeCarry(raw));
         // v1.418.0 (C4.8): argument hints, and the messages waiting behind
         // the reply (held ones go back to the box).
         setHints(commandHints((raw as { commands?: unknown } | null)?.commands));
@@ -590,6 +597,7 @@ function SessionPane({
     setOlder({ cursor: null, earlier: 0 });
     setQueued([]);
     setHints({});
+    setCarry({ cut: null, wait: null, limitNote: "" });
     followedTurnsRef.current = new Set();
     void load({ follow: true });
     return () => {
@@ -1052,6 +1060,39 @@ function SessionPane({
     }
   }, [session, continuing, onChanged, tools]);
 
+  /** v1.422.0 (B3): Continue on a reply a restart cut off — the same hidden
+   *  carry-on the app sends by itself, started by this press; the running
+   *  turn is then followed as on any read. */
+  const continueCut = useCallback(async () => {
+    if (!session || continuingCut) return;
+    setContinuingCut(true);
+    setNote(null);
+    setInfo(null);
+    try {
+      await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/continue`, {});
+      setCarry((c) => ({ ...c, cut: null }));
+      await load({ follow: true });
+    } catch (e) {
+      setNote(errorWords(e, "The reply could not be carried on."));
+    } finally {
+      setContinuingCut(false);
+    }
+  }, [session, continuingCut, load]);
+
+  /** v1.422.0 (B5): Cancel on a limit card that waits by itself — nothing
+   *  carries on by itself after it; the card and its press stay. */
+  const cancelWait = useCallback(async () => {
+    if (!session) return;
+    setNote(null);
+    try {
+      await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/wait/cancel`, {});
+      setCarry((c) => ({ ...c, wait: null }));
+    } catch (e) {
+      setNote(errorWords(e, "The wait could not be cancelled."));
+      void load({ follow: false });
+    }
+  }, [session, load]);
+
   const openInTerminal = useCallback(async () => {
     if (!session) return;
     setMoreOpen(false);
@@ -1375,6 +1416,12 @@ function SessionPane({
                 onContinueOn={continueOn}
                 continuing={continuing}
                 onRetry={running ? undefined : retryFailed}
+                cut={running ? null : carry.cut}
+                onContinueCut={continueCut}
+                continuingCut={continuingCut}
+                wait={running ? null : carry.wait}
+                onCancelWait={cancelWait}
+                limitNote={carry.limitNote}
                 model={session.model}
                 account={session.account ? accountName : ""}
                 onExpand={expandStep}

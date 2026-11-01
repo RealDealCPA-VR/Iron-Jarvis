@@ -896,9 +896,15 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // account_name, …}; session_id "build:<id>". The row opens Build on THAT
     // session. A limit stopped work nobody may be watching: it counts on the
     // badge. A resume is good news, said once.
+    // v1.422.0 (Wave 2, B3 + B5): a Build › Code session too (`surface:
+    // "build_app"`, session id "build_app:<id>") — the same words, opened on
+    // that session in Build › Code.
+    const sidRaw = typeof e.session_id === "string" ? e.session_id : "";
+    const app = p.surface === "build_app" || sidRaw.startsWith("build_app:");
     const thread =
       (typeof p.thread_id === "string" && p.thread_id.trim()) ||
-      buildThreadOf(typeof e.session_id === "string" ? e.session_id : "") ||
+      (sidRaw.startsWith("build_app:") ? sidRaw.slice("build_app:".length) : "") ||
+      buildThreadOf(sidRaw) ||
       "";
     const title = typeof p.title === "string" ? p.title.trim() : "";
     const name = typeof p.account_name === "string" ? p.account_name.trim() : "";
@@ -916,7 +922,7 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     return {
       id: e.id,
       ts: e.ts,
-      href: thread ? buildSessionHref(thread) : CODE_VIEW_LINK,
+      href: thread ? (app ? buildCodeHref(thread) : buildSessionHref(thread)) : app ? buildCodeHref() : CODE_VIEW_LINK,
       icon: limitRow ? AlertTriangle : CheckCircle2,
       title: limitRow
         ? buildLimitHeadline(p.kind, name)
