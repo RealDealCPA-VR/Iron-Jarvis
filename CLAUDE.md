@@ -12653,6 +12653,53 @@ does not need a bump, stop and bump it.
   READ `logs/daemon-freeze.txt` after the next "isn't responding"; it names
   the place. Pins: `tests/test_freeze_trace_v14091.py` (a real held GIL via
   `PyDLL("kernel32").Sleep` in a child; 7 mutations, all red).
+  v1.418.1 (a USER BUG: Build › Terminal said "Reopening 3 terminals…" for
+  4+ hours; `GET /terminals` held `restoring: [3 ids]` and the three Store
+  pwsh restores never returned). NOTHING WAITS ON A RESTORE FOREVER:
+  `manager.RESTORE_GIVE_UP_S` (60 s from the boot's restore start) GIVES UP a
+  restore still starting — decided when the state is READ
+  (`_settle_restores` in `restoring_ids`/`restore_failed`/
+  `snapshot_if_changed`), never by a timer thread (a stuck process creation
+  can hold the loader lock, and `Thread.start` then hangs too). A given-up
+  pane moves to `_restore_failed`, its `_reserved` slot is released (a late
+  `_finish_late_restore` never releases it twice), its snapshot entry is
+  KEPT (`_index_text` writes both tables) so the next start tries again, and
+  a shell that starts later still registers and clears the note. `GET
+  /terminals` adds `restore_failed: {count, ids, reason}` only when non-empty;
+  the Build page (`lib/restoreFailed`) drops "Reopening…", says "N terminals
+  from before the restart couldn't be reopened: their shell didn't start. Open
+  a new terminal, or restart Iron Jarvis to try again." in the stage (beside
+  the normal New terminal door) and the rail, keeps their saved keys, and
+  keeps re-reading while one could still open. `_PACKAGED_SPAWN` is acquired
+  with `PACKAGED_SPAWN_WAIT_S` (15 s): past it a Store shell raises
+  `ShellStartStuck` (a RuntimeError, never `ConPtyUnavailable`, so ConPTY is
+  not marked broken) — `POST /terminals` and `/terminals/launch` answer 503
+  with its sentence; a RESTORE refused that way is given up with its entry
+  kept. `_conpty_api` builds under `_CONPTY_API_LOCK` (double-checked) and
+  `rehydrate` calls `warm_conpty()` on the boot thread before any restore
+  thread starts (the 15:36 freeze: two restore threads in `ctypes.WinDLL` of
+  conpty.dll while the boot thread sat in `Thread.start`). THE WINDOWS-SIDE
+  CAUSE IS STILL NOT KNOWN. Pins: `tests/test_restore_give_up_v14181.py`
+  (time through `TerminalManager._now`, never a sleep; 14 mutations, all
+  red), `dashboard/__tests__/build-restore-failed-v14181.test.tsx` (7
+  mutations, all red); moved on purpose: `pane-keys-v1280`,
+  `terminal-host-v1243` (the kept set gained the given-up ids).
+  REVIEW (2 defects, each red first): (1) `kill_all` sets `_closing`, lets go
+  of `_lock`, then reads the tables for the shutdown snapshot; a late shell
+  starting in that gap made `_finish_late_restore` POP the pane (reopening,
+  given up, or refused behind a stuck shell) before closing it, so the
+  shutdown snapshot lost it. Once `_closing`, the finisher now only closes a
+  started shell and leaves both tables as they are. (2) panes given up at
+  different moments (refused at 15 s, the stuck one at the minute) were saved
+  and reported in give-up order; `_restore_rank` (snapshot order, set by
+  `rehydrate`) sorts the pending entries and `restore_failed.ids`. Pins:
+  `tests/test_restore_give_up_review_v14181.py` (drives the REAL `kill_all`;
+  checks the file was written by the shutdown, never read off the boot's own
+  snapshot); moved on purpose: `test_boot_pane_restore_bound_v1406::
+  test_a_pane_that_starts_after_shutdown_began_is_closed_not_registered`
+  (waits for the finisher, not for `restoring` to empty). OPEN: a pane that
+  opens after the give-up is registered without a cap check (at most the
+  number given up past the cap).
 
 - **Build (`app/terminals/page.tsx`)**: since v1.409.0 a "</> Code | Terminal"
   switch (Code = `components/buildCode/*`, see the v1.409.0 hard rule). The

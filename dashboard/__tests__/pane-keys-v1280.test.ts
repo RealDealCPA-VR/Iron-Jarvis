@@ -29,7 +29,11 @@ describe("the Build page calls the prune after a successful pane load (v1.280.0)
     // v1.406.0 (part 6): the kept set is the live ids PLUS the panes the
     // daemon is still reopening after a restart (`restoring`), so a slow
     // shell's saved keys survive it (pinned in build-restoring-v1406).
-    const keep = page.indexOf("const keep = [...alive.map((t) => t.id), ...restoring];");
+    // v1.418.1: ...and the panes the daemon GAVE UP reopening (`restore_failed`;
+    // the next start tries them again, pinned in build-restore-failed-v14181).
+    const keep = page.indexOf(
+      "const keep = [...alive.map((t) => t.id), ...restoring, ...(failed?.ids ?? [])];",
+    );
     const retain = page.indexOf("retainPaneHosts(keep);");
     const prune = page.indexOf("prunePaneStorage(keep);");
     expect(keep).toBeGreaterThan(-1);

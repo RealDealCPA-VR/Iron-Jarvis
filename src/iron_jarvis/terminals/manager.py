@@ -48,6 +48,23 @@ RESTORE_ACCOUNTS_BUDGET_S = 2.0
 #: does not prune its saved keys.
 RESTORE_WAIT_S = 8.0
 
+#: v1.418.1 (a USER BUG: Build › Terminal said "Reopening 3 terminals…" for
+#: more than four hours — the three restores never returned from Windows, and
+#: nothing ever gave up on them). Counted from the start of the boot's
+#: restore: a pane whose shell has not started by then is GIVEN UP. It leaves
+#: ``restoring``, ``GET /terminals`` reports it under ``restore_failed`` (the
+#: Build page says so in plain words, beside the New terminal door), its slot
+#: is released so a new terminal is never refused for it, and its snapshot
+#: entry is KEPT so the next start tries again. A shell that starts after the
+#: give-up still opens (``_finish_late_restore``). A normal restore of the
+#: user's panes takes 0.1-3.3 s, so a minute is far past any start that is
+#: going to happen.
+RESTORE_GIVE_UP_S = 60.0
+
+#: What ``restore_failed.reason`` says, for one pane or several.
+RESTORE_FAILED_REASON_ONE = "its shell didn't start"
+RESTORE_FAILED_REASON_MANY = "their shell didn't start"
+
 #: A PTY shell that's going to die (e.g. a frozen build whose ConPTY has no
 #: OpenConsole.exe host) dies within a fraction of a second; give it this long
 #: to reveal itself before trusting it. Only paid ONCE per daemon run (the
@@ -294,6 +311,20 @@ class TerminalManager:
         #: entry as it was read, so quitting before the shell starts loses
         #: nothing. Guarded by ``_lock``.
         self._restoring: dict[str, dict[str, Any]] = {}
+        #: v1.418.1: boot restores GIVEN UP (``RESTORE_GIVE_UP_S`` passed, or
+        #: the shell could not even be asked to start), by pane id, snapshot
+        #: order. Their slots are released; their snapshot entries are kept
+        #: as read so the next start tries again. Guarded by ``_lock``.
+        self._restore_failed: dict[str, dict[str, Any]] = {}
+        #: When the restores still starting are given up (on ``_now``'s
+        #: clock); None when nothing is waiting. Tests replace ``_now``.
+        self._restore_give_up_at: float | None = None
+        self._now = time.monotonic
+        #: v1.418.1 (review): each boot-restored pane's place in the snapshot,
+        #: so panes given up at different moments (one refused behind a
+        #: stuck shell at 15 s, the stuck one itself at the minute) are saved
+        #: and reported in the user's order, not the order they gave up in.
+        self._restore_rank: dict[str, int] = {}
         #: Set by ``kill_all``: a restore that finishes after shutdown began
         #: is closed instead of registered.
         self._closing = False
@@ -943,19 +974,75 @@ class TerminalManager:
         with self._lock:
             held = {e.get("id") for e in entries}
             pending = [
-                dict(e)
-                for rid, e in getattr(self, "_restoring", {}).items()
+                (rid, dict(e))
+                for table in (
+                    getattr(self, "_restoring", {}),
+                    # v1.418.1: a pane given up is still the user's pane; the
+                    # next start tries it again.
+                    getattr(self, "_restore_failed", {}),
+                )
+                for rid, e in table.items()
                 if rid not in held
             ]
-        entries.extend(pending)
+            rank = getattr(self, "_restore_rank", {})
+        pending.sort(key=lambda pair: rank.get(pair[0], len(rank)))
+        entries.extend(e for _, e in pending)
         return entries, json.dumps({"terminals": entries})
 
     def restoring_ids(self) -> list[str]:
         """Ids of panes a boot restore is still starting (v1.406.0 part 6).
         `GET /terminals` reports them so the Build page keeps their saved
-        view, thread and layout keys while their shells start."""
+        view, thread and layout keys while their shells start. Past
+        ``RESTORE_GIVE_UP_S`` they are given up first (v1.418.1) and listed
+        by :meth:`restore_failed` instead."""
+        self._settle_restores()
         with self._lock:
             return list(getattr(self, "_restoring", {}))
+
+    def restore_failed(self) -> dict[str, Any] | None:
+        """v1.418.1: the boot restores that were given up, as
+        ``{count, ids, reason}`` (``reason`` in plain words), or None when
+        there are none. Their snapshot entries are kept, so the next start
+        tries again."""
+        self._settle_restores()
+        with self._lock:
+            ids = list(getattr(self, "_restore_failed", {}))
+            rank = getattr(self, "_restore_rank", {})
+        ids.sort(key=lambda rid: rank.get(rid, len(rank)))
+        if not ids:
+            return None
+        return {
+            "count": len(ids),
+            "ids": ids,
+            "reason": RESTORE_FAILED_REASON_ONE if len(ids) == 1 else RESTORE_FAILED_REASON_MANY,
+        }
+
+    def _settle_restores(self) -> None:
+        """Give up every boot restore still starting once ``RESTORE_GIVE_UP_S``
+        has passed (v1.418.1). Decided when the state is READ (the listing,
+        the 30 s snapshot) — never by a timer thread: a stuck process
+        creation can hold the loader lock, and starting a thread then would
+        hang the caller too. Never raises."""
+        with self._lock:
+            at = getattr(self, "_restore_give_up_at", None)
+            if at is None or not getattr(self, "_restoring", None) or self._now() < at:
+                return
+            moved = list(self._restoring.items())
+            self._restoring.clear()
+            self._restore_give_up_at = None
+            for rid, entry in moved:
+                self._restore_failed[rid] = entry
+            # The stuck threads keep running; their slots are released NOW so
+            # a new terminal is never refused for a pane that may never start.
+            # `_finish_late_restore` does not release them a second time.
+            self._reserved -= len(moved)
+        log.warning(
+            "gave up reopening %d terminal pane(s) after %g s: the shell never "
+            "started. They stay saved and the next start tries again; each "
+            "still opens if its shell starts now",
+            len(moved),
+            RESTORE_GIVE_UP_S,
+        )
 
     def snapshot(self, *, inline: bool = False) -> None:
         """Persist all LIVE sessions under ``state_path`` (atomic writes; no-op
@@ -981,6 +1068,7 @@ class TerminalManager:
         when it wrote. BLOCKING (file writes): call it off the loop."""
         if not self.state_path:
             return False
+        self._settle_restores()
         with self._snapshot_lock:
             if self._closing:
                 return False  # the shutdown snapshot is the last word
@@ -1242,9 +1330,24 @@ class TerminalManager:
             free = self.max_sessions - live - len(self._pending_panes) - self._reserved
             batch = entries[: max(0, free)]
             self._reserved += len(batch)
+            self._restore_rank = {str(e.get("id")): i for i, e in enumerate(batch) if e.get("id")}
         slots: list[TerminalSession | None] = [None] * len(batch)
+        # v1.418.1: a restore whose shell could not even be ASKED to start
+        # (another Store shell is stuck starting) is given up, not dropped.
+        stuck = [False] * len(batch)
+        if backend is None and batch:
+            # v1.418.1: load the ConPTY DLLs ONCE, here on the boot thread,
+            # before any restore thread starts. A frozen daemon (2026-10-31)
+            # had two restore threads loading conpty.dll at the same moment
+            # while the boot thread waited in `Thread.start` — the whole
+            # daemon stopped answering until the desktop restarted it.
+            from .backend import warm_conpty
+
+            warm_conpty()
 
         def _restore_at(i: int) -> None:
+            from .backend import ShellStartStuck
+
             try:
                 session = self.restore(batch[i], env=env, backend=backend, register=False)
                 if session is not None:
@@ -1255,6 +1358,9 @@ class TerminalManager:
                     # start; it yields whenever a Build pane attaches.
                     session.start_autodrain()
                     slots[i] = session
+            except ShellStartStuck:
+                stuck[i] = True
+                log.warning("a terminal pane could not be reopened", exc_info=True)
             except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
                 log.debug("failed to restore a terminal", exc_info=True)
 
@@ -1278,9 +1384,10 @@ class TerminalManager:
                     if waiting["on"]:
                         finished[i] = True
                         return
-                self._finish_late_restore(slots[i], batch[i])
+                self._finish_late_restore(slots[i], batch[i], stuck=stuck[i])
 
         self._restore_deadline = time.monotonic() + RESTORE_ACCOUNTS_BUDGET_S
+        started_at = self._now()
         late: list[int] = []
         try:
             threads = [
@@ -1302,6 +1409,11 @@ class TerminalManager:
                         if rid:
                             self._restoring[str(rid)] = batch[i]
                         continue
+                    if stuck[i]:
+                        rid = batch[i].get("id")
+                        if rid:
+                            self._restore_failed[str(rid)] = batch[i]
+                        continue
                     if session is None:
                         continue
                     self._sessions[session.id] = session
@@ -1313,8 +1425,11 @@ class TerminalManager:
         finally:
             self._restore_deadline = None
             with self._lock:
-                # A restore still starting keeps its slot until it finishes.
+                # A restore still starting keeps its slot until it finishes,
+                # or until it is given up (`_settle_restores`).
                 self._reserved -= len(batch) - len(late)
+                if late:
+                    self._restore_give_up_at = started_at + RESTORE_GIVE_UP_S
         if late:
             log.warning(
                 "%d of %d terminal panes had not started after %g s; boot goes on "
@@ -1337,28 +1452,53 @@ class TerminalManager:
         return restored
 
     def _finish_late_restore(
-        self, session: TerminalSession | None, entry: Mapping[str, Any]
+        self,
+        session: TerminalSession | None,
+        entry: Mapping[str, Any],
+        *,
+        stuck: bool = False,
     ) -> None:
         """A boot restore that finished after the boot stopped waiting
         (v1.406.0, part 6): register it (or close it, when shutdown began),
         release its slot, and persist. Runs on the restore's own thread;
-        never raises."""
+        never raises.
+
+        v1.418.1: one already GIVEN UP (``_settle_restores``) released its
+        slot then, and is registered here all the same — it is the user's
+        pane, and the note about it goes away. One whose shell could not be
+        asked to start (``stuck``) is given up now, its entry kept."""
         rid = str(entry.get("id") or "")
         close_it = False
+        keep_failed = False
         with self._lock:
-            self._restoring.pop(rid, None)
-            self._reserved -= 1
-            if session is not None:
-                if self._closing:
-                    close_it = True
-                else:
+            if self._closing:
+                # v1.418.1 (review): shutdown began. `kill_all` sets the flag
+                # and only THEN takes `_lock` again to read these tables for
+                # the shutdown snapshot; popping the pane here (as this did)
+                # dropped it from that snapshot, and the next start had
+                # nothing to reopen. Leave it exactly where it is — still
+                # reopening, or given up — so it is saved as read, and close a
+                # shell that did start (below, outside the lock).
+                close_it = True
+            else:
+                given_up = self._restore_failed.pop(rid, None) is not None
+                self._restoring.pop(rid, None)
+                if not given_up:
+                    self._reserved -= 1
+                if stuck and session is None and rid:
+                    self._restore_failed[rid] = dict(entry)
+                    keep_failed = True
+                if session is not None:
                     self._sessions[session.id] = session
-        if close_it and session is not None:
-            try:
-                session.kill()
-            except Exception:  # noqa: BLE001 — shutdown: nothing to report to
-                pass
+        if close_it:
+            if session is not None:
+                try:
+                    session.kill()
+                except Exception:  # noqa: BLE001 — shutdown: nothing to report to
+                    pass
             return
+        if keep_failed:
+            return  # the snapshot is unchanged: its entry is kept as read
         log.info(
             "a terminal pane %s after the boot stopped waiting for it",
             "opened" if session is not None else "could not be reopened",
