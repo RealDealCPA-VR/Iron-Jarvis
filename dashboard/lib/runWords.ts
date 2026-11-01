@@ -190,6 +190,9 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   page_click: { did: "Clicked on a page in its browser", noun: "page click" },
   page_type: { did: "Typed into a page in its browser", noun: "page entry", nouns: "page entries" },
   page_read: { did: "Read the page in its browser", noun: "page read" },
+  // v1.421.0 (Wave 1, A4): the team reviewer's read-only git
+  // (harness/git_read; agents/mission.py _RUN_TOOL_WORDS is the twin).
+  git_read: { did: "Looked something up in git", noun: "git lookup" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

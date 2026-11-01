@@ -64,6 +64,7 @@
     "extract_pdf",
     "file_search",
     "generate_media",
+    "git_read",
     "glob",
     "goal_add",
     "goal_delete",
@@ -239,6 +240,7 @@
     "extract_pdf": "read a file",
     "file_search": "search your drives",
     "generate_media": "make an image, video or sound",
+    "git_read": "look something up in git",
     "glob": "search files",
     "goal_add": "add a goal",
     "goal_delete": "drop a goal",
@@ -510,6 +512,10 @@
     "generate_media": [
       "Made an image, video or sound",
       "Making an image, video or sound"
+    ],
+    "git_read": [
+      "Looked something up in git",
+      "Looking something up in git"
     ],
     "goal_add": [
       "Added a goal",
@@ -888,6 +894,7 @@
     "extract_pdf": "read",
     "file_search": "",
     "generate_media": "",
+    "git_read": "",
     "glob": "search",
     "goal_add": "",
     "goal_delete": "",

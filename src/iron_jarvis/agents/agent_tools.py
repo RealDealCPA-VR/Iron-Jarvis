@@ -560,12 +560,16 @@ class SpawnAgentTool(Tool):
         )
         # v1.395.0: a ROLE's piece is credited to the member's record for it
         # — only when the member HOLDS that role (``delegate``'s rule).
-        _record_role = (
-            _team_role
-            if (record is not None and _team_role and _team_role in _model_team.roles_of(record))
-            else ""
+        # v1.421.0 (Wave 1, A2): a piece handed BY NAME too — ``delegate``'s
+        # rule, lock-step (``model_team.piece_role``).
+        _record_role, _record_asked = _model_team.piece_role(
+            record, asked=_team_role, team=getattr(_hp, "team", None), base_type=base_type,
         )
-        _child_task = _model_team.review_task(_record_role, task)
+        if _record_asked == "name" and not _piece:
+            _piece = _model_team.piece_key(args.get("piece"), task)
+        _child_task = _model_team.review_task(
+            _record_role if _record_asked == "role" else "", task
+        )
         _helper_options = None
         if _hp is not None:
             provider, model = _hp.provider or provider, _hp.model or model
@@ -825,7 +829,7 @@ class SpawnAgentTool(Tool):
                 scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
                 provider=str(provider or ""), model=str(model or ""),
                 account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
-                turn=str(getattr(_hp, "turn", "") or ""),
+                turn=str(getattr(_hp, "turn", "") or ""), asked=_record_asked,
             )
             await publish_delegation_completed(
                 self.platform,

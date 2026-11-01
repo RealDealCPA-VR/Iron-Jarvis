@@ -529,6 +529,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "page_click": ("clicked on a page in its browser", "page click"),
     "page_type": ("typed into a page in its browser", "page entry"),
     "page_read": ("read the page in its browser", "page read"),
+    # v1.421.0 (Wave 1, A4): the team reviewer's read-only git
+    # (harness/git_read). Twin: lib/runWords.ts AGENT_TOOLS.
+    "git_read": ("looked something up in git", "git lookup"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the

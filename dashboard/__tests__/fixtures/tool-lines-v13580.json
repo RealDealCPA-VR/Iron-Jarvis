@@ -212,6 +212,10 @@
       "ok": "made an image, video or sound",
       "failed": "tried a media generation and it failed"
     },
+    "git_read": {
+      "ok": "looked something up in git",
+      "failed": "tried a git lookup and it failed"
+    },
     "glob": {
       "ok": "searched files",
       "failed": "tried a file search and it failed"

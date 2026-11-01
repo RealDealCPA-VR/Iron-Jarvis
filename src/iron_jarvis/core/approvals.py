@@ -592,7 +592,15 @@ def run_place(session: Any, *, night: Any = None) -> tuple[str, str]:
     session (``options.build_session``) asks in that session — ``build``, or
     ``bench`` for the benchmark's; a run a chat started (``options.
     chat_thread_id``) reports to that chat; every other run is ``agent`` with
-    no thread. A night task's helper is ``night``."""
+    no thread. A night task's helper is ``night``.
+
+    v1.421.0 (E6): the option holds the session's BARE thread id
+    (``harness/helpers.HelperParent.options`` writes ``build_thread_of`` of
+    ``build:<id>`` — "chat_…", never "build:chat_…"), and this read only knew
+    the prefixed spelling, so every helper card of a real Build session was
+    published as ``agent`` with no thread and the Autonomy card counted it
+    "unattributed" (9 of the owner's 12 asks in one week). Both spellings are
+    read now; the benchmark's own helper (``bench-…``) stays ``bench``."""
     import json as _json
 
     try:
@@ -602,13 +610,15 @@ def run_place(session: Any, *, night: Any = None) -> tuple[str, str]:
             opts = {}
     except Exception:  # noqa: BLE001
         opts = {}
-    build = str(opts.get("build_session") or "")
-    thread = build.split(":", 1)[1] if build.startswith("build:") else str(opts.get("chat_thread_id") or "")
+    build = str(opts.get("build_session") or "").strip()
+    if build.startswith("build:"):
+        build = build.split(":", 1)[1]
+    thread = build or str(opts.get("chat_thread_id") or "")
     if night is not None:
         return "night", thread
-    if build.startswith("build:bench-"):
+    if build.startswith("bench-"):
         return "bench", thread
-    if build.startswith("build:"):
+    if build:
         return "build", thread
     return "agent", thread
 

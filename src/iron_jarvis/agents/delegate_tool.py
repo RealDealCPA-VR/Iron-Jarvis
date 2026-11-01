@@ -653,14 +653,21 @@ class DelegateTool(Tool):
         target_name = entry.name if entry is not None else agent_type.value
         # v1.395.0: a ROLE's piece is credited to the member's record for it
         # (``agents/team_record``) — only when the member HOLDS that role.
-        _record_role = (
-            _team_role
-            if (rec is not None and _team_role and _team_role in _model_team.roles_of(rec))
-            else ""
+        # v1.421.0 (Wave 1, A2): and a piece handed to a member BY NAME too
+        # (most of a coding session's work — the record held 2 rows ever):
+        # ``piece_role`` infers the role it worked as and says HOW it was
+        # asked. A non-member (a built-in helper) still writes no row.
+        _record_role, _record_asked = _model_team.piece_role(
+            rec, asked=_team_role, team=getattr(_hp, "team", None), base_type=agent_type,
         )
+        if _record_asked == "name" and not _piece:
+            _piece = _model_team.piece_key(args.get("piece"), task)
         # A reviewer member is asked for a verdict line (team_record), which
-        # the record credits to the work it reviewed.
-        _child_task = _model_team.review_task(_record_role, task)
+        # the record credits to the work it reviewed — only when the planner
+        # ASKED for a review (a named piece's task is handed on unchanged).
+        _child_task = _model_team.review_task(
+            _record_role if _record_asked == "role" else "", task
+        )
         # AN IJ HARNESS TURN'S HELPER (v1.372.0) has no parent ROW (its turn
         # runs under ``build:<id>``): everything above read None and would
         # have handed it the configured default model in a scratch folder.
@@ -953,7 +960,7 @@ class DelegateTool(Tool):
                 scope=ctx.session_id, piece=_piece, finished=ok, report=run.result,
                 provider=str(provider or ""), model=str(model or ""),
                 account=str(getattr(_hp.pin if _hp is not None else _member_pin, "profile_id", "") or ""),
-                turn=str(getattr(_hp, "turn", "") or ""),
+                turn=str(getattr(_hp, "turn", "") or ""), asked=_record_asked,
             )
             await publish_delegation_completed(
                 self.platform,

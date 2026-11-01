@@ -3009,6 +3009,7 @@ const TOOL_WORDS_BUILTIN = {
   extract_pdf: "read a file",
   file_search: "search your drives",
   generate_media: "make an image, video or sound",
+  git_read: "look something up in git",
   glob: "search files",
   goal_add: "add a goal",
   goal_delete: "drop a goal",

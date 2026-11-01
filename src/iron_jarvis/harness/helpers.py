@@ -124,7 +124,15 @@ REVIEW_ONLY_OPTION = "review_only"
 #: v1.401.0: the ONLY tools a read-only reviewer may hold (those of them the
 #: turn holds): reading and searching the folder. Never a write, a command, a
 #: process tool, the web, a page or a helper door.
-REVIEW_TOOLS: tuple[str, ...] = ("read_file", "glob", "grep", "list_files")
+#: v1.421.0 (Wave 1, A4, the owner's decision): and ``git_read`` — read-only
+#: git (``harness/git_read``: status, diff, log, show, blame …; never a test
+#: run, which writes caches) so the reviewer can check the change the way a
+#: person does. The turn never holds it (it is on no lane's list), so
+#: :func:`helper_definition` arms it for a reviewer ALWAYS
+#: (:data:`REVIEW_ALWAYS`).
+REVIEW_TOOLS: tuple[str, ...] = ("read_file", "glob", "grep", "list_files", "git_read")
+#: v1.421.0 (A4): the review tools a reviewer holds whatever the turn holds.
+REVIEW_ALWAYS: tuple[str, ...] = ("git_read",)
 #: A Build session's tool session id prefix (``harness/sessions.session_id_for``).
 _BUILD_PREFIX = "build:"
 
@@ -459,6 +467,8 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
         # the turn's whole set below).
         reads = set(REVIEW_TOOLS)
         tools = [t for t in turn if t in reads]
+        # v1.421.0 (A4): read-only git, armed for the reviewer always.
+        tools += [t for t in REVIEW_ALWAYS if t not in tools]
     elif custom:
         tools = [t for t in turn if t in own]
     elif kind == "builder":
@@ -1258,7 +1268,7 @@ async def until_stopped(aw: Any, handle: Any) -> tuple[Any, bool]:
 
 __all__ = [
     "AGENT_TOOLS", "ASK_POLL_S", "FINAL_STATES", "HELPER_EVENT", "HELPER_ORIGIN",
-    "REVIEW_ONLY_OPTION", "REVIEW_TOOLS", "TIMED_OUT_STATE",
+    "REVIEW_ALWAYS", "REVIEW_ONLY_OPTION", "REVIEW_TOOLS", "TIMED_OUT_STATE",
     "HELPER_PARENT", "HELPER_TOOLS", "HelperCall", "HelperParent", "MAX_HELPERS", "for_member",
     "NOT_FOR_HELPERS", "READ_ONLY_TYPES",
     "REASON_CHARS", "SKILL_TOOLS", "STOPPED_RESULT", "asking", "call_target", "child_started",

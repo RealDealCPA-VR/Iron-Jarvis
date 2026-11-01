@@ -243,6 +243,10 @@ _OFF_ROSTER_BY_DESIGN = {
     "page_screenshot",
     # v1.376.0: the agent's own browser (harness/page_act) — the same rule.
     "page_open", "page_click", "page_type", "page_read",
+    # v1.421.0 (Wave 1, A4): read-only git for the team's REVIEWER only —
+    # harness/helpers.helper_definition arms it for a review-only helper and
+    # nothing else does (tests/test_git_read_v14210.py pins that).
+    "git_read",
 }
 
 #: The eight that CHANGE something, named once so the exemption above and the

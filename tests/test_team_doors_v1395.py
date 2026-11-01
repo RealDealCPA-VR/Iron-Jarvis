@@ -145,14 +145,18 @@ async def test_a_named_member_runs_as_before_and_a_role_beside_it_only_labels_it
     assert res.ok and res.data["target"] == "custom:codex"
     assert "reason" not in res.data  # named: the router did not pick
     assert [(r.member, r.role) for r in _runs(w.p)] == [("codex", "code")]
-    # Named with no role: exactly Phase 5 — no record row.
+    # Named with no role: it runs as in Phase 5. v1.421.0 (A2, moved on
+    # purpose): the piece IS on the member's record now, under the role it
+    # worked as (glm holds read + code and is builder-based: code) and marked
+    # as asked by name (tests/test_team_named_pieces_v14210.py).
     res = await w.p.registry.get("delegate").execute(
         {"agent_type": "custom:glm", "task": "Read y.py."}, _ctx(w.p, sid, tmp_path))
-    assert res.ok and len(_runs(w.p)) == 1
+    assert res.ok and len(_runs(w.p)) == 2
+    assert [(r.member, r.role, r.asked) for r in _runs(w.p)][-1] == ("glm", "code", "name")
     # Named with a role it does not hold: it runs; nothing is credited.
     res = await w.p.registry.get("delegate").execute(
         {"agent_type": "custom:glm", "role": "review", "task": "Review z.py."}, _ctx(w.p, sid, tmp_path))
-    assert res.ok and len(_runs(w.p)) == 1
+    assert res.ok and len(_runs(w.p)) == 2
 
 
 async def test_an_unknown_role_is_one_sentence_and_starts_nothing(w, tmp_path):
