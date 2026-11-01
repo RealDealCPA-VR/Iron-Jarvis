@@ -39,7 +39,13 @@ checked, v1.422.0):
   a process the daemon starts is not in it; the launcher and the host also ask
   ``CREATE_BREAKAWAY_FROM_JOB`` (retried without when an outer Job refuses —
   then the host simply stays in that Job, as under a test runner).
-* Neither the launcher nor the host has a console (``DETACHED_PROCESS``).
+* Each of the launcher and the host has a HIDDEN console of its own
+  (``CREATE_NO_WINDOW``, :data:`HOST_FLAGS`) — never none: a host with no
+  console (``DETACHED_PROCESS``) gave a console program it started a NEW,
+  VISIBLE one (measured: under ``uv``'s venv launcher, a Windows Terminal
+  window opened for the host; closing it ended the host and every tool in it
+  with 0xC000013A, mid-reply). A console of its own is still not the
+  daemon's: closing the daemon's terminal or a Ctrl-C there never reaches it.
 
 QUIT, UPDATE AND THE INSTALLER STILL END EVERYTHING: the daemon's tidy
 shutdown (the desktop's Quit and its update stop, ``POST /shutdown``) sends
@@ -863,6 +869,10 @@ DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 CREATE_NO_WINDOW = 0x08000000
+#: How the launcher starts the host: a hidden console of its own (see the
+#: module docstring — DETACHED_PROCESS let a window open), its own process
+#: group.
+HOST_FLAGS = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
 
 def popen_detached(argv: list[str], *, flags: int, env: dict[str, str] | None = None,
@@ -913,7 +923,7 @@ def launch(home: Any) -> int:
     if handle:
         env[PARENT_HANDLE_ENV] = str(handle)
     try:
-        popen_detached(host_argv(home), flags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, env=env,
+        popen_detached(host_argv(home), flags=HOST_FLAGS, env=env,
                        handles=[handle] if handle else None)
     except OSError as exc:
         _Log(home)(f"the launcher could not start the host ({type(exc).__name__})")

@@ -108,6 +108,62 @@ def test_the_host_keeps_its_launcher_s_pid_from_being_reused(hosts, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# It has no window anyone can close
+# --------------------------------------------------------------------------- #
+def test_the_launcher_starts_the_host_with_a_hidden_console_of_its_own(monkeypatch):
+    """Found by this wave's own tests: a host started with NO console
+    (``DETACHED_PROCESS``) gave the console program it ran — ``uv``'s venv
+    launcher in front of Python — a NEW, VISIBLE one: a Windows Terminal
+    window opened for each host, and closing it ended the host and every tool
+    in it (exit 0xC000013A) in the middle of a reply. The host gets a hidden
+    console of its own instead."""
+    seen: list[int] = []
+
+    def spy(argv, *, flags, env=None, handles=None):
+        seen.append(flags)
+        raise OSError("not started in this test")
+
+    monkeypatch.setattr(CH, "popen_detached", spy)
+    CH.launch(Path("C:/no/such/home"))
+    assert seen, "the launcher started nothing"
+    assert seen[0] & CH.CREATE_NO_WINDOW, "the host needs a console of its own, without a window"
+    assert not seen[0] & CH.DETACHED_PROCESS, "a host with no console hands its children a visible one"
+
+
+#: Windows 11 hands every new console WINDOW to Windows Terminal, started for
+#: it as ``WindowsTerminal.exe -Embedding`` / ``OpenConsole.exe -Embedding``.
+_HANDOFF = ("windowsterminal.exe", "openconsole.exe")
+
+
+def _handoffs_since(t0: float) -> list[tuple[int, str]]:
+    out = []
+    for p in psutil.process_iter(["name", "create_time", "cmdline"]):
+        try:
+            if (p.info["name"] or "").lower() in _HANDOFF and (p.info["create_time"] or 0) >= t0 \
+                    and "-Embedding" in (p.info["cmdline"] or []):
+                out.append((p.pid, p.info["name"]))
+        except psutil.Error:
+            continue
+    return out
+
+
+@win
+@pytest.mark.timeout(120)
+def test_a_real_host_and_its_tool_open_no_window(hosts, tmp_path):
+    """A real start (behind the venv launcher, as every source run and test
+    is): no console of it is handed to a terminal window (on a PC whose
+    default terminal is classic conhost the check reads nothing, and the
+    unit pin above holds the rule)."""
+    home = hosts.home(tmp_path / "home")
+    t0 = time.time() - 0.5
+    proc, _ = _start_tool(home, tmp_path)
+    hosts.note()
+    time.sleep(1.5)  # a handoff starts within the console's creation
+    assert proc.alive
+    assert _handoffs_since(t0) == [], "a console window opened for the host or its tool"
+
+
+# --------------------------------------------------------------------------- #
 # The orphan rules
 # --------------------------------------------------------------------------- #
 class _T:
