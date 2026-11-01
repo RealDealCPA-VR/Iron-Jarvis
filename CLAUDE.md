@@ -12276,6 +12276,52 @@ does not need a bump, stop and bump it.
   its case — the request is still the person's); helpers (agent runtime)
   under Ask first get no read-only pass.
 
+- **The project's checkers run ONCE per reply, at the finish check, inside
+  one 15 s budget; tsc only on a small TypeScript project** (v1.420.0, fix
+  plan C3.3, the user's decision D1). Before, after EACH round that edited a
+  .py/.js/.ts file the checkers ran inside that round (60 s each, mypy
+  following imports, tsc over the whole project, a card per round). Now
+  `harness/checkers.ProjectCheckers.schedule_finish(changed, low_trust=)` is
+  called by `FinishCheck.prepare` (`_checker_calls`, after the test calls,
+  BEFORE the team review) with `_changed_rels` (the journal's and
+  `folder_changes`' files — the union of the reply's change); both lanes'
+  per-round `checkers.schedule` block is GONE (`schedule`, `_edited`,
+  `_patch_files` and the per-edit bookkeeping were deleted; `note()` /
+  `target()` stay as no-ops because the lanes still call them, so
+  `attach_check` does nothing for a checker). ONCE: `scheduled` flag; never
+  in low trust. BUDGET: `CHECKERS_BUDGET_S` 15 shared — the clock
+  (`checkers._clock`, a test seam) starts at the first checker's `prepare`,
+  each run's `timeout_s` (or `wait_ms`) is what is LEFT, a run with less than
+  `MIN_RUN_S` left is not started; a cut run (`timed_out` / still running)
+  and an unstarted one are both "late" and NAMED in the note ("Check (ruff)
+  not finished in time: the project's checkers share 15 s, so it was
+  stopped."), never a silent miss. TSC: only when a changed file is
+  TypeScript AND `_count_typescript` (the map's pruning: `_SKIP_DIRS`,
+  dot-folders, no links; off the loop; `TSC_COUNT_DEADLINE_S` 1.5) finds at
+  most `TSC_MAX_FILES` 400, else skipped with `TSC_TOO_LARGE` "project too
+  large for a quick check" (or `TSC_NOT_COUNTED`). MYPY:
+  `--follow-imports=silent`, changed files only. FINDINGS go into the finish
+  note's `CHECKERS_HEAD` "## The project's checkers" section (each head line
+  Iron Jarvis's words, the lines under it through the lane's own fence —
+  `note_text(fence)`) plus `CHECKERS_ASK`; the record gains `checkers {ran,
+  skipped: [{checker, why}], late}` ONLY when they had something to do
+  (`RECORD_KEYS` puts it BEFORE `review`, which stays last;
+  `saved_checkers` types and caps it for the reply line). CARDS (Wave 1,
+  unchanged): Don't ask or a session grant on the carrier → none; else ONE
+  card for the finish round's own calls (test re-run + checkers), asker
+  `iron_jarvis`. A folder's own `plugins.toml` checks keep their per-round
+  behaviour and cards. A folder whose `finish.toml` says `enabled = false`
+  now runs NO checker (they are part of the check); a reply cut off, at its
+  last two rounds, or that changed nothing runs none either. Pins:
+  `tests/test_checkers_once_v1420.py` (17 mutations, all red); moved on
+  purpose: `test_harness_checkers_v1387` (the fixture turns the finish check
+  on with its other parts off — `checkers_only_finish` — and the pins read
+  `finish_note` where they read the edit's result; "an edit that did not
+  apply" hands out no step; the on-loop pin drives `schedule_finish`),
+  `test_harness_phase3_review_v1387` ("the next round's checker" became "a
+  two-round editing reply runs its checker once behind one card"),
+  `test_checker_card_why_v1417`.
+
 - **Grounding has a SOFT DEADLINE; the project map is CACHED by its top two
   levels; a kept reply APPENDS; a token is never re-parsed** (v1.418.0, fix
   plan C3.4 + C3.6). GROUNDING: `chat_turn._gather_grounding` starts every hop
@@ -12488,6 +12534,469 @@ does not need a bump, stop and bump it.
   the Pi share, the transcript file found once. Known (older than this
   wave): `service._conversation_files` lists a Pi sessionDir a project names
   even when it is a share.
+
+- **A follow-up turn is TOLD its last reply's tool work; the prompt's
+  STABLE head comes first; a coding turn drops chat-only blocks; Codex
+  plans against its own window; a summary is reused** (v1.420.0, C3.2 /
+  C3.5 / C3.7 / C3.8 of the fix master plan, decision D5). C3.2:
+  `harness/sessions.history_of(messages, last_work=True)` (asked ONLY by
+  `compact.history_for_turn` and the resume path in `routes/build.py`;
+  every other reader keeps the plain rule) appends
+  `last_work_note(steps)` to the NEWEST reply: "[What I did in that reply
+  (recorded by Iron Jarvis, not shown to the user): read a.py, b.py;
+  edited cart.py; ran `pytest -q` (failed) …]" from the reply line's saved
+  steps (`step_target.KIND_OF` words, the command from `detail.input`,
+  masked BEFORE the backticks), never an output, ≤ 1,500, `plan_update`
+  left out. Still role + content only (no native carrier). C3.7: both lanes
+  keep `_query_tail` — the brain block, `_Grounding.query()` (project
+  knowledge + recent activity, now `project_query`, then fabric, connector,
+  apps), attachments, page, resources, refs, the "/" skill — and join it
+  LAST, right after the LOW_TRUST seam (after the tool list); the head
+  (persona, env, profile, `_Grounding.stable()`, roster/workflows, folder,
+  harness tree) goes first. Compaction and the planner are handed
+  `system + _query_tail`; `chat_turn.split_query_tail` puts a stored summary
+  into the head. `before_attachments()` keeps the old whole-block order for
+  any other reader. The `_Grounding` order pin moved
+  (`test_wave3_chat_lanes_v1311`, `test_prep_overlap_v1332`); the
+  harness-off golden did not move (none of its scenarios has a
+  query-dependent section). C3.8: `harness is not None` → no `DRAFT_BLOCK`,
+  `CHART_BLOCK`, browser section; `_Grounding.after_skill` drops the saved
+  workflows for a harness turn; `team_first_off_golden_v1400.json` moved by
+  exactly the two fences. C3.5: `_ladder_window_source` gains a `codex-cli`
+  rung (and a keyless provider served by it): `codex_context_window` reads
+  `<CODEX_HOME or ~/.codex>/models_cache.json` on a background thread
+  (`refresh_codex_windows`, TTL 300 s; effective = `context_window` x
+  `effective_context_window_percent`, 272,000 x 95% today), else
+  `CODEX_WINDOW_TABLE`; the fleet `max_input_tokens` rung already existed.
+  THE RE-SUMMARY LOOP WAS REAL (3 turns past the ceiling = 3 summary calls,
+  both lanes): `_apply_compaction` now falls back to
+  `CompactionStore.standing(covered)` (content-addressed prefix probe, off
+  the loop) and reuses a summary until `KEEP_RECENT` more lines are
+  uncovered. Pins: `tests/test_{build_last_work,prompt_order,codex_window,
+  compaction_reuse}_v1420.py` (14 mutations, all red).
+
+- **Build › Code's OpenCode never CHANGES a rule of the user's (looser or
+  tighter); Codex on Windows has no "edits free, commands ask"** (v1.420.0,
+  C1.9 + C1.10). OPENCODE (`hosted/opencode.permission_env`): a key merged
+  from `OPENCODE_PERMISSION` lands AFTER the config's and the last match
+  wins, so a key of ours over a tool the user names overrides THEIR rule — a
+  `"bash": "allow"` became a card per command, and a user `"*": "deny"` had
+  the built-in tools named `ask` after it. Now a tool is named only when no
+  user key matches it (`_users`: OpenCode's own `Wildcard.match`, `si` flags,
+  read from the 1.18.18 program — `"web*"` counts), `"*"` only when every
+  user rule says EXACTLY what it would (`_equal_to`, every pattern), and a
+  user `"*"` names every tool (env `{}` → no `OPENCODE_PERMISSION`,
+  `OPENCODE_RULES_DECIDE`; Plan: `OPENCODE_RULES_DECIDE_PLAN`). Plan's edit
+  refusal goes under a key the user does NOT have (`_fresh_key`: `edit`,
+  else `EDIT`/`Edit`/… — names match case-blind, a key they have keeps its
+  PLACE), so it is the last edit rule: a user `"edit": …` followed by
+  `"*": "allow"` used to undo it (Plan edited). `task` is `allow` in Ask
+  first and Auto edits (the helper's session gets only the parent's folder
+  rules and refusals; its steps meet the same config rules and still ask);
+  Plan keeps OpenCode's own. "ALLOW FOR THIS SESSION" ACROSS A MODE CHANGE:
+  OpenCode's reply "always" pushes `{permission, pattern, allow}` per the
+  request's `always` patterns onto an in-PROCESS list (opencode.db's
+  `permission` table is a newer mechanism and stays empty), and ACP neither
+  sends those patterns nor takes rules. So `OpenCodeDriver.answered` keeps
+  each allow_session in `SESSION_ALWAYS[ses_id]` (memory, ≤ 64 × 200) and
+  the NEW process's `_ask` answers the same request "always" itself (one
+  notice, `OPENCODE_ALWAYS_CARRIED`): the whole tool for
+  `ALWAYS_COVERS_ALL` (edit/write/patch, webfetch, websearch, task, glob,
+  grep, lsp, todowrite — each `always: ["*"]` in OpenCode's source), the
+  EXACT command for bash (OpenCode's own is the command's prefix, never
+  sent; a command with `*`/`?` is never kept — a wildcard), nothing for any
+  other tool; matched only by the tool's FIRST record (a request whose title
+  is the command is a card). Never via `OPENCODE_PERMISSION` (it would sit
+  in the user's rules' place). CODEX (`hosted/codex.py` docstring, from
+  0.157.0's `generate-json-schema --experimental` + `--help`, no model
+  call): `approvalPolicy` untrusted | on-request | never | `{granular}`
+  (switches whole prompt KINDS off), sandbox/permission profiles choose what
+  may be touched, never when to ask; on Windows only full disk access runs a
+  command, where on-request asks nothing and untrusted asks before every file
+  change AND command — no such posture, the mode table is unchanged, and
+  `HIDDEN_MODES` says the cause in plain words. Codex DOES have a plan mode
+  (`collaborationMode` {mode: plan}, EXPERIMENTAL): the Plan reason says
+  so. NOT BUILT (the user's call): answering
+  `item/fileChange/requestApproval` ourselves under untrusted would give
+  "edits free, commands ask" by Iron Jarvis's own rule (needs Chat's
+  `sensitive_kind` checks). Pins: `tests/test_build_app_{opencode_rules,
+  codex_posture}_v1420.py` (14 mutations, all red); moved on purpose:
+  `test_build_app_opencode_v1413` (task granted; a user `"bash": "allow"`
+  kept) and `test_build_app_opencode_review_v1413` (a user edit rule equal
+  to the mode no longer keeps `"*"` out in Plan).
+
+- **A claude-cli round is RELEASED at `result`, torn down in the
+  background, and rides ONE listener, ONE TLS context and a kept upstream
+  connection** (v1.420.0, fix plan C3.1/C7; the trace and the D4 projection
+  are in `docs/CLAUDE-NATIVE-ROUND-COST.md`). MEASURE FIRST:
+  `claude_native.transport.TRACE` (None = off) gets `(call, phase, ms,
+  info)` from `_Clock.mark` — files_written, relay_bound, spawned, init,
+  history_acked, relay_request/connected(reused)/headers/first_byte/
+  last_byte (the relay's own `Admission.stamps`, perf_counter), first_text,
+  result, final_released, exited, teardown_done; numbers only. One real
+  3-round haiku reply: the model took 484-631 ms a round, the CLI's own
+  start ~500 ms (731 cold), TLS 64-84 ms, `result`→exit 33-45 ms, inline
+  teardown 7-53 ms; the history acks cost nothing visible (they arrive as
+  the CLI comes up), so the burst-write idea (C3.1 d) was NOT done and
+  `frames.py` rule 1 stands. RELEASE (`transport._released_code`): only
+  when the relay holds the whole 200 answer (`used`, status 200,
+  `capture.complete`), no native error and ONE `result` that is success
+  (exit 0) or `error_max_turns` with tool_use in the capture (exit 1, the
+  boundary) — then the loop breaks at `result`, `assemble` gets that code,
+  and the finally hands `_Resources` to `_teardown_later` (a daemon thread:
+  `close(grace_s=RELEASE_GRACE_S)` lets the CLI exit by itself for 3 s,
+  then the old kill/reap/join/rmtree; a different real exit code is logged,
+  never raised). Any other ending tears down INLINE exactly as before (an
+  error, a refusal, a Stop, the `runner=` test double). ONE CONVERSATION,
+  ONE LIVE CLI: `_chain_key` (sha1 of the first frame + the account's
+  `CLAUDE_CONFIG_DIR`, computed in `prepare`, off the loop) keys `_PENDING`;
+  the next call awaits `_after_previous` (shielded `wrap_future`) right
+  before `spawn`; `drain_teardowns()` / `pending_teardowns()` for tests and
+  shutdown (the lifespan does not call it yet: a hard exit inside the ~40 ms
+  window can leave one `ij-claude-*` temp dir; the process itself dies with
+  its kill-on-close Job). RELAY (`admission.py`): `listener()` = one
+  `RelayServer` (ThreadingHTTPServer, daemon threads) per process; each
+  `Admission` registers its secret prefix and `close()` unregisters it and
+  waits (≤ 10 s) for its own in-flight handlers (`_enter`/`_leave`) — a
+  closed or unknown route is a 404 (the v1300 "releases the port" pin moved
+  to "closes the route"). `tls_context()` is made once (the verifying
+  default). `POOL` (`UpstreamPool`, key scheme/host/port/proxy, ≤ 4 idle,
+  `POOL_IDLE_S` 30) gets a connection back only when its response was read
+  to the end, `will_close` is False and the call was not aborted;
+  `_still_open` (select readable / SSL pending ⇒ dead) runs before reuse;
+  a KEPT connection that fails under `request`/`getresponse` (before any
+  answer) is replaced ONCE by a new one — a new connection that fails is
+  the failure, never retried. First-request-only, the sign-in retry, the
+  proxy tunnel and the cache pin are unchanged. NOT DONE (decision D4): a
+  long-lived `claude` per session (~0.5 s a round projected). Pins:
+  `tests/test_claude_native_round_cost_v1420.py` (fake CLI held open by a
+  file, never a clock; 11 mutations, all red).
+
+- **"My latest emails" is the mail KIND, a feature question asks the Guide,
+  and a Build › Code file can be reverted per message** (v1.420.0, fix plan
+  C6.1 + C4.12). MATCHER (`connectors/app_names.py`): `_MAIL_EVERYDAY_NEW`
+  (in BOTH `_GMAIL_WORDS` and `_GENERIC_MAIL_RX`) adds "my <freshness>
+  emails/mail/inbox/messages" (`_MAIL_FRESH`, 1-2 of latest/recent/new/
+  unread/last/most recent…), "my mail", "any (new) mail/emails", guarded by
+  `_NOT_MAIL_TRADE` (carrier, marketing, list, server, account…); the older
+  "my email(s)" gained `_NOT_A_LIST` only ("check my email account" stays
+  the mailbox). A "messages" match is dropped when the text names a chat or
+  texting place (`_mail_hits` / `_CHAT_PLACE_RX`, read in `apps_named`,
+  `app_name_hits` and `generic_kinds`). Because the freshness word sits
+  INSIDE the app's words, the web rule's blanking removes "latest" and
+  "summarize my latest emails" arms no web tool; `resolve_kinds` then means
+  the connected mail app (stream lane ask-arms it), else ONE mail-choice
+  door. `_own_verdict` reads a mail/calendar kind hit that opens with
+  my/our/any as own BEFORE the "what is <app>" exit ("what's my latest
+  email about?"). GUIDE (`tools/autoselect.py`): `_FEATURE_QUESTION` rides
+  `_GUIDE_RX` as the non-howdo group `guide_feature` — "what apps can you
+  work with", "what can you connect to", "what are missions", "what is
+  build for", "what does the Code view do", "What is Chat › Code" — each
+  alternative ending the sentence (`_FEATURE_END`, or "here"/"in Jarvis"),
+  so "what are missions in the Bible", "what is the build for the release",
+  "what apps can you use to edit photos" stay out; `_ABOUT_JARVIS_STRONG_RX`
+  gained capitalised Build after use/open, "use build" at the end, "code
+  view" and the "›" places for how-do-I. CODING OFFER:
+  `autoselect.coding_offer(text)` → `{href: "/terminals?view=code", label}`
+  (a `daemon.doors` entry) for "build/write/make me a <software thing>"
+  (`_SOFTWARE_THING` minus "program"/"script" without a language;
+  `_NOT_SOFTWARE_AFTER` guards "game plan", "tool shed", "site visit",
+  "in SharePoint") or an acting verb on "my repo"/a github.com address; it
+  ARMS nothing. NOT WIRED: the lanes (`chat_turn.py`/`routes/chat.py`,
+  lock-step) still need one line each to add it to their doors list beside
+  `with_connect_door`. THE TABLE: `tests/test_matcher_tables_v13610.py`
+  gained DOOR rows (16 own / 13 not), GUIDE_ROWS (17 / 13), MAIL_WEB (5 / 7)
+  and CODING (13 / 17); two DOOR rows flipped ON PURPOSE ("any new emails
+  from my accountant?", "read my latest emails": they pinned the gap).
+  CHANGES PANE (`hosted/panes.py`, `routes/build_app_panes.py`):
+  `GET …/changes?scope=turn[&turn=]` lists ONE message's changes as a
+  tree-to-tree diff (`git_changes(base=, target=)`; `snapshot_tree` = the
+  user's index COPIED to a temp file, `git add -A :/`, `write-tree` — the
+  user's index, branch and files untouched; blobs land in the object store
+  as `git stash` does) against `turn_base`: a `start` tree
+  (`record_turn_start`, NOT CALLED YET — the hosted service must call it
+  off the loop right after `_drive` writes the `user` event), else the
+  newest `seen` tree an IDLE pane read recorded between the turn before and
+  this one (`note_seen`, ≤ once per `SEEN_EVERY_S` 30 s, again at once after
+  a `done`, never mid-reply), else `first` (the session's first message =
+  the session list), else `none` (the session list with `TURN_UNKNOWN`
+  words). Trees live in `<home>/hosted/<sid>/turn_trees.json` (≤ 60; one
+  writer, `_TREES_LOCK`) — NOT the events log or meta.json, which are the
+  service's. Every git row carries `blob` (git's blob id of the raw bytes,
+  in Python) and a rename `old_rel`; `can_revert` only for git. `POST
+  …/changes/revert {path, blob, old_rel, scope, turn}` → `revert_file`
+  under `build_git._locked("app:<sid>")`: `git restore --source=<base>
+  --worktree -- :(literal)<rel>` (git's staging area untouched), a file the
+  base lacks MOVED to `<home>/trash/<stamp>/code-revert/<sid>/`, a staged
+  new file refused, a path outside the folder 400 (by TEXT first: absolute,
+  drive, `..`, `\\host`), a network folder refused before any stat, a reply
+  running 409 (the route AND the function check it), a blob that differs
+  409. `no_undo` (git) now says what Revert does and keeps "No Undo".
+  Dashboard: `CodePanes` Changes tab "Whole session" | "This message"
+  (`changesQuery`), a "Revert this file" `ConfirmButton` per row (two
+  presses; hidden with `REVERT_WAITS` while running), the daemon's words in
+  `code-changes-revert-note`. Pins: `tests/test_matcher_mail_features_v1420.py`,
+  `tests/test_build_code_revert_v1420.py`,
+  `dashboard/__tests__/code-panes-revert-v1420.test.tsx` (16 mutations,
+  15 red; the survivor — the route's own running check — is redundant with
+  `revert_file`'s).
+
+- **Two views called Code are told apart by the TOOL; the approval levels
+  are named by what they do; the engine-room words leave the screen**
+  (v1.420.0, fix plan C5.1, C5.2, C1.8, C6.7; decisions D3 and D6 accepted
+  as proposed). NAMES: Chat › Code and Build › Code both stay "Code";
+  `lib/buildWords.codingSessionWith(tool)` / `CODING_SESSION_JARVIS` name a
+  row that must tell them apart ("Coding session (Jarvis)" vs "Coding
+  session (Claude Code)" / Codex / Pi / OpenCode / Grok; an unknown tool is
+  the bare label, never a guess) — Running now (`lib/runningNow` buildItem
+  and buildAppItem) reads them. `BUILD_BLURB` names the terminals AND the
+  Code view (≤ 120 chars: `nav.test`); Build's aliases gain "code",
+  "claude code", "codex" ("code" still finds Chat). LEVELS
+  (`lib/permissionLevels`, pinned EQUAL to `settings/schema.py`
+  `device.approval_mode` by `test_approval_words_v13520` and
+  `one-vocabulary-v1420`): "Ask before every action", "Ask before commands"
+  (chip "Ask for commands"; it was "Ask first", which in Build › Code means
+  asking before a file change too), "Accept edits" (its line says what
+  differs), "Auto (its own safety check)" (chip "Auto"; a menu name may be
+  ≤ 28 chars, a chip ≤ 16), "Don't ask" ("…uses connected apps without
+  asking; commits and pushes on a session's own branch, and a few safety
+  cards, still ask" — the git guard holds only on a session's branch, so
+  the sentence says so). `settings/tools._RETIRED_OPTION_WORDS` keeps "ask
+  first" → approve_for_me and "auto" → auto. LOCAL ONLY (`lib/localOnly`):
+  "this PC or your own network" (egress lets LAN / tailnet hosts through);
+  the card ends `CLOUD_ASK_BODY_END`. RETIRED: "attaching to sessions" is a
+  plain `RETIRED` row (the Python scans read it too); "worktree" and "no
+  safe inverse" sit in `__tests__/helpers/retiredWords.RETIRED_ON_SCREEN`,
+  written as `onScreen(…)` calls ON PURPOSE so the Python reader
+  (`test_vocabulary_beyond_dashboard_v13580._retired`, which parses the
+  `{ word, re, use }` rows) does not see them — the daemon still says them
+  in other lanes' files (harness/branches.py, routes/build*.py,
+  routes/ci_watch.py, routes/undo.py) and its PENDING must stay empty; move
+  each up into `RETIRED` when the daemon's last sentence is reworded. The
+  dashboard lines this lane could not reword are ALLOW entries in
+  `vocabulary.test.ts` that say so (HarnessSession, chat page, PaneChat,
+  HarnessStartComposer, LegacySettingsForm; self-dev keeps "worktree" on
+  purpose); a reworded line makes its entry stale and red — delete it.
+  `TurnReceipt.cannotUndoTitle` shows the journal's "no safe inverse" as
+  "This change can't be undone." "Iron-Proxy" is NOT a retired word: it
+  stays the program's name on its Connections card and in its own errors;
+  the coding surfaces say "your accounts" / "the account manager". KANBAN:
+  `lib/kanban` LaneId gains "stopped" (cancelled → a slate "Stopped" lane;
+  Failed is real failures), so `KanbanBoard` (records, LANE_ORDER, "Clear
+  stopped" clears only `cancelled`, xl:grid-cols-6 with Queued) and
+  `SessionCard` (Retry/Dismiss on a stopped card) moved with it. Pins:
+  `dashboard/__tests__/one-vocabulary-v1420.test.tsx`, the moved
+  `status-words-v13520` board tests (18 mutations, all red).
+
+- **A coding session's keys work from its PORTALED list; a long question's
+  title is the first reply's words; the panes poll, open where the work is
+  and collapse; Plan and the account are offered ONCE** (v1.420.0, fix plan
+  C2.9-C2.11 and C4.10). KEYS: `lib/harnessKeys` — the session list
+  (HarnessSidebar's nav) carries `HARNESS_LIST_ATTR`
+  (`data-harness-keys-root`) and `pressIsInside` / the pointer watcher read
+  `inHarness(node, root)` = the view's root OR a marked list (it is portaled
+  into the app's sidebar, outside `ij-harness-view`, so Esc / Ctrl+N /
+  Ctrl+L / Ctrl+K died after a click on a row); rows carry
+  `HARNESS_ROW_ATTR` and ↑/↓ call `moveRowFocus` (no modifier; Enter is the
+  row button's own click). TITLE: `harness/sessions.session_title(current,
+  before, after)` is THE rule `append_lines` calls (a separate function; Lane
+  J edits `history_of` in the same file): "New session" takes the question
+  cut at 48 + "…"; when the question was cut AND the title is still exactly
+  that cut question AND this append brings the FIRST reply (no assistant line
+  before it, not an error), the reply's first sentence (fences, list marks,
+  links, `*`/backticks and word-edge `_` dropped; cut at `.!?:;` + space)
+  names it: 3-6 words, ≤ 48 chars at a word boundary, else the cut question
+  stays. Deterministic, no model call; a typed title is never touched. PANES
+  (`HarnessPanes`): Changes re-reads every `CHANGES_POLL_MS` (5 s) while
+  `busy` (`useVisibleInterval`), plus the turn's end `refreshKey`; the first
+  tab, when none is remembered, is `defaultPaneTab` = Changes when the newest
+  reply's `documents` is non-empty (`lib/buildSessions.replyChangedFiles`),
+  else Session — and the remembered tab is read in the FIRST render (an
+  effect switching it mounted the Session tab for a frame and fired its
+  reads); `PANES_LAYOUT_KEY` (`ij.harness.panes`, `{collapsed, wide}`):
+  `harness-panes-toggle` collapses to a strip (the views unmount; a terminal
+  parks), `harness-panes-width` picks 320/400 or 480/560 px from xl —
+  the session's own aside only (`onLayout` absent in a split's shared
+  column). TOOLBAR: the "Plan first" chip is gone (`harness-plan-mode`;
+  `HARNESS_FIT_ORDER` lost "plan", the step stays in `FIT_STEPS`); Plan is
+  PermissionChip's row. The header's `AccountChip` shows only with NO
+  account ("Choose an account"); on an account the model chip names it and
+  the header keeps quiet `account-chip-status` / `account-chip-usage` spans;
+  "Make it the default" moved to the Session tab
+  (`session-rail-make-default`, `onMakeDefault` through the memoised panes).
+  UNDO: no `window.confirm` — the row's Undo (ChangesReview, not this lane's
+  file) awaits a page question (`harness-undo-confirm`: "Undo it" /
+  "Keep"); a second Undo answers the first "keep". BUILD › CODE
+  (`BuildCodeView`): the row's ⋯ gains Rename (inline input, PATCH
+  `{title}`, trimmed, once — `renameOpenRef`) and Delete (ConfirmButton, the
+  DELETE route; its 409 for a running reply is said in `code-row-note`, the
+  row stays); `code-session-search` filters the held list by title + folder,
+  every word. Pins: `tests/test_build_session_title_v1420.py`,
+  `dashboard/__tests__/{ij-harness-keys-list,ij-harness-panes-toolbar,
+  build-app-sessions}-v1420.test.tsx` (20 mutations, 19 red; the survivor is
+  the rename blur guard, which jsdom cannot reach: it fires no blur on an
+  element's removal). Moved on purpose: `composer-one-row-v1400` (no plan
+  chip/step), `ij-harness-model-accounts{,-review}-v1376`,
+  `ij-harness-model-fold-v1376`, `ij-harness-session-v1369`,
+  `limits-without-a-press-v1393` (the account is the model chip's),
+  `ij-harness-panes-v1369`, `ij-harness-long-replies-v1384`,
+  `harness-gaps-plan-pane-v1389`, `session-rail-v1404` (Plan is no longer
+  the first tab), e2e `ij-harness.spec.ts`. Same lane: HarnessSession's two
+  `vocabulary.test.ts` ALLOW lines were reworded ("its own copy of the
+  folder", "this change can't be undone") and their entries deleted.
+
+- **An @-agent's failure is said in words and its round can be stopped; a
+  connection Test answers TYPED facts the route words; a few missing doors**
+  (v1.420.0, fix plan C6.4 / C6.6 / C6.7 part / C6.9 dashboard / C6.12).
+  @-ROUND: `agents/threads.seat_error_words(exc, manager=)` (the ONE minimal
+  `agents/*` edit: a function + one line in `run_round`'s except) words a
+  failed seat through `failure_words.friendly_error` with the fix said for a
+  seat (`_SEAT_FIX_WORDS`: no "Press Retry", "pick another model on its card
+  in Agents") and stores it as `entry["error_words"]` beside the raw
+  `error` (kept for the Agents page's room); `routes/agents.panel_reply_lines`
+  and the page's `roundMessages` put it in the line's `content` (else "(no
+  reply)", unchanged for an older store). `lib/panelWords.panelKindWords` is
+  the ONLY way a `panelKind` reaches the screen (progress "working…",
+  pending "working, will report back", question "has a question"; message,
+  done and any unknown kind: nothing). STOP: the page names each round
+  (`round_id` `pr_…`, `panelRoundRef`) and posts it with an `AbortController`;
+  `chat_panel` runs `run_round` as its OWN task in `_PANEL_ROUNDS`;
+  `POST /chat/panel/{round_id}/stop` (`stop_panel_round`, 404 when no such
+  round runs) marks `_PANEL_STOPPED` and cancels it; the route then answers
+  `{mode: "panel", stopped: true, entries: []}` and appends NOTHING to the
+  chat (its own request being cancelled still raises — `cancelling()`). The
+  page's `stop()` takes the panel branch first, the composer shows Stop while
+  `panelLive`, and `sendPanel` writes ONE "Stopped." line (`stoppedHere`) on
+  either the abort or a `stopped` answer, never an error line. TEST WORDS:
+  `connections/probe.ProbeResult` is a `(ok, detail)` tuple subclass (every
+  caller unpacks it unchanged) carrying `kind` (`PROBE_KINDS`: ok, unchecked,
+  account, unreachable, refused_key, http) and `status`; `kind_of` reads a
+  plain pair (an injected prober, the Google key probe) off THIS module's own
+  sentences only. `ConnectionRegistry.test` adds `kind` (+ `status`, `via`
+  for an inherited CLI) and keeps `detail` byte-identical (the Directory's
+  `note_key_check` / `key_check_line` still read it). `routes/connections.
+  probe_test_words` adds `title`/`fix`/`technical` (masked, failures only):
+  refused_key and http take their headline from `friendly_error`
+  (`_ProbeFailure` carries `status_code` + `failed_provider`), the fix is said
+  for a Test press (`_TEST_FIX`). Dashboard `lib/connectionTestWords.testWords`
+  → `title. fix` with the technical text under `DETAILS_WORDS`; an older
+  daemon keeps its raw line (ConnectDoors keeps "Connected — " only there).
+  WORDS: "Your plans and your own model servers", "Look again", "Jarvis
+  answers with this by default", "<Name> app id … under the name
+  <provider>_oauth_client_id", the server-type choice ONLY after a Fetch that
+  could not tell (`EndpointModelPicker` `onTold` → `protocolTold === false`),
+  "Email (sending)", `EMAIL_FIELD_COPY`, "Open Notifications". WHERE:
+  `lib/runWhere.onThisNetworkOf` (exact provider+model, plus a config slot's
+  `fleet-<slot>` twin; never another model's row — a proxy splits by model)
+  feeds TurnReceipt's `replyWhere` on the mission receipt
+  (`mission-receipt-where`, "· local" / "· cloud"); the catalog row's flag is
+  the same `egress.stays_on_this_network` the session receipt reads, so no
+  per-poll read. `buildHelpers.workerModelName` names the machine ("glm on
+  DGX Spark") ONLY for a server the user NAMED (an unnamed "Ollama" adds
+  nothing — the Team chip and the Timeline read the same function). ORB:
+  `MoodOrb.repliesWaiting` reads `/health.replies.waiting` defensively
+  (absent = 0); mood `waiting` (amber, no spin, "Waiting for you") when no
+  session is in flight and `waiting >= replies > 0`. DOORS: Fleet's Add a
+  node takes a key (`/secrets` `endpoint_<id>_key` then PATCH
+  `api_key_name` — the Connections form's pattern); `lib/freeTiers` (a
+  documented constant with the vendor page and read date, Google only) puts
+  "· free tier" (aria-hidden: the button's name stays "Google Gemini") and the
+  tier's privacy note on the key door; `components/onboarding/
+  ImportToolsOffer` (mounted by OnboardingWelcome on the OPEN connect_apps
+  step) reads GET /mcp/import/sources once and offers "Import your tools"
+  only when `importDiscovery.discover(...).fresh > 0`, opening the Tools
+  page's own `SourcesDoor` (lazy). Pins: `tests/test_panel_round_words_stop_
+  v1420.py`, `tests/test_connection_test_words_v1420.py`,
+  `dashboard/__tests__/{panel-round-words-stop,connections-plain-words,
+  where-it-ran}-v1420.test.tsx`; moved on purpose: `chat-remote-live-v1285`
+  ("done" shows no label), `connections-anthropic-endpoint-v1329` (the choice
+  shows after a Fetch that cannot tell), `endpoint-models-anthropic-v1329`,
+  `ux-wave4-connections-v1316`, `accounts-signin-v13530`,
+  `last-words-connections-v13590`, `sign-in-press-v1387` ("Look again"),
+  `ux-wave3-chat-v1315` ("Open Notifications"). 22 mutations, all red
+  (8 daemon, 14 dashboard).
+
+- **A remote's "accepted" has an end state; a helper's failure, an account
+  refusal and a phone crash read in plain words; Grok has the Sign in press;
+  `/health.replies.waiting`; the tray says what ended in silence** (v1.420.0,
+  fix plan C6.3 / C6.5 / C6.8 / C6.9 daemon / C6.10). ACCEPTED (G62): a
+  HANDED-OVER job (`DelegateTool._handoff_remote` → `_delegate_remote(...,
+  handoff=True)`; never `consult`) and the `delegate_remote` tool open a
+  report-back ROOM when the remote may message back
+  (`remote.open_handoff_room`: an `AgentThreads` room with the remote seated
+  and the task as its first line; `conversation_id` + `reply_to` (+
+  `reply_token` / `local_only` for a task door) passed to `registry.run` ONLY
+  then — a remote with message-back off gets the old body byte for byte, and
+  test doubles of `run` that take no kwargs keep working); a `202` /
+  `{"accepted": true}` is its own outcome: `ToolResult(ok, output=
+  accepted_words(name) | accepted_no_reply_words(name), data.state
+  "accepted", conversation_id, reply_back)`, a `pending: True` room line, and
+  `delegation.completed` gains `accepted: True, conversation_id, reply_back`
+  (`publish_delegation_completed(accepted=)`). `mission_view` reads it as
+  member status `waiting_remote` (progress "Accepted, will report back") and
+  `_remote_reports` (one bounded read of the job rooms) ends the card `done`
+  with the NEWEST inbound `done` / `message` line from that remote (progress
+  and question lines keep it waiting) and adds "<agent> reported back to
+  Jarvis" to the activity log. `mission.display_unfenced` reads a FLATTENED,
+  possibly cut untrusted fence (the event's `_short`) for the card and the log
+  — the card showed the fence header; the model's tool result keeps its
+  fence. DASHBOARD HALF NOT DONE: `lib/statusWords` / the mission card do not
+  know `waiting_remote` yet (it reads as itself; its progress label is the
+  daemon's words). PLAIN WORDS (C6.5): `delegate` and `spawn_agent` word a
+  child that RAISED through `failure_words.run_failure_words` ("delegated
+  agent 'x' could not finish: <the run's sentence>"), the failure's own text
+  on `data.technical` (moved on purpose: `test_delegate_settles_v1167`,
+  `test_delegate_coop_v1193` ×2, `test_failed_run_rows_settle_v1288` pinned
+  the raw text in the error); `HarnessHelpers.helperFailureText` drops that
+  prefix on a failed helper row and turns an OLD row's "crashed: <Class>: …"
+  into "It stopped on an error: …". `friendly_error` makes a refusal already
+  worded for a person (`worded_message`: Iron-Proxy's account sentences, a
+  held session) the HEADLINE (trailing stop dropped) with `ACCOUNTS_FIX`
+  ("Open Settings › Connections to see your accounts on the Iron-Proxy card.")
+  when it is about an account, else the surface's generic fix; the phone's
+  crash lines (`comm/inbound`: a chat turn, a remote chat, a parked answer, an
+  approval answer) say `_run_problem` (= `plain_reason`). GROK (C6.8):
+  `cli_auth.SIGN_IN_FIX["grok"]` ("Grok CLI isn't signed in. Press Sign in
+  beside Grok CLI in Settings › Connections."), `cli_auth.SIGN_IN_BINARIES`
+  (`CLI_BINARIES` + grok — Grok is never PROBED, its session file is read),
+  `failure_words.SIGN_IN_CLIS` gains grok-cli (a 401 is "refused your
+  sign-in"); `cli_detect` and the Grok adapter's four refusals say it;
+  `cli_detect.grok_login_status()` (memoised `GROK_STATUS_TTL_S` 15 s,
+  forgotten by `forget_detection_memos`) gives the /health grok row
+  `installed` / `signed_in` / `sign_in_fix` (`routes/system.
+  _with_grok_sign_in`, only when the row says nothing); dashboard
+  `lib/cliSignIn.GROK_SIGN_IN` / `SIGN_IN_CLIS` / `SignInCli` (Launch id
+  "grok" with `account: "default"`: Grok's TUI opens its own sign-in; `/login`
+  does the same) — `subscriptionCliFor` returns it, so Connections, the
+  Rescan line, PreflightNote and MissionComposer offer the press. NOT DONE:
+  `lib/failureActions` reads `SUBSCRIPTION_CLIS` only, so a chat failure line
+  for Grok shows the sentence, not the press. WAITING (C6.9): `/health.
+  replies.waiting` = `durable_turns.running_replies` rows with `waiting`
+  (chat and Chat › Code: a card in the registry or the chat's waiting state)
+  + Build › Code running − working (`hosted/news.counts`); additive, in
+  memory (moved on purpose: `test_harness_gaps_running_v1389`'s exact dicts).
+  TRAY (C6.10): `chat.turn_finished` (`EventType.CHAT_TURN_FINISHED`, no
+  session id; `{thread_id, turn_id, title, seconds, outcome}`) is published by
+  `durable_turns.TurnLogs._announce_finished` for a CHAT-surface turn longer
+  than `CHAT_FINISH_NOTICE_AFTER_S` (60) that ended done/error (never a Chat ›
+  Code turn, a stopped or cut-off one, or one with no chat) on the bus
+  `durable_turns.bind_event_bus` holds (bound in `routes/system.register`,
+  weak key AND weak value); not a default alert, `bell_pings` False.
+  `comm/notifier.tray_says` is the daemon twin of main.js `runOutcomeNotice`:
+  the bell's attention rows + a mission root that ended (the bell's mission
+  words, `/agents?[project=…&]mission=…`) + a run started from chat (origin
+  "chat"; "The agent you started from chat …", `/sessions/<id>`) + a long chat
+  reply ("Jarvis finished your chat's answer", `/chat?thread=<id>`); none if
+  the user stopped it. `RUN_OUTCOME_AUDIT_TYPES` gains `chat.turn_finished`.
+  The one-notice fixture gains `tray` (absent = attention; true = the row's
+  words; an object = a notice the bell has no row for) and `this_pc` (default
+  true) keys and five cases (mission-failed/-stopped, chat-helper-finished/
+  -failed, chat-turn-finished/-failed); moved on purpose: `test_one_notice_
+  v13600` (tray test, This PC test, audit types). Pins:
+  `tests/test_{remote_accepted,failures_plain_words,waiting_grok_chat_notice}
+  _v1420.py`, `dashboard/__tests__/grok-signin-helper-failure-v1420.test.tsx`;
+  moved on purpose: `test_cli_detect`, `test_grok_cli_adapter` ("grok
+  login"). 23 mutations, all red (20 daemon/main.js, 3 dashboard).
 
 ## Map (where things live)
 

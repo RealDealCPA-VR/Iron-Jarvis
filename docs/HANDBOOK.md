@@ -330,7 +330,8 @@ Chat is where most work happens, and it is wired into everything:
 - **What an escalated run inherits from the chat** (v1.232.0): the armed
   tools (on every message, not just the first), a grant you answered on a
   card, the grounded folder, and the approval posture — except *Don't ask*,
-  which escalates as *Ask first* (called *Ask when risky* before v1.407.0). See *Agents & jobs* for the
+  which escalates as *Ask before commands* (called *Ask first* before v1.420.0 and
+  *Ask when risky* before v1.407.0). See *Agents & jobs* for the
   rules, and the session's amber chips ("Waiting for you · shell",
   "Completed · needs you") now keep their own case.
 
@@ -425,13 +426,14 @@ into chat as `@guide …`, ready to send.
   after you answer, "Approved. The run continues · Open run" for a moment.)
 - **The approval posture rides an escalation** (v1.232.0): when a chat hands
   work to an agent session, the chat's approval dropdown goes with it.
-  *Ask first* (called *Ask when risky* before v1.407.0) lets the tools you
+  *Ask before commands* (called *Ask first* before v1.420.0, *Ask when risky*
+  before v1.407.0) lets the tools you
   armed in chat run without a pause and asks once for anything else; *Ask
   before every action* (called *Ask first* before v1.407.0) asks once per run
   for every ask-tier tool, armed or not (Allow for this run covers the rest of
   the run). *Accept edits* and *Auto* ride along only to a run you are
   watching (see *One switch* below). *Don't ask* is **never inherited**: a
-  Don't ask chat's escalated run behaves as *Ask first* — you consented to auto-approval
+  Don't ask chat's escalated run behaves as *Ask before commands* — you consented to auto-approval
   one watched turn at a time, not for a background run making a batch of
   calls while you are elsewhere.
 
@@ -2195,8 +2197,13 @@ same switch as the chat page's Chat | Code, in the same place on the page.
 - **The chips under the box**: the tool and its model, the effort, the mode
   and the account. The modes are the tool's own (Ask first, Auto edits, Plan
   for Claude Code, and Full access). Codex on Windows offers only Ask first
-  and Full access: its sandbox cannot run commands there, and it has no plan
-  mode; the mode menu says so. **Full access** lets the tool do anything
+  and Full access, and the mode menu says why (v1.420.0, read from Codex's
+  own list of settings): on Windows Codex can run commands only with its own
+  file protection switched off, and then it asks either before every file
+  change and every command, or before none of them — it has no setting where
+  edits run on their own while commands still ask. Its own plan mode is
+  marked experimental, so Plan is not offered for Codex yet. **Full
+  access** lets the tool do anything
   without asking, so it takes two presses. A change the tool can only pick
   up when it starts again (the effort, for example) says it applies from
   your next message. `/` lists the tool's own commands; `@` lists the
@@ -2378,16 +2385,32 @@ asks into a card you answer.
 - **Your own permission rules come first.** If your OpenCode config (or a
   project's own `opencode.json`) has a rule for a tool, that rule stays as you
   wrote it, whatever mode you choose, and the session says which tools keep
-  your rules. A mode never loosens a rule of yours: a `deny` stays a `deny`
-  (that includes the older `"tools": {"bash": false}` switches and an
-  admin's settings in `C:\ProgramData\opencode`). When a rule of yours is
-  stricter than the mode, the mode names only OpenCode's built-in tools, so
-  tools from the MCP servers and plugins in your OpenCode config run without
-  asking unless a rule of yours says otherwise; the session says so.
+  your rules. A mode never changes a rule of yours, in either direction
+  (v1.420.0): a `deny` stays a `deny` (that includes the older `"tools":
+  {"bash": false}` switches and an admin's settings in
+  `C:\ProgramData\opencode`), and an `allow` stays an `allow` — before
+  v1.420.0, Ask first turned a `"bash": "allow"` of yours into a card for
+  every command. A rule that names tools by a pattern (`"web*"`) counts for
+  every tool it matches, and a `"*"` rule of yours decides for every tool
+  (only Plan still refuses edits). When a rule of yours differs from the
+  mode, the mode names only OpenCode's built-in tools, so tools from the MCP
+  servers and plugins in your OpenCode config run without asking unless a
+  rule of yours says otherwise; the session says so.
+- **Helpers**: in Ask first and Auto edits, OpenCode starts one of its
+  helpers (its `task` tool) without a card, as Iron Jarvis's own coding
+  sessions do; every step the helper takes still asks under the same mode.
+  In Plan, OpenCode's own rule for helpers applies.
 - **Cards**: a card shows what OpenCode wants to do (the command, or the file
   and its changes). **Allow once** allows that one step; **Allow for this
-  session** is OpenCode's own "Always allow" (it lasts until this OpenCode
-  process stops); **Deny** says no, and OpenCode stops that step.
+  session** is OpenCode's own "Always allow"; **Deny** says no, and OpenCode
+  stops that step. OpenCode keeps an "Always allow" only while its process
+  runs, and changing the mode starts a new one, so Iron Jarvis remembers your
+  answer for the conversation and gives it again itself when the new
+  OpenCode asks the same thing: every file change (and every web fetch,
+  search, helper) when you allowed one for the session, or the exact same
+  command. A similar but different command asks again (OpenCode's own rule
+  covers a whole command family, which it does not tell Iron Jarvis). These
+  answers are forgotten when Iron Jarvis restarts.
 - **Notes while it works**: type while OpenCode is working and press Enter.
   OpenCode reads the note at its next step, and the reply goes on with it. If
   you press Stop before OpenCode reached a note, the note stays in OpenCode's
@@ -2422,6 +2445,163 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## Fewer things end in silence (v1.420.0)
+
+- **Another computer that takes a task "for later" is followed to the
+  end.** When you hand work to a remote agent (another Iron Jarvis, a Hermes
+  on another PC) and it answers "I have it, I'll report back", the agent
+  card on the mission screen now says "Accepted, will report back" instead of
+  "Done" over an empty answer. When the remote posts its report back (Let it
+  message back must be on, on its card), the card turns Done with the
+  report's own words. With Let it message back off, the card says the answer
+  cannot come back here.
+- **A helper that failed says why in plain words.** When a helper agent or
+  a teammate stops on an error, its parent, the mission's activity log and a
+  coding session's helper row now say the same plain sentence a failed run
+  says ("Codex is busy. Run it again shortly, or choose another model in
+  Settings."), never "crashed: ProviderError: …". The technical text is kept
+  in the details.
+- **An account sentence is the headline.** When an Iron-Proxy account is at
+  its limit or needs to sign in, the chat's failure line now leads with that
+  exact sentence (which account, until when) and says where your accounts
+  are, instead of hiding it behind "Press Retry".
+- **The phone says it plainly too.** A problem the phone hears ("I hit a
+  problem: …") is the same plain sentence, never a program error name.
+- **Grok has a Sign in button.** Like Claude Code and Codex, a signed-out
+  Grok CLI shows a Sign in press in Settings › Connections. It opens a Build
+  terminal with Grok started on this PC's own login; Grok opens its sign-in
+  there (or type `/login`). Grok's messages no longer tell you to run a
+  command in a terminal.
+- **The status light knows when it is waiting for you.** Iron Jarvis now
+  tells the dashboard how many running replies are parked on your answer (a
+  card or a question), so the status light can say "Waiting for you" instead
+  of "Working".
+- **The tray tells you when more things end.** With every window closed to
+  the tray, Iron Jarvis now also raises a Windows notification when a
+  mission ends ("Your objective is done", or why it is not), when an agent
+  you started from chat ends, and when a chat answer that took longer than a
+  minute is ready ("Jarvis finished your chat's answer"). Each is said once,
+  and never while a window is open (the window shows it itself).
+
+## A coding reply checks your project once, quickly (v1.420.0)
+
+- **Your project's own checkers run once per reply.** When the project has
+  ruff, mypy, ESLint or TypeScript set up, they used to run after every round
+  that edited a file, each allowed a minute, and asked for each round. Now
+  they run once, when the reply is about to end, over every file it changed,
+  beside the finish check's test run, and what they find goes into that
+  check's note so the agent fixes it before it stops.
+- **15 seconds for all of them together.** The checkers share 15 seconds. One
+  that does not finish in that time is stopped, and the note says "not
+  finished in time" with its name, so a slow checker is never mistaken for a
+  clean one.
+- **TypeScript is checked only on a small project.** tsc checks the whole
+  project, so it runs only when a changed file is TypeScript and the project
+  holds at most 400 TypeScript files (not counting `node_modules`, build
+  folders or hidden folders). On a bigger project the note says "skipped:
+  project too large for a quick check". mypy now checks the changed files
+  without checking the files they import.
+- **The same cards as before.** Under "Don't ask", or when you allowed the
+  command tool for the session, they run with no card. Otherwise the test
+  run and the checkers share one card, and it says Iron Jarvis asks.
+- **Turning the finish check off turns them off too.** A folder whose
+  `.ironjarvis/harness/finish.toml` says `enabled = false` runs no checker.
+  A folder's own checks in `plugins.toml` still run after each edit, as you
+  set them up.
+
+## A coding session remembers its last reply's work, and spends less per message (v1.420.0)
+
+- **The next message knows what the last reply read, changed and ran.** A
+  coding session's history is sent to the model as plain words (so it can
+  move to another account or vendor). Before, that meant the model forgot
+  which files it had just read and read them again. Now the newest reply in
+  the history carries one short line Iron Jarvis writes from that reply's
+  own steps, for example "read a.py, b.py; edited cart.py; ran `python -m
+  pytest -q` (failed)". It names files, commands and whether they worked —
+  never what a tool printed — hides anything that looks like a key, and is
+  at most 1,500 characters. Only the newest reply has it; you never see it
+  in the conversation.
+- **The parts of the instructions that stay the same come first.** What
+  changes with each question (memory notes, project knowledge retrieved for
+  it, recent activity, attachments, a "/" skill) now goes after the parts
+  that do not (who Jarvis is, your profile, the coding-session instructions,
+  the tool list). Claude's prompt cache then reuses everything up to the
+  changing part on the next message instead of reading it all again. The
+  same words are sent; only their order changed.
+- **A coding session is not sent chat-only instructions.** The email-draft
+  and chart instructions, the browser section and your saved workflows list
+  are left out of a coding reply (they never apply there). Chat is unchanged.
+- **Codex sessions use Codex's real window.** A Codex reply used to plan as
+  if the model could hold 32,000 tokens, so older messages were dropped and
+  summarised early. Iron Jarvis now reads the window from Codex's own model
+  list on this PC (`models_cache.json` in Codex's folder, read in the
+  background) — 258,400 tokens for today's models, the share Codex itself
+  lets a conversation fill — and uses that figure when the file cannot be
+  read.
+- **A long conversation is summarised once, not on every message.** Once a
+  chat or coding session passed the automatic summary point, every new
+  message paid for a fresh summary, because each message moved what the
+  summary covered. A stored summary of the same opening messages is now
+  reused until six more lines have passed it; then one new summary is
+  written.
+
+## Each Claude Code round wastes less time around the model (v1.420.0)
+
+Every round of a coding session on your Claude plan starts Claude Code once,
+sends it the conversation, and lets it make one request to Anthropic. Iron
+Jarvis measured what that costs on this PC, phase by phase
+(`docs/CLAUDE-NATIVE-ROUND-COST.md`): the model took about half a second a
+round, and about as much again went to Claude Code starting up, a new secure
+connection to Anthropic, and waiting for Claude Code to quit.
+
+- **The answer arrives the moment it is complete.** Iron Jarvis used to wait
+  for Claude Code to quit (30-45 ms after it finished) and then clean up
+  (up to 50 ms) before showing the answer or running the next tool. Now the
+  answer is used at once and the clean-up happens in the background. The
+  next round of the same conversation still waits until the last copy of
+  Claude Code has quit, so a conversation never has two running at once; one
+  that does not quit within 3 seconds is stopped.
+- **One connection to Anthropic is kept open.** Each round used to open a new
+  secure connection (64-84 ms on this PC). Now the connection is kept for up
+  to 30 seconds and reused, so only the first round pays for it.
+- **Nothing else about the request changed.** Each round still makes exactly
+  one request on your plan, Claude Code's own retries are still refused, a
+  sign-in refresh is still allowed once, and Stop still ends Claude Code and
+  everything it started.
+- **What is left.** Claude Code itself takes about half a second to start on
+  every round. Keeping one Claude Code running for a whole session would
+  remove that; it changes how these sessions work, so it waits for your
+  decision.
+
+## Coding sessions: keys from the list, real titles, calmer panes and fewer controls (v1.420.0)
+
+- **Keys work from the session list.** In Chat › Code the list of sessions
+  sits in the app's sidebar. After you click a session there, Esc stops a
+  running reply, Ctrl+L puts the cursor in the message box, Ctrl+K opens the
+  model menu and Ctrl+N starts a new session, without clicking in the
+  session first. ↑ and ↓ move between the sessions in the list; Enter opens
+  the one you are on.
+- **Real titles.** A session named by a long first message (cut off with
+  "…") is renamed after its first reply: three to six words from the start
+  of that reply. A short first message keeps its title, and a name you gave
+  the session yourself is never changed. No model is asked for the title.
+- **The panes on the right.** Changes is read again every few seconds while
+  a reply works, so files show up as they are written. When you have not
+  picked a tab, the panes open on Changes if the last reply changed files,
+  otherwise on Session. The column can be hidden (the button at its top
+  right) and has two widths; both are remembered.
+- **Fewer controls in the message box's row.** Plan is a choice in the
+  approvals chip (it was also a separate "Plan first" chip). The account is
+  named once, in the model chip ("Opus · Work"); the session's header only
+  shows the account's state (a limit, a sign-in, its usage). Undo asks above
+  the message box: "Undo it" undoes, "Keep" leaves the file as it is. The
+  Session tab says whether the session's account is the one new sessions
+  start on, and offers "Make it the default" when it is not.
+- **Build › Code.** A session's ⋯ menu now has Rename and Delete (Delete
+  takes two presses, and a session whose reply is still running is not
+  deleted: stop it first). A search box above the list finds sessions by
+  title or folder.
 
 ## A reply starts sooner, and a long one costs less to keep (v1.418.0)
 
@@ -2487,6 +2667,155 @@ asks into a card you answer.
   bottom of the session list under "Archived (N)". Each has a Bring back
   button, and a session you open from there (or from a link) says it is
   archived with a Bring back button where you type.
+
+## Chat reads "my latest emails" and questions about Iron Jarvis (v1.420.0)
+
+- **Your own mail is your mail, never a web search.** "Summarize my latest
+  emails", "check my new mail", "any new emails from Bob?" and "read my
+  unread messages" now mean the mail app you connected (Gmail, or Microsoft
+  365 for Outlook): its tools are offered, and the words "latest" or "new"
+  no longer send the question to a web search. With no mail app connected,
+  the reply carries one Connect button naming both mail choices. "My new
+  messages on Slack" is Slack, and "my mail carrier" or "email marketing
+  tips" are not your mailbox.
+- **Questions about Iron Jarvis ask the Guide.** "What apps can you work
+  with?", "what can you connect to?", "what are missions?", "what is Build
+  for?", "what does the Code view do?" and "how do I use Build?" look the
+  answer up in the Handbook and in your own setup. The everyday meanings
+  stay everyday: "what are missions in the Bible" or "what is the build for
+  the release" are answered as usual.
+- **Coding work can be offered a coding session.** Iron Jarvis can now tell
+  a request to build a piece of software ("build me a todo app", "write me
+  a Chrome extension") or work in a repository ("fix the failing test in my
+  repo") from office work or a shed. Chat still answers; the offer is a
+  link to Build › Code, never a hand-off. (The link under the reply is
+  being wired into chat in a later step.)
+
+## See one message's changes, and put a file back (v1.420.0)
+
+- **This message or the whole session.** Build › Code's Changes tab has
+  two buttons at the top: **Whole session** (what it always listed:
+  everything since the session started here) and **This message** (only
+  what changed while the newest message ran). Iron Jarvis tells the two
+  apart by reading the folder before each message; when it did not get to
+  read it in time, the pane says so and lists the whole session instead.
+  The first message of a session is the whole session.
+- **Revert this file.** In a git repository each changed file has a
+  **Revert this file** button: press it, then press again to confirm. The
+  file goes back to how it was at the start of what the list shows (the
+  session's start, or this message's). A file that did not exist then is
+  moved to Iron Jarvis's trash folder, never deleted. Nothing else moves:
+  the branch, its commits, what git has staged and every other file stay as
+  they are. Revert waits while a reply is running, refuses a file that
+  changed after the list was read (read the changes again first), and is
+  not offered when the folder is not a git repository (the coding tool's
+  own undo, or git, is the way back there).
+
+## Plain words when an agent or a key check fails, and a few doors that were missing (v1.420.0)
+
+**An agent you @-mention says why it could not answer.** When `@builder`
+(or any agent you name in chat) fails, its line now says what happened and
+what to do in one sentence, like "Claude Code is busy. Try again shortly, or
+pick another model on its card in Agents." It used to say only "couldn't
+answer" beside "(no reply)". A remote agent's line no longer prints raw words
+such as "done": a finished reply has no label, a question says "has a
+question", and a remote still at it says "working…".
+
+**Stop works while an agent answers.** While an @-agent round is running, the
+send button turns into Stop (Esc does the same). Stop ends the round on Iron
+Jarvis's side too and leaves a "Stopped." line; your question stays in the
+chat.
+
+**A key check says what it found, in words.** On the first-run key door and on
+Settings › Connections, Test used to print the check's raw text ("could not
+reach anthropic: ConnectError: [Errno 11001] …"). It now says, for example,
+"Couldn't reach Anthropic to check the key. Check your internet connection,
+then press Test again." or "Anthropic refused your key. Update it in Settings ›
+Connections." The raw text is still there, folded under **Details**.
+
+**Connections uses plainer words.** "Subscription & local providers" is now
+**Your plans and your own model servers**, and its **Rescan local CLIs** button
+is **Look again**. A Google, Microsoft or Dropbox card that needs an app id
+says what it is for ("Dropbox needs one to know which app is asking you to sign
+in") before the name to save it under. When you add a model server, Iron Jarvis
+asks it how it answers when you press **Fetch available models**; the choice
+between OpenAI-compatible and Anthropic-compatible appears only when it could
+not tell. The email words follow suit: **Email (sending)** and **Email
+(receiving)** instead of SMTP and IMAP, and the email dialog's button opens
+**Notifications**.
+
+**Where a mission ran.** A mission's receipt now ends with "· local" (it ran on
+this PC or a machine on your network) or "· cloud" (it left your network), the
+same words a chat reply uses. A helper in a coding session that ran on a model
+server you named says the machine too ("glm on DGX Spark").
+
+**The status orb waits with you.** When every reply that is running is waiting
+for your answer, the orb in the sidebar turns amber and says "Waiting for you"
+instead of "Working".
+
+**A few doors that were missing.**
+
+- **Fleet › Add a node** takes an API key, for a model server that asks for one.
+  It is stored encrypted and sent only to that server, the same way the
+  Connections endpoint form does it.
+- The first-run key door says **Google Gemini · free tier**, and what the free
+  tier costs in privacy (Google may use what you send on it to improve its
+  products).
+- The first-run checklist's **Connect the apps you use** step offers **Import
+  your tools** when Claude Code, Claude Desktop, Codex, Cursor or VS Code on
+  this PC already use tools you have not added. It opens the same list the
+  Tools page uses; nothing is added until you tick and press Add.
+
+## Two Codes told apart, and the approval levels named by what they do (v1.420.0)
+
+**Two views called Code, told apart by the tool.** The chat page's **Chat |
+Code** switch is where Jarvis writes, runs and checks the code itself
+(**Chat › Code**). Build has a **Code | Terminal** switch of its own, where
+your own Claude Code, Codex, Pi, OpenCode or Grok does the work and Iron
+Jarvis shows it (**Build › Code**). Both stay "Code" — each page names its
+own — and where a list has to tell them apart, a session says which tool
+writes its code: **Running now** lists "Coding session (Jarvis) · 12 min" for
+Chat › Code and "Coding session (Claude Code) · 3 min" (or Codex, Pi,
+OpenCode, Grok) for Build › Code. Build's one-line description names both
+its terminals and its Code view, and typing "code", "claude code" or "codex"
+in search finds Build.
+
+**The approval levels say what they do.** The chip's levels, strictest
+first, are now:
+
+- **Ask before every action** — unchanged.
+- **Ask before commands** (the chip says *Ask for commands*) — the default,
+  called *Ask first* until now. It edits files and searches the web on its
+  own and asks before running a command. The old name meant the opposite in
+  Build › Code, where *Ask first* also asks before a file change.
+- **Accept edits** — like Ask before commands, and a file edit in the folder
+  never asks, even where the folder's own rules would.
+- **Auto (its own safety check)** (the chip still says *Auto*).
+- **Don't ask** — runs commands, edits files and uses connected apps without
+  asking; a commit or push on a coding session's own branch, and a few
+  safety cards, still ask.
+
+Nothing about what each level does changed, and saved chats keep their
+level. Typing an old name in chat ("set approvals to Ask first") still finds
+the right level.
+
+**Plainer words around coding sessions.**
+
+- A coding session that works on its own branch keeps **its own copy of the
+  folder** beside the repository (it said "worktree"). The Branch view's
+  button after a merge is **Remove its copy of the folder**.
+- The account words in a coding session say **your accounts** (the
+  *Several accounts* card on Connections): "No longer in your accounts" for
+  an account that was removed, and Usage says "From the account manager's
+  last look at this account".
+- An undo button that cannot undo says **This change can't be undone.**
+- Build says **Opening your terminals…** while it loads.
+- **Local only** says what it promises: nothing leaves **this PC or your own
+  network** (a model on your network, like a server on a Tailscale tailnet,
+  stays on your side) without asking you.
+- The **Session board** has a grey **Stopped** lane for runs you (or
+  Emergency stop) ended; **Failed** is real failures only. A stopped card
+  keeps Retry and Dismiss, and **Clear stopped** clears only those.
 
 ## Build › Code keeps its history, and lets a message wait (v1.418.0)
 
@@ -3008,16 +3337,17 @@ first:
 - **Ask before every action** (the chip says *Ask every time*): asks before
   it edits files, uses the internet, runs commands, or clicks or types in a
   browser. This is the level that was called *Ask first* before v1.407.0.
-- **Ask first**: the default. Edits files and searches the web on its own,
-  asks before running commands, an app's tools and anything risky. This is
-  the level that was called *Ask when risky*. Saved chats keep exactly what
-  they had; only the names moved.
-- **Accept edits**: as Ask first, and a file edit inside the chat's or the
+- **Ask before commands** (the chip says *Ask for commands*): the default. Edits
+  files and searches the web on its own, asks before running commands, an
+  app's tools and anything risky. This is the level that was called *Ask
+  first* until v1.420.0 and *Ask when risky* before v1.407.0. Saved chats
+  keep exactly what they had; only the names moved.
+- **Accept edits**: as Ask before commands, and a file edit inside the chat's or the
   session's folder never stops for a card, even where the folder's own rules
   would ask. An edit outside the folder (or into a folder Iron Jarvis keeps
   for itself) still asks.
 - **Auto**: lets routine work through and asks only about risky things. It
-  starts from what Ask first would ask about and, for each of those, first
+  starts from what Ask before commands would ask about and, for each of those, first
   applies fixed rules (no model call, no cost): reading, edits inside the
   folder, running the project's tests (`pytest`, `npm test` and the like,
   joined only by `&&`, with no output sent into a file), the session's own
@@ -3038,7 +3368,7 @@ first:
   on, and billed to the reply. It sees only your request and the call (never
   a tool's output or a page) and may answer only "allow"; anything else — no
   answer within a few seconds, an error, a garbled answer, the demo model —
-  keeps the card. Auto never asks about MORE than Ask first would.
+  keeps the card. Auto never asks about MORE than Ask before commands would.
 - **Plan** (coding sessions): the session only reads and writes a plan for
   you to approve before it changes anything. Picking Plan keeps your level;
   picking a level turns plan mode off. The *Plan first* chip beside it still
@@ -3055,7 +3385,7 @@ hands-off numbers count it apart (it never counts as an interruption).
 helpers and teammates it starts (a helper applies the rules only: what they
 leave undecided still asks you). A schedule, a goal, a workflow, a rule, a
 phone message, an assignment or anything else that runs with nobody there
-gets *Ask first* instead, like Don't ask. A chat sent through the API (no
+gets *Ask before commands* instead, like Don't ask. A chat sent through the API (no
 card can be shown there) runs only what the rules pass and says, in words,
 that the rest needs your OK on the chat page. Turning Auto on from chat asks
 first, as Don't ask does.
@@ -3077,10 +3407,10 @@ first, as Don't ask does.
   quick check.
 - A coding-session reply Iron Jarvis carries on by itself (after a restart,
   when an account's limit resets, on another account, the work of a plan you
-  approved, the night shift) runs as Ask first: nobody is watching it start.
+  approved, the night shift) runs as Ask before commands: nobody is watching it start.
 
-**Edits to Git's own files and Jarvis's own rules ask under Ask first too
-(v1.408.1).** File edits run on their own under Ask first, but an edit of a
+**Edits to Git's own files and Jarvis's own rules ask under Ask before commands too
+(v1.408.1).** File edits run on their own under Ask before commands, but an edit of a
 file that steers Git, your editor, CI or Iron Jarvis itself — the same list
 as above: anything under `.git` (its settings and hooks, which Git can run as
 programs), `.ironjarvis` (this folder's own permission rules and harness),
@@ -3088,7 +3418,7 @@ programs), `.ironjarvis` (this folder's own permission rules and harness),
 instructions files (`AGENTS.md`, `CLAUDE.md`, their `.local.md` versions,
 `AGENTS.override.md` and `.ironjarvis.md`, in any folder), `.vscode/tasks.json` and
 `.vscode/settings.json`, `.github/workflows`, `.gitattributes`,
-`.gitconfig`, `.gitmodules` — now stops for a card under **Ask first** and
+`.gitconfig`, `.gitmodules` — now stops for a card under **Ask before commands** and
 **Ask before every action**, in a chat, a coding session and the helpers it
 starts. The card says why in plain words ("it changes Git's own settings",
 "it changes Iron Jarvis's own safety rules for this folder") and offers
@@ -4363,11 +4693,12 @@ the check never ran: both of its remaining benchmark failures were that.
   project does not fit.
 - **Your project's own checkers after an edit.** When the project already has
   ruff, mypy, ESLint or TypeScript set up (both its settings and the program),
-  they run on the files the agent just changed, and any problem they find goes
-  straight back to the agent with that edit. They run your project's own
-  programs, so they ask first under every approval setting (one card per
-  round), unless you allowed the command tool for longer. A project without
-  them works exactly as before. Iron Jarvis never installs a checker.
+  they run on the files the agent changed, and any problem they find goes
+  back to the agent. They run your project's own programs, so they ask first
+  unless you allowed the command tool for longer. A project without them
+  works exactly as before. Iron Jarvis never installs a checker. (Since
+  v1.420.0 they run once per reply, at its end; see "A coding reply checks
+  your project once, quickly".)
 - **Several files in one read** for the generic and Codex model families, so
   fewer rounds are spent reading.
 - **Long results are cut honestly.** In a Build session a long command output
