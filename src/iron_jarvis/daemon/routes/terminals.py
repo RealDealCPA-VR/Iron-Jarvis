@@ -454,7 +454,10 @@ def register(app: FastAPI, d) -> None:
     def terminal_shells() -> dict[str, Any]:
         from ...terminals import available_shells
 
-        return {"shells": available_shells()}
+        # v1.422.0 (B6): the default FIRST and named — never the Microsoft
+        # Store copy of PowerShell (each entry's ``label`` says which is it).
+        shells = available_shells()
+        return {"shells": shells, "default": shells[0]["name"] if shells else ""}
 
     @app.get("/terminals/ai-clis")
     def terminal_ai_clis() -> dict[str, Any]:

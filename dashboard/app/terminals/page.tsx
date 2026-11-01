@@ -27,7 +27,8 @@ import {
 } from "lucide-react";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import { paneTurn } from "@/components/terminal/paneChatCore";
-import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
+import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
+import { STORE_SHELL_TITLE, defaultShellName, shellLabel, type ShellOption } from "@/lib/shells";
 import { Card, OfflineHint, Spinner, ConfirmButton, Empty } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
 import { useModels } from "@/lib/useModels";
@@ -305,7 +306,7 @@ export default function TerminalsPage() {
     return m;
   }, [activityData]);
 
-  const [shells, setShells] = useState<Shell[]>([]);
+  const [shells, setShells] = useState<ShellOption[]>([]);
   // Per-pane AI picker. v1.250.0 (S-02): the SHARED catalog, not a fetch of
   // this page's own — the title bar's switcher has usually loaded it already,
   // and `/models` measured 2.1–3.4 s on the live install (see the note below).
@@ -918,11 +919,14 @@ export default function TerminalsPage() {
     // The catalogs, in the background (see above) — each on its own, so a slow
     // model list never holds up the Launch menu or the other way round, and
     // each degrades to empty on its own failure exactly as before.
-    get<{ shells: Shell[] }>("/terminals/shells")
+    get<{ shells: ShellOption[]; default?: string }>("/terminals/shells")
       .then((sh) => {
         if (cancelled) return;
         setShells(sh.shells);
-        setShell((cur) => cur || (sh.shells[0]?.name ?? ""));
+        // v1.422.0 (B6): the daemon's default (listed first): never the
+        // Microsoft Store copy of PowerShell, whose start hung in the
+        // restore freezes. Kept as the menu's first entry for an older one.
+        setShell((cur) => cur || defaultShellName(sh.shells, sh.default));
       })
       .catch(() => {
         /* no list — the selector says "default" and the daemon picks */
@@ -1116,8 +1120,8 @@ export default function TerminalsPage() {
                   >
                     {shells.length === 0 && <option value="">default</option>}
                     {shells.map((s) => (
-                      <option key={s.name} value={s.name}>
-                        {s.name}
+                      <option key={s.name} value={s.name} title={s.store ? STORE_SHELL_TITLE : undefined}>
+                        {shellLabel(s)}
                       </option>
                     ))}
                   </select>
