@@ -575,6 +575,63 @@ _CALL_NAME_RXS = (
     re.compile(r"\"(?:name|tool|tool_name|function)\"\s*:\s*\"([A-Za-z0-9_.\-]{1,64})\""),
 )
 
+#: v1.421.0 review (A5): a reply's CODE — a fenced block (``` or ~~~, closed
+#: by the same fence or left open to the end of the reply) and an inline code
+#: span. A call that sits only there, beside the report's own prose, is a
+#: QUOTATION (a reviewer reading a test fixture, a teammate documenting the
+#: format), not the model's call.
+_FENCE_RX = re.compile(
+    r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\n]*\n(?P<body>.*?)(?:^[ \t]{0,3}(?P=fence)[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+_TICKS_RX = re.compile(r"`+")
+
+
+def _blank_inline_code(text: str) -> str:
+    """``text`` with every inline code span blanked, by CommonMark's rule: a
+    backtick run opens a span the NEXT run of the same length on its line
+    closes. Paired by index, never by a backtracking regex — a reply streams
+    up to 200,000 characters on the event loop, and backtick runs of many
+    lengths made the regex this replaced take half a minute."""
+    import bisect
+
+    out = list(text)
+    offset = 0
+    for line in text.split("\n"):
+        runs = [(m.start(), m.end()) for m in _TICKS_RX.finditer(line)]
+        if len(runs) > 1:
+            by_len: dict[int, list[int]] = {}
+            for k, (a, b) in enumerate(runs):
+                by_len.setdefault(b - a, []).append(k)
+            i = 0
+            while i < len(runs):
+                a, b = runs[i]
+                same = by_len[b - a]
+                p = bisect.bisect_right(same, i)
+                if p < len(same):
+                    j = same[p]
+                    start, end = offset + a, offset + runs[j][1]
+                    out[start:end] = " " * (end - start)
+                    i = j + 1
+                else:
+                    i += 1
+        offset += len(line) + 1
+    return "".join(out)
+
+
+def _call_text(body: str) -> tuple[str, list[str]]:
+    """``body`` with every code region blanked (same length, so nothing
+    shifts), and the bodies of the fenced blocks that END the reply — the one
+    fence a call the model meant to make may sit in ("Let me look." then a
+    ```json call: a model with no tool parser stops right after its call)."""
+    chars = list(body)
+    ending: list[str] = []
+    for m in _FENCE_RX.finditer(body):
+        if not body[m.end():].strip():
+            ending.append(m.group("body") or "")
+        chars[m.start():m.end()] = " " * (m.end() - m.start())
+    return _blank_inline_code("".join(chars)), ending
+
 
 def named_text_tool_call(text: str, offered: Iterable[str]) -> str:
     """The NAME of an OFFERED tool a reply wrote a call to AS TEXT, or ""
@@ -585,16 +642,25 @@ def named_text_tool_call(text: str, offered: Iterable[str]) -> str:
     of tool-call parsing code, notes on a model's quirks — must not be told
     to "call the tool itself". So the call must name a tool the step was
     offered, the rule ``reply_budget.cut_off_round`` applies to a leaked
-    half call. Never raises."""
+    half call.
+
+    v1.421.0 review: and it must not be QUOTED. A report that quotes a real
+    call (a fixture naming ``list_files``, which a reviewer is offered) in a
+    code block or inline code was told to call it, and the reply to that note
+    REPLACED the report as the run's answer. A call is read from the reply's
+    bare text, or from a fenced block that ENDS the reply; one only inside
+    inline code, or inside a fence the report goes on after, is not a call.
+    Never raises."""
     try:
         names = {str(n) for n in (offered or ()) if n}
         if not names or not text_tool_call(text, names):
             return ""
-        body = str(text or "")
-        for rx in _CALL_NAME_RXS:
-            for m in rx.finditer(body):
-                if m.group(1) in names:
-                    return m.group(1)
+        bare, ending = _call_text(str(text or ""))
+        for body in (bare, *ending):
+            for rx in _CALL_NAME_RXS:
+                for m in rx.finditer(body):
+                    if m.group(1) in names:
+                        return m.group(1)
     except Exception:  # noqa: BLE001
         return ""
     return ""
