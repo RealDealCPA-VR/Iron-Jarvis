@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
 from sqlmodel import select
 
 from iron_jarvis.core.db import session_scope
@@ -218,3 +219,29 @@ def test_an_old_database_gains_shell_syntax_and_both_kinds_of_row_read(tmp_path)
     assert [(args["command"], syntax) for _tool, args, _h, syntax in got] == [
         ("pytest -q", ""), ("pytest -q; echo ok", "bash"),
     ], got
+
+
+# --------------------------------------------------------------------------- #
+# 3. the benchmark knows what a helper is given
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("module", ["standard", "command_env"])
+def test_the_bench_identity_moves_with_what_a_helper_is_given(tmp_path, monkeypatch, module):
+    """A Build session's helpers get the standard (``harness/standard``) and
+    their shell (``harness/command_env``) — neither is in the lead's specs or
+    fingerprint, so a change to either alone must be a new harness for the
+    benchmark, never a reuse of results its helpers never saw."""
+    from iron_jarvis.harness_bench import runners as R
+
+    platform = build_platform(str(tmp_path / "root"))
+    before = R.JarvisRunner(platform, provider="p", model="m", round_budget=60).identity()["harness_sha256"]
+    real = R._module_bytes
+
+    def changed(mod):
+        out = real(mod)
+        return out + b"# changed" if getattr(mod, "__name__", "").endswith(f"harness.{module}") else out
+
+    monkeypatch.setattr(R, "_module_bytes", changed)
+    after = R.JarvisRunner(platform, provider="p", model="m", round_budget=60).identity()["harness_sha256"]
+    assert after != before, f"a change to harness/{module} kept the bench's identity"
