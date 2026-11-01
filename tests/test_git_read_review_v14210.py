@@ -402,3 +402,28 @@ async def test_outside_a_repository_the_folder_itself_must_hold_no_keys(tmp_path
     # Outside a repository `git diff a b` compares two files (no index needed).
     res = await _read(folder, "diff", ["secrets/k.txt", "b.txt"])
     assert not res.ok and "FERNETKEYVALUE" not in (res.output or "") + (res.error or "")
+
+
+# --------------------------------------------------------------------------- #
+# 10. blame.ignoreRevsFile names a file outside the folder
+# --------------------------------------------------------------------------- #
+
+
+async def test_blame_never_echoes_a_file_the_repos_config_names_outside_the_folder(tmp_path):
+    """``git blame`` READS ``blame.ignoreRevsFile`` and names a line it cannot
+    read as a commit in its error (measured: the first line of a file outside
+    the folder came back in "fatal: invalid object name: <line>"); an empty
+    ``-c`` value does not clear it."""
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_bytes(b"SECRETLINE-ONE\n")
+    repo = _repo(tmp_path)
+    assert _git(repo, "config", "blame.ignoreRevsFile", secret.as_posix()).returncode == 0
+    plain = _git(repo, "--no-pager", "blame", "app.py")
+    assert b"SECRETLINE-ONE" in plain.stderr, "the control did not echo the file: the test would be vacuous"
+    res = await _read(repo, "blame", ["app.py"])
+    assert not res.ok and "SECRETLINE" not in (res.output or "") + (res.error or "")
+    # The usual setting — a list kept in the repository — still blames.
+    (repo / ".git-blame-ignore-revs").write_bytes(b"")
+    assert _git(repo, "config", "blame.ignoreRevsFile", ".git-blame-ignore-revs").returncode == 0
+    res = await _read(repo, "blame", ["app.py"])
+    assert res.ok, res.error

@@ -75,6 +75,9 @@ allowed call —
   home holds it): the folder git reads (the repository's top, else this one)
   must hold none of ``core.fs_policy``'s protected roots
   (:data:`PROTECTED_REFUSAL`) — the rule ``read_file`` and ``grep`` follow;
+* ``blame.ignoreRevsFile`` naming a file outside the folder: blame echoed
+  its first line in an error — blame is refused unless every such file is a
+  plain path inside (:data:`SKIP_FILE_REFUSAL`);
 * ``describe --dirty`` / ``--broken`` REWROTE ``.git/index``: refused.
 
 Allow tier, READONLY (so replay-safe), on no roster: the review-only helper
@@ -299,15 +302,16 @@ def _split_command(raw: Any, args: list[str]) -> tuple[str, list[str]]:
     return words[0].lower(), [*words[1:], *args]
 
 
-def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]] | None":
-    """``(filters, worktrees)``: the filter drivers the REPOSITORY's own
-    config defines (local or worktree scope — what a worker can write) and
-    every ``core.worktree`` it names (any scope); None when the config could
-    not be read. Read NUL-separated (``-z``): a driver's name may hold a
-    space. BLOCKING."""
+def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str], list[str]] | None":
+    """``(filters, worktrees, skip_files)``: the filter drivers the
+    REPOSITORY's own config defines (local or worktree scope — what a worker
+    can write), every ``core.worktree`` it names (any scope), and the
+    ``blame.ignoreRevsFile`` files it names (local or worktree scope); None
+    when the config could not be read. Read NUL-separated (``-z``): a
+    driver's name may hold a space. BLOCKING."""
     from ..git.integration import run_git
 
-    pattern = r"^(filter\.|core\.worktree$)"
+    pattern = r"^(filter\.|core\.worktree$|blame\.ignorerevsfile$)"
     got = run_git(["--no-pager", "config", "-z", "--show-scope", "--get-regexp", pattern], cwd,
                   timeout=15.0, env=env, identity=False, encoding="utf-8")
     scoped = True
@@ -321,6 +325,7 @@ def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]
     tokens = [t for t in str(got.out or "").split("\0")]
     names: list[str] = []
     worktrees: list[str] = []
+    skip_files: list[str] = []
     i = 0
     while i < len(tokens):
         scope = ""
@@ -338,12 +343,15 @@ def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]
             continue
         if scoped and scope not in ("local", "worktree"):
             continue
+        if low == "blame.ignorerevsfile":
+            skip_files.append(value)
+            continue
         if not low.startswith("filter.") or key.count(".") < 2:
             continue
         name = key[len("filter."):].rsplit(".", 1)[0]
         if name and name not in names:
             names.append(name)
-    return names, worktrees
+    return names, worktrees, skip_files
 
 
 def _repo_filters(cwd: Any, env: dict[str, str]) -> "list[str] | None":
@@ -352,6 +360,27 @@ def _repo_filters(cwd: Any, env: dict[str, str]) -> "list[str] | None":
     not be read. BLOCKING."""
     got = _repo_settings(cwd, env)
     return None if got is None else got[0]
+
+
+#: v1.421.0 review: ``blame.ignoreRevsFile`` in the repository's config makes
+#: ``git blame`` READ that file — and git names a line it cannot read as a
+#: commit in its error ("fatal: invalid object name: <the line>"; measured: a
+#: file outside the folder's first line came back). An empty ``-c`` value does
+#: not clear it (git reads the list sorted, the empty name first). A file the
+#: config names must be a plain path inside the repository (``.git-blame-
+#: ignore-revs``, the usual one), else blame is refused.
+SKIP_FILE_REFUSAL = ("This folder's git settings name a file of commits for blame to skip that lies "
+                     "outside this folder, so git_read ran nothing.")
+
+
+def _skip_file_problem(values: list[str]) -> str:
+    for value in values:
+        v = str(value or "").strip()
+        if not v:
+            continue  # an empty name clears the list: nothing is read
+        if v.startswith("~") or "%(" in v or _path_problem(v):
+            return SKIP_FILE_REFUSAL
+    return ""
 
 
 #: v1.421.0 review: ``git -c`` splits a key at its FIRST "=", so a filter
@@ -504,12 +533,13 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     settings = _repo_settings(cwd, env)
     if settings is None:
         return ToolResult(ok=False, error="git_read could not read this folder's git settings, so it ran nothing.")
-    filters, worktrees = settings
+    filters, worktrees, skip_files = settings
     if len(filters) > MAX_FILTERS:
         return ToolResult(ok=False, error="This folder's git settings name too many file filters; git_read ran nothing.")
     if any("=" in name for name in filters):
         return ToolResult(ok=False, error=FILTER_NAME_REFUSAL, data={"command": command})
-    problem = _place_problem(cwd, worktrees, filters, env)
+    problem = (_skip_file_problem(skip_files) if command == "blame" else "") \
+        or _place_problem(cwd, worktrees, filters, env)
     if problem:
         return ToolResult(ok=False, error=problem, data={"command": command})
     got = run_git(safe_argv(command, args, filters), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
