@@ -53,6 +53,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import re
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 log = logging.getLogger(__name__)
@@ -118,6 +119,25 @@ def _says_overloaded(exc: BaseException | None) -> bool:
     return any("overload" in str(cur).lower() for cur in _chain(exc))
 
 
+#: v1.422.0 review: the words of an ACCOUNT's own limit, whatever the typed
+#: facts say — Codex's ``usageLimitExceeded`` with no rate-limit snapshot (a
+#: 429 with no ``Retry-After``: "busy" by the facts), an OpenAI key out of
+#: quota (``insufficient_quota``), Claude Code's own limit lines ("You've hit
+#: your session limit", "You're out of usage credits"). A passing rate limit
+#: ("per-minute rate limit", "Rate limit reached for requests per min") is
+#: none of these and is still waited out.
+_ACCOUNT_LIMIT_RX = re.compile(
+    r"\busage limit\b|\b(?:session|weekly|daily|monthly|5-hour|five-hour) limit\b"
+    r"|you(?:'ve| have) (?:hit|reached) your\b|\bout of (?:usage )?credits\b|\bcredit balance\b"
+    r"|insufficient[_ ]quota|\bquota (?:exceeded|exhausted)\b",
+    re.IGNORECASE,
+)
+
+
+def _says_account_limit(exc: BaseException | None) -> bool:
+    return any(_ACCOUNT_LIMIT_RX.search(str(cur) or "") for cur in _chain(exc))
+
+
 def why_waited(exc: BaseException | None) -> str:
     """Why a round's failure is WAITED OUT, as a short word — ``overloaded``,
     ``busy``, ``server``, ``timeout``, ``dropped``, ``unreachable``,
@@ -147,9 +167,10 @@ def why_waited(exc: BaseException | None) -> str:
         f = failure_facts(exc)
         if f.kind in ("refusal", "signed_out"):
             return ""
-        if f.limit:
+        if f.limit or _says_account_limit(exc):
             # The account's own usage limit (a 429 marked not transient, or
-            # one whose reset is minutes away): its card is the way out.
+            # one whose reset is minutes away — v1.422.0 review: or one whose
+            # own words say so, its reset not known): its card is the way out.
             return ""
         status = f.status if f.status is not None else _status(exc)
         if status in (401, 403):
