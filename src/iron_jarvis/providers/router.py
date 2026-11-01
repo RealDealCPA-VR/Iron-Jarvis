@@ -64,6 +64,7 @@ from .reasoning import normalize_level, supports
 from .guided import GuidedToolsAdapter, profile_supports_guided
 from . import egress as _egress
 from . import failure_words as _failure_words
+from . import retry_round as _retry_round
 from .local import is_local_provider
 from .manager import ProviderManager
 
@@ -171,7 +172,13 @@ def _failed_payload(provider: str, exc: BaseException, **extra: Any) -> dict[str
     before, plus — for a safety refusal only (v1.378.0) — ``kind: "refusal"``
     and the vendor's ``category`` (when it gave one), so the ledger says what
     the failure WAS. Never raises."""
-    payload: dict[str, Any] = {"provider": provider, "error": f"{type(exc).__name__}: {exc}", **extra}
+    payload: dict[str, Any] = {
+        "provider": provider, "error": f"{type(exc).__name__}: {exc}", **extra,
+        # v1.422.0 review: a coding reply's round asked again by its patience
+        # marks the tries after the first (`retry_round`) — the notifier says
+        # only the round's first failure. Unmarked everywhere else.
+        **_retry_round.payload_extra(),
+    }
     try:
         refused = refusal_of(exc)
         if refused is not None:
@@ -2152,7 +2159,10 @@ class ModelRouter:
             tried_providers.add(adapter.provider)
             await self.event_bus.publish(
                 EventType.PROVIDER_FAILED,
-                {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                # v1.422.0 review: `retry` on a patience's later try (see
+                # `_failed_payload`); byte-identical everywhere else.
+                {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}",
+                 **_retry_round.payload_extra()},
                 session_id=session_id,
             )
             # STRICT MODEL PIN: the explicit pick failed — surface ITS error
@@ -2657,7 +2667,10 @@ class ModelRouter:
             tried_providers.add(adapter.provider)
             await self.event_bus.publish(
                 EventType.PROVIDER_FAILED,
-                {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                # v1.422.0 review: `retry` on a patience's later try (see
+                # `_failed_payload`); byte-identical everywhere else.
+                {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}",
+                 **_retry_round.payload_extra()},
                 session_id=session_id,
             )
             # STRICT MODEL PIN: the explicit pick failed — surface ITS error

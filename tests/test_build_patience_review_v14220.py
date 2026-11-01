@@ -65,3 +65,95 @@ async def test_a_coding_reply_at_its_codex_usage_limit_fails_at_once(env, waits)
     assert [e for e, _ in frames if e == "error"] == ["error"]
     assert not [d for e, d in frames if e == P.FRAME], "the live line said it would try again"
     assert waits == [] and len(model.calls) == 1
+
+
+# --------------------------------------------------------------------------- #
+# ONE alert per failed round, not one per try (the real router)
+# --------------------------------------------------------------------------- #
+#
+# THE DEFECT (found in review). Every try of a round that the patience asks
+# again goes through the router, and the router publishes ``provider.failed``
+# for each failed try — a DEFAULT ALERT (``comm.notifier``): "This PC" toasts
+# it and a phone gets it. A round that waited out a 529 storm sent up to five
+# "Claude Code couldn't answer. Press Retry." notices in two minutes (before
+# the patience, a failed reply sent one). Now a try the patience made AFTER a
+# failure carries ``retry`` on its ``provider.failed`` payload (the ledger
+# keeps every one) and the notifier says only the first failure of the round.
+
+
+async def test_a_round_that_waited_says_its_failure_once_not_once_per_try(tmp_path, monkeypatch, waits):  # noqa: F811
+    import json
+
+    from sqlmodel import select
+
+    from iron_jarvis.comm.channels import DesktopChannel
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import EventRecord
+    from iron_jarvis.daemon.app import create_app
+    from tests.test_build_accounts_v1368 import Behaviour, isolate, wire_doubles
+    from tests.test_build_sessions_v1367 import asgi, frames_of, open_turn
+
+    iso = isolate(tmp_path, monkeypatch)
+    next(iso)
+    try:
+        monkeypatch.setattr(DesktopChannel, "sink", lambda title, msg: None)
+        app = create_app(str(tmp_path / "home"))
+        work = tmp_path / "work"
+        work.mkdir()
+        beh = wire_doubles(app, monkeypatch, Behaviour(["Done after the storm."]))
+        # Each router call is the adapter tried three times (the router's own
+        # same-adapter retries): two router calls fail, the third answers.
+        beh.overload["claude-cli"] = 6
+        status, view = await asgi(app, "POST", "/build/sessions", {
+            "folder": str(work), "provider": "claude-cli", "model": "claude-sonnet-4-5",
+        })
+        assert status == 201, view
+        status, raw = await open_turn(app, view["id"], {"text": "hi", "turn_id": "t-alert"})
+        assert status == 200 and frames_of(raw)[-1][0] == "done", raw[-300:]
+        assert waits == [5.0, 15.0]
+        with session_scope(app.state.platform.engine) as db:
+            failed = [json.loads(r.payload_json) for r in db.exec(select(EventRecord)).all()
+                      if r.type == "provider.failed"]
+        # The ledger keeps every failed try...
+        assert len(failed) == 2, failed
+        # ...and only the round's FIRST failure is a notice.
+        notifier = app.state.platform.notifier
+        said = [notifier.on_event({"type": "provider.failed", "payload": p}) for p in failed]
+        assert sum(s is not None for s in said) == 1, failed
+        assert [p for p, s in zip(failed, said) if s is not None][0].get("retry") is None
+        assert [p.get("retry") for p, s in zip(failed, said) if s is None] == [2], failed
+    finally:
+        with __import__("contextlib").suppress(StopIteration):
+            next(iso)
+
+
+async def test_both_lanes_mark_the_tries_after_the_first(waits):  # noqa: F811
+    """Lock-step: the stream lane's ``patient_frames`` and the POST lane's
+    ``patient_call`` mark the SAME tries (the first never; every later one
+    with its number) — what the router reads for ``provider.failed``."""
+    from iron_jarvis.providers import retry_round as RT
+
+    seen_post: list[int] = []
+
+    async def call():
+        seen_post.append(RT.attempt())
+        if len(seen_post) < 3:
+            raise ProviderError("x API error 503: unavailable", status_code=503)
+        return "answer"
+
+    assert await P.patient_call(call, patient=True) == "answer"
+    assert seen_post == [0, 2, 3]
+    assert RT.attempt() == 0, "the mark leaked out of the round"
+
+    seen_stream: list[int] = []
+
+    async def frames():
+        seen_stream.append(RT.attempt())
+        if len(seen_stream) < 3:
+            raise ProviderError("x API error 503: unavailable", status_code=503)
+        yield {"type": "final", "response": None}
+
+    out = [f async for f in P.patient_frames(frames)]
+    assert seen_stream == [0, 2, 3]
+    assert out[-1]["type"] == "final"
+    assert RT.attempt() == 0

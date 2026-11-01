@@ -56,6 +56,8 @@ import math
 import re
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from ..providers import retry_round as _retry_round
+
 log = logging.getLogger(__name__)
 
 #: The wait before each new try of a failed round (seconds): up to four more
@@ -397,18 +399,23 @@ async def patient_frames(
         wait: "Wait | None" = None
         failure: "BaseException | None" = None
         try:
-            async with contextlib.aclosing(make()) as frames:
-                async for frame in frames:
-                    kind = frame.get("type") if isinstance(frame, dict) else None
-                    if kind == "text":
-                        shown += len(frame.get("text") or "")
-                    elif kind == "final":
-                        finished = True
-                    elif kind == "reset":
-                        # The router's own take-back (a failover before the
-                        # first word): what it took back is not ours to drop.
-                        shown = 0
-                    yield frame
+            # v1.422.0 review: a try after a failure is marked, so its own
+            # `provider.failed` is kept in the ledger but never a second
+            # notice (`providers/retry_round`).
+            with _retry_round.marked(pat.tries):
+                async with contextlib.aclosing(make()) as frames:
+                    async for frame in frames:
+                        kind = frame.get("type") if isinstance(frame, dict) else None
+                        if kind == "text":
+                            shown += len(frame.get("text") or "")
+                        elif kind == "final":
+                            finished = True
+                        elif kind == "reset":
+                            # The router's own take-back (a failover before
+                            # the first word): what it took back is not ours
+                            # to drop.
+                            shown = 0
+                        yield frame
             return
         except Exception as exc:  # noqa: BLE001 — classified; re-raised unless waited out
             if finished:
@@ -468,7 +475,10 @@ async def patient_call(call: Callable[[], Awaitable[Any]], *, patient: bool,
     pat = RoundPatience()
     while True:
         try:
-            return await call()
+            # v1.422.0 review: lock-step with `patient_frames` (a try after a
+            # failure is marked: ledger yes, a second notice no).
+            with _retry_round.marked(pat.tries):
+                return await call()
         except Exception as exc:  # noqa: BLE001 — classified; re-raised unless waited out
             wait = pat.next_wait(exc)
             if wait is None:
