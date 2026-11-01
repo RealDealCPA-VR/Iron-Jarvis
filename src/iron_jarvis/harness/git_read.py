@@ -78,6 +78,10 @@ allowed call —
 * ``blame.ignoreRevsFile`` naming a file outside the folder: blame echoed
   its first line in an error — blame is refused unless every such file is a
   plain path inside (:data:`SKIP_FILE_REFUSAL`);
+* a REMERGE (``--remerge-diff``, ``--diff-merges=remerge``, or a plain
+  ``log -m -p`` under the repo's own ``log.diffMerges = remerge``) re-ran a
+  merge in memory and ran the merge driver the folder names: refused, and
+  ``log.diffMerges=separate`` (git's default) forced;
 * ``describe --dirty`` / ``--broken`` REWROTE ``.git/index``: refused.
 
 Allow tier, READONLY (so replay-safe), on no roster: the review-only helper
@@ -129,7 +133,13 @@ _REFUSED_EXACT = frozenset({
     # guard's ``=all`` and beat it (measured: both ran the submodule's
     # ``diff.external``).
     "--submodule", "--ignore-submodules",
+    # v1.421.0 review: a REMERGE re-runs a merge in memory, which runs the
+    # merge driver ``.gitattributes`` + ``merge.<x>.driver`` name (measured;
+    # ``--diff-merges=remerge`` too — :data:`_REMERGE`).
+    "--remerge-diff",
 })
+#: ``--diff-merges``'s values that re-merge (``remerge`` and its letter).
+_REMERGE = frozenset({"remerge", "r"})
 _REFUSED_PREFIX = (
     "--output=", "--open-files-in-pager=", "--exec=", "--upload-pack=", "--recurse-submodules=",
     "--exec-path",
@@ -221,6 +231,11 @@ def refusal(command: str, args: list[str]) -> str:
             return f"git_read does not take {head}: it can write a file, run a program or read outside this folder."
         if arg.startswith("-O") or (arg.startswith("-o") and not arg.startswith("--")):
             return f"git_read does not take {arg[:2]}: it can write a file or run a program."
+        merges = (arg.split("=", 1)[1] if head == "--diff-merges" and "=" in arg
+                  else arg if (args[i - 1] if i else "") == "--diff-merges" else "")
+        if merges.strip().lower() in _REMERGE:
+            return ("git_read does not re-merge a merge: re-merging runs the folder's own merge "
+                    "program. Use --diff-merges=separate or --cc.")
         cluster = arg.startswith("-") and not arg.startswith("--") and len(arg) > 2
         # v1.421.0 review: git reads a CLUSTER of short options letter by
         # letter (measured: ``git grep -nO<program>`` ran the program as its
@@ -477,6 +492,10 @@ def safe_argv(command: str, args: list[str], filters: list[str]) -> list[str]:
         "-c", "protocol.allow=never",
         "-c", "core.quotepath=off",
         "-c", "color.ui=never",
+        # v1.421.0 review: the repo's own ``log.diffMerges = remerge`` made a
+        # plain ``git log -m -p`` re-merge a merge in memory, running the
+        # merge driver the folder names (measured): git's default, forced.
+        "-c", "log.diffMerges=separate",
         # v1.421.0 review: a submodule's diff is never shown by running git
         # INSIDE it (its own config is another repository a worker can write:
         # the repo's ``diff.submodule = diff`` made ``git log -p`` run that

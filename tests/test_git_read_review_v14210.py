@@ -33,7 +33,13 @@ vacuous.
    ``GIT_OPTIONAL_LOCKS`` says) — the tool says it never changes the
    repository;
 8. a ``..`` step glued to a cluster (``grep -nf../x``) read a file outside the
-   folder past the text check.
+   folder past the text check;
+9. a folder holding Iron Jarvis's own keys and records (the protected roots
+   ``read_file`` refuses): ``blame --contents`` printed a key file;
+10. ``blame.ignoreRevsFile`` naming a file outside: blame echoed its first
+    line in an error;
+11. a REMERGE (``--remerge-diff``, or ``log -m -p`` under the repo's own
+    ``log.diffMerges = remerge``) ran the folder's merge driver.
 """
 
 from __future__ import annotations
@@ -427,3 +433,59 @@ async def test_blame_never_echoes_a_file_the_repos_config_names_outside_the_fold
     assert _git(repo, "config", "blame.ignoreRevsFile", ".git-blame-ignore-revs").returncode == 0
     res = await _read(repo, "blame", ["app.py"])
     assert res.ok, res.error
+
+
+# --------------------------------------------------------------------------- #
+# 11. a merge shown by re-merging runs the folder's merge driver
+# --------------------------------------------------------------------------- #
+
+
+def _merged_repo(tmp_path: Path, marker: Path) -> Path:
+    repo = tmp_path / "merge"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "app.py").write_bytes(b"X = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "switch", "-q", "-c", "side")
+    (repo / "app.py").write_bytes(b"X = 2\n")
+    _git(repo, "commit", "-qam", "side")
+    _git(repo, "switch", "-q", "main")
+    (repo / "app.py").write_bytes(b"X = 3\n")
+    _git(repo, "commit", "-qam", "main")
+    _git(repo, "merge", "side", "-m", "merge")  # a conflict, resolved by hand
+    (repo / "app.py").write_bytes(b"X = 23\n")
+    _git(repo, "add", "app.py")
+    assert _git(repo, "commit", "-qm", "merged").returncode == 0
+    (repo / ".gitattributes").write_bytes(b"*.py merge=evil\n")
+    assert _git(repo, "config", "merge.evil.driver",
+                f"sh -c 'echo mergedriver >> {marker.as_posix()}; exit 1'").returncode == 0
+    return repo
+
+
+@pytest.mark.parametrize("command,args", [
+    ("show", ["--remerge-diff", "HEAD"]), ("log", ["--remerge-diff", "-1"]),
+    ("log", ["--diff-merges=remerge", "-1"]), ("log", ["--diff-merges=r", "-1"]),
+    ("log", ["--diff-merges", "remerge", "-1"]), ("show", ["--remerge"]),
+])
+def test_a_remerge_is_refused(command, args):
+    assert G.refusal(command, args), (command, args)
+
+
+async def test_showing_a_merge_never_runs_the_folders_merge_driver(tmp_path):
+    """``--remerge-diff`` re-runs a merge in memory, and that runs the merge
+    driver ``.gitattributes`` + ``merge.<x>.driver`` name (measured); the
+    repo's own ``log.diffMerges = remerge`` makes a plain ``git log -m -p``
+    do the same."""
+    marker = tmp_path / "marker"
+    repo = _merged_repo(tmp_path, marker)
+    _git(repo, "--no-pager", "show", "--remerge-diff", "HEAD")
+    assert marker.exists(), "the control did not run the trap: the test would be vacuous"
+    assert _git(repo, "config", "log.diffMerges", "remerge").returncode == 0
+    for command, args in (("log", ["-m", "-p", "-1"]), ("log", ["--diff-merges=on", "-p", "-1"]),
+                          ("show", ["-m", "HEAD"]), ("show", ["HEAD"])):
+        if marker.exists():
+            marker.unlink()
+        res = await _read(repo, command, args)
+        assert res.ok, (command, res.error)
+        assert not marker.exists(), (command, args)
