@@ -50,6 +50,8 @@ export interface CarryMark {
   accountName: string;
   group: string;
   pressed: boolean;
+  /** v1.422.0 review: the user pressed Retry on a carry-on that failed. */
+  retry?: boolean;
 }
 
 function obj(v: unknown): Record<string, unknown> | null {
@@ -101,11 +103,13 @@ export function decodeCarryMark(raw: unknown): CarryMark | null {
     accountName: str(r.account_name, 200),
     group: str(r.group, 120),
     pressed: r.pressed === true,
+    ...(r.retry === true ? { retry: true } : {}),
   };
 }
 
 /** The quiet line a carry-on message is drawn as. */
 export function carryLineWords(m: CarryMark): string {
+  if (m.retry) return "You pressed Retry: carrying the reply on again.";
   if (m.why === "restart") {
     return m.pressed
       ? "You pressed Continue: carrying on the reply Iron Jarvis's restart cut off."

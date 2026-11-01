@@ -1045,13 +1045,18 @@ function SessionPane({
    *  next account of the same tool (Iron-Proxy picks it). A refusal (no
    *  other account) is said in its words. */
   /** v1.417.0 (C4.9): Retry on the newest failed reply — the same message
-   *  again, its files by path (they went up already). */
+   *  again, its files by path (they went up already).
+   *  v1.422.0 review: a carry-on Iron Jarvis sent (its `carry`) is run again
+   *  by the daemon, hidden (POST …/continue) — its words are Iron Jarvis's to
+   *  the tool and must never be sent as the user's own message. */
+  const continueCutRef = useRef<(() => Promise<void>) | null>(null);
   const retryFailed = useCallback(() => {
     if (runningRef.current) return;
     for (let i = conv.items.length - 1; i >= 0; i--) {
       const it = conv.items[i];
       if (it.kind === "user") {
-        void sendRef.current?.(it.text, it.files);
+        if (it.carry) void continueCutRef.current?.();
+        else void sendRef.current?.(it.text, it.files);
         return;
       }
     }
@@ -1098,6 +1103,7 @@ function SessionPane({
       setContinuingCut(false);
     }
   }, [session, continuingCut, load]);
+  continueCutRef.current = continueCut;
 
   /** v1.422.0 (B5): Cancel on a limit card that waits by itself — nothing
    *  carries on by itself after it; the card and its press stay. */

@@ -73,6 +73,11 @@ log = logging.getLogger(__name__)
 
 CUT_FILE = "cut.json"
 LIMITS_FILE = "limits.json"
+#: v1.422.0 review (upgrade day, decided conservative): when the FIRST pass of a
+#: daemon that can carry replies on began, at ``<home>/hosted/<this>``. A cut
+#: from before it (every cut v1.421.0 and earlier left, the cut the update to
+#: this version made included) is offered, never carried on by itself.
+SINCE_FILE = "carry_on_since.json"
 
 #: The tools whose conversation can move to another account (Claude Code's
 #: copy since v1.303.0; Codex's since v1.422.0, measured — :mod:`.codex_move`).
@@ -128,6 +133,7 @@ WHY_LIMIT = "it waits on its account's limit"
 #: carry-on that had not been served yet) — never "it waits".
 WHY_LIMIT_CARD = "it had stopped on its account's limit"
 WHY_OLD = "it was cut off more than a week ago"
+WHY_BEFORE = "it was cut off before this version of Iron Jarvis could carry replies on by itself"
 WHY_NEWER = "a newer message was sent"
 WHY_BUSY = "the session is already working"
 WHY_POOL = "too many coding sessions were working at once"
@@ -213,6 +219,32 @@ def read_limits(home: Any, sid: str) -> dict[str, Any]:
     return _read(_path(home, sid, LIMITS_FILE))
 
 
+def since_path(home: Any) -> Path:
+    return Path(home) / "hosted" / SINCE_FILE
+
+
+def read_since(home: Any) -> datetime | None:
+    """When the first carry pass on this install began (None: never, or the
+    marker cannot be read)."""
+    return _parse(_read(since_path(home)).get("since"))
+
+
+def ensure_since(home: Any) -> datetime:
+    """BLOCKING: the marker's time, written NOW when it is missing or cannot
+    be read (atomic). A marker that cannot be written answers now too — never
+    a time that would let an older cut carry on."""
+    with _LOCK:
+        got = read_since(home)
+        if got is not None:
+            return got
+        now = CLOCK()
+        try:
+            _write(since_path(home), {"since": _iso(now)})
+        except OSError:
+            log.warning("could not keep when Build › Code began carrying replies on", exc_info=True)
+        return now
+
+
 def _amend_cut(home: Any, sid: str, turn: str, **changes: Any) -> bool:
     """Change the cut record of ``turn`` (only while it is still that turn's)."""
     with _LOCK:
@@ -227,6 +259,19 @@ def _amend_cut(home: Any, sid: str, turn: str, **changes: Any) -> bool:
 def drop_cut(home: Any, sid: str) -> None:
     with _LOCK:
         _write(_path(home, sid, CUT_FILE), {})
+
+
+def forget_undecided(home: Any, sid: str) -> None:
+    """BLOCKING (v1.422.0 review): a session a surviving host still runs
+    (``reconcile_cut_turns(keep=…)``) was not cut by this restart: a cut
+    record no pass has decided yet (an older start's, kept undecided by
+    Emergency stop, say) goes, so no later pass acts on it. A DECIDED record
+    stays (its ``to`` is how a later cut of that carry-on is known)."""
+    with _LOCK:
+        rec = read_cut(home, sid)
+        if rec.get("turn") and not rec.get("auto"):
+            rec = {k: v for k, v in rec.items() if k == "stopped"}
+            _write(_path(home, sid, CUT_FILE), rec)
 
 
 def note_stopped(home: Any, sid: str, turn: str) -> None:
@@ -377,9 +422,10 @@ def _pending_cuts(home: Any) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
-def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any]) -> str:
+def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any], since: datetime | None = None) -> str:
     """Why the cut reply is NOT carried on by itself (plain words), or "".
-    BLOCKING (a row read, a log tail)."""
+    ``since``: when the first carry pass on this install began (None: every
+    cut counts as from before it). BLOCKING (a row read, a log tail)."""
     from . import store
 
     row = store.get(svc.engine, sid)
@@ -399,6 +445,8 @@ def _restart_refusal(svc: Any, sid: str, rec: dict[str, Any]) -> str:
     cut_at = _parse(rec.get("cut_at"))
     if cut_at is None or CLOCK() - cut_at > timedelta(days=CUT_KEEP_DAYS):
         return WHY_OLD
+    if since is None or cut_at < since:
+        return WHY_BEFORE
     st = read_limits(svc.home, sid)
     if isinstance(st.get("wait"), dict):
         return WHY_LIMIT
@@ -466,6 +514,9 @@ async def carry_on_after_restart(svc: Any) -> list[str]:
     session."""
     from .service import Refused
 
+    # v1.422.0 review (upgrade day): the marker is written by the FIRST pass,
+    # whatever it then finds (a cut from before it is only offered).
+    since = await asyncio.to_thread(ensure_since, svc.home)
     cuts = await asyncio.to_thread(_pending_cuts, svc.home)
     if not cuts:
         return []
@@ -480,7 +531,15 @@ async def carry_on_after_restart(svc: Any) -> list[str]:
     for sid, rec in cuts:
         turn = str(rec.get("turn") or "")
         try:
-            why = await asyncio.to_thread(_restart_refusal, svc, sid, rec)
+            alive = svc.live.get(sid)
+            if alive is not None and getattr(alive, "running", False):
+                # v1.422.0 review: the tool is ALIVE (it survived the restart —
+                # another part's host still runs it): it was not cut. Never
+                # carried on, and the record goes so no later pass acts on it.
+                log.info("not carrying on Code-view session %s: its tool is still running", sid)
+                await asyncio.to_thread(forget_undecided, svc.home, sid)
+                continue
+            why = await asyncio.to_thread(_restart_refusal, svc, sid, rec, since)
             if not why and _pool_full(svc):
                 why = WHY_POOL
             if why:
@@ -509,11 +568,34 @@ async def carry_on_after_restart(svc: Any) -> list[str]:
     return carried
 
 
+#: The words each kind of carry-on tells the tool (a Retry sends them again).
+CARRY_TEXT = {"restart": CONTINUE_AFTER_RESTART, "reset": CONTINUE_AFTER_RESET, "move": CONTINUE_AFTER_MOVE}
+
+
+def failed_carry(events: list[dict[str, Any]], turn: str) -> dict[str, Any] | None:
+    """v1.422.0 review: the ``carry`` of ``turn`` when it was a carry-on Iron
+    Jarvis sent and it FAILED (an error that is not an account's limit, and
+    its done), else None. Pure."""
+    if not turn:
+        return None
+    mine = [ev for ev in events if isinstance(ev, dict) and str(ev.get("turn") or "") == turn]
+    carry = next((ev.get("carry") for ev in mine if ev.get("type") == "user"), None)
+    if not isinstance(carry, dict) or carry.get("why") not in CARRY_TEXT:
+        return None
+    ended = any(ev.get("type") == "done" for ev in mine)
+    failed = any(ev.get("type") == "error" and ev.get("fix_kind") != "account_limit" for ev in mine)
+    return dict(carry) if ended and failed else None
+
+
 async def continue_cut(svc: Any, sid: str) -> dict[str, Any]:
     """The "Continue" press on a reply a restart cut off: the same hidden
     message, started by a PERSON (so Emergency stop does not refuse it, and a
     card that was open or a reply already carried on once does not either —
-    the press is the consent)."""
+    the press is the consent).
+
+    v1.422.0 review: also the page's **Retry** on a carry-on that FAILED — the
+    same carry-on again, hidden (its ``carry``, marked ``pressed`` and
+    ``retry``), never the carry-on's own words sent as the user's message."""
     from .service import Refused
 
     row = await svc._row(sid)
@@ -521,14 +603,23 @@ async def continue_cut(svc: Any, sid: str) -> dict[str, Any]:
     turn = str(rec.get("turn") or "")
     live = svc.live.get(sid)
     events = await _newest_events(svc, sid, live)
-    if not turn or rec.get("auto") == "carried" or newest_turn(events) != turn:
+    newest = newest_turn(events)
+    if turn and rec.get("auto") != "carried" and newest == turn:
+        if row.archived_at is not None:
+            from . import words as W
+
+            raise Refused(W.ARCHIVED)
+        new = await _start(svc, sid, CONTINUE_AFTER_RESTART, {"why": "restart", "from": turn, "pressed": True})
+        await asyncio.to_thread(_amend_cut, svc.home, sid, turn, auto="carried", to=new.id, pressed=True)
+        return {"ok": True, "turn_id": new.id}
+    again = failed_carry(events, newest)
+    if again is None:
         raise Refused(NOTHING_CUT, 409)
     if row.archived_at is not None:
         from . import words as W
 
         raise Refused(W.ARCHIVED)
-    new = await _start(svc, sid, CONTINUE_AFTER_RESTART, {"why": "restart", "from": turn, "pressed": True})
-    await asyncio.to_thread(_amend_cut, svc.home, sid, turn, auto="carried", to=new.id, pressed=True)
+    new = await _start(svc, sid, CARRY_TEXT[again["why"]], {**again, "pressed": True, "retry": True})
     return {"ok": True, "turn_id": new.id}
 
 
@@ -866,6 +957,11 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
             live = svc.live.get(sid)
             if live is not None and ((live.turn is not None and live.turn.running) or live.claim or live.asks):
                 continue
+            if live is not None and (live.working_alone or live.replying_alone(svc.clock())):
+                # v1.422.0 review: the tool is still working BY ITSELF (Pi's
+                # own run, a reply no message owns): nothing starts beside it,
+                # and the wait is neither taken nor counted.
+                continue
             chain = int(st.get("chain") or 0)
             account = str(wait.get("account") or "")
             if wait.get("group") and row.harness in MOVABLE and chain < MAX_AUTO_IN_A_ROW:
@@ -1065,6 +1161,11 @@ async def carry_loop(platform: Any, on_tick: Any) -> None:
     home = getattr(getattr(platform, "config", None), "home", None)
     try:
         try:
+            if home is not None:
+                # v1.422.0 review (upgrade day): the marker is written at the
+                # first start, cut or no cut — else the first cut AFTER the
+                # upgrade would meet no marker and be only offered.
+                await asyncio.to_thread(ensure_since, home)
             if home is not None and await asyncio.to_thread(_anything, home, CUT_FILE):
                 carried = await carry_on_after_restart(_service(platform))
                 if carried:

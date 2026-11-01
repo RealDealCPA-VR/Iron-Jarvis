@@ -2824,6 +2824,10 @@ def reconcile_cut_turns(home: Any, keep: "Collection[str]" = ()) -> int:
     for path in logs[:2000]:
         sid = path.parent.name
         if sid in skip:
+            # v1.422.0 review: a session a surviving host still runs was not
+            # cut — an older undecided cut record of it goes (no later pass
+            # acts on it).
+            CO.forget_undecided(home, sid)
             continue
         try:
             with open(path, "rb") as fh:

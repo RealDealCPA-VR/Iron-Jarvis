@@ -30,6 +30,7 @@ Code's carry-on found, each pinned RED on the builder's code first.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,6 +63,26 @@ def work(tmp_path) -> Path:
     folder = tmp_path / "work"
     folder.mkdir()
     return folder
+
+
+@pytest.fixture(autouse=True)
+def _a_carrying_daemon_ran_here_before(tmp_path):
+    """v1.422.0 review (upgrade day): these tests are about cuts a daemon
+    that CAN carry replies on made — its first pass's marker is already
+    there (five days ago). The upgrade-day rule (a cut from before that
+    marker is only offered) has its own file,
+    ``test_build_app_carry_followups_v14220``."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    for name in ("root", "root2"):
+        marker = tmp_path / name / ".ironjarvis" / "hosted" / CO.SINCE_FILE
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"since": (_dt.now(_tz.utc) - _td(days=5)).isoformat()}), encoding="utf-8")
+
+
+def test_the_marker_fixture_writes_where_the_app_keeps_its_home(tmp_path):
+    app = create_app(str(tmp_path / "root"))
+    assert CO.read_since(Path(app.state.platform.config.home)) is not None
 
 
 def _aged(events: list[dict], days: float) -> list[dict]:
