@@ -2601,8 +2601,10 @@ class AgentRuntime:
                 if _base:
                     system_prompt += "\n\n" + _base
             except Exception:  # noqa: BLE001 — the Guide still has its tools
-                import logging
-
+                # v1.421.0 (Wave 1 review): the MODULE's `logging`. A local
+                # `import logging` here made the name local to all of
+                # `_run_body`, so the brain block's own warning above raised
+                # UnboundLocalError and failed the run it was protecting.
                 logging.getLogger("iron_jarvis.guide").exception(
                     "guide base knowledge unavailable (run continues)"
                 )
