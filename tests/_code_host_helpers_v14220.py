@@ -167,7 +167,7 @@ async def boot(home: Path) -> Any:
     keep = await asyncio.to_thread(ADOPT.keep_ids, platform.config.home)
     await asyncio.to_thread(S.reconcile_cut_turns, platform.config.home, keep)
     if keep:
-        await S.service_for(platform).adopt()
+        await ADOPT.at_boot(platform, keep)  # the lifespan's own step (v1.422.0 review)
     return app
 
 

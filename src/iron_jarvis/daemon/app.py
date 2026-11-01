@@ -1061,10 +1061,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 — never block boot
             log.warning("could not close Code-view turns a crash cut off", exc_info=True)
         if _hosted_kept:
+            # v1.422.0 review: one step that carries them on AND ends, in
+            # words, each one that could not be (bounded inside; never raises).
             try:
-                from ..hosted.service import service_for as _hosted_service_for
-
-                await asyncio.wait_for(_hosted_service_for(platform).adopt(), timeout=60.0)
+                await _hosted_adopt.at_boot(platform, _hosted_kept)
             except Exception:  # noqa: BLE001 — never block boot
                 log.warning("could not carry on the Code-view sessions the code host kept", exc_info=True)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)

@@ -131,6 +131,11 @@ MAX_TOOL_BUFFER = int(_knob("MAX_TOOL_BUFFER", 64 * 1024 * 1024))
 MAX_QUEUE_BYTES = int(_knob("MAX_QUEUE_BYTES", 256 * 1024 * 1024))
 #: One header line, at most.
 MAX_HEADER = 4 * 1024 * 1024
+#: v1.422.0 review: the payload a connection's FIRST frame (its hello, read
+#: before the token is checked) may carry. A hello has none: without this an
+#: unauthenticated local process could make the host allocate any size it
+#: named (``rfile.read(n)`` allocates ``n`` up front) and end every tool in it.
+MAX_HELLO_PAYLOAD = 4096
 #: With no daemon: how long before the host may go when nothing works.
 ORPHAN_GRACE_S = _knob("ORPHAN_GRACE_S", 10 * 60.0)
 #: A tool that said nothing for this long is not working.
@@ -208,8 +213,9 @@ def send_frame(sock: socket.socket, header: dict[str, Any], payload: bytes = b""
     sock.sendall(data + payload if payload else data)
 
 
-def read_frame(rfile: Any) -> tuple[dict[str, Any], bytes] | None:
-    """BLOCKING: one message, or None at the end of the stream / a bad one."""
+def read_frame(rfile: Any, max_payload: int | None = None) -> tuple[dict[str, Any], bytes] | None:
+    """BLOCKING: one message, or None at the end of the stream / a bad one
+    (``max_payload``: a frame naming more is bad — nothing of it is read)."""
     line = rfile.readline(MAX_HEADER + 1)
     if not line or not line.endswith(b"\n"):
         return None
@@ -222,6 +228,8 @@ def read_frame(rfile: Any) -> tuple[dict[str, Any], bytes] | None:
     n = header.get("n")
     payload = b""
     if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+        if max_payload is not None and n > max_payload:
+            return None
         payload = rfile.read(n)
         if len(payload) != n:
             return None
@@ -607,7 +615,7 @@ class Host:
         conn = Conn(sock, self)
         rfile = sock.makefile("rb")
         try:
-            first = read_frame(rfile)
+            first = read_frame(rfile, max_payload=MAX_HELLO_PAYLOAD)
             if first is None or first[0].get("t") != "hello":
                 conn.close()
                 return

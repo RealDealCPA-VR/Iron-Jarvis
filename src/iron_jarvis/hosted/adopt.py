@@ -213,14 +213,16 @@ def keep_ids(home: Any) -> list[str]:
 # --------------------------------------------------------------------------- #
 # 3. Taking it back
 # --------------------------------------------------------------------------- #
-async def adopt_all(svc: Any) -> list[str]:
-    """ON THE LOOP (boot): carry on every session the host kept."""
+async def adopt_all(svc: Any, into: list[str] | None = None) -> list[str]:
+    """ON THE LOOP (boot): carry on every session the host kept. ``into``
+    (v1.422.0 review): each session is added to it the moment it is carried
+    on, so a boot that ran out of time still knows which ones were."""
     if not HL.enabled():
         return []
     link = await asyncio.to_thread(HL.link_for, svc.home, start=False)
     if link is None:
         return []
-    adopted: list[str] = []
+    adopted: list[str] = into if into is not None else []
     seen: set[str] = set()
     for t in link.tools:
         sid, tool = str(t.get("sid") or ""), str(t.get("tool") or "")
@@ -240,6 +242,83 @@ async def adopt_all(svc: Any) -> list[str]:
         log.info("carried on %d Code-view session(s) the code host kept across the restart", len(adopted))
         svc._ensure_reaper()
     return adopted
+
+
+#: v1.422.0 review: how long the boot waits to take every kept session back.
+BOOT_ADOPT_WAIT_S = 60.0
+
+
+async def at_boot(platform: Any, keep: Any) -> list[str]:
+    """THE LIFESPAN'S STEP (v1.422.0 review), after the boot reconcile: carry
+    on every session the code host kept (``keep``, from :func:`keep_ids`) —
+    and END, in words and once, every one of them that could not be carried
+    on. The reconcile left ALL of them alone (their replies may still be
+    going), so a session whose adoption raised, ran out of
+    :data:`BOOT_ADOPT_WAIT_S`, or whose host went away in between used to
+    keep its reply open in the log forever, and (a timeout) its tool running
+    in the host under an attached Iron Jarvis that did not know it (the
+    host's orphan rules never run while a daemon is attached): the next
+    message then started a SECOND process for the same conversation. Never
+    raises; returns the sessions carried on."""
+    keep = [str(s) for s in (keep or ()) if s]
+    if not keep:
+        return []
+    from .service import service_for
+
+    svc = service_for(platform)
+    adopted: list[str] = []
+    try:
+        await asyncio.wait_for(svc.adopt(into=adopted), timeout=BOOT_ADOPT_WAIT_S)
+    except Exception:  # noqa: BLE001 — never block boot (a timeout included)
+        log.warning("could not carry on every Code-view session the code host kept", exc_info=True)
+    try:
+        await close_unadopted(svc, keep, adopted)
+    except Exception:  # noqa: BLE001
+        log.warning("could not close the Code-view sessions that were not carried on", exc_info=True)
+    return list(adopted)
+
+
+async def close_unadopted(svc: Any, keep: Any, adopted: Any) -> None:
+    """ON THE LOOP: every kept session that is NOT carried on ends the way a
+    stopped one does — its tool stopped gracefully (its conversation saved),
+    its cards closed, its token gone, its open reply closed in words — so the
+    next message resumes it with the CLI's own resume, on ONE process."""
+    from . import words as W
+
+    done = {str(s) for s in (adopted or ())}
+    todo = [str(s) for s in (keep or ()) if s and str(s) not in done]
+    if not todo:
+        return
+    link = await asyncio.to_thread(HL.link_for, svc.home, start=False) if HL.enabled() else None
+    for sid in todo:
+        try:
+            live = svc.live.get(sid)
+            row = await asyncio.to_thread(store.get, svc.engine, sid)
+            label = W.label(row.harness if row is not None else getattr(live, "harness", ""))
+            words = W.error(GAVE_UP_TITLE, GAVE_UP_PLAIN.format(label=label), "")
+            if live is not None:
+                turn = live.turn
+                running = turn is not None and turn.running and not turn.ending
+                if running:
+                    svc._emit(live, dict(words))
+                # The process (a half-taken one included), its cards, its token.
+                await svc._stop_process(live, end_turn=False)
+                if running:
+                    await svc._end_turn(live, "interrupted")
+            if link is not None and link.alive:
+                # A tool the adoption never reached still runs in the host.
+                for t in link.tools:
+                    tool = str(t.get("tool") or "")
+                    if tool and str(t.get("sid") or "") == sid:
+                        link.unregister(tool)
+                        await asyncio.to_thread(_stop_tool, link, tool)
+            if row is None:
+                continue
+            facts = await asyncio.to_thread(log_facts, svc.home, sid, "")
+            if facts["open_turn"]:
+                _close_turn(svc._live(row), facts["open_turn"], words)
+        except Exception:  # noqa: BLE001 — one session never stops the others
+            log.warning("could not close Code-view session %s that was not carried on", sid, exc_info=True)
 
 
 def _stop_tool(link: HL.HostLink, tool: str) -> None:

@@ -2514,14 +2514,15 @@ class HostedService:
         await asyncio.gather(*(self._stop_process(lv) for lv in lives), return_exceptions=True)
         await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in lives), return_exceptions=True)
 
-    async def adopt(self) -> list[str]:
+    async def adopt(self, into: list[str] | None = None) -> list[str]:
         """v1.422.0 (boot): carry on every session whose tool the code host
         kept running across the restart (``hosted/adopt.py``). Returns the
-        session ids now live again. Never raises."""
+        session ids now live again (``into`` gets each as it goes — see
+        ``adopt.at_boot``). Never raises."""
         from . import adopt as ADOPT
 
         try:
-            return await ADOPT.adopt_all(self)
+            return await ADOPT.adopt_all(self, into)
         except Exception:  # noqa: BLE001 — never block boot
             log.warning("could not carry on the Code-view sessions kept across the restart", exc_info=True)
             return []
