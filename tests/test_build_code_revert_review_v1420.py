@@ -47,6 +47,11 @@ def repo(tmp_path) -> Path:
     folder = tmp_path / "repo"
     folder.mkdir()
     _git(folder, "init", "-q", "-b", "main")
+    # v1.420.1: the product restores a file through the REPO's own git config
+    # (`run_git` passes no -c), and GitHub's Windows runners set a GLOBAL
+    # core.autocrlf=true, so the byte pins below read CRLF there. The repo's
+    # own setting wins over the global one; the autocrlf test sets its own.
+    _git(folder, "config", "core.autocrlf", "false")
     (folder / "a.py").write_bytes(b"a = 0\n")
     (folder / "sub").mkdir()
     (folder / "sub" / "s.py").write_bytes(b"s = 0\n")

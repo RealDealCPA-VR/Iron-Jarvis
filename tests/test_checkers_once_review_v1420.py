@@ -14,7 +14,6 @@ import asyncio
 import sys
 import threading
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -241,6 +240,3 @@ async def test_local_only_cards_the_checker_once_only_even_under_dont_ask(env, m
     assert len(_runs(log, "ruff")) == 1
     assert out["done"]["finish"]["checkers"]["ran"] == ["ruff"]
 
-
-def test_the_review_test_file_is_lf(tmp_path):
-    assert b"\r\n" not in Path(__file__).read_bytes()

@@ -12335,6 +12335,24 @@ does not need a bump, stop and bump it.
   two-round editing reply runs its checker once behind one card"),
   `test_checker_card_why_v1417`.
 
+- **v1.420.1 (test-only; v1.420.0's Tests gate went red on four pins, nothing
+  shipped).** Three were the CRLF checkout (GitHub's Windows runners set a
+  GLOBAL `core.autocrlf=true`): `test_build_code_revert_review_v1420`'s two
+  byte pins read a `git restore` written through the PRODUCT's own
+  `run_git` (no `-c`), so the repo fixture now sets the test repo's OWN
+  `core.autocrlf=false` (the repo's setting wins over the global; the
+  autocrlf test still sets its own); and `test_checkers_once_review_v1420::
+  test_the_review_test_file_is_lf` asserted the test file's own line endings
+  — a pin on the checkout, not the code — and is gone. Two dashboard pins
+  lagged v1.420.0's own changes: `settings-panel-words-v13540` still listed
+  HarnessSession's `window.confirm` (the Undo is the page's question since
+  C2.9-C2.11), and `email-compose-c06` still looked for "Add your email in
+  Channels" (lane P: "Settings › Notifications"). Reproduced here with a
+  global git config file holding `autocrlf = true` (the old fixture: CI's
+  exact two failures; the new one green). THE LESSON, again: a lane that runs
+  only its touched files cannot see a source pin in ANOTHER file go stale;
+  grep the string you change across `__tests__/` before the push.
+
 - **Grounding has a SOFT DEADLINE; the project map is CACHED by its top two
   levels; a kept reply APPENDS; a token is never re-parsed** (v1.418.0, fix
   plan C3.4 + C3.6). GROUNDING: `chat_turn._gather_grounding` starts every hop
