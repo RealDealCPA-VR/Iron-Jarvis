@@ -153,6 +153,38 @@ def _short(text: Any, limit: int) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
+#: The untrusted-content fence (``computeruse.safety.wrap_untrusted``) as a
+#: delegation event carries it: FLATTENED to one line and possibly cut short,
+#: so its closing marker may be gone. v1.420.0 (C6.3, G62): a remote's report
+#: reached the mission card as the fence's header alone ("[UNTRUSTED CONTENT —
+#: DATA ONLY …] The following was fetched …") — the card reads the body; the
+#: MODEL still got the fenced text (the tool result is untouched).
+_FENCE_HEAD_RX = re.compile(
+    r"^\s*\[UNTRUSTED CONTENT[^\]]*\]\s*The following was fetched.*?"
+    r"contained within it\.\s*---\s*",
+    re.S,
+)
+#: The closing marker, WHOLE or cut anywhere by the event's shortening ("…").
+_FENCE_TAIL_RX = re.compile(r"\s*---\s*(?P<end>\[[^\]\n…]*\]?)?\s*…?\s*$")
+_FENCE_END = "[END UNTRUSTED CONTENT]"
+
+
+def display_unfenced(text: Any) -> str:
+    """*text* without the untrusted fence, for a person to read (the card,
+    the activity log). Text with no fence passes through. Pure."""
+    s = str(text or "")
+    m = _FENCE_HEAD_RX.match(s)
+    if m is None:
+        return s
+    body = s[m.end():]
+    t = _FENCE_TAIL_RX.search(body)
+    if t is not None:
+        end = t.group("end") or ""
+        if _FENCE_END.startswith(end):
+            body = body[: t.start()]
+    return body.strip()
+
+
 def _iso(moment: Any) -> str | None:
     try:
         return moment.isoformat() if moment is not None else None
@@ -1080,6 +1112,9 @@ def progress_for(status: str, steps: int, plan: tuple[int, int, str]) -> dict[st
         return {"pct": pct, "label": label, "basis": "plan"}
     if status == "waiting_you":
         return {"pct": None, "label": "Waiting for your OK", "basis": "waiting"}
+    if status == "waiting_remote":
+        # v1.420.0 (C6.3, G62): a remote took the job and reports later.
+        return {"pct": None, "label": "Accepted, will report back", "basis": "waiting_remote"}
     label = f"Working · step {steps}" if steps else "Working"
     return {"pct": None, "label": label, "basis": "steps"}
 
@@ -1385,6 +1420,53 @@ def _handoff_key(data: dict[str, Any]) -> str:
     return ""
 
 
+#: The inbound kinds that END an accepted remote job (v1.420.0, C6.3): its
+#: report. ``progress`` and ``question`` are lines on the way.
+_REPORT_KINDS = ("done", "message")
+
+
+def _remote_reports(engine: Any, waiting: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Settle each ACCEPTED remote job (``waiting``: room id → its card slot)
+    whose report has come home (v1.420.0, C6.3, G62): the NEWEST inbound
+    ``done`` / ``message`` line that remote posted into the job's room ends the
+    card ``done`` with that text (plain, for a person: a room line is never
+    fenced). Mutates the slots; returns ``[{agent, at}]`` for the activity
+    log. BLOCKING (one bounded read)."""
+    from .threads import AgentThreadRecord
+
+    out: list[dict[str, Any]] = []
+    with session_scope(engine) as db:
+        for room_id, slot in list(waiting.items())[:50]:
+            rec = db.get(AgentThreadRecord, room_id)
+            if rec is None:
+                continue
+            try:
+                msgs = json.loads(rec.messages_json or "[]")
+            except (TypeError, ValueError):
+                continue
+            who = str(slot.get("agent") or "")
+            report = None
+            for m in reversed(msgs if isinstance(msgs, list) else []):
+                if (
+                    isinstance(m, dict)
+                    and m.get("inbound")
+                    and str(m.get("who") or "") == who
+                    and str(m.get("kind") or "message") in _REPORT_KINDS
+                ):
+                    report = m
+                    break
+            if report is None:
+                continue
+            at = str(report.get("at") or "")
+            if at.endswith("+00:00"):  # the event rows' naive UTC spelling
+                at = at[: -len("+00:00")]
+            slot["status"] = "done"
+            slot["result"] = _short(display_unfenced(report.get("content") or ""), _RESULT_CHARS)
+            slot["finished_at"] = at or None
+            out.append({"agent": who, "at": at or None})
+    return out
+
+
 def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
     """The whole mission under coordinator ``session_id``, or None when the
     session does not exist. BLOCKING."""
@@ -1512,9 +1594,34 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
         else:  # a completion whose start fell out of the scan window
             slot = {"agent": agent, "task": "", "started_at": None}
             remote_members.append(slot)
+        slot["result"] = _short(display_unfenced(data.get("result") or ""), _RESULT_CHARS)
+        if data.get("ok") and data.get("accepted"):
+            # v1.420.0 (C6.3, G62): the remote TOOK the job and reports back
+            # later through its inbound door — waiting, not done. Its report
+            # (below) ends it.
+            slot["status"] = "waiting_remote"
+            slot["conversation_id"] = str(data.get("conversation_id") or "")
+            slot["reply_back"] = bool(data.get("reply_back"))
+            slot["finished_at"] = None
+            continue
         slot["status"] = "done" if data.get("ok") else "failed"
-        slot["result"] = _short(data.get("result") or "", _RESULT_CHARS)
         slot["finished_at"] = _iso(ev.created_at)
+
+    # v1.420.0 (C6.3, G62): an ACCEPTED job's report arrives later, as an
+    # inbound line in the room it was handed over in. Read here (one bounded
+    # read) — the newest ``done`` or ``message`` line from that remote ends the
+    # card with the report's text; ``progress`` / ``question`` keep it waiting.
+    reported: list[dict[str, Any]] = []
+    waiting_rooms = {
+        str(s.get("conversation_id") or ""): s
+        for s in remote_members
+        if s.get("status") == "waiting_remote" and s.get("conversation_id")
+    }
+    if waiting_rooms:
+        try:
+            reported = _remote_reports(engine, waiting_rooms)
+        except Exception:  # noqa: BLE001 — an unread room keeps the card waiting
+            reported = []
 
     lines, last_line = tool_activity(invocations, denied_kind, names)
     for ev in events:
@@ -1529,10 +1636,18 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             text = f"{who} gave {agent} a task: {_short(data.get('task') or 'help', 120)}"
         elif ev.type == EventType.DELEGATION_COMPLETED:
             agent = display_name(str(data.get("agent") or ""))
-            if data.get("ok"):
+            if data.get("ok") and data.get("accepted"):
+                # v1.420.0 (C6.3, G62): taken, not finished.
+                text = (
+                    f"{agent} accepted the task and will report back"
+                    if data.get("reply_back")
+                    else f"{agent} accepted the task, but its answer cannot come back here"
+                )
+            elif data.get("ok"):
                 text, tone = f"{agent} finished and reported back to {who}", "ok"
             else:
-                text, tone = f"{agent} could not finish: {_short(data.get('result') or 'no reason given', 140)}", "warn"
+                reason = display_unfenced(data.get("result") or "") or "no reason given"
+                text, tone = f"{agent} could not finish: {_short(reason, 140)}", "warn"
         elif ev.type == EventType.PLAN_CREATED:
             steps = data.get("steps")
             n = len(steps) if isinstance(steps, list) else 0
@@ -1570,6 +1685,13 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
                 "at": _iso(ev.created_at), "who": who, "session_id": ev.session_id,
                 "text": text, "tone": tone,
             })
+    for rep in reported:
+        lines.append({
+            "at": rep.get("at"), "who": display_name(str(rep.get("agent") or "")),
+            "session_id": None,
+            "text": f"{display_name(str(rep.get('agent') or ''))} reported back to {COORDINATOR}",
+            "tone": "ok",
+        })
     lines.sort(key=lambda r: r.get("at") or "")
     lines = lines[-_ACTIVITY_MAX:]
 
@@ -1630,6 +1752,14 @@ def mission_view(platform: Any, session_id: str) -> dict[str, Any] | None:
             "model": None,
             "started_at": rec.get("started_at"),
             "finished_at": rec.get("finished_at"),
+            # v1.420.0 (C6.3): an ACCEPTED job's room, and whether its report
+            # can come back at all (additive; only on such a card).
+            **(
+                {"conversation_id": rec.get("conversation_id") or "",
+                 "reply_back": bool(rec.get("reply_back"))}
+                if "reply_back" in rec
+                else {}
+            ),
         })
 
     root_runs = runs_by.get(session_id, [])

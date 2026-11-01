@@ -92,7 +92,8 @@ def test_grok_unavailable_when_auth_missing(tmp_path, monkeypatch):
     models = cli_detect.detect_grok()
     assert models  # still enumerated from the cache
     assert all(m.available is False for m in models)
-    assert all("grok login" in m.detail for m in models)
+    # v1.420.0 (moved on purpose, C6.8): the one Sign in press, never "grok login".
+    assert all("Press Sign in beside Grok CLI" in m.detail for m in models)
 
 
 def test_grok_unavailable_when_key_empty(tmp_path, monkeypatch):

@@ -68,6 +68,9 @@ const STATUS: Readonly<Record<string, StatusWords>> = {
   // Mission members: queued | working | waiting_you | done | failed | cancelled.
   working: WORKING,
   waiting_you: NEEDS_YOU,
+  // v1.420.0 (C6.3): a REMOTE took the job and reports back later — waiting
+  // on the other computer, not on the user (so never amber "Needs you").
+  waiting_remote: w("Will report back", "cyan"),
   // Workflow runs: running | resuming | waiting | interrupted | completed |
   // failed | cancelled | error; a step: completed | failed | cancelled |
   // skipped, or no output yet (the page says "pending").

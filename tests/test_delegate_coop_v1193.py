@@ -246,7 +246,9 @@ async def test_delegation_completed_fires_when_the_child_crashes(
     assert len(completed) == 1
     assert completed[0].payload["ok"] is False
     assert completed[0].payload["child_run_id"] is None  # never minted
-    assert "provider refused" in completed[0].payload["result"]
+    # v1.420.0 (C6.5): the plain sentence, never the raw exception text.
+    assert "could not finish" in completed[0].payload["result"]
+    assert "RuntimeError" not in completed[0].payload["result"]
 
 
 async def test_output_carries_the_child_handle_the_model_can_address(
@@ -406,7 +408,9 @@ async def test_a_crashed_spawn_never_strands_an_active_child_in_the_users_folder
 
     # The tool reports the failure honestly instead of returning nothing.
     assert res.ok is False
-    assert "provider refused" in (res.error or "")
+    # v1.420.0 (C6.5): the raw text moved from the headline to the details.
+    assert "could not finish" in (res.error or "")
+    assert "provider refused" in res.data["technical"]
 
     child = orch.get_session(res.data["child_session_id"])
     assert child is not None

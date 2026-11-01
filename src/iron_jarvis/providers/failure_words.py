@@ -161,10 +161,25 @@ _LOWER_CASE_BRANDS: frozenset[str] = frozenset({"llama.cpp"})
 
 #: The subscription CLIs a user SIGNS IN to (Accounts has a Sign in button
 #: for each, v1.353.0 G33) — a refusal from one is about the sign-in, not a key.
-SIGN_IN_CLIS: frozenset[str] = frozenset({"claude-cli", "codex-cli"})
+SIGN_IN_CLIS: frozenset[str] = frozenset({"claude-cli", "codex-cli", "grok-cli"})
 
 #: The words when the provider is unknown.
 _SOMEONE = "the AI service"
+
+#: v1.420.0: a 429 whose reset is at least this far away is the account's
+#: usage limit, whatever the adapter said about transience.
+LIMIT_RESET_S = 300.0
+
+
+def _reset_words(secs: float) -> str:
+    """" (in about N minutes|hours)" for a known reset, else ""."""
+    if not secs or secs < 60:
+        return ""
+    mins = int(math.ceil(secs / 60))
+    if mins < 120:
+        return f" (in about {mins} minutes)"
+    hours = int(math.ceil(secs / 3600))
+    return f" (in about {hours} hours)"
 
 #: The kinds ``ModelRouter._unavailable_error`` stamps on its refusals — and
 #: (v1.378.0) ``"refusal"``, a provider's safety check declining the
@@ -246,7 +261,7 @@ def heading(name: str) -> str:
 class _Facts:
     """What a failure carries, read once off its cause chain."""
 
-    __slots__ = ("kind", "provider", "cli", "status", "partial", "retry_in", "transport")
+    __slots__ = ("kind", "provider", "cli", "status", "partial", "retry_in", "transport", "limit")
 
     def __init__(self) -> None:
         self.kind = ""
@@ -256,6 +271,10 @@ class _Facts:
         self.partial = False
         self.retry_in = 0.0
         self.transport = ""
+        #: v1.420.0: a 429 that is the ACCOUNT'S OWN limit (the adapter said
+        #: ``transient=False``, or its reset is minutes away), not a passing
+        #: busy moment — "Run it again shortly" would be a lie for hours.
+        self.limit = False
 
 
 def _cli_sign_in_refusal(text: str) -> str:
@@ -267,9 +286,9 @@ def _cli_sign_in_refusal(text: str) -> str:
     if not text:
         return ""
     try:
-        from .cli_auth import CLI_BINARIES, SIGN_IN_FIX
+        from .cli_auth import SIGN_IN_BINARIES, SIGN_IN_FIX
 
-        for provider, binary in CLI_BINARIES.items():
+        for provider, binary in SIGN_IN_BINARIES.items():
             fix = SIGN_IN_FIX.get(binary, "")
             if fix and fix in text:
                 return provider
@@ -374,6 +393,15 @@ def failure_facts(exc: BaseException | None) -> _Facts:
                 st = getattr(cur, "status_code", None)
                 if isinstance(st, int) and not isinstance(st, bool):
                     f.status = st
+                    if st == 429 and not f.limit:
+                        try:
+                            ra = float(getattr(cur, "retry_after", 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            ra = 0.0
+                        if getattr(cur, "transient", None) is False or ra >= LIMIT_RESET_S:
+                            f.limit = True
+                            if not f.retry_in and ra:
+                                f.retry_in = ra
             m = _API_ERROR_RX.match(str(cur) or "")
             if m is not None:
                 if not f.provider:
@@ -629,6 +657,11 @@ def classify(
                 f"Press Sign in beside {name} in {ACCOUNTS_PLACE}, then {again}.",
             )
         return (f"{Name} refused your key", f"Update it in {ACCOUNTS_PLACE}.")
+    if status == 429 and f.limit:
+        # v1.420.0: the account's own limit, which can last hours.
+        when = _reset_words(f.retry_in)
+        lead = "Run it again" if run else "Try again"
+        return (f"{Name} hit its usage limit", f"{lead} after it resets{when}, or {other}.")
     if status == 429 or (status is not None and 500 <= status <= 599):
         lead = "Run it again shortly" if run else "Try again shortly"
         return (f"{Name} is busy", f"{lead}, or {other}.")
@@ -679,6 +712,29 @@ GENERIC_FIX_RUN_OWN = "Run it again. If it happens again, open the run to see th
 #: asked (``tools/selfcare.app_health``, the Help page's same advice).
 GENERIC_TITLE_UNSTARTED = "Iron Jarvis couldn't start this task"
 GENERIC_FIX_UNSTARTED = "Run it again. If it happens again, ask Jarvis “what's wrong?” in chat."
+
+
+#: v1.420.0 (C6.5): the fix under an ACCOUNT refusal Iron-Proxy worded (a
+#: limit, a sign-in, every account parked): where the accounts are — the
+#: Iron-Proxy card's Check again / Sign in / turn-on presses live there.
+ACCOUNTS_FIX = f"Open {ACCOUNTS_PLACE} to see your accounts on the Iron-Proxy card."
+
+_ACCOUNT_WORDS_RX = re.compile(r"\b(?:Iron-Proxy|accounts?)\b", re.IGNORECASE)
+
+
+def _about_accounts(text: str) -> bool:
+    return bool(_ACCOUNT_WORDS_RX.search(text or ""))
+
+
+def _worded_headline(exc: BaseException | None) -> str:
+    """:func:`worded_message` as a HEADLINE: one sentence with its closing
+    stop left off (the page joins ``title. fix``). "" when the failure was not
+    written for a person. Never raises."""
+    try:
+        text = worded_message(exc)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+    return text.rstrip().rstrip(".").rstrip() if text else ""
 
 
 def generic_title(name: str = "", *, run: bool = False) -> str:
@@ -780,8 +836,20 @@ def friendly_error(
         words = classify(exc, provider=provider, manager=manager, surface=surface)
     except Exception:  # noqa: BLE001 — words are never a new failure
         words = None
+    worded = "" if words is not None else _worded_headline(exc)
     if words is not None:
         title, fix = words
+    elif worded:
+        # v1.420.0 (C6.5): a refusal ALREADY written for a person (Iron-Proxy's
+        # account sentences, a held Build session — ``worded_message``) is
+        # the headline itself; "Press Retry" under it hid the one sentence
+        # that says which account and when it frees up. An account's fix
+        # names where the accounts are.
+        title = worded
+        fix = ACCOUNTS_FIX if _about_accounts(worded) else (
+            GENERIC_FIX_RUN if run else
+            GENERIC_FIX_BUILD if this_place(surface) == "this session" else GENERIC_FIX
+        )
     elif run:
         # Readiness 12A (G28): the run's own generic words (see
         # :func:`_run_generic_words`), so the router's background-task banner

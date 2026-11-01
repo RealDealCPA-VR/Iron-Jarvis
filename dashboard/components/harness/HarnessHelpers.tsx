@@ -88,6 +88,16 @@ function HelperReason({ reason }: { reason?: string }) {
 
 const NO_MODELS: readonly CatalogRow[] = [];
 
+/** v1.420.0 (C6.5): a FAILED helper's line in plain words. The row's title
+ *  already names the helper, so "delegated agent 'x' could not finish:" is
+ *  left off; a row saved before v1.420.0 may hold the raw "crashed:
+ *  ProviderError: …" text, whose exception class never shows. */
+export function helperFailureText(text: string): string {
+  const t = text.replace(/^(?:delegated|spawned) agent '[^']*' could not finish:\s*/, "");
+  const raw = /^(?:delegated|spawned) agent '[^']*' crashed:\s*(?:[A-Za-z_][\w.]*:\s*)?/.exec(t);
+  return raw ? `It stopped on an error: ${t.slice(raw[0].length)}` : t;
+}
+
 /** The words that say what a helper was asked, in the row's own grey. */
 function Asked({ task }: { task: string }) {
   const line = askedLine(task);
@@ -122,7 +132,7 @@ export function SettledHelperRow({
           icon={X}
           failed={!stopped}
           title={stopped ? `${name} was stopped before it started` : `${name} could not start`}
-          detail={stopped ? null : helper.result || null}
+          detail={stopped ? null : helperFailureText(helper.result || "") || null}
         />
         {/* v1.395.0: a role nobody could take says it WAITED, and why. */}
         <div className="pl-[22px]">
@@ -137,7 +147,7 @@ export function SettledHelperRow({
         {helper.result ? (
           <p data-testid="helper-result" className="whitespace-pre-wrap text-[13px] leading-5 text-zinc-400">
             {/* v1.405.0: a finding's `path:line` opens that place in the editor. */}
-            <LinkedRefs text={helper.result} />
+            <LinkedRefs text={helper.state === "failed" ? helperFailureText(helper.result) : helper.result} />
           </p>
         ) : null}
         {helper.work.length ? (

@@ -127,7 +127,9 @@ def _failure_words_for_phone(exc: HTTPException) -> str:
     return str(exc.detail)
 
 
-def _run_problem(exc: BaseException, *, manager: Any = None, provider: str = "") -> str:
+def _run_problem(
+    exc: BaseException, *, manager: Any = None, provider: str = "", started: bool = True
+) -> str:
     """What the phone hears after "I hit a problem: " when a job it started
     FAILED (v1.378.0 review). A provider's SAFETY REFUSAL says the run's
     plain sentence (``failure_words.plain_reason``) — never the class name and
@@ -140,6 +142,9 @@ def _run_problem(exc: BaseException, *, manager: Any = None, provider: str = "")
     codex-cli: CLI exited 1: error: unexpected status 400 …" — the phone has
     no hover to fold the raw text away (the run page keeps it, folded).
     *manager* / *provider* name the run's provider as the run's summary does.
+    ``started`` (v1.420.0 review): False where NO run exists (a phone chat
+    turn, a phone conversation with a remote) — the words then never say
+    "open the run" (v1.388.0's rule for a failure before any run).
     Never raises."""
     try:
         from ..providers.failure_words import plain_reason, refusal_reason
@@ -148,7 +153,7 @@ def _run_problem(exc: BaseException, *, manager: Any = None, provider: str = "")
         # ``refusal_reason`` reads it as not partial ("The reply above is
         # incomplete" would be a lie here).
         return refusal_reason(exc, manager=manager) or plain_reason(
-            exc, manager=manager, provider=provider
+            exc, manager=manager, provider=provider, started=started
         )
     except Exception:  # noqa: BLE001 — wording only
         return "the task could not finish."
@@ -626,6 +631,11 @@ class InboundPoller:
             res = await asyncio.to_thread(ch.send, chunk, chat_id=chat_id)
             ok = ok and bool(res.get("ok"))
         return ok
+
+    def _providers(self) -> Any:
+        """The provider manager the failure words name a provider through
+        (v1.420.0, C6.5), or None. Never raises."""
+        return getattr(getattr(self, "platform", None), "providers", None)
 
     def _safe_append(
         self,
@@ -1214,7 +1224,8 @@ class InboundPoller:
             return {"channel": name, "status": "chat_error", "thread_id": tid, "sent": sent}
         except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
             log.exception("chat turn failed on %r", name)
-            reply = f"I hit a problem: {type(exc).__name__}: {exc}"
+            # v1.420.0 (C6.5): the run's plain sentence, never a class name.
+            reply = f"I hit a problem: {_run_problem(exc, manager=self._providers(), started=False)}"
             if tid:
                 tid = self._safe_append(
                     tid, "assistant", reply,
@@ -1441,7 +1452,7 @@ class InboundPoller:
             pending = bool(last.get("pending"))
         except Exception as exc:  # noqa: BLE001 — the phone still gets an answer
             log.exception("remote chat failed on %r for %r", name, remote_name)
-            reply = f"{remote_name} couldn't answer: {type(exc).__name__}: {exc}"
+            reply = f"{remote_name} couldn't answer: {_run_problem(exc, manager=self._providers(), started=False)}"
             pending = False
         # The conversation is with the remote now — until "@jarvis".
         if tid:
@@ -1829,7 +1840,7 @@ class InboundPoller:
             log.exception("pending prompt answer failed on %r", name)
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
-                f"I hit a problem: {type(exc).__name__}: {exc}",
+                f"I hit a problem: {_run_problem(exc, manager=self._providers())}",
                 "answer_error",
             )
         if (res or {}).get("ok"):
@@ -1901,7 +1912,7 @@ class InboundPoller:
             log.exception("approval resolve failed on %r", name)
             return await self._answer_reply(
                 name, ch, msg, display, chat_on, original_text,
-                f"I hit a problem: {type(exc).__name__}: {exc}",
+                f"I hit a problem: {_run_problem(exc, manager=self._providers())}",
                 "answer_error",
             )
         if ok:

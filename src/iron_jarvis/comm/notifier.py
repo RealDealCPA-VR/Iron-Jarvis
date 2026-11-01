@@ -322,6 +322,26 @@ def _build_finished_line(payload: dict) -> str:
     return build_finished_title(payload) + (f" — {' · '.join(bits)}" if bits else "")
 
 
+#: v1.420.0 (C6.10): the headlines of ``chat.turn_finished`` — a long chat
+#: reply that ended. The twins of desktop/main.js ``runOutcomeNotice`` (the
+#: one-notice fixture holds them equal).
+CHAT_FINISHED_TITLE = "Jarvis finished your chat's answer"
+CHAT_FAILED_TITLE = "Jarvis could not finish your chat's answer"
+
+
+def chat_finished_line(payload: dict) -> str:
+    """A long chat reply ended (v1.420.0, C6.10) — said on a destination
+    that subscribed the type (it is not a default alert; the tray says it on
+    this PC). The chat's title and how long it took, never an id."""
+    if not isinstance(payload, dict):
+        payload = {}
+    head = CHAT_FAILED_TITLE if payload.get("outcome") == "failed" else CHAT_FINISHED_TITLE
+    title = str(payload.get("title") or "").strip() if isinstance(payload.get("title"), str) else ""
+    title = title if len(title) <= 120 else title[:119] + "…"
+    bits = [b for b in (title, build_took_words(payload.get("seconds"))) if b]
+    return head + (f" — {' · '.join(bits)}" if bits else "")
+
+
 #: v1.392.0: the bell's headline for ``build.turn_stalled`` (the twin of the
 #: dashboard's ``lib/buildLinks.BUILD_STALLED_HEADLINE`` and desktop/main.js —
 #: one fixture, one-notice-v13600).
@@ -476,6 +496,8 @@ def format_event(event: Any) -> str:
         return "Iron Jarvis ran an action on its own — see it on the Autonomy page."
     if etype == EventType.BUILD_TURN_FINISHED:
         return _build_finished_line(payload)
+    if etype == EventType.CHAT_TURN_FINISHED:
+        return chat_finished_line(payload)
     if etype == EventType.BUILD_TURN_STALLED:
         return _build_stalled_line(payload)
     if etype == EventType.BUILD_CI_DONE:
@@ -574,11 +596,18 @@ def bell_pings(event: Any) -> bool:
       pull request's failing checks, or they pass after the fix it pushed —
       counted, said from the tray, one phone line.
 
+    * ``chat.turn_finished`` (v1.420.0, C6.10) is NOT one: a long chat reply
+      that ended is said from the TRAY only (desktop/main.js
+      ``runOutcomeNotice``) — with a window open the chat shows its own
+      answer, and it is not a default alert, so "This PC" never says it.
+
     A run with no session id has no bell row. Never raises."""
     try:
         etype = _event_field(event, "type")
         payload = _event_field(event, "payload", {}) or {}
         if not isinstance(payload, dict):
+            return False
+        if etype == EventType.CHAT_TURN_FINISHED:
             return False
         if etype == EventType.BUILD_NIGHT_SUMMARY:
             return bool(_text(payload.get("night")))
@@ -614,11 +643,42 @@ def bell_pings(event: Any) -> bool:
         return False
 
 
+def tray_says(event: Any) -> bool:
+    """Does the desktop app say this event from the TRAY (no window open)?
+    The Python twin of desktop/main.js ``runOutcomeNotice`` (non-null), held
+    equal by the one-notice fixture's ``tray`` key (default: ``attention``).
+
+    v1.420.0 (C6.10): the bell's attention rows (:func:`bell_attention`),
+    plus what used to end silently in the tray — a MISSION's root run that
+    ended (unless the user stopped it), a run the user started from CHAT
+    (origin ``chat``; unless stopped) and a long chat reply that ended
+    (``chat.turn_finished``). With a window open the tray says none of them
+    (the bell, or the open chat, already did). Never raises."""
+    try:
+        if bell_attention(event):
+            return True
+        etype = _event_field(event, "type")
+        payload = _event_field(event, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            return False
+        if etype == EventType.CHAT_TURN_FINISHED:
+            return bool(_text(payload.get("thread_id"))) and _text(payload.get("outcome")) in (
+                "done", "failed",
+            )
+        if etype != EventType.SESSION_COMPLETED or not _text(_event_field(event, "session_id")):
+            return False
+        if _text(payload.get("status")) == "cancelled":
+            return False
+        return _text(payload.get("origin")) in (_MISSION_ORIGIN, "chat")
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def bell_attention(event: Any) -> bool:
     """The bell's ATTENTION rows among the ones it pings (counted on its
     badge): every unattended shortfall and a failed workflow — never a
-    mission's row. Exactly what desktop/main.js says while the app sits in
-    the tray.
+    mission's row. The tray says each of them (and, since v1.420.0, more:
+    :func:`tray_says`).
 
     v1.393.0 review: a coding reply that carried on (``build.resumed``, a
     move within a group included) and one that WAITS for its account's reset

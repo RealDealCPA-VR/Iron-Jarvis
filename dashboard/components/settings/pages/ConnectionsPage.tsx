@@ -1882,10 +1882,15 @@ function CliProviderRow({
     <CliSignInAction provider={info.provider} />
   ) : notInstalled && cli ? (
     <div data-testid={`cli-get-${info.provider}`} className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-      Not on this PC yet.{" "}
-      <a href={cli.installUrl} target="_blank" rel="noreferrer" className={ROW_LINK}>
-        {cli.installLabel}
-      </a>
+      Not on this PC yet.
+      {cli.installUrl && cli.installLabel ? (
+        <>
+          {" "}
+          <a href={cli.installUrl} target="_blank" rel="noreferrer" className={ROW_LINK}>
+            {cli.installLabel}
+          </a>
+        </>
+      ) : null}
     </div>
   ) : isOllama && detected ? (
     <UseOllamaAction />

@@ -57,6 +57,7 @@ const STATUS_TONE: Record<MemberStatus, string> = {
   queued: "text-zinc-400",
   working: "text-accent",
   waiting_you: "text-tone-warn",
+  waiting_remote: "text-accent/80",
   done: "text-tone-success",
   failed: "text-tone-danger",
   cancelled: "text-zinc-400",
@@ -79,7 +80,9 @@ export function ProgressBar({
         ? "bg-tone-danger/70"
         : status === "waiting_you"
           ? "bg-tone-warn/80"
-          : "bg-accent";
+          : status === "waiting_remote"
+            ? "bg-accent/60"
+            : "bg-accent";
   return (
     <div className="flex items-center gap-2">
       <div
@@ -93,7 +96,7 @@ export function ProgressBar({
       >
         {pct !== null ? (
           <div className={`h-full rounded-full ${fill} transition-all duration-500`} style={{ width: `${pct}%` }} />
-        ) : status === "working" || status === "waiting_you" ? (
+        ) : status === "working" || status === "waiting_you" || status === "waiting_remote" ? (
           <div
             data-indeterminate="true"
             className={`absolute inset-y-0 left-0 w-1/3 animate-pulse rounded-full ${fill} opacity-70`}

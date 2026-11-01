@@ -3378,8 +3378,13 @@ function planPaneNotifications(seen, panes, windowOpen) {
 // v1.406.0 part 3: and a coding session's pull-request NEWS (`build.ci_done`:
 // Iron Jarvis stopped fixing its failing checks, or they pass now after the
 // reviewed fix it pushed), in the words the daemon wrote for the bell.
+// v1.420.0 (C6.10): and what used to end in silence while the app sat in the
+// tray — a MISSION that ended (the bell's mission words), a run the user
+// started from chat, and a chat reply that ran longer than a minute
+// (`chat.turn_finished`, comm/notifier.CHAT_FINISHED_TITLE). The daemon's twin
+// is comm/notifier.tray_says (the fixture's `tray` key).
 const RUN_OUTCOME_AUDIT_TYPES =
-  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done";
+  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,build.ci_done,chat.turn_finished";
 //: Entries one read asks for (the bell's own replay reads 50).
 const RUN_OUTCOME_LIMIT = 50;
 //: How many seen ids the watcher remembers (newest kept).
@@ -3457,8 +3462,9 @@ function runOutcomeBuildTook(seconds) {
 }
 
 // One audit entry ({id, type, session_id, payload}) as the bell's ATTENTION
-// row, or null (a clean finish, a run the user stopped, a mission, a chat, an
-// untagged run — the bell rings none of them as attention).
+// row, or null (a clean finish of an unattended run, a run the user stopped,
+// an untagged run). v1.420.0 (C6.10): also a mission that ended, a run the
+// user started from chat, and a long chat reply that ended — each said once.
 function runOutcomeNotice(entry) {
   if (!entry || typeof entry !== "object") return null;
   const id = typeof entry.id === "string" ? entry.id : "";
@@ -3561,10 +3567,77 @@ function runOutcomeNotice(entry) {
       ...(typeof p.failed_session === "string" ? { endedBy: p.failed_session } : {}),
     };
   }
+  if (entry.type === "chat.turn_finished") {
+    // v1.420.0 (C6.10): a chat reply longer than a minute ended
+    // (comm/notifier.CHAT_FINISHED_TITLE / CHAT_FAILED_TITLE, word for word);
+    // the click opens that chat.
+    const thread = typeof p.thread_id === "string" ? p.thread_id.trim() : "";
+    if (!thread || (p.outcome !== "done" && p.outcome !== "failed")) return null;
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const bits = [title.length > 120 ? `${title.slice(0, 119)}…` : title, runOutcomeBuildTook(p.seconds)].filter(
+      (b) => b,
+    );
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title: p.outcome === "failed" ? "Jarvis could not finish your chat's answer" : "Jarvis finished your chat's answer",
+      body: bits.join(" · ") || RUN_OUTCOME_NO_DETAIL,
+      href: `/chat?thread=${encodeURIComponent(thread)}`,
+    };
+  }
   if (entry.type !== "session.completed") return null;
   const sid = typeof entry.session_id === "string" ? entry.session_id : "";
   if (!sid) return null;
   const origin = typeof p.origin === "string" ? p.origin.trim() : "";
+  if (origin === "job:mission" || origin === "chat") {
+    // v1.420.0 (C6.10): a MISSION's root run (the bell's mission row, word
+    // for word: NotificationBell `toActivity`) and a run the user started
+    // from chat. A run the user stopped says nothing.
+    const status = typeof p.status === "string" ? p.status : "";
+    if (status === "cancelled") return null;
+    const outcome = typeof p.outcome === "string" ? p.outcome : "";
+    const ran = status === "completed" && p.ok !== false;
+    const done = ran && outcome === "completed";
+    let title;
+    let href;
+    if (origin === "job:mission") {
+      title = !ran
+        ? "Your objective could not be finished"
+        : done
+          ? "Your objective is done"
+          : outcome === "needs_you"
+            ? "Your objective finished, but something needs you"
+            : outcome === "completed_with_failures"
+              ? "Your objective finished, but part of it failed"
+              : outcome === ""
+                ? "Your objective finished"
+                : "Your objective finished. Check what it did";
+      const project = typeof p.project_id === "string" ? p.project_id : "";
+      const q = [];
+      if (project) q.push(`project=${encodeURIComponent(project)}`);
+      q.push(`mission=${encodeURIComponent(sid)}`);
+      href = `/agents?${q.join("&")}`;
+    } else {
+      const who = "The agent you started from chat";
+      title = !ran
+        ? `${who} could not finish`
+        : done
+          ? `${who} finished`
+          : outcome === "needs_you"
+            ? `${who} needs you`
+            : outcome === "completed_with_failures"
+              ? `${who} finished, but part of it failed`
+              : `${who} finished. Check what it did`;
+      href = `/sessions/${encodeURIComponent(sid)}`;
+    }
+    return {
+      id,
+      ts: runOutcomeTsMs(entry.ts),
+      title,
+      body: runOutcomeClip(p.summary) || RUN_OUTCOME_NO_DETAIL,
+      href,
+    };
+  }
   const i = origin.indexOf(":");
   const kind = (i >= 0 ? origin.slice(0, i) : origin).trim();
   if (!Object.prototype.hasOwnProperty.call(RUN_OUTCOME_SUBJECT, kind)) return null;

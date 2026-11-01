@@ -16,6 +16,7 @@ export type MemberStatus =
   | "queued"
   | "working"
   | "waiting_you"
+  | "waiting_remote"
   | "done"
   | "failed"
   | "cancelled";
@@ -125,7 +126,9 @@ export interface MissionRow {
 }
 
 export const MISSION_TERMINAL = new Set(["completed", "failed", "cancelled"]);
-const STATUSES: MemberStatus[] = ["queued", "working", "waiting_you", "done", "failed", "cancelled"];
+// v1.420.0: waiting_remote = another computer took the job and reports back
+// later (it is waiting on that computer, never on the user).
+const STATUSES: MemberStatus[] = ["queued", "working", "waiting_you", "waiting_remote", "done", "failed", "cancelled"];
 const TONES: ActivityTone[] = ["ok", "warn", "info", "ask"];
 
 type Obj = Record<string, unknown>;

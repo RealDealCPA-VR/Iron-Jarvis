@@ -46,6 +46,7 @@ from iron_jarvis.comm.notifier import (
     bell_pings,
     in_schedule_fire,
     schedule_fire,
+    tray_says,
 )
 from iron_jarvis.core.events import EventType
 from iron_jarvis.core.models import AgentState
@@ -76,6 +77,8 @@ def test_the_daemon_reads_each_outcome_exactly_as_the_bell_rings_it(case):
     ev = case["event"]
     assert bell_pings(ev) is case["pings"], case["case"]
     assert bell_attention(ev) is case["attention"], case["case"]
+    # v1.420.0 (C6.10): and what the tray says (``tray``; default attention).
+    assert tray_says(ev) is bool(case.get("tray", case["attention"])), case["case"]
 
 
 def test_a_completion_with_no_session_has_no_bell_row():
@@ -112,7 +115,9 @@ def test_this_pc_is_quiet_for_exactly_what_the_bell_pings(case, desktop_sink):
         case["event"]["type"] == EventType.SESSION_COMPLETED
         and str((case["event"]["payload"] or {}).get("origin") or "").startswith("workflow:")
     )
-    if case["pings"] or step:
+    # v1.420.0 (moved on purpose): a case marked `this_pc: false` is not a
+    # default alert (a chat reply's end is said from the tray only).
+    if case["pings"] or step or not case.get("this_pc", True):
         assert desktop_sink == [], f"{case['case']}: This PC repeated the bell"
     else:
         assert len(desktop_sink) == 1, f"{case['case']}: This PC lost its one notice"
@@ -457,7 +462,17 @@ def test_the_tray_notice_is_the_bells_attention_row_word_for_word(tmp_path):
     cases = _cases()
     out = _node(_NOTICES, tmp_path, {"cases": cases})["out"]
     for case, notice in zip(cases, out):
-        if case["attention"]:
+        # v1.420.0 (moved on purpose, C6.10): the tray says the case's `tray`
+        # (absent = attention): a mission, a chat-started run and a long chat
+        # reply that ended used to be silent there. An object is a notice
+        # the bell has no row for.
+        tray = case.get("tray", case["attention"])
+        if isinstance(tray, dict):
+            assert notice is not None, case["case"]
+            assert notice["title"] == tray["title"], case["case"]
+            assert notice["body"] == tray["body"], case["case"]
+            assert notice["href"] == tray["href"], case["case"]
+        elif tray:
             assert notice is not None, case["case"]
             assert notice["title"] == case["title"], case["case"]
             # v1.360.0 integrate (moved on purpose, lane 10A note f): the
@@ -545,6 +560,7 @@ def test_the_watcher_reads_the_bells_events_and_the_notice_opens_the_run():
     assert (
         'const RUN_OUTCOME_AUDIT_TYPES =\n'
         '  "session.completed,workflow.completed,build.turn_finished,build.turn_stalled,build.night_summary,'
-        'build.ci_done";'
+        # v1.420.0 (moved on purpose, C6.10): and a long chat reply's end.
+        'build.ci_done,chat.turn_finished";'
         in src
     )

@@ -95,6 +95,37 @@ PERSIST_EVERY_S = 1.0
 PERSIST_BYTES_PER_S = 64_000
 #: How long a finished turn's log stays in memory for a late rejoin.
 FINISHED_KEEP_S = 600.0
+#: v1.420.0 (C6.10): a CHAT reply longer than this that ended is announced
+#: (``chat.turn_finished``) — the chat twin of Build's
+#: ``FINISH_NOTICE_AFTER_S``: a short answer is read where it was asked.
+CHAT_FINISH_NOTICE_AFTER_S = 60.0
+
+#: v1.420.0 (C6.10): the event bus each database's turns announce on —
+#: bound once when the app is built (``routes/system.register``), read by
+#: :class:`TurnLogs` (made on first use, with only the engine). Weak keys: a
+#: closed test platform's engine never keeps its bus alive.
+import weakref as _weakref  # noqa: E402
+
+_BUSES: "_weakref.WeakKeyDictionary[Any, Any]" = _weakref.WeakKeyDictionary()
+
+
+def bind_event_bus(engine: Any, bus: Any) -> None:
+    """Say which event bus the turns of *engine*'s database announce on.
+    Never raises."""
+    try:
+        # A weak VALUE too: the bus's handlers hold the platform, which holds
+        # the engine — a strong value would keep the key alive for ever.
+        _BUSES[engine] = _weakref.ref(bus)
+    except Exception:  # noqa: BLE001 — an engine that cannot be weakly held
+        log.debug("could not bind the turns' event bus", exc_info=True)
+
+
+def _bus_for(engine: Any) -> Any:
+    try:
+        ref = _BUSES.get(engine)
+        return ref() if ref is not None else None
+    except Exception:  # noqa: BLE001
+        return None
 #: A turn nobody has followed for this long is stopped (see the module doc).
 ORPHAN_STOP_S = 3600.0
 #: Stored frames are capped; past it, later TOKEN detail is not stored (the
@@ -708,6 +739,41 @@ class TurnLogs:
                 await asyncio.shield(lg.persist_now(self.engine))
             except BaseException:  # noqa: BLE001 — shutdown: the boot reconcile covers it
                 pass
+        # v1.420.0 (C6.10): a long CHAT reply that ended says so from the
+        # tray. Outside the ``finally``: a cut-off (``CancelledError``) never
+        # reaches here, and a stopped turn is not news.
+        await self._announce_finished(lg, status)
+
+    async def _announce_finished(self, lg: TurnLog, status: str) -> None:
+        """``chat.turn_finished`` (v1.420.0, C6.10) for a CHAT reply longer
+        than :data:`CHAT_FINISH_NOTICE_AFTER_S` that finished or failed —
+        never a Chat › Code turn (``surface == "build"``: Build's own
+        ``build.turn_finished``), a stopped one or one with no chat. The
+        chat's title is read off the loop. Never raises."""
+        try:
+            if status not in ("done", "error") or _surface_of(lg) != "chat":
+                return
+            thread = str(lg.thread_id or "").strip()
+            if not thread:
+                return
+            seconds = (utcnow() - lg.started_at).total_seconds()
+            if seconds <= CHAT_FINISH_NOTICE_AFTER_S:
+                return
+            bus = _bus_for(self.engine)
+            if bus is None:
+                return
+            from ..core.events import EventType
+
+            titles = await asyncio.to_thread(reply_titles, self.engine, [thread])
+            await bus.publish(EventType.CHAT_TURN_FINISHED, {
+                "thread_id": thread,
+                "turn_id": lg.turn_id,
+                "title": titles.get(thread, ""),
+                "seconds": int(seconds),
+                "outcome": "done" if status == "done" else "failed",
+            })
+        except Exception:  # noqa: BLE001 — a notice never fails a turn
+            log.warning("announcing chat turn %s's end failed", lg.turn_id, exc_info=True)
 
     async def shutdown(self) -> None:
         """Lifespan exit: cut every running turn off and keep what it wrote."""

@@ -700,6 +700,101 @@ class RemoteAgentRegistry:
         }
 
 
+#: v1.420.0 (C6.3, G62): what a remote that ACCEPTED a job (a ``202`` or
+#: ``{"accepted": true}`` with no result) has done, said for what it is — never
+#: an empty success. The delegate tools answer it, the mission card says it,
+#: the handoff room keeps it as a ``pending`` entry (v1.285.0's flag).
+ACCEPTED_TAIL = "accepted the task and will report back"
+
+
+def accepted_words(name: str) -> str:
+    """"<name> accepted the task and will report back." (v1.420.0, G62)."""
+    return f"{name} {ACCEPTED_TAIL}."
+
+
+def accepted_no_reply_words(name: str) -> str:
+    """The same when its answer CANNOT come back (message-back is off): said
+    with the switch that fixes it, never "will report back"."""
+    return (
+        f"{name} accepted the task, but its answer cannot come back here: turn on "
+        "Let it message back on its card to get it."
+    )
+
+
+async def open_handoff_room(platform: Any, record: Any, task: str) -> dict[str, Any]:
+    """A room the remote can REPORT BACK into, for one handed-over job
+    (v1.420.0, C6.3, G62). A remote that answers ``202`` delivers its report
+    later through ``POST /agents/remote/{name}/inbound``, which only accepts a
+    room the remote sits in — and a delegated job had no room, so the report
+    could never land anywhere. Opened ONLY when the remote may message back
+    (inbound on, an address known); the task is the room's first line.
+
+    Returns ``{room_id, kwargs}`` — ``kwargs`` for
+    :meth:`RemoteAgentRegistry.run` (``conversation_id``, ``reply_to`` and, for
+    another Iron Jarvis's task door, ``reply_token`` / ``local_only``) — or
+    ``{}`` when the remote cannot message back (the call is then sent exactly
+    as before). Never raises: a room that cannot be opened sends the job
+    without one."""
+    from types import SimpleNamespace
+
+    try:
+        from .threads import AgentThreads
+
+        reply_to = AgentThreads._inbound_url(record)
+        if not reply_to:
+            return {}
+        name = str(getattr(record, "name", "") or "remote")
+        threads = AgentThreads(platform.engine)
+        participants = [
+            {"key": f"remote:{name}", "source": "remote", "name": name, "role": "helper"}
+        ]
+        title = " ".join(str(task or "").split())[:60] or "a task"
+        room = await asyncio.to_thread(threads.create, f"{name}: {title}", participants)
+        await asyncio.to_thread(
+            threads._append,
+            room.id,
+            [{"who": "user", "role": "user", "source": "user",
+              "content": str(task or ""), "at": utcnow().isoformat()}],
+        )
+        d = SimpleNamespace(platform=platform)
+        kwargs: dict[str, Any] = {"conversation_id": room.id, "reply_to": reply_to}
+        token = await AgentThreads._reply_token_for(record, d)
+        if token:
+            kwargs["reply_token"] = token
+        if AgentThreads._local_only_for_door(record):
+            kwargs["local_only"] = True
+        return {"room_id": room.id, "kwargs": kwargs}
+    except Exception:  # noqa: BLE001 — a job without a room is the old behaviour
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "could not open a report-back room for a remote job", exc_info=True
+        )
+        return {}
+
+
+async def note_accepted_in_room(platform: Any, room_id: str, name: str) -> None:
+    """The handoff room's ``pending`` line (v1.285.0's flag): the remote has
+    the job. Never raises."""
+    if not room_id:
+        return
+    try:
+        from .threads import AgentThreads
+
+        threads = AgentThreads(platform.engine)
+        await asyncio.to_thread(
+            threads._append,
+            room_id,
+            [{"who": f"remote:{name}", "role": "participant", "source": "remote",
+              "content": accepted_words(name), "at": utcnow().isoformat(),
+              "pending": True}],
+        )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).debug("could not note an accepted job", exc_info=True)
+
+
 class DelegateRemoteTool(Tool):
     """Delegate a task to a registered remote agent running elsewhere."""
 
@@ -736,7 +831,27 @@ class DelegateRemoteTool(Tool):
             return ToolResult(ok=False, error=f"unknown remote agent '{agent}'")
         if not record.enabled:
             return ToolResult(ok=False, error=f"remote agent '{agent}' is disabled")
-        res = await registry.run(record, task, self.platform.secrets.get)
+        room = await open_handoff_room(self.platform, record, task)
+        if room:
+            res = await registry.run(record, task, self.platform.secrets.get, **room["kwargs"])
+        else:
+            res = await registry.run(record, task, self.platform.secrets.get)
+        if res.get("ok") and res.get("accepted"):
+            # v1.420.0 (C6.3, G62): the remote TOOK the job and will report
+            # later — a distinct outcome, never an empty success.
+            room_id = str(room.get("room_id") or "")
+            await note_accepted_in_room(self.platform, room_id, agent)
+            return ToolResult(
+                ok=True,
+                output=accepted_words(agent) if room_id else accepted_no_reply_words(agent),
+                data={
+                    "agent": agent,
+                    "kind": record.kind,
+                    "state": "accepted",
+                    "conversation_id": room_id,
+                    "reply_back": bool(room_id),
+                },
+            )
         if res.get("ok"):
             # FILES the remote sent back (v1.157.0). Written HERE because this
             # is the only place that knows the workspace they may land in, and

@@ -256,7 +256,11 @@ def detect_grok() -> list[DetectedModel]:
         return []
     session = grok_session()
     available = session is not None
-    detail = "" if available else "not logged in — run `grok login`"
+    # v1.420.0 (C6.8): the one Sign in press (cli_auth.SIGN_IN_FIX), never a
+    # terminal recipe.
+    from .cli_auth import SIGN_IN_FIX
+
+    detail = "" if available else SIGN_IN_FIX["grok"]
 
     models = _grok_models_from_cache()
     if not models:  # cache absent but binary here → best-effort probe (memoised)
@@ -384,6 +388,8 @@ def forget_detection_memos() -> None:
         _ollama_miss.clear()
     with _grok_binary_lock:
         _grok_binary_memo.clear()
+    # v1.420.0 (C6.8): and the Grok row's sign-in answer.
+    _grok_status_memo.clear()
 
 
 def detect_ollama(configured_url: str | None = None) -> list[DetectedModel]:
@@ -506,3 +512,39 @@ def grok_session_expired(session: dict[str, Any] | None) -> bool:
         return exp < datetime.now(timezone.utc)
     except Exception:  # noqa: BLE001 — unknown format → don't block the call
         return False
+
+
+#: v1.420.0 (C6.8): how long :func:`grok_login_status` keeps its answer —
+#: /health is polled every 5 s by every window, and the answer is a PATH scan
+#: plus a small file read. A sign-in is seen within this.
+GROK_STATUS_TTL_S = 15.0
+_grok_status_memo: dict[str, Any] = {}
+_grok_status_lock = threading.Lock()
+
+
+def grok_login_status() -> dict[str, Any]:
+    """``{installed, signed_in, sign_in_fix}`` for the Grok CLI row (v1.420.0,
+    C6.8) — the shape the Claude Code and Codex rows carry, so Settings ›
+    Connections offers Grok the same Sign in press. ``signed_in`` reads its
+    on-disk session (never a probe, nothing spawned); ``None`` = not
+    installed. Memoised :data:`GROK_STATUS_TTL_S`. BLOCKING (a PATH scan and
+    a file read): call off the event loop. Never raises."""
+    from .cli_auth import SIGN_IN_FIX
+
+    now = time.monotonic()
+    with _grok_status_lock:
+        cached = _grok_status_memo.get("v")
+        if cached is not None and now - cached[0] < GROK_STATUS_TTL_S:
+            return dict(cached[1])
+    try:
+        installed = _grok_binary() is not None
+        signed_in: bool | None = None
+        if installed:
+            session = grok_session()
+            signed_in = bool(session) and not grok_session_expired(session)
+    except Exception:  # noqa: BLE001 — a status row never fails
+        installed, signed_in = False, None
+    out = {"installed": installed, "signed_in": signed_in, "sign_in_fix": SIGN_IN_FIX["grok"]}
+    with _grok_status_lock:
+        _grok_status_memo["v"] = (now, dict(out))
+    return out

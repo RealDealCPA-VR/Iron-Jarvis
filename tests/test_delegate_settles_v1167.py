@@ -73,7 +73,10 @@ async def test_child_crash_finalizes_failed_and_reports_honestly(
         platform.permissions,
     )
     assert res.ok is False
-    assert "crashed" in (res.error or "") and "endpoint unreachable" in res.error
+    # v1.420.0 (C6.5): the parent hears the run's plain sentence; the raw
+    # text (pinned here before) rides ``data.technical``.
+    assert "could not finish" in (res.error or "") and "RuntimeError" not in res.error
+    assert "endpoint unreachable" in res.data["technical"]
     child = _child_row(platform)
     assert child.status is SessionStatus.FAILED, (
         f"child stranded {child.status.value} — the ACTIVE-forever bug"
