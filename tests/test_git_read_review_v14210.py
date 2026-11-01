@@ -338,3 +338,67 @@ def test_the_argv_carries_the_review_guards():
     for piece in ("diff.submodule=short", "submodule.recurse=false", "gpg.program=",
                   "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program="):
         assert piece in argv, piece
+
+
+# --------------------------------------------------------------------------- #
+# 9. Iron Jarvis's own keys and records (the protected roots)
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_folder_holding_iron_jarviss_own_keys_is_refused(tmp_path, monkeypatch):
+    """``read_file`` and ``grep`` refuse the protected roots (the secrets and
+    undo stores, the database — ``core.fs_policy``); git reads files by
+    itself, so a session folder that HOLDS them (the user's home holds the
+    app's state home) let ``git blame --contents`` print a key file and
+    ``git grep --untracked`` search the secrets store. The folder git would
+    read — the repository's top when there is one — must hold none."""
+    from iron_jarvis.core import fs_policy
+
+    repo = _repo(tmp_path, "home")  # a home folder that is a repository
+    secrets = repo / ".ironjarvis" / "secrets"
+    secrets.mkdir(parents=True)
+    (secrets / "vault.txt").write_bytes(b"FERNETKEYVALUE\n")
+    monkeypatch.setattr(fs_policy, "_PROTECTED_ROOTS", set(fs_policy._PROTECTED_ROOTS))
+    fs_policy.register_protected_root(secrets)
+    ok, _why = fs_policy.fs_read_ok(secrets / "vault.txt")
+    assert not ok, "the control: read_file would refuse this file"
+    plain = _git(repo, "--no-pager", "blame", "--contents", ".ironjarvis/secrets/vault.txt", "app.py")
+    assert b"FERNETKEYVALUE" in plain.stdout, "the control did not read the key: the test would be vacuous"
+    for command, args in (("blame", ["--contents", ".ironjarvis/secrets/vault.txt", "app.py"]),
+                          ("grep", ["--untracked", "-n", "FERNET"]), ("status", ["--short"])):
+        res = await _read(repo, command, args)
+        assert not res.ok, (command, res.output)
+        assert "FERNETKEYVALUE" not in (res.output or "") + (res.error or "")
+    # A SUBFOLDER of that repository: git still reads the whole repository
+    # (``:/``), so it is refused too.
+    sub = repo / "proj"
+    sub.mkdir()
+    res = await _read(sub, "grep", ["--untracked", "FERNET", "--", ":/"])
+    assert not res.ok and "FERNETKEYVALUE" not in (res.output or "")
+
+
+async def test_a_folder_beside_the_keys_still_reads(tmp_path, monkeypatch):
+    from iron_jarvis.core import fs_policy
+
+    repo = _repo(tmp_path)
+    secrets = tmp_path / ".ironjarvis" / "secrets"
+    secrets.mkdir(parents=True)
+    monkeypatch.setattr(fs_policy, "_PROTECTED_ROOTS", set(fs_policy._PROTECTED_ROOTS))
+    fs_policy.register_protected_root(secrets)
+    res = await _read(repo, "status", ["--short"])
+    assert res.ok, res.error
+
+
+async def test_outside_a_repository_the_folder_itself_must_hold_no_keys(tmp_path, monkeypatch):
+    from iron_jarvis.core import fs_policy
+
+    folder = tmp_path / "plain"
+    secrets = folder / "secrets"
+    secrets.mkdir(parents=True)
+    (secrets / "k.txt").write_bytes(b"FERNETKEYVALUE\n")
+    (folder / "b.txt").write_bytes(b"x\n")
+    monkeypatch.setattr(fs_policy, "_PROTECTED_ROOTS", set(fs_policy._PROTECTED_ROOTS))
+    fs_policy.register_protected_root(secrets)
+    # Outside a repository `git diff a b` compares two files (no index needed).
+    res = await _read(folder, "diff", ["secrets/k.txt", "b.txt"])
+    assert not res.ok and "FERNETKEYVALUE" not in (res.output or "") + (res.error or "")

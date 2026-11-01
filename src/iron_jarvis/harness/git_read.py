@@ -68,8 +68,13 @@ allowed call —
   guard: ``diff.submodule=short`` and ``submodule.recurse=false`` are forced,
   ``--submodule`` / ``--ignore-submodules`` refused;
 * ``core.worktree`` sent git to files OUTSIDE the folder: the working folder
-  git would use must CONTAIN this one (:func:`_worktree_problem`), and a
+  git would use must CONTAIN this one (:func:`_place_problem`), and a
   network spelling is refused by its text before git is asked;
+* ``blame --contents`` printed a key file and ``grep --untracked`` searched
+  the secrets store in a folder holding Iron Jarvis's own state (the user's
+  home holds it): the folder git reads (the repository's top, else this one)
+  must hold none of ``core.fs_policy``'s protected roots
+  (:data:`PROTECTED_REFUSAL`) — the rule ``read_file`` and ``grep`` follow;
 * ``describe --dirty`` / ``--broken`` REWROTE ``.git/index``: refused.
 
 Allow tier, READONLY (so replay-safe), on no roster: the review-only helper
@@ -368,30 +373,67 @@ def _network_spelling(value: str) -> bool:
     return v.startswith(("\\\\", "//", "\\/", "/\\"))
 
 
-def _worktree_problem(cwd: Any, worktrees: list[str], filters: list[str],
-                      env: dict[str, str]) -> str:
-    """"" when the working folder git would use CONTAINS ``cwd`` (always, with
-    no ``core.worktree``: git found the repository by walking UP from it);
-    else :data:`WORKTREE_REFUSAL`. A network spelling is refused by its text,
-    before git is asked anything. BLOCKING."""
-    if not worktrees:
-        return ""
+#: v1.421.0 review: ``read_file`` and ``grep`` refuse Iron Jarvis's own keys
+#: and records (``core.fs_policy``'s protected roots: the secrets and undo
+#: stores, the database); git reads files by itself, so in a folder that HOLDS
+#: one (the user's home holds the app's state home) ``git blame --contents``
+#: printed a key file and ``git grep --untracked`` searched the secrets store
+#: (measured).
+PROTECTED_REFUSAL = ("This folder holds Iron Jarvis's own keys or records, which are never read, so "
+                     "git_read ran nothing.")
+
+
+def _holds_protected(folder: str) -> bool:
+    """Is ``folder`` inside one of Iron Jarvis's protected roots, or does it
+    hold one? Fail-closed (an unreadable answer is yes). BLOCKING."""
+    from ..core import fs_policy
+
+    try:
+        if fs_policy.is_protected_path(folder):
+            return True
+        here = fs_policy._canonical(folder)
+        return any(fs_policy._within(root, here) for root in fs_policy.protected_roots())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _place_problem(cwd: Any, worktrees: list[str], filters: list[str],
+                   env: dict[str, str]) -> str:
+    """Where git would read must be safe to read, else the sentence why
+    ("" when it is). Two rules, after the repository's top is found
+    (``rev-parse --show-toplevel``; none outside a repository):
+
+    * a ``core.worktree`` must name a working folder that CONTAINS ``cwd``
+      (with none, git found the repository by walking UP from ``cwd``, so its
+      top always does) — else :data:`WORKTREE_REFUSAL`; a network spelling is
+      refused by its TEXT before git is asked anything (looking it up is a
+      connection to that host);
+    * the folder git reads — the repository's top (``:/`` and ``HEAD:<path>``
+      reach all of it), else ``cwd`` — holds none of Iron Jarvis's protected
+      roots: :data:`PROTECTED_REFUSAL`.
+
+    BLOCKING."""
     if any(_network_spelling(w) for w in worktrees):
         return WORKTREE_REFUSAL
     from ..git.integration import run_git
 
     got = run_git(safe_argv("rev-parse", ["--show-toplevel"], filters), cwd, timeout=15.0, env=env,
                   identity=False, encoding="utf-8")
-    top = str(got.out or "").strip().splitlines()[0].strip() if str(got.out or "").strip() else ""
-    if got.code != 0 or got.timed_out or not top or _network_spelling(top):
-        return WORKTREE_REFUSAL
-    try:
-        here = os.path.normcase(os.path.realpath(str(cwd)))
-        root = os.path.normcase(os.path.realpath(top))
-        if os.path.commonpath([here, root]) != root:
+    out = str(got.out or "").strip()
+    top = out.splitlines()[0].strip() if out else ""
+    found = got.code == 0 and not got.timed_out and bool(top)
+    if worktrees:
+        if not found or _network_spelling(top):
             return WORKTREE_REFUSAL
-    except (OSError, ValueError):
-        return WORKTREE_REFUSAL
+        try:
+            here = os.path.normcase(os.path.realpath(str(cwd)))
+            root = os.path.normcase(os.path.realpath(top))
+            if os.path.commonpath([here, root]) != root:
+                return WORKTREE_REFUSAL
+        except (OSError, ValueError):
+            return WORKTREE_REFUSAL
+    if _holds_protected(top if found else str(cwd)):
+        return PROTECTED_REFUSAL
     return ""
 
 
@@ -467,7 +509,7 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
         return ToolResult(ok=False, error="This folder's git settings name too many file filters; git_read ran nothing.")
     if any("=" in name for name in filters):
         return ToolResult(ok=False, error=FILTER_NAME_REFUSAL, data={"command": command})
-    problem = _worktree_problem(cwd, worktrees, filters, env)
+    problem = _place_problem(cwd, worktrees, filters, env)
     if problem:
         return ToolResult(ok=False, error=problem, data={"command": command})
     got = run_git(safe_argv(command, args, filters), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
