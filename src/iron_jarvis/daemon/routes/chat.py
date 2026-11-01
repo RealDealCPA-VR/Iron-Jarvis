@@ -5072,6 +5072,11 @@ async def chat_stream(
                     _round_call,
                     provider=provider_choice or route_provider,
                     manager=getattr(d.platform, "providers", None),
+                    # v1.422.0 review (the owner's decision): a reply that
+                    # STARTS on a local server that is not answering is
+                    # refused at once (v1.228.0). MIRROR NOTE (lock-step):
+                    # chat_turn's `patient_call(first_call=)`.
+                    first_call=completions == 0,
                 ), handle)) as _frames:
                     async for frame in _frames:
                         if await _stop():

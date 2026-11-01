@@ -220,6 +220,30 @@ def why_waited(exc: BaseException | None) -> str:
         return ""
 
 
+#: v1.422.0 review (the owner's decision): the kinds of the router's honest
+#: "isn't connected / not answering" refusal for a LOCAL primary —
+#: ``_refuse_if_dead``'s probe (``unreachable`` / ``timeout``), the run-stage
+#: refusal of a transport that never answered, and the breaker's open circuit
+#: (``cooldown``). A dropped connection (``interrupted``: the box was there)
+#: and an answer with an error are not among them.
+LOCAL_NOT_ANSWERING_KINDS = frozenset({"unreachable", "timeout", "cooldown"})
+
+
+def local_not_answering(exc: BaseException | None) -> bool:
+    """Is ``exc`` the router's refusal of a LOCAL model server that is not
+    answering (see :data:`LOCAL_NOT_ANSWERING_KINDS`)? Read off the router's
+    typed ``kind`` and ``failed_provider`` only (a cloud transport error has
+    no ``kind``). Never raises."""
+    try:
+        from ..providers.failure_words import failure_facts
+        from ..providers.local import is_local_provider
+
+        f = failure_facts(exc)
+        return f.kind in LOCAL_NOT_ANSWERING_KINDS and is_local_provider(str(f.provider or ""))
+    except Exception:  # noqa: BLE001 — unsure: the patience's own rules decide
+        return False
+
+
 def _retry_hint(exc: BaseException | None) -> float:
     """Seconds the failure itself asks for (``Retry-After``, the breaker's
     ``retry_in``), 0 when it names none."""
@@ -322,9 +346,15 @@ class RoundPatience:
     out of the round's budget)."""
 
     def __init__(self, *, waits: "tuple[float, ...] | None" = None,
-                 budget_s: "float | None" = None) -> None:
+                 budget_s: "float | None" = None, first_call: bool = False) -> None:
         self.waits = tuple(WAITS_S if waits is None else waits)
         self.budget_s = float(PATIENCE_BUDGET_S if budget_s is None else budget_s)
+        #: v1.422.0 review (the owner's decision): this is the turn's FIRST
+        #: model call (no round of it answered yet). A reply that STARTS on a
+        #: local model server that is not answering is refused AT ONCE, as
+        #: v1.228.0 made it (:func:`local_not_answering`); a box that went
+        #: away mid-reply (a vLLM restart) is still waited out.
+        self.first_call = bool(first_call)
         #: Tries made so far (the first is under way).
         self.tries = 1
         #: Seconds waited so far.
@@ -337,6 +367,8 @@ class RoundPatience:
     def next_wait(self, exc: BaseException | None) -> "Wait | None":
         why = why_waited(exc)
         if not why:
+            return None
+        if self.first_call and local_not_answering(exc):
             return None
         k = self.tries - 1
         if k >= len(self.waits):
@@ -384,6 +416,7 @@ async def patient_frames(
     provider: str = "",
     manager: Any = None,
     patience: "RoundPatience | None" = None,
+    first_call: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """The model's frames for ONE round (``make()`` — the lane's own
     ``_router_frames`` call), tried again after a transient failure (see the
@@ -394,7 +427,7 @@ async def patient_frames(
     "trying", ...}``. A failure after the ``final`` frame, or one that is not
     waited out, is raised as it is (with :meth:`RoundPatience.stamp` when the
     round waited)."""
-    pat = patience if patience is not None else RoundPatience()
+    pat = patience if patience is not None else RoundPatience(first_call=first_call)
     while True:
         shown = 0
         finished = False
@@ -456,17 +489,20 @@ def round_frames(
     *,
     provider: str = "",
     manager: Any = None,
+    first_call: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """The stream lane's frames for one round: ``make()`` itself — the very
     generator, byte for byte as before — unless ``patient`` (a harness turn),
-    then :func:`patient_frames` around it."""
+    then :func:`patient_frames` around it. ``first_call`` (v1.422.0 review):
+    no round of this turn has answered yet (:attr:`RoundPatience.first_call`)."""
     if not patient:
         return make()
-    return patient_frames(make, provider=provider, manager=manager)
+    return patient_frames(make, provider=provider, manager=manager, first_call=first_call)
 
 
 async def patient_call(call: Callable[[], Awaitable[Any]], *, patient: bool,
-                       should_stop: "Callable[[], Any] | None" = None) -> Any:
+                       should_stop: "Callable[[], Any] | None" = None,
+                       first_call: bool = False) -> Any:
     """The POST lane's twin of :func:`round_frames` (lock-step): ``call()``,
     tried again after a transient failure in a harness turn (no frames: the
     POST lane streams nothing). ``should_stop`` (sync or async) is read after
@@ -474,7 +510,7 @@ async def patient_call(call: Callable[[], Awaitable[Any]], *, patient: bool,
     ``patient``: ``await call()``, exactly as before."""
     if not patient:
         return await call()
-    pat = RoundPatience()
+    pat = RoundPatience(first_call=first_call)
     while True:
         try:
             # v1.422.0 review: lock-step with `patient_frames` (a try after a
@@ -498,7 +534,7 @@ async def patient_call(call: Callable[[], Awaitable[Any]], *, patient: bool,
 
 
 __all__ = [
-    "DEFAULT_WAITS_S", "FRAME", "PATIENCE_BUDGET_S", "PATIENCE_TYPE", "RESET_REASON", "RETRY_AFTER_CAP_S", "RoundPatience",
+    "DEFAULT_WAITS_S", "FRAME", "LOCAL_NOT_ANSWERING_KINDS", "PATIENCE_BUDGET_S", "PATIENCE_TYPE", "RESET_REASON", "RETRY_AFTER_CAP_S", "RoundPatience",
     "SLEEP", "WAITS_S", "Wait", "frame_data", "patient_call", "patient_frames", "round_frames",
-    "seconds_words", "tried_words", "waiting_words", "why_waited",
+    "local_not_answering", "seconds_words", "tried_words", "waiting_words", "why_waited",
 ]

@@ -10121,6 +10121,10 @@ async def run_chat_turn(
                     **_reasoning_kw(body),
                 ),
                 patient=_harness is not None,
+                # v1.422.0 review: lock-step with the stream lane — a reply
+                # that STARTS on a local server that is not answering is
+                # refused at once.
+                first_call=completions == 0,
             )
             _u = route.response.usage or {}
             usage_in += int(_u.get("input_tokens", 0) or 0)
