@@ -9,7 +9,7 @@
 
 ### The AI operating system you actually own.
 
-**One chat. A team of agents behind it. Your files, your models, your machine.**
+**Keep the models and tools you already like. Lose the silos.**
 
 Every action logged. Every change reviewable. Every secret encrypted on your disk.
 
@@ -17,7 +17,11 @@ Every action logged. Every change reviewable. Every secret encrypted on your dis
 
 ---
 
-Iron Jarvis is a desktop app that turns AI models into a working system: **a chat that answers in seconds and quietly hands real work to a full tool-using agent**, a team of specialist agents you give one objective to, terminals running Claude Code or Codex side by side, schedules, workflows, memory, and documents. It runs on **your** computer. Bring an API key, your existing Claude or ChatGPT subscription login, or your own GPUs. Or run it fully offline with a built-in demo model.
+Claude Code can code. Codex can code. Local models run privately on your own GPUs. MCP servers bring tools. Each one lives in its own window, with its own memory, its own permissions, its own login and its own idea of what you're working on.
+
+**Iron Jarvis is the layer that makes them one system.** It gives all of them shared projects, memory, permissions, accounts, browser access, automation and observability, behind one interface, on **your** computer. You don't have to replace any of them. Iron Jarvis is where they start working together.
+
+Bring an API key, your existing Claude or ChatGPT subscription login, or your own GPUs. Or run it fully offline with a built-in demo model.
 
 <div align="center">
 
@@ -27,53 +31,60 @@ Iron Jarvis is a desktop app that turns AI models into a working system: **a cha
 
 </div>
 
-## 🔥 Why it's different
+## 🔥 Why Iron Jarvis
 
-- **It does the work and shows its receipts.** Every reply says which model answered it, which tools ran, and which files it made. A tool the turn wasn't given is refused and recorded, never quietly run.
-- **There's no mode picker.** You just ask. A quick question gets a quick answer, and a job that needs files, tools and several steps turns into a full agent run on its own, with the reason shown.
+- **Iron Jarvis is the stable layer. The coding tools are interchangeable workers.** Claude Code, Codex, Pi, OpenCode and Grok run as the real tools underneath, with their own features on. Switch between them or run several at once without losing your projects, history or settings. When a better tool ships next month, it moves into the same home.
+- **It does the work and shows its receipts.** Every reply says which model answered, which tools ran and which files changed. A tool the turn wasn't given is refused and recorded, never quietly run.
 - **It never moves your data behind your back.** If your local model is down, it says so **by name** instead of quietly sending your conversation to a cloud API. Only **Auto**, if you pick it, may switch providers.
-- **You approve what matters.** Risky actions ask first. Code changes land on a git branch and **never auto-merge**. Reversible actions (file writes, documents, notes, settings) have an **Undo**.
-- **Local-first.** SQLite on your disk, secrets encrypted at rest, sandboxed execution. The network is optional.
+- **You approve what matters.** Risky actions ask first. Code changes land on a git branch and **never auto-merge**. File writes, documents, notes and settings have an **Undo**.
+- **Failures are contained, visible and recoverable.** A step that hangs is stopped and named. A tool that breaks says why, where you're looking. Work a restart cut off waits for you with **Continue**.
 
 ---
 
 ## ✨ Highlights
 
+### 🛠️ One home for your coding agents
+- **Every coding agent, one workspace.** **Build › Code** runs **Claude Code, Codex, Pi, OpenCode and Grok** as themselves, with their own skills, commands and saved conversations, so `claude --resume` still works from a terminal. **Chat › Code** is Iron Jarvis's own coding harness, on any model you connect, local ones included.
+- **Start by typing.** Pick a folder, tool, account, model, effort and permission level only when you need to. Attach screenshots, and steer the work while it runs without stopping it.
+- **See everything.** What changed, usage and cost per reply, exactly what fills the context window, and which background helpers are still working. When they finish, their report appears on its own.
+- **Never lose the thread.** Sessions reopen where they left off and a reply survives a restart. In a git folder, Iron Jarvis's own sessions work on their own branch, with Commit and **Open a pull request** one press away.
+- **Skills follow you.** A skill you installed for Claude Code, Codex, Grok, Pi or OpenCode works in Iron Jarvis's coding sessions the way it works there.
+- **Many accounts, one switch.** The bundled [Iron-Proxy](https://github.com/RealDealCPA-VR/Iron-Proxy) holds several Claude, Codex or Grok logins. Pick the account per session; when one hits its limit, the work waits it out or moves to another account in a group you made, never to a different provider.
+- **Real terminals too.** Tiled live terminals for your shells and CLIs keep running when you leave the page.
+
+Iron Jarvis doesn't replace the coding tools you already like. It gives them one consistent home.
+
+### 👥 A model team, and a night shift
+- **Model Team.** Give a coding session a team: a **lead** that plans and checks but never edits, **workers** that write the code, and a **reviewer** that reads every change before it lands. The roles are enforced, not suggested, and if the lead ever had to do a piece itself, the receipt says so. Members can be local models, your plans or API keys, and local models are asked first.
+- **Night Shift.** Give it work tonight. Review what happened tomorrow morning. Queued coding tasks run overnight, each on its own branch. File edits and commands run unasked; anything else waits for you and is declined if nobody answers. Finished work is committed to that branch with secrets and huge files screened out, and is never pushed or merged. Your main folder is watched, **Emergency stop** halts everything, and the morning brings one summary with **Push**, **Open a pull request** or **Throw away** beside each task.
+
 ### 💬 Chat that keeps up with you
-- **One surface for everything.** Type **/** for a skill, drop files anywhere, and pick a project so every reply grounds in its brief, instructions, folder and knowledge.
-- **Charts and tables in replies.** Answers can include bar, line and pie charts you can flip to a table. Tables sort when you press a column heading and copy or download as CSV.
-- **Nothing gets lost.** Editing a question or pressing Try again keeps the old answer, and **‹ 1 / 2 ›** flips between them. You can also retry one reply with a different model.
-- **Keeps up while it works.** Steer a reply mid-answer, or queue your next message (**Ctrl+Enter**) to send when this one finishes. You can also quote part of an answer, **Continue** a reply that was cut off, and see the model's thinking separately from its answer.
-- **Ask about this page.** Press **Ctrl K** on any screen and type "explain this page". What that page shows goes along with your next question.
-- **Change settings by asking.** Say "turn on follow-up suggestions" and a card shows what changed, with **Undo**. Protected settings always ask first, and keys go into a secure box instead of the chat.
+- **One box for everything.** Type **/** for a skill, drop files anywhere, pick a project so every reply grounds in its brief, folder and knowledge. There's no mode picker: a quick question gets a quick answer, and a job that needs files and tools becomes a full agent run on its own, with the reason shown.
+- **Nothing gets lost.** Editing a question or pressing Try again keeps the old answer (**‹ 1 / 2 ›**). Steer a reply mid-answer, queue the next one (**Ctrl+Enter**), and **Continue** a reply that was cut off. Charts and tables come back sortable and copyable.
+- **Change settings by asking.** "Turn on follow-up suggestions" shows a card with what changed and **Undo**. Protected settings always ask first, and keys go into a secure box, never the chat.
 - **Voice, offline.** Speech-to-text is bundled (Vosk), so dictation works with no key and no cloud.
 
 ### 🤖 Agents that do real work
-- **Missions.** Give the team one objective. Jarvis splits it among specialist agents (planner, builder, reviewer, researcher and so on). Progress only shows a number when it counts finished steps, and the finished deliverable is shown first.
-- **Agents you can hire.** A custom agent gets a job card, a monthly budget that pauses it when spent, its own notes folder, and a coach that suggests better instructions for you to accept or decline.
-- **Build.** Tiled live terminals for Claude Code, Codex, Grok and your shells. A pane keeps running when you leave the page.
-- **Many accounts, one switch.** The bundled [Iron-Proxy](https://github.com/RealDealCPA-VR/Iron-Proxy) holds several Claude, Codex or Grok logins. When one hits its limit, the next one takes over, but never a different provider. In Build, **Continue on the next account** carries a Claude Code conversation over.
-- **Automations without cron.** Schedules, a visual workflow canvas, webhooks, and triggers that start work from email, calendar or Slack. Agents can create schedules, workflows and webhooks too, and you can see and edit what they made.
-- **Fixes itself.** An opt-in Maintainer agent edits Iron Jarvis's own source on a review-gated branch.
+- **Missions.** Give the team one objective. Jarvis splits it among specialist agents, shows each one's progress, and puts the finished deliverable first.
+- **Agents you can hire.** A custom agent gets a job card, a monthly budget that pauses it when spent, its own notes, and a coach that suggests better instructions for you to accept or decline.
+- **Automations without cron.** Schedules, a visual workflow canvas, webhooks, and triggers from email, calendar or Slack. Agents can create these too, and you can see and edit what they made.
 
 ### 🧠 It knows you and your stuff
-- **One you, every model.** A **You** page sets who you are, how answers should read, and the language they come back in. Every model in chat, on your phone and inside agents gets it.
-- **It learns what you prefer.** Say "from now on…" and it remembers, then shows that on the receipt. Correct it the same way twice and it asks once whether to keep the rule. It can also share your profile with Claude Code and Codex in Build if you switch that on.
-- **Memory you can touch.** Four memory layers, plus bases you plug in with **Add a memory base**: a folder or Obsidian vault, Notion, cloud drives, a machine over SSH, or an MCP memory server. Each project picks its own. All of it renders as a 3D graph.
-- **Every file type.** Read and write PDF, Word, Excel, PowerPoint, CSV and Markdown. Scanned pages are found page by page. **PII redaction** really deletes the text from a PDF and re-reads the result to prove it's gone.
-- **Creative studio.** Generate images, video, music and speech, and browse your own media folders.
+- **One you, every model.** A **You** page sets who you are, how answers should read and the language they come back in. Say "from now on…" and it remembers; correct it the same way twice and it asks once whether to keep the rule.
+- **Memory you can touch.** Four memory layers, plus bases you plug in with **Add a memory base**: a folder or Obsidian vault, Notion, cloud drives, a machine over SSH, or an MCP memory server. All of it renders as a 3D graph.
+- **Every file type.** Read and write PDF, Word, Excel, PowerPoint, CSV and Markdown. **PII redaction** really deletes the text from a PDF and re-reads the result to prove it's gone. A creative studio makes images, video, music and speech.
 
 ### 🔌 It plugs into your world
 - 🌐 **Your own browser, as a capability.** The installer ships a small browser **add-on** for Chrome or Edge. Pair it and ask about the page in front of you, or let it click, type and navigate. Anything that looks destructive or transactional stops and asks first. Page text is treated as data, so a page can't give Jarvis orders, and form values are never collected. Whatever harness you pick in **Build** drives the *same* browser through the same gates.
-- 📱 **Chat from your phone.** Text your Telegram bot like a person. It has the same memory and tools behind a sender allowlist, and the conversation shows up in the desktop chat.
-- 🧩 **MCP apps.** MCP servers become tools in chat and in agents. A server can ask you a question or report progress, and you answer it right in the chat. A tool a server adds later that can write is held until you approve it.
-- 🖥️ **Your own GPUs, watched live.** Tokens/sec, queue, VRAM and context windows for every local server you run. A number it can't read says so rather than showing zero.
+- 📱 **Chat from your phone.** Text your Telegram bot like a person: the same memory and tools behind a sender allowlist, and the conversation shows up on the desktop.
+- 🧩 **MCP apps.** Paste a server's config from any tool and it becomes tools in chat and in agents. A tool a server adds later that can write is held until you approve it.
+- 🖥️ **Your own GPUs, watched live.** Tokens/sec, queue, VRAM and context windows for every local server. A number it can't read says so rather than showing zero.
 
 ### 🛡️ Trust you can check
 - 🧾 **The roster is the contract, no cloud by fallback, honest outcomes.** An agent or chat can only call the tools it was given; anything else is refused and logged as *not armed*. A local model that is down or errors refuses **by name** instead of failing over to a cloud API (`local_primary_policy = refuse` by default; Auto is the one route that may substitute). And every finished run carries an outcome beside its status (*completed*, *with failures* or *needs you*) taken from the ledger, never from the model's closing paragraph.
 - **The bell** lists every run that is waiting for you, and an ask nobody answered ends up on the session's outcome (*needs you*), not in a forgotten corner.
 - **Context is screened.** Project notes, attachments, outside skills, memory and tool results are scanned for hidden instructions before a model sees them. Work that arrives from your phone, or touches flagged content, runs with fewer powers.
-- **Safety checks** run rules over what Jarvis did, and over your Claude Code and Codex history, which it reads but never changes. **Activity** replays every action, token and decision, and is where you Undo.
+- **Activity** replays every action, token and decision, and is where you Undo. **Safety checks** run rules over what Jarvis did, and over your Claude Code and Codex history, which it reads but never changes.
 
 <div align="center">
 
@@ -85,22 +96,32 @@ Iron Jarvis is a desktop app that turns AI models into a working system: **a cha
 
 ---
 
+## ⚡ Built to stay out of your way
+
+A daily driver has to be light. Measured on our own daily-driver PC:
+
+- **Add-ons start directly.** With four MCP add-ons running, Iron Jarvis went from **19 processes to 8** and from **774 MB to 415 MB** of memory, because each server now starts without its npx/uvx launcher idling beside it. An npx add-on now starts in **0.5–0.7 s instead of 2.3–3.1 s**.
+- **Idle terminals cost nothing.** Eight idle Build terminals used to keep a whole CPU core busy; they now use **0.08%**.
+- **Proof, not promises.** More than 11,000 backend tests and 4,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
+
+---
+
 ## 📦 Install
 
 ### 🪟 Windows desktop app (recommended, no dependencies)
 
 1. **Download** `Iron-Jarvis-Setup-<version>.exe` from the **[latest release](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)**. Ignore the `.blockmap` and `latest.yml` files; the updater uses those.
 2. **Install.** The app isn't code-signed yet ([why](docs/SIGNING.md)), so SmartScreen shows *"Windows protected your PC"*. Click **More info → Run anyway**.
-3. **Connect a model.** The app opens on chat. If you're signed in to Claude Code or Codex, or Ollama is running on this PC with a model downloaded, the empty chat offers it as one press (for example **Use Ollama (on this PC) for answers**, which also connects Ollama). It never picks one for you. Signed out of Claude Code or Codex? **Sign in** on the chat's door or on **Settings → Connections → Connections** opens a sign-in window inside the app. You can also paste an API key (Anthropic, OpenAI, xAI, OpenRouter, or a Gemini key from Google AI Studio), or point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server under **Settings → Connections** (Gemini can also log in with your own Google OAuth app). Until you choose a model, a **Demo replies** strip under the title bar says so: replies come from the built-in demo model, a scripted demo, not real answers. Its button takes you to the next step (**Choose a model**, or **Connect a model** when none is connected yet).
+3. **Connect a model.** If you're signed in to Claude Code or Codex, or Ollama is running with a model downloaded, the empty chat offers it as one press. It never picks one for you. You can also **Sign in** to Claude Code or Codex from inside the app, paste an API key (Anthropic, OpenAI, xAI, OpenRouter, Google AI Studio), or point it at a local Ollama / vLLM / LM Studio / OpenAI-compatible server under **Settings → Connections**. Until you choose, a **Demo replies** strip says replies come from the built-in demo model.
 
 Iron Jarvis inherits your subscription through the logged-in CLI. It never performs an account login itself and never sees that credential.
 
 **Day to day**
-- **Closing the window doesn't quit.** It goes to the tray so schedules and triggers keep running. Reopen it with **Ctrl+Shift+J** (or **Ctrl+Alt+J** if another app holds that). **Ctrl+Shift+Space** opens a quick ask from anywhere.
-- **Updates install themselves.** New versions download in the background and install when you click **Restart to update**.
+- **Closing the window doesn't quit.** It goes to the tray so schedules and the night shift keep running. Reopen it with **Ctrl+Shift+J**; **Ctrl+Shift+Space** opens a quick ask from anywhere.
+- **Updates install themselves.** New versions download in the background and install when you click **Restart to update**. Want fewer of them? Pick the **Stable** update channel under **Settings → System**.
 - **Your data lives in `%APPDATA%\Iron Jarvis`** and survives updates and reinstalls.
 
-**If something looks wrong:** *"Iron Jarvis isn't responding"* only appears after two missed polls, and your chats and files are saved while it shows. When it comes back you see *"Iron Jarvis is back."* for a few seconds, and anything a restart stopped waits in the bell with **Continue**. If it stays, quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then go to **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why. `ironjarvis doctor`, `repair`, `rollback`, `reset-config` and `backup`/`restore` are one-command recoveries that work even when the background service won't start.
+**If something looks wrong:** *"Iron Jarvis isn't responding"* only appears after two missed polls, and your chats and files are saved while it shows. Anything a restart stopped waits in the bell with **Continue**. If it stays, quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then **Settings → Maintenance → Copy diagnostics / Open logs folder** shows why. `ironjarvis doctor`, `repair`, `rollback`, `reset-config` and `backup`/`restore` are one-command recoveries that work even when the background service won't start.
 
 ### 💻 From source (macOS / Linux / Windows)
 
@@ -124,14 +145,13 @@ Desktop (Electron) ── tray · updates · hotkeys · pop-out windows
    ├─ Dashboard (Next.js 15) ── chat, Build, projects, missions, memory graph, settings
    └─ Daemon (FastAPI, 127.0.0.1:8787, token-protected)
         ├─ Router ── providers · strict local refusal · breaker · Iron-Proxy accounts
+        ├─ Coding ── Claude Code · Codex · Pi · OpenCode · Grok · model team · night shift
         ├─ Agents ── runtime · missions · assignments · coach · trust posture
         ├─ Tools ── fail-closed permissions · undo journal · sandbox · MCP
         ├─ Memory ── 4 layers · memory bases · lessons · graph
         └─ Automations ── schedules · workflows · webhooks · triggers
    SQLite (WAL, self-healing migrations) · Fernet-encrypted vault
 ```
-
-**Proof, not promises:** more than 11,000 backend tests and 4,000 dashboard tests run **offline** with no keys. CI runs them on every push and blocks the installer until they pass. The live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml).
 
 <div align="center">
 
