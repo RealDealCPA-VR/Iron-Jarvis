@@ -44,3 +44,23 @@ export function decodeProviderWait(data: unknown): ProviderWait | "trying" | nul
   if (!words || attempt === null || of === null) return null;
   return { words, attempt, of };
 }
+
+/** v1.422.0 review: `text` without its last `n` CHARACTERS — counted the way
+ *  the daemon counts a `reset`'s `drop` (Python's `len`: code points). A JS
+ *  string counts UTF-16 units, and an emoji is two of them: slicing `n` units
+ *  off left one unit of a failed try's words per emoji (a stray letter, or
+ *  half an emoji). Never splits a surrogate pair. */
+export function dropCodePoints(text: string, n: number): string {
+  let i = text.length;
+  let left = Math.max(0, Math.floor(n));
+  while (left > 0 && i > 0) {
+    i -= 1;
+    const low = text.charCodeAt(i);
+    if (i > 0 && low >= 0xdc00 && low <= 0xdfff) {
+      const high = text.charCodeAt(i - 1);
+      if (high >= 0xd800 && high <= 0xdbff) i -= 1;
+    }
+    left -= 1;
+  }
+  return text.slice(0, i);
+}

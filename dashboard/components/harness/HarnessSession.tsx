@@ -47,7 +47,7 @@ import { retryItemFor } from "@/lib/buildRetry";
 import { carriedOn, carriedOnTurns, continuedTurns } from "@/lib/buildResume";
 // v1.422.0 (Wave 2 "Never lose work", B1): the live line while a round waits
 // out a passing provider error.
-import { PROVIDER_WAIT_FRAME, decodeProviderWait, type ProviderWait } from "@/lib/buildPatience";
+import { PROVIDER_WAIT_FRAME, decodeProviderWait, dropCodePoints, type ProviderWait } from "@/lib/buildPatience";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
@@ -651,6 +651,10 @@ export function HarnessSession({
   // (`resume` .. `caught_up`), so a replayed step read the store's length
   // BEFORE the replay and every step landed above every word.
   const tapLenRef = useRef(0);
+  // v1.422.0 review: the words the tap counted, so a retried round's
+  // take-back (`drop`, in CODE POINTS — the daemon's count) comes off in
+  // the same units as the count (UTF-16: an emoji is two).
+  const tapTextRef = useRef("");
   // v1.390.0 (the Timeline): the running reply folded from its frames — a
   // store, never React state (the Timeline tab reads it once a second while
   // it is shown); carried on from where this window left it (lib/turnCache).
@@ -1126,6 +1130,7 @@ export function HarnessSession({
       replayingRef.current = true;
       if (data.resumed !== true) {
         tapLenRef.current = 0;
+        tapTextRef.current = "";
         pageRef.current = { helpers: [], questions: [], attempts: [] };
         timeline.reset(turnRef.current ?? "");
       }
@@ -1145,12 +1150,20 @@ export function HarnessSession({
     // words away, so every step placed so far sits before the new ones.
     if (data.check !== "finish") {
       if (event === "token") {
-        tapLenRef.current += typeof data.text === "string" ? data.text.length : 0;
+        const words = typeof data.text === "string" ? data.text : "";
+        tapLenRef.current += words.length;
+        tapTextRef.current += words;
       } else if (event === "reset") {
         // v1.422.0 (B1): a retried round takes back only `drop` characters
         // (its own words): the steps placed before them stay where they are.
         const drop = typeof data.drop === "number" && data.drop > 0 ? Math.floor(data.drop) : 0;
-        const len = drop ? Math.max(0, tapLenRef.current - drop) : 0;
+        // v1.422.0 review: `drop` counts code points; the tap counts
+        // UTF-16 units — the words it kept say how many units go.
+        const kept = drop ? dropCodePoints(tapTextRef.current, drop) : "";
+        const len = drop
+          ? Math.max(0, tapLenRef.current - (tapTextRef.current.length - kept.length))
+          : 0;
+        tapTextRef.current = kept;
         tapLenRef.current = len;
         if (turnRef.current) {
           const offs = liveOffsetsFor(turnRef.current);
@@ -1391,6 +1404,7 @@ export function HarnessSession({
       posRef.current = resume?.after ?? "";
       // v1.418.0 review: the tap counts the words from where this run starts.
       tapLenRef.current = resume ? (resume.seed.text ?? "").length : 0;
+      tapTextRef.current = resume ? (resume.seed.text ?? "") : "";
       limitSeenRef.current = false;
       let started = !!rejoinId;
       // A NEW turn retires the limit card at its first real frame (once —

@@ -34,6 +34,7 @@
 // POST /chat path is untouched.
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { dropCodePoints } from "@/lib/buildPatience";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 // v1.354.0 (G30): a chat bubble says "Iron Jarvis", never "the daemon".
 import { OFFLINE_WORDS } from "./offlineWords";
@@ -1991,7 +1992,9 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // NOT `committed`: a reset is not work; the tokens around it are.
               // v1.422.0 (B1): a `drop` takes back only that many characters
               // (a retried round's own words), never the earlier rounds'.
-              acc = ev.drop ? acc.slice(0, Math.max(0, acc.length - ev.drop)) : "";
+              // v1.422.0 review: `drop` is the daemon's count (code points,
+              // Python's len) — never UTF-16 units (an emoji is two).
+              acc = ev.drop ? dropCodePoints(acc, ev.drop) : "";
               if (!replaying) {
                 textRef.current = acc;
                 scheduleText();

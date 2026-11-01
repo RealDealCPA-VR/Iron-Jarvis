@@ -294,3 +294,29 @@ describe("a reset with drop takes back only the retried round's words", () => {
     });
   });
 });
+
+// v1.422.0 review: the daemon counts `drop` in CODE POINTS (Python's len); a
+// JS string counts UTF-16 units, so a failed try that streamed an emoji (two
+// units, one code point) left one unit of its words behind ("H", or half an
+// emoji) in the live text and in the text a Stop or an error falls back to.
+describe("review: a drop counts characters the way the daemon does", () => {
+  it("a failed try with an emoji is taken back whole, never one unit short", async () => {
+    render(<Owner />);
+    let p!: Promise<unknown>;
+    act(() => {
+      p = hook!.run({ message: "go" });
+    });
+    p.catch(() => {});
+    await send("token", { text: "Reading 😀 the files. " });
+    await send("token", { text: "Half 😀 answ" });
+    await frame();
+    // Python: len("Half 😀 answ") == 11 (the daemon's `drop`).
+    await send("reset", { reason: "retry", drop: [..."Half 😀 answ"].length });
+    await frame();
+    expect(hook!.textStore!.get()).toBe("Reading 😀 the files. ");
+    await act(async () => {
+      wire.end();
+      await pump();
+    });
+  });
+});
