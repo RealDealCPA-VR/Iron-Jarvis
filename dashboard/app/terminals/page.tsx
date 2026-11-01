@@ -80,6 +80,7 @@ import {
   type BuildView,
 } from "@/lib/buildApp";
 import { codeViewOfferFor, codeViewOfferWords } from "@/lib/buildCodeOffer";
+import { decodeRestoreFailed, restoreFailedWords, type RestoreFailed } from "@/lib/restoreFailed";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -172,6 +173,10 @@ export default function TerminalsPage() {
   // v1.406.0 (part 6 follow-up): panes the daemon is still reopening after a
   // restart (`GET /terminals` → `restoring`), kept current by the re-reads.
   const [restoringIds, setRestoringIds] = useState<string[]>([]);
+  // v1.418.1 (a USER BUG: "Reopening 3 terminals…" for four hours): panes the
+  // daemon GAVE UP reopening (`GET /terminals` → `restore_failed`). Said in
+  // one quiet line beside the normal New terminal door, never "Reopening…".
+  const [restoreFailed, setRestoreFailed] = useState<RestoreFailed | null>(null);
 
   // v1.406.0 (part 1): Build is the terminals only. An OLD link to a
   // coding session or to Last night (`/terminals?session=<id>`,
@@ -809,7 +814,11 @@ export default function TerminalsPage() {
         // every return to Build waited seconds for catalogs that only fill the
         // per-pane pickers and the Launch menu. The panes render the moment
         // the list is in; the catalogs (below) arrive when they arrive.
-        const terms = await get<{ terminals: TerminalInfo[]; restoring?: string[] }>("/terminals");
+        const terms = await get<{
+          terminals: TerminalInfo[];
+          restoring?: string[];
+          restore_failed?: unknown;
+        }>("/terminals");
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
         // v1.406.0 (part 6): panes the daemon is still reopening after a
@@ -819,7 +828,10 @@ export default function TerminalsPage() {
         const restoring = Array.isArray(terms.restoring)
           ? terms.restoring.filter((id): id is string => typeof id === "string")
           : [];
-        const keep = [...alive.map((t) => t.id), ...restoring];
+        // v1.418.1: panes the daemon gave up reopening are still saved — the
+        // next start tries them again — so their keys are kept too.
+        const failed = decodeRestoreFailed(terms.restore_failed);
+        const keep = [...alive.map((t) => t.id), ...restoring, ...(failed?.ids ?? [])];
         // Terminals outlive this page (v1.243.0, components/terminal/paneHost):
         // a pane's xterm and socket stay open while you are elsewhere, so a
         // return is instant. This is where that ends for a pane the daemon no
@@ -832,6 +844,7 @@ export default function TerminalsPage() {
         prunePaneStorage(keep);
         setTerminals(alive);
         setRestoringIds(restoring);
+        setRestoreFailed(failed);
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands
         // right on the pane they came to watch. Read window.location to avoid a
@@ -859,16 +872,22 @@ export default function TerminalsPage() {
         // hold (local adds and closes are never overwritten): every 3 s for
         // the first minute, then every 15 s for as long as one is still
         // reopening, skipping the read while the window is hidden.
-        let waitingFor = restoring;
+        // v1.418.1: also while a pane the daemon gave up on could still open
+        // (a shell that starts late joins the list, and the note goes away).
+        let waitingFor = [...restoring, ...(failed?.ids ?? [])];
         for (let i = 0; waitingFor.length > 0; i += 1) {
           await new Promise((r) =>
             window.setTimeout(r, i < RESTORING_REREADS ? RESTORING_REREAD_MS : RESTORING_SLOW_REREAD_MS),
           );
           if (cancelled) return;
           if (typeof document !== "undefined" && document.visibilityState === "hidden") continue;
-          let again: { terminals: TerminalInfo[]; restoring?: string[] };
+          let again: { terminals: TerminalInfo[]; restoring?: string[]; restore_failed?: unknown };
           try {
-            again = await get<{ terminals: TerminalInfo[]; restoring?: string[] }>("/terminals");
+            again = await get<{
+              terminals: TerminalInfo[];
+              restoring?: string[];
+              restore_failed?: unknown;
+            }>("/terminals");
           } catch {
             continue;
           }
@@ -880,10 +899,13 @@ export default function TerminalsPage() {
               ...opened.filter((t) => !prev.some((p) => p.id === t.id)),
             ]);
           }
-          waitingFor = Array.isArray(again.restoring)
+          const stillRestoring = Array.isArray(again.restoring)
             ? again.restoring.filter((id): id is string => typeof id === "string")
             : [];
-          setRestoringIds(waitingFor);
+          const nowFailed = decodeRestoreFailed(again.restore_failed);
+          setRestoringIds(stillRestoring);
+          setRestoreFailed(nowFailed);
+          waitingFor = [...stillRestoring, ...(nowFailed?.ids ?? [])];
         }
       } catch (e) {
         if (cancelled) return;
@@ -1201,6 +1223,7 @@ export default function TerminalsPage() {
                 onNew={() => addTerminal(newFolder)}
                 busy={busy}
                 reopening={restoringIds.length}
+                restoreFailed={restoreFailed ? restoreFailedWords(restoreFailed) : undefined}
               />
             </div>
           )}
@@ -1247,6 +1270,18 @@ export default function TerminalsPage() {
                   // addTerminal(newFolder), the one code path. The phrase
                   // "No terminals yet" is kept (a review test matches it).
                   <div className="grid h-full place-items-center px-4">
+                    <div className="flex flex-col items-center gap-3">
+                    {restoreFailed && (
+                      // v1.418.1: the daemon gave up reopening the panes from
+                      // before the restart — one quiet line, then the door.
+                      <p
+                        role="status"
+                        data-testid="build-restore-failed"
+                        className="max-w-md text-center text-meta text-zinc-500"
+                      >
+                        {restoreFailedWords(restoreFailed)}
+                      </p>
+                    )}
                     <Empty
                       icon={<SquareTerminal size={26} />}
                       title="No terminals yet"
@@ -1256,6 +1291,7 @@ export default function TerminalsPage() {
                         ? `A terminal is a command line on this PC. A new one opens in ${newFolder}.`
                         : "A terminal is a command line on this PC. Open one here, or pick a project folder first to start in it."}
                     </Empty>
+                    </div>
                   </div>
                   )
                 ) : (

@@ -158,12 +158,28 @@ def test_a_pane_that_starts_after_shutdown_began_is_closed_not_registered(tmp_pa
     m, entries = _manager(tmp_path, monkeypatch, gate, [STUCK])
     stuck_id = entries[0]["id"]
     m.rehydrate()
+    # v1.418.1 (review, moved on purpose): the late finisher no longer takes
+    # the pane out of `restoring` once shutdown began (the shutdown snapshot
+    # may not have read the tables yet), so "restoring is empty" is no longer
+    # the sign that it ran. Wait for the finisher itself.
+    finished = threading.Event()
+    real_finish = m._finish_late_restore
+
+    def _finish(*a, **kw):
+        try:
+            return real_finish(*a, **kw)
+        finally:
+            finished.set()
+
+    m._finish_late_restore = _finish  # type: ignore[method-assign]
     m.kill_all()
     # The shutdown snapshot kept the entry for the next boot.
     assert _saved_ids(m.state_path) == [stuck_id]
     gate.release.set()
-    assert _until(lambda: m.restoring_ids() == [])
+    assert finished.wait(15), "the late restore never finished"
     assert m.get(stuck_id) is None
+    # ...and nothing it did afterwards dropped the pane from the snapshot.
+    assert _saved_ids(m.state_path) == [stuck_id]
 
 
 def test_a_late_pane_that_opens_just_before_shutdown_cannot_wipe_the_shutdown_snapshot(

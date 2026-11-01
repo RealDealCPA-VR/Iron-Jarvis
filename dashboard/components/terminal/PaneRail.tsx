@@ -238,6 +238,7 @@ export function PaneRail({
   footer,
   now,
   reopening = 0,
+  restoreFailed,
 }: {
   panes: RailPane[];
   focusedId: string | null;
@@ -254,6 +255,9 @@ export function PaneRail({
   /** v1.406.0 (part 6 follow-up): panes the daemon is still reopening after
    *  a restart. With no pane yet, the empty line says so instead. */
   reopening?: number;
+  /** v1.418.1: the sentence for panes the daemon GAVE UP reopening after a
+   *  restart (lib/restoreFailed), shown as one quiet line; absent = none. */
+  restoreFailed?: string;
 }) {
   const clock = now ?? Date.now();
   const blocked = panes.filter((p) => p.state === "blocked");
@@ -730,6 +734,11 @@ export function PaneRail({
             );
           })
         )}
+        {restoreFailed ? (
+          <p data-testid="rail-restore-failed" className="px-2.5 py-3 text-meta text-zinc-500">
+            {restoreFailed}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 flex-col gap-px border-t border-white/[0.06] pt-2">
