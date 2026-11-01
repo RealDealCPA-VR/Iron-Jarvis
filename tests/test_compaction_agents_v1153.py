@@ -101,39 +101,81 @@ def test_no_compaction_means_the_transcript_is_untouched():
 # --------------------------------------------------------------------------- #
 # (3) THE RUN: it happens, it is recorded, and it never breaks anything.
 # --------------------------------------------------------------------------- #
-def test_a_run_compacts_itself_and_says_so(tmp_path, monkeypatch):
-    """End to end on a deliberately tiny window: the run compacts without
-    asking, and leaves a PERSISTED record that it did."""
-    from fastapi.testclient import TestClient
-    from sqlmodel import Session, select
+def _compacting_run(tmp_path, *, window: int, task: str, say_chars: int, steps: int):
+    """One agent run on a SCRIPTED model that keeps working for ``steps``
+    steps — each an assistant turn carrying ``say_chars`` of reasoning and a
+    ``list_files`` call — then answers. Returns (platform, session,
+    compaction calls). v1.421.0: these pins used to ride the demo model with
+    a task bigger than a 2,000-token window — a run whose planner clipped the
+    task, so the model never saw its own result and asked again until its
+    step limit, compacting along the way. That run now ends at once, saying
+    the model is too small for the job (``runtime.ContextTooSmall``), so the
+    pins drive a run the window CAN carry: a short roster (the builder's
+    ~15k tokens of tool definitions now count against a known window) and a
+    model that really takes the steps."""
+    import asyncio
+    import dataclasses
 
-    from iron_jarvis.core.models import EventRecord
-    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.agents.types import get_agent_definition
+    from iron_jarvis.core.models import AgentType
+    from iron_jarvis.platform import build_platform
+    from iron_jarvis.providers.adapters.base import LLMResponse
+    from iron_jarvis.providers.adapters.mock import MockLLMAdapter
 
-    client = TestClient(create_app(str(tmp_path)))
-    client.put("/settings", json={"values": {"model_context_windows": {"mock": 2000}}})
-    platform = client.app.state.platform
+    platform = build_platform(str(tmp_path / "home"))
+    platform.config.model_context_windows = {"mock": window}
+    made = {"steps": 0, "compactions": 0}
 
     async def fake_complete(system, user):
         # Names only things the transcript really contains, so verification
         # keeps it — the point here is the wiring, not the stripping.
-        return "GOAL:\n- audit the ledger\nDONE:\n- ran write_file\n", "acme", "acme-1"
+        made["compactions"] += 1
+        return "GOAL:\n- note the plain items\nDONE:\n- ran list_files\n", "acme", "acme-1"
 
     platform._compaction_complete = lambda *a, **k: fake_complete
 
-    # A BIG task in a small window is what actually fills an agent's context.
-    # The mock's own steps are ~16 tokens each, so a short task never reaches
-    # the ceiling no matter how many steps run — measured, not assumed.
-    r = client.post(
-        "/sessions", json={"task": "audit the ledger carefully. " * 220, "wait": True}
-    )
-    assert r.status_code == 200
+    class Scripted(MockLLMAdapter):
+        async def complete(self, *, system, messages, tools, **kw):
+            made["steps"] += 1
+            i = made["steps"]
+            if i <= steps:
+                return LLMResponse(
+                    text=("I am still looking at item %d. " % i) * (say_chars // 30),
+                    tool_calls=[ToolCall(id=f"c{i}", name="list_files", arguments={"path": "."})],
+                    finish_reason="tool_use",
+                )
+            return LLMResponse(text="done", finish_reason="stop")
 
+    platform.providers.register("mock", lambda model=None: Scripted())
+    orch = Orchestrator(platform)
+    short = dataclasses.replace(get_agent_definition(AgentType.BUILDER), tools=["list_files"])
+
+    async def go():
+        sess = await orch.create_session(task, provider="mock", model="mock-1")
+        return await orch.run_session(sess.id, definition=short)
+
+    return platform, asyncio.run(go()), made["compactions"]
+
+
+def test_a_run_compacts_itself_and_says_so(tmp_path):
+    """End to end on a deliberately small window: the run compacts without
+    asking, and leaves a PERSISTED record that it did."""
+    from sqlmodel import Session, select
+
+    from iron_jarvis.core.models import EventRecord, SessionStatus
+
+    platform, sess, calls = _compacting_run(
+        tmp_path, window=8_000, task="Note the plain items in this list.",
+        say_chars=3_000, steps=10,
+    )
+    assert sess.status is SessionStatus.COMPLETED, sess.summary
     with Session(platform.engine) as db:
         rows = db.exec(
             select(EventRecord).where(EventRecord.type == "context.compacted")
         ).all()
     assert rows, "a run over the ceiling must record that it compacted"
+    assert calls == len(rows) == 1
     payload = json.loads(rows[0].payload_json)
     assert payload["covers"] > 0
     assert payload["trigger"] == "auto"
@@ -142,34 +184,24 @@ def test_a_run_compacts_itself_and_says_so(tmp_path, monkeypatch):
 def test_a_run_stops_paying_for_compactions_that_do_not_help(tmp_path):
     """The futility guard. When the TASK alone dominates the window, covering
     every step still leaves pressure above the ceiling — and without this the
-    run buys another model call every few steps for no benefit. One attempt,
-    then the planner's honest trim-and-clip path takes over.
+    run buys another model call every step for no benefit. One attempt, then
+    the planner's honest trim path takes over (the task and the newest step
+    still fit, so the run goes on to its answer).
     """
-    from fastapi.testclient import TestClient
     from sqlmodel import Session, select
 
-    from iron_jarvis.core.models import EventRecord
-    from iron_jarvis.daemon.app import create_app
+    from iron_jarvis.core.models import EventRecord, SessionStatus
 
-    client = TestClient(create_app(str(tmp_path)))
-    client.put("/settings", json={"values": {"model_context_windows": {"mock": 2000}}})
-
-    calls = {"n": 0}
-
-    async def fake_complete(system, user):
-        calls["n"] += 1
-        return "GOAL:\n- audit the ledger\n", "acme", "acme-1"
-
-    client.app.state.platform._compaction_complete = lambda *a, **k: fake_complete
-    client.post(
-        "/sessions", json={"task": "audit the ledger carefully. " * 220, "wait": True}
+    platform, sess, calls = _compacting_run(
+        tmp_path, window=40_000, task="Note the plain items in this list. " * 3_312,
+        say_chars=5_400, steps=9,
     )
-
-    with Session(client.app.state.platform.engine) as db:
+    assert sess.status is SessionStatus.COMPLETED, sess.summary
+    with Session(platform.engine) as db:
         rows = db.exec(
             select(EventRecord).where(EventRecord.type == "context.compacted")
         ).all()
-    assert calls["n"] == 1, f"compacted {calls['n']}x when it could not help"
+    assert calls == 1, f"compacted {calls}x when it could not help"
     assert len(rows) == 1
 
 

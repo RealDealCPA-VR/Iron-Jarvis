@@ -570,6 +570,49 @@ class RunStoppedByUser(Exception):
         self.run = run
 
 
+#: v1.421.0: what a run whose model is too small for the job says. The second
+#: sentence is the way out; the fleet probe now reads a local model's REAL
+#: window (``fleet/windows``), and Ollama's default (4,096) is the usual case.
+CONTEXT_TOO_SMALL_FIX = (
+    "Use a model with a larger window, or raise its context length "
+    "(for Ollama, OLLAMA_CONTEXT_LENGTH)."
+)
+
+
+def context_too_small_result(window: int, *, task_clipped: bool, has_tools: bool) -> str:
+    """The one plain sentence (and its way out) a run ends with when its
+    model's KNOWN context window cannot hold what a step must send — the task
+    itself (``task_clipped``), or the latest results the model must act on
+    (v1.421.0). Names the window, never a token estimate of anything else."""
+    what = "its instructions and tools" if has_tools else "its instructions"
+    part = "the task" if task_clipped else "its latest results"
+    return (
+        f"This model's context window ({int(window):,} tokens) is too small for "
+        f"this job: {part} {'does' if task_clipped else 'do'} not fit beside "
+        f"{what}. {CONTEXT_TOO_SMALL_FIX}"
+    )
+
+
+class ContextTooSmall(Exception):
+    """A step that cannot be sent with what the model needs to make progress
+    (v1.421.0): at a KNOWN window the planner had to clip the task, or could
+    not keep the newest block — the latest tool results the model is about to
+    act on. Sending the step anyway made the model ask for the same results
+    again, step after step, until its step limit — the honest ending of a run
+    whose model is too small for the job, reached only after every step was
+    spent. Raised by :meth:`AgentRuntime.perceive_act` (the flat loop and the
+    decomposed lane's mini-loops alike) BEFORE the model call, and caught in
+    :meth:`AgentRuntime.run`, which ends the run FAILED with ``result`` as
+    its summary — the same ending a run that spent its steps gets, never a
+    crash. A guessed window (the 32k default) never raises it.
+    """
+
+    def __init__(self, run: AgentRun, result: str) -> None:
+        super().__init__(result)
+        self.run = run
+        self.result = result
+
+
 def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
     """True when a session runs DIRECTLY in a user-chosen folder (a project's
     in-folder task, created with ``workspace_root=...``), not in a disposable
@@ -1977,6 +2020,8 @@ class AgentRuntime:
                 return await self._run_body(session, agent_def, parent_id)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
+        except ContextTooSmall as small:
+            return await self._end_too_small(small.run, session, small.result)
         finally:
             reset_run_budget(token)
             # v1.333.0 (D9): this run's in-run grants and taint flag are
@@ -2081,6 +2126,31 @@ class AgentRuntime:
                 session_id=session.id,
             )
         except Exception:  # noqa: BLE001 — narration must never break a stop
+            pass
+        hub = getattr(self.p, "streams", None)
+        if hub is not None:
+            try:
+                hub.sink(session.id, run.id).done(ok=False, result=run.result)
+            except Exception:  # noqa: BLE001
+                pass
+        return run
+
+    async def _end_too_small(self, run: AgentRun, session: Session, result: str) -> AgentRun:
+        """End a run whose model's window is too small for the job (v1.421.0,
+        :class:`ContextTooSmall`): FAILED with the one plain sentence as its
+        result — so as its session's summary — announced and its stream
+        closed, exactly as the flat loop ends a run that spent its steps.
+        RETURNED, so a delegated child's caller settles it like any failed
+        child."""
+        run.result = result
+        await self._set_state(run, AgentState.FAILED, session.id)
+        try:
+            await self.p.event_bus.publish(
+                EventType.AGENT_COMPLETED,
+                {"run_id": run.id, "ok": False, "result": run.result},
+                session_id=session.id,
+            )
+        except Exception:  # noqa: BLE001 — narration must never break the ending
             pass
         hub = getattr(self.p, "streams", None)
         if hub is not None:
@@ -3686,6 +3756,10 @@ class AgentRuntime:
         # v1.402.0 (the closing offer): where this invocation's steps start,
         # so the final-answer exit knows how many are LEFT.
         _offer_from = run.steps
+        # v1.421.0: this invocation's tool definitions as the wire carries
+        # them (serialised once — they do not change between its steps), so
+        # the budget planner can price them against a KNOWN window.
+        _tools_blob: str | None = None
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
@@ -3707,8 +3781,12 @@ class AgentRuntime:
             # keeps appending to the real `messages` list, so the run's own
             # history (and the DB transcript) is never rewritten by trimming.
             step_messages, step_system = messages, system_prompt
+            # v1.421.0: the one sentence this step ends the run with when its
+            # model's KNOWN window cannot hold what the step must send.
+            _too_small = ""
             try:
                 from ..context.agent_window import plan_agent_transcript
+                from ..context.budget import estimate_tokens as _estimate_tokens
                 from ..daemon.chat_turn import _context_window, _history_ratio, _reserve_kw
 
                 _win = _context_window(
@@ -3747,6 +3825,28 @@ class AgentRuntime:
                     messages, system_prompt, _cpt_summary, _cpt_covers
                 )
 
+                # THE TOOL DEFINITIONS COUNT (v1.421.0). Every step sends
+                # `tool_specs` beside the system prompt and the messages — a
+                # 67-tool builder ~15k tokens of them — and the planner priced
+                # only the other two: on a model whose window is now read
+                # honestly (the fleet probe: Ollama's 4,096, a 44k-70k
+                # mid-size server) a step "fitted" by the planner overflowed
+                # by the tools. Priced ONLY when the window is KNOWN
+                # (`_context_window` answers None for the unknown rung, which
+                # the planner reads as the 32k guess): 15k of tools against a
+                # guessed 32k would
+                # over-trim every unknown model's run. Not in compaction
+                # pressure either (`TranscriptPlan.raw_tokens`): a summary
+                # cannot shrink a tool list. Passed only when set, so a run
+                # with no tools, or an unknown window, plans byte-identically.
+                _fixed_kw: dict[str, int] = {}
+                if _win and tool_specs:
+                    if _tools_blob is None:
+                        _tools_blob = json.dumps(
+                            tool_specs, ensure_ascii=False, sort_keys=True, default=str,
+                        )
+                    _fixed_kw = {"fixed_tokens": _estimate_tokens(_tools_blob, _cpt)}
+
                 _plan = plan_agent_transcript(
                     _eff_messages,
                     window=_win,
@@ -3757,6 +3857,7 @@ class AgentRuntime:
                     **_reserve_kw(
                         SimpleNamespace(platform=self.p), session.provider, session.model, _win,
                     ),
+                    **_fixed_kw,
                 )
                 step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:
@@ -3796,9 +3897,26 @@ class AgentRuntime:
                             },
                             session_id=session.id,
                         )
+                # A MODEL TOO SMALL FOR THE JOB SAYS SO (v1.421.0). With the
+                # task clipped, or without the newest block — the results the
+                # model is about to act on — the step cannot make progress:
+                # the model asks for the same results again, step after step,
+                # and the run ended at its step limit having done nothing,
+                # for a reason nobody was told. Only at a KNOWN window (a
+                # guessed 32k never ends a run); decided here, raised after
+                # this block (whose `except` keeps budgeting faults from
+                # breaking a run) and BEFORE any model call.
+                if _win and (_plan.clipped_task or _plan.lost_newest):
+                    _too_small = context_too_small_result(
+                        _plan.window,
+                        task_clipped=_plan.clipped_task,
+                        has_tools=bool(tool_specs),
+                    )
             except Exception:  # noqa: BLE001 — a budgeting fault must never
                 # break a run; the untrimmed transcript is what shipped before.
                 step_messages, step_system = messages, system_prompt
+            if _too_small:
+                raise ContextTooSmall(run, _too_small)
             # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to
             # the SSE sink the moment they arrive; the terminal ``final`` frame
             # carries the SAME aggregate LLMResponse (+ resolved provider/model) that
