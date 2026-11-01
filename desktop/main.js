@@ -44,6 +44,7 @@ const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const path = require("path");
 
 const windowState = require("./windowState");
@@ -1710,7 +1711,8 @@ function daemonWatchdogTick() {
         // It is OURS (adoption requires the ownership probe) and it may still
         // hold the port while wedged: sweep first, or serve's preflight sees a
         // held port with a dead /health, exits 1, and the ladder loops.
-        sweepOrphanDaemons();
+        // v1.422.0: a restart, so the code host (Build › Code's tools) stays.
+        sweepOrphanDaemons({ spareCodeHost: true });
         startService("daemon", rec.spawnFn);
       }
       return;
@@ -1846,13 +1848,101 @@ function verifyInstallIntegrity() {
 // the next boot comes up half-installed. The image name is unique to Iron
 // Jarvis, so force-killing every instance is safe. Best-effort, synchronous
 // (the installer must not start until the locks are gone).
-function sweepOrphanDaemons() {
+function sweepOrphanDaemons(opts = {}) {
   if (process.platform !== "win32") return;
+  // v1.422.0: a RESTART-type sweep (a wedged adopted daemon) spares the code
+  // host — it runs Build › Code's tools on purpose and the next daemon takes
+  // them back. A Quit or an update sweep (no options) ends it like the rest.
+  const spare = opts.spareCodeHost ? (codeHostRecord(codeHostHome()) || {}).pid : 0;
   try {
-    spawnSync("taskkill", ["/F", "/T", "/IM", "ironjarvis.exe"], { windowsHide: true });
+    spawnSync("taskkill", sweepArgs(spare), { windowsHide: true });
   } catch {
     /* best effort */
   }
+}
+
+//: v1.422.0: the sweep's taskkill arguments — every ironjarvis.exe, but the
+//: code host's pid when one is spared. Pure (pinned under node).
+function sweepArgs(spareHostPid) {
+  const args = ["/F", "/T", "/IM", "ironjarvis.exe"];
+  if (Number.isInteger(spareHostPid) && spareHostPid > 0) args.push("/FI", `PID ne ${spareHostPid}`);
+  return args;
+}
+
+// v1.422.0: Build › Code's CODE HOST (iron_jarvis/codehost.py) runs the
+// coding tools in a process of its own that OUTLIVES a daemon restart: a
+// launcher starts it, so it is never in the daemon's tree and killChild's
+// `taskkill /T` (a restart, the watchdog) leaves it and its tools running —
+// the next daemon takes them back. A QUIT and an update must still end it:
+// the daemon's tidy stop tells it (POST /shutdown with no body is a quit);
+// quitCodeHost covers a daemon that could not. Its record names its pid,
+// loopback port and token (the daemon's own home, so it is ours).
+const CODE_HOST_RECORD = path.join("hosted", "codehost.json");
+
+function codeHostHome() {
+  return updateChannelHome(); // the state home the daemon runs in
+}
+
+function codeHostRecord(stateHome) {
+  try {
+    const rec = JSON.parse(fs.readFileSync(path.join(stateHome, CODE_HOST_RECORD), "utf8"));
+    const pid = Number(rec && rec.pid);
+    const port = Number(rec && rec.port);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(port) || port <= 0) return null;
+    if (typeof rec.token !== "string" || !rec.token) return null;
+    return { pid, port, token: rec.token };
+  } catch {
+    return null;
+  }
+}
+
+//: What the desktop says to the code host: hello (protocol 0 — never the
+//: daemon's, so the host takes only `quit` from it and never drops the
+//: daemon's own connection) and quit, gracefully. Pure (pinned under node).
+function codeHostQuitFrames(token) {
+  return (
+    JSON.stringify({ t: "hello", token, protocol: 0, version: "desktop" }) +
+    "\n" +
+    JSON.stringify({ t: "quit", re: 1, graceful: true }) +
+    "\n"
+  );
+}
+
+// Tell the code host to stop its tools gracefully and go. Resolves true once
+// it answered, false when there is none or it did not answer in time (it
+// still stops by itself once it got the message). Never rejects.
+function quitCodeHost(stateHome, timeoutMs) {
+  return new Promise((resolve) => {
+    const rec = codeHostRecord(stateHome);
+    if (!rec) return resolve(false);
+    let done = false;
+    let buf = "";
+    let sock = null;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      try {
+        if (sock) sock.destroy();
+      } catch {
+        /* already closed */
+      }
+      resolve(value);
+    };
+    try {
+      sock = net.createConnection({ host: "127.0.0.1", port: rec.port }, () =>
+        sock.write(codeHostQuitFrames(rec.token))
+      );
+    } catch {
+      return finish(false);
+    }
+    sock.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      if (/"re":\s*1\b/.test(buf)) finish(true);
+    });
+    sock.on("error", () => finish(false));
+    sock.on("close", () => finish(false));
+    setTimeout(() => finish(false), timeoutMs);
+  });
 }
 
 // The updater keeps the last downloaded installer + its sha512 under
@@ -4225,6 +4315,14 @@ async function applyPendingUpdate() {
     stopped = false;
   }
   if (!stopped) killChild(daemonProc, "daemon", "update");
+  // v1.422.0: Build › Code's code host runs from the install folder too —
+  // its tools save and stop before the installer replaces the files (the
+  // sweep below and the installer's own taskkill end what is left).
+  try {
+    await quitCodeHost(codeHostHome(), 4000);
+  } catch {
+    /* best effort */
+  }
   let failure = null;
   const onInstallError = (err) => {
     failure = err || new Error("the installer did not start");
@@ -6155,6 +6253,10 @@ if (!gotLock) {
     // lifespan runs, so a Quit with a chat/session stream open never finished
     // in 2s and the terminal snapshot + browser close were routinely skipped.
     requestDaemonShutdown(5000).finally(() => {
+      // v1.422.0: a daemon that could not tell the code host (wedged) — the
+      // desktop does (the message is sent at once; the host then stops its
+      // tools and goes by itself): Quit leaves nothing of Build › Code running.
+      quitCodeHost(codeHostHome(), 2500).catch(() => false);
       shutdown(); // force-kills whatever is still alive (incl. the dashboard)
       // A stale or adopted daemon that ignored /shutdown must not outlive Quit
       // (v1.226.0, F-E-2) — but only OURS is swept (contract C2 as amended);
