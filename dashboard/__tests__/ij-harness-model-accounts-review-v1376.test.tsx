@@ -187,7 +187,8 @@ function renderSession() {
 
 async function openMenu(waitForAccount = "work"): Promise<HTMLElement> {
   const chip = await screen.findByTitle("Switch model");
-  if (waitForAccount) await screen.findByTestId("account-chip");
+  // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip.
+  if (waitForAccount) await screen.findByTestId("model-chip-account");
   fireEvent.click(chip);
   const menu = await screen.findByTestId("model-menu");
   if (waitForAccount) await within(menu).findByTestId(`model-account-${waitForAccount}`);
@@ -272,7 +273,7 @@ describe("the session's own account is listed even when its vendor's list is emp
       { account: { ...WORK, status: "off" } },
     );
     renderSession();
-    await screen.findByTestId("account-chip");
+    await screen.findByTestId("model-chip-account");
     fireEvent.click(screen.getByTitle("Switch model"));
     const menu = await screen.findByTestId("model-menu");
     const work = await within(menu).findByTestId("model-account-work");
@@ -390,7 +391,7 @@ describe("the account list is re-read only while the menu is open", () => {
   it("every few seconds while open; never once it closes", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     renderSession();
-    await screen.findByTestId("account-chip");
+    await screen.findByTestId("model-chip-account");
     const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/build/accounts").length;
     await waitFor(() => expect(reads()).toBe(1));
     fireEvent.click(screen.getByTitle("Switch model"));

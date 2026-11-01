@@ -24,7 +24,9 @@
  * mounted, hidden and inert, so a draft survives). Chips: tool · model,
  * effort, mode (Full access takes two presses and is sent with
  * `confirm: true`), account. `/` lists the tool's own commands, `@` the
- * folder's files. Stop interrupts the tool. ⋯ → Open in terminal.
+ * folder's files. Stop interrupts the tool. ⋯ → Open in terminal, Rename,
+ * Delete (two presses; v1.420.0, fix plan C4.10), and a search over the
+ * list's titles and folders.
  *
  * v1.412.0 (the user: "I cant copy and past images into the build modules
  * </> code … the permission blocker does not allow change to auto-- allow
@@ -65,12 +67,14 @@ import {
   Loader2,
   MoreHorizontal,
   Plus,
+  Search,
   ShieldAlert,
   Square,
   UserRound,
   X,
 } from "lucide-react";
-import { ApiError, get, patch, post } from "@/lib/api";
+import { ApiError, del, get, patch, post } from "@/lib/api";
+import { ConfirmButton } from "@/components/ui";
 import { streamSSE } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
@@ -1723,6 +1727,13 @@ export function BuildCodeView({
   const [creating, setCreating] = useState(false);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [rowNote, setRowNote] = useState<string | null>(null);
+  // v1.420.0 (fix plan C4.10): rename a session in its row, and search the
+  // list by title and folder (the list the view holds; no new read).
+  const [renaming, setRenaming] = useState<{ id: string; text: string } | null>(null);
+  // The row being renamed, read synchronously: Enter saves and the input's
+  // blur (its removal) must not save a second time.
+  const renameOpenRef = useRef<string | null>(null);
+  const [query, setQuery] = useState("");
   // The archived list (read only while it is shown).
   const [showArchived, setShowArchived] = useState(false);
   const [archivedRows, setArchivedRows] = useState<CodeSession[] | null>(null);
@@ -1905,11 +1916,92 @@ export function BuildCodeView({
     [noteChanged, open],
   );
 
-  const groups = useMemo(() => groupByFolder(sessions ?? []), [sessions]);
-  const archivedGroups = useMemo(() => groupByFolder(archivedRows ?? [], { archived: true }), [archivedRows]);
+  /** v1.420.0 (C4.10): Rename — PATCH the title; the daemon's answer is the
+   *  row. An empty or unchanged name saves nothing. */
+  const saveRename = useCallback(
+    async (id: string, text: string, was: string) => {
+      if (renameOpenRef.current !== id) return;
+      renameOpenRef.current = null;
+      setRenaming(null);
+      const title = text.trim();
+      if (!title || title === was.trim()) return;
+      setRowNote(null);
+      try {
+        const raw = await patch<unknown>(`${SESSIONS}/${encodeURIComponent(id)}`, { title });
+        const next = decodeCodeSession(raw);
+        if (next) {
+          noteChanged(next);
+          setArchivedRows((prev) => (prev ? prev.map((x) => (x.id === id ? { ...x, ...next } : x)) : prev));
+        } else readList();
+      } catch (e) {
+        setRowNote(errorWords(e, "The new name did not save."));
+      }
+    },
+    [noteChanged, readList],
+  );
+
+  /** v1.420.0 (C4.10): Delete — two presses (ConfirmButton), the existing
+   *  DELETE route. A session whose reply is running is refused by the daemon
+   *  (409) and its words are said here; nothing leaves the list then. */
+  const deleteSession = useCallback(
+    async (id: string) => {
+      setRowNote(null);
+      try {
+        await del<unknown>(`${SESSIONS}/${encodeURIComponent(id)}`);
+        setRowMenu(null);
+        setSessions((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));
+        setArchivedRows((prev) => (prev ? prev.filter((x) => x.id !== id) : prev));
+        if (openId === id) open(null);
+      } catch (e) {
+        setRowMenu(null);
+        setRowNote(errorWords(e, "The session was not deleted."));
+      }
+    },
+    [openId, open],
+  );
+
+  /** v1.420.0 (C4.10): the search — a title or a folder (its path or its
+   *  last part) holding every typed word, case ignored. Blank: everything. */
+  const matches = useCallback(
+    (s: CodeSession) => {
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) return true;
+      const hay = `${sessionTitle(s, tools)} ${s.folder}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    },
+    [query, tools],
+  );
+  const groups = useMemo(() => groupByFolder((sessions ?? []).filter(matches)), [sessions, matches]);
+  const archivedGroups = useMemo(
+    () => groupByFolder((archivedRows ?? []).filter(matches), { archived: true }),
+    [archivedRows, matches],
+  );
 
   const row = (s: CodeSession, archivedRow: boolean) => (
     <li key={s.id} className="group relative">
+      {renaming?.id === s.id ? (
+        <input
+          autoFocus
+          aria-label="Session name"
+          data-testid={`code-row-rename-input-${s.id}`}
+          value={renaming.text}
+          maxLength={120}
+          onChange={(e) => setRenaming({ id: s.id, text: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void saveRename(s.id, renaming.text, s.title);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              renameOpenRef.current = null;
+              setRenaming(null);
+            }
+          }}
+          onBlur={() => void saveRename(s.id, renaming.text, s.title)}
+          className="field w-full py-1 text-[13px]"
+        />
+      ) : (
       <button
         type="button"
         data-testid={`code-row-${s.id}`}
@@ -1934,6 +2026,7 @@ export function BuildCodeView({
           {s.source === "disk" ? ` · saved by ${toolLabel(s.tool, tools)}` : ""}
         </span>
       </button>
+      )}
       <button
         type="button"
         aria-label={`More for ${sessionTitle(s, tools)}`}
@@ -1967,6 +2060,34 @@ export function BuildCodeView({
           >
             {OPEN_IN_TERMINAL}
           </button>
+          {/* v1.420.0 (fix plan C4.10): Rename in the row; Delete takes two
+              presses. */}
+          <button
+            type="button"
+            role="menuitem"
+            data-testid={`code-row-rename-${s.id}`}
+            onClick={() => {
+              setRowMenu(null);
+              renameOpenRef.current = s.id;
+              setRenaming({ id: s.id, text: s.title });
+            }}
+            className="flex w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-300 hover:bg-white/[0.06]"
+          >
+            Rename
+          </button>
+          <div role="menuitem" data-testid={`code-row-delete-${s.id}`}>
+            <ConfirmButton
+              label="Delete"
+              confirmLabel="Delete for good?"
+              title={
+                s.running
+                  ? "A reply is running: stop it first (Iron Jarvis refuses to delete a working session)"
+                  : "Delete this session from the list (press twice). The tool's own saved conversation stays."
+              }
+              className="w-full justify-start"
+              onConfirm={() => deleteSession(s.id)}
+            />
+          </div>
         </div>
       ) : null}
     </li>
@@ -2054,7 +2175,38 @@ export function BuildCodeView({
             </button>
           ) : null}
         </div>
+        {(sessions?.length ?? 0) > 0 || (archivedRows?.length ?? 0) > 0 || query ? (
+          // v1.420.0 (fix plan C4.10): search by title or folder. `isolate`
+          // + `z-[1]` (the v1.313.0 rule): the icon paints over the field.
+          <div className="relative isolate shrink-0 px-3 pb-1">
+            <Search
+              size={12}
+              aria-hidden="true"
+              className="pointer-events-none absolute left-5 top-1/2 z-[1] -translate-y-1/2 text-zinc-500"
+            />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && query) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setQuery("");
+                }
+              }}
+              placeholder="Search sessions…"
+              aria-label="Search sessions"
+              data-testid="code-session-search"
+              className="field w-full py-1.5 pl-7 text-[12px]"
+            />
+          </div>
+        ) : null}
         <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+          {query.trim() && !(showArchived ? archivedGroups : groups).length && (showArchived ? archivedRows : sessions)?.length ? (
+            <p data-testid="code-search-none" className="px-2 py-2 text-[12px] text-zinc-500">
+              No sessions match “{query.trim()}”.
+            </p>
+          ) : null}
           {showArchived ? (
             !archivedRows ? (
               <p className="px-2 py-2 text-[12px] text-zinc-500">Reading the archived sessions…</p>

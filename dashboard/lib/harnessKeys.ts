@@ -8,8 +8,12 @@
  *  - INSIDE THE IJ HARNESS ONLY: the key is pressed with the keyboard focus
  *    inside Build's IJ harness view, or with nothing focused while the last
  *    click was inside it (a click on the conversation's text gives no focus).
- *    Anywhere else — the app's sidebar, the title bar, another page, the chat
- *    page — the keys are not the harness's.
+ *    v1.420.0 (fix plan C2.9): the session LIST counts as inside too — it is
+ *    portaled into the app's sidebar, outside the view's root, and after a
+ *    click on a row Esc, Ctrl+N, Ctrl+L and Ctrl+K did nothing until the user
+ *    clicked in the session. The list marks itself with `HARNESS_LIST_ATTR`.
+ *    Anywhere else — the rest of the app's sidebar, the title bar, another
+ *    page, the chat page — the keys are not the harness's.
  *  - Ctrl+K: inside the harness it is the MODEL MENU; everywhere else (the
  *    title bar's search, the sidebar, every other page) it stays the app's
  *    command palette (components/CommandPalette.tsx), which is untouched.
@@ -83,6 +87,36 @@ export function harnessKeyAction(e: HarnessKeyEvent, ctx: HarnessKeyContext): Ha
 export const HARNESS_ROOT_SELECTOR = '[data-testid="ij-harness-view"]';
 /** The session's message box (its Escape stops a running reply). */
 export const HARNESS_BOX_SELECTOR = '[data-testid="harness-input"]';
+/** v1.420.0 (C2.9): an element OUTSIDE the view's root whose key presses are
+ *  the harness's (the session list, portaled into the app's sidebar). */
+export const HARNESS_LIST_ATTR = "data-harness-keys-root";
+/** v1.420.0: a session row ↑/↓ move between (inside a HARNESS_LIST_ATTR). */
+export const HARNESS_ROW_ATTR = "data-harness-row";
+
+/** Is `node` inside the harness: the view's root, or a list marked with
+ *  HARNESS_LIST_ATTR (the portaled session list)? */
+export function inHarness(node: Node | null, root: Element | null = null): boolean {
+  if (!node) return false;
+  const view = root ?? (typeof document !== "undefined" ? document.querySelector(HARNESS_ROOT_SELECTOR) : null);
+  if (view && view.contains(node)) return true;
+  const el = node instanceof Element ? node : node.parentElement;
+  return !!el?.closest(`[${HARNESS_LIST_ATTR}]`);
+}
+
+/** v1.420.0 (C2.9): ↑/↓ on a session row move the focus to the row above or
+ *  below (Enter then opens it — the row is a button). Returns whether it
+ *  moved. Pure DOM: the rows are read in document order. */
+export function moveRowFocus(from: Element, delta: 1 | -1): boolean {
+  const list = from.closest(`[${HARNESS_LIST_ATTR}]`);
+  if (!list) return false;
+  const rows = Array.from(list.querySelectorAll<HTMLElement>(`[${HARNESS_ROW_ATTR}]`));
+  const i = rows.indexOf(from as HTMLElement);
+  if (i < 0) return false;
+  const next = rows[i + delta];
+  if (!next) return false;
+  next.focus();
+  return true;
+}
 
 /** What counts as an OPEN POPUP whose Escape is its own (v1.377.0 review): a
  *  control that says it opens a popup and has it open (`aria-haspopup` +
@@ -124,11 +158,12 @@ let lastPointerInside = false;
 let pointerWatchers = 0;
 function onPointerDown(e: Event) {
   const t = e.target;
-  lastPointerInside = t instanceof Element && !!t.closest(HARNESS_ROOT_SELECTOR);
+  lastPointerInside = t instanceof Element && (!!t.closest(HARNESS_ROOT_SELECTOR) || !!t.closest(`[${HARNESS_LIST_ATTR}]`));
 }
 
-/** Does this key press belong to the harness? The focus is inside the view,
- *  or nothing is focused and the last click was inside it. */
+/** Does this key press belong to the harness? The focus is inside the view
+ *  (or its session list, v1.420.0), or nothing is focused and the last click
+ *  was inside one of them. */
 export function pressIsInside(target: EventTarget | null): boolean {
   if (typeof document === "undefined") return false;
   const root = document.querySelector(HARNESS_ROOT_SELECTOR);
@@ -139,7 +174,7 @@ export function pressIsInside(target: EventTarget | null): boolean {
     target !== document.documentElement &&
     target !== document
   ) {
-    return root.contains(target);
+    return inHarness(target, root);
   }
   return lastPointerInside;
 }

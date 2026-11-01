@@ -30,6 +30,20 @@
  * The terminal tab, once opened, stays MOUNTED and is hidden with
  * `visibility` (never `display:none`, never an unmount — the Build terminal
  * rules); behind another tab its terminal parks in the host's lot.
+ *
+ * v1.420.0 (fix plan C2.10):
+ *  - Changes re-reads every CHANGES_POLL_MS while a reply runs (the window on
+ *    screen — useVisibleInterval, as Build › Code's CodePanes does) and once
+ *    when it ends (`refreshKey`), so a file the reply writes shows while it
+ *    works, not only after.
+ *  - The first tab, when the user never chose one: Changes when the newest
+ *    reply changed files, else Session (Plan used to open first and mostly
+ *    said "No plan yet"). A chosen tab is remembered as before.
+ *  - The column COLLAPSES to a thin strip (`harness-panes-toggle`) and has two
+ *    widths (`harness-panes-width`: narrow / wide), both remembered in
+ *    localStorage `ij.harness.panes`. Collapsing unmounts the views (a
+ *    terminal parks in the host's lot, as on any unmount); the tab and the
+ *    opened terminal are kept.
  */
 
 import { memo, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -40,8 +54,11 @@ import {
   Globe,
   ListChecks,
   Loader2,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
+  StretchHorizontal,
   SquareMenu,
   SquareTerminal,
   type LucideIcon,
@@ -71,6 +88,52 @@ import {
   type BuildSessionView,
 } from "@/lib/buildSessions";
 import type { TerminalInfo } from "@/lib/types";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { replyChangedFiles } from "@/lib/buildSessions";
+
+/** v1.420.0 (C2.10): how often Changes is read again while a reply runs
+ *  (Build › Code's CodePanes reads at the same pace). */
+export const CHANGES_POLL_MS = 5_000;
+
+/** v1.420.0 (C2.10): the pane column's remembered shape. */
+export const PANES_LAYOUT_KEY = "ij.harness.panes";
+export interface PanesLayout {
+  /** The column is a thin strip (only the button that opens it again). */
+  collapsed: boolean;
+  /** The wider of the two widths. */
+  wide: boolean;
+}
+export const DEFAULT_PANES_LAYOUT: PanesLayout = { collapsed: false, wide: false };
+
+/** The remembered shape (a bad or missing value: open, narrow). */
+export function readPanesLayout(): PanesLayout {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(PANES_LAYOUT_KEY) || "null") as Partial<PanesLayout> | null;
+    if (!raw || typeof raw !== "object") return DEFAULT_PANES_LAYOUT;
+    return { collapsed: raw.collapsed === true, wide: raw.wide === true };
+  } catch {
+    return DEFAULT_PANES_LAYOUT;
+  }
+}
+
+export function writePanesLayout(layout: PanesLayout): void {
+  try {
+    window.localStorage.setItem(PANES_LAYOUT_KEY, JSON.stringify({ collapsed: layout.collapsed, wide: layout.wide }));
+  } catch {
+    /* the shape lasts this visit */
+  }
+}
+
+/** The aside's width classes for a shape (from xl, beside the conversation). */
+export function panesWidthClass(layout: PanesLayout): string {
+  if (layout.collapsed) return "xl:w-10";
+  return layout.wide ? "xl:w-[480px] 2xl:w-[560px]" : "xl:w-[320px] 2xl:w-[400px]";
+}
+
+/** v1.420.0 (C2.10): the first tab when the user never chose one. */
+export function defaultPaneTab(messages: readonly BuildMessage[]): PaneTab {
+  return replyChangedFiles(messages) ? "changes" : "session";
+}
 
 /** What the page lends the panes for the session's terminal. */
 export interface SessionTerminalApi {
@@ -122,12 +185,12 @@ export function choosePaneNext(tab: PaneTab): void {
   }
 }
 
-function readTab(): PaneTab {
+function readTab(fallback: PaneTab): PaneTab {
   try {
     const v = window.localStorage.getItem(TAB_KEY);
-    return PANE_TABS.some((t) => t.value === v) ? (v as PaneTab) : "plan";
+    return PANE_TABS.some((t) => t.value === v) ? (v as PaneTab) : fallback;
   } catch {
-    return "plan";
+    return fallback;
   }
 }
 
@@ -367,6 +430,7 @@ function ChangesPane({
   onSessionChanged,
   onSessionGone,
   initialScope,
+  busy = false,
   press = null,
   onPressed,
 }: {
@@ -383,6 +447,8 @@ function ChangesPane({
   onUndo: (actionId: string, path: string) => Promise<void>;
   onSessionChanged?: () => void;
   onSessionGone?: () => void;
+  /** v1.420.0 (C2.10): a reply is running (This session's view re-reads). */
+  busy?: boolean;
 }) {
   // v1.378.0 (part 2, Phase 7, the walkthrough): a session on its own branch
   // opens on the Branch view — the branch IS that session's work, and its
@@ -421,6 +487,7 @@ function ChangesPane({
       refreshKey={refreshKey}
       undoFor={undoFor}
       onUndo={onUndo}
+      busy={busy}
       scopeBar={view.git ? <ChangesScope scope={scope} onScope={setScope} /> : null}
     />
   );
@@ -432,12 +499,14 @@ function SessionChanges({
   undoFor,
   onUndo,
   scopeBar,
+  busy = false,
 }: {
   view: BuildSessionView;
   refreshKey: number;
   undoFor: (path: string) => ChangeUndoState | null;
   onUndo: (actionId: string, path: string) => Promise<void>;
   scopeBar: ReactNode;
+  busy?: boolean;
 }) {
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [more, setMore] = useState(false);
@@ -465,6 +534,9 @@ function SessionChanges({
       live = false;
     };
   }, [since, view.sessionId, refreshKey, round]);
+  // v1.420.0 (C2.10): read again while the reply works; the turn's end bumps
+  // `refreshKey` for the read after it.
+  useVisibleInterval(() => setRound((n) => n + 1), CHANGES_POLL_MS, busy && !!since);
 
   return (
     <div data-testid="pane-changes" className="space-y-2">
@@ -530,8 +602,21 @@ function HarnessPanesImpl({
   branchPress = null,
   onCompact,
   compacting = false,
+  collapsed = false,
+  wide = false,
+  onLayout,
+  onMakeDefault,
 }: {
+  /** v1.420.0 (C2.11): the Session tab's "Make default" for the account. */
+  onMakeDefault?: (account: BuildAccount) => Promise<string | null>;
   view: BuildSessionView;
+  /** v1.420.0 (C2.10): the column is collapsed to a strip. */
+  collapsed?: boolean;
+  /** v1.420.0: the wider of the two widths. */
+  wide?: boolean;
+  /** v1.420.0: the shape changed (collapse / width). Absent (the split's
+   *  shared pane column): no collapse or width buttons. */
+  onLayout?: (layout: PanesLayout) => void;
   /** v1.415.0: the Session tab's Context drop-down's "Compact session"
    *  (the session's own Compact, `POST /build/sessions/{id}/compact`). */
   onCompact?: () => void;
@@ -571,14 +656,15 @@ function HarnessPanesImpl({
   /** v1.375.0: the Branch view removed the worktree (the session is archived). */
   onSessionGone?: () => void;
 }) {
-  const [tab, setTab] = useState<PaneTab>("plan");
-  const [terminalOpened, setTerminalOpened] = useState(false);
+  // v1.420.0 (C2.10): the first tab when the user never chose one — Changes
+  // when the newest reply changed files, else Session (read at mount). The
+  // remembered tab is read in the FIRST render (the panes are drawn in the
+  // browser only — Chat › Code loads in the browser): a tab mounted for one
+  // frame and switched by an effect started its reads (the Session tab's
+  // programs and changes) for nothing.
+  const [tab, setTab] = useState<PaneTab>(() => readTab(defaultPaneTab(view.messages)));
+  const [terminalOpened, setTerminalOpened] = useState(() => tab === "terminal");
   const baseId = useId();
-  useEffect(() => {
-    const saved = readTab();
-    setTab(saved);
-    if (saved === "terminal") setTerminalOpened(true);
-  }, []);
   // v1.384.0: a running reply's plan APPEARS while the user is on another
   // tab — the tab stays (never switched for them); the Plan tab is MARKED
   // (a dot, with words for a screen reader) until they open it.
@@ -619,13 +705,38 @@ function HarnessPanesImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchPressN, choose]);
 
+  const toggle = onLayout ? (
+    <button
+      type="button"
+      data-testid="harness-panes-toggle"
+      aria-expanded={!collapsed}
+      aria-label={collapsed ? "Show the session views" : "Hide the session views"}
+      title={collapsed ? "Show the session views" : "Hide the session views"}
+      onClick={() => onLayout({ collapsed: !collapsed, wide })}
+      className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+    >
+      {collapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
+    </button>
+  ) : null;
+
+  if (collapsed && onLayout) {
+    // v1.420.0 (C2.10): a thin strip; the views are not drawn (a terminal
+    // parks in the host's lot, as on any unmount).
+    return (
+      <div data-testid="harness-panes" data-collapsed="true" className="flex h-full min-h-0 flex-col items-center gap-2">
+        {toggle}
+      </div>
+    );
+  }
+
   return (
     <div data-testid="harness-panes" className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 items-start gap-1">
       <div
         role="tablist"
         aria-label="Session views"
         data-testid="harness-pane-tabs"
-        className="flex shrink-0 flex-wrap items-center gap-x-1 gap-y-1 px-1"
+        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 px-1"
       >
         {PANE_TABS.map((t) => {
           const selected = tab === t.value;
@@ -681,6 +792,23 @@ function HarnessPanesImpl({
           );
         })}
       </div>
+      {onLayout ? (
+        // v1.420.0 (C2.10): two remembered widths, from xl (beside the
+        // conversation; below it the views take the whole width).
+        <button
+          type="button"
+          data-testid="harness-panes-width"
+          aria-pressed={wide}
+          aria-label={wide ? "Make the session views narrower" : "Make the session views wider"}
+          title={wide ? "Make the session views narrower" : "Make the session views wider"}
+          onClick={() => onLayout({ collapsed: false, wide: !wide })}
+          className="hidden h-8 w-8 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 xl:grid"
+        >
+          <StretchHorizontal size={15} aria-hidden />
+        </button>
+      ) : null}
+      {toggle}
+      </div>
       <div
         id={`${baseId}-panel`}
         role="tabpanel"
@@ -698,6 +826,7 @@ function HarnessPanesImpl({
             onSessionChanged={onSessionChanged}
             onSessionGone={onSessionGone}
             initialScope={changesScope ?? undefined}
+            busy={busy}
             press={pendingPress}
             onPressed={() => setPendingPress(null)}
           />
@@ -713,6 +842,7 @@ function HarnessPanesImpl({
             refreshKey={refreshKey}
             onCompact={onCompact}
             compacting={compacting}
+            onMakeDefault={onMakeDefault}
             onOpenChanges={() => {
               setChangesScope("session");
               choose("changes");

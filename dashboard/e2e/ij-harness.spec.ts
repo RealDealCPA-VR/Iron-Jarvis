@@ -346,7 +346,9 @@ test("a faked account limit shows the card; Resume when ready waits, survives a 
 
   await page.goto(`/terminals?session=${sessionId}`);
   await expect(page.getByTestId("harness-session")).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByTestId("account-chip")).toContainText("Work");
+  // v1.420.0 (moved on purpose, fix plan C2.11): the account is named once,
+  // in the model chip.
+  await expect(page.getByTestId("model-chip-account")).toContainText("Work");
   const box = page.getByTestId("harness-input");
   await box.fill("Keep going");
   await box.press("Enter");
@@ -528,7 +530,8 @@ async function modelMenuAccounts(page: Page, phone: boolean) {
   }
   await panel.getByText("Sonnet 4.6").click();
   await expect(chip).toHaveText("Sonnet 4.6 · Personal", { timeout: 20_000 });
-  await expect(page.getByTestId("account-chip-name")).toHaveText("Personal");
+  // v1.420.0 (moved on purpose, fix plan C2.11): no second account chip.
+  await expect(page.getByTestId("account-chip")).toHaveCount(0);
   expect(patched).toEqual([{ account: "personal", model: "claude-sonnet-4-6" }]);
   const after = await inBox();
   expect(after!.send[1]).toBeLessThanOrEqual(after!.card[1] + 0.5);

@@ -98,6 +98,8 @@ describe("the Plan tab shows the plan the reply shows", () => {
   });
 
   it("an 11-step saved plan with a cut plan_update detail renders the checklist in pane-plan", () => {
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): the remembered Plan tab.
+    localStorage.setItem("ij.build.pane", "plan");
     const v = view({ messages: [{ role: "user", content: "Build the shop", turnId: "t1" }, REPLY] });
     render(<HarnessPanes view={v} livePlan={null} terminal={terminal} refreshKey={0} undoFor={() => null} onUndo={async () => {}} />);
     const pane = screen.getByTestId("pane-plan");

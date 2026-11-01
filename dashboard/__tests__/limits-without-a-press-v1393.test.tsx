@@ -318,7 +318,8 @@ describe("the coding session", () => {
     renderSession();
     const usage = await screen.findByTestId("account-chip-usage");
     expect(usage.textContent).toBe(`63% of the 5-hour window, ${resetWords(WINDOW_RESET)}`);
-    expect(screen.getByTestId("account-chip").getAttribute("title")).toContain(
+    // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip; its usage stays a quiet line in the header.
+    expect(screen.getByTestId("account-chip-usage").getAttribute("title")).toContain(
       `TSI · 63% of the 5-hour window, ${resetWords(WINDOW_RESET)}`,
     );
   });
@@ -327,7 +328,7 @@ describe("the coding session", () => {
     api.gets["/build/sessions/s1"] = view({ setup: { provider: "claude-cli", account: "spare" }, account: SPARE_ROW });
     renderSession();
     const usage = await screen.findByTestId("account-chip-usage");
-    await waitFor(() => expect(screen.getByTestId("account-chip-name").textContent).toBe("Spare"));
+    await waitFor(() => expect(screen.getByTestId("model-chip-account").textContent).toBe(" · Spare"));
     expect(usage.textContent).toBe("usage not known yet");
   });
 

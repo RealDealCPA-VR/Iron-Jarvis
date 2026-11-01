@@ -156,6 +156,9 @@ describe("the Session tab", () => {
   });
 
   it("is not mounted — and reads nothing — until it is chosen", () => {
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): on another remembered tab (here Plan) the Session tab is not
+    // mounted, and nothing it reads is asked for — not even for one frame.
+    localStorage.setItem("ij.build.pane", "plan");
     render(
       <HarnessPanes view={view()} livePlan={null} terminal={terminal} refreshKey={0} undoFor={() => null} onUndo={async () => {}} />,
     );

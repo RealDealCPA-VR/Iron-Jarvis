@@ -26,7 +26,6 @@ import { ownsKeys } from "@/lib/codeSplit";
 import {
   ArrowUp,
   Check,
-  ListChecks,
   FolderOpen,
   FolderX,
   GitBranch,
@@ -66,7 +65,6 @@ import { mintTurnId } from "@/lib/turnRejoin";
 // v1.417.0 (C2.7): a session keeps its half-typed words (the chat's drafts).
 import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
-import { composerChipClass, fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 import { HARNESS_FIT_ORDER, fitStepOn, useToolbarFit, type FitStep } from "@/lib/toolbarFit";
 import { asPermissionMode } from "@/lib/permissionLevels";
 import { finishTitle, finishWarn, finishWords, phaseLabel } from "@/lib/stepWords";
@@ -85,7 +83,7 @@ import { DockAsk } from "@/components/chat/DockAsk";
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { ThinkingDisclosure } from "@/components/chat/ThinkingDisclosure";
 import { TurnClock } from "@/components/chat/TurnClock";
-import { ConfirmButton, ErrorNote, OfflineHint } from "@/components/ui";
+import { CALM_CONFIRM, ConfirmButton, ErrorNote, OfflineHint } from "@/components/ui";
 import type { ChangeUndoState } from "@/components/chat/ChangedFiles";
 import type { AskAnswer } from "@/components/chat/AskUserCard";
 import {
@@ -100,7 +98,14 @@ import { joinUndoByPath, normalizeFsPath, type UndoRowLike } from "@/components/
 import { modelText } from "@/components/ModelRowBits";
 import { companyMenu } from "@/lib/harnessModelMenu";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
-import { HarnessPanes, type SessionTerminalApi } from "@/components/harness/HarnessPanes";
+import {
+  HarnessPanes,
+  panesWidthClass,
+  readPanesLayout,
+  writePanesLayout,
+  type PanesLayout,
+  type SessionTerminalApi,
+} from "@/components/harness/HarnessPanes";
 import type { LiveTimelineHandle } from "@/components/harness/HarnessTimeline";
 import { createLiveTimeline } from "@/lib/buildTimeline";
 import { AccountChip, AccountLimitCard, AccountList } from "@/components/harness/HarnessAccounts";
@@ -224,6 +229,9 @@ import {
 import {
   armResumeWhenReady,
   cancelResumeWhenReady,
+  accountStatusLine,
+  accountUsageLine,
+  accountUsageWords,
   chooseAccountAndContinue,
   decodeAccountLimit,
   decodeAccountWait,
@@ -471,12 +479,18 @@ function LiveFinishLine({ stream }: { stream: ReturnType<typeof useChatStream> }
   );
 }
 
-/** The confirm before an Undo: this session's own journal, its newest write. */
+/** The confirm before an Undo: this session's own journal, its newest write.
+ *  v1.420.0 (C2.11): said in the confirm line above the box, whose second
+ *  press is "Undo it". */
 export function undoPrompt(kind: string | undefined, base: string): string {
   return kind === "file_delete" || kind === "files_delete"
     ? `Undo it? ${base} was created by this session and will be removed.`
     : `This restores ${base} to its content from before this session's newest write to it. Continue?`;
 }
+
+/** v1.420.0 (C2.11): an account status that asks the user to act (the
+ *  header's quiet line; HarnessAccounts' own rule). */
+const ACCOUNT_WARN_KINDS = new Set(["limit", "sign_in", "off", "missing"]);
 
 function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
@@ -603,6 +617,18 @@ export function HarnessSession({
   // v1.406.0 part 7: the element the session is drawn in — its keys are its
   // own column's only when two sessions sit side by side (lib/codeSplit).
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // v1.420.0 (fix plan C2.10): the pane column's shape — collapsed to a
+  // strip, or one of two widths — remembered in localStorage, read in the
+  // FIRST render (v1.420.0 review): a return to a session paints its kept
+  // view at once (lib/turnCache), and a column drawn open for one frame
+  // started the remembered tab's reads behind a remembered collapse. The
+  // session is drawn in the browser only (Chat › Code loads in the browser);
+  // `readPanesLayout` answers the default where there is no storage.
+  const [panesLayout, setPanesLayout] = useState<PanesLayout>(readPanesLayout);
+  const onPanesLayout = useCallback((next: PanesLayout) => {
+    setPanesLayout(next);
+    writePanesLayout(next);
+  }, []);
   const catalog = useModels();
   // v1.384.0: WHERE THE USER WAS (lib/turnCache) — the session last read
   // and its running reply as this window last drew it (this component is
@@ -956,6 +982,22 @@ export function HarnessSession({
       setAccounts(null); // unreadable: no chip rather than a wrong one
     }
   }, []);
+  /** v1.420.0 (fix plan C2.11): the Session tab's "Make default" (the
+   *  header's account chip that offered it is gone). Stable: the panes are
+   *  memoised. Resolves to the refusal in words, or null. */
+  const onPanesMakeDefault = useCallback(
+    async (a: BuildAccount): Promise<string | null> => {
+      try {
+        const next = await makeDefaultAccount(a.id);
+        if (next) setAccounts(next);
+        else await refreshAccounts();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    [refreshAccounts],
+  );
 
   // ---------------------------------------------------------- undo journal
   const [undoRows, setUndoRows] = useState<UndoRowLike[]>([]);
@@ -979,15 +1021,35 @@ export function HarnessSession({
       return {
         actionId: row.action_id,
         undoable: row.undoable !== false,
-        ...(row.undoable === false ? { reason: "this action has no safe inverse" } : {}),
+        ...(row.undoable === false ? { reason: "this change can't be undone" } : {}),
       };
     },
     [undoByPath, undone],
   );
+  // v1.420.0 (fix plan C2.11): Undo is TWO PRESSES in the page, never the
+  // browser's `window.confirm`. The row's Undo (ChangesReview / the reply's
+  // changed files) is the first press: it puts the words in the confirm line
+  // above the box (`harness-undo-confirm`) and waits — the row shows its
+  // spinner meanwhile; "Undo it" there is the second press, "Keep" ends it.
+  const [undoAsk, setUndoAsk] = useState<{ actionId: string; words: string } | null>(null);
+  const undoAnswerRef = useRef<((yes: boolean) => void) | null>(null);
+  const answerUndo = useCallback((yes: boolean) => {
+    const answer = undoAnswerRef.current;
+    undoAnswerRef.current = null;
+    setUndoAsk(null);
+    answer?.(yes);
+  }, []);
+  // An open question answers "keep" when the session goes (no promise hangs).
+  useEffect(() => () => undoAnswerRef.current?.(false), []);
   const onUndo = useCallback(
     async (actionId: string, path: string) => {
       const row = undoByPath.get(normalizeFsPath(path));
-      if (!window.confirm(undoPrompt(row?.kind, baseName(path)))) return;
+      undoAnswerRef.current?.(false); // a second Undo replaces the first question
+      const yes = await new Promise<boolean>((resolve) => {
+        undoAnswerRef.current = resolve;
+        setUndoAsk({ actionId, words: undoPrompt(row?.kind, baseName(path)) });
+      });
+      if (!yes) return;
       await post(`/undo/${encodeURIComponent(actionId)}`, {});
       setUndone((prev) => new Set(prev).add(actionId));
       void refreshUndo();
@@ -2818,6 +2880,12 @@ export function HarnessSession({
       branchPress={branchPress}
       onCompact={onPanesCompact}
       compacting={compacting || elsewhereCompacting}
+      // v1.420.0 (C2.10): collapse and width — the session's own column
+      // only (a split's shared pane column keeps its own shape).
+      collapsed={panesInto === undefined && panesLayout.collapsed}
+      wide={panesLayout.wide}
+      onLayout={panesInto === undefined ? onPanesLayout : undefined}
+      onMakeDefault={onPanesMakeDefault}
     />
   );
 
@@ -2950,7 +3018,34 @@ export function HarnessSession({
               </button>
             ) : null}
           </div>
-          {accounts && (vendor || currentAccount) ? (
+          {/* v1.420.0 (fix plan C2.11): the account is named ONCE — in the
+              model chip ("Opus · Work"). Here: only "Choose an account" when
+              the session has none yet, else the account's state in quiet
+              words (a limit or a sign-in in warn ink; usage on wide screens). */}
+          {accounts && currentAccount ? (
+            (() => {
+              const line = accountStatusLine(currentAccount);
+              const warn = ACCOUNT_WARN_KINDS.has(line.kind);
+              const usage = accountUsageWords(currentAccount);
+              return warn ? (
+                <span
+                  data-testid="account-chip-status"
+                  title={line.text}
+                  className="shrink-0 whitespace-nowrap px-2 text-[12px] text-tone-warn"
+                >
+                  {line.text.split(" · ")[0]}
+                </span>
+              ) : usage ? (
+                <span
+                  data-testid="account-chip-usage"
+                  title={accountUsageLine(currentAccount)}
+                  className="hidden min-w-0 max-w-[18rem] truncate whitespace-nowrap px-2 text-[12px] text-zinc-500 lg:inline"
+                >
+                  {usage}
+                </span>
+              ) : null;
+            })()
+          ) : accounts && vendor ? (
             <AccountChip
               account={currentAccount}
               view={accounts}
@@ -3034,7 +3129,7 @@ export function HarnessSession({
                     confirmLabel="Delete for good"
                     title={
                       view.git && !view.git.removed
-                        ? `Delete this session and its conversation. Its worktree goes to Iron Jarvis's trash; the branch ${view.git.branch} stays.`
+                        ? `Delete this session and its conversation. Its own copy of the folder goes to Iron Jarvis's trash; the branch ${view.git.branch} stays.`
                         : view.noFolder && view.folder
                           ? "Delete this session and its conversation. Its own folder goes only if it is empty; files in it stay."
                           : "Delete this session and its conversation"
@@ -3322,6 +3417,33 @@ export function HarnessSession({
           {asking ? (
             <p className="px-2 pt-1 text-[11px] text-zinc-600">{dockAskKeyHint(asks[0].kind, asks[0])}</p>
           ) : null}
+          {undoAsk ? (
+            // v1.420.0 (C2.11): the second press of an Undo.
+            <div
+              data-testid="harness-undo-confirm"
+              role="group"
+              aria-label="Confirm the undo"
+              className="mb-1.5 flex min-w-0 flex-wrap items-center gap-2 px-2 text-[12px] text-zinc-300"
+            >
+              <span className="min-w-0 flex-1">{undoAsk.words}</span>
+              <button
+                type="button"
+                data-testid="harness-undo-yes"
+                onClick={() => answerUndo(true)}
+                className={`${CALM_CONFIRM.base} ${CALM_CONFIRM.armed}`}
+              >
+                Undo it
+              </button>
+              <button
+                type="button"
+                data-testid="harness-undo-keep"
+                onClick={() => answerUndo(false)}
+                className="inline-flex min-h-7 items-center rounded-lg px-2.5 py-1 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+              >
+                Keep
+              </button>
+            </div>
+          ) : null}
           {queued.length ? (
             <div data-testid="harness-queued" className="mb-1.5 flex flex-wrap gap-1.5 px-1">
               {queued.map((q, k) => (
@@ -3489,37 +3611,12 @@ export function HarnessSession({
                 iconOnlyOnPhone
                 iconOnly={harnessOn("ask")}
                 // v1.406.0 part 2: Plan is offered in the same picker (the
-                // session's `mode`; the Plan-first chip beside it drives the
-                // same setting).
+                // session's `mode`). v1.420.0 (fix plan C2.11): it is the ONE
+                // place Plan lives — the "Plan first" chip beside it is gone
+                // (Plan was offered twice in one row).
                 planMode={view.mode === "plan"}
                 onPlanChange={(on) => void patchSetup({ mode: on ? "plan" : "act" })}
               />
-              {(() => {
-                const planning = view.mode === "plan";
-                const words = planning ? "Planning" : "Plan first";
-                const title =
-                  view.mode === "plan"
-                    ? "Plan mode is on: the session only reads and plans, then asks you to approve the plan. Press to let it work."
-                    : "Plan first: the session only reads and writes a plan for you to approve before it changes anything.";
-                return (
-                  <button
-                    type="button"
-                    data-testid="harness-plan-mode"
-                    aria-pressed={view.mode === "plan"}
-                    // v1.400.0: its words were its name; they can go now.
-                    aria-label={words}
-                    onClick={() => void patchSetup({ mode: view.mode === "plan" ? "act" : "plan" })}
-                    title={harnessOn("plan") && !planning ? iconOnlyTitle(words, title) : title}
-                    // Review: only "Plan first" (off) gives up its words. On,
-                    // "Planning" is the session's mode, and the list icon in
-                    // the accent alone would tell it by hue.
-                    className={`${composerChipClass(planning)}${planning ? "" : ` ${fitIconChip("plan")}`}`}
-                  >
-                    <ListChecks size={14} aria-hidden className="shrink-0" />
-                    <span className={planning ? undefined : fitWords("plan")}>{words}</span>
-                  </button>
-                );
-              })()}
               {/* v1.397.0: try the next message on up to three models, each on
                   its own branch (the words "try this with …" ask the same). */}
               <TryOnControl
@@ -3642,7 +3739,11 @@ export function HarnessSession({
           in the split's one pane column (a portal keeps this session's
           context); the other column draws none. */}
       {panesInto === undefined ? (
-        <aside className="flex h-[70vh] w-full shrink-0 flex-col xl:h-auto xl:min-h-0 xl:w-[320px] 2xl:w-[400px]">
+        <aside
+          data-testid="harness-panes-aside"
+          data-panes={panesLayout.collapsed ? "collapsed" : panesLayout.wide ? "wide" : "narrow"}
+          className={`flex w-full shrink-0 flex-col xl:h-auto xl:min-h-0 ${panesLayout.collapsed ? "h-auto" : "h-[70vh]"} ${panesWidthClass(panesLayout)}`}
+        >
           {panesEl}
         </aside>
       ) : panesInto ? (
