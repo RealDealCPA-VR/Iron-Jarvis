@@ -20,7 +20,7 @@
  * mission list. Only the network is faked.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const api = vi.hoisted(() => {
   class FakeApiError extends Error {
@@ -33,6 +33,7 @@ const api = vi.hoisted(() => {
   }
   return {
     responses: {} as Record<string, unknown>,
+    posts: [] as Array<[string, unknown]>,
     FakeApiError,
   };
 });
@@ -47,7 +48,10 @@ vi.mock("@/lib/api", () => ({
     if (r === undefined) return Promise.reject(new api.FakeApiError(`unmocked GET ${path}`, 404));
     return Promise.resolve(r);
   },
-  post: () => Promise.resolve({}),
+  post: (path: string, body?: unknown) => {
+    api.posts.push([path, body]);
+    return Promise.resolve({ cleared: 1 });
+  },
   put: () => Promise.resolve({}),
   patch: () => Promise.resolve({}),
   del: () => Promise.resolve({}),
@@ -362,15 +366,18 @@ describe("Sessions page: the badges and the filter speak words", () => {
 /* ======================================================= the Session board */
 
 describe("the Session board: lanes in the table's words; a stopped card is slate", () => {
-  it("the four lanes read Working / Waiting for you / Done / Failed, toned by the table", () => {
+  // v1.420.0 (fix plan C5.2, moved on purpose): a stopped run left the red
+  // Failed lane for a grey Stopped lane of its own.
+  it("the five lanes read Working / Waiting for you / Done / Failed / Stopped, toned by the table", () => {
     expect(LANES.map((l) => [l.id, l.title, l.tone])).toEqual([
       ["active", "Working", "cyan"],
       ["review", "Waiting for you", "amber"],
       ["completed", "Done", "green"],
       ["failed", "Failed", "red"],
+      ["stopped", "Stopped", "slate"],
     ]);
-    // The failed lane says a stopped run lives there too.
-    expect(LANES.find((l) => l.id === "failed")?.hint).toMatch(/stopped/);
+    // The failed lane no longer says a stopped run lives there.
+    expect(LANES.find((l) => l.id === "failed")?.hint).not.toMatch(/stopped/);
     // Every lane carries a sentence for its empty state.
     for (const l of LANES) expect(l.empty, l.id).toBeTruthy();
   });
@@ -378,17 +385,19 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
   it("renders the lanes by those words, and a stopped card's dot is slate", () => {
     api.responses["/sessions/teams"] = { parents: {} };
     render(<KanbanBoard sessions={[sv("s-stop", "cancelled")]} reviews={{}} reload={() => {}} />);
-    for (const title of ["Working", "Waiting for you", "Done", "Failed"]) {
+    for (const title of ["Working", "Waiting for you", "Done", "Failed", "Stopped"]) {
       expect(screen.getByRole("heading", { level: 2, name: title })).toBeInTheDocument();
     }
-    const failedLane = document.querySelector('[data-lane="failed"]') as HTMLElement;
-    const card = within(failedLane).getByText("task s-stop").parentElement as HTMLElement;
+    // v1.420.0: the stopped card sits in the Stopped lane, never in Failed.
+    expect(within(document.querySelector('[data-lane="failed"]') as HTMLElement).queryByText("task s-stop")).toBeNull();
+    const stoppedLane = document.querySelector('[data-lane="stopped"]') as HTMLElement;
+    const card = within(stoppedLane).getByText("task s-stop").parentElement as HTMLElement;
     const dot = card.querySelector("span") as HTMLElement;
     expect(dot.className).toMatch(/bg-zinc-500/);
     expect(dot.className).not.toMatch(/tone-danger/);
   });
 
-  it("a stopped card SAYS Stopped, in slate, in the lane it shares with real failures", () => {
+  it("a stopped card SAYS Stopped, in slate, in its own lane apart from real failures (v1.420.0)", () => {
     api.responses["/sessions/teams"] = { parents: {} };
     render(
       <KanbanBoard
@@ -402,10 +411,12 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
       />,
     );
     const failedLane = document.querySelector('[data-lane="failed"]') as HTMLElement;
-    const chips = within(failedLane).getAllByTestId("session-stopped-chip");
+    const stoppedLane = document.querySelector('[data-lane="stopped"]') as HTMLElement;
+    expect(within(failedLane).queryAllByTestId("session-stopped-chip")).toHaveLength(0);
+    const chips = within(stoppedLane).getAllByTestId("session-stopped-chip");
     // Exactly one: the stopped card's. A real failure keeps its plain card.
     expect(chips).toHaveLength(1);
-    const stopCard = within(failedLane).getByText("task s-stop").closest("[data-team-depth]") as HTMLElement;
+    const stopCard = within(stoppedLane).getByText("task s-stop").closest("[data-team-depth]") as HTMLElement;
     expect(stopCard.contains(chips[0])).toBe(true);
     expect(chips[0].textContent).toBe("Stopped");
     // The board's calm chip: the tone lives on its dot (the Badge inside the
@@ -423,6 +434,24 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
     expect(within(doneLane).queryByTestId("session-stopped-chip")).toBeNull();
   });
 
+  it("a stopped card keeps Retry and Dismiss, and its lane clears only stopped runs (v1.420.0)", async () => {
+    api.responses["/sessions/teams"] = { parents: {} };
+    api.posts.length = 0;
+    render(<KanbanBoard sessions={[sv("s-stop", "cancelled"), sv("s-fail", "failed")]} reviews={{}} reload={() => {}} />);
+    const stoppedLane = document.querySelector('[data-lane="stopped"]') as HTMLElement;
+    const stopCard = within(stoppedLane).getByText("task s-stop").closest("[data-team-depth]") as HTMLElement;
+    expect(within(stopCard).getByText("Retry")).toBeInTheDocument();
+    expect(within(stopCard).getByRole("button", { name: /Dismiss/ })).toBeInTheDocument();
+    const clear = within(stoppedLane).getByRole("button", { name: "Clear stopped (1)" });
+    fireEvent.click(clear);
+    fireEvent.click(within(stoppedLane).getByRole("button", { name: /Confirm clear/ }));
+    await waitFor(() => expect(api.posts).toContainEqual(["/sessions/clear", { statuses: ["cancelled"] }]));
+    const failedLane = document.querySelector('[data-lane="failed"]') as HTMLElement;
+    fireEvent.click(within(failedLane).getByRole("button", { name: "Clear failed (1)" }));
+    fireEvent.click(within(failedLane).getByRole("button", { name: /Confirm clear/ }));
+    await waitFor(() => expect(api.posts).toContainEqual(["/sessions/clear", { statuses: ["failed"] }]));
+  });
+
   it("an empty lane says its own sentence, never 'No done sessions'", () => {
     api.responses["/sessions/teams"] = { parents: {} };
     render(<KanbanBoard sessions={[]} reviews={{}} reload={() => {}} />);
@@ -431,7 +460,8 @@ describe("the Session board: lanes in the table's words; a stopped card is slate
       expect(within(col).getByText(l.empty as string), l.id).toBeInTheDocument();
     }
     expect(screen.getByText("Nothing has finished yet")).toBeInTheDocument();
-    expect(screen.getByText("Nothing failed or was stopped")).toBeInTheDocument();
+    expect(screen.getByText("Nothing failed")).toBeInTheDocument();
+    expect(screen.getByText("Nothing was stopped")).toBeInTheDocument();
     expect(screen.queryByText(/^No (working|done|failed) sessions$/)).toBeNull();
   });
 });

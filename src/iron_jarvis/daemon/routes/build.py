@@ -2527,7 +2527,7 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
         if not playbook.strip():
             folder_skill, playbook = "", ""
     return {
-        "history": S.history_of(messages[start:idx]),
+        "history": S.history_of(messages[start:idx], last_work=True),
         "summary": _compact.render(standing["summary"]) if standing is not None else "",
         "question": loaded[0],
         "tail": loaded[1:],

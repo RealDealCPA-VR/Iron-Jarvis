@@ -438,7 +438,7 @@ describe("nested cards keep their own lane's affordances (v1.168.0 review fix)",
     });
     // The failed child renders inside the Active column, so the Failed column
     // is honestly empty… (v1.352.0, G17: in the lane's own empty sentence)
-    expect(screen.getByText("Nothing failed or was stopped")).toBeInTheDocument();
+    expect(screen.getByText("Nothing failed")).toBeInTheDocument(); // v1.420.0: Stopped has its own lane
     // …and the toolbar must not contradict it one line above.
     expect(screen.queryByText(/Clear failed/)).not.toBeInTheDocument();
   });

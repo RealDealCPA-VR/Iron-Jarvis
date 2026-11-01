@@ -33,7 +33,8 @@ export interface Surface extends NavEntry {
 
 /** The sidebar's items, in order. v1.406.0 (part 1 + 5, the user's decision
  *  2026-10-29): Chat (with its Chat | Code switch — the coding sessions live
- *  there now), Build (the terminals only), Projects, Everything, Settings.
+ *  there now), Build (the terminals, and since v1.409.0 its own Code view
+ *  for the real Claude Code / Codex), Projects, Everything, Settings.
  *  The brief's T1 cap was four; Chat is the fifth because the Code view is
  *  reached through it. Every automation and admin page (agents, goals,
  *  workflows, schedules, rules, watchers, fleet, the session board,

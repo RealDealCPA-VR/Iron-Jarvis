@@ -288,10 +288,13 @@ DOOR = [
     ('check my email', ['gmail']),
     ('check my inbox', ['gmail']),
     ("what's in my inbox today?", ['gmail']),
-    ('any new emails from my accountant?', []),  # NAMES NO APP
+    # v1.420.0 (C6.1) FLIPPED ON PURPOSE: these two pinned the re-audit's
+    # gap ("summarize my latest emails" armed web search); "any new
+    # emails" and "my latest emails" are the user's own mailbox now.
+    ('any new emails from my accountant?', ['gmail']),
     ('did I get an email from the bank?', []),  # NAMES NO APP
     ('search my email for the invoice from Acme', ['gmail']),
-    ('read my latest emails', []),  # NAMES NO APP
+    ('read my latest emails', ['gmail']),  # v1.420.0 flipped, see above
     ('reply to the email from Bob in gmail', ['gmail']),
     ("what's on my calendar tomorrow?", ['microsoft_365']),
     ('what meetings do I have today?', []),  # NAMES NO APP
@@ -547,6 +550,49 @@ DOOR = [
     ('I want to see the slack messages from today', ['slack']),
     # an acting verb keeps the place even beside a switching word
     ('download the converted pdf from dropbox', ['dropbox']),
+    # --- v1.420.0 (C6.1): the user's own mail with a freshness word, "my
+    # mail", "any new mail" — the mail KIND (Gmail is the word's catalog
+    # id; the lanes resolve it to the connected mail app, else one choice).
+    ('summarize my latest emails', ['gmail']),
+    ('check my latest email', ['gmail']),
+    ('read my new messages', ['gmail']),
+    ("what's in my new mail?", ['gmail']),
+    ('check my mail', ['gmail']),
+    ('any new mail?', ['gmail']),
+    ('any new emails from Bob?', ['gmail']),
+    ('did I get any email from the IRS', ['gmail']),
+    ("what's my most recent email about?", ['gmail']),
+    ('summarize my unread inbox', ['gmail']),
+    ('go through my recent emails and flag anything urgent', ['gmail']),
+    ('anything important in my unread messages?', ['gmail']),
+    ('show me my last email from Dana', ['gmail']),
+    ('my calendar today', ['microsoft_365']),
+    ('what is my calendar like tomorrow', ['microsoft_365']),
+    # ...and the words that are not the mailbox (v1.420.0)
+    ('my mail carrier is late again', []),
+    ('any email marketing tips for a bakery?', []),
+    ('build my email list from the signup sheet', []),
+    ('read my new messages on slack', ['slack']),
+    ('what are my latest text messages', []),
+    ('summarize my new messages in teams', []),  # NAMES NO APP
+    ('my new mail server keeps dropping connections', []),
+    ('how do I set up my new email account', []),
+    ('write a poem about my latest emails', []),
+    ('the mail came late today', []),  # NAMES NO APP
+    ('any new email clients worth trying?', []),
+    ('write my new email signature', []),
+    ('any new messages for the team channel?', []),  # NAMES NO APP
+    # --- v1.420.0 REVIEW: acting on the user's own mail; and mail in hand
+    ('forward my latest email to Bob', ['gmail']),
+    ('delete my old emails', ['gmail']),
+    ('reply to the latest email', ['gmail']),
+    ('forward the newest email to Dana', ['gmail']),
+    ('the latest email about the invoice said it was due Friday', []),
+    ('proofread my latest email below', []),
+    ('reply to the latest email below: thanks for the update', []),
+    ("what's new in email marketing", []),
+    ('search the web for the latest emails from Apple about the iPhone', []),
+    ('my old email address stopped working', []),
 ]
 
 #: ``(text, armed)`` — does Auto arm the Guide's three lookups
@@ -937,6 +983,120 @@ GUIDE_ROWS = [
     # "the spark" is the DGX Spark, never a plug or a cluster
     ('how do I connect the spark plug wires', False),
     ('how do I set up the spark cluster for my team', False),
+    # --- v1.420.0 (C6.1): a feature question about Iron Jarvis asks the
+    # Guide; the everyday senses (a mission in the Bible, a software build,
+    # another program's code view, "you" as anyone) do not.
+    ('what apps can you work with?', True),
+    ('what can you connect to?', True),
+    ('which services do you support?', True),
+    ('what other apps can you connect with here?', True),
+    ('what are missions', True),
+    ('what are missions for?', True),
+    ("what's a mission in jarvis?", True),
+    ('what is build for', True),
+    ('what is Build?', True),
+    ('what does Build do?', True),
+    ('what is the build page for', True),
+    ('what does the Code view do', True),
+    ('What is Chat › Code', True),
+    ('what is Build › Code for?', True),
+    ('how do I use Build', True),
+    ('how do I use build?', True),
+    ('how do I open the Code view', True),
+    ('what are missions in the Bible', False),
+    ('what are the missions of the church', False),
+    ('what are missions to Mars', False),
+    ("what's a mission?", False),
+    ('what is the build for the release', False),
+    ('what does the build do', False),
+    ('what is the build process', False),
+    ('what does the code view do in Dreamweaver', False),
+    ('what apps can you use to edit photos', False),
+    ('what tools can you use to fix a sink', False),
+    ('how do I build a shed', False),
+    ('how do I use Build a Bear gift cards', False),
+    ('what can you connect a printer to', False),
+    ('what software can you use for taxes', False),
+    # --- v1.420.0 REVIEW: the everyday senses stay out; "Jarvis" is "you"
+    ('what does the code do', False),
+    ('what is my build number', False),
+    ('how do I use build tools in npm', False),
+    ('which services do you support for payment', False),
+    ('what is build.gradle for', False),
+    ('what is Build.ps1 for?', False),
+    ('What can Jarvis connect to?', True),
+    ('what apps does Jarvis work with?', True),
+    ('which services can Iron Jarvis connect to?', True),
+]
+
+#: v1.420.0 (C6.1): ``(text, web armed)`` — the user's own mail never arms
+#: web search, and the freshness word that sits inside the mail words
+#: ("my LATEST emails") is not a web signal; news and research still are.
+MAIL_WEB = [
+    ('summarize my latest emails', False),
+    ('check my latest email', False),
+    ('read my newest emails and tell me what matters', False),
+    ('any new mail?', False),
+    ('summarize my most recent emails', False),
+    ('what are the latest news headlines', True),
+    ('summarize the latest news about email marketing', True),
+    ('search the web for the latest Gmail outage', True),
+    ('look up the latest pricing for Gmail', True),
+    ("what's the latest on the postal strike", True),
+    ('find the latest research on email productivity', True),
+    ('latest stock price of Microsoft', True),
+    # --- v1.420.0 REVIEW: a reply or a pasted email is never a web search;
+    # an explicit "search the web" still is
+    ('reply to the latest email', False),
+    ('proofread my latest email below', False),
+    ('the latest email about the invoice said it was due Friday', False),
+    ('search the web for the latest emails from Apple about the iPhone', True),
+    ('search for the latest news', True),
+    ('latest news on the mail strike', True),
+]
+
+#: v1.420.0 (C6.1): ``(text, offered)`` — a CODING task gets the Build ›
+#: Code door (``autoselect.coding_offer``; an offer, never a hand-off).
+CODING = [
+    ('build me a todo app', True),
+    ('write me an app', True),
+    ('can you make me a website for my bakery', True),
+    ('please build an app that tracks my workouts', True),
+    ('create a landing page for my product', True),
+    ('Jarvis, build me a Discord bot', True),
+    ('write me a chrome extension that blocks ads', True),
+    ('build me a REST api for my inventory', True),
+    ('write me a python script that renames files', True),
+    ('fix the failing test in my repo', True),
+    ('add a README to github.com/acme/site', True),
+    ('go through my repo and remove dead code', True),
+    ('refactor the auth module in our codebase', True),
+    ('build me a shed', False),
+    ('write me a script for my wedding toast', False),
+    ('make me a spreadsheet', False),
+    ('build me a budget', False),
+    ('how do I build an app', False),
+    ('what is a repository', False),
+    ('my repo is a mess', False),
+    ('build me a game plan', False),
+    ('make me a website logo', False),
+    ('update the repository of knowledge', False),
+    ('write me a tool list', False),
+    ('make me a list of apps', False),
+    ('write me a program for the concert', False),
+    ('make a game of it', False),
+    ('make an extension cord', False),
+    ('create a new site in SharePoint', False),
+    ('write me a song', False),
+    # --- v1.420.0 REVIEW: a software word that names an office thing
+    ('make me an app icon', False),
+    ('write me a server log summary', False),
+    ('make me the server room checklist', False),
+    ('write me a cover letter', False),
+    ('make me a schedule', False),
+    ('build me a budget spreadsheet', False),
+    ('write me a Python script', True),
+    ('fix the bug in my repo of recipes', False),
 ]
 
 
@@ -969,6 +1129,11 @@ DOOR_WORDS = [
     ("give me your outlook on the market", []),
     ("stripe the table rows", []),
     ("remove the GitHub link from the footer", []),
+    # v1.420.0 (C6.1): the user's own mail, fresh, with no mail app — the
+    # mail choice, never web search (``MAIL_WEB``).
+    ("summarize my latest emails", [f"Connect Gmail or {M365} in Settings"]),
+    ("any new mail?", [f"Connect Gmail or {M365} in Settings"]),
+    ("my mail carrier is late again", []),
 ]
 
 #: The acceptance rows of each regression, exactly as the hunt's suggested
@@ -1119,6 +1284,39 @@ def test_every_guide_row_reads_as_meant_both_ways():
         elif want and not got:
             lost.append(text)
     assert not (lost or extra), f"lost the Guide: {lost}\n Guide where none belongs: {extra}"
+
+
+def test_the_users_own_mail_never_arms_web_search():
+    """v1.420.0 (C6.1): ONE pass over ``MAIL_WEB``. MUTATION: take the
+    freshness words out of the mail words (``_MAIL_FRESH``) -> "summarize my
+    latest emails" arms web search again (red); widen the mail words over
+    "the latest news" -> the news rows lose their search (red)."""
+    wrong = [
+        (t, want) for t, want in MAIL_WEB
+        if ("web_search" in select_auto_tools(t, cap=99)) is not want
+    ]
+    assert wrong == [], wrong
+    assert sum(1 for _t, w in MAIL_WEB if not w) >= 5
+    assert sum(1 for _t, w in MAIL_WEB if w) >= 5
+
+
+def test_a_coding_task_is_offered_build_code_and_nothing_else_is():
+    """v1.420.0 (C6.1): ONE pass over ``CODING``. MUTATION: drop the
+    software-thing guard (``_NOT_SOFTWARE_AFTER``) or the gap's preposition
+    guard -> "build me a game plan" / "make me a list of apps" get the door
+    (red); drop the repository reading -> "fix the failing test in my repo"
+    loses it (red)."""
+    from iron_jarvis.tools.autoselect import CODING_OFFER_HREF, coding_offer
+
+    wrong = [(t, want) for t, want in CODING if (coding_offer(t) is not None) is not want]
+    assert wrong == [], wrong
+    door = coding_offer("build me a todo app")
+    assert door == {"href": CODING_OFFER_HREF, "label": door["label"]}
+    assert CODING_OFFER_HREF == "/terminals?view=code" and "Build › Code" in door["label"]
+    assert sum(1 for _t, w in CODING if w) >= 12
+    assert sum(1 for _t, w in CODING if not w) >= 12
+    # An offer never ARMS anything: the coding words alone arm no tool.
+    assert select_auto_tools("build me a todo app", cap=99) == []
 
 
 def test_the_tables_are_wide_both_ways():

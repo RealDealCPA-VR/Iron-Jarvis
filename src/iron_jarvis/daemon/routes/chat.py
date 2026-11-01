@@ -3745,10 +3745,14 @@ async def chat_stream(
     # is the STREAMING lane, which is the one a user actually watches write
     # an email; if the instruction reached only the non-streaming lane the
     # feature would look broken exactly where it is most used.
-    system += DRAFT_BLOCK
+    # v1.420.0 (C3.8): never on a CODING turn (harness mode) — nor the chart
+    # fence or the browser section below. MIRROR NOTE (lock-step): chat_turn.
+    if harness is None:
+        system += DRAFT_BLOCK
     # CHART FENCE (v1.325.0) — the lock-step copy of chat_turn's injection.
     # MIRROR NOTE: edit both or neither. Before the planner, like DRAFT_BLOCK.
-    system += CHART_BLOCK
+    if harness is None:
+        system += CHART_BLOCK
     # YOUR BROWSER (v1.236.0, D16/D21) — the lock-step copy of chat_turn's
     # injection. MIRROR NOTE: edit both or neither. This is the STREAMING
     # lane, which is the one the Build pane uses, so D16's own interaction
@@ -3758,7 +3762,9 @@ async def chat_stream(
     # `_plan_context`, so the section is priced by the budget planner. Kept
     # by name (v1.330.0) so a TEXT-ONLY turn can swap exactly these bytes for
     # the tool-free form below. MIRROR NOTE (lock-step): chat_turn.
-    _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
+    _browser_block = (
+        _browser_section(d, getattr(body, "pane_id", "") or "") if harness is None else ""
+    )
     system += _browser_block
     # (`pid` / `resolved_proj` are read above the Environment line — v1.351.0.)
 
@@ -3786,11 +3792,15 @@ async def chat_stream(
     if _ground_out is _PREP_STOPPED or await _stop():
         return
     _grounding, _brain = _ground_out
-    system += _brain.block
+    # v1.420.0 (C3.7, PROMPT ORDER FOR THE CACHE) — the lock-step copy of
+    # chat_turn's: the query-dependent sections are kept in ``_query_tail``
+    # and joined LAST (after the tool list), priced with the rest.
+    _query_tail = _brain.block
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block). MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn joins the same object.
-    system += _grounding.before_attachments()
+    system += _grounding.stable()
+    _query_tail += _grounding.query()
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
@@ -3837,7 +3847,7 @@ async def chat_stream(
     # model, coding session) → rules that name none. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn swaps at the same seam.
     if (text_only_pick or harness is not None) and _brain.block:
-        system = system.replace(_brain.block, _brain.without_tools(), 1)
+        _query_tail = _query_tail.replace(_brain.block, _brain.without_tools(), 1)
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -3945,7 +3955,7 @@ async def chat_stream(
         return
     images, attach_block = _attached
     if attach_block:
-        system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+        _query_tail += "\n\n# Attachments (provided by the user this turn)" + attach_block
         _ctx_pieces.setdefault("attachments", []).append(
             "\n\n# Attachments (provided by the user this turn)" + attach_block
         )
@@ -3956,7 +3966,7 @@ async def chat_stream(
         _page = await _prep_step(_prep.take("page"))
         if _page is _PREP_STOPPED:
             return
-        system += _page
+        _query_tail += _page
         _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
@@ -3968,7 +3978,7 @@ async def chat_stream(
             return
         _res_block, resources_receipt = _res
         if _res_block:
-            system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+            _query_tail += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
             _ctx_pieces.setdefault("attachments", []).append(_res_block)
     # EARLIER CHATS THE USER POINTED TO (v1.326.0) — the lock-step copy of
     # chat_turn's: the ONE helper, at the attachments seam, raced against Stop
@@ -3979,7 +3989,7 @@ async def chat_stream(
         if _refs is _PREP_STOPPED:
             return
         _refs_block, thread_refs_receipt = _refs
-        system += _refs_block
+        _query_tail += _refs_block
         _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
     if (body.skill or "").strip():
@@ -4010,7 +4020,7 @@ async def chat_stream(
             "FOLLOW this playbook for this request.\n"
             + _playbook
         )
-        system += _skill_text
+        _query_tail += _skill_text
         _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0), computed in
@@ -4061,9 +4071,10 @@ async def chat_stream(
     if await _stop():
         return
     _summarizing = asyncio.Event()
-    _system_before_compaction = system
+    # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last).
+    _system_before_compaction = system + _query_tail
     _compaction = asyncio.ensure_future(_apply_compaction(
-        d, body, system, provider_choice, model_choice,
+        d, body, system + _query_tail, provider_choice, model_choice,
         on_summarize=_summarizing.set,
     ))
     _said_summarizing = False
@@ -4102,12 +4113,13 @@ async def chat_stream(
         # A summary that ran and finished inside one wake-up: still said, in
         # order, before "choosing_tools".
         yield _sse("phase", {"phase": "summarizing"})
-    system, _ctx_messages, context_report = _compaction.result()
-    _ctx_system = system
+    _ctx_system, _ctx_messages, context_report = _compaction.result()
+    # A stored summary the compaction added joins the head (lock-step).
+    system, _query_tail = _chat_turn.split_query_tail(_ctx_system, system, _query_tail)
     if await _stop():
         return
     plan = _plan_context(
-        d, body, system, provider_choice, model_choice, messages=_ctx_messages
+        d, body, system + _query_tail, provider_choice, model_choice, messages=_ctx_messages
     )
     if plan.recap:
         system += "\n\n" + plan.recap
@@ -4626,6 +4638,9 @@ async def chat_stream(
     if _trust_state["low"]:
         overrides.update(low_trust_overrides(overrides))
         system += "\n\n" + LOW_TRUST_PROMPT
+    # v1.420.0 (C3.7): the query-dependent sections LAST — the lock-step copy
+    # of chat_turn's join at the same seam.
+    system += _query_tail
     # Only the ALLOW entries are a grant (v1.298.0) — lock-step with chat_turn.
     armed_grant = {k for k, v in overrides.items() if v == "allow"}
     # CONVERSATION GRANTS (v1.312.0) — "Allow for this conversation", sent by
@@ -5313,21 +5328,12 @@ async def chat_stream(
                             "this needs more steps than a quick answer allows"
                         )
                     break
-                if (
-                    _harness is not None and getattr(_harness, "checkers", None) is not None
-                    and not _finish_round
-                ):
-                    # THE PROJECT'S OWN CHECKERS (part 3, Phase 3 — harness/
-                    # checkers): a round that edited a file the folder's ruff /
-                    # mypy / eslint / tsc reads gets ONE command call per
-                    # checker, right after the edit, as this round's own call —
-                    # so the posture cards it exactly as a command the model
-                    # ran (Local only's "Allow once", Ask first's card), the
-                    # spend check, the gate and the ledger see it. Never in low
-                    # trust. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
-                    calls = _harness.checkers.schedule(
-                        calls, low_trust=_chat_turn.finish_low_trust(_trust_state),
-                    )
+                # THE PROJECT'S OWN CHECKERS (part 3, Phase 3 — harness/
+                # checkers) are no longer added to each editing round: since
+                # v1.420.0 (C3.3, decision D1) they run ONCE, in the finish
+                # check's round (`FinishCheck.prepare` hands them out), over
+                # every file the reply changed. MIRROR NOTE (lock-step):
+                # chat_turn.run_chat_turn.
                 if not _finish_round:
                     # (The finish check's own round put the model's reply in
                     # above, as words: the model called nothing.)
@@ -7170,6 +7176,12 @@ async def chat_stream(
         # card or answer up for it. Low trust and local only too (a door only
         # links). MIRROR NOTE (lock-step): chat_turn.run_chat_turn does the
         # same before its response.
+        # CODING OFFER (v1.420.0, C6.1): the lock-step copy of chat_turn's —
+        # a door into Build › Code for a request to build software (a link
+        # only; never the sidebar, a pane, a coding session or an escalation).
+        door_entries = _chat_turn.with_coding_offer(
+            door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
+        )
         door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
         done_frame: dict[str, Any] = {
             "reply": reply,
@@ -7231,7 +7243,7 @@ async def chat_stream(
             # FOLDER RULES (v1.326.0): the project folder's instruction files
             # this turn injected (AGENTS.md / CLAUDE.md / *.local.md, read
             # order) — ALWAYS present (possibly []). The sections themselves
-            # joined the prompt through `_grounding.before_attachments()`
+            # joined the prompt through `_grounding.stable()` (v1.420.0)
             # above, the shared seam, before the planner. MIRROR NOTE
             # (lock-step): chat_turn.py's response carries the identical key.
             "folder_rules": list(_grounding.folder_rules_used),

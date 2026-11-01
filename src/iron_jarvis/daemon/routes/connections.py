@@ -756,6 +756,102 @@ def _probe_fail(kind: str) -> dict[str, Any]:
     return {"models": [], "error": _probe_words(kind), "reason": kind}
 
 
+class _ProbeFailure(Exception):
+    """A Test's typed facts as the shape ``failure_words.friendly_error``
+    reads (an HTTP ``status_code`` and the ``failed_provider``) — so the
+    headline of a refused key or a server error is the SAME classifier every
+    chat failure goes through, never a second wording."""
+
+    def __init__(self, provider: str, status: "int | None") -> None:
+        super().__init__(f"{provider} test answered {status}")
+        self.failed_provider = provider
+        self.status_code = status
+
+
+#: v1.420.0 (C6.6): the fix each Test answer gets, said for the press that
+#: asked (a Test, not a chat: no "Retry", no "this chat").
+_TEST_FIX: dict[str, str] = {
+    "unreachable": "Check your internet connection, then press Test again.",
+    "http": "That says nothing about the key. Press Test again in a moment.",
+    "not_connected": "Connect it on this page first.",
+    "no_credential": "Paste a key and press Connect.",
+    "unchecked": "There is no quick check for it. A chat with it shows it works.",
+    "account": "Start a chat with it to check that it answers.",
+    "inherited": "No API key is needed.",
+    "own_server": "Verify tools on its row asks it now.",
+    "demo": "It runs on this PC.",
+}
+
+
+def probe_test_words(result: dict[str, Any], provider: str, manager: Any = None) -> dict[str, str]:
+    """``{title, fix, technical}`` for a connection Test (v1.420.0, C6.6) —
+    read off the TYPED facts the registry and the probe answer (``kind``,
+    ``status``, ``via``), never off the probe's own text. A refused key and
+    an error status take their headline from ``failure_words.friendly_error``;
+    ``technical`` is the probe's text, masked, for a failed Test only (it
+    folds under Details). ``detail`` is left as it was for a headless caller.
+    Never raises."""
+    from ...providers import failure_words as fw
+
+    try:
+        ok = bool(result.get("ok"))
+        kind = str(result.get("kind") or "")
+        name = fw.plain_name(provider, manager) or provider
+        Name = fw.heading(name)
+        technical = "" if ok else fw.mask_failure_text(str(result.get("detail") or ""))[:400]
+        title = ""
+        if kind in ("refused_key", "http"):
+            status = result.get("status")
+            status = status if isinstance(status, int) and not isinstance(status, bool) else (
+                401 if kind == "refused_key" else 500
+            )
+            # The review: a REFUSED key is classified as one whatever status
+            # carried it — Google answers an invalid AI Studio key with a 400,
+            # which the chat classifier reads as "answered with an error.
+            # Retry, or pick another model for this chat". The real status
+            # stays on the result for a headless caller.
+            if kind == "refused_key" and status not in (401, 403):
+                status = 401
+            words = fw.friendly_error(_ProbeFailure(provider, status), provider=provider, manager=manager)
+            title = str(words.get("title") or "")
+            fix = str(words.get("fix") or "") if kind == "refused_key" else _TEST_FIX["http"]
+            return {"title": title, "fix": fix, "technical": technical}
+        if kind == "ok":
+            return {"title": f"{Name} accepted the key", "fix": "", "technical": ""}
+        if kind == "unreachable":
+            title = f"Couldn't reach {name} to check the key"
+        elif kind == "not_connected":
+            title = f"{Name} isn't connected"
+        elif kind == "no_credential":
+            title = f"{Name} has no key saved"
+        elif kind == "unchecked":
+            title = f"{Name} is connected"
+        elif kind == "account":
+            title = f"{Name} is connected through your ChatGPT account"
+        elif kind == "inherited":
+            via = fw.plain_name(str(result.get("via") or ""), manager) or "your plan"
+            title = f"{Name} works through your {via} sign-in"
+        elif kind == "own_server":
+            title = "Your model server needs no key"
+        elif kind == "demo":
+            title = "The demo model is always ready"
+        elif kind == "unknown":
+            return {"title": "Iron Jarvis doesn't know this provider", "fix": "", "technical": technical}
+        if title:
+            return {"title": title, "fix": _TEST_FIX.get(kind, ""), "technical": technical}
+        # An older registry or an injected prober with no kind: still a plain
+        # line, never the raw text as the headline.
+        if ok:
+            return {"title": f"{Name} is connected", "fix": "", "technical": ""}
+        return {
+            "title": f"{Name} didn't pass the check",
+            "fix": "Press Test again. If it keeps failing, connect it again with a working key.",
+            "technical": technical,
+        }
+    except Exception:  # noqa: BLE001 — words are never a new failure
+        return {"title": "", "fix": "", "technical": ""}
+
+
 def _model_list_urls(base_url: str, *, ollama_ok: bool | None = None) -> list[str]:
     """Where a server keeps its model list, most likely first: the
     OpenAI-compatible ``<base>/v1/models`` (or ``<base>/models`` when the base
@@ -1152,6 +1248,12 @@ def register(app: FastAPI, d) -> None:
         # loop so a slow provider can't stall the daemon.
         try:
             result = await asyncio.to_thread(d.platform.connections.test, provider)
+            # v1.420.0 (C6.6): the answer said for a person (title + fix, the
+            # technical text folded) beside the unchanged ``detail``.
+            if isinstance(result, dict):
+                words = probe_test_words(result, provider, getattr(d.platform, "providers", None))
+                if words.get("title"):
+                    result = {**result, **words}
             # v1.358.0 (lane 8D): the Directory's key card says what THIS
             # check said (the same key, one verdict on both pages).
             try:

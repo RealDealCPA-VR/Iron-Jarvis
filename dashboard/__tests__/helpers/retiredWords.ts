@@ -68,6 +68,39 @@ export const RETIRED: readonly Retired[] = [
   // view" (its switch reads Code | Terminal); "App view" was the plan's
   // working name and is never shown.
   { word: "app view", re: /\bapp view\b/i, use: "Code view (Build's Code | Terminal switch)" },
+  // v1.420.0 (fix plan C5.2): Build's loading line said "Attaching to
+  // sessions…" — the engine room's word for re-opening the terminals.
+  { word: "attaching to sessions", re: /\battaching to sessions\b/i, use: "Opening your terminals…" },
+];
+
+/** A retired word read on the DASHBOARD only (see RETIRED_ON_SCREEN). */
+function onScreen(word: string, re: RegExp, use: string): Retired {
+  return { word, re, use };
+}
+
+/**
+ * v1.420.0 (fix plan C5.2): engine-room words retired from what the
+ * DASHBOARD shows, but not yet from what the daemon answers. RETIRED above is
+ * also read by the two Python scans of the daemon's sentences
+ * (tests/test_vocabulary_beyond_dashboard_v13580.py parses the `{ word: …,
+ * re: …, use: … }` rows of this file), and those scans keep PENDING empty;
+ * the daemon still says these words in files other lanes reword this wave
+ * (harness/branches.py, routes/build*.py, routes/ci_watch.py, routes/undo.py
+ * — see the v1.420.0 hand-off). Written as `onScreen(…)` calls ON PURPOSE so
+ * the Python reader does not parse them: when the daemon's last sentence is
+ * reworded, move the entry up into RETIRED as a plain row.
+ */
+export const RETIRED_ON_SCREEN: readonly Retired[] = [
+  // A Build session's branch lives in a git worktree beside the repository
+  // (v1.375.0); a person reads "its own copy of the folder".
+  onScreen("worktree", /\bworktrees?\b/i, "its own copy of the folder"),
+  // The undo journal's word for a write it cannot reverse.
+  onScreen("no safe inverse", /\bno safe inverse\b/i, "can't be undone"),
+  // Connections headings a person read as engine-room words (v1.420.0, lane P).
+  onScreen("Subscription & local providers", /subscription & local providers/i, "the tools' own headings (Claude Code, Codex, …)"),
+  onScreen("Rescan local CLIs", /rescan local clis/i, "Look again"),
+  onScreen("No OAuth client configured", /no oauth client configured/i, "the sign-in set-up sentence"),
+  onScreen("Open Channels", /\bopen channels\b/i, "Open Notifications"),
 ];
 
 /** The folders whose files a user reads. */
@@ -374,7 +407,7 @@ export function readableCopy(rel: string, src = readSrc(rel)): Array<{ line: num
 export function retiredHits(rel: string, src?: string): Hit[] {
   const out: Hit[] = [];
   for (const piece of readableCopy(rel, src)) {
-    for (const r of RETIRED) {
+    for (const r of [...RETIRED, ...RETIRED_ON_SCREEN]) {
       if (r.re.test(piece.text)) {
         out.push({ file: rel, line: piece.line, word: r.word, text: piece.text.replace(/\s+/g, " ").trim() });
       }

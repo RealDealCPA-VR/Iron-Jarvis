@@ -10,6 +10,14 @@ cleanly where they are not on this machine — see each skip's reason).
 
 Every "it runs" pin fails on the code before Phase 3 (there were no
 checkers: the edit's result said only "Check: the file parses.").
+
+v1.420.0 (C3.3, the user's decision D1) — MOVED ON PURPOSE: the checkers run
+ONCE per reply, in the finish check's round, over every file the reply
+changed, and their findings reach the FINISH NOTE (never the edit's own
+result any more). The fixture turns the finish check ON with its other parts
+off (:func:`checkers_only_finish`), so each pin still reads the checkers
+alone; the pins read the note (:func:`finish_note`) where they read the
+edit's result before.
 """
 
 from __future__ import annotations
@@ -32,7 +40,6 @@ from tests._fakes.harness_lane import (
     call,
     finished_ids,
     ledger,
-    no_finish_check,
     post,
     stream,
     wire,
@@ -71,13 +78,32 @@ def _fake_ruff(bin_dir: Path) -> None:
         script.chmod(0o755)
 
 
+def checkers_only_finish(ws: Path) -> None:
+    """v1.420.0 (C3.3): the project's checkers ride the finish check's round
+    — the check ON, its tests / new files / request parts off, so a pin
+    counts only the checkers' calls and reads only their part of the note."""
+    h = ws / ".ironjarvis" / "harness"
+    h.mkdir(parents=True, exist_ok=True)
+    (h / "finish.toml").write_text("tests = false\nnew_files = false\nrequest = false\n", encoding="utf-8")
+
+
+def finish_note(model) -> str:
+    """The finish note the model was sent ("" for none) — where the
+    checkers' findings land since v1.420.0."""
+    for c in reversed(model.calls):
+        for m in reversed(c["messages"]):
+            if getattr(m, "role", "") == "user" and str(m.content).startswith(F.NOTE_OPENING):
+                return str(m.content)
+    return ""
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
-    (ws / "app.py").write_bytes(b"X = 1\n")
-    no_finish_check(ws)
+    (ws / "app.py").write_bytes(b"X = 100\n")
+    checkers_only_finish(ws)
     bin_dir = tmp_path / "bin"
     _fake_ruff(bin_dir)
     log = tmp_path / "ruff.log"
@@ -122,7 +148,7 @@ def _check_rows(platform) -> list:
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_a_checker_the_folder_has_runs_after_the_edit_and_its_findings_ride_the_edit(env, lane, monkeypatch):
+async def test_a_checker_the_folder_has_runs_at_the_finish_and_its_findings_reach_the_note(env, lane, monkeypatch):
     platform, ws, log = env
     _ruff_on(ws)
     if lane == "post":
@@ -133,13 +159,14 @@ async def test_a_checker_the_folder_has_runs_after_the_edit_and_its_findings_rid
     out = await (stream(platform, body(ws), answer=_ALLOW_ONCE) if lane == "stream" else post(platform, body(ws)))
     done = out["done"] if lane == "stream" else out
     assert done is not None
-    # The model's next call reads the findings ON THE EDIT's result, under its
-    # syntax line — and no tool message of the checker's own.
+    # v1.420.0: the edit's own result is only its own; the findings reach
+    # the finish note — and no tool message of the checker's own.
     sent = model.tool_messages(1)
-    assert set(sent) == {"w1"}
-    text = sent["w1"]
-    assert text.startswith("wrote 16 bytes to app.py\nCheck: the file parses.\nCheck (ruff): 1 problem in app.py\n")
+    assert sent == {"w1": "wrote 16 bytes to app.py\nCheck: the file parses."}
+    text = finish_note(model)
+    assert F.CHECKERS_HEAD + "\nCheck (ruff): 1 problem in app.py\n" in text, text
     assert "app.py:1:1: F401 fake finding 0 in app.py" in text
+    assert done["finish"]["checkers"] == {"ran": ["ruff"], "skipped": [], "late": []}
     # It ran as an ordinary command call, ledgered as the project's check,
     # with the safe flags (never a fix, never a cache in the folder).
     rows = _check_rows(platform)
@@ -160,7 +187,8 @@ async def test_a_clean_file_says_no_problems(env, monkeypatch):
     _ruff_on(ws)
     model = wire(platform, monkeypatch, _edit_then_done(content="X = 2  # CLEAN\n"))
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    assert model.tool_messages(1)["w1"].endswith("Check: the file parses.\nCheck (ruff): no problems in app.py.")
+    assert model.tool_messages(1)["w1"].endswith("Check: the file parses.")
+    assert "\nCheck (ruff): no problems in app.py.\n" in finish_note(model)
 
 
 async def test_findings_are_bounded_and_the_cut_is_said(env, monkeypatch):
@@ -169,11 +197,11 @@ async def test_findings_are_bounded_and_the_cut_is_said(env, monkeypatch):
     monkeypatch.setenv("FAKE_RUFF_LINES", "60")
     model = wire(platform, monkeypatch, _edit_then_done())
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    text = model.tool_messages(1)["w1"]
+    text = finish_note(model)
     assert "Check (ruff): 60 problems in app.py" in text
     shown = [ln for ln in text.splitlines() if "fake finding" in ln]
     assert len(shown) == C.MAX_FINDING_LINES
-    assert text.endswith(f"… {60 - C.MAX_FINDING_LINES} more lines not shown")
+    assert f"… {60 - C.MAX_FINDING_LINES} more lines not shown" in text
 
 
 # --------------------------------------------------------------------------- #
@@ -197,7 +225,10 @@ async def test_no_checkers_installed_means_the_same_calls_and_the_same_check_tex
     model = wire(platform, monkeypatch, _edit_then_done())
     out = await (stream(platform, body(ws)) if lane == "stream" else post(platform, body(ws)))
     assert model.tool_messages(1) == {"w1": "wrote 16 bytes to app.py\nCheck: the file parses."}
-    assert len(model.calls) == 2
+    # v1.420.0: the finish check's note (its other parts off here) has no
+    # checkers section, and its record no `checkers`.
+    assert F.CHECKERS_HEAD not in finish_note(model)
+    assert "checkers" not in (out["done"] if lane == "stream" else out)["finish"]
     assert [r.tool for r in ledger(platform)] == ["write_file"]
     assert not log.exists()
     if lane == "stream":
@@ -223,8 +254,8 @@ async def test_ask_first_cards_the_checker_and_a_declined_card_runs_nothing(env,
     # ONE card: the checker's command (the write is allow-tier there).
     assert [(f["tool"], _program_of(f["args"]["command"])) for f in asked] == [("shell", "ruff")]
     assert not log.exists(), "a declined checker ran"
-    text = model.tool_messages(1)["w1"]
-    assert "Check: the file parses.\nCheck (ruff) was not run: " in text
+    text = finish_note(model)
+    assert "\nCheck (ruff) was not run: " in text
     assert "declined" in text
     # The refusal is ledgered as the check's (a decision a human made).
     rows = _check_rows(platform)
@@ -237,7 +268,7 @@ async def test_ask_first_allowed_once_runs_it(env, monkeypatch):
     model = wire(platform, monkeypatch, _edit_then_done())
     await stream(platform, body(ws, approval_mode="approve_for_me"), answer=lambda f: "once")
     assert log.exists()
-    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)
 
 
 async def test_local_only_cards_it_allow_once_only(env, monkeypatch):
@@ -252,7 +283,7 @@ async def test_local_only_cards_it_allow_once_only(env, monkeypatch):
     assert [f["tool"] for f in asked if _program_of(f["args"].get("command", "") or "-") == "ruff"] == ["shell"]
     card = next(f for f in asked if _program_of(f["args"].get("command", "") or "-") == "ruff")
     assert card.get("once_only") is True
-    assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem" in finish_note(model)
 
 
 async def test_low_trust_never_runs_a_checker(env, monkeypatch):
@@ -263,6 +294,7 @@ async def test_low_trust_never_runs_a_checker(env, monkeypatch):
     assert not log.exists()
     assert _check_rows(platform) == []
     assert "Check (ruff)" not in model.tool_messages(1).get("w1", "")
+    assert "Check (ruff)" not in finish_note(model)
     assert "ij-check-1" not in finished_ids(out["frames"])
 
 
@@ -300,11 +332,12 @@ async def test_an_edit_that_did_not_apply_runs_no_checker(env, monkeypatch):
     out = await stream(platform, body(ws), answer=_ALLOW_ONCE)
     assert not log.exists() and _check_rows(platform) == []
     assert "Check (ruff)" not in model.tool_messages(1)["e1"]
-    # (Its step still settles — answered without running.)
-    assert finished_ids(out["frames"]) == ["e1", "ij-check-1"]
+    # v1.420.0: nothing changed, so the reply's finish check (and with it the
+    # checkers) does not run at all — no step is handed out.
+    assert finished_ids(out["frames"]) == ["e1"]
 
 
-async def test_one_run_per_checker_covers_the_rounds_edits_and_only_files_it_reads(env, monkeypatch):
+async def test_one_run_per_checker_covers_the_replys_edits_and_only_files_it_reads(env, monkeypatch):
     platform, ws, log = env
     _ruff_on(ws)
     (ws / "b.py").write_bytes(b"Y = 1\n")
@@ -314,11 +347,13 @@ async def test_one_run_per_checker_covers_the_rounds_edits_and_only_files_it_rea
         call("edit_file", "w3", path="b.py", old="Y = 1", new="import sys\nY = 2"),
     ], "Done."])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    assert log.read_text(encoding="utf-8").split()[-2:] == ["app.py", "b.py"]
+    assert sorted(log.read_text(encoding="utf-8").split()[-2:]) == ["app.py", "b.py"]
     sent = model.tool_messages(1)
-    # The findings ride the LAST edit of the round that changed a checked file.
-    assert "Check (ruff)" not in sent["w1"] and "Check (ruff)" not in sent["w2"]
-    assert "Check (ruff): 2 problems in app.py, b.py" in sent["w3"]
+    # v1.420.0: the findings reach the finish note, never an edit's result.
+    assert all("Check (ruff)" not in t for t in sent.values())
+    text = finish_note(model)
+    assert ("Check (ruff): 2 problems in app.py, b.py" in text
+            or "Check (ruff): 2 problems in b.py, app.py" in text), text
     assert len(_check_rows(platform)) == 1
 
 
@@ -330,9 +365,10 @@ async def test_one_run_takes_a_bounded_number_of_files_and_says_so(env, monkeypa
         call("write_file", f"w{i}", path=f"m{i}.py", content="import os\n") for i in range(3)
     ], "Done."])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    assert log.read_text(encoding="utf-8").split()[-2:] == ["m0.py", "m1.py"]
-    assert ("Check (ruff): 2 problems in m0.py, m1.py (1 more changed file not checked: one run "
-            "takes at most 2)") in model.tool_messages(1)["w2"]
+    ran = log.read_text(encoding="utf-8").split()[-2:]
+    assert len(ran) == 2 and set(ran) < {"m0.py", "m1.py", "m2.py"}
+    assert (f"Check (ruff): 2 problems in {ran[0]}, {ran[1]} (1 more changed file not checked: one run "
+            "takes at most 2)") in finish_note(model)
 
 
 async def test_a_file_name_a_command_line_cannot_carry_is_never_checked(env, monkeypatch):
@@ -345,6 +381,7 @@ async def test_a_file_name_a_command_line_cannot_carry_is_never_checked(env, mon
     await stream(platform, body(ws))
     assert not log.exists() and _check_rows(platform) == []
     assert all("Check (ruff)" not in t for t in model.tool_messages(1).values())
+    assert "Check (ruff)" not in finish_note(model)
 
 
 def test_detection_needs_the_config_and_the_program_and_never_installs(tmp_path, monkeypatch):
@@ -378,6 +415,9 @@ def test_detection_needs_the_config_and_the_program_and_never_installs(tmp_path,
     assert "--no-fix" in found["ruff"].argv(["a.py"]) and "--no-cache" in found["ruff"].argv(["a.py"])
     mypy_argv = found["mypy"].argv(["a.py"])
     assert mypy_argv[mypy_argv.index("--cache-dir") + 1] in ("nul", "/dev/null")
+    # v1.420.0 (C3.3): mypy reads the changed files only, never following
+    # their imports into a check of their own.
+    assert "--follow-imports=silent" in mypy_argv
 
 
 def test_a_config_without_its_table_turns_nothing_on(tmp_path, monkeypatch):
@@ -425,30 +465,31 @@ async def test_the_run_is_prepared_and_read_off_the_event_loop(env, monkeypatch)
     monkeypatch.setattr(C, "findings", findings)
     model = wire(platform, monkeypatch, _edit_then_done())
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem" in finish_note(model)
     loop_thread = threading.get_ident()
     assert seen["prepare"] and loop_thread not in seen["prepare"]
     assert seen["findings"] and loop_thread not in seen["findings"]
 
 
-def test_scheduling_on_the_loop_touches_no_disk(tmp_path, monkeypatch):
-    """``schedule`` runs ON the event loop, so it is string work only."""
-    from iron_jarvis.providers.adapters.base import ToolCall
-
+async def test_scheduling_on_the_loop_touches_no_disk(tmp_path, monkeypatch):
+    """``schedule_finish`` runs ON the event loop, so (without ``tsc``, whose
+    project count is taken off the loop) it is string work only.
+    v1.420.0: was ``schedule`` (per round) — moved on purpose."""
     checker = C.Checker(name="ruff", program="ruff", where="path", config="ruff.toml", suffixes=C.PY_SUFFIXES)
     pc = C.ProjectCheckers(tmp_path, [checker], "shell")
 
     def no_disk(*a, **kw):
-        raise AssertionError("schedule touched the disk")
+        raise AssertionError("schedule_finish touched the disk")
 
     monkeypatch.setattr(Path, "resolve", no_disk)
     monkeypatch.setattr(os, "stat", no_disk)
-    calls = [ToolCall(id="w1", name="write_file", arguments={"path": "pkg/a.py", "content": "x"}),
-             ToolCall(id="w2", name="write_file", arguments={"path": str(tmp_path / "b.py"), "content": "x"}),
-             ToolCall(id="w3", name="write_file", arguments={"path": "../out.py", "content": "x"})]
-    out = pc.schedule(calls)
-    assert [c.id for c in out] == ["w1", "w2", "ij-check-1", "w3"]
-    assert out[2].arguments["command"].endswith(" pkg/a.py b.py")
+    try:
+        out = await pc.schedule_finish(["pkg/a.py", str(tmp_path / "b.py"), "../out.py", "notes.md"])
+    finally:
+        monkeypatch.undo()
+    assert [c.id for c in out] == ["ij-check-1"]
+    assert out[0].arguments["command"].endswith(" pkg/a.py b.py")
+    assert out[0].arguments["timeout_s"] == C.CHECKERS_BUDGET_S
 
 
 async def test_a_checker_run_is_never_the_finish_checks_test_command(env, monkeypatch):
@@ -530,12 +571,12 @@ async def test_the_real_ruff_takes_the_flags_and_its_finding_comes_back(tmp_path
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "proj"
     ws.mkdir()
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     (ws / "pyproject.toml").write_text("[tool.ruff]\nline-length = 100\nfix = true\n", encoding="utf-8")
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\nX = 1\n")],
                                          "Done."])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    text = model.tool_messages(1)["w1"]
+    text = finish_note(model)
     assert "Check (ruff): 1 problem in app.py\n" in text and "F401" in text, text
     # `fix = true` in the config, and the file is untouched (--no-fix).
     assert (ws / "app.py").read_text(encoding="utf-8") == "import os\nX = 1\n"
@@ -547,15 +588,15 @@ async def test_a_file_the_projects_ruff_settings_exclude_is_said_not_passed(tmp_
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "proj"
     ws.mkdir()
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     (ws / "pyproject.toml").write_text('[tool.ruff]\nexclude = ["generated.py"]\n', encoding="utf-8")
     model = wire(platform, monkeypatch, [
         [call("write_file", "w1", path="generated.py", content="import os\n")], "Done.",
     ])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    text = model.tool_messages(1)["w1"]
-    assert text.endswith("Check (ruff): generated.py is excluded by the project's own ruff settings, so it was "
-                         "not checked."), text
+    text = finish_note(model)
+    assert ("Check (ruff): generated.py is excluded by the project's own ruff settings, so it was "
+            "not checked.") in text, text
 
 
 def test_eslint_json_is_read_as_lines_for_the_changed_files(tmp_path):
@@ -586,21 +627,22 @@ async def test_a_type_error_an_edit_introduced_comes_back_from_the_real_mypy(tmp
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "proj"
     ws.mkdir()
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     (ws / "mypy.ini").write_text("[mypy]\nwarn_unused_configs = False\n", encoding="utf-8")
     (ws / "util.py").write_text("def double(n: int) -> int:\n    return n * 2\n", encoding="utf-8")
     monkeypatch.setenv("PATH", _mypy_dir() + os.pathsep + os.environ.get("PATH", ""))
     bad = "from util import double\n\n\ndef label(n: int) -> str:\n    return double(n)\n"
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content=bad)], "Done."])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    text = model.tool_messages(1)["w1"]
-    assert "Check: the file parses.\nCheck (mypy): 1 problem in app.py\n" in text, text
+    text = finish_note(model)
+    assert "\nCheck (mypy): 1 problem in app.py\n" in text, text
     assert "app.py:5: error: Incompatible return value type" in text
     # Only the changed file's lines; nothing written into the project.
     assert not (ws / ".mypy_cache").exists()
     rows = _check_rows(platform)
     command = json.loads(rows[0].args_json)["command"]
     assert len(rows) == 1 and _program_of(command) == "mypy" and " --cache-dir " in command
+    assert " --follow-imports=silent " in command
 
 
 @pytest.mark.skipif(_typescript() is None, reason="typescript + node are not on this machine (IJ_TEST_TYPESCRIPT)")
@@ -608,7 +650,7 @@ async def test_a_type_error_an_edit_introduced_comes_back_from_the_projects_own_
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "web"
     ws.mkdir()
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     (ws / "tsconfig.json").write_text(json.dumps({
         "compilerOptions": {"strict": True, "noEmit": True, "target": "es2020"}, "include": ["src"],
     }), encoding="utf-8")
@@ -627,7 +669,7 @@ async def test_a_type_error_an_edit_introduced_comes_back_from_the_projects_own_
     bad = "export function total(xs: number[]): number {\n  return xs.join(',');\n}\n"
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="src/total.ts", content=bad)], "Done."])
     await stream(platform, body(ws), answer=_ALLOW_ONCE)
-    text = model.tool_messages(1)["w1"]
+    text = finish_note(model)
     assert "Check (tsc): 1 problem in src/total.ts\n" in text, text
     assert "src/total.ts(2,3): error TS2322" in text
     rows = _check_rows(platform)

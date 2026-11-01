@@ -21,9 +21,11 @@
  *  - Terminals: the live Build terminals with the state dots Build draws
  *    (GET /terminals/activity, polled by CodeView). Pressing one opens it
  *    in Build (v1.406.0: Build is the terminals; this list is in Chat › Code).
+ *  - Keys (v1.420.0, fix plan C2.9): the list is the harness's for its keys
+ *    (lib/harnessKeys HARNESS_LIST_ATTR), and ↑/↓ move between session rows.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -48,6 +50,21 @@ import type { RailPane } from "@/components/terminal/PaneRail";
 import { formatAge } from "@/lib/threadStatus";
 import { archivedCount, BRING_BACK_WORDS, type BuildFolder } from "@/lib/buildSessions";
 import { SESSION_DRAG_TYPE } from "@/lib/codeSplit";
+import { HARNESS_LIST_ATTR, HARNESS_ROW_ATTR, moveRowFocus } from "@/lib/harnessKeys";
+
+/** v1.420.0 (fix plan C2.9): the attribute that marks a session row (↑/↓
+ *  move between them) and the one that marks the list as the harness's. */
+const ROW_MARK = { [HARNESS_ROW_ATTR]: "" } as Record<string, string>;
+const LIST_MARK = { [HARNESS_LIST_ATTR]: "" } as Record<string, string>;
+
+/** v1.420.0 (C2.9): ↑/↓ on a row move to the row above or below (Enter opens
+ *  it — the row is a button). Never with a modifier held. True: the key was
+ *  an arrow (handled here). */
+function onRowArrow(e: KeyboardEvent<HTMLButtonElement>): boolean {
+  if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+  if (moveRowFocus(e.currentTarget, e.key === "ArrowDown" ? 1 : -1)) e.preventDefault();
+  return true;
+}
 
 /** v1.406.0 part 7: the "Open beside" button's words. */
 export const OPEN_BESIDE_TITLE = "Open beside the session in front (Shift+Enter on a row; or drag the row to the right edge)";
@@ -210,7 +227,9 @@ function FolderGroup({
                 onClick={() => onSelect(s.id)}
                 // v1.406.0 part 7: Shift+Enter on a row opens it beside; the
                 // row can be dragged to the view's right edge to do the same.
+                {...ROW_MARK}
                 onKeyDown={(e) => {
+                  if (onRowArrow(e)) return;
                   if (!onOpenBeside || e.key !== "Enter" || !e.shiftKey) return;
                   e.preventDefault();
                   onOpenBeside(s.id);
@@ -316,6 +335,8 @@ function ArchivedFold({
                 <button
                   type="button"
                   data-testid={`harness-archived-row-${s.id}`}
+                  {...ROW_MARK}
+                  onKeyDown={(e) => void onRowArrow(e)}
                   aria-current={s.id === selectedId ? "true" : undefined}
                   onClick={() => onSelect(s.id)}
                   title={f.noFolder ? `${s.title} (no folder)` : `${s.title} · ${f.name}`}
@@ -455,7 +476,14 @@ export function HarnessSidebar({
 
   return (
     // Harness gaps (fix 4): the view's everyday name (lib/buildWords).
-    <nav aria-label={CODING_SESSIONS_LIST} data-testid="harness-sidebar" className="flex h-full min-h-0 flex-col gap-2">
+    // v1.420.0 (C2.9): the list's key presses are the harness's (Esc,
+    // Ctrl+N, Ctrl+L, Ctrl+K) even portaled into the app's sidebar.
+    <nav
+      aria-label={CODING_SESSIONS_LIST}
+      data-testid="harness-sidebar"
+      {...LIST_MARK}
+      className="flex h-full min-h-0 flex-col gap-2"
+    >
       <button
         type="button"
         data-testid="harness-new-session"

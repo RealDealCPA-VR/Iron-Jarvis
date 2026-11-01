@@ -193,7 +193,7 @@ describe("the draft card's mail buttons", () => {
     await openDialog("draft", { form: false });
 
     await screen.findByTestId("compose-no-account");
-    expect(screen.getByText(/Add your email in Channels/)).toBeTruthy();
+    expect(screen.getByText(/Add your email in Settings › Notifications/)).toBeTruthy();
     expect(screen.queryByTestId("compose-submit")).toBeNull();
     expect(api.posts).toEqual([]);
   });

@@ -100,10 +100,12 @@ describe("the order: one step at a time, least needed first", () => {
     expect(CHAT_FIT_ORDER[CHAT_FIT_ORDER.length - 1]).toBe("tight");
   });
 
-  it("the IJ harness gives up 'Try on…' first, then the name, then 'Plan first'", () => {
+  it("the IJ harness gives up 'Try on…' first, then the name, then the permission level", () => {
     // v1.403.0 (moved on purpose): "Team" gives up its word right after
     // "Try on…" (a team set keeps its count), before the model's name.
-    expect(HARNESS_FIT_ORDER).toEqual(["tryon", "team", "name", "plan", "ask", "short", "tight"]);
+    // v1.420.0 (moved on purpose, fix plan C2.11): no "plan" step — the
+    // "Plan first" chip is gone; Plan lives inside the permission chip.
+    expect(HARNESS_FIT_ORDER).toEqual(["tryon", "team", "name", "ask", "short", "tight"]);
   });
 
   it("every step a toolbar takes is one the attributes know", () => {
@@ -616,18 +618,20 @@ describe("the IJ harness composer", () => {
     // counts controls running over one another: either alone holds it).
     expect(s).toContain("group-data-[fit-row]/fit:justify-start");
     expect(s).toContain('iconOnly={harnessOn("ask")}');
-    // The plan chip and the try-on chip had no aria-label: their words were
-    // their name. Now they keep a name when the words go.
-    expect(s).toMatch(/data-testid="harness-plan-mode"[\s\S]{0,400}aria-label=/);
+    // The try-on chip had no aria-label: its words were its name. Now it
+    // keeps a name when the words go. v1.420.0 (moved on purpose, fix plan
+    // C2.11): the plan chip is gone — Plan is a row of the permission chip,
+    // which says "Plan" when it is on.
+    expect(s).not.toContain('data-testid="harness-plan-mode"');
+    expect(s).toContain("onPlanChange={(on) => void patchSetup({ mode: on ? \"plan\" : \"act\" })}");
     const tryOn = read("components", "harness", "HarnessTryOn.tsx");
     expect(tryOn).toMatch(/data-testid="harness-try-on"[\s\S]{0,400}aria-label=/);
     expect(tryOn).toContain('fitWords("tryon")');
   });
 
-  it("'Planning' (on) keeps its word; models picked to try on keep their count", () => {
-    const s = src();
-    expect(s).toContain('className={`${composerChipClass(planning)}${planning ? "" : ` ${fitIconChip("plan")}`}`}');
-    expect(s).toContain('<span className={planning ? undefined : fitWords("plan")}>{words}</span>');
+  it("models picked to try on keep their count", () => {
+    // v1.420.0 (moved on purpose, fix plan C2.11): the "Planning" chip and
+    // its words are gone (Plan is in the permission chip).
     const tryOn = read("components", "harness", "HarnessTryOn.tsx");
     expect(tryOn).toContain('${picks.length > 0 ? "" : ` ${fitIconChip("tryon")}`}');
     expect(tryOn).toContain('<span className={`hidden ${fitShows("tryon")}`}>{picks.length}</span>');

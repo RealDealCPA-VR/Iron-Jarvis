@@ -218,7 +218,8 @@ function renderSession() {
  *  accounts) are on screen. */
 async function openMenu(waitForAccount = "work"): Promise<HTMLElement> {
   const chip = await screen.findByTitle("Switch model");
-  if (waitForAccount) await screen.findByTestId("account-chip");
+  // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip.
+  if (waitForAccount) await screen.findByTestId("model-chip-account");
   fireEvent.click(chip);
   const menu = await screen.findByTestId("model-menu");
   if (waitForAccount) await within(menu).findByTestId(`model-account-${waitForAccount}`);
@@ -401,7 +402,7 @@ describe("the Iron-Proxy accounts in the Claude group", () => {
 
   it("opening the menu reads the account list again, so each state is the one now", async () => {
     renderSession();
-    await screen.findByTestId("account-chip");
+    await screen.findByTestId("model-chip-account");
     const reads = () => api.calls.filter((c) => c.method === "GET" && c.path === "/build/accounts").length;
     await waitFor(() => expect(reads()).toBe(1));
     // Personal reached its limit since the session opened.
@@ -439,7 +440,7 @@ describe("the Iron-Proxy accounts in the Claude group", () => {
     expect(shut.getAttribute("title")).toBe("Turned off. Turn it on in Connections to use it.");
     const work = within(menu).getByTestId("model-account-work");
     expect(work.getAttribute("data-current")).toBe("true");
-    expect(within(work).getByTestId("model-account-state").textContent).toBe("Removed from Iron-Proxy");
+    expect(within(work).getByTestId("model-account-state").textContent).toBe("No longer in your accounts"); // v1.420.0 (C5.2)
     // The session's own account still opens its models (a model change only).
     expect((work as HTMLButtonElement).disabled).toBe(false);
   });
@@ -474,7 +475,7 @@ describe("picking a model under an account", () => {
     };
     renderSession();
     const menu = await openMenu();
-    expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(screen.getByTestId("model-chip-account")).toHaveTextContent("Work");
     fireEvent.click(within(menu).getByTestId("model-account-personal"));
     const sub = await screen.findByTestId("model-sub");
     fireEvent.click(within(sub).getByText("Sonnet 4.6"));
@@ -484,7 +485,7 @@ describe("picking a model under an account", () => {
       ]),
     );
     // Both chips show the result.
-    await waitFor(() => expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Personal"));
+    await waitFor(() => expect(screen.getByTestId("model-chip-account")).toHaveTextContent("Personal"));
     expect(screen.getByTestId("model-chip-words")).toHaveTextContent("Sonnet 4.6");
     expect(screen.getByTestId("model-chip-account").textContent).toBe(" · Personal");
     // Never a continue: that is the limit card's.
@@ -540,10 +541,12 @@ describe("picking a model under an account", () => {
     ]);
     expect(screen.getByTestId("model-chip-words")).toHaveTextContent("Opus 4.8");
     expect(screen.getByTestId("model-chip-account").textContent).toBe(" · Work");
-    expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(screen.getByTestId("model-chip-account")).toHaveTextContent("Work");
   });
 
-  it("the header chip's switch is the same action: the model chip names the new account", async () => {
+  // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip: the header carries no second account chip, so the switch is
+  // the model menu's account row (a model under it, one request).
+  it("the header names no account a second time: the switch is the model chip's", async () => {
     api.answers["PATCH /build/sessions/s1"] = () => {
       const v = onWork({
         setup: { provider: "claude-cli", model: "claude-opus-4-8", account: "personal", account_name: "Personal" },
@@ -553,10 +556,15 @@ describe("picking a model under an account", () => {
       return v;
     };
     renderSession();
-    fireEvent.click(await screen.findByTestId("account-chip"));
-    fireEvent.click(await screen.findByTestId("account-pick-personal"));
+    const first = await openMenu();
+    expect(screen.queryByTestId("account-chip")).toBeNull();
+    expect(screen.queryByTestId("account-chip-name")).toBeNull();
+    fireEvent.click(within(first).getByTestId("model-account-personal"));
+    fireEvent.click(within(await screen.findByTestId("model-sub")).getByText("Opus 4.8"));
     await waitFor(() =>
-      expect(patches()).toEqual([{ method: "PATCH", path: "/build/sessions/s1", body: { account: "personal" } }]),
+      expect(patches()).toEqual([
+        { method: "PATCH", path: "/build/sessions/s1", body: { account: "personal", model: "claude-opus-4-8" } },
+      ]),
     );
     await waitFor(() => expect(screen.getByTestId("model-chip-account").textContent).toBe(" · Personal"));
     fireEvent.click(screen.getByTitle("Switch model"));
@@ -602,7 +610,7 @@ describe("no account list: Claude Code is the one row it always was", () => {
 describe("the model chip names the account", () => {
   it('reads "Opus 4.8 · Work"', async () => {
     renderSession();
-    await screen.findByTestId("account-chip");
+    await screen.findByTestId("model-chip-account");
     const chip = screen.getByTitle("Switch model");
     await waitFor(() => expect(chip.textContent).toBe("Opus 4.8 · Work"));
   });
@@ -610,7 +618,7 @@ describe("the model chip names the account", () => {
   it("a session left on the vendor's own default names that, never the app's default model", async () => {
     api.gets["/build/sessions/s1"] = onWork({ setup: { provider: "claude-cli", account: "work", account_name: "Work" } });
     renderSession();
-    await screen.findByTestId("account-chip");
+    await screen.findByTestId("model-chip-account");
     await waitFor(() => expect(screen.getByTitle("Switch model").textContent).toBe("Your Claude plan · Work"));
     expect(screen.getByTitle("Switch model").textContent).not.toContain("Demo");
   });

@@ -142,7 +142,7 @@ function tipFor(detail?: string): string {
     return "the saved token is missing — re-enter it via Edit.";
   if (d.includes("chat_id")) return "add your Chat ID via Edit.";
   if (d.includes("host") || d.includes("from_addr") || d.includes("to_addr"))
-    return "fill the SMTP host and addresses via Edit.";
+    return "fill in the email sending details (the mail server and both addresses) via Edit.";
   return "open Edit and re-check the destination's details.";
 }
 
@@ -175,9 +175,9 @@ const DEST_META: Record<
     order: 3,
   },
   email: {
-    label: "Email",
+    label: "Email (sending)",
     blurb: "Plain email to any address you choose.",
-    needs: "SMTP details (host, from, to)",
+    needs: "your email's sending details (the mail server, and who it comes from and goes to)",
     effort: "technical",
     order: 4,
   },
@@ -223,6 +223,14 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   // fixing its failing checks, or they pass after the reviewed fix it pushed.
   { key: "build.ci_done", label: "Your pull request's checks: fixed, or Iron Jarvis gave up" },
 ];
+
+/** v1.420.0 (C6.6): what the user READS on the email fields. The server's
+ * own labels say "SMTP host" / "SMTP port" (wire-honest); the screen says
+ * what the box is for. The address examples stay (they are what to type). */
+const EMAIL_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
+  host: { label: "Mail server for sending", help: "e.g. smtp.gmail.com" },
+  port: { label: "Sending port", help: "usually 587" },
+};
 
 /** What the user READS on the telegram two-way fields (v1.136.0). The server's
  * own labels stay wire-honest ("true/false"); the screen speaks plainly. The
@@ -645,7 +653,11 @@ export default function ChannelsPage() {
                   : [];
                 const renderField = (f: ChannelField) => {
                   const copy =
-                    addType === "telegram" ? TELEGRAM_FIELD_COPY[f.key] : undefined;
+                    addType === "telegram"
+                      ? TELEGRAM_FIELD_COPY[f.key]
+                      : addType === "email"
+                        ? EMAIL_FIELD_COPY[f.key]
+                        : undefined;
                   const label = copy?.label ?? f.label;
                   const help = copy?.help ?? f.help;
                   // Boolean settings render as REAL toggles (v1.136.0) — a

@@ -655,7 +655,7 @@ describe("an account limit", () => {
       ]);
     });
     renderSession();
-    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(await screen.findByTestId("model-chip-account")).toHaveTextContent("Work");
     expect(screen.queryByTestId("account-chip-status")).toBeNull();
     await send("Keep going");
     await waitFor(() => expect(screen.getByTestId("account-chip-status").textContent).toBe("Limit reached"));
@@ -796,10 +796,12 @@ describe("the account chip", () => {
     default: false, plan: "pro", plan_label: "Pro", status: "limit", resets_at: "2030-01-01T16:12:00Z", limit_kind: "usage",
   };
 
-  it("names the session's account and lists the accounts, grouped, with Iron-Proxy's note", async () => {
+  // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip: a session ON an account has no header chip; one with no
+  // account yet keeps "Choose an account" there, with the whole list.
+  it("with no account yet the header chip lists the accounts, grouped, with Iron-Proxy's note", async () => {
     api.gets["/build/sessions/s1"] = view({
-      setup: { provider: "claude-cli", account: "work", account_name: "Work" },
-      account: WORK,
+      setup: { provider: "claude-cli" },
+      account: null,
       account_vendor: "claude",
     });
     api.gets["/build/accounts"] = {
@@ -814,7 +816,7 @@ describe("the account chip", () => {
     };
     renderSession();
     const chip = await screen.findByTestId("account-chip");
-    expect(chip).toHaveTextContent("Work");
+    expect(chip).toHaveTextContent("Choose an account");
     fireEvent.click(chip);
     const menu = await screen.findByTestId("account-menu");
     await waitFor(() =>
@@ -829,8 +831,9 @@ describe("the account chip", () => {
     await waitFor(() =>
       expect(api.calls).toContainEqual({ method: "PATCH", path: "/build/sessions/s1", body: { account: "home" } }),
     );
-    // The answer is adopted: the chip names the new account.
-    await waitFor(() => expect(screen.getByTestId("account-chip-name")).toHaveTextContent("Home"));
+    // The answer is adopted: the MODEL chip names the new account, and the
+    // header's chip is gone (named once).
+    await waitFor(() => expect(screen.getByTestId("model-chip-account")).toHaveTextContent("Home"));
     // A plain pick in the list never asks the daemon to carry on now: that
     // is offered only from the limit card.
     expect(api.calls.some((c) => c.path === "/build/sessions/s1/account")).toBe(false);
@@ -882,7 +885,7 @@ describe("a new session on a Default account that is at its limit (v1.368.0 ship
       ]);
     });
     renderSession();
-    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Work");
+    expect(await screen.findByTestId("model-chip-account")).toHaveTextContent("Work");
     const status = await screen.findByTestId("account-chip-status");
     expect(status.textContent).toBe("Limit reached");
     expect(status.getAttribute("title")).toMatch(/^Limit reached · resets /);
@@ -898,7 +901,7 @@ describe("a new session on a Default account that is at its limit (v1.368.0 ship
     api.gets["/build/sessions/s1"] = view({ account: PERSONAL, account_vendor: "claude", account_limit: null, account_wait: null });
     api.gets["/build/accounts"] = { claude: [WORK, PERSONAL], codex: [], iron_proxy: { enabled: true, running: true, needs_update: false, note: "" } };
     renderSession();
-    expect(await screen.findByTestId("account-chip-name")).toHaveTextContent("Personal");
+    expect(await screen.findByTestId("model-chip-account")).toHaveTextContent("Personal");
     expect(screen.queryByTestId("account-chip-status")).toBeNull();
   });
 });

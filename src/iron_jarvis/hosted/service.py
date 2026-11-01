@@ -2225,6 +2225,13 @@ class HostedService:
         self._emit(live, user)
         started = False
         try:
+            # v1.420.0 (C4.12): the folder's git tree as this message starts,
+            # before the tool hears it — the Changes pane's "This message".
+            # Off the loop, bounded, never failing the turn; a late tree is
+            # dropped (the tool may already be working).
+            from . import panes as PN
+
+            await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id)
             async with live.lock:
                 self._say_start(live, row)  # v1.417.0 (C4.7)
                 await self._ensure_running(live, row)

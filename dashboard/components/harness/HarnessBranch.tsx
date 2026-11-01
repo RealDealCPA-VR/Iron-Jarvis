@@ -246,7 +246,7 @@ export function BranchView({
   if (removed) {
     return (
       <p data-testid="pane-branch-removed" className="text-[13px] text-zinc-400">
-        This session&apos;s worktree was removed. The branch {git.branch} is kept in the repository.
+        This session&apos;s own copy of the folder was removed. The branch {git.branch} is kept in the repository.
       </p>
     );
   }
@@ -345,12 +345,12 @@ export function BranchView({
             act("discard", async () => {
               const done = await discardBranch(sessionId);
               onArchived?.();
-              return done.note || "The worktree is in the trash.";
+              return done.note || "Its copy of the folder is in the trash.";
             })
           }
           label="Discard"
           confirmLabel={discardConfirm}
-          title={`The worktree folder goes to Iron Jarvis's trash; the branch ${git.branch} stays.`}
+          title={`This session's own copy of the folder goes to Iron Jarvis's trash; the branch ${git.branch} stays.`}
         />
         {busy ? <Loader2 size={13} aria-label="Working" className="animate-spin text-zinc-500" /> : null}
       </div>
@@ -495,18 +495,18 @@ export function BranchView({
 
       {merged ? (
         <div data-testid="branch-merged" className="flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
-          <span>The work is in {merged.into}. The worktree is no longer needed.</span>
+          <span>The work is in {merged.into}. This session&apos;s own copy of the folder is no longer needed.</span>
           <ConfirmButton
             onConfirm={() =>
               act("remove", async () => {
                 const done = await discardBranch(sessionId, true);
                 onArchived?.();
-                return done.note || "The worktree is in the trash.";
+                return done.note || "Its copy of the folder is in the trash.";
               })
             }
-            label="Remove the worktree"
+            label="Remove its copy of the folder"
             confirmLabel="Confirm remove"
-            title={`The worktree folder goes to Iron Jarvis's trash; the branch ${git.branch} stays.`}
+            title={`This session's own copy of the folder goes to Iron Jarvis's trash; the branch ${git.branch} stays.`}
           />
         </div>
       ) : null}

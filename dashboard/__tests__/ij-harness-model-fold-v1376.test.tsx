@@ -191,7 +191,8 @@ describe("every pickable row of the harness menu, as the daemon receives it", ()
         render(
           <HarnessSession threadId="s1" terminal={terminal} listRunning={false} onChanged={() => {}} onGone={() => {}} />,
         );
-        if (which === "on") await screen.findByTestId("account-chip");
+        // v1.420.0 (moved on purpose, fix plan C2.11): the account is named ONCE, in the model chip.
+        if (which === "on") await screen.findByTestId("model-chip-account");
         const got = await pressEverything();
         const key = which === "on" ? "picks" : "picks_off";
         if (process.env.IJ_REGEN_HARNESS_FOLD === "1") {

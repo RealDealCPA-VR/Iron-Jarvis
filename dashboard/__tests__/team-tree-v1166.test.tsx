@@ -525,7 +525,8 @@ describe("kanban queued lane (B6)", () => {
     expect(boardLaneFor(sv("s1", "active"), false)).toBe("active");
     expect(boardLaneFor(sv("s1", "completed"), false)).toBe("completed");
     expect(boardLaneFor(sv("s1", "failed"), false)).toBe("failed");
-    expect(boardLaneFor(sv("s1", "cancelled"), false)).toBe("failed");
+    // v1.420.0 (C5.2, moved on purpose): a stopped run has its own lane.
+    expect(boardLaneFor(sv("s1", "cancelled"), false)).toBe("stopped");
   });
 
   it("assignBoardLanes buckets queued separately from active", () => {
@@ -548,7 +549,7 @@ describe("kanban queued lane (B6)", () => {
   it("visibleLanes: an occupied queue prepends Queued BEFORE Active", () => {
     const lanes = assignBoardLanes([sv("s-q", "queued")], {});
     const ids = visibleLanes(lanes).map((l) => l.id as string);
-    expect(ids).toEqual(["queued", "active", "review", "completed", "failed"]);
+    expect(ids).toEqual(["queued", "active", "review", "completed", "failed", "stopped"]);
     expect(QUEUED_LANE.title).toBe("Queued");
   });
 });

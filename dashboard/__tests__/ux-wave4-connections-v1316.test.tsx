@@ -327,7 +327,8 @@ describe("Connections — the model path comes first (connections-model-path-bur
     expect(link).not.toBeNull();
     const target = document.getElementById("subscription-providers");
     expect(target).not.toBeNull();
-    expect(target!.textContent).toMatch(/Subscription & local providers/);
+    // v1.420.0 (C6.6), moved ON PURPOSE: the plain words (lib words retired).
+    expect(target!.textContent).toMatch(/Your plans and your own model servers/);
     expect(before(cardOf("xai"), target!)).toBe(true);
   });
 
@@ -340,8 +341,9 @@ describe("Connections — the model path comes first (connections-model-path-bur
     expect(screen.queryByTestId("connections-ready-banner")).toBeNull();
     expect(document.body.textContent).not.toMatch(/Ready now/i);
     // The Subscription section and its Rescan are still there.
-    expect(screen.getByText("Subscription & local providers")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Rescan local CLIs/ })).toBeInTheDocument();
+    // v1.420.0 (C6.6), moved ON PURPOSE: the plain words (lib words retired).
+    expect(screen.getByText("Your plans and your own model servers")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Look again/ })).toBeInTheDocument();
   });
 });
 
@@ -373,7 +375,8 @@ describe("Connections — a drive that needs an app says so BEFORE the click (oa
     await renderConnections();
     const card = cardOf("dropbox");
     fireEvent.click(within(card).getByRole("button", { name: /Set up & log in/ }));
-    await waitFor(() => expect(within(card).getByText(/No OAuth client configured/)).toBeInTheDocument());
+    // v1.420.0 (C6.6), moved ON PURPOSE: the plain words (lib words retired).
+    await waitFor(() => expect(within(card).getByText(/No Dropbox app id yet/)).toBeInTheDocument());
     expect(hooks.gets).toContain("/oauth/dropbox/start");
   });
 

@@ -32,12 +32,16 @@ import { providerDisplay } from "@/lib/onboarding";
 /** The user's last choice, which a NEW chat starts with. */
 export const LOCAL_ONLY_KEY = "ij.chat.localOnly";
 
-/** The composer chip's tooltip, on and off. */
-export const LOCAL_ONLY_TITLE_ON = "Nothing in this chat leaves this PC without asking you.";
-export const LOCAL_ONLY_TITLE_OFF = "Keep this chat on this PC.";
+/** The composer chip's tooltip, on and off.
+ *  v1.420.0 (fix plan C6.7): "this PC OR YOUR OWN NETWORK" — the daemon's
+ *  rule (`providers/egress.stays_on_this_network`) lets a model on the
+ *  user's own network through too (a LAN address, a `.local` / `.lan` name,
+ *  a Tailscale tailnet), so "this PC" alone was a promise it never made. */
+export const LOCAL_ONLY_TITLE_ON = "Nothing in this chat leaves this PC or your own network without asking you.";
+export const LOCAL_ONLY_TITLE_OFF = "Keep this chat on this PC or your own network.";
 
 /** The ⋯ menu's checkable row. */
-export const LOCAL_ONLY_MENU_ROW = "Keep this chat on this PC";
+export const LOCAL_ONLY_MENU_ROW = "Keep this chat on this PC or your own network";
 
 /** The one quiet line at the top of the model menu while the chat is local only. */
 export const LOCAL_ONLY_MODEL_MENU_LINE = "Local only · cloud models ask first";
@@ -46,8 +50,10 @@ export const LOCAL_ONLY_MODEL_MENU_LINE = "Local only · cloud models ask first"
 export const CLOUD_ASK_TITLE = "This chat is local only";
 export const CLOUD_ASK_SEND = "Send once";
 export const CLOUD_ASK_KEEP = "Keep it local";
+/** The card's last sentence (v1.420.0, C6.7). */
+export const CLOUD_ASK_BODY_END = "It will leave this PC and your own network.";
 export function cloudAskBody(name: string): string {
-  return `Send this message to ${name}? It will leave this PC.`;
+  return `Send this message to ${name}? ${CLOUD_ASK_BODY_END}`;
 }
 
 /** The receipt's words for a reply the user let leave this PC once. */

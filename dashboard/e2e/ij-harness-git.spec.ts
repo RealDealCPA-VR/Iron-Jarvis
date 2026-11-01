@@ -156,7 +156,7 @@ test("a session on its own branch: commit, push, merge, remove the worktree", as
 
   // Remove the worktree: two presses; the folder is gone, the branch stays.
   const offer = page.getByTestId("branch-merged");
-  await offer.getByRole("button", { name: "Remove the worktree" }).click();
+  await offer.getByRole("button", { name: "Remove its copy of the folder" }).click();
   await offer.getByRole("button", { name: "Confirm remove" }).click();
   await expect(page.getByTestId("harness-no-session")).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => existsSync(wt), { timeout: 20_000 }).toBe(false);

@@ -310,7 +310,11 @@ def test_each_mode_is_a_permission_posture():
     full, _ = O.permission_env("full", {})
     assert full == {"*": "allow"}
     plan, _ = O.permission_env("plan", {})
-    assert plan == {**ask, "edit": "deny"}, "(review, moved on purpose) Plan refuses every edit"
+    # (v1.420.0, moved on purpose) Ask first grants OpenCode's helpers (``task``); Plan keeps
+    # OpenCode's own rule for them.
+    assert ask["task"] == "allow" and edits["task"] == "allow" and "task" not in plan
+    assert plan == {**{k: v for k, v in ask.items() if k != "task"}, "edit": "deny"}, \
+        "(review, moved on purpose) Plan refuses every edit"
 
 
 def test_a_stricter_rule_of_the_users_is_never_widened():
@@ -319,15 +323,17 @@ def test_a_stricter_rule_of_the_users_is_never_widened():
     last match wins. So a stricter rule of the user's drops our "*"."""
     perm, kept = O.permission_env("ask", {"bash": "deny"})
     assert "*" not in perm and "bash" not in perm and kept == ["bash"]
-    assert all(perm[t] == "ask" for t in O.ACTING_TOOLS if t != "bash")
+    # (v1.420.0, moved on purpose) ``task`` (OpenCode's helpers) is granted in Ask first.
+    assert all(perm[t] == "ask" for t in O.ACTING_TOOLS if t not in ("bash", "task")) and perm["task"] == "allow"
     perm, kept = O.permission_env("full", {"bash": "ask", "webfetch": {"*": "allow", "evil.example": "deny"}})
     assert "*" not in perm and "bash" not in perm and "webfetch" not in perm
     assert kept == ["bash", "webfetch"]
     perm, kept = O.permission_env("ask", {"*": "deny"})
     assert "*" not in perm and kept == ["*"]
-    # A looser rule of the user's: our "*" is stricter and lands last — nothing widened.
+    # (v1.420.0, moved on purpose: C1.10) A looser rule of the user's is theirs too: our "*"
+    # landed last and turned their allowed commands into cards. Now it is left alone.
     perm, kept = O.permission_env("ask", {"bash": "allow"})
-    assert perm["*"] == "ask" and kept == []
+    assert "*" not in perm and "bash" not in perm and kept == ["bash"]
     # One rule for everything decides alone.
     assert O.permission_env("full", "ask") == (None, ["*"])
 
@@ -347,9 +353,13 @@ def test_the_users_own_config_is_read_never_written(tmp_path, monkeypatch):
     assert "bash" not in perm and "webfetch" not in perm and "*" not in perm
     assert "bash" in note and "webfetch" in note
     assert [(p.read_bytes(), p.stat().st_mtime_ns) for p in files] == before
-    # An OPENCODE_PERMISSION of the user's own counts as their rules too.
+    # An OPENCODE_PERMISSION of the user's own counts as their rules too — and
+    # (v1.420.0, moved on purpose) it is KEPT in the variable OpenCode reads,
+    # first, with Iron Jarvis's own rules after it: the variable used to be
+    # replaced, so a user's "edit": "deny" fell to OpenCode's default allow.
     env, _ = O.child_env({"OPENCODE_PERMISSION": '{"edit": "deny"}'}, "edits", str(folder))
-    assert "edit" not in json.loads(env["OPENCODE_PERMISSION"])
+    perm = json.loads(env["OPENCODE_PERMISSION"])
+    assert perm["edit"] == "deny" and list(perm)[0] == "edit"
 
 
 async def test_a_mode_change_reaches_a_new_process_before_the_next_message(app, work, tmp_path, monkeypatch):

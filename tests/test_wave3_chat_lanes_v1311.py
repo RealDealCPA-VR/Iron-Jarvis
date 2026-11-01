@@ -290,16 +290,26 @@ def test_auto_compaction_runs_at_the_ceiling_in_both_lanes(tmp_path, lane):
 _GROUND_HOPS = ("knowledge", "index", "fabric", "connector", "roster", "workflows")
 _PROFILE_MARK = "ZZ-PROFILE-MARK-v1311"
 _LESSONS = "\n\n# Lessons learned (fake)\n- L-ONE"
-_EXPECTED_GROUNDING_SEGMENT = (
+#: v1.420.0 (C3.7, PROMPT ORDER FOR THE CACHE — moved on purpose): the
+#: sections that stay the same from one message to the next come first (the
+#: project block's instructions/brief/folder, lessons, index, roster, saved
+#: workflows), the query-dependent ones LAST (the project knowledge retrieved
+#: for this question, the fabric, the connector memory), so a provider's
+#: prompt cache reads the stable head again. Before: project → knowledge →
+#: lessons → index → fabric → connector → roster → workflows.
+_EXPECTED_STABLE_SEGMENT = (
     "\n\n# Project: Grounded"
-    "\n\nProject knowledge (reference):\nKNOW-1"
     + _LESSONS
     + "\n\nIDX-1"
-    + "\n\nFAB-1"
-    + "\n\nCONN-1"
     + "\n\nROSTER-1"
     + "\n\nWF-1"
 )
+_EXPECTED_QUERY_SEGMENT = (
+    "\n\nProject knowledge (reference):\nKNOW-1"
+    + "\n\nFAB-1"
+    + "\n\nCONN-1"
+)
+_EXPECTED_GROUNDING_SEGMENT = _EXPECTED_STABLE_SEGMENT + _EXPECTED_QUERY_SEGMENT
 
 
 class _HopProbe:
@@ -440,22 +450,22 @@ def test_grounding_hops_never_run_on_the_event_loop(tmp_path, monkeypatch, lane)
 def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     """ANTI-VACUITY (passes today, must keep passing): concurrency must not
     reorder the prompt. The identity/profile spine precedes the project block,
-    and the grounded sections land in today's exact order and joins:
-    project → knowledge → lessons (learning APPENDS, so its suffix sits right
-    after the project block — whether it is applied to the prefix after the
-    gather or computed as ``apply_to_prompt("")`` in it) → index → fabric →
-    connector → [v1.354.0: the named-apps section, ONLY when the message names
-    an app — this message names none, so the bytes are unchanged] → roster →
-    saved workflows, and nothing grounding-related after.
+    and the grounded sections land in a fixed order and joins. v1.420.0
+    (C3.7, moved on purpose): the STABLE head first — project → lessons
+    (learning APPENDS, so its suffix sits right after the project block) →
+    index → roster → saved workflows — and the QUERY-DEPENDENT sections LAST:
+    project knowledge → fabric → connector → [v1.354.0: the named-apps
+    section, ONLY when the message names an app — this message names none],
+    with nothing after them.
     """
     _probe, system, _body = _grounded_turn(tmp_path, monkeypatch, lane)
     assert _EXPECTED_GROUNDING_SEGMENT in system, (
         f"{lane}: grounded sections out of order or re-joined.\n"
         f"--- got tail ---\n{system[-600:]!r}"
     )
-    assert system.endswith(_EXPECTED_GROUNDING_SEGMENT), (
-        f"{lane}: something now lands after the saved-workflows block:\n"
-        f"{system[system.find(_EXPECTED_GROUNDING_SEGMENT):]!r}"
+    assert system.endswith(_EXPECTED_QUERY_SEGMENT), (
+        f"{lane}: something now lands after the query-dependent sections:\n"
+        f"{system[system.find(_EXPECTED_QUERY_SEGMENT):]!r}"
     )
     assert _PROFILE_MARK in system, "the identity spine must reach this seam"
     assert system.index(_PROFILE_MARK) < system.index("# Project: Grounded"), (
@@ -476,10 +486,11 @@ def test_grounded_system_prompt_is_identical_across_lanes(tmp_path, monkeypatch)
 @pytest.mark.parametrize("lane", LANES)
 def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, monkeypatch, lane):
     """v1.354.0 (G39): a message that names a catalog app gets the "Apps
-    named in this message" section, joined RIGHT AFTER connector memory and
-    before the roster (before the planner, so its cost is priced), in BOTH
-    lanes. The six hops still overlap (the section is one more hop, off the
-    loop); a message naming no app keeps the byte-identical prompt above."""
+    named in this message" section, joined RIGHT AFTER connector memory
+    (priced by the planner), in BOTH lanes. The six hops still overlap (the
+    section is one more hop, off the loop); a message naming no app keeps the
+    byte-identical prompt above. v1.420.0 (C3.7, moved on purpose): it is
+    query-dependent, so it now sits AFTER the roster, at the very end."""
     client = _client(tmp_path)
     pid = client.post("/projects", json={"name": "Grounded"}).json()["id"]
     probe = _HopProbe(_GROUND_HOPS)
@@ -493,7 +504,7 @@ def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, mon
     system = seen["systems"][0]
     head = "\n\n# Apps named in this message\n"
     assert "\n\nCONN-1" + head in system, f"{lane}: not right after connector memory:\n{system[-900:]!r}"
-    assert system.index(head) < system.index("\n\nROSTER-1"), f"{lane}: must precede the roster"
+    assert system.index(head) > system.index("\n\nROSTER-1"), f"{lane}: must follow the stable roster"
     assert "- Dropbox: not connected." in system
     assert probe.peak == len(_GROUND_HOPS), f"{lane}: the hops stopped overlapping"
     assert not any(probe.on_loop.values()), f"{lane}: a hop ran on the loop"

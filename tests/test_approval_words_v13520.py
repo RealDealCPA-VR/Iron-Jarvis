@@ -307,10 +307,11 @@ def test_settings_names_the_levels_exactly_as_the_chat_chip_does():
         key: re.search(rf"{key}: \{{\s*label: \"([^\"]+)\"", ts).group(1)  # type: ignore[union-attr]
         for key in ("always_ask", "approve_for_me", "accept_edits", "auto", "yolo")
     }
-    # v1.406.0 part 2: five levels, renamed for the one switch.
+    # v1.406.0 part 2: five levels, renamed for the one switch. v1.420.0
+    # (fix plan C1.8, decision D3, moved on purpose): named by what each does.
     assert chip == {
-        "always_ask": "Ask before every action", "approve_for_me": "Ask first",
-        "accept_edits": "Accept edits", "auto": "Auto", "yolo": "Don't ask",
+        "always_ask": "Ask before every action", "approve_for_me": "Ask before commands",
+        "accept_edits": "Accept edits", "auto": "Auto (its own safety check)", "yolo": "Don't ask",
     }
     row = schema.get("device.approval_mode")
     assert dict(row.options) == chip
@@ -328,6 +329,10 @@ def test_settings_names_the_levels_exactly_as_the_chat_chip_does():
     # "Ask first" now names the default; the old words keep their level.
     assert _coerce(row, "Ask first") == "approve_for_me"
     assert _coerce(row, "Ask before every action") == "always_ask"
+    # v1.420.0: the new names and the retired v1.406.0 ones all find their level.
+    assert _coerce(row, "Ask before commands") == "approve_for_me"
+    assert _coerce(row, "Auto (its own safety check)") == "auto"
+    assert _coerce(row, "Auto") == "auto"
 
 
 def test_agent_setup_reads_the_same_level_names():

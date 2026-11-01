@@ -129,8 +129,54 @@ def _replies_running(d) -> dict[str, int]:
         out = {"chat": 0, "build": 0}
     # v1.414.0: a Build › Code reply (the user's real Claude Code / Codex /
     # Pi / OpenCode) — in memory, never a database read.
-    out["build_app"] = _code_counts(d)["running"]
+    code = _code_counts(d)
+    out["build_app"] = code["running"]
+    # v1.420.0 (C6.9): how many of ALL those replies (chat, Chat › Code,
+    # Build › Code) are parked on the user — a card or a question — so the
+    # orb can say "Waiting for you" instead of "Working" when nothing is
+    # actually being written. Additive; the same in-memory reads as the
+    # counts above (``running_replies``' ``waiting`` and the Code view's
+    # running-minus-working).
+    out["waiting"] = _replies_waiting(d) + max(
+        0, int(code.get("running") or 0) - int(code.get("working") or 0)
+    )
     return out
+
+
+def _with_grok_sign_in(rows: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
+    """v1.420.0 (C6.8): the Grok CLI row carries ``installed`` / ``signed_in``
+    / ``sign_in_fix`` like the Claude Code and Codex rows, so Settings ›
+    Connections offers Grok the same Sign in press. Read off Grok's on-disk
+    session (``cli_detect.grok_login_status``, memoised; /health is a sync
+    route, so this runs in the threadpool, never on the loop). Additive: a
+    row that already says is left as it is. Never raises."""
+    try:
+        for row in rows:
+            if row.get("provider") == "grok-cli" and "signed_in" not in row:
+                from ...providers.cli_detect import grok_login_status
+
+                row.update(grok_login_status())
+    except Exception:  # noqa: BLE001 — /health must never fail
+        pass
+    return rows
+
+
+def _replies_waiting(d) -> int:
+    """Daemon-owned replies (chat and Chat › Code) parked on the user: a card
+    still in the shared approvals registry or the chat's ``waiting`` state
+    (``durable_turns.running_replies``). In memory only. Never raises (0)."""
+    try:
+        from ...core.turns import TURNS
+        from ..durable_turns import running_replies
+
+        approvals = getattr(d.platform, "approvals", None)
+        pending = approvals.pending_ids() if approvals is not None else []
+        rows = running_replies(
+            getattr(d.platform, "turn_logs", None), TURNS.thread_states(), pending
+        )
+        return sum(1 for r in rows if r.get("waiting"))
+    except Exception:  # noqa: BLE001 — /health must never fail
+        return 0
 
 
 def _code_counts(d) -> dict[str, Any]:
@@ -300,6 +346,16 @@ def _working(d, live_sessions: "list[Any]", writing: int, chat_replies: int, wor
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+    # v1.420.0 (C6.10): the daemon-owned chat turns (``durable_turns``, made
+    # on first use with only the engine) announce a long reply's end on this
+    # platform's bus — bound here, where the app is built.
+    try:
+        from ..durable_turns import bind_event_bus
+
+        bind_event_bus(d.platform.engine, d.platform.event_bus)
+    except Exception:  # noqa: BLE001 — a missing notice never stops the app
+        pass
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         # The ACTIVE project (context spine) rides along so the UI can show
@@ -325,7 +381,7 @@ def register(app: FastAPI, d) -> None:
             "default_provider": d.platform.config.default_provider,
             "default_model": d.platform.config.default_model,
             "active_project": active_project,
-            "providers": d._visible_providers(),
+            "providers": _with_grok_sign_in(d._visible_providers()),
             # BROWSER (v1.235.0, plan section 3.2): five booleans + the access
             # word, so every surface that must say whether Jarvis can see the
             # user's Chrome reads ONE truth instead of polling /browser/status

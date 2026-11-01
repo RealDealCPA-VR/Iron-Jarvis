@@ -90,7 +90,8 @@ def test_crashed_delegate_child_settles_its_run_row_failed(platform, tmp_path):
         return parent.id, res
 
     parent_id, res = asyncio.run(go())
-    assert res.ok is False and _ERR in (res.error or "")
+    # v1.420.0 (C6.5): the raw text rides data.technical, the headline is plain.
+    assert res.ok is False and _ERR in (res.data or {}).get("technical", "")
     with session_scope(platform.engine) as db:
         children = [s for s in db.exec(select(Session)).all() if s.id != parent_id]
     assert children, "delegate created a child session"

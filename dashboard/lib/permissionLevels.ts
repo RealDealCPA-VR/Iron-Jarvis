@@ -72,30 +72,49 @@ const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string;
   // and the browser add-on's acting tools).
   // v1.406.0 part 2 (one switch, Claude Code's shape): renamed — the strictest
   // level is "Ask before every action", and "Ask first" now names the default
-  // (it was "Ask when risky"). The wire values never change.
+  // (it was "Ask when risky"). The wire values never change. v1.420.0 (D3):
+  // the default is "Ask before commands" now (below).
   always_ask: {
     label: "Ask before every action",
     does: "Asks before it edits files, uses the internet, runs commands, or clicks or types in a browser.",
     tone: "neutral",
     chip: "Ask every time",
   },
+  // v1.420.0 (fix plan C1.8, decision D3): every level is named by what it
+  // does, the same words Build › Code's `about` lines use (hosted/claude.py
+  // MODE_ABOUT): the default asks before COMMANDS (edits are free), so it is
+  // "Ask before commands" — "Ask first" meant the opposite in Build › Code,
+  // where it also asks before a file change. The old words still find the
+  // level (settings/tools._RETIRED_OPTION_WORDS).
   approve_for_me: {
-    label: "Ask first",
+    label: "Ask before commands",
     does: "Edits files and searches the web on its own, asks before running commands.",
     tone: "neutral",
+    chip: "Ask for commands",
   },
-  // v1.406.0 part 2 (core/auto_approve on the daemon).
+  // v1.406.0 part 2 (core/auto_approve on the daemon). v1.420.0: the line
+  // says what differs from the default.
   accept_edits: {
     label: "Accept edits",
-    does: "Edits files in this folder without asking, even where the folder's own rules would ask. Everything else is as Ask first.",
+    does: "Like Ask before commands, and a file edit in this folder never asks, even where the folder's own rules would.",
     tone: "neutral",
   },
+  // v1.420.0 (D3): the name says who decides — its own safety check; the
+  // toolbar chip keeps the short word.
   auto: {
-    label: "Auto",
+    label: "Auto (its own safety check)",
     does: "Lets routine work through without asking: reading, edits in this folder, running the tests, and anything a quick check finds routine for what you asked. Always asks before anything that deletes, sends, pays or acts in your browser.",
     tone: "neutral",
+    chip: "Auto",
   },
-  yolo: { label: "Don't ask", does: "Runs commands and edits files without asking you first.", tone: "warn" },
+  // v1.420.0 (C6.7): the sentence names what it covers (connected apps too)
+  // and what still asks (a coding session's commits and pushes on its own
+  // branch — harness/git_guard — and the safety cards no posture lifts).
+  yolo: {
+    label: "Don't ask",
+    does: "Runs commands, edits files and uses connected apps without asking; commits and pushes on a session's own branch, and a few safety cards, still ask.",
+    tone: "warn",
+  },
 };
 
 /** v1.406.0 part 2: a coding session's PLAN mode, offered in the same picker

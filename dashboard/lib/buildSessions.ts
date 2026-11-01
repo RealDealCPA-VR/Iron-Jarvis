@@ -773,6 +773,19 @@ export function planFromCards(cards: readonly { name: string; args?: Record<stri
   return null;
 }
 
+/** v1.420.0 (fix plan C2.10): did the NEWEST reply change files? (its
+ *  `documents`, the files the daemon says the turn wrote or edited). The
+ *  panes open on Changes when it did, else on Session. A steer note, the
+ *  daemon's hidden carry-on and a question never count. */
+export function replyChangedFiles(messages: readonly BuildMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    return Array.isArray(m.documents) && m.documents.some((d) => typeof d === "string" && d.trim() !== "");
+  }
+  return false;
+}
+
 /** The newest `plan_update` a saved reply kept (its step's masked input,
  *  when it is whole JSON), or null — never a guess from a cut input. */
 export function planFromMessages(messages: readonly BuildMessage[]): PlanView | null {

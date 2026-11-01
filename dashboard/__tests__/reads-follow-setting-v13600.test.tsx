@@ -88,7 +88,8 @@ describe("one reading decision, one sentence per state", () => {
       "Edits files and searches the web on its own, asks before running commands. Reads files anywhere on this PC without asking",
     );
     expect(PERMISSION_LEVELS.yolo.description).toBe(
-      "Runs commands and edits files without asking you first. Reads files anywhere on this PC without asking. Use with care",
+      // v1.420.0 (C6.7, moved on purpose): names connected apps, and what still asks.
+      "Runs commands, edits files and uses connected apps without asking; commits and pushes on a session's own branch, and a few safety cards, still ask. Reads files anywhere on this PC without asking. Use with care",
     );
     for (const m of PERMISSION_MODES) expect(permissionLevel(m)).toEqual(PERMISSION_LEVELS[m]);
   });

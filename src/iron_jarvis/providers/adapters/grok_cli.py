@@ -255,14 +255,10 @@ class GrokCliAdapter(LLMAdapter):
         if lease is not None and (not session or not session.get("token") or grok_session_expired(session)):
             raise _account_not_signed_in(lease)
         if not session or not session.get("token"):
-            raise RuntimeError(
-                "grok-cli: no Grok session found — run `grok login` "
-                "(this provider uses the CLI's on-disk session, not an API key)."
-            )
+            # v1.420.0 (C6.8): the one Sign in press, never a terminal recipe.
+            raise RuntimeError(f"grok-cli: {_sign_in_fix()}")
         if grok_session_expired(session):
-            raise RuntimeError(
-                "grok-cli: the Grok session has expired — re-run `grok login`."
-            )
+            raise RuntimeError(f"grok-cli: {_sign_in_fix()} (its sign-in expired)")
         token = session["token"]
         version = session.get("version") or "0.2.82"
         base_url = (session.get("base_url") or self._base_url).rstrip("/")
@@ -385,14 +381,10 @@ class GrokCliAdapter(LLMAdapter):
         if lease is not None and (not session or not session.get("token") or grok_session_expired(session)):
             raise _account_not_signed_in(lease)
         if not session or not session.get("token"):
-            raise RuntimeError(
-                "grok-cli: no Grok session found — run `grok login` "
-                "(this provider uses the CLI's on-disk session, not an API key)."
-            )
+            # v1.420.0 (C6.8): the one Sign in press, never a terminal recipe.
+            raise RuntimeError(f"grok-cli: {_sign_in_fix()}")
         if grok_session_expired(session):
-            raise RuntimeError(
-                "grok-cli: the Grok session has expired — re-run `grok login`."
-            )
+            raise RuntimeError(f"grok-cli: {_sign_in_fix()} (its sign-in expired)")
         token = session["token"]
         version = session.get("version") or "0.2.82"
         base_url = (session.get("base_url") or self._base_url).rstrip("/")
@@ -476,6 +468,16 @@ _LIMIT_STATUSES = (401, 429)
 #: The response headers handed to Iron-Proxy (its xAI reset readers) — an
 #: allow-list: never Authorization, cookies or anything else.
 _EXPOSED_HEADERS = ("retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens")
+
+
+def _sign_in_fix() -> str:
+    """Grok's sign-in remedy (v1.420.0, C6.8): the ONE sentence that names
+    the Sign in press (``cli_auth.SIGN_IN_FIX``) — recognised by
+    ``failure_words`` as a sign-in refusal, so the chat says "Grok CLI isn't
+    signed in" with the press, never a terminal recipe."""
+    from ..cli_auth import SIGN_IN_FIX
+
+    return SIGN_IN_FIX["grok"]
 
 
 def _with_signal(exc: Exception, resp: Any, detail: str) -> Exception:

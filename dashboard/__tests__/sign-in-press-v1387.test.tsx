@@ -177,7 +177,7 @@ describe("G33: Rescan never puts a signed-out CLI in the green note, and offers 
   it("the green note says only what is ready; each signed-out CLI has its own line and its Sign in press", async () => {
     hooks.responses.health = healthFrom("mock");
     render(<ConnectionsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /Rescan local CLIs/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Look again/ }));
     const claude = await screen.findByTestId("rescan-signed-out-claude-cli");
     const codex = screen.getByTestId("rescan-signed-out-codex-cli");
     // The green note: "Rescan complete." and nothing about the signed-out CLIs.
@@ -209,7 +209,7 @@ describe("G33: Rescan never puts a signed-out CLI in the green note, and offers 
     hooks.responses.health = healthFrom("mock");
     hooks.rescan = [{ ...FIX.rescan[0], available: true, detail: "", signed_in: true }];
     render(<ConnectionsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /Rescan local CLIs/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Look again/ }));
     const ok = await waitFor(() => {
       const el = screen
         .getAllByRole("status")

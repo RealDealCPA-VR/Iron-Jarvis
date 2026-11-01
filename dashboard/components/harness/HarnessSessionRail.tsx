@@ -108,8 +108,14 @@ export function SessionRail({
   onOpenChanges,
   onCompact,
   compacting = false,
+  onMakeDefault,
 }: {
   view: BuildSessionView;
+  /** v1.420.0 (fix plan C2.11): make the session's account the default for
+   *  new sessions (the header's account chip, which offered it, is gone —
+   *  the account is named once, in the model chip). Resolves to the refusal
+   *  in words, or null. Absent: no button. */
+  onMakeDefault?: (account: BuildAccount) => Promise<string | null>;
   /** The conversation as shown, the question being sent included. */
   messages: readonly BuildMessage[];
   /** The model as the box's chip names it ("Opus 5.5"). */
@@ -146,7 +152,7 @@ export function SessionRail({
   return (
     <div data-testid="pane-session" className="space-y-5 pb-4">
       <WhereItWorks view={view} messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
-      <WhatAnswers view={view} modelWords={modelWords} account={account} />
+      <WhatAnswers view={view} modelWords={modelWords} account={account} onMakeDefault={onMakeDefault} />
       <HowFull view={view} busy={busy} compacting={compacting} onCompact={onCompact} />
       <LastAttachmentSection messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
       {openError ? (
@@ -226,11 +232,25 @@ function WhatAnswers({
   view,
   modelWords,
   account,
+  onMakeDefault,
 }: {
   view: BuildSessionView;
   modelWords: string;
   account: BuildAccount | null;
+  onMakeDefault?: (account: BuildAccount) => Promise<string | null>;
 }) {
+  const [defaulting, setDefaulting] = useState(false);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
+  async function makeDefault(a: BuildAccount) {
+    if (!onMakeDefault) return;
+    setDefaulting(true);
+    setDefaultError(null);
+    try {
+      setDefaultError(await onMakeDefault(a));
+    } finally {
+      setDefaulting(false);
+    }
+  }
   const level = PERMISSION_LEVELS[asPermissionMode(view.setup.approvalMode)];
   const effort = view.setup.reasoning ? levelWords(view.setup.reasoning) : "";
   const usage = account ? accountStatusLine(account) : null;
@@ -248,6 +268,29 @@ function WhatAnswers({
           Account {account.name}
           {account.planLabel ? ` · ${account.planLabel}` : ""}
           {usage?.text ? ` · ${usage.text}` : ""}
+        </p>
+      ) : null}
+      {account && account.isDefault && onMakeDefault ? (
+        <p data-testid="session-rail-account-default" className={QUIET}>
+          New sessions start on this account.
+        </p>
+      ) : account && onMakeDefault ? (
+        <p className={QUIET}>
+          <button
+            type="button"
+            data-testid="session-rail-make-default"
+            disabled={defaulting}
+            onClick={() => void makeDefault(account)}
+            title="New sessions start on the default account"
+            className="rounded-md text-zinc-400 underline-offset-2 transition-colors hover:text-zinc-100 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-50"
+          >
+            Make it the default
+          </button>
+        </p>
+      ) : null}
+      {defaultError ? (
+        <p role="alert" className="text-[12px] text-tone-danger">
+          {defaultError}
         </p>
       ) : null}
       <p data-testid="session-rail-approvals" className={QUIET} title={level.description}>

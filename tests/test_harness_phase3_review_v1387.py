@@ -27,6 +27,13 @@ the real detections ledger and rules) with only the model scripted.
    parsing the files' top-level names had none — measured on a 4,800-file
    synthetic tree: 88 s before the first model call of the turn, to show a
    3,084-character map. FAILS ON THE REVIEWED CODE.
+v1.420.0 (C3.3, the user's decision D1) — MOVED ON PURPOSE: the checkers
+run ONCE per reply in the finish check's round and their findings reach the
+finish note, so the fixture turns the finish check on with its other parts
+off (``checkers_only_finish``) and the pins read the note (``finish_note``)
+where they read the edit's result; "the next round's checker" became "a
+two-round editing reply runs its checker once".
+
 4. Pins of what the reviewed code already did right (each mutation-checked):
    the checker runs in the platform's own shell under the claude dialect;
    a folder's deny rule keeps it from running; an unknown or unarmed name
@@ -50,7 +57,7 @@ from iron_jarvis.harness import checkers as C
 from iron_jarvis.harness import project_map as PM
 from iron_jarvis.platform import build_platform
 from tests._fakes.harness_lane import body, call, finished_ids, ledger, no_finish_check, post, stream, wire
-from tests.test_harness_checkers_v1387 import FAKE_RUFF
+from tests.test_harness_checkers_v1387 import FAKE_RUFF, checkers_only_finish, finish_note
 
 # --------------------------------------------------------------------------- #
 # 1. a project checker needs a person, even under yolo
@@ -79,7 +86,7 @@ def env(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "app.py").write_bytes(b"X = 1\n")
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     bin_dir = tmp_path / "bin"
     _fake_program(bin_dir, "ruff")
     _fake_program(bin_dir, "mypy")
@@ -114,7 +121,7 @@ async def test_yolo_runs_the_project_checker_with_no_card(env, monkeypatch):
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
     await stream(platform, body(ws, approval_mode="yolo"))  # any card fails
     assert log.exists()
-    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)
 
 
 async def test_ask_first_cards_a_project_checker_and_a_declined_card_runs_nothing(env, monkeypatch):
@@ -128,7 +135,7 @@ async def test_ask_first_cards_a_project_checker_and_a_declined_card_runs_nothin
     # The model's own edit did not card (an allow-tier edit), only the checker.
     assert len(asked) == 1
     assert not log.exists(), "the project's checker ran with nobody asked"
-    assert "Check (ruff) was not run: " in model.tool_messages(1)["w1"]
+    assert "Check (ruff) was not run: " in finish_note(model)
 
 
 async def test_ask_first_allowed_once_runs_it_and_the_rounds_checkers_share_one_card(env, monkeypatch):
@@ -141,15 +148,16 @@ async def test_ask_first_allowed_once_runs_it_and_the_rounds_checkers_share_one_
     # ONE card for the round's two checkers (v1.247.0), naming both commands.
     assert len(asked) == 1 and asked[0].get("count") == 2, asked
     assert [_program_of(e["command"]) for e in asked[0]["examples"]] == ["ruff", "mypy"]
-    text = model.tool_messages(1)["w1"]
+    text = finish_note(model)
     assert "Check (ruff): 1 problem in app.py" in text and "Check (mypy): 1 problem in app.py" in text
     assert len(_check_rows(platform)) == 2 and all(r.ok is False for r in _check_rows(platform))
 
 
-async def test_ask_first_allow_for_this_chat_covers_the_next_rounds_checker(env, monkeypatch):
-    """The least noisy honest form: ONE card per session — "Allow for this
-    chat" is a grant wider than one call, and covers every later run.
-    (v1.417.0: was the yolo pin, moved on purpose — decision D1.)"""
+async def test_a_two_round_editing_reply_runs_its_checker_once_behind_one_card(env, monkeypatch):
+    """v1.420.0 (C3.3, decision D1) — moved on purpose: the checkers run
+    ONCE per reply, at its finish check, over every file it changed — two
+    editing rounds are ONE checker run and ONE card (was: a run and a card
+    per editing round, "Allow for this chat" covering the second)."""
     platform, ws, log = env
     asked: list[dict] = []
     model = wire(platform, monkeypatch, [
@@ -160,9 +168,10 @@ async def test_ask_first_allow_for_this_chat_covers_the_next_rounds_checker(env,
     await stream(platform, body(ws, approval_mode="approve_for_me"),
                  answer=lambda f: (asked.append(f) or "conversation"))
     assert len(asked) == 1, asked
-    assert "Check (ruff): 1 problem" in model.tool_messages(1)["w1"]
-    assert "Check (ruff): 1 problem" in model.tool_messages(2)["w2"]
-    assert len(_check_rows(platform)) == 2
+    assert "Check (ruff)" not in model.tool_messages(1)["w1"]
+    assert "Check (ruff)" not in model.tool_messages(2)["w2"]
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)
+    assert len(_check_rows(platform)) == 1
 
 
 async def test_a_grant_wider_than_one_call_runs_it_with_no_card(env, monkeypatch):
@@ -175,7 +184,7 @@ async def test_a_grant_wider_than_one_call_runs_it_with_no_card(env, monkeypatch
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
     await stream(platform, body(ws, approval_mode="yolo", granted_tools=["shell"]))  # any card fails
     assert log.exists()
-    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)
 
 
 async def test_the_post_lane_under_yolo_with_no_allowed_command_tool_runs_no_checker(env, monkeypatch):
@@ -191,7 +200,7 @@ async def test_the_users_permission_table_allowing_the_command_tool_runs_it_with
     monkeypatch.setitem(platform.permissions._base, "shell", "allow")
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
     await stream(platform, body(ws, approval_mode="yolo"))
-    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)
 
 
 async def test_the_models_own_command_still_runs_with_no_card_under_yolo(env, monkeypatch):
@@ -234,6 +243,7 @@ async def test_folder_deny_rules_on_the_command_tools_keep_every_checker_from_ru
     await stream(platform, body(ws, approval_mode="yolo"))
     assert not log.exists()
     assert "Check (ruff)" not in model.tool_messages(1)["w1"]
+    assert "Check (ruff): 1 problem" not in finish_note(model)
     assert [r.tool for r in ledger(platform)] == ["write_file"]
 
 
@@ -264,7 +274,7 @@ async def test_under_the_claude_dialect_a_checker_runs_in_the_platforms_own_shel
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "web"
     ws.mkdir()
-    no_finish_check(ws)
+    checkers_only_finish(ws)
     (ws / "tsconfig.json").write_text("{}", encoding="utf-8")
     bin_dir = ws / "node_modules" / ".bin"
     bin_dir.mkdir(parents=True)
@@ -286,7 +296,7 @@ async def test_under_the_claude_dialect_a_checker_runs_in_the_platforms_own_shel
     ])
     await stream(platform, body(ws, approval_mode="yolo"), harness="claude", answer=lambda f: "once")
     assert seen == [(r"node_modules\.bin\tsc.cmd --noEmit --pretty false -p tsconfig.json", "")], seen
-    assert "Check (tsc): 1 problem in src/total.ts" in model.tool_messages(1)["w1"]
+    assert "Check (tsc): 1 problem in src/total.ts" in finish_note(model)
 
 
 # --------------------------------------------------------------------------- #
@@ -571,7 +581,7 @@ async def test_a_checker_found_on_the_path_is_named_by_its_full_path_so_the_fold
     assert found and Path(found).parent != ws
     command = asked[0]["args"]["command"]
     assert command.startswith(f'"{found}" check' if " " in found else f"{found} check"), command
-    text = model.tool_messages(1)["w1"]
+    text = finish_note(model)
     assert "HIJACKED-BY-THE-FOLDER" not in text
     assert "Check (ruff): 1 problem in app.py" in text and log.exists()
 
@@ -601,13 +611,15 @@ async def test_a_checker_runs_after_an_apply_patch_edit(env, monkeypatch, dialec
     """The real ``apply_patch`` takes ``patch`` (Codex's ``input`` is
     translated to it at the boundary); the checkers read ``input`` only, so a
     patch — Codex's ONLY way to edit, and the generic dialect's multi-file
-    edit — never had its files checked. FAILS ON THE REVIEWED CODE."""
+    edit — never had its files checked. FAILS ON THE REVIEWED CODE.
+    v1.420.0: the files come from the reply's whole change now (the
+    journal), and the findings from the finish note."""
     platform, ws, log = env
     name, args = edit
     model = wire(platform, monkeypatch, [[call(name, "p1", **args)], "Done."])
     await stream(platform, body(ws, approval_mode="yolo"), harness=dialect, answer=lambda f: "once")
     assert (ws / "app.py").read_text(encoding="utf-8") == "import os\nX = 1\n"
-    text = model.tool_messages(1)["p1"]
+    text = finish_note(model)
     assert "Check (ruff): 1 problem in app.py" in text, text
     assert log.exists()
 

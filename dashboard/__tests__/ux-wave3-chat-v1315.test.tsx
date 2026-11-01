@@ -904,7 +904,9 @@ describe("EmailComposeDialog gets Modal focus behaviour (carry-modal-focus-chat-
     const { opener, dialog } = await openCompose();
     await within(dialog).findByText("No email account is connected yet.");
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
-    const last = within(dialog).getByRole("link", { name: "Open Channels" });
+    // v1.420.0 (C6.6), moved ON PURPOSE: "Channels" is retired; the
+    // section is Settings › Notifications.
+    const last = within(dialog).getByRole("link", { name: "Open Notifications" });
     last.focus();
     fireEvent.keyDown(last, { key: "Tab" });
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" }));

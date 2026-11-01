@@ -233,6 +233,14 @@ class EventType:
     # desktop app from the tray); "This PC" stays quiet for it
     # (comm/notifier.bell_pings). session_id = "build:<thread id>".
     BUILD_TURN_FINISHED = "build.turn_finished"
+    # v1.420.0 (C6.10): a CHAT reply the daemon owns that ran longer than a
+    # minute ended — the chat twin of ``build.turn_finished``: {thread_id,
+    # turn_id, title, seconds, outcome: "done" | "failed"} (never for a turn
+    # the user stopped or a shutdown cut off; never for a Chat › Code turn,
+    # which has its own). The desktop app says it from the tray (no window
+    # open); the bell and "This PC" do not (comm/notifier.bell_pings), and it
+    # is not a default alert. No session id (a chat turn has no Session row).
+    CHAT_TURN_FINISHED = "chat.turn_finished"
     # The long-jobs plan's Phase 3 (v1.392.0, never stalls silently). A Build
     # reply made NO PROGRESS — no frame, no tool output — for ten minutes
     # while it was not waiting on the user: {thread_id, turn_id, title,

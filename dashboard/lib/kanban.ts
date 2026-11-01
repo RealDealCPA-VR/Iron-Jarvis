@@ -2,7 +2,9 @@ import type { SessionView, Review } from "./types";
 import type { Tone } from "@/components/ui";
 import { statusWords } from "@/lib/statusWords";
 
-export type LaneId = "active" | "review" | "completed" | "failed";
+/** v1.420.0 (fix plan C5.2): "stopped" is its own lane (a run the user or
+ *  Emergency stop ended is not a failure). */
+export type LaneId = "active" | "review" | "completed" | "failed" | "stopped";
 
 export interface LaneDef {
   id: LaneId;
@@ -32,8 +34,12 @@ export const LANES: LaneDef[] = [
   // v1.315.0: "Finished", not git's "Merged & done" — most finished runs
   // never merged anything (a summary, a memo, a reply).
   lane("completed", "completed", "Finished", "Nothing has finished yet"),
-  // A stopped run sits here too (laneFor below); its card says "Stopped".
-  lane("failed", "failed", "Errored, stopped or rejected", "Nothing failed or was stopped"),
+  lane("failed", "failed", "Errored or rejected", "Nothing failed"),
+  // v1.420.0 (fix plan C5.2): a stopped run had sat in the red Failed lane
+  // ("Errored, stopped or rejected") beside real failures since v1.352.0; it
+  // has its own lane now, named and toned by the ONE status table — slate
+  // "Stopped", the same word its card and the Sessions filter say.
+  lane("stopped", "cancelled", "Stopped by you or by Emergency stop", "Nothing was stopped"),
 ];
 
 /** A review takes precedence over the raw status — that is the review lane
@@ -49,9 +55,10 @@ export function laneFor(session: SessionView, hasReview: boolean): LaneId {
   const s = session.status.toLowerCase();
   if (s === "completed") return "completed";
   // The backend emits exactly: active | completed | failed | cancelled.
-  // Cancelled belongs with failed ("Errored or rejected"), NOT in Active —
-  // otherwise a cancelled session shows "Running now" forever.
-  if (s === "failed" || s === "cancelled") return "failed";
+  // A cancelled session is NOT in Active — otherwise it shows "Running now"
+  // forever — and (v1.420.0) not in Failed either: it has its own grey lane.
+  if (s === "failed") return "failed";
+  if (s === "cancelled") return "stopped";
   return "active";
 }
 
@@ -64,6 +71,7 @@ export function assignLanes(
     review: [],
     completed: [],
     failed: [],
+    stopped: [],
   };
   for (const s of sessions) out[laneFor(s, !!reviews[s.id])].push(s);
   return out;

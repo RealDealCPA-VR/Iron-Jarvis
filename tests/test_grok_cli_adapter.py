@@ -203,7 +203,8 @@ async def test_replays_assistant_tool_calls_and_results():
 async def test_missing_session_raises():
     adapter = GrokCliAdapter(http=FakeHTTP(FakeResponse("")),
                              session_provider=lambda: None)
-    with pytest.raises(RuntimeError, match="grok login"):
+    # v1.420.0 (moved on purpose, C6.8): the one Sign in press, never "grok login".
+    with pytest.raises(RuntimeError, match="Press Sign in beside Grok CLI"):
         await adapter.complete(system="", messages=[], tools=[])
 
 

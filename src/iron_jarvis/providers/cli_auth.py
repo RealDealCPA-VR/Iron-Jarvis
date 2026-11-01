@@ -65,7 +65,21 @@ SIGN_IN_FIX: dict[str, str] = {
         "Codex isn't signed in. Press Sign in beside Codex in "
         "Settings › Connections."
     ),
+    # v1.420.0 (C6.8): Grok has the same press now (a Build terminal opens
+    # with the Grok CLI started in it), so its words stop saying "run `grok
+    # login`". NOT in :data:`CLI_BINARIES`: nothing here probes Grok's
+    # sign-in — it reads its on-disk session (``cli_detect.grok_session``).
+    "grok": (
+        "Grok CLI isn't signed in. Press Sign in beside Grok CLI in "
+        "Settings › Connections."
+    ),
 }
+
+#: v1.420.0 (C6.8): every CLI whose sign-in refusal carries a
+#: :data:`SIGN_IN_FIX` sentence — :data:`CLI_BINARIES` (probed) plus Grok
+#: (read off its session file, never probed). ``failure_words`` reads a
+#: refusal's CLI off this.
+SIGN_IN_BINARIES: dict[str, str] = {**CLI_BINARIES, "grok-cli": "grok"}
 
 #: Phrases a CLI uses to say "you are not signed in". Matched case-insensitively
 #: against the CLI's own words. Deliberately narrow: a token count or an id

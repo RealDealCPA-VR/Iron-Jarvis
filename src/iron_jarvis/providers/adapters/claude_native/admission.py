@@ -33,6 +33,17 @@ connection dropped, try again" from "Anthropic refused" from "you are signed out
 an HTTPS upstream honours the standard proxy ENVIRONMENT (``HTTPS_PROXY`` / ``ALL_PROXY``
 / ``NO_PROXY``) through a CONNECT tunnel, as the Node CLI did before the relay stood
 in front of it (:func:`proxy_for`).
+
+v1.420.0 (C3.1, the per-round fixed cost): the LISTENER, the TLS context and the
+upstream CONNECTION are no longer made per call. ONE loopback listener per daemon
+process (:func:`listener`) serves every call; each call is still its own
+:class:`Admission`, registered under its own secret route token, which is the
+admission key (an unknown or closed route is a 404 and reaches nothing). ONE ``ssl``
+context (:func:`tls_context`) and a small keep-alive pool of upstream connections
+(:data:`POOL`) mean the TCP + TLS handshake to Anthropic is paid once, not on every
+tool round (measured on this PC: 64-84 ms a round). Every admission rule is
+unchanged: the first request only, the one sign-in retry, the proxy handling, the
+cache breakpoint pin.
 """
 
 from __future__ import annotations
@@ -46,11 +57,13 @@ import json
 import logging
 import re
 import secrets
+import select
 import socket
 import ssl
 import threading
+import time
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -251,8 +264,163 @@ class Capture:
         self.complete = bool(self.message and self.message.get("stop_reason") and not self.arguments)
 
 
+# --------------------------------------------------------------------------- shared parts
+#: How long an unused upstream connection is kept for the next call: below any
+#: server keep-alive timeout we know of. A connection the server already closed is
+#: caught by :func:`_still_open` before it is used.
+POOL_IDLE_S = 30.0
+#: The most idle upstream connections kept per upstream (concurrent sessions).
+POOL_MAX = 4
+#: The read timeout for a request to a route that is unknown or closed.
+_UNKNOWN_ROUTE_TIMEOUT_S = 30.0
+
+_TLS_CONTEXT: ssl.SSLContext | None = None
+_TLS_LOCK = threading.Lock()
+
+
+def tls_context() -> ssl.SSLContext:
+    """THE certificate-verifying context every upstream connection uses (made once)."""
+    global _TLS_CONTEXT
+    with _TLS_LOCK:
+        if _TLS_CONTEXT is None:
+            _TLS_CONTEXT = ssl.create_default_context()
+        return _TLS_CONTEXT
+
+
+def _still_open(conn: Any) -> bool:
+    """An idle keep-alive connection has nothing to read: a readable socket is one
+    the server closed (or that holds bytes nobody asked for), so it is not reused."""
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return False
+    try:
+        if isinstance(sock, ssl.SSLSocket) and sock.pending():
+            return False
+        readable, _, _ = select.select([sock], [], [], 0)
+        return not readable
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _closed_under_request(exc: BaseException) -> bool:
+    """True when a KEPT connection failed the way a connection the server already
+    closed fails: a reset/abort/broken pipe on the send, or a close with no status
+    line (``RemoteDisconnected``, a ``ConnectionResetError``), or a TLS EOF. A
+    timeout (``TimeoutError`` is not a ``ConnectionError``) or a garbled status
+    line is NOT: the server had the request."""
+    return isinstance(exc, (ConnectionError, ssl.SSLEOFError, ssl.SSLZeroReturnError))
+
+
+def _close_quietly(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class UpstreamPool:
+    """Idle upstream connections, keyed by where they go. A connection serves ONE
+    request at a time (it is taken out while in use) and comes back only when its
+    response was read to the end and the server did not ask to close."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.idle: dict[tuple, list[tuple[Any, float]]] = {}
+
+    def take(self, key: tuple) -> Any | None:
+        now = time.monotonic()
+        stale: list[Any] = []
+        found = None
+        with self.lock:
+            kept = self.idle.get(key) or []
+            while kept:
+                conn, since = kept.pop()
+                if now - since <= POOL_IDLE_S and _still_open(conn):
+                    found = conn
+                    break
+                stale.append(conn)
+            if not kept:
+                self.idle.pop(key, None)
+        for conn in stale:
+            _close_quietly(conn)
+        return found
+
+    def give(self, key: tuple, conn: Any) -> None:
+        with self.lock:
+            kept = self.idle.setdefault(key, [])
+            if len(kept) < POOL_MAX:
+                kept.append((conn, time.monotonic()))
+                return
+        _close_quietly(conn)
+
+    def clear(self) -> None:
+        with self.lock:
+            idle, self.idle = self.idle, {}
+        for kept in idle.values():
+            for conn, _ in kept:
+                _close_quietly(conn)
+
+
+#: The process's upstream connection pool.
+POOL = UpstreamPool()
+
+
+class RelayServer(ThreadingHTTPServer):
+    """THE loopback listener: each request goes to the :class:`Admission` registered
+    under its secret path. One thread per request, so sessions stream side by side."""
+
+    daemon_threads = True
+    #: Review (v1.420.0): the stdlib default (SO_REUSEADDR) lets another process
+    #: bind the SAME 127.0.0.1 port on Windows and take connections meant for it
+    #: — and this one port now lives as long as the daemon and carries every
+    #: call's sign-in header. Bound EXCLUSIVELY instead.
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is not None:
+            self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        super().server_bind()
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), Handler)
+        self.routes: dict[str, "Admission"] = {}
+        self.routes_lock = threading.Lock()
+
+    def register(self, prefix: str, gate: "Admission") -> None:
+        with self.routes_lock:
+            self.routes[prefix] = gate
+
+    def unregister(self, prefix: str) -> None:
+        with self.routes_lock:
+            self.routes.pop(prefix, None)
+
+    def route(self, prefix: str) -> "Admission | None":
+        with self.routes_lock:
+            return self.routes.get(prefix)
+
+
+_LISTENER: RelayServer | None = None
+_LISTENER_LOCK = threading.Lock()
+
+
+def listener() -> RelayServer:
+    """The process's one relay listener, started on first use (a daemon thread)."""
+    global _LISTENER
+    with _LISTENER_LOCK:
+        if _LISTENER is None:
+            server = RelayServer()
+            threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.25},
+                daemon=True, name="claude-relay",
+            ).start()
+            _LISTENER = server
+        return _LISTENER
+
+
 class Admission:
-    """One loopback relay that admits exactly one upstream Messages request."""
+    """One call's admission: exactly one upstream Messages request (v1.420.0: a route
+    on the shared :func:`listener`, no longer a listener of its own)."""
 
     def __init__(self, upstream_base_url: str, timeout: float, queried: list | None = None) -> None:
         self.upstream = urlsplit(upstream_base_url)
@@ -292,15 +460,18 @@ class Admission:
         self.reauth = False
         self.capture = Capture()
         self.error_body = b""
+        #: ``time.perf_counter`` stamps of the admitted request (v1.420.0, the
+        #: per-phase trace): request, connected, headers, first_byte,
+        #: last_byte, plus ``reused`` (1.0 when a kept connection was used).
+        self.stamps: dict[str, float] = {}
         self._closed = False
+        #: Requests of this admission still being handled (close() waits for them).
+        self._active = 0
+        self._idle = threading.Condition(self.lock)
         self.prefix = "/admit/" + secrets.token_urlsafe(32)
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.server.admission = self  # type: ignore[attr-defined]
+        self.server = listener()
         self.url = f"http://127.0.0.1:{self.server.server_port}" + self.prefix
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
-        )
-        self.thread.start()
+        self.server.register(self.prefix, self)
 
     def error_text(self) -> str:
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -341,14 +512,27 @@ class Admission:
                     pass  # Peer may have closed between the read and cancellation.
 
     def close(self) -> None:
-        """Abort, stop the listener and release its port. Idempotent."""
+        """Abort, take this call's route off the shared listener (a later request to
+        it is a 404 that reaches nothing) and wait for its requests still being
+        handled. Idempotent."""
         self.abort()
         if self._closed:
             return
         self._closed = True
-        self.server.shutdown()
-        self.thread.join()
-        self.server.server_close()
+        self.server.unregister(self.prefix)
+        with self.lock:
+            # abort() shut every socket of this call, so a handler still running
+            # ends at once; the bound only guards a wedged write.
+            self._idle.wait_for(lambda: self._active == 0, timeout=10.0)
+
+    def _enter(self) -> None:
+        with self.lock:
+            self._active += 1
+
+    def _leave(self) -> None:
+        with self.lock:
+            self._active -= 1
+            self._idle.notify_all()
 
 
 #: The most a REFUSED request's body is read before the refusal (a wrong route
@@ -376,16 +560,63 @@ class Handler(BaseHTTPRequestHandler):
             return b"", exc
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib hook name
-        gate: Admission = self.server.admission  # type: ignore[attr-defined]
         path = urlsplit(self.path)
-        if path.path != gate.prefix + "/v1/messages" or self.headers.get("Origin"):
+        gate: Admission | None = None
+        if path.path.endswith("/v1/messages") and not self.headers.get("Origin"):
+            gate = self.server.route(path.path[: -len("/v1/messages")])  # type: ignore[attr-defined]
+        if gate is None:
             try:
-                self.connection.settimeout(gate.timeout)
+                self.connection.settimeout(_UNKNOWN_ROUTE_TIMEOUT_S)
             except OSError:
                 pass
             self._read_body(_REFUSED_BODY_CAP)
             self.send_error(404)
             return
+        gate._enter()
+        try:
+            self._admit(gate, path)
+        finally:
+            gate._leave()
+
+    def _upstream(self, gate: "Admission", reuse: bool) -> tuple[Any, tuple, bool]:
+        """``(connection, pool key, reused)`` for the upstream — a kept one when
+        ``reuse`` and the pool has one still open, else a new, connected one."""
+        target = gate.upstream
+        proxy = proxy_for(target) if target.scheme == "https" else None
+        key = (
+            target.scheme, target.hostname, target.port,
+            None if proxy is None else (proxy[0], proxy[1], tuple(sorted(proxy[2].items()))),
+        )
+        if reuse:
+            kept = POOL.take(key)
+            if kept is not None:
+                try:
+                    kept.timeout = gate.timeout
+                    kept.sock.settimeout(gate.timeout)
+                    return kept, key, True
+                except (OSError, AttributeError):
+                    _close_quietly(kept)
+        if target.scheme == "https":
+            context = tls_context()
+            if proxy is None:
+                conn = http.client.HTTPSConnection(
+                    target.hostname, target.port, timeout=gate.timeout, context=context
+                )
+            else:
+                # TLS to the upstream THROUGH a CONNECT tunnel: the certificate is
+                # still verified against the upstream's own hostname.
+                proxy_host, proxy_port, tunnel_headers = proxy
+                conn = http.client.HTTPSConnection(
+                    proxy_host, proxy_port, timeout=gate.timeout, context=context
+                )
+                conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers or None)
+                log.debug("claude admission: upstream reached through an HTTPS proxy")
+        else:
+            conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
+        conn.connect()
+        return conn, key, False
+
+    def _admit(self, gate: "Admission", path: Any) -> None:
         # Read the body BEFORE deciding (and before gate.lock): a refusal must
         # never reply over unread bytes, and the admitted request uses it as is.
         try:
@@ -416,6 +647,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             gate.used = True
             gate.sockets.add(self.connection)
+            gate.stamps = {"request": time.perf_counter()}
         conn: http.client.HTTPConnection | None = None
         upstream_socket = None
         try:
@@ -423,30 +655,6 @@ class Handler(BaseHTTPRequestHandler):
                 raise read_error
             payload = pin_message_breakpoint(body_in, gate.queried)
             target = gate.upstream
-            if target.scheme == "https":
-                proxy = proxy_for(target)
-                context = ssl.create_default_context()
-                if proxy is None:
-                    conn = http.client.HTTPSConnection(
-                        target.hostname, target.port, timeout=gate.timeout, context=context
-                    )
-                else:
-                    # TLS to the upstream THROUGH a CONNECT tunnel: the certificate is
-                    # still verified against the upstream's own hostname.
-                    proxy_host, proxy_port, tunnel_headers = proxy
-                    conn = http.client.HTTPSConnection(
-                        proxy_host, proxy_port, timeout=gate.timeout, context=context
-                    )
-                    conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers or None)
-                    log.debug("claude admission: upstream reached through an HTTPS proxy")
-            else:
-                conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
-            conn.connect()
-            upstream_socket = conn.sock
-            with gate.lock:
-                if gate.cancelled:
-                    return
-                gate.sockets.add(upstream_socket)
             # Request identity and payload remain native; only HTTP transfer encoding changes.
             headers = {
                 k: v
@@ -464,9 +672,39 @@ class Handler(BaseHTTPRequestHandler):
             }
             headers["Accept-Encoding"] = "identity"
             route = target.path.rstrip("/") + "/v1/messages" + ("?" + path.query if path.query else "")
-            conn.request("POST", route, payload, headers)
+            for attempt in (1, 2):
+                conn, pool_key, reused = self._upstream(gate, reuse=attempt == 1)
+                gate.stamps["connected"] = time.perf_counter()
+                gate.stamps["reused"] = 1.0 if reused else 0.0
+                upstream_socket = conn.sock
+                with gate.lock:
+                    if gate.cancelled:
+                        return
+                    gate.sockets.add(upstream_socket)
+                try:
+                    conn.request("POST", route, payload, headers)
+                    response = conn.getresponse()
+                    break
+                except (OSError, http.client.HTTPException) as exc:
+                    # A KEPT connection the server closed between the open-check and
+                    # the request (its keep-alive ran out): nothing was answered, so
+                    # the server never took the request. Once, on a new connection --
+                    # the same request the router's own retry would send, without a
+                    # new CLI. A new connection that fails is the failure. ONLY the
+                    # closed-connection shapes (review, v1.420.0): a TIMEOUT waiting
+                    # for the answer or a garbled answer means the server READ the
+                    # whole request and may be running it on the user's account, so
+                    # it is never sent a second time.
+                    with gate.lock:
+                        gate.sockets.discard(upstream_socket)
+                        cancelled = gate.cancelled
+                    _close_quietly(conn)
+                    conn = None
+                    if not reused or cancelled or not _closed_under_request(exc):
+                        raise
+                    log.debug("claude admission: a kept upstream connection was closed; using a new one")
             del headers, payload, body_in
-            response = conn.getresponse()
+            gate.stamps["headers"] = time.perf_counter()
             gate.request_id = response.getheader("request-id") or response.getheader("x-request-id")
             gate.status = response.status
             gate.retry_after = response.getheader("retry-after")
@@ -483,9 +721,11 @@ class Handler(BaseHTTPRequestHandler):
                     chunk = response.read1(65536)
                     if not chunk:
                         break
+                    gate.stamps.setdefault("first_byte", time.perf_counter())
                     gate.capture.feed(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
+                gate.stamps["last_byte"] = time.perf_counter()
             else:
                 # A refusal is small: read ALL of it, record it (the reason, bounded)
                 # and mark it answered BEFORE the CLI sees a byte — the CLI may retry
@@ -504,6 +744,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             with gate.lock:
                 gate.answered = True
+                gate.sockets.discard(upstream_socket)
+                keep = not gate.cancelled and response.isclosed() and not response.will_close
+            if keep:
+                # Read to the end and the server keeps the connection open: the
+                # next call reuses it (no new TCP + TLS handshake).
+                POOL.give(pool_key, conn)
+                conn = None
         except (OSError, http.client.HTTPException, ValueError, KeyError, IndexError, TypeError) as exc:
             gate.failure = type(exc).__name__
             gate.failure_network = isinstance(exc, (OSError, http.client.HTTPException))

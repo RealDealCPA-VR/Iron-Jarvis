@@ -30,6 +30,7 @@ parent can ``message_agent`` it afterwards.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from ..core.db import session_scope
@@ -48,6 +49,12 @@ _MAX_DELEGATION_DEPTH = 3
 #: How much of a child's result rides in ``delegation.completed``. The event is
 #: a timeline entry, not a transcript — the full result is on the AgentRun.
 _EVENT_RESULT_CHARS = 240
+
+
+#: v1.420.0 review: a remote reply the injection detector withheld, as
+#: ``_delegate_remote`` words it ("[content withheld — suspected <category>:
+#: <reason quoting the phrase>]").
+_WITHHELD_RX = re.compile(r"^\s*\[content withheld — suspected ([^:\]]{1,60}):", re.S)
 
 
 def _short(text: str | None, limit: int = _EVENT_RESULT_CHARS) -> str:
@@ -131,9 +138,32 @@ async def publish_delegation_completed(
     ok: bool,
     result: str | None,
     handoff_id: str | None = None,
+    accepted: dict | None = None,
 ) -> None:
     """Announce a handoff settling — including the crash path, where there is
-    no child run id at all (the runtime raised before/while making one)."""
+    no child run id at all (the runtime raised before/while making one).
+
+    ``accepted`` (v1.420.0, C6.3, G62): a REMOTE took the job to report back
+    later — ``{conversation_id, reply_back}`` rides the event as
+    ``accepted: True`` beside them, so the mission card waits for the report
+    (``mission_view``'s ``waiting_remote``) instead of calling the job done.
+
+    v1.420.0 review: a remote's result arrives FENCED (``wrap_untrusted``),
+    and the fence's own header is ~210 of the event's 240 characters — so
+    the card read a sliver of the report. The event (a display record, never
+    the model's copy) carries the BODY, cut; the tool result keeps the
+    fence whole."""
+    try:
+        from .mission import display_unfenced
+
+        result = display_unfenced(result) if result else result
+        # A WITHHELD reply's note quotes the phrase that tripped the detector
+        # (attacker text): the event keeps Iron Jarvis's category only.
+        m = _WITHHELD_RX.match(result or "")
+        if m is not None:
+            result = f"[content withheld — suspected {m.group(1).strip()}]"
+    except Exception:  # noqa: BLE001 — wording only: keep the text as it is
+        pass
     await platform.event_bus.publish(
         EventType.DELEGATION_COMPLETED,
         {
@@ -144,6 +174,15 @@ async def publish_delegation_completed(
             "ok": ok,
             "result": _short(result),
             **({"handoff_id": handoff_id} if handoff_id else {}),
+            **(
+                {
+                    "accepted": True,
+                    "conversation_id": str(accepted.get("conversation_id") or ""),
+                    "reply_back": bool(accepted.get("reply_back")),
+                }
+                if accepted
+                else {}
+            ),
         },
         session_id=session_id,
     )
@@ -803,21 +842,32 @@ class DelegateTool(Tool):
                     pass
                 raise  # the parent's cancellation keeps propagating
             except Exception as exc:  # noqa: BLE001
-                from ..providers.failure_words import refusal_reason
+                from ..providers.failure_words import refusal_reason, run_failure_words
 
                 # v1.378.0 review: a REFUSED child tells its parent so in the
                 # run's words ("… running it again as it is will be declined
                 # too") — never the vendor's raw words, and never a hint that
                 # handing the same task out again could help.
                 refused = refusal_reason(exc)
+                # v1.420.0 (C6.5): every other failure in the RUN's plain
+                # words too (``run_failure_words``) — "crashed: ProviderError:
+                # …" reached the mission log and Build's helper rows raw. The
+                # failure's own text rides ``data.technical`` only.
+                try:
+                    reason, technical = run_failure_words(
+                        exc,
+                        manager=getattr(self.platform, "providers", None),
+                        provider=str(provider or ""),
+                    )
+                except Exception:  # noqa: BLE001 — wording only
+                    reason, technical = "", ""
                 # v1.394.0 review: named as the planner named it (a team
                 # member's own name, never its base type — "builder crashed"
                 # sent the planner looking at the wrong teammate).
                 error = (
-                    f"delegated agent '{target_name}' could not finish: {refused}"
-                    if refused
-                    else f"delegated agent '{target_name}' crashed: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"delegated agent '{target_name}' could not finish: {refused or reason}"
+                    if (refused or reason)
+                    else f"delegated agent '{target_name}' could not finish."
                 )
                 await orch._finalize_failed(child_session, exc)
                 # v1.395.0 review: a run that RAISED writes NO row on the
@@ -846,6 +896,9 @@ class DelegateTool(Tool):
                         "child_session_id": child_session.id,
                         "agent_type": child_session.agent_type.value,
                         "state": "failed",
+                        # v1.420.0 (C6.5): the failure's own (masked) text,
+                        # for whoever opens the details — never the headline.
+                        **({"technical": technical} if technical and not refused else {}),
                         **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
                         **_routed_member(_route, rec, provider, model),
                     },
@@ -963,7 +1016,7 @@ class DelegateTool(Tool):
         )
         await publish_delegation_started(self.platform, task=task, **edge)
         try:
-            res = await self._delegate_remote(entry, task)
+            res = await self._delegate_remote(entry, task, handoff=True)
         except asyncio.CancelledError:
             # Close the announced edge on the way out, as the local path does.
             try:
@@ -986,17 +1039,20 @@ class DelegateTool(Tool):
                 **edge,
             )
             raise
+        data = res.data if isinstance(res.data, dict) else {}
         await publish_delegation_completed(
             self.platform,
             child_run_id=None,
             ok=bool(res.ok),
-            # Both are already fenced by ``_delegate_remote``.
+            # Both are already fenced by ``_delegate_remote`` (an ACCEPTED
+            # job's words are Iron Jarvis's own, v1.420.0).
             result=res.output if res.ok else res.error,
+            accepted=data if data.get("state") == "accepted" else None,
             **edge,
         )
         return res
 
-    async def _delegate_remote(self, entry, task: str) -> ToolResult:
+    async def _delegate_remote(self, entry, task: str, *, handoff: bool = False) -> ToolResult:
         """A roster-validated ``remote:<name>`` target: the existing
         RemoteAgentRegistry ask path (the same machinery reflex ``/ask`` and
         the ``delegate_remote`` tool use) — no local session, the remote's
@@ -1019,7 +1075,37 @@ class DelegateTool(Tool):
                 output="",
                 error=f"remote agent '{name}' is not available right now",
             )
-        res = await registry.run(record, task, self.platform.secrets.get)
+        from .remote import (
+            accepted_no_reply_words,
+            accepted_words,
+            note_accepted_in_room,
+            open_handoff_room,
+        )
+
+        # v1.420.0 (C6.3, G62): a HANDED-OVER job (not a consult) gets a room
+        # the remote can report back into; the call is unchanged without one.
+        room = await open_handoff_room(self.platform, record, task) if handoff else {}
+        if room:
+            res = await registry.run(record, task, self.platform.secrets.get, **room["kwargs"])
+        else:
+            res = await registry.run(record, task, self.platform.secrets.get)
+        if res.get("ok") and res.get("accepted"):
+            # The remote TOOK the job and reports later: its own outcome
+            # ("accepted"), in Iron Jarvis's words — never an empty, fenced
+            # success the mission card showed as the fence's header alone.
+            room_id = str(room.get("room_id") or "")
+            await note_accepted_in_room(self.platform, room_id, name)
+            return ToolResult(
+                ok=True,
+                output=accepted_words(name) if room_id else accepted_no_reply_words(name),
+                data={
+                    "target": entry.name,
+                    "kind": record.kind,
+                    "state": "accepted",
+                    "conversation_id": room_id,
+                    "reply_back": bool(room_id),
+                },
+            )
         if not res.get("ok"):
             # The FAILURE detail is fenced too: on a non-2xx the registry puts
             # a snippet of the remote's RAW response body into ``detail``, so

@@ -1233,7 +1233,7 @@ export default function TerminalsPage() {
           <div className="min-w-0 flex-1">
             {loading ? (
               <Card>
-                <Spinner label="Attaching to sessions…" />
+                <Spinner label="Opening your terminals…" />
               </Card>
             ) : (
               <div

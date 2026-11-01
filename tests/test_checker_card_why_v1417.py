@@ -8,10 +8,10 @@ from __future__ import annotations
 from iron_jarvis.core import auto_approve as A
 from iron_jarvis.harness import checkers as C
 from tests._fakes.harness_lane import body, call, stream, wire
-from tests.test_harness_checkers_v1387 import _ruff_on, env  # noqa: F401 — `env` is a fixture
+from tests.test_harness_checkers_v1387 import _ruff_on, env, finish_note  # noqa: F401 — `env` is a fixture
 
 
-async def test_a_checker_card_names_iron_jarvis_and_the_checker(env, monkeypatch):
+async def test_a_checker_card_names_iron_jarvis_and_the_checker(env, monkeypatch):  # noqa: F811 — the fixture
     platform, ws, _log = env
     _ruff_on(ws)
     asked: list[dict] = []
@@ -23,10 +23,11 @@ async def test_a_checker_card_names_iron_jarvis_and_the_checker(env, monkeypatch
     assert cards[0]["why"] == A.checker_why("ruff") == "Iron Jarvis runs the project's own checker ruff"
 
 
-async def test_under_dont_ask_the_checker_runs_with_no_card(env, monkeypatch):
+async def test_under_dont_ask_the_checker_runs_with_no_card(env, monkeypatch):  # noqa: F811 — the fixture
     platform, ws, log = env
     _ruff_on(ws)
     model = wire(platform, monkeypatch, [[call("write_file", "w1", path="app.py", content="import os\n")], "Done."])
     await stream(platform, body(ws, approval_mode="yolo"))  # any card fails the stream helper
     assert log.exists()
-    assert "Check (ruff): 1 problem in app.py" in model.tool_messages(1)["w1"]
+    # v1.420.0 (C3.3): the findings reach the finish note.
+    assert "Check (ruff): 1 problem in app.py" in finish_note(model)

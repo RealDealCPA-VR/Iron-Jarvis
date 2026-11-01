@@ -264,6 +264,25 @@ const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
   },
   // v1.408.0: the v1.406.0 feature is "Memory profile" now, so it needs no
   // exception here ("brain" is retired for anything a person reads).
+  // v1.420.0 (fix plan C5.2): "worktree" left the coding surfaces. One page
+  // keeps it on purpose:
+  {
+    file: "app/self-dev/page.tsx",
+    text: "throwaway git worktree of this repo",
+    why: "Self-development is the developer's page for Iron Jarvis's OWN source; its reader works in git, and the Maintainer really uses a git worktree of this repository",
+  },
+  {
+    file: "app/self-dev/page.tsx",
+    text: "isolated worktree",
+    why: "the same developer page (above): a git worktree is the exact thing the Maintainer edits and tests in",
+  },
+  // v1.420.0 (C5.2): lines the lane that retired these words could not
+  // touch — each file belongs to another lane of the same wave (or to no lane
+  // yet). Reword the line ("its own copy of the folder", "can't be undone")
+  // and delete its entry; a reworded line makes its entry stale and red.
+  // (v1.420.0, C2.11 lane: the two HarnessSession.tsx lines were reworded
+  // — "its own copy of the folder", "this change can't be undone" — and
+  // their entries deleted.)
 ];
 
 const allowed = (h: { file: string; text: string }) => ALLOW.some((a) => a.file === h.file && h.text.includes(a.text));

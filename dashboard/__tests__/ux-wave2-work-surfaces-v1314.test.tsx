@@ -253,7 +253,9 @@ describe("Kanban page at zero sessions", () => {
       "Nothing is running",
       "Nothing is waiting for you",
       "Nothing has finished yet",
-      "Nothing failed or was stopped",
+      // v1.420.0 (C5.2, moved on purpose): a stopped run has its own lane.
+      "Nothing failed",
+      "Nothing was stopped",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }

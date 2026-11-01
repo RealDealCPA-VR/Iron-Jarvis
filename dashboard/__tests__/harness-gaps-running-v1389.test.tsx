@@ -141,12 +141,12 @@ afterEach(() => {
 });
 
 describe("lib/runningNow: a coding session's reply is a row", () => {
-  it("'Coding session · 12 min', named by its title, opened on that session in Build", () => {
+  it("'Coding session (Jarvis) · 12 min', named by its title, opened on that session (v1.420.0, moved on purpose: the tool in brackets)", () => {
     const now = Date.parse("2026-10-25T12:00:00Z");
     const [item] = buildReplyItems([{ ...BUILD, started_at: "2026-10-25T11:47:55Z" }], now);
     expect(item.kind).toBe("build");
-    expect(item.line).toBe(`${CODING_SESSION_LABEL} · 12 min`);
-    expect(item.line).toBe("Coding session · 12 min");
+    expect(item.line).toBe(`${CODING_SESSION_LABEL} (Jarvis) · 12 min`);
+    expect(item.line).toBe("Coding session (Jarvis) · 12 min");
     expect(item.detail).toBe("Add a cart page");
     expect(item.href).toBe("/chat?view=code&session=s-cart");
   });
@@ -167,7 +167,7 @@ describe("lib/runningNow: a coding session's reply is a row", () => {
     ]);
     expect(items[0].key).toBe("b:bt_2");
     expect(items[0].waiting).toBe(true);
-    expect(items[0].line).toMatch(/^Coding session · .* · Waiting on you$/);
+    expect(items[0].line).toMatch(/^Coding session \(Jarvis\) · .* · Waiting on you$/);
   });
 });
 
@@ -182,7 +182,7 @@ describe("Running now lists a running coding session", () => {
   it("reads the running replies and lists the session by its title, with a link that opens it", async () => {
     seed({ replies: [BUILD] });
     wrap(<RunningNow />);
-    const row = await screen.findByText(/^Coding session · 12 min$/, {}, W);
+    const row = await screen.findByText(/^Coding session \(Jarvis\) · 12 min$/, {}, W);
     const link = row.closest("a")!;
     expect(link.getAttribute("href")).toBe("/chat?view=code&session=s-cart");
     expect(link.getAttribute("data-kind")).toBe("build");
@@ -199,7 +199,7 @@ describe("Running now lists a running coding session", () => {
     window.addEventListener(BUILD_SESSION_EVENT, on);
     try {
       wrap(<RunningNow />);
-      const row = await screen.findByText(/^Coding session · 12 min$/, {}, W);
+      const row = await screen.findByText(/^Coding session \(Jarvis\) · 12 min$/, {}, W);
       fireEvent.click(row.closest("a")!);
       expect(heard).toEqual(["s-cart"]);
     } finally {

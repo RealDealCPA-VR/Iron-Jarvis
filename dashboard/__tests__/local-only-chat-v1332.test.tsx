@@ -256,7 +256,8 @@ describe("the Local only chip", () => {
     const c = await chip();
     expect(c.tagName).toBe("BUTTON");
     expect(c.getAttribute("aria-pressed")).toBe("false");
-    expect(c.getAttribute("title")).toBe("Keep this chat on this PC.");
+    // v1.420.0 (C6.7, moved on purpose): "this PC or your own network".
+    expect(c.getAttribute("title")).toBe("Keep this chat on this PC or your own network.");
     expect(classes(c)).toContain("text-zinc-400");
     expect(classes(c)).not.toContain("text-tone-success");
     expect(screen.getByTestId("composer-toolbar").contains(c)).toBe(true);
@@ -276,7 +277,7 @@ describe("the Local only chip", () => {
     const c = await chip();
     expect(c.getAttribute("aria-pressed")).toBe("true");
     expect(classes(c)).toContain("text-tone-success");
-    expect(c.getAttribute("title")).toBe("Nothing in this chat leaves this PC without asking you.");
+    expect(c.getAttribute("title")).toBe("Nothing in this chat leaves this PC or your own network without asking you.");
     // A phone says "Local" beside the house when on.
     expect(Array.from(c.querySelectorAll("span")).map((w) => w.textContent)).toEqual(["Local", "Local only"]);
     expect(window.localStorage.getItem(LOCAL_ONLY_KEY)).toBe("1");
@@ -370,7 +371,7 @@ describe("a cloud model in a local-only chat asks first", () => {
     const card = await screen.findByTestId("cloud-ask-card");
     expect(within(card).getByText("This chat is local only")).toBeTruthy();
     expect(screen.getByTestId("cloud-ask-body").textContent).toBe(
-      "Send this message to Opus 4.8? It will leave this PC.",
+      "Send this message to Opus 4.8? It will leave this PC and your own network.",
     );
     expect(within(card).getByRole("button", { name: "Send once" })).toBeTruthy();
     expect(within(card).getByRole("button", { name: "Keep it local" })).toBeTruthy();

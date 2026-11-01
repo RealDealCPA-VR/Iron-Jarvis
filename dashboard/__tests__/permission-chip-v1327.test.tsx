@@ -94,7 +94,9 @@ describe("the levels table", () => {
       const row = PERMISSION_LEVELS[mode];
       expect(row.label.trim().length).toBeGreaterThan(0);
       // v1.406.0 part 2: the menu's name may be longer; the CHIP's word fits.
-      expect(row.label.length).toBeLessThanOrEqual(24);
+      // v1.420.0 (C1.8, moved on purpose): "Auto (its own safety check)" is
+      // 27 — the name says who decides; the chip keeps "Auto".
+      expect(row.label.length).toBeLessThanOrEqual(28);
       expect((row.chip ?? row.label).length).toBeLessThanOrEqual(16);
       expect(row.description.trim().length).toBeGreaterThan(0);
       expect(row.description).not.toMatch(/\n/);
@@ -102,7 +104,7 @@ describe("the levels table", () => {
       expect(row.label + row.description).not.toMatch(/—|yolo|approve_for_me|always_ask/i);
     }
     expect(PERMISSION_LEVELS.always_ask.label).toBe("Ask before every action");
-    expect(PERMISSION_LEVELS.approve_for_me.label).toBe("Ask first");
+    expect(PERMISSION_LEVELS.approve_for_me.label).toBe("Ask before commands"); // v1.420.0 (C1.8)
   });
 
   it("marks the riskiest level, and only it, amber", () => {
@@ -154,7 +156,8 @@ describe("the chip", () => {
   it("an unknown value reads as the default level", () => {
     const { chip } = setup("from-a-newer-client");
     expect(chip.dataset.mode).toBe("approve_for_me");
-    expect(chip.textContent).toBe(PERMISSION_LEVELS.approve_for_me.label);
+    // v1.420.0: the chip shows the level's short word ("Ask for commands").
+    expect(chip.textContent).toBe(PERMISSION_LEVELS.approve_for_me.chip ?? PERMISSION_LEVELS.approve_for_me.label);
   });
 
   it("disabled: nothing opens", () => {

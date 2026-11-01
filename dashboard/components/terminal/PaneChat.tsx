@@ -562,7 +562,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     return {
       actionId: row.action_id,
       undoable: row.undoable !== false,
-      ...(row.undoable === false ? { reason: "this action has no safe inverse" } : {}),
+      ...(row.undoable === false ? { reason: "it can't be undone" } : {}),
     };
   }
 

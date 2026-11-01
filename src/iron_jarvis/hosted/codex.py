@@ -72,6 +72,41 @@ itemId, delta: string} before the item completes with its whole
 (``partial: true``, ≤ 4 updates a second); the completed item's output
 replaces it. (``item/fileChange/outputDelta`` is in the schema too, marked
 deprecated: "The server no longer emits this notification".)
+
+READ for v1.420.0 (C1.9: is there an "edits run, commands ask" posture on
+Windows?), from codex 0.157.0's own ``app-server generate-json-schema
+--experimental`` (``v2/TurnStartParams.json``: ``AskForApproval``,
+``SandboxPolicy``, ``ApprovalsReviewer``, ``permissions``,
+``collaborationMode``; ``FileChangeRequestApprovalParams``,
+``CommandExecutionRequestApprovalParams``) and ``codex --help`` — no model
+call:
+
+* ``approvalPolicy`` is ``untrusted`` | ``on-request`` | ``never`` (``codex
+  --help`` lists only the last two for ``-a``) or ``{granular:
+  {sandbox_approval, rules, mcp_elicitations, request_permissions?,
+  skill_approval?}}``. NONE of them names file changes apart from commands:
+  ``granular`` only switches whole KINDS of prompt off (a sandbox escape, a
+  rule's prompt, a tool server's question), on top of on-request.
+* ``sandboxPolicy`` is ``dangerFullAccess`` | ``readOnly`` |
+  ``workspaceWrite`` | ``externalSandbox``; ``permissions`` (a named profile,
+  ``permissionProfile/list``) picks a sandbox shape, never when to ask. So on
+  Windows, where only full disk access can run a command (measured above),
+  ``on-request`` asks nothing at all: nothing is blocked, so nothing needs to
+  be asked (measured above: it asked NOTHING) — "Auto edits" would be Full
+  access by another name, and ``untrusted`` asks before every file change
+  (``item/fileChange/requestApproval`` {threadId, turnId, itemId, reason?,
+  grantRoot?}) AND every command. Codex itself has no such posture here.
+* Not built (a decision for the user): Iron Jarvis could answer Codex's
+  ``item/fileChange/requestApproval`` itself under ``untrusted`` (the paths
+  are on the ``fileChange`` item that starts before it), so edits inside the
+  folder run while commands still ask. That is Iron Jarvis's own rule, not
+  Codex's; it would need the same folder and protected-file checks as Chat's
+  Accept edits (``core/auto_approve.sensitive_kind``).
+* ``collaborationMode`` {mode: ``plan`` | ``default``} exists, marked
+  EXPERIMENTAL, so Plan is still not offered for Codex.
+
+So the mode table is unchanged; the reasons in :data:`HIDDEN_MODES` say the
+real cause in plain words.
 """
 
 from __future__ import annotations
@@ -121,9 +156,12 @@ MODES: dict[str, tuple[str, str]] = (
 )
 #: Presets not offered for Codex here, and why.
 HIDDEN_MODES: dict[str, str] = {
-    "plan": "Codex has no plan mode.",
-    **({"edits": "Codex cannot run commands in its sandbox on Windows, so edits cannot run on their own "
-                 "while commands still ask."} if _WINDOWS else {}),
+    # v1.420.0 (C1.9): the real causes, read from Codex's own settings list.
+    "plan": "Codex's own plan mode is marked experimental in this version, so it is not offered here yet.",
+    **({"edits": "On Windows, Codex can run commands only with its own file protection switched off, and "
+                 "then it asks either before every file change and every command, or before none of them. "
+                 "It has no setting where edits run on their own while commands still ask."}
+       if _WINDOWS else {}),
 }
 #: v1.412.0: what each preset does, in plain words (the mode menu says it).
 MODE_ABOUT: dict[str, str] = {

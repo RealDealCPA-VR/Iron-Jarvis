@@ -78,11 +78,46 @@ recordings in ``tests/fixtures/build_app_v1413``):
   time_archived); ``opencode --session <id>`` opens one in a terminal.
 * Sign-in is OpenCode's own (``opencode auth login``, per provider): no
   Iron-Proxy account applies.
+
+READ for v1.420.0 (C1.10), from the installed opencode 1.18.18 program (its
+bundled source: ``Permission.ask`` / ``Permission.reply`` / ``evaluate`` /
+``Wildcard.match`` and each tool's ``ask`` call):
+
+* The SAME merge order also NARROWED: a ``"*": "ask"`` of Iron Jarvis's
+  landed after a user's ``"bash": "allow"`` and won, so their allowed
+  commands became cards. Now no key of ours names a tool a rule of the user's
+  names (exactly, or by a wildcard such as ``"web*"``), ``"*"`` is used only
+  when every rule of theirs says exactly what it would, and a ``"*"`` of the
+  user's own names every tool (we then add nothing but Plan's refusal; before,
+  a ``"*": "deny"`` of theirs had the built-in tools named ``ask`` after it).
+* A permission NAME is matched as a wildcard WITHOUT regard to case (flags
+  ``si``), and a merged key the user already has keeps its PLACE. So Plan's
+  ``edit`` refusal goes under a key the user does not have (``EDIT`` when
+  they have ``edit``): it is then the last rule for ``edit``, and a user's
+  ``"edit": …`` followed by ``"*": "allow"`` no longer undoes it.
+* ``task`` asks with ``always: ["*"]``; the helper's own session gets only the
+  parent session's folder rules and refusals, and its steps meet the same
+  config rules. Iron Jarvis grants ``task`` in Ask first and Auto edits (as its
+  own coding sessions grant helpers); every step OF the helper still asks.
+  Plan keeps OpenCode's own rule for helpers.
+* "always" pushes ``{permission, pattern, allow}`` for each of the request's
+  ``always`` patterns onto a list that lives only as long as the PROCESS (the
+  ``permission`` table in opencode.db is a different, newer mechanism; it
+  stayed empty). ``always`` is ``["*"]`` for edit, webfetch, websearch, task,
+  glob, grep, lsp and todowrite; for bash it is the command's prefix, which
+  ACP never sends. A mode change starts a new process, so the driver keeps
+  each "Allow for this session" (:data:`SESSION_ALWAYS`, per conversation)
+  and answers the same question "always" itself in the new process — the
+  whole tool for the first group, the exact command for bash, nothing for
+  any other tool. ACP has no way to send rules to a running OpenCode, and
+  putting them in ``OPENCODE_PERMISSION`` would sit in the user's rules'
+  place; answering the request is what OpenCode itself would do.
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import os
@@ -115,7 +150,7 @@ from .acp import (  # noqa: F401 — re-exported
     tool_kind,
     tool_title,
 )
-from .driver import ControlRefused
+from .driver import Ask, ControlRefused
 from .events import clip, make
 
 log = logging.getLogger(__name__)
@@ -155,6 +190,73 @@ _POSTURE_STAR = {"ask": "ask", "edits": "ask", "full": "allow"}
 #: silently dropped it (v1.413.0 review).
 READ_RULE: dict[str, str] = {"*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow"}
 _RANK = {"allow": 0, "ask": 1, "deny": 2}
+
+#: v1.420.0 (C1.10): OpenCode's own reach of an "always" answer, read from
+#: the 1.18.18 program (each tool's ``ask({permission, patterns, always})``):
+#: for these permissions ``always`` is ``["*"]`` — the rest of that tool.
+#: ``bash``'s is the command's own prefix (``"git status *"``), worked out by
+#: OpenCode and never sent over ACP, so Iron Jarvis keeps only the EXACT
+#: command for it; any other tool's reach is not known and is not kept.
+ALWAYS_COVERS_ALL: tuple[str, ...] = (
+    "edit", "webfetch", "websearch", "task", "glob", "grep", "lsp", "todowrite",
+)
+#: An OpenCode tool's name -> the permission it asks under (its write, patch
+#: and multi-edit ask as ``edit``).
+_PERMISSION_OF = {"write": "edit", "multiedit": "edit", "patch": "edit", "apply_patch": "edit"}
+#: v1.420.0 (C1.10): the "Allow for this session" answers of each OpenCode
+#: conversation (its ``ses_`` id) — ``{permission: {pattern, ...}}``. OpenCode
+#: keeps an "always" only for the life of ITS process, and a mode change
+#: starts a new process, so the driver of the new process answers the same
+#: question the same way itself (never a card the user already answered).
+#: Memory only: a restart of Iron Jarvis forgets them, as OpenCode does.
+SESSION_ALWAYS: dict[str, dict[str, set[str]]] = {}
+MAX_ALWAYS_SESSIONS = 64
+MAX_ALWAYS_PER_SESSION = 200
+#: The longest command kept word for word (a card shows the first 2,000 chars).
+MAX_ALWAYS_COMMAND = 1_900
+
+
+def permission_of(tool: str) -> str:
+    """The permission an OpenCode tool asks under (its own name otherwise)."""
+    name = str(tool or "").strip().lower()
+    return _PERMISSION_OF.get(name, name)
+
+
+def remember_always(session_id: str, tool: str, command: str = "") -> bool:
+    """Keep an "Allow for this session" answer for the conversation
+    ``session_id``. Only what OpenCode's own "always" is KNOWN to cover: a
+    whole tool from :data:`ALWAYS_COVERS_ALL`, or one exact command (never a
+    command holding ``*`` or ``?``, which OpenCode would read as a wildcard)."""
+    if not session_id:
+        return False
+    perm = permission_of(tool)
+    if perm in ALWAYS_COVERS_ALL:
+        pattern = "*"
+    elif perm == "bash":
+        pattern = str(command or "").strip()
+        if not pattern or len(pattern) > MAX_ALWAYS_COMMAND or "*" in pattern or "?" in pattern:
+            return False
+    else:
+        return False
+    kept = SESSION_ALWAYS.pop(session_id, {})
+    SESSION_ALWAYS[session_id] = kept  # newest last
+    if sum(len(v) for v in kept.values()) >= MAX_ALWAYS_PER_SESSION:
+        return False
+    kept.setdefault(perm, set()).add(pattern)
+    while len(SESSION_ALWAYS) > MAX_ALWAYS_SESSIONS:
+        SESSION_ALWAYS.pop(next(iter(SESSION_ALWAYS)))
+    return True
+
+
+def always_covers(session_id: str, tool: str, command: str = "") -> bool:
+    """Did the user already say "Allow for this session" to this very
+    question in this conversation?"""
+    kept = SESSION_ALWAYS.get(session_id) or {}
+    patterns = kept.get(permission_of(tool)) or set()
+    if "*" in patterns:
+        return True
+    return bool(command) and str(command).strip() in patterns
+
 
 #: OpenCode's effort ("variant") names seen across models — a model's own
 #: list (``configOptions.effort``) narrows it when known.
@@ -363,16 +465,49 @@ def _rank(value: Any) -> int:
     return 2
 
 
+class _Mixed(str):
+    """A rule two sources say DIFFERENTLY (v1.420.0 review): the stricter of
+    them, which is never "exactly" anything — which one OpenCode ends up with
+    depends on its load order and deep merge, which Iron Jarvis does not
+    re-create (a global ``"bash": "ask"`` and a project's ``"bash": "allow"``
+    read as ``ask`` here and as ``allow`` in OpenCode)."""
+
+
+class _MixedMap(dict):
+    """A pattern map two sources say differently (see :class:`_Mixed`)."""
+
+
+def _same_rule(a: Any, b: Any) -> bool:
+    if isinstance(a, (_Mixed, _MixedMap)) or isinstance(b, (_Mixed, _MixedMap)):
+        return False
+    if isinstance(a, str) and isinstance(b, str):
+        return a.strip().lower() == b.strip().lower()
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_rule(a[k], b[k]) for k in a)
+    return False
+
+
+def _mixed(value: Any) -> Any:
+    if isinstance(value, str):
+        return _Mixed(value)
+    if isinstance(value, dict):
+        return _MixedMap(value)
+    return value  # unreadable: never "exactly" anything already
+
+
 def _merge_rules(into: dict[str, Any], rules: Any) -> str | None:
     """Fold one source's ``permission`` into ``into``; a string rule for
-    EVERYTHING is returned (it decides alone)."""
+    EVERYTHING is returned (it decides alone). A tool two sources rule
+    differently keeps the stricter rule, MARKED as mixed (:class:`_Mixed`)."""
     if isinstance(rules, str):
         return rules
     if isinstance(rules, dict):
         for k, v in rules.items():
             key = str(k)
-            if key not in into or _rank(v) > _rank(into[key]):
+            if key not in into:
                 into[key] = v
+            elif not _same_rule(into[key], v):
+                into[key] = _mixed(v if _rank(v) > _rank(into[key]) else into[key])
     return None
 
 
@@ -419,44 +554,101 @@ def user_rules(folder: str, environ: Any = None) -> dict[str, Any] | str:
     return found
 
 
+def _wild(name: str, pattern: str) -> bool:
+    """OpenCode's own wildcard match (its ``Wildcard.match``, read from the
+    1.18.18 program): ``\\`` reads as ``/``, ``*`` is any run, ``?`` one
+    character, a trailing ``" *"`` also matches the bare word, and case does
+    not matter (flags ``si``)."""
+    text = str(name).replace("\\", "/")
+    rx = re.sub(r"[.+^${}()|\[\]\\]", lambda m: "\\" + m.group(0), str(pattern).replace("\\", "/"))
+    rx = rx.replace("*", ".*").replace("?", ".")
+    if rx.endswith(" .*"):
+        rx = rx[:-3] + "( .*)?"
+    return re.match("^" + rx + "$", text, re.S | re.I) is not None
+
+
+def _users(tool: str, rules: dict[str, Any]) -> bool:
+    """Does a rule of the user's own name ``tool`` (exactly or by a wildcard)?"""
+    return any(_wild(tool, k) for k in rules)
+
+
+def _fresh_key(name: str, taken: Any) -> str:
+    """A key for ``name`` that is NOT one of the user's (``taken``), so
+    OpenCode appends it AFTER every key of theirs (a key they already have
+    keeps its place). OpenCode matches permission names without regard to
+    case, so ``EDIT`` is the same tool as ``edit`` — and a new key."""
+    for key in (name, name.upper(), name.capitalize()):
+        if key not in taken:
+            return key
+    for combo in itertools.product(*[(c.lower(), c.upper()) for c in name]):
+        key = "".join(combo)
+        if key not in taken:
+            return key
+    return name  # pragma: no cover - every spelling taken
+
+
+def _equal_to(value: Any, rank: int) -> bool:
+    """Is a rule exactly ``rank`` for everything it names (a pattern map:
+    every pattern)? An empty map names nothing. A rule the user's sources
+    say differently is never exactly anything (:class:`_Mixed`)."""
+    if isinstance(value, (_Mixed, _MixedMap)):
+        return False
+    if isinstance(value, str):
+        return _RANK.get(value.strip().lower(), -1) == rank
+    if isinstance(value, dict):
+        return all(_equal_to(v, rank) for v in value.values())
+    return False
+
+
 def permission_env(mode: str, rules: dict[str, Any] | str) -> tuple[dict[str, str] | None, list[str]]:
     """``(OPENCODE_PERMISSION for this mode, the tools whose rule stays the
-    user's own)``. NEVER WIDENS a rule of the user's: a key their config sets
-    is left out (OpenCode would put ours after theirs, and the last one wins),
-    and ``"*"`` is used only when no rule of theirs is stricter than it.
-    ``None``: the user has ONE rule for everything — it decides alone."""
+    user's own)``. NEVER CHANGES a rule of the user's (v1.420.0, C1.10; it
+    used to only avoid WIDENING one): a tool the user names — exactly or by a
+    wildcard — is left out (OpenCode puts our keys after theirs and the last
+    match wins, so a key of ours would override theirs, a ``"bash": "allow"``
+    as much as a ``"bash": "deny"``), and ``"*"`` is used only when every rule
+    of theirs already says exactly what ``"*"`` would. A ``"*"`` of the user's
+    own names every tool: then nothing is named (``{}``) but Plan's refusal.
+    ``task`` (a helper of OpenCode's) runs without a card in Ask first and
+    Auto edits, as Iron Jarvis's own helpers do: the helper's own steps still
+    ask. ``None``: the user has ONE rule for everything — it decides alone."""
     if isinstance(rules, str):
         return None, ["*"]
     posture, agent = MODES.get(mode, MODES["ask"])
     star = _POSTURE_STAR[posture]
-    out: dict[str, str] = {}
-    # Plan with an ``edit`` rule of the user's: that key keeps its place and
-    # is set to deny below; a "*" of ours would land AFTER it and undo it.
-    plan_edit_in_place = agent == "plan" and "edit" in rules
-    if all(_rank(v) <= _RANK[star] for v in rules.values()) and not plan_edit_in_place:
+    out: dict[str, Any] = {}
+    # (Plan with an ``edit`` rule of the user's no longer keeps "*" out: the
+    # refusal below is appended after every rule, ours and theirs.)
+    if all(_equal_to(v, _RANK[star]) for v in rules.values()):
         out["*"] = star
     else:
         for name in ACTING_TOOLS:
-            if name not in rules:
+            if not _users(name, rules):
                 out[name] = star
     if posture != "full":
         for name in READ_ONLY_TOOLS:
-            if name not in rules:
+            if not _users(name, rules):
                 out[name] = dict(READ_RULE) if name == "read" else "allow"
-        if posture == "edits" and "edit" not in rules:
+        if posture == "edits" and not _users("edit", rules):
             out["edit"] = "allow"
+        if agent != "plan" and not _users("task", rules):
+            # C1.10: a helper starts without a card. OpenCode gives the helper
+            # only the parent's folder rules and refusals, so each of ITS steps
+            # still meets this mode's rules (and asks).
+            out["task"] = "allow"
     if agent == "plan":
         # v1.413.0 review: OpenCode puts the config's rules (and so these)
         # AFTER its plan agent's own ``edit`` deny, so a ``"*": "ask"`` here
-        # turned Plan's refusal into a card (an Allow changed the file). A
-        # deny never widens anything: it replaces a key of the user's in
-        # place, or is added last.
-        out["edit"] = "deny"
-    kept = sorted(k for k in rules if (k != "*" or "*" not in out) and not (k == "edit" and agent == "plan"))
+        # turned Plan's refusal into a card. The refusal is the LAST rule
+        # naming ``edit``: a key the user does not have, so it is appended
+        # after all of theirs (C1.10: a user's ``"edit"`` key followed by a
+        # ``"*": "allow"`` of theirs used to undo it).
+        out.pop("edit", None)
+        out[_fresh_key("edit", rules)] = "deny"
+    kept = sorted(k for k in rules if not (agent == "plan" and _wild("edit", k) and k != "*"))
     if "*" in out:
-        # Our "*" lands after the user's own keys and wins over them: every
-        # rule of theirs is looser than it (or equal), so nothing is widened,
-        # and none of theirs is "kept" as written.
+        # Every rule of theirs says exactly what our "*" says: nothing of
+        # theirs changes, and none is "kept" in a way that differs.
         kept = []
     return out, kept
 
@@ -470,7 +662,23 @@ def child_env(env: dict[str, str], mode: str, folder: str) -> tuple[dict[str, st
     perm, kept = permission_env(mode, rules)
     if perm is None:
         return out, W.OPENCODE_RULES_DECIDE
-    out["OPENCODE_PERMISSION"] = json.dumps(perm, separators=(",", ":"))
+    if perm:
+        # v1.420.0 review: OpenCode reads ONE ``OPENCODE_PERMISSION``, so an
+        # object of the user's own already there is kept, in its place, with
+        # ours after it (``user_rules`` read it: no key of ours names a tool of
+        # theirs). Replacing it dropped their rules (a deny of theirs fell to
+        # OpenCode's default allow).
+        try:
+            theirs = json.loads(str(env.get("OPENCODE_PERMISSION") or "").strip() or "null")
+        except ValueError:
+            theirs = None
+        if isinstance(theirs, dict):
+            perm = {**theirs, **perm}
+        out["OPENCODE_PERMISSION"] = json.dumps(perm, separators=(",", ":"))
+    if "*" in kept:
+        # A "*" of the user's own decides for every tool (Plan still refuses edits).
+        plan = MODES.get(mode, MODES["ask"])[1] == "plan"
+        return out, (W.OPENCODE_RULES_DECIDE_PLAN if plan else W.OPENCODE_RULES_DECIDE)
     if kept:
         return out, W.OPENCODE_RULES_KEPT.format(tools=", ".join(kept[:12]))
     if "*" not in perm:
@@ -729,6 +937,49 @@ class OpenCodeDriver(AcpDriver):
     #: Set when a change can only apply to a NEW process (the service restarts
     #: it before the next message).
     restart_needed = False
+
+    # -- "Allow for this session", across a new process (v1.420.0, C1.10) ---------
+    def _always_key(self) -> str:
+        """The conversation's key in :data:`SESSION_ALWAYS`, scoped to the Iron
+        Jarvis home that started this OpenCode (v1.420.0 review: the map is the
+        whole process's, and a conversation of another home — the test suite
+        starts one app per test on the same recorded ``ses_`` ids — took the
+        answer and never showed its own card)."""
+        if not self.session_id:
+            return ""
+        home = str(Path(self.catalog_path).parent) if self.catalog_path is not None else ""
+        return f"{home}\x00{self.session_id}" if home else self.session_id
+
+    def answered(self, ask: Ask, decision: str) -> None:
+        if decision == "allow_session":
+            remember_always(self._always_key(), ask.tool, str(ask.event.get("command") or ""))
+
+    def _ask(self, rid: Any, p: dict[str, Any]) -> None:
+        """A question the user already answered "Allow for this session" in
+        this conversation — before a mode change started a new OpenCode — is
+        answered the same way here (OpenCode's own "always", which then covers
+        the rest of this process exactly as before). Anything else is a card."""
+        tc = p.get("toolCall") if isinstance(p.get("toolCall"), dict) else {}
+        known = self._tools.get(str(tc.get("toolCallId") or ""))
+        # The tool's NAME comes only from its first record: a request with
+        # none (its title is the command) is never matched.
+        name = known[0] if known else ""
+        args = tc.get("rawInput") if isinstance(tc.get("rawInput"), dict) and tc.get("rawInput") else (
+            known[2] if known else {})
+        command = str(args.get("command") or "") if isinstance(args, dict) else ""
+        offered = [o for o in p.get("options") or [] if isinstance(o, dict) and o.get("optionId")]
+        pick = self.session_option(offered)
+        if name and pick is not None and always_covers(self._always_key(), name, command):
+            asyncio.ensure_future(self.write({"jsonrpc": "2.0", "id": rid, "result": {
+                "outcome": {"outcome": "selected", "optionId": pick.get("optionId")}}}))
+            if not self._always_said:
+                self._always_said = True
+                self.emit(make("notice", text=W.OPENCODE_ALWAYS_CARRIED))
+            return
+        super()._ask(rid, p)
+
+    #: The notice that an earlier answer still applies is said once a process.
+    _always_said = False
 
     # -- OpenCode's side (ON THE LOOP) ---------------------------------------------
     def on_usage_update(self, u: dict[str, Any]) -> None:

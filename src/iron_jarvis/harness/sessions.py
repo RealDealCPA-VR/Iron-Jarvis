@@ -582,6 +582,86 @@ def _clean_line(raw: Any, stamp: str) -> dict[str, Any] | None:
     return line
 
 
+def session_title(current: str, before: list[dict[str, Any]], after: list[dict[str, Any]]) -> str:
+    """THE title rule of a Build session (v1.420.0, fix plan C2.9). Pure,
+    deterministic, no model call.
+
+    A session still called :data:`NEW_SESSION_TITLE` takes its first question
+    (spaces collapsed, cut at 48 characters with "…"). When that question was
+    LONG (it had to be cut) and the title is still exactly that cut question
+    (never one the user typed), the session's FIRST reply names it instead:
+    the reply's first sentence (its first line with words, fences and
+    markdown marks dropped, cut at ". ", "! ", "? ", ": " or "; "), three to
+    six of its words, at most 48 characters, cut at a word boundary. A reply
+    whose first sentence has fewer than three words (a bare "Sure!"), a
+    failed reply, or a later reply leaves the title as it is."""
+    cap = 48
+    first = next((str(m.get("content") or "") for m in after if m.get("role") == "user" and m.get("content")), "")
+    if not first:
+        return current
+    words = " ".join(first.split())
+    question_title = words[:cap] + ("…" if len(words) > cap else "")
+    if current == NEW_SESSION_TITLE:
+        current = question_title
+    if len(words) <= cap or current != question_title:
+        return current
+
+    def _replied(lines: list[dict[str, Any]]) -> "dict[str, Any] | None":
+        return next(
+            (m for m in lines if m.get("role") == "assistant" and str(m.get("content") or "").strip()),
+            None,
+        )
+
+    if _replied(before) is not None:
+        return current
+    reply = _replied(after)
+    if reply is None or reply.get("error"):
+        return current
+    line, fenced = "", False
+    for raw in str(reply.get("content") or "").splitlines():
+        if raw.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        # v1.420.0 review: a markdown TABLE row is no sentence.
+        if fenced or not raw.strip() or raw.strip().startswith("|"):
+            continue
+        line = raw.strip()
+        break
+    line = re.sub(r"<[^>]{0,200}>", " ", line).strip()  # v1.420.0 review: HTML tags
+    line = re.sub(r"^(?:[#>*+\-]+|\d+[.)])\s*", "", line)
+    line = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", line)
+    line = re.sub(r"[*`]+|(?<!\w)_+|_+(?!\w)", "", line)
+    sentence = re.split(r"[.!?:;](?:\s|$)", line, maxsplit=1)[0].strip()
+    # v1.420.0 review: the title is shown far beyond the session (the list,
+    # Running now, the bell, a desktop notice, the phone) — a secret the
+    # reply's first sentence quotes is masked, and an ABSOLUTE path is named
+    # by its last part (never the user's folders).
+    from ..providers.failure_words import mask_failure_text
+
+    sentence = mask_failure_text(sentence)
+
+    def _shown(word: str) -> str:
+        if re.match(r"^(?:[A-Za-z]:[\\/]|\\\\|/[^/])", word):
+            return re.split(r"[\\/]+", word.rstrip("\\/"))[-1] or word
+        return word
+
+    picked: list[str] = []
+    for w in (_shown(x) for x in sentence.split()[:6]):
+        if len(" ".join(picked + [w])) > cap:
+            break
+        picked.append(w)
+    while picked and not re.search(r"\w", picked[-1]):
+        picked.pop()
+    # Three REAL words (a token holding a letter), never punctuation.
+    if sum(1 for w in picked if re.search(r"[^\W\d_]", w)) < 3:
+        return current
+    title = " ".join(picked).rstrip(",;:-–— ")
+    # A URL or a path first is never capitalised ("Https://…").
+    if re.search(r"[\\/]", picked[0]):
+        return title
+    return title[:1].upper() + title[1:]
+
+
 def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
                  title_from_first: bool = True) -> dict[str, Any]:
     """Append ``lines`` to the session (whitelisted to :data:`LINE_KEYS`,
@@ -597,13 +677,11 @@ def append_lines(engine: Any, thread_id: str, lines: list[dict[str, Any]], *,
             row = db.get(ChatThreadRecord, str(thread_id or ""))
             if row is None or not is_build_thread(row):
                 return {"ok": False, "updated_at": None, "count": 0}
-            msgs = (_messages(row) + cleaned)[-MAX_MESSAGES:]
+            before = _messages(row)
+            msgs = (before + cleaned)[-MAX_MESSAGES:]
             row.messages_json = json.dumps(msgs)
-            if title_from_first and (row.title or NEW_SESSION_TITLE) == NEW_SESSION_TITLE:
-                first = next((m["content"] for m in msgs if m.get("role") == "user" and m.get("content")), "")
-                if first:
-                    words = " ".join(first.split())
-                    row.title = words[:48] + ("…" if len(words) > 48 else "")
+            if title_from_first:
+                row.title = session_title(row.title or NEW_SESSION_TITLE, before, msgs)
             row.updated_at = _next_stamp(row.updated_at)
             db.add(row)
             db.commit()
@@ -872,10 +950,20 @@ def history(row: Any) -> list[dict[str, str]]:
     return history_of(_messages(row))
 
 
-def history_of(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """:func:`history`'s rule over a list of transcript lines."""
+def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> list[dict[str, str]]:
+    """:func:`history`'s rule over a list of transcript lines.
+
+    ``last_work`` (v1.420.0, C3.2, decision D5): the NEWEST reply in the list
+    also carries :func:`last_work_note` — what that reply read, changed and
+    ran, from its saved steps — so the next turn's model knows its own tool
+    work without a native carrier (the account mobility of v1.368.0 is
+    kept). Only a turn's own history asks for it (``compact.history_for_turn``
+    and the resume path); every other reader keeps the plain rule."""
     out: list[dict[str, str]] = []
-    for m in messages:
+    newest = -1
+    if last_work:
+        newest = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
+    for idx, m in enumerate(messages):
         role = m.get("role")
         content = str(m.get("content") or "")
         if role == "user" and isinstance(m.get("commandText"), str) and m["commandText"].strip():
@@ -897,8 +985,163 @@ def history_of(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
             content = sent_files_line(_listed(m.get("attachmentPaths")) + _listed(m.get("filePaths")))
         if role not in ("user", "assistant") or not content.strip():
             continue
+        if idx == newest:
+            content += last_work_note(m.get("steps"))
         out.append({"role": role, "content": content})
     return out
+
+
+#: v1.420.0 (C3.2): the most a "what I did in that reply" note may hold.
+LAST_WORK_MAX_CHARS = 1500
+#: Its opening words (the note is the daemon's record, never the user's).
+LAST_WORK_LEAD = "What I did in that reply (recorded by Iron Jarvis, not shown to the user): "
+#: A command or search text kept in the note, at most.
+_LAST_WORK_ITEM_CHARS = 120
+#: The step kinds (``harness.step_target.KIND_OF``) and their words, in the
+#: order the note lists them.
+_LAST_WORK_VERBS = (
+    ("read", "read"),
+    ("search", "searched for"),
+    ("folder", "listed"),
+    ("web", "searched the web for"),
+    ("page", "fetched"),
+    ("site", "opened"),
+    ("service", "called"),
+    ("make", "created"),
+    ("change", "edited"),
+)
+#: Bookkeeping tools the note leaves out (they changed nothing the model
+#: would read again).
+_LAST_WORK_QUIET = frozenset({"plan_update"})
+_STEP_ARG_RX = {
+    key: re.compile(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)' % key) for key in ("command", "cmd", "code")
+}
+
+
+def _step_command(step: dict[str, Any]) -> str:
+    """The command a command step ran, from its saved (redacted, cut at 300
+    characters) input: the JSON's ``command``, else what a cut JSON still
+    spells of it. "" when it is not there."""
+    detail = step.get("detail") if isinstance(step.get("detail"), dict) else {}
+    raw = str(detail.get("input") or "")
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    for key, rx in _STEP_ARG_RX.items():
+        if isinstance(data, dict) and isinstance(data.get(key), str):
+            return data[key]
+        m = rx.search(raw)
+        if m:
+            # v1.420.0 review: a value with no closing quote was CUT by the
+            # saved input's 300 characters — it is marked cut, never shown
+            # as a complete command the model did not run.
+            cut = m.end() >= len(raw)
+            try:
+                found = str(json.loads('"' + m.group(1) + '"'))
+            except ValueError:
+                found = m.group(1)
+            return found.rstrip() + "\u2026" if cut and found.strip() else found
+    return ""
+
+
+def _one_line(text: str, cap: int = _LAST_WORK_ITEM_CHARS) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= cap else text[: cap - 1].rstrip() + "\u2026"
+
+
+def last_work_note(steps: Any) -> str:
+    """``"\\n\\n[What I did in that reply …: read a.py, b.py; edited cart.py;
+    ran `python -m pytest` (failed).]"`` — one reply's tool work in a few
+    deterministic words, from the steps its reply line saved (v1.420.0,
+    C3.2). Names, targets and verdicts only — NEVER a step's output (the
+    v1.344.0 ``cap_prior_tool_results`` rule); every word masked
+    (``detections.redact.mask``); at most :data:`LAST_WORK_MAX_CHARS`. ""
+    when the reply ran no tool. Never raises."""
+    try:
+        if not isinstance(steps, list) or not steps:
+            return ""
+        from ..detections.redact import mask
+        from .process import _shown_command
+        from .step_target import KIND_OF
+
+        by_kind: dict[str, list[str]] = {}
+        commands: list[str] = []
+        other: list[str] = []
+        helpers = 0
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            name = str(step.get("name") or "").strip()
+            if not name or name in _LAST_WORK_QUIET:
+                continue
+            if step.get("helper"):
+                helpers += 1
+                continue
+            failed = step.get("ok") is False
+            target = _one_line(mask(str(step.get("target") or "")))
+            kind = KIND_OF.get(name, "")
+            if kind == "command":
+                # v1.420.0 review: masked by the Programs list's own rule
+                # (v1.404.0 ``process._shown_command``: the word after a
+                # secret-named flag hidden even with no key shape) BEFORE the
+                # cut.
+                cmd = _one_line(_shown_command(_step_command(step))) or target or name
+                verdict = "failed" if failed else "succeeded"
+                who = " (Iron Jarvis's own check)" if step.get("check") else ""
+                commands.append(f"ran `{cmd}` ({verdict}){who}")
+                continue
+            if kind and target:
+                word = target + (" (failed)" if failed else "")
+                bucket = by_kind.setdefault(kind, [])
+                if word not in bucket:
+                    bucket.append(word)
+                continue
+            word = name + (" (failed)" if failed else "")
+            if word not in other:
+                other.append(word)
+        # (lead words, items): a group is cut at WHOLE items (v1.420.0
+        # review — a 40-file reply was cut in the middle of a path).
+        groups: list[tuple[str, list[str]]] = [
+            (verb + " ", by_kind[k]) for k, verb in _LAST_WORK_VERBS if by_kind.get(k)
+        ]
+        groups += [("", [c]) for c in commands]
+        if other:
+            groups.append(("used ", other))
+        if helpers:
+            groups.append(("", [f"handed {helpers} piece{'s' if helpers != 1 else ''} of work to helpers"]))
+        if not groups:
+            return ""
+        room = LAST_WORK_MAX_CHARS - len(LAST_WORK_LEAD) - 30
+        kept: list[str] = []
+        used = 0
+        for i, (lead, items) in enumerate(groups):
+            part = lead + ", ".join(items)
+            if used + len(part) + 2 <= room:
+                kept.append(part)
+                used += len(part) + 2
+                continue
+            fit: list[str] = []
+            for item in items:
+                left = len(items) - len(fit) - 1
+                trial = lead + ", ".join(fit + [item]) + (f" and {left} more" if left else "")
+                if used + len(trial) + 2 > room:
+                    break
+                fit.append(item)
+            if fit and len(fit) < len(items):
+                kept.append(lead + ", ".join(fit) + f" and {len(items) - len(fit)} more")
+                used += len(kept[-1]) + 2
+            more = len(groups) - i - (1 if fit else 0)
+            if more:
+                kept.append(f"and {more} more step{'s' if more != 1 else ''}")
+            break
+        body = mask("; ".join(kept))
+        return f"\n\n[{LAST_WORK_LEAD}{body}.]"[:LAST_WORK_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — a note never breaks a turn's history
+        log.debug("the last-work note failed", exc_info=True)
+        return ""
 
 
 def _listed(value: Any) -> list[Any]:

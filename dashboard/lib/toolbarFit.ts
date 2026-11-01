@@ -123,10 +123,12 @@ export const CHAT_FIT_ORDER: readonly FitStep[] = ["project", "web", "tools", "l
 /**
  * The IJ harness composer's order: "Try on…" (an occasional tool) first,
  * then "Team" (v1.403.0: its word goes; a team set keeps its count), then
- * the model's name, then "Plan first" (on, "Planning" keeps its word), then
- * the permission level.
+ * the model's name, then the permission level. v1.420.0 (fix plan C2.11):
+ * no "plan" step — the "Plan first" chip is gone (Plan lives inside the
+ * permission chip, which names it when it is on). The step stays in
+ * FIT_STEPS for the attribute vocabulary; no toolbar takes it.
  */
-export const HARNESS_FIT_ORDER: readonly FitStep[] = ["tryon", "team", "name", "plan", "ask", "short", "tight"];
+export const HARNESS_FIT_ORDER: readonly FitStep[] = ["tryon", "team", "name", "ask", "short", "tight"];
 
 /** How much more room than a level needed before the toolbar goes back to
  *  it. Wider than a classic Windows scrollbar (17 px), the one width that can

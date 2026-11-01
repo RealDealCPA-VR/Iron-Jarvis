@@ -639,6 +639,39 @@ def no_reply_back_line(name: str) -> str:
     )
 
 
+#: v1.420.0 (C6.4): a seat's fix said for WHERE it is read. The failure words
+#: (``providers.failure_words``) speak to a chat reply ("Press Retry", "pick
+#: another model for this chat"); a panel seat has no Retry press and its
+#: model is the AGENT's, set on its card. Applied in order, whole phrases.
+_SEAT_FIX_WORDS = (
+    ("Press Retry", "Ask it again"),
+    ("pick another model for this chat", "pick another model on its card in Agents"),
+    ("pick another model for this session", "pick another model on its card in Agents"),
+    (", and retry.", ", and ask it again."),
+    (", then retry.", ", then ask it again."),
+)
+
+
+def seat_error_words(exc: BaseException | None, *, manager: Any = None) -> str:
+    """ONE plain sentence for a panel seat that could not answer (v1.420.0,
+    C6.4): the shared failure words' headline and fix
+    (``failure_words.friendly_error`` — the classifier every chat failure
+    reads, never a second one), the fix said for a seat (``_SEAT_FIX_WORDS``).
+    Never the exception's own text: that stays in the stored ``error`` for
+    the Agents page's room transcript. Never raises; never empty."""
+    try:
+        from ..providers import failure_words as fw
+
+        words = fw.friendly_error(exc, manager=manager)
+        title = str(words.get("title") or "").strip() or fw.GENERIC_TITLE
+        fix = str(words.get("fix") or "").strip()
+        for old, new in _SEAT_FIX_WORDS:
+            fix = fix.replace(old, new)
+        return f"{title}. {fix}".strip() if fix else f"{title}."
+    except Exception:  # noqa: BLE001 — words are never a new failure
+        return "It couldn't answer this time. Ask it again."
+
+
 class AgentThreads:
     """Store + the speaking-round engine."""
 
@@ -1473,6 +1506,8 @@ class AgentThreads:
             except Exception as exc:  # noqa: BLE001 — honest error, round continues
                 entry["content"] = ""
                 entry["error"] = f"{p['name']} couldn't answer: {str(exc)[:300]}"
+                entry["error_words"] = seat_error_words(exc, manager=getattr(
+                    getattr(d, "platform", None), "providers", None))
             spoke.append(p["key"])
             messages.append(entry)
             new_entries.append(entry)

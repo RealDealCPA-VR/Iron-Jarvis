@@ -40,6 +40,12 @@ and, where ``skill_load`` is shown under its own name (generic, gpt, qwen), its
 spec; nothing else moved. The capture now reads no skill folder of this PC
 (only the bundled skills) and writes the source folder as ``<SRC>``.
 
+REGENERATED AGAIN, v1.420.0 (C3.8, a coding turn drops chat-only blocks): a
+harness turn is no longer sent the email-draft fence (``DRAFT_BLOCK``) or the
+chart fence (``CHART_BLOCK``). Checked before it was written: every key
+differs from the v1.417.0 capture by exactly those two blocks removed, and
+the tool specs are identical (``tests/test_prompt_order_v1420.py``).
+
 The capture is machine-independent: the temporary folder and the home folder
 become placeholders, today's date becomes ``<TODAY>``, and a command tool's
 "How commands run here" note (it names the shell this PC has) becomes

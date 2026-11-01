@@ -42,9 +42,10 @@ describe("the posture vocabulary", () => {
     // Plain names for each level (v1.327.0 replaced the v1.188.0 labels).
     // v1.406.0 part 2: five levels, renamed for the one switch.
     expect(levels).toContain('label: "Ask before every action"');
-    expect(levels).toContain('label: "Ask first"');
+    // v1.420.0 (fix plan C1.8, moved on purpose): named by what each does.
+    expect(levels).toContain('label: "Ask before commands"');
     expect(levels).toContain('label: "Accept edits"');
-    expect(levels).toContain('label: "Auto"');
+    expect(levels).toContain('label: "Auto (its own safety check)"');
     expect(levels).toContain(`label: "Don't ask"`);
     // Unknown → the DEFAULT, never yolo (mirrors normalize_approval_mode).
     expect(levels).toContain('export const DEFAULT_PERMISSION_MODE: PermissionMode = "approve_for_me";');

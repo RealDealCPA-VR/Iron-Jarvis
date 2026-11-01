@@ -198,7 +198,7 @@ export function AccountList({
       {empty ? (
         ironProxy?.note ? null : (
           <p className="px-1 text-[13px] text-zinc-400">
-            No Claude Code or Codex accounts yet. Add one on the Connections page (Iron-Proxy).
+            No Claude Code or Codex accounts yet. Add one under Several accounts on the Connections page.
           </p>
         )
       ) : (

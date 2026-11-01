@@ -530,6 +530,16 @@ export interface ReceiptUndoState {
   kind?: string;
 }
 
+/** v1.420.0 (fix plan C5.2): the undo button's title when it cannot undo. The
+ *  journal's own reason for a row it cannot reverse reads "this action has no
+ *  safe inverse" (the daemon's and the pages' word, which another lane owns);
+ *  a person reads "This change can't be undone." Any other reason ("already
+ *  undone") is shown as it comes. */
+export function cannotUndoTitle(reason: string | null | undefined): string {
+  if (reason && /no safe inverse|non-reversible|can't be undone/i.test(reason)) return "This change can't be undone.";
+  return `Can't undo: ${reason || "not undoable"}`;
+}
+
 /**
  * Last path segment — handles BOTH separators, because the daemon reports
  * Windows paths with backslashes while workspace-relative ones use slashes.
@@ -1436,7 +1446,7 @@ function TurnReceiptImpl({
                             title={
                               undoState.undoable
                                 ? `Undo this write and put back ${docBasename(path)}`
-                                : `Can't undo: ${undoState.reason ?? "not undoable"}`
+                                : cannotUndoTitle(undoState.reason)
                             }
                             className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-tone-warn disabled:opacity-40"
                           >

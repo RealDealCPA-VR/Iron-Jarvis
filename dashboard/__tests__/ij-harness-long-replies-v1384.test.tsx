@@ -227,6 +227,8 @@ const PLAN_ARGS = { plan: [{ step: "Read the code", status: "completed" }, { ste
 
 describe("the plan stays on the right", () => {
   it("while it works: under the reply only below xl, in the Plan pane from xl", async () => {
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): the remembered Plan tab.
+    localStorage.setItem("ij.build.pane", "plan");
     api.gets["/build/sessions/s1"] = view({ running: true, turn_id: "tr1" });
     const s = controlledStream();
     fetchMock.mockImplementation(s.fetch);
@@ -278,6 +280,8 @@ describe("the plan stays on the right", () => {
   });
 
   it("no mark when the Plan tab is already open", () => {
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): the remembered Plan tab.
+    localStorage.setItem("ij.build.pane", "plan");
     const v = decodeSessionView(view())!;
     const plan = { steps: [{ index: 0, goal: "Fix it", state: "running" as const }], total: 1 };
     const { rerender } = render(

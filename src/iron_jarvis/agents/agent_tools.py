@@ -732,16 +732,25 @@ class SpawnAgentTool(Tool):
                     pass
                 raise  # the caller's cancellation keeps propagating
             except Exception as exc:  # noqa: BLE001
-                from ..providers.failure_words import refusal_reason
+                from ..providers.failure_words import refusal_reason, run_failure_words
 
                 # v1.378.0 review: a REFUSED child tells its parent so in the
                 # run's words (MIRROR NOTE, lock-step: delegate_tool).
                 refused = refusal_reason(exc)
+                # v1.420.0 (C6.5): every other failure in the run's plain
+                # words too; its own text rides ``data.technical`` only.
+                try:
+                    reason, technical = run_failure_words(
+                        exc,
+                        manager=getattr(self.platform, "providers", None),
+                        provider=str(provider or ""),
+                    )
+                except Exception:  # noqa: BLE001 — wording only
+                    reason, technical = "", ""
                 error = (
-                    f"spawned agent '{agent_name}' could not finish: {refused}"
-                    if refused
-                    else f"spawned agent '{agent_name}' crashed: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"spawned agent '{agent_name}' could not finish: {refused or reason}"
+                    if (refused or reason)
+                    else f"spawned agent '{agent_name}' could not finish."
                 )
                 await orch._finalize_failed(child_session, exc)
                 # v1.395.0 review: a run that RAISED writes no row on the
@@ -766,6 +775,7 @@ class SpawnAgentTool(Tool):
                         "dynamic": self.registry.get(agent_name) is not None,
                         "child_session_id": child_session.id,
                         "state": "failed",
+                        **({"technical": technical} if technical and not refused else {}),
                     },
                 )
 

@@ -97,6 +97,16 @@ _RETIRED_OPTION_WORDS: dict[str, dict[str, str]] = {
         "ask before everything": "always_ask",
         "accept edits": "accept_edits",
         "auto mode": "auto",
+        # v1.420.0 (C1.8, D3): named by what they do; the v1.406.0 words keep
+        # their level ("Ask first" is the default, "Auto" is Auto).
+        "ask first": "approve_for_me",
+        "auto": "auto",
+        # v1.420.0 review: the chip's TOOLBAR words (lib/permissionLevels
+        # `chip`) are what the user sees and types; they are not option
+        # labels, so they live here (pinned:
+        # dashboard/__tests__/one-vocabulary-review-v1420.test.tsx).
+        "ask every time": "always_ask",
+        "ask for commands": "approve_for_me",
     },
 }
 

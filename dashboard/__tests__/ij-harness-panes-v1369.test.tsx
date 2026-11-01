@@ -166,6 +166,8 @@ describe("the plan pane", () => {
   });
 
   it("says there is no plan yet, and shows the approved plan's text", () => {
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): the remembered Plan tab opens on it.
+    localStorage.setItem("ij.build.pane", "plan");
     renderPanes(view());
     expect(screen.getByTestId("pane-plan")).toHaveTextContent("No plan yet.");
     cleanup();
@@ -356,11 +358,15 @@ describe("waits are real", () => {
     const { rerender } = render(
       <HarnessPanes view={view()} livePlan={null} terminal={t} refreshKey={0} undoFor={() => null} onUndo={async () => {}} />,
     );
+    // v1.420.0 (moved on purpose, fix plan C2.10): Plan is no longer the first tab (Changes when the reply changed files, else Session): the Session tab opened first reads the changes count too, so
+    // the reads are counted from the press on Changes.
+    const reads = () => api.posts.filter(([p]) => p === "/chat/changes").length;
+    const before = reads();
     fireEvent.click(screen.getByTestId("harness-pane-tab-changes"));
-    await waitFor(() => expect(api.posts.filter(([p]) => p === "/chat/changes")).toHaveLength(1));
+    await waitFor(() => expect(reads()).toBe(before + 1));
     rerender(
       <HarnessPanes view={view()} livePlan={null} terminal={t} refreshKey={1} undoFor={() => null} onUndo={async () => {}} />,
     );
-    await waitFor(() => expect(api.posts.filter(([p]) => p === "/chat/changes")).toHaveLength(2));
+    await waitFor(() => expect(reads()).toBe(before + 2));
   });
 });

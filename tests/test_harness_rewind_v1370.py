@@ -176,11 +176,17 @@ async def test_rewinding_to_a_later_turn_keeps_the_earlier_one(app, work):
         build_routes.stream_chat_turn = saved
     # (Turn one's reply line keeps its finish check's answer after its words —
     # part 3, Phase 2.)
+    # v1.420.0 (C3.2, moved on purpose): the newest reply left — turn one's —
+    # carries its own "what I did" note; the rewound turn two's work (notes.md)
+    # is nowhere in it.
     assert [(m.role, m.content) for m in seen[0].messages] == [
         ("user", "make hello and bump x"),
-        ("assistant", "Turn one done.\n\nChecked: nothing needed changing."),
+        ("assistant", "Turn one done.\n\nChecked: nothing needed changing."
+         "\n\n[What I did in that reply (recorded by Iron Jarvis, not shown to the user):"
+         " created hello.py; edited app.py.]"),
         ("user", "carry on"),
     ]
+    assert not any("notes.md" in m.content for m in seen[0].messages)
 
 
 async def test_a_text_write_then_a_raw_edit_of_one_file_rewind_together(app, work):

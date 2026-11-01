@@ -298,7 +298,7 @@ export function SessionCard({
   // Lane-specific extras: failed cards get Retry/Dismiss, review cards get an
   // inline "Add context" form. Rendered only on the live card (never the ghost).
   const footer =
-    effLane === "failed" ? (
+    effLane === "failed" || effLane === "stopped" ? (
       <FailedActions session={session} />
     ) : session.waiting_on?.approval_id ? (
       // Paused run (v1.227.0): "Add context" posts /continue, which a
