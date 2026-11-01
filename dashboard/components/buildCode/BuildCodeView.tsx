@@ -297,7 +297,7 @@ function SessionPane({
   const [continuing, setContinuing] = useState(false);
   /** v1.422.0 (B3, B5): a reply a restart cut off (Continue) and a limit's
    *  wait that carries on by itself (until when; Cancel). */
-  const [carry, setCarry] = useState<CarryFacts>({ cut: null, wait: null, limitNote: "" });
+  const [carryFacts, setCarryFacts] = useState<CarryFacts>({ cut: null, wait: null, limitNote: "" });
   const [continuingCut, setContinuingCut] = useState(false);
   /** Iron Jarvis stopped answering while a reply ran: looked for again. */
   const [lost, setLost] = useState(false);
@@ -439,7 +439,7 @@ function SessionPane({
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
         // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
-        setCarry(decodeCarry(raw));
+        setCarryFacts(decodeCarry(raw));
         // v1.418.0 (C4.8): argument hints, and the messages waiting behind
         // the reply (held ones go back to the box).
         setHints(commandHints((raw as { commands?: unknown } | null)?.commands));
@@ -597,7 +597,7 @@ function SessionPane({
     setOlder({ cursor: null, earlier: 0 });
     setQueued([]);
     setHints({});
-    setCarry({ cut: null, wait: null, limitNote: "" });
+    setCarryFacts({ cut: null, wait: null, limitNote: "" });
     followedTurnsRef.current = new Set();
     void load({ follow: true });
     return () => {
@@ -1070,7 +1070,7 @@ function SessionPane({
     setInfo(null);
     try {
       await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/continue`, {});
-      setCarry((c) => ({ ...c, cut: null }));
+      setCarryFacts((c) => ({ ...c, cut: null }));
       await load({ follow: true });
     } catch (e) {
       setNote(errorWords(e, "The reply could not be carried on."));
@@ -1086,7 +1086,7 @@ function SessionPane({
     setNote(null);
     try {
       await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/wait/cancel`, {});
-      setCarry((c) => ({ ...c, wait: null }));
+      setCarryFacts((c) => ({ ...c, wait: null }));
     } catch (e) {
       setNote(errorWords(e, "The wait could not be cancelled."));
       void load({ follow: false });
@@ -1416,12 +1416,12 @@ function SessionPane({
                 onContinueOn={continueOn}
                 continuing={continuing}
                 onRetry={running ? undefined : retryFailed}
-                cut={running ? null : carry.cut}
+                cut={running ? null : carryFacts.cut}
                 onContinueCut={continueCut}
                 continuingCut={continuingCut}
-                wait={running ? null : carry.wait}
+                wait={running ? null : carryFacts.wait}
                 onCancelWait={cancelWait}
-                limitNote={carry.limitNote}
+                limitNote={carryFacts.limitNote}
                 model={session.model}
                 account={session.account ? accountName : ""}
                 onExpand={expandStep}

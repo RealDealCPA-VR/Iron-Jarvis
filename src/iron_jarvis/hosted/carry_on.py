@@ -818,6 +818,9 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
             taken = await asyncio.to_thread(take_wait, svc.home, sid, wid)
             if taken is None:
                 continue  # cancelled, a message, or another pass got there first
+            # Counted BEFORE the start: a carry-on the account refuses at once
+            # ends (and records its limit) before a count after it would land.
+            await asyncio.to_thread(_bump_chain, svc.home, sid)
             try:
                 new = await _start(svc, sid, CONTINUE_AFTER_RESET, {
                     "why": "reset", "account": account, "account_name": str(wait.get("account_name") or ""),
@@ -828,7 +831,6 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
                     await asyncio.to_thread(_put_back, svc.home, sid, taken, tries=tries,
                                             next_check_at=_iso(when + timedelta(seconds=RECHECK_S)))
                 continue
-            await asyncio.to_thread(_bump_chain, svc.home, sid)
             await _publish(svc.platform, EventType.BUILD_RESUMED, sid, {
                 "title": getattr(svc.live.get(sid), "title", "") or "",
                 "turn_id": new.id,
@@ -875,7 +877,8 @@ async def _move(svc: Any, sid: str, row: Any, wait: dict[str, Any], target: dict
         tried = list(taken.get("tried") or []) + [to_id]
         await asyncio.to_thread(_put_back, svc.home, sid, taken, tried=tried)
         return "failed"
-    # The session is on the new account now: the old card and wait are not its.
+    # The session is on the new account now: the old card and wait are not
+    # its. Counted BEFORE the start (see :func:`resume_due`).
     await asyncio.to_thread(_bump_chain, svc.home, sid)
     try:
         new = await _start(svc, sid, CONTINUE_AFTER_MOVE, {

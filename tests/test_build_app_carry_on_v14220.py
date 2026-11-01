@@ -236,6 +236,8 @@ async def test_the_bell_hears_it_carried_on_after_a_restart(home, app, work, mon
     assert resumed and resumed[0]["reason"] == "restart" and resumed[0]["surface"] == "build_app"
     assert resumed[0]["thread_id"] == row.id and resumed[0]["resumed_from"] == "t1"
     assert [s for k, _p, s in seen if k == "build.resumed"] == [f"build_app:{row.id}"]
+    # The carry-on's words are the app's: they never name the session.
+    assert resumed[0]["title"] == "" and store.get(app.state.platform.engine, row.id).title == ""
     S.service_for(app.state.platform)._emit(svc.live[row.id], make("done", stop="completed"))
     await stop_all(app)
 
@@ -300,7 +302,8 @@ async def test_a_card_answered_before_the_cut_does_not_hold_it_back(home, app, w
     await stop_all(app)
 
 
-async def test_a_carry_on_that_is_cut_again_is_never_carried_on_twice(root, home, app, work, monkeypatch):
+@pytest.mark.parametrize("how", ["record_kept", "record_lost", "long_reply"])
+async def test_a_carry_on_that_is_cut_again_is_never_carried_on_twice(root, home, app, work, monkeypatch, how):
     row = _row(app, work)
     _log(home, row.id, _working())
     S.reconcile_cut_turns(home)
@@ -309,8 +312,17 @@ async def test_a_carry_on_that_is_cut_again_is_never_carried_on_twice(root, home
     assert await CO.carry_on_after_restart(svc) == [row.id]
     await until(lambda: drivers.get(row.id) and drivers[row.id].sent)
     second = svc.live[row.id].turn.id
+    if how == "long_reply":
+        # The carry-on worked long enough that its message is out of the
+        # boot's tail read: the record's own `to` still knows it.
+        for i in range(4):
+            svc._emit(svc.live[row.id], make("text_done", item=f"big{i}", text="x" * 100_000))
     # The carry-on is cut by ANOTHER restart (a crash: no done).
     await asyncio.to_thread(svc.live[row.id].log.flush)
+    if how == "record_lost":
+        # Each of the two ways it knows (the record's `to`, the message's own
+        # `carry`) is enough on its own.
+        CO.drop_cut(home, row.id)
     app2 = create_app(str(root))
     S.reconcile_cut_turns(home)
     rec = CO.read_cut(home, row.id)
@@ -345,6 +357,11 @@ async def test_a_newer_message_an_archived_session_or_an_unsaved_conversation_is
     assert await CO.carry_on_after_restart(svc) == []
     assert drivers == {}
     assert CO.read_cut(home, newer.id)["why_not"] == CO.WHY_NEWER
+    # The page offers no Continue on a cut reply that is not the newest one.
+    assert "cut" not in await _view(app, newer.id)
+    async with client(app) as c:
+        r = await c.post(f"/build/app/sessions/{newer.id}/continue")
+    assert r.status_code == 409 and r.json()["detail"] == CO.NOTHING_CUT
     assert CO.read_cut(home, archived.id)["why_not"] == CO.WHY_ARCHIVED
     assert CO.read_cut(home, unsaved.id)["why_not"] == CO.WHY_NOT_SAVED
     assert (await _view(app, unsaved.id))["cut"]["resumable"] is False

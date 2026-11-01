@@ -243,14 +243,28 @@ async def test_the_users_own_message_ends_the_wait(app, home, work, monkeypatch)
     await stop_all(app)
 
 
-async def test_no_reset_known_and_no_group_waits_for_nothing(app, home, work, monkeypatch):
+@pytest.mark.parametrize("reset", [None, NOW - timedelta(minutes=1)], ids=["unknown", "already_past"])
+async def test_no_reset_ahead_and_no_group_waits_for_nothing(app, home, work, monkeypatch, reset):
     svc = S.service_for(app.state.platform)
     drivers = fake_tool(svc, monkeypatch)
     row = _session(app, work)
-    await _limit(svc, drivers, row.id, reset=None)
+    await _limit(svc, drivers, row.id, reset=reset)
     st = CO.read_limits(home, row.id)
     assert st["card"] and st.get("wait") is None
     await stop_all(app)
+
+
+def test_a_wait_is_taken_only_by_its_own_id(tmp_path):
+    """A wait the loop read and that was REPLACED meanwhile (a newer limit)
+    is never taken for the older one."""
+    sid = "app_x"
+    (tmp_path / "hosted" / sid).mkdir(parents=True)
+    (tmp_path / "hosted" / sid / CO.LIMITS_FILE).write_text(
+        json.dumps({"card": {"account": "p1"}, "wait": {"id": "new", "account": "p1"}}), "utf-8")
+    assert CO.take_wait(tmp_path, sid, "old") is None
+    assert CO.read_limits(tmp_path, sid)["wait"]["id"] == "new"
+    assert CO.take_wait(tmp_path, sid, "new")["id"] == "new"
+    assert CO.read_limits(tmp_path, sid)["wait"] is None
 
 
 async def test_a_chain_of_carry_ons_that_never_served_stops_and_waits_for_the_user(app, home, work, monkeypatch):
@@ -395,6 +409,8 @@ async def test_continue_on_moves_a_codex_conversation_and_refuses_a_diverged_cop
     dest.parent.mkdir(parents=True)
     dest.write_text('{"a":1}\n{"c":3}\n', encoding="utf-8")  # a DIFFERENT copy
     row = _session(app, work, harness="codex", account="o1", title="Codex work", acc_home=homes["o1"], hid=TID)
+    # The session's account is at its limit (what Iron-Proxy would be told).
+    svc._live(store.get(app.state.platform.engine, row.id)).limit = PaneLimit(line="You've hit your usage limit.")
     async with client(app) as c:
         r = await c.post(f"/build/app/sessions/{row.id}/continue-on", json={"account": "o2"})
         assert r.status_code == 409 and r.json()["detail"] == CM.DIVERGED.format(title="Codex work 2")
@@ -406,6 +422,7 @@ async def test_continue_on_moves_a_codex_conversation_and_refuses_a_diverged_cop
         r = await c.post(f"/build/app/sessions/{row.id}/continue-on", json={"account": "o2"})
         assert r.status_code == 200, r.text
     assert dest.read_bytes() == src.read_bytes()
+    assert [pid for pid, _ in ip.client.signals] == ["o1"], "told once, only when the move went ahead"
     kept = list((home / "trash").rglob(dest.name))
     assert kept and kept[0].read_text(encoding="utf-8") == '{"a":1}\n'
     assert store.get(app.state.platform.engine, row.id).account == "o2"
@@ -476,3 +493,58 @@ async def test_grok_waits_for_a_reset_it_names_and_never_moves(app, home, work, 
     await _limit(svc, drivers, row.id, reset=None, said=no_words, harness_event=G.failure_event(no_words))
     assert CO.read_limits(home, row.id).get("wait") is None, "no reset named: nothing to wait for"
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# the drivers: each tool's limit reaches the card WITH its reset
+# --------------------------------------------------------------------------- #
+def _claude_limit_frames(text: str) -> list[dict]:
+    from ._build_app_helpers_v1409 import FIX
+
+    steps = json.loads((FIX / "claude_limit.json").read_text(encoding="utf-8"))["steps"]
+    out = []
+    for s in steps:
+        o = s.get("out")
+        if not isinstance(o, dict) or o.get("type") not in ("rate_limit_event", "assistant", "result"):
+            continue
+        o = json.loads(json.dumps(o))
+        if o.get("type") == "rate_limit_event":
+            o["rate_limit_info"]["resetsAt"] = int((NOW + timedelta(hours=2)).timestamp())
+        if o.get("type") == "assistant":
+            o["message"]["content"][0]["text"] = text
+        if o.get("type") == "result":
+            o["result"] = text
+        out.append(o)
+    return out
+
+
+def test_claude_keeps_its_own_exact_reset_when_the_words_name_none():
+    from iron_jarvis.hosted.claude import ClaudeDriver
+
+    seen: list = []
+    d = ClaudeDriver(write=None, emit=seen.append, ask=lambda a: None, on_session_id=lambda s: None, mode="ask")
+    d.turn_open = True
+    for frame in _claude_limit_frames("You've hit your session limit"):
+        d.on_message(frame)
+    err = [e for e in seen if e.get("type") == "error"]
+    assert err and err[0]["fix_kind"] == "account_limit"
+    assert CO.reset_from(d, err[0]) == NOW + timedelta(hours=2), "the rate_limit_event's reset was dropped"
+
+
+def test_a_codex_usage_limit_is_the_card_and_resets_when_its_full_window_does():
+    from iron_jarvis.hosted.codex import CodexDriver
+
+    seen: list = []
+    d = CodexDriver(write=None, emit=seen.append, ask=lambda a: None, on_session_id=lambda s: None, mode="ask")
+    d.turn_open = True
+    resets = int((NOW + timedelta(days=2)).timestamp())
+    d.on_message({"jsonrpc": "2.0", "method": "account/rateLimits/updated", "params": {"rateLimits": {
+        "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": int((NOW + timedelta(hours=1)).timestamp())},
+        "secondary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": resets},
+        "planType": "plus"}}})
+    d.on_message({"jsonrpc": "2.0", "method": "error", "params": {"willRetry": False, "error": {
+        "message": "You’ve hit your usage limit. Upgrade to Plus to continue using Codex, or try again at 3:45 PM.",
+        "codexErrorInfo": "usageLimitExceeded"}}})
+    err = [e for e in seen if e.get("type") == "error"]
+    assert err and err[0]["fix_kind"] == "account_limit"
+    assert CO.reset_from(d, err[0]) == datetime.fromtimestamp(resets, tz=timezone.utc)
