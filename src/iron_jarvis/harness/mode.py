@@ -564,6 +564,42 @@ def text_tool_call(text: str, offered: Iterable[str]) -> str:
     return ""
 
 
+#: v1.421.0 (A5): where a call written as text NAMES its tool — GLM's
+#: ``<tool_call>name …``, ``<invoke name="…">``, ``<function=…>`` and a JSON
+#: ``"name": "…"`` (Qwen / Hermes put one inside ``<tool_call>``). The shapes
+#: ``providers/reply_budget._LEAK_NAME_RES`` reads a half-written call by.
+_CALL_NAME_RXS = (
+    re.compile(r"<\s*tool_call\s*>\s*([A-Za-z_][A-Za-z0-9_.\-]{0,63})", re.IGNORECASE),
+    re.compile(r"<\s*invoke\s+name\s*=\s*[\"']?([A-Za-z0-9_.\-]{1,64})", re.IGNORECASE),
+    re.compile(r"<\s*function\s*=\s*[\"']?([A-Za-z0-9_.\-]{1,64})", re.IGNORECASE),
+    re.compile(r"\"(?:name|tool|tool_name|function)\"\s*:\s*\"([A-Za-z0-9_.\-]{1,64})\""),
+)
+
+
+def named_text_tool_call(text: str, offered: Iterable[str]) -> str:
+    """The NAME of an OFFERED tool a reply wrote a call to AS TEXT, or ""
+    (v1.421.0, A5 — the agent runtime's reading). Stricter than
+    :func:`text_tool_call`, whose tag shapes match whatever they name: an
+    agent run's answer IS its report (a reviewer's verdict, a teammate's
+    result), and a report that quotes the ``<tool_call>`` format — a review
+    of tool-call parsing code, notes on a model's quirks — must not be told
+    to "call the tool itself". So the call must name a tool the step was
+    offered, the rule ``reply_budget.cut_off_round`` applies to a leaked
+    half call. Never raises."""
+    try:
+        names = {str(n) for n in (offered or ()) if n}
+        if not names or not text_tool_call(text, names):
+            return ""
+        body = str(text or "")
+        for rx in _CALL_NAME_RXS:
+            for m in rx.finditer(body):
+                if m.group(1) in names:
+                    return m.group(1)
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # the per-turn object the lanes hold
 # --------------------------------------------------------------------------- #

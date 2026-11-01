@@ -22,8 +22,13 @@ ROUNDS_EXTENDED = "rounds_extended"
 #: A reply ended on an offer to do more ("Want me to ...?") with work left,
 #: and was told to do it unless only the user can decide.
 CLOSING_QUESTION = "closing_question"
+#: v1.421.0 (A5): a reply wrote a tool call AS TEXT (GLM's ``<tool_call>…``,
+#: a Claude-style ``<invoke>``, a JSON blob) instead of calling the tool, and
+#: was told once to call it for real (``harness/mode.TEXT_TOOL_CALL_NUDGE``)
+#: — a coding session's turn (both chat lanes) or an agent run's step.
+TEXT_TOOL_CALL = "text_tool_call"
 
-NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION)
+NUDGE_KINDS = (PLAN_RUN, STEP_LIMIT_CONTINUE, ROUNDS_EXTENDED, CLOSING_QUESTION, TEXT_TOOL_CALL)
 
 
 async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **facts: Any) -> None:
@@ -43,4 +48,4 @@ async def note_nudge(bus: Any, kind: str, *, session_id: "str | None" = None, **
 
 
 __all__ = ["CLOSING_QUESTION", "NUDGE_KINDS", "PLAN_RUN", "ROUNDS_EXTENDED", "STEP_LIMIT_CONTINUE",
-           "note_nudge"]
+           "TEXT_TOOL_CALL", "note_nudge"]

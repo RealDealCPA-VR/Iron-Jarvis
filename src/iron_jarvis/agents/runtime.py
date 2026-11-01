@@ -282,6 +282,59 @@ def _closing_offer_cut_reply(messages: list[LLMMessage]) -> str:
     return join(head, tail)
 
 
+#: v1.421.0 (A5): how many times ONE agent run is told to call for real a
+#: tool it wrote out AS TEXT, and never twice in a row. The chat lanes give a
+#: coding session's turn ONE (``HarnessTurn.wants_nudge``); an agent run is
+#: longer (up to 60 attended steps, plus a carry-on) and a local model that
+#: slips into writing its call as text often does it again later in the same
+#: run after working fine in between — so two. A reply that writes a call as
+#: text RIGHT AFTER being told is not going to change on an identical second
+#: note, which would only spend a step: that reply ends the run as before.
+#: Two bounds the cost at two extra model calls a run.
+TEXT_CALL_NUDGES_PER_RUN = 2
+#: The key the count rides on in ``perceive_act``'s caller-scoped state (the
+#: breaker's dict: the flat lane's two allotments, or a decomposed run's
+#: every step and retry, share one).
+_TEXT_CALL_KEY = "text_call_nudges"
+
+
+def _text_call_nudge(
+    text: str, offered: "set[str]", messages: list[LLMMessage], *, steps_left: int,
+    state: "dict[str, Any]",
+) -> str:
+    """The offered tool an agent step's final answer wrote a call to AS TEXT
+    (``harness/mode.named_text_tool_call``), when the run should be told to
+    call it for real and go on; ``""`` otherwise (v1.421.0, A5). Never with no
+    tools offered (a text-only run cannot call one), never on the last step
+    (the call needs a step to happen in), never right after the same nudge,
+    and at most :data:`TEXT_CALL_NUDGES_PER_RUN` a run — counted in the
+    caller's ``state`` AND in the run's own messages (the record a resume
+    carries, like the closing offer's: a resumed run never gets more). Counts
+    the nudge it answers for. Never raises."""
+    try:
+        from ..harness.mode import TEXT_TOOL_CALL_NUDGE, named_text_tool_call
+
+        if not offered or int(steps_left) < 1:
+            return ""
+        last = messages[-1] if messages else None
+        if (last is not None and getattr(last, "role", "") == "user"
+                and str(getattr(last, "content", "") or "") == TEXT_TOOL_CALL_NUDGE):
+            return ""
+        recorded = sum(
+            1 for m in messages
+            if getattr(m, "role", "") == "user" and str(getattr(m, "content", "") or "") == TEXT_TOOL_CALL_NUDGE
+        )
+        used = max(int(state.get(_TEXT_CALL_KEY, 0) or 0), recorded)
+        if used >= TEXT_CALL_NUDGES_PER_RUN:
+            return ""
+        name = named_text_tool_call(text or "", offered)
+        if name:
+            state[_TEXT_CALL_KEY] = used + 1
+        return name
+    except Exception:  # noqa: BLE001 — a reading never breaks a run
+        return ""
+
+
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
 #: that stamps one of these has a channel: chat/job/project/user are watched
@@ -3885,6 +3938,46 @@ class AgentRuntime:
                 _cut_pending = _cut_note
 
             if not resp.wants_tools:
+                # A TOOL CALL WRITTEN AS TEXT (v1.421.0, A5 — the chat lanes'
+                # harness rule, ``HarnessTurn.wants_nudge``, in the agent
+                # loop): a local model (glm's ``<tool_call>read_file …``, a
+                # Claude-style ``<invoke>``, a JSON blob) that writes its call
+                # instead of making it ended the run with the markup as its
+                # "report" — a helper, a teammate, any agent on such a model.
+                # The text is NEVER executed: the answer and ONE note go on
+                # the transcript (plain turns, no tool_use — the v1.152.0 unit
+                # rule holds) and the run goes on, so the model makes the call
+                # itself, through every gate a call goes through. Bounded by
+                # ``_text_call_nudge`` (a tool the step OFFERED, a step left,
+                # never twice in a row, two a run). The flat lane's transcript
+                # is not saved here (the closing offer's rule): the next step
+                # that asks for tools saves it with the note in it. BEFORE the
+                # closing offer, as in the chat lanes. Shared by the
+                # decomposed lane's mini-loops (this method), whose count
+                # spans the whole run through the caller's breaker state.
+                _tc_name = _text_call_nudge(
+                    resp.text, _offered, messages,
+                    steps_left=max_steps - (run.steps - _offer_from), state=_bstate,
+                )
+                if _tc_name:
+                    from ..core.nudges import TEXT_TOOL_CALL, note_nudge
+                    from ..harness.mode import TEXT_TOOL_CALL_NUDGE
+
+                    messages.append(LLMMessage(
+                        role="assistant", content=resp.text,
+                        raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
+                    ))
+                    messages.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                    await note_nudge(
+                        self.p.event_bus, TEXT_TOOL_CALL, session_id=session.id,
+                        run_id=run.id, step=int(run.steps), surface="agent", tool=_tc_name,
+                    )
+                    if sink:
+                        # The streamed markup is not the answer (the stream
+                        # lane's `reset`, reason "text_tool_call").
+                        sink.reset("text_tool_call")
+                    await asyncio.to_thread(self._save, run)
+                    continue
                 # A FINAL ANSWER THAT ENDS ON AN OFFER (v1.402.0, part 4 —
                 # harness/closing_offer, the chat lanes' rule): "Want me to
                 # also add tests?" with steps left is told ONCE to do it

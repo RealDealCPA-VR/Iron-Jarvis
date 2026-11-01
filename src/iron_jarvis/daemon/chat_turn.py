@@ -6690,6 +6690,26 @@ async def note_closing_offer(platform: Any, body: Any, tool_session: str, round_
     )
 
 
+async def note_text_tool_call(platform: Any, body: Any, tool_session: str, round_index: int,
+                              kind: str = "") -> None:
+    """ONE ``autonomy.nudged`` event (``core/nudges.TEXT_TOOL_CALL``, v1.421.0)
+    for a harness turn told to call for real a tool it wrote out as text —
+    the agent runtime's nudge publishes the same kind, so the Autonomy card
+    counts both. Never raises (``note_nudge`` swallows). MIRROR NOTE: both
+    lanes call it at their ``wants_nudge`` seam."""
+    from ..core.nudges import TEXT_TOOL_CALL, note_nudge
+
+    await note_nudge(
+        getattr(platform, "event_bus", None), TEXT_TOOL_CALL,
+        session_id=str(tool_session or "chat"),
+        surface="build" if str(tool_session or "").startswith("build:") else "chat",
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        round=int(round_index) + 1,
+        call=str(kind or ""),
+    )
+
+
 def harness_check_gate(trust_state: dict[str, Any]) -> dict[str, Any]:
     """``{may_run, why_not}`` for a folder's plugin checks this turn: never
     in low trust (a check is the folder's own command, and the folder is
@@ -10136,6 +10156,11 @@ async def run_chat_turn(
 
                 msgs.append(LLMMessage(role="assistant", content=route.response.text or ""))
                 msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                # v1.421.0: counted on the Autonomy card (the agent runtime's
+                # nudge publishes the same kind). MIRROR NOTE: routes/chat.py.
+                await note_text_tool_call(
+                    d.platform, body, _tool_session, _round, _harness.text_call_kind,
+                )
                 continue
             # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4 — harness/
             # closing_offer): "Want me to also add tests?" with rounds left.

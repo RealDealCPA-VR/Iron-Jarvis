@@ -5227,6 +5227,11 @@ async def chat_stream(
 
                     msgs.append(LLMMessage(role="assistant", content=reply_text))
                     msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                    # v1.421.0: counted on the Autonomy card (lock-step with
+                    # chat_turn's).
+                    await _chat_turn.note_text_tool_call(
+                        d.platform, body, _tool_session, _round, _harness.text_call_kind,
+                    )
                     yield _ev("reset", {"reason": "text_tool_call"})
                     continue
                 # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4) — the
