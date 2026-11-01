@@ -65,7 +65,8 @@ def _save(home, provider, model, **kw) -> CapabilityProfile:
 
 # --------------------------------------------------------------------------- #
 # Minimal fake platform for _context_window (the function reads exactly
-# d.platform.config / d.platform.providers / d.platform.fleet)
+# d.platform.config / d.platform.providers / d.platform.fleet and, v1.421.0,
+# d.platform.fleet_sampler)
 # --------------------------------------------------------------------------- #
 
 
@@ -76,30 +77,16 @@ class _Cfg:
         self.default_model = ""
 
 
-class _Model:
-    def __init__(self, name, context_length):
-        self.name = name
-        self.context_length = context_length
-
-
-class _Node:
-    def __init__(self, models):
-        self.models = models
-
-
-class _Fleet:
-    def __init__(self, nodes):
-        self._nodes = nodes
-
-    def nodes(self):
-        return self._nodes
-
-
 class _Platform:
     def __init__(self, config, providers=None, fleet=None):
         self.config = config
         self.providers = providers
-        self.fleet = fleet
+        # v1.421.0 (D3, moved on purpose): the fleet is a REAL registry and
+        # sampler (``tests/_fakes/fleet_window``). The fake this file used
+        # had ``nodes()[].models[].name`` — a shape no FleetNode has — so it
+        # pinned a rung that never answered in the product.
+        self.fleet = getattr(fleet, "registry", fleet)
+        self.fleet_sampler = getattr(fleet, "sampler", None)
 
 
 class _D:
@@ -112,7 +99,9 @@ def _d(pins=None, providers=None, fleet=None):
 
 
 def _fleet(model="qwen3:30b", context_length=32_768):
-    return _Fleet([_Node([_Model(model, context_length)])])
+    from tests._fakes.fleet_window import probed_fleet
+
+    return probed_fleet(model, context_length)
 
 
 # --------------------------------------------------------------------------- #
