@@ -155,17 +155,33 @@ Design, in phases, reusing what exists:
    parity on the product path), then decide C7 (D4) on the numbers.
 6. **Wave 6, "Nimble and modifiable":** E1–E5.
 
-## Decisions for the owner
+## Decisions (answered by the owner, 2026-11-01)
 
-- **A1:** do helpers run commands in Git Bash when it is installed, like the
-  lead? This reverses the v1.386.2 choice for helpers.
-- **A4:** the reviewer gets the read-only command list (git status, diff, log,
-  show, ls, cat…) but not test runs, which write caches. Running tests stays
-  the finish check's job.
-- **D1:** failover stays within the same billing class by default
-  (subscription → subscription or local); crossing to a metered API key is an
-  opt-in.
-- **B3:** continue cut-off Build › Code turns with the CLI's own resume now (M),
-  or later move the CLIs into a separate host process that survives restarts (L).
-- **Team notes:** the distiller spends plan usage on the reviewer's model, at
-  most once a day per member. Should it be on by default, or a switch?
+- **A1 — yes.** "Helpers should run the commands necessary for the team to
+  function effectively. If that is not happening, then the team is broken."
+  Helpers of a coding session run their commands in Git Bash when it is found,
+  like the lead (Wave 1).
+- **A4 — yes, and more.** "The reviewer should get read-only commands, but also
+  be able to determine exactly what needs correcting for shooting over to the
+  team leader for work redistribution." Wave 1 gives the reviewer read-only
+  git and asks it for numbered findings (`R<n>. path:line — what is wrong —
+  what to change`) with a "who changed what" list, and tells the lead to hand
+  each finding to the worker who changed that file. Parsing the findings into
+  records stays in Wave 3.
+- **D1 — stricter than proposed.** "Failover should remain within the same
+  models provided. No pay-per-use unless a pay-per-use model was chosen at the
+  onset." Failover may move only among the subscriptions and local models the
+  user has connected; it never reaches a pay-per-use key unless the user's own
+  pick was a pay-per-use model (Wave 4).
+- **B3 — the large option.** "The option that would allow long running tasks to
+  be accomplished in the most efficient and effective manner possible." Build ›
+  Code's CLIs move into a separate host process that survives an Iron Jarvis
+  restart; the CLI's own resume stays as the fallback for when that process
+  itself is gone (Wave 2).
+- **Team notes — on by default, and a report for the developer.** "This will
+  be the specifics I can feed back to the agent working on the app … structured
+  so that sending it to a coding agent for a fix is a simple copy and paste of
+  the issues experienced." Wave 3 adds, beside the per-member habits, a "Copy
+  as a fix request" report: each problem the team hit, with where it happened,
+  what was seen, what was expected and the evidence (masked), in a shape a
+  coding agent can act on.
