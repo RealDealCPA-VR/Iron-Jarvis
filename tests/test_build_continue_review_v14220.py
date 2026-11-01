@@ -157,3 +157,73 @@ async def test_the_post_lane_says_a_low_trust_failure_too(tmp_path, monkeypatch)
     with pytest.raises(ChatTurnFailed) as caught2:
         await run_chat_turn(platform, BUILTIN_PERSONAS, _body(ws, "hello"), harness=True)
     assert "trust" not in caught2.value.body()
+
+
+# --------------------------------------------------------------------------- #
+# 4. the builder's own guarantees a mutation left green (review: each now red)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_retried_rounds_take_back_keeps_the_earlier_words_on_the_line():
+    """``_ReplyWatch`` takes back only the failed try's words (``drop``): a
+    reply that then FAILS keeps the earlier rounds' words as its line's
+    content (a full clear left the failed line empty)."""
+    import json
+
+    from iron_jarvis.daemon.routes import build as B
+
+    w = B._ReplyWatch()
+    w.see("token", json.dumps({"text": "Reading the files. "}))
+    w.see("token", json.dumps({"text": "Half an answ"}))
+    w.see("reset", json.dumps({"reason": "retry", "drop": len("Half an answ")}))
+    w.see("token", json.dumps({"text": "Second try, cut"}))
+    w.see("reset", json.dumps({"reason": "retry", "drop": len("Second try, cut")}))
+    w.see("error", json.dumps({"detail": "x", "title": "Anthropic is busy", "fix": "Try again."}))
+    line = [m for m in w.lines("bt-x", "error") if m.get("role") == "assistant"][0]
+    assert line["content"] == "Reading the files. ", line
+    # A plain reset (the chat's rewrite) still clears everything.
+    w2 = B._ReplyWatch()
+    w2.see("token", json.dumps({"text": "Hola"}))
+    w2.see("reset", json.dumps({}))
+    assert w2.text == []
+
+
+def test_an_account_limit_card_or_an_attempts_card_keeps_no_rounds():
+    """A failed reply beside an account's limit card (Resume when ready /
+    Choose account are its way out) or an attempts card keeps nothing."""
+    from iron_jarvis.daemon.routes import build as B
+
+    def failed() -> "B._ReplyWatch":
+        w = B._ReplyWatch()
+        w.error = {"detail": "x", "title": "busy"}
+        return w
+
+    assert B.keeps_failed_record(failed()) is True
+    w = failed()
+    w.account_limit = {"account": "c-work", "turn_id": "t"}
+    assert B.keeps_failed_record(w) is False
+    w = failed()
+    w.attempts = {"attempts": [{"n": 1}]}
+    assert B.keeps_failed_record(w) is False
+
+
+async def test_a_continue_that_failed_too_is_continued_with_the_question_once(home, work):  # noqa: F811
+    """Continue → that turn fails too (its question line says
+    ``continuedFrom``) → Continue again: the history ends before the
+    ORIGINAL question (``_resume_root`` follows ``continuedFrom``), so the
+    model reads the question once, never twice."""
+    from tests.test_build_continue_failed_v14220 import _overloaded
+
+    app = create_app(home)
+    sid = new_session(app, work)["id"]
+    await _fail_mid_reply(app, sid)
+    wire(app, Script([_write("c3", "three.txt", "3"), *[_overloaded() for _ in range(5)]]))
+    status, raw = await open_turn(app, sid, {"text": "", "continue_turn": "bt-f", "turn_id": "bt-c1"}, timeout=60)
+    assert status == 200 and "event: error" in raw, raw[-400:]
+    assert RR.has_failed(app.state.platform.engine, "bt-c1")
+    script = wire(app, Script(["All three made."]))
+    status, raw = await open_turn(app, sid, {"text": "", "continue_turn": "bt-c1", "turn_id": "bt-c2"}, timeout=60)
+    assert status == 200 and "event: done" in raw, raw[-400:]
+    first = script.calls[0]["messages"]
+    asked = [m for m in first if getattr(m, "role", "") == "user" and m.content == "make three files"]
+    assert len(asked) == 1, [getattr(m, "content", "")[:60] for m in first]
