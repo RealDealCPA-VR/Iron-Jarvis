@@ -552,8 +552,15 @@ class RemoteProcess:
             reply, _ = lk.request({"t": "start", "tool": self.tool_id, "sid": self.sid, "argv": self.argv,
                                    "env": self.env, "cwd": self.cwd, "ends_left_behind": self.ends_left_behind},
                                   timeout=STOP_REPLY_S)
-        except (HostLost, TimeoutError):
+        except (HostLost, TimeoutError) as exc:
             lk.unregister(self.tool_id)
+            if isinstance(exc, TimeoutError):
+                # v1.422.0 review: the host did not ANSWER in time — it may
+                # still start this tool (a process creation that hung): it is
+                # told to stop it once it does (the host reads its connection
+                # in order), so the start below is the conversation's ONLY
+                # process, never a second one the host runs on unknown.
+                lk.send({"t": "stop", "tool": self.tool_id, "graceful": False})
             self.link = None
             self._start_local(loop, on_message, on_exit)
             return

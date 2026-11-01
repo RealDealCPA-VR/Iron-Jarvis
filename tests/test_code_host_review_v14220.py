@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import sys
+import time
 from pathlib import Path
 
 import psutil
@@ -393,3 +394,41 @@ async def test_a_card_raised_by_a_line_read_again_is_the_same_card_end_to_end(ho
     drawn = [e for e in events_of(home, sid, app2) if e["type"] == "approval"]
     assert [e.get("request_id") for e in drawn] == [ask_id], "drawn once"
     await ADOPT.shutdown(app2.state.platform, keep=False)
+
+
+def test_a_start_the_host_answered_too_late_never_leaves_a_second_process(hosts, tmp_path):
+    """The host did not answer a start in time (a process creation that
+    hung): the tool starts as a plain child instead — and the host, which
+    may still start it, is told to stop it, so the conversation never has a
+    second process the host runs on unknown to Iron Jarvis."""
+    import os
+
+    home = hosts.home(tmp_path / "home")
+    tool_py = tmp_path / "tool.py"
+    tool_py.write_text("import sys\nfor line in sys.stdin:\n    pass\n", encoding="utf-8")
+    lk = HL.link_for(home, start=True)
+    hosts.note()
+    real = lk.request
+    late: dict = {}
+
+    def request(header, payload=b"", timeout=HL.REPLY_TIMEOUT_S):
+        got = real(header, payload, timeout)
+        if header.get("t") == "start":
+            late["pid"] = got[0].get("pid")  # it DID start in the host, but answered "too late"
+            raise TimeoutError("the code host did not answer 'start'")
+        return got
+
+    lk.request = request
+    proc = HL.RemoteProcess([sys.executable, str(tool_py)], env=dict(os.environ), cwd=str(tmp_path), name="t",
+                            home=home, sid="s1")
+    proc.start(asyncio.new_event_loop(), lambda o: None, lambda c: None)
+    try:
+        assert proc.local is not None and proc.alive, "the tool runs as a plain child instead"
+        assert late.get("pid"), "the host started its copy"
+        hosts.pids.add(late["pid"])
+        end = time.monotonic() + 20
+        while time.monotonic() < end and psutil.pid_exists(late["pid"]):
+            time.sleep(0.1)
+        assert not psutil.pid_exists(late["pid"]), "the host's late copy is stopped: one process"
+    finally:
+        proc.stop(graceful=False)
