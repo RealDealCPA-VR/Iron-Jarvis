@@ -6450,6 +6450,12 @@ async def chat_stream(
                                     turn_stopped=lambda: _ToolResult(
                                         ok=False, error=_stall.turn_stopped_result(tc.name),
                                     ),
+                                    # v1.422.0 review: a call of a round the
+                                    # user stopped BEFORE it began is never
+                                    # started (no ledger row: nothing ran).
+                                    not_started=lambda: _ToolResult(
+                                        ok=False, error=_stall.not_started_result(tc.name),
+                                    ),
                                     # A tool that waits on a PERSON or runs
                                     # a whole helper (`deadline_exempt`:
                                     # ask_user) ends on Stop in its own words.

@@ -478,6 +478,17 @@ def turn_stopped_result(name: str = "") -> str:
     )
 
 
+def not_started_result(name: str = "") -> str:
+    """v1.422.0 review (B2): what the model's result says about a step the
+    reply had NOT started yet when the user stopped it — it never ran (plain
+    words; never that it succeeded)."""
+    what = f"The {name} step" if name else "This step"
+    return (
+        f"{what} was not run: the user stopped the reply before it started. Nothing it would "
+        "have done took effect. Do not start it again unless the user asks."
+    )
+
+
 def _task_or_current(task: "asyncio.Task[Any] | None") -> "asyncio.Task[Any] | None":
     if task is not None:
         return task
@@ -531,7 +542,8 @@ async def run_step(turn_id: str, call_id: str, name: str,
                    make: "Callable[[], Awaitable[Any]]",
                    stopped: "Callable[[], Any]",
                    turn_stopped: "Callable[[], Any] | None" = None,
-                   *, race: bool = True) -> Any:
+                   *, race: bool = True,
+                   not_started: "Callable[[], Any] | None" = None) -> Any:
     """Run one tool call of a coding session's turn as its OWN task,
     registered so :func:`stop_step` can cancel exactly it. A cancel the USER
     asked for returns ``stopped()`` (the call's result: the model is told);
@@ -548,7 +560,21 @@ async def run_step(turn_id: str, call_id: str, name: str,
     the Stop on its own answers in its own words). ``race=False`` (the lane
     passes it for a tool that WAITS ON A PERSON or runs a whole helper — the
     registry's ``deadline_exempt``: ``ask_user`` says "stopped before the user
-    answered" itself) runs the step as before, unraced."""
+    answered" itself) runs the step as before, unraced.
+
+    v1.422.0 review (B2): A STEP OF A TURN ALREADY STOPPED IS NEVER STARTED.
+    A round's writers run one after another (``chat_turn._run_tool_round``)
+    and nothing between them looks for a Stop: when the user stopped the
+    reply while one call ran, the NEXT call of the round used to be started
+    anyway — given its grace, a file write or an edit finished inside it,
+    AFTER the user pressed Stop. With ``race`` and the turn's Stop already
+    set, ``make()`` is never called (the registry never sees the call: no
+    ledger row, nothing ran) and the call's result is ``not_started()``
+    (else ``turn_stopped()``, else ``stopped()``)."""
+    if race:
+        early = _turn_handle(str(turn_id or ""))
+        if early is not None and early.stopped:
+            return (not_started or turn_stopped or stopped)()
     task: "asyncio.Task[Any]" = asyncio.ensure_future(make())
     key, cid = str(turn_id or ""), str(call_id or "")
     with _STEPS_LOCK:
@@ -772,7 +798,8 @@ class PhoneAsk:
 
 __all__ = [
     "CLOCK", "DEADLINE_GRACE_S", "PHONE_AFTER_S", "SAFETY_REASONS", "STALL_AFTER_S", "STALL_FRAME", "STOPPED_LEDGER_NOTE",
-    "STOP_GRACE_S", "STOP_STEP", "STOP_TURN", "TURN_STOPPED_LEDGER_NOTE", "stop_note", "stop_reason", "turn_stopped_result",
+    "STOP_GRACE_S", "STOP_STEP", "STOP_TURN", "TURN_STOPPED_LEDGER_NOTE", "not_started_result", "stop_note", "stop_reason",
+    "turn_stopped_result",
     "StallWatch", "TICK_S", "keep", "listening", "minutes_words", "model_words", "notice_words", "now",
     "phone_may_ask", "progress_scope", "run_step", "running_steps", "step_words", "stop_step",
     "stopped_by_user", "stopped_result", "touch", "watched",
