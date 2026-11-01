@@ -190,6 +190,17 @@ def _code_counts(d) -> dict[str, Any]:
         return {"running": 0, "working": 0, "tools": []}
 
 
+def _code_serving(d) -> dict[str, Any]:
+    """``hosted/programs.serving_counts``: Build › Code sessions whose tool
+    runs a program it started (v1.422.0 review). Never raises."""
+    try:
+        from ...hosted.programs import serving_counts
+
+        return serving_counts(d.platform)
+    except Exception:  # noqa: BLE001
+        return {"serving": 0, "tools": []}
+
+
 def activity_snapshot(d) -> dict[str, Any]:
     """What the daemon is busy with RIGHT NOW (v1.226.0, contract C6).
 
@@ -255,6 +266,11 @@ def activity_snapshot(d) -> dict[str, Any]:
     # card included); only the part NOT parked on the user is `working`
     # (keeps the PC awake) — the v1.391.0 rule, unchanged.
     code = _code_counts(d)
+    # v1.422.0 review (B4): a Build › Code session whose tool runs a program
+    # it started (a dev server) — an update's stop ends it too, so `busy`
+    # counts it and the warning names it; never `working` (a server waiting
+    # for requests does not keep the PC awake).
+    serving = _code_serving(d)
     return {
         "active_sessions": sessions,
         "running_workflow_runs": len(run_states),
@@ -264,7 +280,10 @@ def activity_snapshot(d) -> dict[str, Any]:
         "busy_pane_clis": busy_pane_clis,
         "code_replies": code["running"],
         "code_tools": code["tools"],
-        "busy": bool(sessions or run_states or chat_replies or busy_panes or code["running"]),
+        "code_serving": serving["serving"],
+        "code_serving_tools": serving["tools"],
+        "busy": bool(sessions or run_states or chat_replies or busy_panes or code["running"]
+                     or serving["serving"]),
         # v1.391.0 (long jobs, Phase 2, decision 1): the "Keep this PC awake
         # while work runs" setting, read LIVE by the desktop app beside
         # `working` (it holds off sleep only while both are true).

@@ -4305,6 +4305,20 @@ function describeBusyWork(activity) {
       `${plural(code, "coding session", "coding sessions")} in Build › Code working${seen.length ? ` (${seen.join(", ")})` : ""}`
     );
   }
+  // v1.422.0: a Build › Code session whose coding tool runs a program it
+  // started (a dev server) — an update stops that program too.
+  const serving = n("code_serving");
+  if (serving) {
+    const seen = [];
+    for (const raw of Array.isArray(a.code_serving_tools) ? a.code_serving_tools : []) {
+      const name = String(raw || "").trim();
+      if (name && !seen.includes(name)) seen.push(name);
+    }
+    const what = serving === 1 ? "running a program it started" : "running programs they started";
+    parts.push(
+      `${plural(serving, "coding session", "coding sessions")} in Build › Code ${what}${seen.length ? ` (${seen.join(", ")})` : ""}`
+    );
+  }
   const sessions = n("active_sessions");
   if (sessions) parts.push(`${plural(sessions, "background task", "background tasks")} running`);
   const runs = n("running_workflow_runs");

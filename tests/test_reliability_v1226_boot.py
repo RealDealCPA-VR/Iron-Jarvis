@@ -286,6 +286,10 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
     # keeps its own meaning. v1.414.0, MOVED ON PURPOSE: `code_replies` /
     # `code_tools` — a Build › Code reply running (the update warning and the
     # sleep blocker read them; tests/test_build_app_spine_desktop_v1414.py).
+    # v1.422.0 review, MOVED ON PURPOSE: `code_serving` / `code_serving_tools`
+    # — a Build › Code session whose tool runs a program it started (a dev
+    # server): `busy` only, never `working`
+    # (tests/test_build_app_programs_review_v14220.py).
     assert idle == {
         "active_sessions": 0,
         "running_workflow_runs": 0,
@@ -299,6 +303,8 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
         "night_shift": False,
         "code_replies": 0,
         "code_tools": [],
+        "code_serving": 0,
+        "code_serving_tools": [],
     }
     with session_scope(app.state.platform.engine) as db:
         s = Session(task="t", status=SessionStatus.ACTIVE)

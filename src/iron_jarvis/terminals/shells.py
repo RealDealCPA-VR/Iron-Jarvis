@@ -46,8 +46,8 @@ STORE_LABEL = "PowerShell 7 (Microsoft Store copy)"
 
 def _pwsh_candidates() -> list[str]:
     """Every ``pwsh.exe`` this PC offers, in the order a user would expect:
-    each ``PATH`` folder's (``shutil.which`` stops at the first, which is often
-    the Store alias), then the usual install folders."""
+    each absolute, local ``PATH`` folder's (``shutil.which`` stops at the
+    first, which is often the Store alias), then the usual install folders."""
     found: list[str] = []
     seen: set[str] = set()
 
@@ -60,16 +60,21 @@ def _pwsh_candidates() -> list[str]:
     for folder in (os.environ.get("PATH") or "").split(os.pathsep):
         folder = folder.strip().strip('"')
         # A PATH folder on a network share is never looked in here: a stat
-        # of a share path is an SMB connection (the v1.379.0 lesson).
-        if folder and not folder.startswith(("\\\\", "//")):
+        # of a share path is an SMB connection (the v1.379.0 lesson). Nor a
+        # RELATIVE one (".", "bin"): it would be read against the daemon's
+        # current folder, and a pwsh.exe dropped there must never become
+        # every new terminal's shell.
+        if folder and os.path.isabs(folder) and not folder.startswith(("\\\\", "//")):
             add(os.path.join(folder, "pwsh.exe"))
     for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")):
         if base:
             for sub in ("7", "7-preview"):
                 add(os.path.join(base, "PowerShell", sub, "pwsh.exe"))
-    first = shutil.which("pwsh")
-    if first:
-        add(first)
+    # v1.422.0 review: no ``shutil.which("pwsh")`` after the walk above. It
+    # looked in EVERY ``PATH`` folder (shares included, under each PATHEXT
+    # ending) and, on Windows, in the current folder FIRST — what the comment
+    # above promises never happens. The walk already covers every ``PATH``
+    # folder that may be read.
     return found
 
 

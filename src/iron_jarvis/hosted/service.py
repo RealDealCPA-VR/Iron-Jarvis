@@ -2550,6 +2550,13 @@ class HostedService:
             return {"ok": True, "closed": False}
         if (live.turn is not None and live.turn.running) or live.claim:
             raise Refused(W.RUNNING)
+        now = self.clock()
+        if live.busy or live.replying_alone(now) or live.helpers_working(now):
+            # v1.422.0 review: working with no message of the user's running —
+            # a reply Claude Code writes on its own once its helpers end, a card
+            # waiting with no turn open, helper agents at work, Pi's own run. A
+            # tree kill here ended that work mid-way; the press waits for it.
+            raise Refused(PG.CLOSE_WAITS.format(label=W.label(live.harness)))
         ended = list(live.keeping.programs) if live.keeping is not None else []
         await self._stop_process(live)
         live.stopped_why = ""
@@ -2606,7 +2613,12 @@ class HostedService:
         if not typable_sid(row.harness, hid):
             raise Refused("That session's id is not one Iron Jarvis types into a terminal.", 409)
         if live:
+            # v1.422.0 review (B4): what the tool ran that serves (a dev server)
+            # stops with it — read first, said after (never silent).
+            ended = PG.known_programs((await PG.read_many([live])).get(live.sid), live) if live.running else []
             await self._stop_process(live)  # two processes on one session corrupt it
+            if ended:
+                self._said_stopped(live, ended, why="terminal")
         session = await asyncio.to_thread(self._launch_terminal, row, hid)
         # The row is now the terminal's until that terminal's CLI has exited.
         await asyncio.to_thread(store.update, self.engine, sid, terminal_id=str(session.id))
@@ -2727,7 +2739,11 @@ class HostedService:
             )
             lease, source, client, current = plan
             # The process goes BEFORE the copy: its last write lands first.
+            # v1.422.0 review (B4): what it ran that serves stops with it — said.
+            ended = PG.known_programs((await PG.read_many([live])).get(live.sid), live) if live.running else []
             await self._stop_process(live, why="moving to another account")
+            if ended:
+                self._said_stopped(live, ended, why="account")
             await asyncio.to_thread(self._carry, lease, source, client, current, limit)
             from ..terminals import pane_accounts as PA
 

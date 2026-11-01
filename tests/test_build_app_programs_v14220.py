@@ -391,6 +391,9 @@ async def test_the_beat_and_close_routes(app, work, tmp_path, monkeypatch, start
             await _say(c, s["id"])
             live = svc.live[s["id"]]
             _step(live)
+            # v1.422.0 review: a step with no turn open is Claude Code writing a
+            # reply of its own, and Close waits for that — this one is over.
+            live.driver._alone = False
             pid, port = await _serve_in_tool(live, tmp_path / "srv.txt", started)
             assert await svc.reap_once(now=svc.clock() + S.IDLE_S + 1) == []
             r = (await c.post(f"/build/app/sessions/{s['id']}/close")).json()

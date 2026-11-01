@@ -95,6 +95,14 @@ SHOWN_MAX = 5
 COMMAND_CHARS = 120
 
 
+#: v1.422.0 review: "Close <tool>" pressed while the tool works with no
+#: message of the user's running (a reply of its own, helpers, a card).
+CLOSE_WAITS = (
+    "{label} is still working on its own (writing a reply, running helpers, or waiting for your "
+    "answer) — let it finish or stop it, then close it."
+)
+
+
 @dataclass(frozen=True)
 class Program:
     """One listening program the tool started (never shown with its pid)."""
@@ -217,11 +225,25 @@ def short_argv(argv: list[str]) -> str:
     import ntpath
     import posixpath
 
+    from ..mcp.secrets import SECRET_KEY_RX
+
     out = []
     for i, word in enumerate(argv):
         w = str(word)
         if i == 0 or ntpath.isabs(w) or posixpath.isabs(w):
             w = ntpath.basename(w.rstrip("\\/")) or w
+        key, eq, value = w.partition("=")
+        if eq and any(ch.isspace() for ch in value) and SECRET_KEY_RX.search(key.lstrip("-")):
+            # v1.422.0 review: ``--password=my secret phrase`` in ONE word —
+            # the key=value masker stops at the first space ("***secret
+            # phrase"), so a secret-named key's spaced value goes whole.
+            w = f"{key}=***"
+        if any(ch.isspace() for ch in w):
+            # v1.422.0 review: ONE word, quoted, so the masker that splits the
+            # line again (``_shown_command``, quotes kept together) hides a
+            # value with a space WHOLE — ``--password "my secret phrase"``
+            # showed "*** secret phrase". A quote inside never ends it early.
+            w = '"' + " ".join(w.replace('"', "'").split()) + '"'
         out.append(w)
     return " ".join(out)
 
@@ -292,6 +314,47 @@ def spec_of(live: Any) -> tuple[str, int | None, Any, float | None]:
     return (live.sid, pid if isinstance(pid, int) else None, job, first_step(live))
 
 
+def _unknown(specs: list[tuple[str, int | None, Any, float | None]]) -> dict[str, Reading]:
+    return {s[0]: Reading(False) for s in specs}
+
+
+def _read_on_own_thread(specs: list[tuple[str, int | None, Any, float | None]], done: Any) -> bool:
+    """Start ONE :func:`read` of ``specs`` on a thread of its own and hand its
+    answer (None when it failed) to ``done`` from that thread. False — nothing
+    started — while an earlier read still runs (never a second thread stacked
+    under a stuck one).
+
+    v1.422.0 review: never the loop's default executor (``asyncio.to_thread``,
+    the first cut). That pool is SHARED with every offloaded job of the
+    daemon; behind a busy pool the read waited out its bound, the session read
+    "unknown" minute after minute, and after :data:`UNREAD_KEEPS_MAX` of those
+    the idle stop ended a dev server it had never been able to see — silently
+    (the v1.335.0 lesson: a bounded wait on a shared pool queues behind
+    everyone). A daemon thread: a stuck read never holds up shutdown."""
+    if not _READING.acquire(blocking=False):
+        return False
+
+    def run() -> None:
+        got: dict[str, Reading] | None = None
+        try:
+            got = read(specs)
+        except Exception:  # noqa: BLE001 — nothing known; the callers say so
+            log.warning("could not read what the Code view's coding tools are running", exc_info=True)
+        finally:
+            _READING.release()
+        try:
+            done(got)
+        except Exception:  # noqa: BLE001 — a caller that went away
+            log.debug("a Code-view program read finished for nobody", exc_info=True)
+
+    try:
+        threading.Thread(target=run, name="code-programs-read", daemon=True).start()
+    except BaseException:
+        _READING.release()
+        raise
+    return True
+
+
 async def read_many(lives: list[Any]) -> dict[str, Reading]:
     """Each session's :class:`Reading`, off the loop and bounded. A read that
     times out (or one still running from before) answers ``known=False`` for
@@ -299,25 +362,83 @@ async def read_many(lives: list[Any]) -> dict[str, Reading]:
     if not lives:
         return {}
     specs = [spec_of(lv) for lv in lives]
-    if not _READING.acquire(blocking=False):
-        return {s[0]: Reading(False) for s in specs}
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
 
-    def run() -> dict[str, Reading]:
+    def settle(got: dict[str, Reading] | None) -> None:
+        if not fut.done():
+            fut.set_result(got)
+
+    def done(got: dict[str, Reading] | None) -> None:
         try:
-            return read(specs)
-        finally:
-            _READING.release()
+            loop.call_soon_threadsafe(settle, got)
+        except RuntimeError:  # the loop is gone (shutdown): nobody waits
+            pass
 
+    if not _read_on_own_thread(specs, done):
+        return _unknown(specs)
     try:
-        task = asyncio.ensure_future(asyncio.to_thread(run))
-    except BaseException:
-        _READING.release()
-        raise
+        got = await asyncio.wait_for(fut, READ_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("reading what the Code view's coding tools run took over %.0f s", READ_TIMEOUT_S)
+        return _unknown(specs)
+    return got if got is not None else _unknown(specs)
+
+
+#: v1.422.0 review: the update warning's read (``GET /system/activity``) is
+#: bounded well inside the desktop's 3 s wait for that answer.
+ACTIVITY_READ_S = 1.5
+
+
+def serving_counts(platform: Any, *, timeout: float = ACTIVITY_READ_S) -> dict[str, Any]:
+    """BLOCKING (a sync route's thread): ``{serving, tools}`` — the Build ›
+    Code sessions whose coding tool runs a program it started that serves (a
+    dev server), not already counted as a reply (``news.running_rows``: a
+    reply of the user's, helpers at work, a reply of the tool's own), and the
+    tools' names.
+
+    v1.422.0 review: the update warning counted only replies, so installing
+    an update ended a dev server with nothing said. These count toward
+    ``busy`` (the warning names them) and NEVER toward ``working`` (a server
+    waiting for requests must not keep the PC awake). Read fresh — a dev
+    server started a minute ago dies in an update as surely as one the idle
+    stop already kept — and bounded by ``timeout``; when the read cannot
+    answer, a session counts by what the idle stop last kept it for. A
+    session whose tool has not acted yet runs nothing of its own: no read at
+    all. Never raises."""
+    svc = getattr(platform, "hosted", None)
+    if svc is None:
+        return {"serving": 0, "tools": []}
     try:
-        return await asyncio.wait_for(asyncio.shield(task), READ_TIMEOUT_S)
-    except Exception:  # noqa: BLE001 — a timeout or a failed read: nothing known
-        log.warning("could not read what the Code view's coding tools are running", exc_info=True)
-        return {s[0]: Reading(False) for s in specs}
+        from .words import label
+
+        now = svc.clock()
+        lives = []
+        for live in list(svc.live.values()):
+            if not live.running or first_step(live) is None:
+                continue
+            if (live.turn is not None and live.turn.running) or live.helpers_working(now) \
+                    or live.replying_alone(now):
+                continue  # a reply row: counted (and named) as a coding session working
+            lives.append(live)
+        if not lives:
+            return {"serving": 0, "tools": []}
+        specs = [spec_of(lv) for lv in lives]
+        box: dict[str, Any] = {}
+        ready = threading.Event()
+
+        def done(got: dict[str, Reading] | None) -> None:
+            box["got"] = got
+            ready.set()
+
+        readings = _unknown(specs)
+        if _read_on_own_thread(specs, done) and ready.wait(timeout) and box.get("got") is not None:
+            readings = box["got"]
+        serving = [lv for lv in lives if known_programs(readings.get(lv.sid), lv)]
+        return {"serving": len(serving), "tools": sorted({label(lv.harness) for lv in serving})}
+    except Exception:  # noqa: BLE001 — the warning never fails over this
+        log.warning("could not count the Code view's sessions that run programs", exc_info=True)
+        return {"serving": 0, "tools": []}
 
 
 # --------------------------------------------------------------------------- #
@@ -431,6 +552,13 @@ def stopped_words(tool: str, programs: list[Program] | tuple[Program, ...], *, w
                 f"run at once).")
     elif why == "restart":
         head = f"Iron Jarvis restarted {tool} for your new settings."
+    elif why == "terminal":
+        # v1.422.0 review: "Open in terminal" stops the tool here (two
+        # processes on one conversation corrupt it).
+        head = f"Iron Jarvis closed {tool} here to open this conversation in a terminal."
+    elif why == "account":
+        # v1.422.0 review: "Continue on the next account" stops it first.
+        head = f"Iron Jarvis closed {tool} to move this conversation to another account."
     elif why == "bound":
         head = f"Iron Jarvis closed {tool} after {_duration(after_s)} with nothing new."
     else:
