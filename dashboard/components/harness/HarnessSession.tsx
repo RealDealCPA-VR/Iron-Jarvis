@@ -3161,10 +3161,17 @@ export function HarnessSession({
           </div>
         ) : null}
 
+        {/* v1.420.2 (a USER BUG): `relative` makes the transcript the
+            positioning box for what it holds. Without it a screen-reader-only
+            label (Tailwind `sr-only` is position:absolute — a live plan's step
+            words) was positioned by the whole view, so the transcript did not
+            clip it, and it stretched the PAGE to the conversation's full
+            length: the window's own scrollbar scrolled the Code view away
+            into ten screens of nothing. e2e/code-page-height.spec.ts. */}
         <div
           ref={transcriptRef}
           data-testid="harness-transcript"
-          className={`min-h-0 flex-1 space-y-6 overflow-y-auto px-1 py-3 ${HARNESS_TRANSCRIPT_ROWS}`}
+          className={`relative min-h-0 flex-1 space-y-6 overflow-y-auto px-1 py-3 ${HARNESS_TRANSCRIPT_ROWS}`}
           onScroll={onTranscriptScroll}
         >
           {offline ? <OfflineHint /> : null}

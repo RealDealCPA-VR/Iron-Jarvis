@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.420.1 (2026-10-30).*
+holds itself to. Current as of v1.420.2 (2026-11-01).*
 
 ---
 
@@ -2445,6 +2445,23 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## The Code views stay in the window (v1.420.2)
+
+- **The window's own scrollbar no longer scrolls a coding session away.**
+  In Chat › Code (and Build › Code), a long conversation could make the whole
+  page about ten screens tall: the scrollbar at the window's far right then
+  scrolled the session up and out of sight, leaving an empty page. The cause
+  was a label meant only for screen readers (the step words of an open plan,
+  for example) that the conversation did not keep inside itself. Every scroll
+  box in both Code views now keeps what it holds, so the page is exactly as
+  tall as the window and only the conversation and the side panes scroll.
+- **A command's row shows its own output.** When a command ran without the
+  sandbox (Docker not running), each command row used to start with
+  "[native runtime — limits advisory, see first shell result]", a note meant
+  for the model. The row now shows the command's own first line, and opening
+  the row says it once, plainly: "Ran without the sandbox, so its folder and
+  internet limits weren't enforced." The model still gets the note as before.
 
 ## Fewer things end in silence (v1.420.0)
 

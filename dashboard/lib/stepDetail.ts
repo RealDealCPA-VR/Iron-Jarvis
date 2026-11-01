@@ -243,6 +243,36 @@ export function stepInputView(tool: string, input: string): StepInputView | null
   return { kind: "text", text };
 }
 
+/** v1.420.2: the shell tool's notes TO THE MODEL about running outside the
+ *  sandbox (`sandbox/shell_tool.py` `_COMPACT_ADVISORY`, and `[warning] ` +
+ *  `_NO_CONFINEMENT_WARNING` — pinned equal by
+ *  tests/test_runtime_note_words_v14202.py) ride the first line of a
+ *  command's output. They are engine-room words ("native runtime", "limits
+ *  advisory"): a row's one-line preview skips them, and the opened output
+ *  says the same thing once, in plain words (`UNCONFINED_WORDS`). The model
+ *  still reads them unchanged. */
+export const RUNTIME_NOTE_LINES: readonly string[] = [
+  "[native runtime — limits advisory, see first shell result]",
+  "[warning] sandbox: filesystem/host/network policy NOT enforced — ran on the native runtime (Docker unavailable); workspace_only/host_access/internet limits are advisory only for this run",
+];
+
+export const UNCONFINED_WORDS = "Ran without the sandbox, so its folder and internet limits weren't enforced.";
+
+/** A line that is one of the shell tool's notes to the model. */
+export function isRuntimeNote(line: string): boolean {
+  return RUNTIME_NOTE_LINES.includes(line.trim());
+}
+
+/** The output with the shell tool's notes to the model taken out, and
+ *  whether one was there (the command ran without the sandbox). */
+export function withoutRuntimeNotes(output: string): { text: string; unconfined: boolean } {
+  if (typeof output !== "string" || !output) return { text: output ?? "", unconfined: false };
+  const lines = output.replace(/\r\n?/g, "\n").split("\n");
+  const kept = lines.filter((l) => !isRuntimeNote(l));
+  if (kept.length === lines.length) return { text: output, unconfined: false };
+  return { text: kept.join("\n"), unconfined: true };
+}
+
 /** The output as lines: one trailing newline adds no empty last line, and
  *  an output that is only whitespace has none. */
 export function outputLines(output: string): string[] {

@@ -117,10 +117,13 @@ import {
 import { appToolParts } from "@/lib/toolWords";
 import {
   STEP_OUTPUT_LINES,
+  UNCONFINED_WORDS,
   capStepDetails,
   cleanStepDetail,
+  isRuntimeNote,
   outputLines,
   stepInputView,
+  withoutRuntimeNotes,
   type StepDetail,
   type StepInputView,
 } from "@/lib/stepDetail";
@@ -527,7 +530,10 @@ export function StepDetailPanel({ id, name, detail }: { id: string; name: string
   const [all, setAll] = useState(false);
   const outId = useId();
   const input = stepInputView(name, detail.input);
-  const lines = outputLines(detail.output);
+  // v1.420.2: the shell tool's sandbox note to the model is said once, in
+  // plain words, under the output — never as "native runtime" text in it.
+  const { text: output, unconfined } = withoutRuntimeNotes(detail.output);
+  const lines = outputLines(output);
   const capped = lines.length > STEP_OUTPUT_LINES;
   const shown = all || !capped ? lines : lines.slice(0, STEP_OUTPUT_LINES);
   return (
@@ -566,6 +572,11 @@ export function StepDetailPanel({ id, name, detail }: { id: string; name: string
           >
             {all ? "Show fewer lines" : `Show all ${lines.length} lines`}
           </button>
+        ) : null}
+        {unconfined ? (
+          <p data-testid="step-detail-unconfined" className="text-zinc-500">
+            {UNCONFINED_WORDS}
+          </p>
         ) : null}
       </div>
     </div>
@@ -633,9 +644,12 @@ export function argDetail(args: Record<string, unknown> | undefined): { text: st
   return null;
 }
 
+/** A step's one-line preview: its first line with words — never the shell
+ *  tool's note to the model about the sandbox (v1.420.2; lib/stepDetail
+ *  `RUNTIME_NOTE_LINES`), which rode the front of every command row. */
 function firstLine(s: string | undefined): string {
   if (typeof s !== "string") return "";
-  const line = s.split(/\r?\n/).find((l) => l.trim()) ?? "";
+  const line = s.split(/\r?\n/).find((l) => l.trim() && !isRuntimeNote(l)) ?? "";
   return line.trim();
 }
 

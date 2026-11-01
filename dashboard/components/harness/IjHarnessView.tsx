@@ -615,7 +615,10 @@ export function IjHarnessView({
       <div className="min-w-0 flex-1 xl:min-h-0">
         {composerShown ? (
           // v1.418.0 (C2.6): the empty view and New session ARE the box.
-          <div data-testid="harness-no-session" className="h-full min-h-0 overflow-y-auto">
+          // v1.420.2: every scroll box here is `relative`, so what it holds
+          // is positioned (and clipped) by it, never by this view — the
+          // view-wide rule e2e/code-page-height.spec.ts checks.
+          <div data-testid="harness-no-session" className="relative h-full min-h-0 overflow-y-auto">
             <HarnessStartComposer
               key={newKey}
               initialFolder={middle === "new" ? newFolder : null}
@@ -627,7 +630,7 @@ export function IjHarnessView({
             />
           </div>
         ) : tonight ? (
-          <div className="h-full overflow-y-auto">
+          <div className="relative h-full overflow-y-auto">
             <TonightList
               folders={(folders ?? []).filter((f) => !f.noFolder && f.path).map((f) => f.path)}
               onOpenSession={(id) => {
@@ -638,7 +641,7 @@ export function IjHarnessView({
             />
           </div>
         ) : lastNight ? (
-          <div className="h-full overflow-y-auto">
+          <div className="relative h-full overflow-y-auto">
             <LastNightList onOpenSession={openFromNight} focusNight={nightLink?.night ?? null} />
           </div>
         ) : selected ? (

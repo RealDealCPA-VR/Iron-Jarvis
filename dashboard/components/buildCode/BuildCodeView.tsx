@@ -1328,7 +1328,9 @@ function SessionPane({
           ref={scrollRef}
           onScroll={onScroll}
           data-testid="code-transcript"
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+          // v1.420.2: `relative` — the transcript positions (and so clips)
+          // what it holds; see HarnessSession's transcript, the same bug.
+          className="relative min-h-0 flex-1 overflow-y-auto px-4 py-4"
         >
           <div className={HARNESS_COLUMN}>
             {/* v1.418.0 (C4.6): what is older than this read, said — and one

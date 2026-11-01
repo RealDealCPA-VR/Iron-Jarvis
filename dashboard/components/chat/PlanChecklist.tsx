@@ -59,7 +59,10 @@ function PlanRow({ step }: { step: PlanStep }) {
       data-testid="plan-step"
       data-state={step.state}
       aria-current={step.state === "running" ? "step" : undefined}
-      className="flex min-w-0 items-center gap-2 text-[13px] leading-5 text-zinc-500"
+      // v1.420.2: `relative` keeps the row's screen-reader words (sr-only is
+      // position:absolute) inside the row on every screen that shows a plan —
+      // in Chat › Code they escaped the transcript and stretched the page.
+      className="relative flex min-w-0 items-center gap-2 text-[13px] leading-5 text-zinc-500"
     >
       <Icon size={14} aria-hidden="true" className={`shrink-0 ${look.iconTone}`} />
       <span className="sr-only">{STATE_WORDS[step.state]}: </span>

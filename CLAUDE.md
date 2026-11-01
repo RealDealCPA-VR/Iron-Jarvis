@@ -12353,6 +12353,33 @@ does not need a bump, stop and bump it.
   only its touched files cannot see a source pin in ANOTHER file go stale;
   grep the string you change across `__tests__/` before the push.
 
+- **A scroll box is the POSITIONING box for what it holds** (v1.420.2, a USER
+  BUG with two screenshots: in Chat › Code the window's own scrollbar
+  scrolled the whole view away into ~10 screens of nothing). Measured on a
+  read-only copy of the user's session in a real browser: ONE `sr-only`
+  label (Tailwind's is `position:absolute`; a live plan's step words) at the
+  end of a long transcript made `<main>` 9,094 px tall in a 950 px window.
+  `harness-transcript` was not positioned, so the label's containing block
+  was `ij-harness-view` (`relative`): the transcript neither clipped nor
+  scrolled it, and it stretched the page to the conversation's length. Every
+  scroll box of both Code views is now `relative` (`harness-transcript`,
+  `code-transcript`, `harness-no-session`, the Tonight / Last night boxes).
+  A NEW scroll box that can hold an `absolute`/`sr-only` descendant takes
+  `relative` too. `e2e/code-page-height.spec.ts` (1913 × 990, 1280 × 800,
+  both Code views, every side pane) checks THE RULE — no drawn absolute
+  element inside a scroll box is placed by a box outside it — and THE
+  SYMPTOM (a 6,000 px transcript ending in an `sr-only` label never makes the
+  page taller than the window); e2e does not run in CI, so
+  `dashboard/__tests__/code-page-height-v1420-2.test.tsx` pins the classes.
+  SAME RELEASE: the shell tool's notes TO THE MODEL about running outside the
+  sandbox (`_COMPACT_ADVISORY`, `[warning] ` + `_NO_CONFINEMENT_WARNING`)
+  led every command row's preview. `lib/stepDetail.RUNTIME_NOTE_LINES`
+  (pinned word-for-word against the Python constants by
+  `tests/test_runtime_note_words_v14202.py`) — WorkLine's `firstLine` skips
+  them and `StepDetailPanel` drops them and says `UNCONFINED_WORDS` once.
+  The model's output is unchanged. Reword a note in `sandbox/shell_tool.py`
+  and that pin fails until the dashboard list matches.
+
 - **Grounding has a SOFT DEADLINE; the project map is CACHED by its top two
   levels; a kept reply APPENDS; a token is never re-parsed** (v1.418.0, fix
   plan C3.4 + C3.6). GROUNDING: `chat_turn._gather_grounding` starts every hop
