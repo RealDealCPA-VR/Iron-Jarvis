@@ -24,6 +24,16 @@ ef73726, ``directsdk.py``) adapted to asyncio and to Iron Jarvis's rules:
 * STOP IS A KILL. A ``CancelledError`` at any await — or a consumer that walks
   away from the stream — kills the process TREE (``sandbox/native._kill_tree``,
   the v1.287.0 discipline), closes the relay and re-raises.
+* THE ANSWER IS RELEASED AT ``result`` (v1.420.0, C3.1). When the relay holds a
+  complete 200 answer and the CLI's one ``result`` says it ended cleanly (or at
+  the ``--max-turns 1`` tool boundary), the final frame goes to the caller at
+  once; the CLI's own exit (measured: 30-45 ms after ``result``), the reap, the
+  reader joins, the relay route and the temp dir are torn down in the
+  BACKGROUND (:func:`_teardown_later`). The next call of the same conversation
+  waits for that teardown before it spawns (:func:`_after_previous`), so one
+  conversation never has two live CLIs, and :func:`drain_teardowns` waits for
+  all of them. Every other ending (an error, a refusal, a Stop) tears down
+  inline, exactly as before.
 
 Nothing blocking runs on the loop: file writes, the relay's socket, the spawn,
 stdin writes, the kill and the relay's shutdown all hop to a worker thread.
@@ -39,7 +49,10 @@ no account is byte-identical to v1.300.0.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import copy
+import hashlib
+import itertools
 import json
 import logging
 import math
@@ -144,6 +157,37 @@ _AUTH_WORDS = re.compile(
     r"|authentication",
     re.IGNORECASE,
 )
+
+
+# --------------------------------------------------------------------------- #
+# The per-phase clock (C3.1 / C7, v1.420.0)
+# --------------------------------------------------------------------------- #
+#: OFF by default. A test or a scratch script sets ``TRACE = fn`` and gets
+#: ``fn(call_id, phase, ms, info)`` for every phase of every native call —
+#: ``ms`` measured with ``time.perf_counter`` from the call's start, ``info``
+#: small numbers only (never a path, a prompt, a header or an account name).
+#: It is called from whatever thread reached the phase; an exception it raises
+#: is swallowed (a trace never breaks a call).
+TRACE: "Callable[[int, str, float, dict], None] | None" = None
+_TRACE_IDS = itertools.count(1)
+
+
+class _Clock:
+    """One call's phase clock (a no-op while :data:`TRACE` is None)."""
+
+    def __init__(self) -> None:
+        self.t0 = time.perf_counter()
+        self.id = next(_TRACE_IDS)
+
+    def mark(self, phase: str, at: float | None = None, **info: Any) -> None:
+        fn = TRACE
+        if fn is None:
+            return
+        try:
+            when = time.perf_counter() if at is None else at
+            fn(self.id, phase, round((when - self.t0) * 1000.0, 1), info)
+        except Exception:  # noqa: BLE001 - a trace never breaks a call
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -404,8 +448,14 @@ class _Resources:
         self.argv: list[str] = []
         self.threads: list[threading.Thread] = []
         self.stderr_tail: deque[bytes] = deque(maxlen=64)
+        #: The call's phase clock (v1.420.0) and when the CLI's exit was seen.
+        self.clock = _Clock()
+        self.exit_at: float | None = None
+        #: Which conversation this call belongs to (:func:`_chain_key`).
+        self.chain = ""
 
     def prepare(self, call: NativeCall, env: dict[str, str]) -> dict[str, str]:
+        self.chain = _chain_key(call)
         root = Path(tempfile.mkdtemp(prefix="ij-claude-"))
         self.root = root
         (root / "tools.json").write_text(json.dumps(call.manifest), encoding="utf-8")
@@ -416,11 +466,13 @@ class _Resources:
         command = inert_mcp_command(str(root / "tools.json"))
         mcp = {"mcpServers": {F.SERVER: {"command": command[0], "args": command[1:]}}}
         (root / "mcp.json").write_text(json.dumps(mcp), encoding="utf-8")
+        self.clock.mark("files_written")
         upstream = upstream_of(call.base_env)
         # The queried frame lets the relay keep the cache breakpoint off the
         # per-request context native appends to the turn it answers.
         queried = call.frames[-1]["message"]["content"]
         admission = Admission(upstream, call.idle_timeout_s, queried=queried)
+        self.clock.mark("relay_bound")
         with self.lock:
             self.admission = admission
             cancelled = self.cancelled
@@ -452,6 +504,7 @@ class _Resources:
             cwd=stable_workdir(),
             env=env,
         )
+        self.clock.mark("spawned")
         with self.lock:
             self.proc = proc
             cancelled = self.cancelled
@@ -470,9 +523,17 @@ class _Resources:
         if proc is not None and proc.poll() is None:
             _kill_tree(proc)
 
-    def close(self) -> None:
+    def close(self, grace_s: float = 0.0) -> None:
         """Teardown, whatever happened: the tree dies if it is still up, the
-        relay closes, readers are joined, pipes closed, files removed."""
+        relay closes, readers are joined, pipes closed, files removed.
+        ``grace_s`` (a released call, v1.420.0): first let the CLI exit by
+        itself for up to that long — its answer is already in hand."""
+        proc = self.proc
+        if grace_s > 0 and proc is not None:
+            try:
+                proc.wait(timeout=grace_s)
+            except Exception:  # noqa: BLE001 — still running: the kill below ends it
+                pass
         self.kill()
         proc = self.proc
         if proc is not None:
@@ -591,6 +652,7 @@ class _ProcSource:
                     proc.wait()
                 except Exception:  # noqa: BLE001
                     pass
+                res.exit_at = time.perf_counter()
                 post(None)
 
         def read_stderr() -> None:
@@ -1085,6 +1147,124 @@ def _record_attempt(attempt: Attempt, admission: Any, got: Collected) -> None:
 Runner = Callable[[list[str], str], tuple[int, str, str]]
 
 
+def _mark_relay(res: _Resources) -> None:
+    """The relay's own stamps (taken on its thread) as trace phases."""
+    if TRACE is None:
+        return
+    stamps = dict(getattr(res.admission, "stamps", None) or {})
+    for name in ("request", "connected", "headers", "first_byte", "last_byte"):
+        if name in stamps:
+            res.clock.mark("relay_" + name, at=stamps[name],
+                           **({"reused": bool(stamps.get("reused"))} if name == "connected" else {}))
+
+
+def _chain_key(call: NativeCall) -> str:
+    """Which conversation a call belongs to: its FIRST frame (the conversation's
+    opening message, the same in every round and every later turn) and the
+    account it runs as. Two conversations that open with the same words share a
+    key; they then only wait for each other's teardown, never for an answer."""
+    try:
+        first = call.frames[0] if call.frames else {}
+        account = (call.account_env or {}).get("CLAUDE_CONFIG_DIR", "")
+        raw = json.dumps(first, sort_keys=True, default=str) + "\0" + account
+    except Exception:  # noqa: BLE001 - an odd frame still gets a key
+        raw = repr(call.frames[:1])
+    return hashlib.sha1(raw.encode("utf-8", errors="replace")).hexdigest()
+
+
+#: How long a released call's CLI may take to exit by itself before the
+#: background teardown kills its tree (it exits 30-45 ms after ``result``).
+RELEASE_GRACE_S = 3.0
+
+#: Teardowns still running, by conversation key. A LIST (review, v1.420.0): two
+#: conversations that open with the same words share a key, and the later one
+#: must not hide the earlier one from :func:`_after_previous` and the drain.
+_PENDING: dict[str, list[concurrent.futures.Future]] = {}
+_PENDING_LOCK = threading.Lock()
+
+
+def _released_code(got: Collected, admission: Any) -> int | None:
+    """The exit code a CLI that just sent ``result`` WILL have, when its answer is
+    complete and clean enough to release before it exits — else None (read on to
+    the exit, as before). Only when the relay holds the whole 200 answer (the
+    answer's source of truth: :func:`assemble` reads the relay's capture) and the
+    one ``result`` says success (exit 0) or the ``--max-turns 1`` tool boundary
+    with tool calls in that answer (exit 1)."""
+    if len(got.results) != 1 or got.native_error:
+        return None
+    if admission is None or not getattr(admission, "used", False):
+        return None
+    if admission.status != 200 or not admission.capture.complete:
+        return None
+    final = got.results[0]
+    if final.get("subtype") == "success" and not final.get("is_error"):
+        return 0
+    message = admission.capture.message or {}
+    calls = any(
+        isinstance(b, dict) and b.get("type") == "tool_use" for b in message.get("content") or []
+    )
+    if final.get("subtype") == "error_max_turns" and calls:
+        return 1
+    return None
+
+
+def _teardown_later(res: _Resources, expected: int) -> None:
+    """Tear a RELEASED call down on a daemon thread; the next call of the same
+    conversation awaits it (:func:`_after_previous`)."""
+    fut: concurrent.futures.Future = concurrent.futures.Future()
+    fut.set_running_or_notify_cancel()  # never cancellable: the thread sets it
+    key = res.chain
+
+    def work() -> None:
+        try:
+            res.close(grace_s=RELEASE_GRACE_S)
+            proc = res.proc
+            code = proc.returncode if proc is not None else None
+            res.clock.mark("exited", at=res.exit_at, code=code)
+            if code is not None and code != expected:
+                log.info("claude-cli: a released call's CLI exited %s (its result said %s)", code, expected)
+        except BaseException as exc:  # noqa: BLE001 — a background teardown never raises
+            log.debug("claude-cli: background teardown failed (%s)", type(exc).__name__)
+        finally:
+            res.clock.mark("teardown_done")
+            with _PENDING_LOCK:
+                kept = [f for f in _PENDING.get(key, []) if f is not fut]
+                if kept:
+                    _PENDING[key] = kept
+                else:
+                    _PENDING.pop(key, None)
+            fut.set_result(None)
+
+    with _PENDING_LOCK:
+        _PENDING.setdefault(key, []).append(fut)
+    threading.Thread(target=work, daemon=True, name="claude-cli-teardown").start()
+
+
+async def _after_previous(key: str) -> None:
+    """Wait for the background teardown of this conversation's previous call."""
+    with _PENDING_LOCK:
+        futs = [f for f in _PENDING.get(key, []) if not f.done()]
+    for fut in futs:
+        await asyncio.shield(asyncio.wrap_future(fut))
+
+
+def pending_teardowns() -> int:
+    """How many released calls are still being torn down."""
+    with _PENDING_LOCK:
+        return sum(1 for futs in _PENDING.values() for f in futs if not f.done())
+
+
+async def drain_teardowns() -> None:
+    """Wait until every released call's teardown has finished (tests, shutdown)."""
+    while True:
+        with _PENDING_LOCK:
+            futs = [f for kept in _PENDING.values() for f in kept if not f.done()]
+        if not futs:
+            return
+        for fut in futs:
+            await asyncio.shield(asyncio.wrap_future(fut))
+
+
 async def _teardown(res: _Resources) -> None:
     """Shielded: a second cancel must not abandon the kill half-way. A cancel
     that lands here is re-raised once teardown has finished."""
@@ -1120,9 +1300,14 @@ async def run(
     timeouts = _Timeouts(call, started)
     frames = marked_frames(call.frames)
     got = Collected()
+    released: int | None = None
+    final_sent = False
     try:
         child = await asyncio.to_thread(res.prepare, call, env)
         if runner is None:
+            # v1.420.0: the previous call of this conversation may still be
+            # exiting in the background — never two live CLIs for it.
+            await _after_previous(res.chain)
             proc = await asyncio.to_thread(res.spawn, child)
             source: Any = _ProcSource(res, proc, timeouts)
         else:
@@ -1132,6 +1317,7 @@ async def run(
 
         # 1. history, one frame at a time; each replayed user frame is acked.
         early: list[dict] = []
+        acked = 0
         for frame in frames:
             if not await source.write(frame):
                 break  # the CLI stopped reading — read what it said below
@@ -1145,6 +1331,8 @@ async def run(
                                         "the CLI exited before acknowledging the conversation history",
                                         probe=probe)
                     early.append(event)
+                    if event.get("type") == "system" and event.get("subtype") == "init":
+                        res.clock.mark("init")
                     if event.get("type") == "result":
                         if event.get("num_turns") != 0 or event.get("is_error"):
                             raise _diagnose(
@@ -1153,7 +1341,9 @@ async def run(
                                 "(expected a zero-turn result) — update Claude Code",
                                 probe=probe,
                             )
+                        acked += 1
                         break
+        res.clock.mark("history_acked", frames=acked)
         await source.close_stdin()
 
         # 2. the answer.
@@ -1164,6 +1354,8 @@ async def run(
             if isinstance(event, _Unreadable):
                 raise RuntimeError(str(event))
             kind = event.get("type")
+            if kind == "system" and event.get("subtype") == "init":
+                res.clock.mark("init")
             if kind == "assistant":
                 found = _native_error_of(event)
                 if found:
@@ -1172,6 +1364,11 @@ async def run(
                     got.assistants.append(event["message"])
             elif kind == "result":
                 got.results.append(event)
+                res.clock.mark("result")
+                if runner is None:
+                    released = _released_code(got, res.admission)
+                    if released is not None:
+                        break  # v1.420.0: the answer is whole; the exit is teardown's
             elif kind == "stream_event":
                 native = event.get("event") if isinstance(event.get("event"), dict) else {}
                 if native.get("type") == "message_stop":
@@ -1179,6 +1376,8 @@ async def run(
                 delta = native.get("delta") if isinstance(native.get("delta"), dict) else {}
                 piece = delta.get("text")
                 if delta.get("type") == "text_delta" and isinstance(piece, str) and piece:
+                    if not got.emitted:
+                        res.clock.mark("first_text")
                     got.emitted += piece
                     yield {"type": "text", "text": piece}
                 elif delta.get("type") == "thinking_delta":
@@ -1189,7 +1388,12 @@ async def run(
                     thought = delta.get("thinking")
                     if isinstance(thought, str) and thought:
                         yield {"type": "thinking", "text": thought}
-        returncode = await source.returncode()
+        if released is not None:
+            returncode = released
+        else:
+            returncode = await source.returncode()
+            res.clock.mark("exited", at=res.exit_at, code=returncode)
+        _mark_relay(res)
         response, remainder = assemble(
             got, returncode=returncode, admission=res.admission, names=call.names,
             stderr=res.stderr_text(), probe=probe,
@@ -1197,8 +1401,14 @@ async def run(
         if remainder:
             got.emitted += remainder
             yield {"type": "text", "text": remainder}
+        res.clock.mark("final_released")
+        final_sent = True
         yield {"type": "final", "response": response}
     finally:
         if attempt is not None:
             _record_attempt(attempt, res.admission, got)
-        await _teardown(res)
+        if released is not None and final_sent:
+            _teardown_later(res, released)
+        else:
+            await _teardown(res)
+            res.clock.mark("teardown_done")

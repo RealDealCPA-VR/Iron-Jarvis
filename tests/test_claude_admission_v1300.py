@@ -408,13 +408,16 @@ def test_close_mid_stream_shuts_the_upstream_socket(upstream, relays):
     assert adm.cancelled is True
 
 
-def test_close_is_idempotent_and_releases_the_port(upstream, relays):
+def test_close_is_idempotent_and_closes_the_route(upstream, relays):
+    # Moved in v1.420.0 (C3.1): the relay is a ROUTE on the process's one
+    # listener, no longer a listener of its own, so a closed relay's address is
+    # a 404 that reaches nothing (it used to be a refused connection).
     adm = relays(upstream.url)
     post(adm.url)
     adm.close()
     adm.close()
-    with pytest.raises(OSError):
-        post(adm.url, timeout=2.0)
+    assert post(adm.url, timeout=2.0)[0] == 404
+    assert len(upstream.hits) == 1 and adm.denied == 0
 
 
 # --------------------------------------------------------------------------- secrets never logged
