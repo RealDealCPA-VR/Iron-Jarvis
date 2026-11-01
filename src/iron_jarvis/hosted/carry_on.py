@@ -438,6 +438,13 @@ async def _publish(platform: Any, event_type: str, sid: str, payload: dict[str, 
 
 
 async def _start(svc: Any, sid: str, text: str, carry: dict[str, Any]) -> Any:
+    from .service import Refused
+
+    if not carry.get("pressed") and _emergency_stop(svc.platform):
+        # v1.422.0 review: a pass reads Emergency stop once at its top, and
+        # the user may turn it on while the pass goes on (each start is
+        # awaited): every start Iron Jarvis makes BY ITSELF reads it again.
+        raise Refused(WHY_STOP[:1].upper() + WHY_STOP[1:] + ".")
     turn_id = f"turn-{uuid.uuid4().hex[:12]}"
     return await svc.start_turn(sid, text, turn_id, carry=carry)
 
@@ -480,8 +487,9 @@ async def carry_on_after_restart(svc: Any) -> list[str]:
             try:
                 new = await _start(svc, sid, CONTINUE_AFTER_RESTART, {"why": "restart", "from": turn})
             except Refused as r:
+                stop_now = _emergency_stop(svc.platform)
                 await asyncio.to_thread(_amend_cut, svc.home, sid, turn, auto="offered",
-                                        why_not=clip(r.sentence, 300))
+                                        why_not=WHY_STOP if stop_now else clip(r.sentence, 300))
                 continue
             await asyncio.to_thread(_amend_cut, svc.home, sid, turn, auto="carried", to=new.id)
             live = svc.live.get(sid)
@@ -875,6 +883,8 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
                 await asyncio.to_thread(_amend_wait, svc.home, sid, wid,
                                         {"next_check_at": _iso(parked), "resets_at": _iso(parked)})
                 continue
+            if _emergency_stop(svc.platform):
+                continue  # v1.422.0 review: turned on during this pass — the wait stays
             taken = await asyncio.to_thread(take_wait, svc.home, sid, wid)
             if taken is None:
                 continue  # cancelled, a message, or another pass got there first
@@ -923,6 +933,8 @@ async def _move(svc: Any, sid: str, row: Any, wait: dict[str, Any], target: dict
     from .service import Refused
 
     wid = str(wait.get("id") or "")
+    if _emergency_stop(svc.platform):
+        return "raced"  # v1.422.0 review: turned on during this pass — the wait stays
     taken = await asyncio.to_thread(take_wait, svc.home, sid, wid)
     if taken is None:
         return "raced"

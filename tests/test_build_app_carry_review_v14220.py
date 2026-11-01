@@ -460,3 +460,132 @@ async def test_emergency_stop_stops_a_carry_on_already_running_never_the_users_o
     for sid in (pressed.id, mine.id):
         svc._emit(svc.live[sid], make("done", stop="completed"))
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 8. Emergency stop turned on WHILE a pass runs: nothing starts after it
+# --------------------------------------------------------------------------- #
+async def test_emergency_stop_engaged_during_the_restart_pass_starts_nothing_more(home, app, work, monkeypatch):
+    """The pass reads Emergency stop once at its top; the user can turn it
+    on while it goes through the sessions (each start is awaited). Every
+    start Iron Jarvis makes by itself checks it again — a reply after the
+    switch is offered, never started (a Continue the user presses still
+    goes)."""
+    first, second = _row(app, work), _row(app, work, hid="22222222-3333-4444-5555-666666666666")
+    for r in (first, second):
+        _log(home, r.id, _working())
+    S.reconcile_cut_turns(home)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    real_start = svc.start_turn
+
+    async def start_then_engage(*a, **kw):
+        got = await real_start(*a, **kw)
+        app.state.platform.config.autonomy_kill_switch = True  # the user turns it on now
+        return got
+
+    monkeypatch.setattr(svc, "start_turn", start_then_engage)
+    try:
+        carried = await CO.carry_on_after_restart(svc)
+        assert len(carried) == 1, carried
+        other = second.id if carried == [first.id] else first.id
+        assert other not in drivers, "a carry-on started after Emergency stop was turned on"
+        assert CO.read_cut(home, other)["why_not"] == CO.WHY_STOP
+        # A person's press still carries it on.
+        monkeypatch.setattr(svc, "start_turn", real_start)
+        async with client(app) as c:
+            r = await c.post(f"/build/app/sessions/{other}/continue")
+            assert r.status_code == 200, r.text
+        await until(lambda: drivers.get(other) and drivers[other].sent)
+    finally:
+        app.state.platform.config.autonomy_kill_switch = False
+    for sid in (first.id, second.id):
+        if svc.live.get(sid) and svc.live[sid].turn is not None:
+            svc._emit(svc.live[sid], make("done", stop="completed"))
+    await stop_all(app)
+
+
+async def test_emergency_stop_engaged_during_a_wait_pass_leaves_the_other_waits_untouched(
+        app, home, work, monkeypatch, clock):
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    a = _session(app, work)
+    b = _session(app, work, hid="22222222-3333-4444-5555-666666666666")
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, a.id, reset=reset)
+    # (the shared helper names its first turn "t-0" — turn ids are the
+    # service's, so the second session's limit turn is started by hand)
+    await svc.start_turn(b.id, "carry on with the parser", "t-b0")
+    await until(lambda: drivers.get(b.id) and drivers[b.id].turn_open)
+    drivers[b.id].turn_open = False
+    drivers[b.id].limit = PaneLimit(line="You've hit your usage limit.", reset_at=reset)
+    svc._emit(svc.live[b.id], make("error", title="Claude Code hit this account's limit", fix="",
+                                   technical="You've hit your usage limit.", fix_kind="account_limit"))
+    svc._emit(svc.live[b.id], make("done", stop="completed"))
+    await until(lambda: svc.live[b.id].turn is None)
+    before = {sid: CO.read_limits(home, sid) for sid in (a.id, b.id)}
+    assert all(before[sid]["wait"] for sid in (a.id, b.id))
+    real_start = svc.start_turn
+
+    async def start_then_engage(*args, **kw):
+        got = await real_start(*args, **kw)
+        app.state.platform.config.autonomy_kill_switch = True
+        return got
+
+    monkeypatch.setattr(svc, "start_turn", start_then_engage)
+    try:
+        done = await CO.resume_due(svc, now=reset + timedelta(minutes=1))
+    finally:
+        app.state.platform.config.autonomy_kill_switch = False
+    assert len(done) == 1
+    other = b.id if done == [a.id] else a.id
+    assert CO.read_limits(home, other) == before[other], "a wait was taken (and counted) under Emergency stop"
+    for sid in done:
+        svc._emit(svc.live[sid], make("done", stop="completed"))
+    await stop_all(app)
+
+
+async def test_emergency_stop_engaged_during_a_wait_pass_moves_nothing_more(
+        app, home, work, tmp_path, monkeypatch, clock):
+    """The move half: with only the start's own check, a second session would
+    still be MOVED to another account (its conversation copied, its account
+    changed) and then left there with nothing started."""
+    ip, homes = _accounts(tmp_path)
+    monkeypatch.setattr(app.state.platform, "iron_proxy", ip, raising=False)
+    monkeypatch.setattr(app.state.platform.config, "account_groups", {"Work": ["p1", "p2"]})
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    _conversation(homes["p1"])
+    a = _session(app, work, account="p1", title="Work", acc_home=homes["p1"])
+    b = _session(app, work, account="p1", title="Work", acc_home=homes["p1"],
+                 hid="6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a22")
+    conv_b = homes["p1"] / "projects" / "C--work-demo" / "6b1c2f0e-5d4a-4c3b-9a8e-7f6d5c4b3a22.jsonl"
+    conv_b.write_text('{"type":"user","message":"other"}\n', encoding="utf-8")
+    await _limit(svc, drivers, a.id, reset=None)
+    await svc.start_turn(b.id, "carry on", "t-b0")
+    await until(lambda: drivers.get(b.id) and drivers[b.id].turn_open)
+    drivers[b.id].turn_open = False
+    drivers[b.id].limit = PaneLimit(line="You've hit your usage limit.")
+    svc._emit(svc.live[b.id], make("error", title="Claude Code hit this account's limit", fix="",
+                                   technical="You've hit your usage limit.", fix_kind="account_limit"))
+    svc._emit(svc.live[b.id], make("done", stop="completed"))
+    await until(lambda: svc.live[b.id].turn is None)
+    real_start = svc.start_turn
+
+    async def start_then_engage(*args, **kw):
+        got = await real_start(*args, **kw)
+        app.state.platform.config.autonomy_kill_switch = True
+        return got
+
+    monkeypatch.setattr(svc, "start_turn", start_then_engage)
+    try:
+        done = await CO.resume_due(svc)
+    finally:
+        app.state.platform.config.autonomy_kill_switch = False
+    assert len(done) == 1
+    other = b.id if done == [a.id] else a.id
+    assert store.get(app.state.platform.engine, other).account == "p1", "moved under Emergency stop"
+    assert CO.read_limits(home, other)["wait"], "its wait stays"
+    for sid in done:
+        svc._emit(svc.live[sid], make("done", stop="completed"))
+    await stop_all(app)
