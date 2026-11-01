@@ -2449,19 +2449,24 @@ asks into a card you answer.
 ## The Code views stay in the window (v1.420.2)
 
 - **The window's own scrollbar no longer scrolls a coding session away.**
-  In Chat › Code (and Build › Code), a long conversation could make the whole
-  page about ten screens tall: the scrollbar at the window's far right then
-  scrolled the session up and out of sight, leaving an empty page. The cause
-  was a label meant only for screen readers (the step words of an open plan,
-  for example) that the conversation did not keep inside itself. Every scroll
-  box in both Code views now keeps what it holds, so the page is exactly as
-  tall as the window and only the conversation and the side panes scroll.
+  In Chat › Code, a long conversation could make the whole page about ten
+  screens tall: the scrollbar at the window's far right then scrolled the
+  session up and out of sight, leaving an empty page. The cause was a label
+  meant only for screen readers (the step words of an open plan, for
+  example) that the conversation did not keep inside itself. The
+  conversation, the empty view and the Tonight and Last night lists now keep
+  what they hold, and so does every row of a plan, on every screen that
+  shows one. On a wide window the page is exactly as tall as the window and
+  only the conversation and the side panes scroll; on a narrow one the
+  conversation and the panes stack and the page scrolls, as before. Build ›
+  Code was not affected, and got the same guard.
 - **A command's row shows its own output.** When a command ran without the
-  sandbox (Docker not running), each command row used to start with
-  "[native runtime — limits advisory, see first shell result]", a note meant
-  for the model. The row now shows the command's own first line, and opening
-  the row says it once, plainly: "Ran without the sandbox, so its folder and
-  internet limits weren't enforced." The model still gets the note as before.
+  sandbox (Docker not running), each command row, and the tools table on a
+  run's own page, used to start with "[native runtime — limits advisory, see
+  first shell result]", a note meant for the model. They now show the
+  command's own first line, and opening the row says it once, plainly: "Ran
+  without the sandbox, so its limits on files, the rest of this PC and the
+  internet weren't enforced." The model still gets the note as before.
 
 ## Fewer things end in silence (v1.420.0)
 

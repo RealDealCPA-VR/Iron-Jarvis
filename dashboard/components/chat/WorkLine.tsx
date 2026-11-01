@@ -120,7 +120,6 @@ import {
   UNCONFINED_WORDS,
   capStepDetails,
   cleanStepDetail,
-  isRuntimeNote,
   outputLines,
   stepInputView,
   withoutRuntimeNotes,
@@ -649,7 +648,7 @@ export function argDetail(args: Record<string, unknown> | undefined): { text: st
  *  `RUNTIME_NOTE_LINES`), which rode the front of every command row. */
 function firstLine(s: string | undefined): string {
   if (typeof s !== "string") return "";
-  const line = s.split(/\r?\n/).find((l) => l.trim() && !isRuntimeNote(l)) ?? "";
+  const line = withoutRuntimeNotes(s).text.split(/\r?\n/).find((l) => l.trim()) ?? "";
   return line.trim();
 }
 

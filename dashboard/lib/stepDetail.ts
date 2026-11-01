@@ -256,21 +256,25 @@ export const RUNTIME_NOTE_LINES: readonly string[] = [
   "[warning] sandbox: filesystem/host/network policy NOT enforced — ran on the native runtime (Docker unavailable); workspace_only/host_access/internet limits are advisory only for this run",
 ];
 
-export const UNCONFINED_WORDS = "Ran without the sandbox, so its folder and internet limits weren't enforced.";
+export const UNCONFINED_WORDS =
+  "Ran without the sandbox, so its limits on files, the rest of this PC and the internet weren't enforced.";
 
 /** A line that is one of the shell tool's notes to the model. */
 export function isRuntimeNote(line: string): boolean {
   return RUNTIME_NOTE_LINES.includes(line.trim());
 }
 
-/** The output with the shell tool's notes to the model taken out, and
- *  whether one was there (the command ran without the sandbox). */
+/** The output with the shell tool's note to the model taken off its FRONT
+ *  (the only place the tool puts it: `f"{advisory}\n{output}"`), and whether
+ *  it was there (the command ran without the sandbox). A command whose own
+ *  output carries the same words further down (`cat` of a saved log) keeps
+ *  them, and is not called unconfined for it. */
 export function withoutRuntimeNotes(output: string): { text: string; unconfined: boolean } {
   if (typeof output !== "string" || !output) return { text: output ?? "", unconfined: false };
   const lines = output.replace(/\r\n?/g, "\n").split("\n");
-  const kept = lines.filter((l) => !isRuntimeNote(l));
-  if (kept.length === lines.length) return { text: output, unconfined: false };
-  return { text: kept.join("\n"), unconfined: true };
+  const first = lines.findIndex((l) => l.trim() !== "");
+  if (first < 0 || !isRuntimeNote(lines[first])) return { text: output, unconfined: false };
+  return { text: lines.slice(first + 1).join("\n"), unconfined: true };
 }
 
 /** The output as lines: one trailing newline adds no empty last line, and

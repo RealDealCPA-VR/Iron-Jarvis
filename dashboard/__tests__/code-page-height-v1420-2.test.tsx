@@ -117,6 +117,23 @@ describe("the shell tool's sandbox note", () => {
     expect(withoutRuntimeNotes("")).toEqual({ text: "", unconfined: false });
   });
 
+  it("is only ever the FRONT of the output: the same words further down are the command's own", () => {
+    // `cat` of a saved transcript, run inside the sandbox: nothing is taken
+    // out, and the command is not called unconfined.
+    const log = `line one\n${COMPACT}\nline three`;
+    expect(withoutRuntimeNotes(log)).toEqual({ text: log, unconfined: false });
+    // After a real note at the front, a second copy below stays as output.
+    expect(withoutRuntimeNotes(`${COMPACT}\n${log}`)).toEqual({ text: log, unconfined: true });
+    // Blank lines before the note do not hide it.
+    expect(withoutRuntimeNotes(`\n  \n${COMPACT}\nok`)).toEqual({ text: "ok", unconfined: true });
+  });
+
+  it("the session page's tool table shows the command's output, never the note", () => {
+    const src = read("app/sessions/[id]/page.tsx");
+    expect(src).toMatch(/withoutRuntimeNotes\(t\.output \?\? ""\)\.text/);
+    expect(src).not.toMatch(/\{t\.output \|\| "—"\}/);
+  });
+
   it("a command row previews the command's own output, never the note", () => {
     const cards: ToolCard[] = [
       {

@@ -12361,24 +12361,37 @@ does not need a bump, stop and bump it.
   end of a long transcript made `<main>` 9,094 px tall in a 950 px window.
   `harness-transcript` was not positioned, so the label's containing block
   was `ij-harness-view` (`relative`): the transcript neither clipped nor
-  scrolled it, and it stretched the page to the conversation's length. Every
-  scroll box of both Code views is now `relative` (`harness-transcript`,
-  `code-transcript`, `harness-no-session`, the Tonight / Last night boxes).
-  A NEW scroll box that can hold an `absolute`/`sr-only` descendant takes
-  `relative` too. `e2e/code-page-height.spec.ts` (1913 × 990, 1280 × 800,
-  both Code views, every side pane) checks THE RULE — no drawn absolute
-  element inside a scroll box is placed by a box outside it — and THE
-  SYMPTOM (a 6,000 px transcript ending in an `sr-only` label never makes the
-  page taller than the window); e2e does not run in CI, so
+  scrolled it, and it stretched the page to the conversation's length. Now
+  `relative`: `harness-transcript` (the fix), `harness-no-session`, the
+  Tonight / Last night boxes, `code-transcript` (Build › Code was NOT
+  affected — the layout's `relative overflow-hidden` div above `<main>`
+  clipped it — a guard) and each PlanChecklist row (a guard on every screen
+  that shows a plan). The other Code-view scroll boxes (HarnessSidebar,
+  FilesPanel, HarnessTimeline, the panes bodies) hold no unparented
+  absolutes. A NEW scroll box that can hold an `absolute`/`sr-only`
+  descendant takes `relative` too. The fixed height is xl-only; below xl the
+  view stacks and the page scrolls by design. `e2e/code-page-height.spec.ts`
+  (1913 × 990, 1280 × 800; both Code views; Chat › Code's Plan, Timeline,
+  Changes, Session and Files panes) checks THE RULE — no drawn absolute or
+  fixed element inside a scroll box has its containing block (walked:
+  position, transform, filter, backdrop-filter, perspective, contain — never
+  offsetParent, which SVG lacks) outside it — and THE SYMPTOM (a 6,000 px
+  transcript ending in an `sr-only` label keeps `<main>` within 1 px of the
+  window); e2e does not run in CI, so
   `dashboard/__tests__/code-page-height-v1420-2.test.tsx` pins the classes.
-  SAME RELEASE: the shell tool's notes TO THE MODEL about running outside the
-  sandbox (`_COMPACT_ADVISORY`, `[warning] ` + `_NO_CONFINEMENT_WARNING`)
-  led every command row's preview. `lib/stepDetail.RUNTIME_NOTE_LINES`
-  (pinned word-for-word against the Python constants by
-  `tests/test_runtime_note_words_v14202.py`) — WorkLine's `firstLine` skips
-  them and `StepDetailPanel` drops them and says `UNCONFINED_WORDS` once.
-  The model's output is unchanged. Reword a note in `sandbox/shell_tool.py`
-  and that pin fails until the dashboard list matches.
+  SAME RELEASE: the shell tool's note TO THE MODEL about running outside the
+  sandbox (`_COMPACT_ADVISORY`, `[warning] ` + `_NO_CONFINEMENT_WARNING`,
+  always the FRONT of the output) led every command row's preview and the
+  session page's tools table. `lib/stepDetail.withoutRuntimeNotes` takes it
+  off the first non-empty line ONLY (the same words further down are the
+  command's own — a `cat` of a log — and never mark it unconfined);
+  `RUNTIME_NOTE_LINES` is pinned word-for-word against the Python constants
+  by `tests/test_runtime_note_words_v14202.py`. WorkLine's `firstLine`,
+  `StepDetailPanel` (says `UNCONFINED_WORDS` once) and the session page use
+  it. The model's output is unchanged. Reword a note in
+  `sandbox/shell_tool.py` and that pin fails until the dashboard list
+  matches. Not done: the daemon's structured `data["confinement"]` is not on
+  the tool_call frame, so the screen still reads the prose.
 
 - **Grounding has a SOFT DEADLINE; the project map is CACHED by its top two
   levels; a kept reply APPENDS; a token is never re-parsed** (v1.418.0, fix

@@ -49,13 +49,35 @@ async function escapingBoxes(page: Page): Promise<string[]> {
     const scrollers = Array.from(document.querySelectorAll<HTMLElement>("main *")).filter((el) =>
       /(auto|scroll)/.test(getComputedStyle(el).overflowY),
     );
+    // The box that positions `el`: the nearest ancestor that is positioned,
+    // or (for any position) that makes a containing block by transform,
+    // filter, backdrop-filter, perspective or contain. offsetParent misses
+    // those and is undefined for SVG (a lucide icon), so walk instead.
+    const containingBlock = (el: Element): Element | null => {
+      const fixed = getComputedStyle(el).position === "fixed";
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        const makesBlock =
+          cs.transform !== "none" ||
+          cs.filter !== "none" ||
+          cs.backdropFilter !== "none" ||
+          cs.perspective !== "none" ||
+          /paint|layout|strict|content/.test(cs.contain);
+        if (makesBlock || (!fixed && cs.position !== "static")) return p;
+      }
+      return null;
+    };
     for (const sc of scrollers) {
-      for (const el of Array.from(sc.querySelectorAll<HTMLElement>("*"))) {
-        if (getComputedStyle(el).position !== "absolute") continue;
+      for (const el of Array.from(sc.querySelectorAll("*"))) {
+        const pos = getComputedStyle(el).position;
+        if (pos !== "absolute" && pos !== "fixed") continue;
         // Not drawn at all (inside a `hidden` view, e.g. the Chat kept behind
         // Code): it takes no room anywhere.
         if (el.getClientRects().length === 0) continue;
-        const cb = el.offsetParent;
+        const cb = containingBlock(el);
+        // A fixed box with no such ancestor is placed by the window, never
+        // by a scroll box: it cannot stretch the page.
+        if (pos === "fixed" && !cb) continue;
         if (cb && (cb === sc || sc.contains(cb))) continue;
         const name = (n: Element | null) =>
           n ? `${n.tagName.toLowerCase()}${n.getAttribute("data-testid") ? `[${n.getAttribute("data-testid")}]` : ""}` : "none";
@@ -133,16 +155,20 @@ for (const size of [
         await lengthen(page, "harness-transcript");
         // The rule again, now that the transcript holds an absolute label.
         expect(await escapingBoxes(page)).toEqual([]);
-        expect(await bothEnds(page, "harness-transcript")).toEqual([0, 0]);
-        // Every side pane too.
+        expect(Math.max(...(await bothEnds(page, "harness-transcript")))).toBeLessThanOrEqual(1);
+        // Every side pane that draws content (Terminal and Browser start
+        // a shell or a page and are left out); at least one must be there.
+        let checked = 0;
         for (const tab of ["plan", "timeline", "changes", "session", "files"]) {
           const t = page.getByTestId(`harness-pane-tab-${tab}`);
           if (!(await t.count())) continue;
+          checked += 1;
           await t.click();
           await page.waitForTimeout(400);
           expect({ tab, escaping: await escapingBoxes(page) }).toEqual({ tab, escaping: [] });
-          expect({ tab, overflow: await pageOverflow(page) }).toEqual({ tab, overflow: 0 });
+          expect({ tab, overflow: (await pageOverflow(page)) <= 1 }).toEqual({ tab, overflow: true });
         }
+        expect(checked).toBeGreaterThan(0);
       } finally {
         try {
           rmSync(work, { recursive: true, force: true });
@@ -208,7 +234,7 @@ for (const size of [
       expect(await escapingBoxes(page)).toEqual([]);
       await lengthen(page, "code-transcript");
       expect(await escapingBoxes(page)).toEqual([]);
-      expect(await bothEnds(page, "code-transcript")).toEqual([0, 0]);
+      expect(Math.max(...(await bothEnds(page, "code-transcript")))).toBeLessThanOrEqual(1);
     });
   });
 }

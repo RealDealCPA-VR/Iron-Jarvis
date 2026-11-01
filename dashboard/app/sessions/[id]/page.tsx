@@ -62,6 +62,7 @@ import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { PlanChecklist, useLivePlan } from "@/components/chat/PlanChecklist";
 import { LiveToolRows } from "@/components/chat/WorkLine";
+import { withoutRuntimeNotes } from "@/lib/stepDetail";
 import { secondsText } from "@/components/chat/TurnReceipt";
 import { SessionFeedback } from "@/components/SessionFeedback";
 import { TimeTravelFeed } from "@/components/TimeTravelFeed";
@@ -1188,7 +1189,9 @@ export default function SessionDetailPage({
                             </td>
                             <td className="max-w-md px-2 py-2.5">
                               <span className="line-clamp-2 font-mono text-xs text-zinc-400">
-                                {t.output || "—"}
+                                {/* v1.420.2: never the shell tool's sandbox
+                                    note to the model (lib/stepDetail). */}
+                                {withoutRuntimeNotes(t.output ?? "").text.trim() || "—"}
                               </span>
                             </td>
                           </tr>
