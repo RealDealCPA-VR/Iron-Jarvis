@@ -843,7 +843,13 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
             chain = int(st.get("chain") or 0)
             account = str(wait.get("account") or "")
             if wait.get("group") and row.harness in MOVABLE and chain < MAX_AUTO_IN_A_ROW:
-                target = BA.takeover(_ip(svc.platform), groups, account)
+                # v1.422.0 review: a move STOPS the tool's process (a tree
+                # kill); background work still running in it (a dev server, a
+                # long test run, a helper agent) would die with it. Like the
+                # reaper, the pool and a restart (v1.417.0), a move Iron Jarvis
+                # makes by itself waits for that work (the wait stays).
+                background = live is not None and live.keeps_working(svc.clock())
+                target = None if background else BA.takeover(_ip(svc.platform), groups, account)
                 if target is not None and target.get("id") not in (wait.get("tried") or []):
                     outcome = await _move(svc, sid, row, wait, target)
                     if outcome in ("moved", "raced"):

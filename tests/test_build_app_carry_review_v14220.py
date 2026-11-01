@@ -392,3 +392,33 @@ async def test_a_wait_for_an_account_the_session_left_ends(app, home, work, tmp_
     assert len(drivers[row.id].sent) == 1, "carried on with an account the session no longer runs on"
     assert CO.read_limits(home, row.id).get("wait") is None
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 6. a move made BY ITSELF never kills the tool's background work
+# --------------------------------------------------------------------------- #
+async def test_a_move_by_itself_waits_while_the_tool_still_runs_background_work(
+        app, home, work, tmp_path, monkeypatch, clock):
+    """A move stops the coding tool's process (a tree kill): a background
+    command (a dev server, a long test run) or helper agent still running in
+    it would die. Like the idle reaper, the pool and a restart (v1.417.0), a
+    move Iron Jarvis makes by itself waits until that work is done."""
+    ip, homes = _accounts(tmp_path)
+    monkeypatch.setattr(app.state.platform, "iron_proxy", ip, raising=False)
+    monkeypatch.setattr(app.state.platform.config, "account_groups", {"Work": ["p1", "p2"]})
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    _conversation(homes["p1"])
+    row = _session(app, work, account="p1", title="Work", acc_home=homes["p1"])
+    await _limit(svc, drivers, row.id, reset=None)
+    drivers[row.id].background_tasks = 1
+    svc.live[row.id].last_heard = svc.clock()
+    assert await CO.resume_due(svc) == [], "moved (a tree kill) while background work still ran"
+    assert store.get(app.state.platform.engine, row.id).account == "p1"
+    assert CO.read_limits(home, row.id)["wait"], "the wait stays for when the work is done"
+    drivers[row.id].background_tasks = 0
+    assert await CO.resume_due(svc) == [row.id]
+    await until(lambda: len(drivers[row.id].sent) == 2)
+    assert store.get(app.state.platform.engine, row.id).account == "p2"
+    svc._emit(svc.live[row.id], make("done", stop="completed"))
+    await stop_all(app)
