@@ -262,3 +262,133 @@ async def test_a_cut_beside_a_limit_card_with_no_wait_does_not_say_it_waits(home
     assert await CO.carry_on_after_restart(svc) == []
     assert CO.read_cut(home, row.id)["why_not"] == CO.WHY_LIMIT
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# the builder's guarantees a mutation showed UNPINNED (each red when broken)
+# --------------------------------------------------------------------------- #
+from .test_build_app_limits_v14220 import _accounts, _conversation  # noqa: E402
+from iron_jarvis.terminals.limit_state import PaneLimit  # noqa: E402
+
+
+async def _limit_again(svc, drivers, sid, reset):
+    """The carry-on Iron Jarvis just started hits the account's limit AT ONCE
+    (the account served nothing)."""
+    await until(lambda: svc.live[sid].turn is not None and drivers[sid].turn_open)
+    drv = drivers[sid]
+    drv.turn_open = False
+    drv.limit = PaneLimit(line="You've hit your usage limit.", reset_at=reset)
+    live = svc.live[sid]
+    svc._emit(live, make("error", title="Claude Code hit this account's limit", fix="",
+                         technical="You've hit your usage limit.", fix_kind="account_limit"))
+    svc._emit(live, make("done", stop="completed"))
+    await until(lambda: live.turn is None)
+
+
+async def test_a_limit_that_comes_back_at_once_after_each_reset_never_loops(app, home, work, monkeypatch, clock):
+    """The no-loop guarantee: a carry-on that the account refuses at once is
+    COUNTED (before it starts); after MAX_AUTO_IN_A_ROW of them in a row the
+    card waits for the user — never a carry-on at every reset forever."""
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    row = _session(app, work)
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, row.id, reset=reset)
+    carried = 0
+    for i in range(CO.MAX_AUTO_IN_A_ROW + 3):
+        due = reset + timedelta(hours=i, minutes=1)
+        got = await CO.resume_due(svc, now=due)
+        if not got:
+            break
+        carried += 1
+        await _limit_again(svc, drivers, row.id, reset + timedelta(hours=i + 1))
+    assert carried == CO.MAX_AUTO_IN_A_ROW, f"{carried} carry-ons in a row on an account that never served"
+    st = CO.read_limits(home, row.id)
+    assert st.get("wait") is None and st["card"]["note"] == CO.CHAIN_NOTE.format(n=CO.MAX_AUTO_IN_A_ROW)
+    await stop_all(app)
+
+
+async def test_moves_within_a_group_that_are_refused_at_once_never_ping_pong(app, home, work, tmp_path, monkeypatch, clock):
+    """Two accounts of a group both read as free in a snapshot a little
+    behind, each at its limit in fact: the reply moves at most
+    MAX_AUTO_IN_A_ROW times, then waits for the user."""
+    ip, homes = _accounts(tmp_path)
+    monkeypatch.setattr(app.state.platform, "iron_proxy", ip, raising=False)
+    monkeypatch.setattr(app.state.platform.config, "account_groups", {"Work": ["p1", "p2"]})
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    _conversation(homes["p1"])
+    row = _session(app, work, account="p1", title="Work", acc_home=homes["p1"])
+    await _limit(svc, drivers, row.id, reset=None)
+    moves = 0
+    for _ in range(CO.MAX_AUTO_IN_A_ROW + 3):
+        if not await CO.resume_due(svc):
+            break
+        moves += 1
+        await _limit_again(svc, drivers, row.id, None)
+    assert moves == CO.MAX_AUTO_IN_A_ROW, f"{moves} moves in a row between accounts at their limit"
+    assert CO.read_limits(home, row.id).get("wait") is None
+    await stop_all(app)
+
+
+async def test_a_refused_move_is_not_tried_again_on_every_pass(app, home, work, tmp_path, monkeypatch, clock):
+    ip, homes = _accounts(tmp_path)
+    monkeypatch.setattr(app.state.platform, "iron_proxy", ip, raising=False)
+    monkeypatch.setattr(app.state.platform.config, "account_groups", {"Work": ["p1", "p2"]})
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    conv = _conversation(homes["p1"])
+    # p2 already holds a DIFFERENT copy of this conversation: the move is refused.
+    other = homes["p2"] / conv.relative_to(homes["p1"])
+    other.parent.mkdir(parents=True)
+    other.write_text('{"type":"user","message":"something else entirely"}\n', encoding="utf-8")
+    row = _session(app, work, account="p1", title="Work", acc_home=homes["p1"])
+    await _limit(svc, drivers, row.id, reset=None)
+    calls: list = []
+    real = svc.continue_on
+
+    async def spy(*a, **kw):
+        calls.append(a)
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(svc, "continue_on", spy)
+    for _ in range(4):
+        assert await CO.resume_due(svc) == []
+    assert len(calls) == 1, f"a refused move was tried {len(calls)} times"
+    assert store.get(app.state.platform.engine, row.id).account == "p1"
+    assert CO.read_limits(home, row.id)["wait"]["tried"] == ["p2"]
+    await stop_all(app)
+
+
+async def test_emergency_stop_holds_every_wait_and_keeps_it(app, home, work, monkeypatch, clock):
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    row = _session(app, work)
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, row.id, reset=reset)
+    app.state.platform.config.autonomy_kill_switch = True
+    try:
+        assert await CO.resume_due(svc, now=reset + timedelta(minutes=1)) == []
+        assert len(drivers[row.id].sent) == 1 and CO.read_limits(home, row.id)["wait"], "the wait stays"
+    finally:
+        app.state.platform.config.autonomy_kill_switch = False
+    assert await CO.resume_due(svc, now=reset + timedelta(minutes=2)) == [row.id]
+    await until(lambda: len(drivers[row.id].sent) == 2)
+    svc._emit(svc.live[row.id], make("done", stop="completed"))
+    await stop_all(app)
+
+
+async def test_a_wait_for_an_account_the_session_left_ends(app, home, work, tmp_path, monkeypatch, clock):
+    ip, homes = _accounts(tmp_path)
+    monkeypatch.setattr(app.state.platform, "iron_proxy", ip, raising=False)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    row = _session(app, work, account="p1", title="Work", acc_home=homes["p1"])
+    reset = NOW + timedelta(minutes=30)
+    await _limit(svc, drivers, row.id, reset=reset)
+    # The user chose another account for the session meanwhile.
+    store.update(app.state.platform.engine, row.id, account="p3")
+    assert await CO.resume_due(svc, now=reset + timedelta(minutes=1)) == []
+    assert len(drivers[row.id].sent) == 1, "carried on with an account the session no longer runs on"
+    assert CO.read_limits(home, row.id).get("wait") is None
+    await stop_all(app)
