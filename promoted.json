@@ -58,5 +58,11 @@
     "promoted_at": "2026-10-31T22:26:36.571495Z",
     "published_at": "2026-10-30T21:48:31Z",
     "why": "v1.412.0 has been out for 24 h and its Tests passed."
+  },
+  {
+    "version": "1.413.0",
+    "promoted_at": "2026-11-01T01:26:31.903872Z",
+    "published_at": "2026-10-31T00:52:26Z",
+    "why": "v1.413.0 has been out for 24 h and its Tests passed."
   }
 ]
