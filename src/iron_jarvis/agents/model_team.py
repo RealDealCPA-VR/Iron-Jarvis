@@ -2320,7 +2320,8 @@ def _low_trust(engine: Any, session_id: str) -> bool:
 
 async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, scope: str,
                      piece: str, finished: bool, report: Any = "", provider: str = "",
-                     model: str = "", account: str = "", turn: str = "") -> None:
+                     model: str = "", account: str = "", turn: str = "",
+                     asked: str = "") -> None:
     """The door's record of one settled piece (``agents/team_record``), off
     the loop: its row; and, for a ``review`` piece, the reviewer's verdict on
     the work it reviewed. Only for a member that HOLDS ``role``. Never
@@ -2342,7 +2343,14 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
       the runtime's no-summary result, whose last line is a tool's output),
       only from its last line (``team_record.verdict_of``), and only when its
       run was not at LOW trust — an injected instruction may have written
-      that line, and it must not judge anyone's work, good or bad."""
+      that line, and it must not judge anyone's work, good or bad.
+
+    v1.421.0 (Wave 1, A2): the doors call it for EVERY piece a member works —
+    ``role`` is the role asked for, else the one :func:`piece_role` inferred —
+    and ``asked`` (``team_record.ASKED_BY_ROLE`` / ``ASKED_BY_NAME``) says
+    which; the row also keeps the files the piece's session wrote
+    (``team_record.piece_files``, read in the same hop off the loop). Every
+    rule above holds for a named piece as for a role's."""
     import asyncio
 
     from . import team_record as TR
@@ -2351,12 +2359,17 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
         return
     if not finished and _user_decided(report):
         return
-    try:
-        row = await asyncio.to_thread(
-            TR.note_run, platform.engine, member=record.name, role=role, session_id=session_id,
+
+    def _write() -> "str | None":
+        return TR.note_run(
+            platform.engine, member=record.name, role=role, session_id=session_id,
             scope=scope, piece=piece, finished=finished, provider=provider, model=model,
-            account=account, turn=turn,
+            account=account, turn=turn, asked=asked,
+            files=TR.piece_files(platform.engine, session_id),
         )
+
+    try:
+        row = await asyncio.to_thread(_write)
         if role == "review" and finished and row and not _runtime_wrote(report):
             verdict = TR.verdict_of(report)
             if verdict and not await asyncio.to_thread(_low_trust, platform.engine, session_id):
@@ -2364,6 +2377,60 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
                                         review_row=row, verdict=verdict)
     except Exception:  # noqa: BLE001 — a record never breaks a delegation
         log.debug("model team piece record failed", exc_info=True)
+
+
+def piece_role(record: Any, *, asked: str = "", team: Any = None, base_type: Any = "") -> tuple[str, str]:
+    """``(role, how)`` a member worked one piece as (v1.421.0, Wave 1, A2), or
+    ``("", "")`` when the piece writes no row on its record.
+
+    The record used to hold only pieces asked for by ROLE (``role`` /
+    ``role:<id>``): a piece the planner handed a member BY NAME — most of a
+    coding session's work — was never recorded. Now:
+
+    * ``asked`` (the role the planner named): that role when the member
+      HOLDS it (``how`` = ``team_record.ASKED_BY_ROLE``); a role it does not
+      hold writes nothing (the v1.395.0 rule: the planner labelled the piece,
+      and it is not relabelled);
+    * else, NAMED (``how`` = ``team_record.ASKED_BY_NAME``), inside a coding
+      session with a team (``team`` = its ``harness/team.TeamTurn``): the
+      session's REVIEWER worked as ``review``; a WORKER by what the call
+      asked — a read-only base type (``base_type`` in ``harness/helpers.
+      READ_ONLY_TYPES``: researcher / reviewer / guide, where Claude Code's
+      ``Explore`` / ``Plan`` and Codex's ``explorer`` land) as ``read``,
+      otherwise ``code`` when it holds it, else the first role it holds in
+      :data:`ROLES` order;
+    * outside a session's team: the member's ONLY role when it holds one,
+      else the same inference (the inference of a one-role member IS that
+      role, so one rule answers both).
+
+    A non-member (no roles) writes nothing. Pure; never raises."""
+    from ..harness.helpers import READ_ONLY_TYPES
+    from .team_record import ASKED_BY_NAME, ASKED_BY_ROLE
+
+    held = roles_of(record)
+    if record is None or not held:
+        return "", ""
+    if asked:
+        return (asked, ASKED_BY_ROLE) if asked in held else ("", "")
+    kind = str(getattr(base_type, "value", base_type) or "").strip().lower()
+
+    def _inferred() -> str:
+        if kind in READ_ONLY_TYPES and "read" in held:
+            return "read"
+        if "code" in held:
+            return "code"
+        return held[0]
+
+    name = str(getattr(record, "name", "") or "")
+    session = getattr(team, "team", None) if team is not None else None
+    try:
+        if session is not None and session.is_reviewer(name) and "review" in held:
+            return "review", ASKED_BY_NAME
+        if session is not None and session.is_worker(name):
+            return _inferred(), ASKED_BY_NAME
+    except Exception:  # noqa: BLE001 — a team that cannot be read is no team
+        pass
+    return _inferred(), ASKED_BY_NAME
 
 
 def review_task(role: str, task: str) -> str:
@@ -2380,6 +2447,8 @@ __all__ += [
     "ROLE_NOUNS", "ROLE_PREFIX", "RolePick", "local_box", "note_piece", "paid_spend_this_month",
     "piece_key", "provider_ready", "queued_refusal", "review_task", "role_id", "role_named",
     "route_for_call", "route_role", "run_as_member", "unknown_role_refusal",
+    # v1.421.0 (A2)
+    "piece_role",
     # v1.395.0 review
     "AccountPick", "PAY_PLACE", "PIECE_PERCENT", "PIECE_TAIL", "PLACED_RECENT_S", "QUESTION_TAIL",
     "UNKNOWN_BURST_MAX",

@@ -28,6 +28,19 @@ A piece SUCCEEDED when it finished and nothing that checked it said no
 (:func:`succeeded`): a passed check is good, a failed check or a "changes
 needed" review is bad, no check is "finished only".
 
+v1.421.0 (Wave 1, A2): EVERY piece a member works is a row — a piece the
+planner handed a member BY NAME too, not only one it asked for by ROLE (the
+owner's record held 2 rows ever while one coding session handed ~14 pieces to
+its worker by name, so the router and any learning loop saw almost none of
+the work). ``asked`` says HOW: :data:`ASKED_BY_ROLE` (the planner named the
+role — the router picked, or a role beside the name labelled it) or
+:data:`ASKED_BY_NAME` (Iron Jarvis inferred the role the member worked as,
+``model_team.piece_role``); "" on a row from before the column. ``files_json``
+keeps the files the piece's session wrote (its journaled writes,
+:func:`piece_files`), for the coming Team notes (a reviewer's finding is
+attributed to the worker whose session wrote that path). A named piece to a
+NON-member (a built-in helper) still writes no row.
+
 THE JUDGEMENT (:func:`role_record`), over the member's newest
 :data:`RECORD_WINDOW` pieces for that role:
 
@@ -75,6 +88,15 @@ CHECK_PASSED, CHECK_FAILED = "passed", "failed"
 REVIEW_GOOD, REVIEW_BAD = "good", "bad"
 
 GOOD, UNKNOWN, NOT_GOOD = "good", "unknown", "not_good"
+
+#: v1.421.0 (A2): how a piece was asked for (``TeamRoleRun.asked``).
+ASKED_BY_ROLE, ASKED_BY_NAME = "role", "name"
+ASKED = (ASKED_BY_ROLE, ASKED_BY_NAME)
+#: v1.421.0 (A2): at most this many files a piece's row keeps, each at most
+#: :data:`MAX_FILE_CHARS` (an outlier session that rewrote a whole tree must
+#: not bloat a row every record read walks).
+MAX_PIECE_FILES = 40
+MAX_FILE_CHARS = 300
 
 #: What a reviewer member is asked to end its report with (the ONE place the
 #: verdict line is spelled; :func:`verdict_of` reads it back).
@@ -128,6 +150,14 @@ class TeamRoleRun(SQLModel, table=True):
     #: a mission's scope is already one objective). A reviewer's verdict
     #: judges only the pieces of its own reply (:func:`credit_review`).
     turn: str = ""
+    #: v1.421.0 (A2): HOW the piece was asked for — :data:`ASKED_BY_ROLE` /
+    #: :data:`ASKED_BY_NAME`; NULL / "" on a row from before the column (the
+    #: reconciler adds it to an older table: every such row was by role).
+    asked: str = ""
+    #: v1.421.0 (A2): the files the piece's session wrote (JSON list, session-
+    #: folder relative, masked, at most :data:`MAX_PIECE_FILES`; NULL / "[]"
+    #: when none or before the column) — :func:`piece_files` / :func:`files_of`.
+    files_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -249,12 +279,18 @@ def role_record(engine: Any, member: str, role: str,
 
 def note_run(engine: Any, *, member: str, role: str, session_id: str, scope: str,
              piece: str = "", finished: bool, provider: str = "", model: str = "",
-             account: str = "", turn: str = "") -> "str | None":
+             account: str = "", turn: str = "", asked: str = "",
+             files: "Iterable[str] | None" = None) -> "str | None":
     """Write one piece's row when its run settles. Returns its id, or None
-    when it could not be written. BLOCKING; never raises."""
+    when it could not be written. BLOCKING; never raises.
+
+    v1.421.0 (A2): ``asked`` (:data:`ASKED`; anything else is stored "") and
+    ``files`` (:func:`clean_files` keeps them bounded and masked)."""
     if engine is None or not member or not role:
         return None
     try:
+        import json
+
         from ..core.db import session_scope
 
         row = TeamRoleRun(
@@ -262,6 +298,8 @@ def note_run(engine: Any, *, member: str, role: str, session_id: str, scope: str
             scope=str(scope or ""), piece=str(piece or "")[:400], finished=bool(finished),
             provider=str(provider or ""), model=str(model or ""), account=str(account or ""),
             turn=str(turn or "")[:60],
+            asked=str(asked) if asked in ASKED else "",
+            files_json=json.dumps(clean_files(files or [])),
         )
         with session_scope(engine) as db:
             db.add(row)
@@ -270,6 +308,65 @@ def note_run(engine: Any, *, member: str, role: str, session_id: str, scope: str
     except Exception:  # noqa: BLE001
         log.warning("model team record could not be written for %s", member, exc_info=True)
         return None
+
+
+def clean_files(paths: Iterable[Any]) -> list[str]:
+    """``paths`` as a row keeps them (v1.421.0, A2): text, each masked
+    (``detections.redact.mask`` — a path can carry a key someone named a file
+    after) and cut to :data:`MAX_FILE_CHARS`, once each, at most
+    :data:`MAX_PIECE_FILES`. Pure; never raises."""
+    try:
+        from ..detections.redact import mask
+    except Exception:  # noqa: BLE001 — unmasked beats losing the record
+        def mask(value):  # type: ignore[no-redef]
+            return value
+    out: list[str] = []
+    try:
+        for raw in paths:
+            text = " ".join(str(raw or "").split())
+            if not text:
+                continue
+            text = str(mask(text))[:MAX_FILE_CHARS]
+            if text not in out:
+                out.append(text)
+            if len(out) >= MAX_PIECE_FILES:
+                break
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
+def piece_files(engine: Any, session_id: str) -> list[str]:
+    """The files a piece's session WROTE (v1.421.0, A2): what it created, then
+    what it changed — the session's journaled writes, derived by the ONE
+    reader of them (``agents/outcome.session_result``: ``ToolInvocation`` +
+    ``UndoJournal``; an undone write is still listed, a file both created and
+    edited is listed once, as created), relative to the session's folder (a
+    file outside it keeps its absolute path — the honest answer). A command's
+    writes are not journaled and are not here. Bounded by
+    :func:`clean_files`. BLOCKING; never raises ([] when unreadable)."""
+    if engine is None or not session_id:
+        return []
+    try:
+        from .outcome import session_result
+
+        res = session_result(engine, str(session_id))
+        return clean_files([*(res.get("files_created") or []), *(res.get("files_changed") or [])])
+    except Exception:  # noqa: BLE001
+        log.debug("model team piece files unreadable", exc_info=True)
+        return []
+
+
+def files_of(row: Any) -> list[str]:
+    """A row's ``files_json`` as a list ([] for NULL, garbage, or a row from
+    before the column). Pure."""
+    try:
+        import json
+
+        data = json.loads(getattr(row, "files_json", None) or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [str(p) for p in data if isinstance(p, str) and p] if isinstance(data, list) else []
 
 
 def credit_check(engine: Any, session_ids: Iterable[str], verdict: str) -> int:
@@ -422,4 +519,7 @@ __all__ = [
     "PIECE_FAILS", "RECORD_WINDOW", "REVIEW_BAD", "REVIEW_GOOD", "RoleRecord", "TeamRoleRun",
     "UNKNOWN", "VERDICT_ASK", "credit_check", "credit_review", "note_run", "piece_failures",
     "records_for", "role_record", "scope_accounts", "succeeded", "verdict_of",
+    # v1.421.0 (A2)
+    "ASKED", "ASKED_BY_NAME", "ASKED_BY_ROLE", "MAX_FILE_CHARS", "MAX_PIECE_FILES",
+    "clean_files", "files_of", "piece_files",
 ]
