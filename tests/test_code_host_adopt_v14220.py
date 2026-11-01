@@ -128,17 +128,25 @@ async def test_an_idle_session_answers_its_next_message_on_the_same_process(host
 # --------------------------------------------------------------------------- #
 # 2. a reply mid-way: it keeps going, the rest is shown, it ends once
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("when", ["while_it_writes", "after_it_ended"])
+@pytest.mark.parametrize("when", ["while_it_writes", "after_it_ended", "kept_state_behind"])
 async def test_a_reply_being_written_carries_on_and_ends_once(hosts, tmp_path, monkeypatch, when):
     app, root, log, work = await _first_app(hosts, tmp_path, monkeypatch, mid_reply(tmp_path, 4.0))
     home = config_home(root)
+    if when == "kept_state_behind":
+        # Iron Jarvis dies before it kept the state again: lines ALREADY
+        # SHOWN are read again after the restart and must not be shown twice.
+        monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 3600.0)
+        monkeypatch.setattr(HL, "SNAP_AFTER_WRITE_S", 3600.0)
     c = client(app)
     sid = (await new_session(c, work))["id"]
     follow = asyncio.ensure_future(c.post(f"/build/app/sessions/{sid}/turn", json={"text": "go", "turn_id": "t1"}))
     svc = app.state.platform.hosted
     await until(lambda: svc.turn("t1") and any(e.get("delta") == "Hello " for e in svc.turn("t1").events))
-    await kept(app, sid)
+    if when != "kept_state_behind":
+        await kept(app, sid)
     crash(app)
+    monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 1.0)
+    monkeypatch.setattr(HL, "SNAP_AFTER_WRITE_S", 0.05)
     follow.cancel()
     await c.aclose()
     if when == "after_it_ended":
@@ -375,3 +383,75 @@ async def test_no_host_means_the_tool_starts_as_before_and_says_so_once(tmp_path
     assert len(said) == 1, "said once per session"
     proc = app.state.platform.hosted.live[sid].proc
     assert proc is None or proc.local is not None
+
+
+# --------------------------------------------------------------------------- #
+# Lines read again rebuild the driver but never act twice
+# --------------------------------------------------------------------------- #
+async def test_a_line_read_again_after_the_restart_never_writes_twice(hosts, tmp_path, monkeypatch):
+    """A line the tool sent that made the driver ANSWER it (a control request
+    Iron Jarvis does not handle: refused) is read again after the restart —
+    the host kept everything since the last kept state — and must not be
+    answered a second time."""
+    from tests._code_host_helpers_v14220 import _turn_split, write_scenario
+
+    start, one, two = _turn_split()
+    hook = {"out": {"type": "control_request", "request_id": "hook-1",
+                    "request": {"subtype": "hook_callback", "callback_id": "cb"}}}
+    scenario = write_scenario(tmp_path / "hook.json", start + one[:2] + [hook] + one[2:] + two)
+    app, root, log, work = await _first_app(hosts, tmp_path, monkeypatch, scenario)
+    # The host keeps only the state right after the start: every line of the
+    # first reply is read again after the restart.
+    monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 3600.0)
+    monkeypatch.setattr(HL, "SNAP_AFTER_WRITE_S", 3600.0)
+    async with client(app) as c:
+        sid = (await new_session(c, work))["id"]
+        first = frames((await asyncio.wait_for(
+            c.post(f"/build/app/sessions/{sid}/turn", json={"text": "one", "turn_id": "t1"}), 60)).text)
+    assert first[-1]["stop"] == "completed"
+    crash(app)
+    monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 1.0)
+    monkeypatch.setattr(HL, "SNAP_AFTER_WRITE_S", 0.05)
+    app2 = await boot(root)
+    async with client(app2) as c2:
+        second = frames((await asyncio.wait_for(
+            c2.post(f"/build/app/sessions/{sid}/turn", json={"text": "two", "turn_id": "t2"}), 60)).text)
+    assert second[-1]["stop"] == "completed", second
+    refusals = [r["in"] for r in fake_rows(log) if "in" in r and r["in"].get("type") == "control_response"
+                and (r["in"].get("response") or {}).get("request_id") == "hook-1"]
+    assert len(refusals) == 1, f"answered once, never again on the read-again line: {refusals}"
+    logged = events_of(config_home(root), sid, app2)
+    assert len([e for e in logged if e["type"] == "done" and e.get("turn") == "t1"]) == 1
+    said = [e for e in logged if e["type"] == "notice" and "hooks" in str(e.get("text", ""))]
+    assert len(said) == 1, f"what the line said is not said twice: {said}"
+    await ADOPT.shutdown(app2.state.platform, keep=False)
+
+
+async def test_a_reply_whose_end_was_read_but_never_written_ends_once_after_the_restart(hosts, tmp_path,
+                                                                                         monkeypatch):
+    """Iron Jarvis read the tool's last line of a reply (its usage is in the
+    log) and died before the reply's end was written: after the restart the
+    reply ends — once — instead of waiting forever."""
+    app, root, log, work = await _first_app(hosts, tmp_path, monkeypatch, two_turns(tmp_path))
+    home = config_home(root)
+    c = client(app)
+    sid = (await new_session(c, work))["id"]
+    svc = app.state.platform.hosted
+
+    async def never(*a, **k):  # Iron Jarvis dies before the end is written
+        return None
+
+    monkeypatch.setattr(svc, "_end_turn", never)
+    follow = asyncio.ensure_future(c.post(f"/build/app/sessions/{sid}/turn", json={"text": "one", "turn_id": "t1"}))
+    await until(lambda: any(e["type"] == "usage" and e.get("turn") == "t1" for e in events_of(home, sid, app)))
+    await kept(app, sid)
+    crash(app)
+    follow.cancel()
+    await c.aclose()
+    app2 = await boot(root)
+    svc2 = app2.state.platform.hosted
+    await until(lambda: svc2.turn("t1") is None or not svc2.turn("t1").running, timeout=15)
+    logged = [e for e in events_of(home, sid, app2) if e.get("turn") == "t1"]
+    dones = [e for e in logged if e["type"] == "done"]
+    assert len(dones) == 1 and dones[0]["stop"] == "completed", logged
+    await ADOPT.shutdown(app2.state.platform, keep=False)

@@ -675,6 +675,13 @@ class Host:
             if isinstance(after, int) and not isinstance(after, bool):
                 with tool.lock:
                     tool.writes_upto = max(tool.writes_upto, after)
+            snap = h.get("snap")
+            if isinstance(snap, int) and not isinstance(snap, bool) and 0 < snap <= len(payload) \
+                    and isinstance(h.get("snap_seq"), int):
+                # The daemon's state AS IT SENT THIS: kept with the write, in
+                # one step (a frame is handled whole or not at all).
+                tool.take_snapshot(int(h["snap_seq"]), payload[:snap], bool(h.get("busy")))
+                payload = payload[snap:]
             tool.queue_write(re, payload, conn)
         elif kind == "snapshot":
             tool = self.tools.get(str(h.get("tool") or ""))

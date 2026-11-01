@@ -646,14 +646,22 @@ class RemoteProcess:
         if self.current is not None or self.replay is not None or self._hold:
             self._want_snapshot(0.02)
             return
+        got = self._state()
+        if got is not None:
+            self.link.send({"t": "snapshot", "tool": self.tool_id, "seq": self.last_seq, "busy": got[1]}, got[0])
+
+    def _state(self) -> tuple[bytes, bool] | None:
+        """ON THE LOOP: the state to keep now, or None (none can be made)."""
+        if self.snapshot_source is None:
+            return None
         try:
             blob, busy = self.snapshot_source()
         except Exception:  # noqa: BLE001 — a state that cannot be kept: said once in the log
             if not self._snap_failed:
                 self._snap_failed = True
                 log.warning("could not keep a Code-view session's state for a restart", exc_info=True)
-            return
-        self.link.send({"t": "snapshot", "tool": self.tool_id, "seq": self.last_seq, "busy": bool(busy)}, blob)
+            return None
+        return blob, bool(busy)
 
     def snapshot_now(self) -> None:
         """ON THE LOOP: keep the state at once (after a start)."""
@@ -691,7 +699,14 @@ class RemoteProcess:
             return
         cur = self.current
         after = cur if cur is not None else self.last_seq
-        await asyncio.to_thread(self._write, obj, after)
+        # A write the USER caused (a message, an answer, a note, Stop — no
+        # line is being read) carries the state as it is NOW, in the same
+        # frame: the host keeps both or neither. The driver records a message
+        # BEFORE it sends it (Claude Code's turn, its uuid …), so a restart
+        # one instant after the tool got the message still finds the reply
+        # in the kept state — kept a moment later, it could not.
+        state = self._state() if cur is None and self.replay is None and not self._hold else None
+        await asyncio.to_thread(self._write, obj, after, state)
         self._want_snapshot(SNAP_AFTER_WRITE_S)
 
     def write(self, obj: dict[str, Any]) -> None:
@@ -701,14 +716,17 @@ class RemoteProcess:
             return
         self._write(obj, self.last_seq)
 
-    def _write(self, obj: dict[str, Any], after: int) -> None:
+    def _write(self, obj: dict[str, Any], after: int, state: tuple[bytes, bool] | None = None) -> None:
         lk = self.link
         if lk is None or not self.alive:
             raise HarnessGone("the coding tool is not running")
         data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+        header: dict[str, Any] = {"t": "write", "tool": self.tool_id, "after": int(after)}
+        if state is not None:
+            header.update({"snap": len(state[0]), "snap_seq": int(after), "busy": state[1]})
+            data = state[0] + data
         try:
-            reply, _ = lk.request({"t": "write", "tool": self.tool_id, "after": int(after)}, data,
-                                  timeout=WRITE_REPLY_S)
+            reply, _ = lk.request(header, data, timeout=WRITE_REPLY_S)
         except (HostLost, TimeoutError) as exc:
             raise HarnessGone(f"the coding tool stopped reading its input ({type(exc).__name__})") from exc
         if not reply.get("ok"):
