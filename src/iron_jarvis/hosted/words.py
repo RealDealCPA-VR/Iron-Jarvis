@@ -512,3 +512,15 @@ CONTROL_ASKS = {
     "request_user_dialog": "show you one of its own dialogs",
 }
 CONTROL_ASK_OTHER = "answer a request it calls {subtype}"
+#: v1.420.0 (C1.10): an "Allow for this session" answer given before a mode
+#: change started a new OpenCode, applied again by Iron Jarvis (said once).
+OPENCODE_ALWAYS_CARRIED = (
+    "Your earlier \"Allow for this session\" answers still apply in this conversation, so OpenCode "
+    "was not asked again for those."
+)
+#: v1.420.0 (C1.10): the user's own rule for every tool decides, and Plan
+#: still changes no file.
+OPENCODE_RULES_DECIDE_PLAN = (
+    "Your OpenCode config sets a permission rule for every tool, so that rule decides in this "
+    "session; Plan still changes no file."
+)

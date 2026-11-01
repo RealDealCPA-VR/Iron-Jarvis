@@ -186,7 +186,13 @@ def test_a_mode_that_cannot_use_star_says_what_runs_unasked(tmp_path, monkeypatc
     env, note = O.child_env({}, "plan", str(tmp_path))
     assert "*" not in json.loads(env["OPENCODE_PERMISSION"])
     assert note == W.OPENCODE_RULES_KEPT.format(tools="bash")
+    # (v1.420.0, moved on purpose: C1.10) Plan's refusal is now appended after every rule,
+    # so a user's edit rule that says what "*" says no longer keeps "*" out ...
     (conf / "opencode.json").write_text('{"permission": {"edit": "ask"}}', encoding="utf-8")
+    env, note = O.child_env({}, "plan", str(tmp_path))
+    assert json.loads(env["OPENCODE_PERMISSION"])["*"] == "ask" and note == ""
+    # ... while one that does not still does, and says so.
+    (conf / "opencode.json").write_text('{"permission": {"edit": "allow"}}', encoding="utf-8")
     env, note = O.child_env({}, "plan", str(tmp_path))
     assert "*" not in json.loads(env["OPENCODE_PERMISSION"]) and note == W.OPENCODE_UNNAMED_UNASKED
 
