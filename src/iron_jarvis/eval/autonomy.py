@@ -45,6 +45,13 @@ WHAT A TASK IS (the one definition):
   chat and is part of the chat's task; a Build session's helper is part of
   its session's task; a workflow's steps, a mission's teammates and delegated
   children are parts of something else and are never tasks of their own.
+* WHERE AN ASK BELONGS (v1.421.0, E6): its ``thread_id`` (a ``build:``
+  prefix and an attempt's ``~try<n>`` read as the session itself), else its
+  answer's, its turn's, else — for a HELPER run of a Build session, whose
+  run is no task — the session named by the run's ``options.build_session``;
+  the task of that conversation running when it was asked. An ask that
+  belongs to no task counted here (a browser sidebar's turn keeps no
+  conversation) is "unattributed".
 * A Build › Code session (the user's own Claude Code / Codex, v1.417.0) is
   split into tasks by the TURNS its cards name (:func:`build_app_tasks`,
   counted under "build"); only their interruptions are read, never their
@@ -711,6 +718,21 @@ def _week_start(at: float) -> str:
     return (day - timedelta(days=day.weekday())).isoformat()
 
 
+#: v1.421.0 (E6): an ATTEMPT's tool session (``harness/attempts.attempt_sid``:
+#: ``build:<thread>~try<n>``) — its cards belong to the Build session's task.
+_ATTEMPT_THREAD_RX = re.compile(r"^(.+)~try\d+$")
+
+
+def _bare_thread(value: Any) -> str:
+    """A thread id as the conversations are keyed (v1.421.0, E6): no
+    ``build:`` prefix, no attempt's ``~try<n>``. Pure."""
+    th = str(value or "").strip()
+    if th.startswith("build:"):
+        th = th[len("build:"):]
+    m = _ATTEMPT_THREAD_RX.match(th)
+    return m.group(1) if m else th
+
+
 def build_app_tasks(events: list[dict], *, known: "dict[str, list[Task]] | None" = None) -> list[Task]:
     """v1.417.0 (C1.11): Build › Code's tasks (the user's own Claude Code /
     Codex / Pi / OpenCode, ``hosted/``). Their conversation lives in the
@@ -789,6 +811,20 @@ def compute(
     # The interruptions, oldest first, paired asked → answered by ask id.
     system = Counter()
     asked_at: dict[str, float] = {}
+    # v1.421.0 (E6): the Build session each HELPER run belongs to — its
+    # ``options.build_session`` (``harness/helpers.BUILD_SESSION_OPTION``,
+    # origin ``job:build-helper``). "A Build session's helper is part of its
+    # session's task" (the module docstring), but its cards were published
+    # as ``agent`` with only the helper's own session id (``run_place`` read
+    # the option's prefixed spelling only) and the helper is no task of its
+    # own, so every one was "unattributed" — 9 of the owner's 12 asks in one
+    # week. Read here for the events already written; ``run_place`` now
+    # puts the thread on new ones.
+    helper_thread: dict[str, str] = {}
+    for r in sessions:
+        build = _bare_thread(_options(r.get("options_json")).get("build_session"))
+        if build and r.get("id"):
+            helper_thread[str(r.get("id"))] = build
     # (review) WHERE an ask was put when it was asked with no thread (a new
     # chat's first question): its own answer, another ask of the same turn,
     # or the turn's record (``turn_threads``).
@@ -796,7 +832,7 @@ def compute(
     thread_by_turn: dict[str, str] = {}
     for ev in events:
         p = ev.get("payload") or {}
-        th = str(p.get("thread_id") or "") if isinstance(p, dict) else ""
+        th = _bare_thread(p.get("thread_id")) if isinstance(p, dict) else ""
         if not th:
             continue
         if p.get("ask_id"):
@@ -805,17 +841,33 @@ def compute(
             thread_by_turn.setdefault(str(p["turn_id"]), th)
     for turn, th in (turn_threads or {}).items():
         if turn and th:
-            thread_by_turn.setdefault(str(turn), str(th))
+            thread_by_turn.setdefault(str(turn), _bare_thread(th))
 
     def _thread_of(p: dict) -> str:
-        th = str(p.get("thread_id") or "")
+        # v1.421.0 (E6): a Build session's own card is placed in that
+        # session — also an ATTEMPT's (Try on several models,
+        # ``build:<thread>~try<n>``: the session's message it was started
+        # from), and a helper's (by its run's session, above).
+        th = _bare_thread(p.get("thread_id"))
         if th:
             return th
         ask = str(p.get("ask_id") or "")
         if ask and ask in thread_by_ask:
             return thread_by_ask[ask]
         turn = str(p.get("turn_id") or "")
-        return thread_by_turn.get(turn, "") if turn else ""
+        if turn and turn in thread_by_turn:
+            return thread_by_turn[turn]
+        sid = str(p.get("session_id") or "")
+        return helper_thread.get(sid, "") if sid else ""
+
+    def _bench(p: dict) -> bool:
+        # The benchmark's asks are never counted — also a bench HELPER's
+        # written before ``run_place`` knew its bare option (v1.421.0, E6:
+        # its run's ``build_session`` is "bench-…").
+        if str(p.get("surface") or "") == "bench":
+            return True
+        sid = str(p.get("session_id") or "")
+        return bool(sid) and helper_thread.get(sid, "").startswith("bench-")
 
     ordered = sorted(
         events,
@@ -830,7 +882,7 @@ def compute(
         p = ev.get("payload") or {}
         if not isinstance(p, dict) or ev.get("type") != "interrupt.answered":
             continue
-        if str(p.get("actor") or "") != "auto" or str(p.get("surface") or "") == "bench":
+        if str(p.get("actor") or "") != "auto" or _bench(p):
             continue
         if (_epoch(p.get("at")) or _epoch(ev.get("created_at")) or 0.0) >= cutoff:
             auto_by[str(p.get("reason") or "auto")] += 1
@@ -848,7 +900,7 @@ def compute(
             if at >= cutoff:
                 system[str(p.get("kind") or "other")] += 1
             continue
-        if str(p.get("surface") or "") == "bench" or str(p.get("actor") or "") == "bench":
+        if _bench(p) or str(p.get("actor") or "") == "bench":
             continue
         ask_id = str(p.get("ask_id") or "")
         task: "Task | None" = None
