@@ -1057,5 +1057,38 @@ async def carry_loop(platform: Any, on_tick: Any) -> None:
             _WAKE.clear()
 
 
+def stop_unattended_turns(platform: Any) -> list[str]:
+    """Emergency stop's half for Build › Code (v1.422.0 review — Chat › Code's
+    rule since v1.398.0, ``harness/night.stop_unattended_turns``): every reply
+    Iron Jarvis carried on BY ITSELF (after a restart, an account's reset, a
+    move within a group) is stopped, the way the user's Stop stops it (so it
+    is never read as cut, never carried on again). A reply the user started,
+    and a Continue the user pressed, keep going. Thread-safe (the stop runs on
+    the turn's own loop); never makes the Code view's service; returns
+    ``build_app:<turn id>`` for each; never raises."""
+    svc = getattr(platform, "hosted", None)
+    if svc is None:
+        return []
+    stopped: list[str] = []
+    try:
+        lives = list(svc.live.items())
+    except RuntimeError:  # the loop changed the map mid-read: read it again
+        lives = list(dict(svc.live).items())
+    for sid, live in lives:
+        try:
+            turn = live.turn
+            carry = getattr(turn, "carry", None) if turn is not None else None
+            if turn is None or not turn.running or not isinstance(carry, dict) or carry.get("pressed"):
+                continue
+            task = turn.task
+            if task is None:
+                continue
+            asyncio.run_coroutine_threadsafe(svc.interrupt(sid), task.get_loop())
+            stopped.append(f"build_app:{turn.id}")
+        except Exception:  # noqa: BLE001 — one turn never keeps the rest going
+            log.warning("Emergency stop could not stop a Code-view carry-on", exc_info=True)
+    return stopped
+
+
 def reconcile_keep(keep: Collection[str] | None) -> set[str]:
     return {str(k) for k in (keep or ()) if str(k)}

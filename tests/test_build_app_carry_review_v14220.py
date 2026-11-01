@@ -422,3 +422,41 @@ async def test_a_move_by_itself_waits_while_the_tool_still_runs_background_work(
     assert store.get(app.state.platform.engine, row.id).account == "p2"
     svc._emit(svc.live[row.id], make("done", stop="completed"))
     await stop_all(app)
+
+
+# --------------------------------------------------------------------------- #
+# 7. Emergency stop stops a Build › Code reply Iron Jarvis carried on by itself
+# --------------------------------------------------------------------------- #
+async def test_emergency_stop_stops_a_carry_on_already_running_never_the_users_own(home, app, work, monkeypatch):
+    """Chat › Code's rule since v1.398.0: engaging Emergency stop stops every
+    coding turn Iron Jarvis started BY ITSELF. Build › Code starts such turns
+    since v1.422.0 (a carry-on after a restart, a reset or a move); the
+    user's own reply and a Continue the user pressed keep going."""
+    from iron_jarvis.agents.orchestrator import Orchestrator
+
+    carried_row = _row(app, work)
+    _log(home, carried_row.id, _working())
+    pressed = _row(app, work, hid="22222222-3333-4444-5555-666666666666")
+    _log(home, pressed.id, _working())
+    mine = _row(app, work, hid="11111111-2222-3333-4444-555555555555")
+    S.reconcile_cut_turns(home)
+    # `pressed` was already offered (the user's press carries it on).
+    CO._amend_cut(home, pressed.id, "t1", auto="offered", why_not=CO.WHY_POOL)
+    svc = S.service_for(app.state.platform)
+    drivers = fake_tool(svc, monkeypatch)
+    assert await CO.carry_on_after_restart(svc) == [carried_row.id]
+    await CO.continue_cut(svc, pressed.id)
+    await svc.start_turn(mine.id, "my own message", "t-mine")
+    both = (carried_row.id, pressed.id, mine.id)
+    await until(lambda: all(drivers.get(s) and drivers[s].sent for s in both))
+    carry_turn = svc.live[carried_row.id].turn
+    stopped = await asyncio.to_thread(Orchestrator(app.state.platform).stop_unattended)
+    assert stopped == [f"build_app:{carry_turn.id}"]
+    await until(lambda: not carry_turn.running)
+    assert svc.live[mine.id].turn is not None and svc.live[mine.id].turn.running, "the user's own reply was stopped"
+    assert svc.live[pressed.id].turn is not None and svc.live[pressed.id].turn.running, "a pressed Continue was stopped"
+    # And the stopped carry-on is never carried on again at the next start.
+    assert CO.read_cut(home, carried_row.id).get("stopped") == carry_turn.id
+    for sid in (pressed.id, mine.id):
+        svc._emit(svc.live[sid], make("done", stop="completed"))
+    await stop_all(app)

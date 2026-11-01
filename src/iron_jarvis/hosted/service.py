@@ -2205,6 +2205,9 @@ class HostedService:
                 raise Refused(W.BUSY)
         turn = HostedTurn(turn_id, sid)
         turn.started_mono = self.clock()
+        # v1.422.0 review: a turn Iron Jarvis started BY ITSELF (a carry-on) is
+        # one Emergency stop stops (``carry_on.stop_unattended_turns``).
+        turn.carry = dict(carry) if carry else None
         # v1.422.0: a carry-on Iron Jarvis sends by itself never names the
         # session (its words are the app's, not the user's).
         live.title = (row.title or "").strip() or ("" if carry else first_message_title(text))
