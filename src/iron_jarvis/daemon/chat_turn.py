@@ -6727,6 +6727,26 @@ async def note_closing_offer(platform: Any, body: Any, tool_session: str, round_
     )
 
 
+async def note_text_tool_call(platform: Any, body: Any, tool_session: str, round_index: int,
+                              kind: str = "") -> None:
+    """ONE ``autonomy.nudged`` event (``core/nudges.TEXT_TOOL_CALL``, v1.421.0)
+    for a harness turn told to call for real a tool it wrote out as text —
+    the agent runtime's nudge publishes the same kind, so the Autonomy card
+    counts both. Never raises (``note_nudge`` swallows). MIRROR NOTE: both
+    lanes call it at their ``wants_nudge`` seam."""
+    from ..core.nudges import TEXT_TOOL_CALL, note_nudge
+
+    await note_nudge(
+        getattr(platform, "event_bus", None), TEXT_TOOL_CALL,
+        session_id=str(tool_session or "chat"),
+        surface="build" if str(tool_session or "").startswith("build:") else "chat",
+        turn_id=str(getattr(body, "turn_id", "") or ""),
+        thread_id=str(getattr(body, "thread_id", "") or ""),
+        round=int(round_index) + 1,
+        call=str(kind or ""),
+    )
+
+
 def harness_check_gate(trust_state: dict[str, Any]) -> dict[str, Any]:
     """``{may_run, why_not}`` for a folder's plugin checks this turn: never
     in low trust (a check is the folder's own command, and the folder is
@@ -7415,9 +7435,10 @@ def _context_window(d, provider: str, model: str) -> "int | None":
     advertise their window), then a MEASURED capability envelope
     (v1.201.0: ``ProviderManager.measured_context_window`` — only a
     probed/partial/tuned profile with a real ``probed_at`` stamp answers;
-    seeded/trusted/default profiles are silent here by design), then a fleet
-    probe's ``context_length`` when one was recorded. None = unknown →
-    conservative fixed budgets.
+    seeded/trusted/default profiles are silent here by design), then a model
+    proxy's stated window, else the fleet probe's reading of the model's own
+    server (v1.421.0: ``fleet/windows`` — the rung before it never answered).
+    None = unknown → conservative fixed budgets.
 
     EMPTY provider/model mean "the turn did not pick one", which is the COMMON
     case — the composer only sends a provider when the user overrides it. Until
@@ -7454,7 +7475,9 @@ def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, st
     * ``"measured"`` — the capability envelope's measured honest window
       (``ProviderManager.measured_context_window``);
     * ``"catalog"`` — the Claude subscription's live model picker (v1.300.0);
-    * ``"endpoint"`` — a fleet probe's advertised ``context_length``;
+    * ``"endpoint"`` — a model proxy's stated ``max_input_tokens``, else the
+      fleet probe's reading of the model's own server (``max_model_len``,
+      else Ollama's loaded ``context_length`` — ``fleet/windows``, v1.421.0);
     * ``"default"`` — unknown; the value is ``None`` and callers fall back to
       their conservative fixed budgets.
 
@@ -7547,15 +7570,22 @@ def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, st
                 n = None
             if isinstance(n, int) and not isinstance(n, bool) and n > 0:
                 return n, "endpoint"
-        try:  # best-effort probe read — fleet node models may carry the window
-            for node in fleet.nodes():
-                for m in getattr(node, "models", None) or []:
-                    if getattr(m, "name", None) == model:
-                        n = getattr(m, "context_length", None)
-                        if n:
-                            return int(n), "endpoint"
-        except Exception:  # noqa: BLE001 — budgets fall back to defaults
-            pass
+        # THE FLEET PROBE (v1.421.0, D3): the window the model's OWN server
+        # reports — vLLM's ``max_model_len``, Ollama's loaded ``context_length``
+        # — off the sampler's LAST snapshot of the node serving ``provider``,
+        # a proxy's alias followed to its deployment (``fleet/windows``). This
+        # rung used to walk ``fleet.nodes()`` for ``node.models`` / ``m.name``:
+        # a FleetNode is config and has no models (they live on the sampler's
+        # NodeSnapshot, by ``id``), so it never answered and a local model
+        # planned at the default. A cached read, never a request; no sampler,
+        # no snapshot, no match or no number stays unknown.
+        from ..fleet.windows import probed_window
+
+        n = probed_window(
+            fleet, getattr(getattr(d, "platform", None), "fleet_sampler", None), provider, model,
+        )
+        if n:
+            return int(n), "endpoint"
     return None, "default"
 
 
@@ -10166,6 +10196,11 @@ async def run_chat_turn(
 
                 msgs.append(LLMMessage(role="assistant", content=route.response.text or ""))
                 msgs.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                # v1.421.0: counted on the Autonomy card (the agent runtime's
+                # nudge publishes the same kind). MIRROR NOTE: routes/chat.py.
+                await note_text_tool_call(
+                    d.platform, body, _tool_session, _round, _harness.text_call_kind,
+                )
                 continue
             # A REPLY THAT ENDS ON AN OFFER (v1.402.0, part 4 — harness/
             # closing_offer): "Want me to also add tests?" with rounds left.

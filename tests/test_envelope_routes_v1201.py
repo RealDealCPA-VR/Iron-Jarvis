@@ -122,7 +122,9 @@ def build_app(
         model_context_windows=dict(pins or {}),
     )
     platform = SimpleNamespace(
-        config=cfg, event_bus=bus, providers=manager, fleet=window_fleet
+        config=cfg, event_bus=bus, providers=manager,
+        fleet=getattr(window_fleet, "registry", window_fleet),
+        fleet_sampler=getattr(window_fleet, "sampler", None),
     )
     d = SimpleNamespace(platform=platform, fleet=fleet)
     app = FastAPI()
@@ -132,9 +134,12 @@ def build_app(
 
 def _window_fleet(model: str, context_length: int):
     """A fleet whose probe recorded ``context_length`` for ``model`` — the
-    shape _context_window_source reads (platform.fleet.nodes()[].models)."""
-    node = SimpleNamespace(models=[SimpleNamespace(name=model, context_length=context_length)])
-    return SimpleNamespace(nodes=lambda: [node])
+    REAL registry + sampler _context_window_source reads (v1.421.0, D3, moved
+    on purpose: this used to be a fake of ``fleet.nodes()[].models``, a shape
+    no FleetNode has, so the rung it pinned never answered in the product)."""
+    from tests._fakes.fleet_window import probed_fleet
+
+    return probed_fleet(model, context_length)
 
 
 def wait_until(pred, timeout=5.0) -> bool:

@@ -230,9 +230,18 @@ def test_the_recap_goes_to_the_system_prompt_not_the_transcript():
 # (6) Wired into a REAL run.
 # --------------------------------------------------------------------------- #
 def test_a_real_agent_run_survives_a_tiny_window(tmp_path):
-    """End to end: a pinned 3k window must not break a session."""
+    """End to end: a pinned 3k window must not break a session.
+
+    v1.421.0: it ends FAILED now, saying why — moved on purpose. A builder
+    sends ~15k tokens of tool definitions with every step, and those count
+    against a KNOWN window, so 3,000 tokens cannot carry the result of its
+    first step; the run used to "complete" only because the demo model's
+    answer needs no result. A real model asked for it again until its step
+    limit. "Survives" still means what it meant: a real end, never a crash or
+    a 500, and the step limit is not where it ended."""
     from fastapi.testclient import TestClient
 
+    from iron_jarvis.agents.runtime import STEP_LIMIT_RESULT
     from iron_jarvis.daemon.app import create_app
 
     client = TestClient(create_app(str(tmp_path)))
@@ -244,18 +253,30 @@ def test_a_real_agent_run_survives_a_tiny_window(tmp_path):
     )
     r = client.post("/sessions", json={"task": "write a report", "wait": True})
     assert r.status_code == 200
-    assert r.json()["status"] == "completed"
+    body = r.json()
+    assert body["status"] == "failed"
+    assert body["summary"].startswith(
+        "This model's context window (3,000 tokens) is too small for this job:"
+    )
+    assert body["summary"] != STEP_LIMIT_RESULT
 
 
 def test_the_loop_sends_the_planned_transcript_not_the_raw_one(tmp_path, monkeypatch):
     """Pins the WIRING: without it the planner is dead code. Captures what the
-    router was actually handed on a run with a tiny window."""
+    router was actually handed on a run whose task overflows the window.
+
+    v1.421.0: on an UNKNOWN window (the planner's 32k guess) — moved on
+    purpose. At a KNOWN window a task that has to be clipped now ends the run
+    before any model call (the model is too small for the job:
+    ``runtime.ContextTooSmall``), so the clipped task the planner sends is
+    only ever sent under the guess, which never ends a run. The KNOWN-window
+    wiring (a step trimmed to fit, tool definitions included) is pinned in
+    ``test_agent_too_small_v14210``."""
     from fastapi.testclient import TestClient
 
     from iron_jarvis.daemon.app import create_app
 
     client = TestClient(create_app(str(tmp_path)))
-    client.put("/settings", json={"values": {"model_context_windows": {"mock": 2000}}})
     platform = client.app.state.platform
 
     seen: list[tuple[str, list]] = []
@@ -273,9 +294,9 @@ def test_the_loop_sends_the_planned_transcript_not_the_raw_one(tmp_path, monkeyp
         return adapter
 
     monkeypatch.setattr(platform.providers, "get", spy_get)
-    # A task far larger than the pinned window forces the planner to engage on
+    # A task far larger than the guessed window forces the planner to engage on
     # the very first step, and to engage VISIBLY (it must clip the task).
-    task = "report. " * 900
+    task = "report. " * 20_000
     client.post("/sessions", json={"task": task, "wait": True})
 
     assert seen, "the agent loop never reached the adapter"
@@ -285,14 +306,19 @@ def test_the_loop_sends_the_planned_transcript_not_the_raw_one(tmp_path, monkeyp
     worst = max(sum(len(m.content or "") for m in msgs) for _, msgs in seen)
     assert worst < len(task), (
         f"the raw transcript reached the provider: {worst} chars in one call "
-        f"for a {len(task)}-char task on a 2000-token window"
+        f"for a {len(task)}-char task on the guessed window"
     )
 
 
 def test_a_clipped_task_is_reported_as_such_not_as_ordinary_trimming(tmp_path):
     """When the goal itself does not fit, the run proceeds on a TRUNCATED task.
     That is a result the user has to be able to distrust, so it gets its own
-    honest message rather than the generic "trimmed context" note."""
+    honest message rather than the generic "trimmed context" note.
+
+    v1.421.0: at a KNOWN window (this pin's 1,200) a clipped task no longer
+    proceeds at all — the run ends FAILED before any model call, saying the
+    task does not fit (``runtime.ContextTooSmall``). The persisted notice is
+    still written first, so the timeline says what was cut."""
     from fastapi.testclient import TestClient
 
     from iron_jarvis.daemon.app import create_app
@@ -302,6 +328,8 @@ def test_a_clipped_task_is_reported_as_such_not_as_ordinary_trimming(tmp_path):
     r = client.post("/sessions", json={"task": "audit. " * 4000, "wait": True})
     assert r.status_code == 200
     sid = r.json()["id"]  # POST /sessions returns the session FLAT
+    assert r.json()["status"] == "failed"
+    assert "the task does not fit" in r.json()["summary"]
 
     # Read the PERSISTED record, not the live stream: the point is that someone
     # reviewing this session tomorrow can still see the task was cut.

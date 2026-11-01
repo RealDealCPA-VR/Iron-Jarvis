@@ -282,6 +282,59 @@ def _closing_offer_cut_reply(messages: list[LLMMessage]) -> str:
     return join(head, tail)
 
 
+#: v1.421.0 (A5): how many times ONE agent run is told to call for real a
+#: tool it wrote out AS TEXT, and never twice in a row. The chat lanes give a
+#: coding session's turn ONE (``HarnessTurn.wants_nudge``); an agent run is
+#: longer (up to 60 attended steps, plus a carry-on) and a local model that
+#: slips into writing its call as text often does it again later in the same
+#: run after working fine in between — so two. A reply that writes a call as
+#: text RIGHT AFTER being told is not going to change on an identical second
+#: note, which would only spend a step: that reply ends the run as before.
+#: Two bounds the cost at two extra model calls a run.
+TEXT_CALL_NUDGES_PER_RUN = 2
+#: The key the count rides on in ``perceive_act``'s caller-scoped state (the
+#: breaker's dict: the flat lane's two allotments, or a decomposed run's
+#: every step and retry, share one).
+_TEXT_CALL_KEY = "text_call_nudges"
+
+
+def _text_call_nudge(
+    text: str, offered: "set[str]", messages: list[LLMMessage], *, steps_left: int,
+    state: "dict[str, Any]",
+) -> str:
+    """The offered tool an agent step's final answer wrote a call to AS TEXT
+    (``harness/mode.named_text_tool_call``), when the run should be told to
+    call it for real and go on; ``""`` otherwise (v1.421.0, A5). Never with no
+    tools offered (a text-only run cannot call one), never on the last step
+    (the call needs a step to happen in), never right after the same nudge,
+    and at most :data:`TEXT_CALL_NUDGES_PER_RUN` a run — counted in the
+    caller's ``state`` AND in the run's own messages (the record a resume
+    carries, like the closing offer's: a resumed run never gets more). Counts
+    the nudge it answers for. Never raises."""
+    try:
+        from ..harness.mode import TEXT_TOOL_CALL_NUDGE, named_text_tool_call
+
+        if not offered or int(steps_left) < 1:
+            return ""
+        last = messages[-1] if messages else None
+        if (last is not None and getattr(last, "role", "") == "user"
+                and str(getattr(last, "content", "") or "") == TEXT_TOOL_CALL_NUDGE):
+            return ""
+        recorded = sum(
+            1 for m in messages
+            if getattr(m, "role", "") == "user" and str(getattr(m, "content", "") or "") == TEXT_TOOL_CALL_NUDGE
+        )
+        used = max(int(state.get(_TEXT_CALL_KEY, 0) or 0), recorded)
+        if used >= TEXT_CALL_NUDGES_PER_RUN:
+            return ""
+        name = named_text_tool_call(text or "", offered)
+        if name:
+            state[_TEXT_CALL_KEY] = used + 1
+        return name
+    except Exception:  # noqa: BLE001 — a reading never breaks a run
+        return ""
+
+
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
 #: that stamps one of these has a channel: chat/job/project/user are watched
@@ -515,6 +568,49 @@ class RunStoppedByUser(Exception):
     def __init__(self, run: AgentRun) -> None:
         super().__init__(STOPPED_BY_USER_RESULT)
         self.run = run
+
+
+#: v1.421.0: what a run whose model is too small for the job says. The second
+#: sentence is the way out; the fleet probe now reads a local model's REAL
+#: window (``fleet/windows``), and Ollama's default (4,096) is the usual case.
+CONTEXT_TOO_SMALL_FIX = (
+    "Use a model with a larger window, or raise its context length "
+    "(for Ollama, OLLAMA_CONTEXT_LENGTH)."
+)
+
+
+def context_too_small_result(window: int, *, task_clipped: bool, has_tools: bool) -> str:
+    """The one plain sentence (and its way out) a run ends with when its
+    model's KNOWN context window cannot hold what a step must send — the task
+    itself (``task_clipped``), or the latest results the model must act on
+    (v1.421.0). Names the window, never a token estimate of anything else."""
+    what = "its instructions and tools" if has_tools else "its instructions"
+    part = "the task" if task_clipped else "its latest results"
+    return (
+        f"This model's context window ({int(window):,} tokens) is too small for "
+        f"this job: {part} {'does' if task_clipped else 'do'} not fit beside "
+        f"{what}. {CONTEXT_TOO_SMALL_FIX}"
+    )
+
+
+class ContextTooSmall(Exception):
+    """A step that cannot be sent with what the model needs to make progress
+    (v1.421.0): at a KNOWN window the planner had to clip the task, or could
+    not keep the newest block — the latest tool results the model is about to
+    act on. Sending the step anyway made the model ask for the same results
+    again, step after step, until its step limit — the honest ending of a run
+    whose model is too small for the job, reached only after every step was
+    spent. Raised by :meth:`AgentRuntime.perceive_act` (the flat loop and the
+    decomposed lane's mini-loops alike) BEFORE the model call, and caught in
+    :meth:`AgentRuntime.run`, which ends the run FAILED with ``result`` as
+    its summary — the same ending a run that spent its steps gets, never a
+    crash. A guessed window (the 32k default) never raises it.
+    """
+
+    def __init__(self, run: AgentRun, result: str) -> None:
+        super().__init__(result)
+        self.run = run
+        self.result = result
 
 
 def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
@@ -1932,6 +2028,8 @@ class AgentRuntime:
                 return await self._run_body(session, agent_def, parent_id)
         except RunStoppedByUser as stop:
             return await self._end_stopped(stop.run, session)
+        except ContextTooSmall as small:
+            return await self._end_too_small(small.run, session, small.result)
         finally:
             reset_run_budget(token)
             # v1.333.0 (D9): this run's in-run grants and taint flag are
@@ -2037,6 +2135,31 @@ class AgentRuntime:
                 session_id=session.id,
             )
         except Exception:  # noqa: BLE001 — narration must never break a stop
+            pass
+        hub = getattr(self.p, "streams", None)
+        if hub is not None:
+            try:
+                hub.sink(session.id, run.id).done(ok=False, result=run.result)
+            except Exception:  # noqa: BLE001
+                pass
+        return run
+
+    async def _end_too_small(self, run: AgentRun, session: Session, result: str) -> AgentRun:
+        """End a run whose model's window is too small for the job (v1.421.0,
+        :class:`ContextTooSmall`): FAILED with the one plain sentence as its
+        result — so as its session's summary — announced and its stream
+        closed, exactly as the flat loop ends a run that spent its steps.
+        RETURNED, so a delegated child's caller settles it like any failed
+        child."""
+        run.result = result
+        await self._set_state(run, AgentState.FAILED, session.id)
+        try:
+            await self.p.event_bus.publish(
+                EventType.AGENT_COMPLETED,
+                {"run_id": run.id, "ok": False, "result": run.result},
+                session_id=session.id,
+            )
+        except Exception:  # noqa: BLE001 — narration must never break the ending
             pass
         hub = getattr(self.p, "streams", None)
         if hub is not None:
@@ -2573,8 +2696,10 @@ class AgentRuntime:
                 if _base:
                     system_prompt += "\n\n" + _base
             except Exception:  # noqa: BLE001 — the Guide still has its tools
-                import logging
-
+                # v1.421.0 (Wave 1 review): the MODULE's `logging`. A local
+                # `import logging` here made the name local to all of
+                # `_run_body`, so the brain block's own warning above raised
+                # UnboundLocalError and failed the run it was protecting.
                 logging.getLogger("iron_jarvis.guide").exception(
                     "guide base knowledge unavailable (run continues)"
                 )
@@ -3660,6 +3785,10 @@ class AgentRuntime:
         # v1.402.0 (the closing offer): where this invocation's steps start,
         # so the final-answer exit knows how many are LEFT.
         _offer_from = run.steps
+        # v1.421.0: this invocation's tool definitions as the wire carries
+        # them (serialised once — they do not change between its steps), so
+        # the budget planner can price them against a KNOWN window.
+        _tools_blob: str | None = None
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
@@ -3681,8 +3810,12 @@ class AgentRuntime:
             # keeps appending to the real `messages` list, so the run's own
             # history (and the DB transcript) is never rewritten by trimming.
             step_messages, step_system = messages, system_prompt
+            # v1.421.0: the one sentence this step ends the run with when its
+            # model's KNOWN window cannot hold what the step must send.
+            _too_small = ""
             try:
                 from ..context.agent_window import plan_agent_transcript
+                from ..context.budget import estimate_tokens as _estimate_tokens
                 from ..daemon.chat_turn import _context_window, _history_ratio, _reserve_kw
 
                 _win = _context_window(
@@ -3721,6 +3854,28 @@ class AgentRuntime:
                     messages, system_prompt, _cpt_summary, _cpt_covers
                 )
 
+                # THE TOOL DEFINITIONS COUNT (v1.421.0). Every step sends
+                # `tool_specs` beside the system prompt and the messages — a
+                # 67-tool builder ~15k tokens of them — and the planner priced
+                # only the other two: on a model whose window is now read
+                # honestly (the fleet probe: Ollama's 4,096, a 44k-70k
+                # mid-size server) a step "fitted" by the planner overflowed
+                # by the tools. Priced ONLY when the window is KNOWN
+                # (`_context_window` answers None for the unknown rung, which
+                # the planner reads as the 32k guess): 15k of tools against a
+                # guessed 32k would
+                # over-trim every unknown model's run. Not in compaction
+                # pressure either (`TranscriptPlan.raw_tokens`): a summary
+                # cannot shrink a tool list. Passed only when set, so a run
+                # with no tools, or an unknown window, plans byte-identically.
+                _fixed_kw: dict[str, int] = {}
+                if _win and tool_specs:
+                    if _tools_blob is None:
+                        _tools_blob = json.dumps(
+                            tool_specs, ensure_ascii=False, sort_keys=True, default=str,
+                        )
+                    _fixed_kw = {"fixed_tokens": _estimate_tokens(_tools_blob, _cpt)}
+
                 _plan = plan_agent_transcript(
                     _eff_messages,
                     window=_win,
@@ -3731,6 +3886,7 @@ class AgentRuntime:
                     **_reserve_kw(
                         SimpleNamespace(platform=self.p), session.provider, session.model, _win,
                     ),
+                    **_fixed_kw,
                 )
                 step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:
@@ -3770,9 +3926,26 @@ class AgentRuntime:
                             },
                             session_id=session.id,
                         )
+                # A MODEL TOO SMALL FOR THE JOB SAYS SO (v1.421.0). With the
+                # task clipped, or without the newest block — the results the
+                # model is about to act on — the step cannot make progress:
+                # the model asks for the same results again, step after step,
+                # and the run ended at its step limit having done nothing,
+                # for a reason nobody was told. Only at a KNOWN window (a
+                # guessed 32k never ends a run); decided here, raised after
+                # this block (whose `except` keeps budgeting faults from
+                # breaking a run) and BEFORE any model call.
+                if _win and (_plan.clipped_task or _plan.lost_newest):
+                    _too_small = context_too_small_result(
+                        _plan.window,
+                        task_clipped=_plan.clipped_task,
+                        has_tools=bool(tool_specs),
+                    )
             except Exception:  # noqa: BLE001 — a budgeting fault must never
                 # break a run; the untrimmed transcript is what shipped before.
                 step_messages, step_system = messages, system_prompt
+            if _too_small:
+                raise ContextTooSmall(run, _too_small)
             # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to
             # the SSE sink the moment they arrive; the terminal ``final`` frame
             # carries the SAME aggregate LLMResponse (+ resolved provider/model) that
@@ -3914,6 +4087,46 @@ class AgentRuntime:
                 _cut_pending = _cut_note
 
             if not resp.wants_tools:
+                # A TOOL CALL WRITTEN AS TEXT (v1.421.0, A5 — the chat lanes'
+                # harness rule, ``HarnessTurn.wants_nudge``, in the agent
+                # loop): a local model (glm's ``<tool_call>read_file …``, a
+                # Claude-style ``<invoke>``, a JSON blob) that writes its call
+                # instead of making it ended the run with the markup as its
+                # "report" — a helper, a teammate, any agent on such a model.
+                # The text is NEVER executed: the answer and ONE note go on
+                # the transcript (plain turns, no tool_use — the v1.152.0 unit
+                # rule holds) and the run goes on, so the model makes the call
+                # itself, through every gate a call goes through. Bounded by
+                # ``_text_call_nudge`` (a tool the step OFFERED, a step left,
+                # never twice in a row, two a run). The flat lane's transcript
+                # is not saved here (the closing offer's rule): the next step
+                # that asks for tools saves it with the note in it. BEFORE the
+                # closing offer, as in the chat lanes. Shared by the
+                # decomposed lane's mini-loops (this method), whose count
+                # spans the whole run through the caller's breaker state.
+                _tc_name = _text_call_nudge(
+                    resp.text, _offered, messages,
+                    steps_left=max_steps - (run.steps - _offer_from), state=_bstate,
+                )
+                if _tc_name:
+                    from ..core.nudges import TEXT_TOOL_CALL, note_nudge
+                    from ..harness.mode import TEXT_TOOL_CALL_NUDGE
+
+                    messages.append(LLMMessage(
+                        role="assistant", content=resp.text,
+                        raw_blocks=list(getattr(resp, "raw_blocks", None) or []),
+                    ))
+                    messages.append(LLMMessage(role="user", content=TEXT_TOOL_CALL_NUDGE))
+                    await note_nudge(
+                        self.p.event_bus, TEXT_TOOL_CALL, session_id=session.id,
+                        run_id=run.id, step=int(run.steps), surface="agent", tool=_tc_name,
+                    )
+                    if sink:
+                        # The streamed markup is not the answer (the stream
+                        # lane's `reset`, reason "text_tool_call").
+                        sink.reset("text_tool_call")
+                    await asyncio.to_thread(self._save, run)
+                    continue
                 # A FINAL ANSWER THAT ENDS ON AN OFFER (v1.402.0, part 4 —
                 # harness/closing_offer, the chat lanes' rule): "Want me to
                 # also add tests?" with steps left is told ONCE to do it

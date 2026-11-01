@@ -126,6 +126,12 @@ const SYSTEM_WORDS: Record<string, [string, string]> = {
   step_limit_continue: ["run carried on past its step budget", "runs carried on past their step budget"],
   rounds_extended: ["turn took more rounds by itself", "turns took more rounds by themselves"],
   closing_question: ["offer to do more it took up instead of asking", "offers to do more it took up instead of asking"],
+  // v1.421.0 (A5): a model wrote a step out as text instead of running it and
+  // was told once to run it for real (a coding session's turn or an agent run).
+  text_tool_call: [
+    "step a model wrote out as text and was told to run",
+    "steps a model wrote out as text and was told to run",
+  ],
 };
 
 /** The system's own nudges on one quiet line; "" when there were none. */
