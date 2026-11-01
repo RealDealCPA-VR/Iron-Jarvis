@@ -321,3 +321,44 @@ def test_an_older_teamrolerun_table_gains_both_columns_and_its_rows_read_as_befo
                 asked="name", files=["a.py"])
     new = next(r for r in _rows(p) if r.session_id == "s-new")
     assert new.asked == "name" and TR.files_of(new) == ["a.py"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. a review handed by name is no floor for the reply's review
+# --------------------------------------------------------------------------- #
+
+
+def test_a_named_review_does_not_hide_earlier_pieces_from_the_replys_review(tmp_path):
+    p = build_platform(str(tmp_path))
+
+    def row(member, role, sid, asked):
+        return TR.note_run(p.engine, member=member, role=role, session_id=sid, scope="build:s",
+                           finished=True, turn="reply-1", asked=asked)
+
+    row("qwen", "code", "h1", "name")
+    row("rev", "review", "h2", "name")  # the lead asked the reviewer to look, no verdict asked
+    row("qwen", "code", "h3", "name")
+    finish_review = row("rev", "review", "h4", "role")
+    assert TR.credit_review(p.engine, scope="build:s", review_row=finish_review, verdict=TR.REVIEW_GOOD) == 2
+    got = {r.session_id: r.review for r in _rows(p)}
+    assert got == {"h1": TR.REVIEW_GOOD, "h2": "", "h3": TR.REVIEW_GOOD, "h4": ""}
+    # A ROLE review still is a floor (the v1.395.0 rule): a later review
+    # judges only what came after it.
+    row("qwen", "code", "h5", "name")
+    second = row("rev", "review", "h6", "role")
+    assert TR.credit_review(p.engine, scope="build:s", review_row=second, verdict=TR.REVIEW_BAD) == 1
+    assert {r.session_id: r.review for r in _rows(p)}["h5"] == TR.REVIEW_BAD
+
+
+async def test_through_the_lane_the_finish_review_judges_work_before_a_named_review(world):  # noqa: F811
+    members(world.p)
+    world.main = [_named("n1", "qwen", "Set X to 2 in app.py."), _named("r1", "rev", "Look at app.py."),
+                  "The worker set X to 2 and the reviewer looked.", answer_note(world)]
+    world.worker = [write_x(2), "Changed app.py."]
+    world.reviewer = ["Looks fine to me.", "Good.\nVERDICT: approved"]
+    out = await stream(world.p, body(world.ws))
+    assert out["done"]["finish"]["review"]["verdict"] == "approved"
+    rows = _rows(world.p)
+    assert [(r.member, r.role, r.asked) for r in rows] == [
+        ("qwen", "code", "name"), ("rev", "review", "name"), ("rev", "review", "role")]
+    assert rows[0].review == TR.REVIEW_GOOD

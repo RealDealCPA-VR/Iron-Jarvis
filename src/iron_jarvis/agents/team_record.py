@@ -426,7 +426,14 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
     — a coding session's scope is the whole session, which lasts for days, so
     the first review of the day used to judge every unreviewed piece the
     session ever handed out (another member's included). A review in a later
-    reply than the code judges nothing: a missed signal, never a wrong one."""
+    reply than the code judges nothing: a missed signal, never a wrong one.
+
+    v1.421.0 (A2): a review piece the lead handed BY NAME (``asked`` =
+    :data:`ASKED_BY_NAME`) is no FLOOR for a later review: it was not asked
+    for a verdict (its task is handed on unchanged), so the pieces before it
+    are usually unjudged — and the finish check's review of the reply must
+    still judge them. The pieces a named review DID judge (its report ended
+    on a verdict line) are skipped anyway (``review = ''``)."""
     if verdict not in (REVIEW_GOOD, REVIEW_BAD) or engine is None or not scope or not review_row:
         return 0
     try:
@@ -443,7 +450,8 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
             turn = str(me[1] or "")
             prev = db.exec(text(  # type: ignore[call-overload]
                 "SELECT MAX(rowid) FROM teamrolerun WHERE scope = :scope AND role = 'review' "
-                "AND rowid < :mine").bindparams(scope=scope, mine=mine)).first()
+                "AND COALESCE(asked, '') != :named AND rowid < :mine"
+            ).bindparams(scope=scope, mine=mine, named=ASKED_BY_NAME)).first()
             floor = int(prev[0]) if prev is not None and prev[0] is not None else 0
             res = db.exec(text(  # type: ignore[call-overload]
                 "UPDATE teamrolerun SET review = :v WHERE scope = :scope AND role IN ('code', 'test') "
