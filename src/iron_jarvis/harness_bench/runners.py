@@ -850,6 +850,7 @@ class JarvisRunner:
         from ..harness import finish as harness_finish
         from ..harness import folder_changes as harness_folder_changes
         from ..harness import mode as harness_mode
+        from ..harness import patience as harness_patience
         from ..harness import project_map as harness_project_map
         from ..harness import standard as harness_standard
         from ..personas.builtins import BUILTIN_PERSONAS
@@ -883,6 +884,12 @@ class JarvisRunner:
                 # would otherwise reuse results its helpers never saw.
                 + b"\0" + _module_bytes(harness_standard)
                 + b"\0" + _module_bytes(harness_command_env)
+                # v1.422.0 (Wave 2, B1) review: and the round's patience — a
+                # passing provider failure is waited out and the SAME call
+                # asked again, so its rules decide whether a run finishes or
+                # is "did not run". (``providers/retry_round`` only marks a
+                # notice: it changes nothing a run does, and stays out.)
+                + b"\0" + _module_bytes(harness_patience)
             ),
             "dialect": turn.plan.dialect.id,
             "dialect_requested": self.dialect,

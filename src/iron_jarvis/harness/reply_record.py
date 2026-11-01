@@ -60,10 +60,26 @@ DELETED, never resumed (resuming it would run finished steps again). A write
 that fails or times out does the same. Either way the reply keeps v1.389.0's
 Retry.
 
-HOW LONG. Only while it can be resumed: a reply that ends — done, failed or
-stopped by the user — deletes its list (``routes/build.recorded_turn``); a
-boot resumes or drops every list it finds (``routes/build.resume_after_
-restart``), and :func:`prune` removes any left older than :data:`KEEP_DAYS`.
+HOW LONG. Only while it can be resumed: a reply that ends — done or stopped
+by the user — deletes its list (``routes/build.recorded_turn``); a boot
+resumes or drops every list it finds (``routes/build.resume_after_restart``),
+and :func:`prune` removes any left older than :data:`KEEP_DAYS`.
+
+A REPLY THAT FAILED KEEPS ITS LIST (v1.422.0, Wave 2 "Never lose work", B1).
+A provider error at round 35 of a 40-minute reply used to delete the record,
+and the only way on was Retry — the question again FROM THE BEGINNING. Now a
+reply that ended on an error (never a safety refusal, never beside an
+account's limit card) keeps its list under a key of its own,
+:data:`FAILED_PREFIX` ``+ <turn id>`` (:meth:`ReplyRecord.keep_failed`), and
+its reply line offers "Continue from where it stopped": a new turn that
+carries it on from its kept rounds, the restart resume's own way
+(``routes/build.start_build_turn`` with ``resume_failed``). The boot's resume
+pass CANNOT see such a list (:func:`kept` reads :data:`RUN_PREFIX` only), so a
+failed reply is never carried on by itself — only by the user's press
+(:func:`claim` with ``failed=True``). A kept failed list goes when the
+session starts any other turn (:func:`drop_failed` — a newer message, or
+Retry, makes it moot), and :func:`prune` removes it after :data:`KEEP_DAYS`
+like the others.
 
 WAITING. A reply parked on the user (an approval card, its own question, an
 app's question or model request) is marked ``waiting`` while it is, and a boot
@@ -88,6 +104,10 @@ log = logging.getLogger(__name__)
 
 #: ``RunTranscript.run_id`` of a coding session's turn: this + the turn id.
 RUN_PREFIX = "build-turn:"
+#: v1.422.0 (B1): ``RunTranscript.run_id`` of a reply that FAILED and kept its
+#: list for "Continue from where it stopped": this + the turn id. A key of its
+#: own so the boot's resume pass (:func:`kept`) never sees it.
+FAILED_PREFIX = "build-failed:"
 #: How long one save may hold the reply up before it is given up (the list is
 #: then dropped: a reply whose record could not be kept is not resumed).
 SAVE_WAIT_S = 10.0
@@ -108,6 +128,19 @@ RESUME_NOTE = (
 RESUME_QUESTION = (
     "Carry on with the reply that stopped when Iron Jarvis restarted, from where it stopped."
 )
+#: v1.422.0 (B1): the model's note at the end of a FAILED reply's kept
+#: conversation, when the user pressed "Continue from where it stopped".
+FAILED_RESUME_NOTE = (
+    "[Your reply stopped here on an error from the model's service (it was busy, timed out or"
+    " the connection dropped), and the user asked you to continue. Your work so far is above,"
+    " exactly as it was. A tool call that was cut off says so in its result: a call that only"
+    " reads is safe to run again; for anything else, check whether it took effect before doing"
+    " it again. Carry on with the reply from where you stopped, and do not repeat work that is"
+    " already done.]"
+)
+#: v1.422.0 (B1): that continue turn's question line (a continuation: the
+#: screen hides it; a later turn's history reads it).
+FAILED_RESUME_QUESTION = "Continue the reply that stopped on an error, from where it stopped."
 
 _WRITER: "concurrent.futures.ThreadPoolExecutor | None" = None
 _WRITER_LOCK = threading.Lock()
@@ -127,6 +160,11 @@ def _writer() -> concurrent.futures.ThreadPoolExecutor:
 
 def run_id_for(turn_id: str) -> str:
     return RUN_PREFIX + str(turn_id or "")
+
+
+def failed_run_id_for(turn_id: str) -> str:
+    """v1.422.0 (B1): the key a FAILED reply's kept list moves to."""
+    return FAILED_PREFIX + str(turn_id or "")
 
 
 def turn_of(run_id: str) -> str:
@@ -247,7 +285,8 @@ def _fit(rows: list[dict[str, Any]], cap: int) -> "str | None":
 
 
 def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
-           real: dict[str, str], sizes: "dict[str, int] | None" = None) -> str:
+           real: dict[str, str], sizes: "dict[str, int] | None" = None,
+           low_trust: str = "") -> str:
     """"ok", "over" (over the cap even after leaving the earliest rounds out:
     the row is removed), or "failed" (the row is removed when it can be). On
     the writer thread. ``sizes`` (v1.418.0) receives the stored text's length
@@ -269,6 +308,9 @@ def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
             row.session_id = session_id
             row.messages_json = text
             row.updated_at = utcnow()
+            if low_trust:
+                # v1.422.0 review: in the same write as the rounds it covers.
+                row.low_trust = low_trust
             db.add(row)
             db.commit()
         if sizes is not None:
@@ -282,7 +324,7 @@ def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
 
 def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
             real: dict[str, str], start: int, expect: int,
-            sizes: "dict[str, int] | None" = None) -> str:
+            sizes: "dict[str, int] | None" = None, low_trust: str = "") -> str:
     """v1.418.0 (C3.6): add ``snaps[start:]`` to the stored list, whose text
     is ``expect`` chars long: only those messages are encoded, and SQLite
     joins them onto the row (``messages_json`` minus its closing ``]``, then
@@ -300,10 +342,10 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
         rows = _encode_rows(snaps[start:], real)
         delta = "".join(", " + json.dumps(r) for r in rows) + "]"
     except Exception:  # noqa: BLE001 — the whole write decides
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     new_len = expect - 1 + len(delta)
     if new_len > _transcript.MAX_TRANSCRIPT_CHARS:
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     try:
         with session_scope(engine) as db:
             col = RunTranscript.messages_json
@@ -313,7 +355,10 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
                 .where(RunTranscript.session_id == session_id)
                 .where(func.length(col) == expect)
                 .values(messages_json=func.substr(col, 1, expect - 1).op("||")(delta),
-                        updated_at=utcnow())
+                        updated_at=utcnow(),
+                        # v1.422.0 review: the reply's low trust, in the same
+                        # statement as the rounds it covers.
+                        **({"low_trust": low_trust} if low_trust else {}))
             )
             db.commit()
             appended = int(getattr(res, "rowcount", 0) or 0) == 1
@@ -321,7 +366,7 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
         log.warning("could not add to the conversation of %s; writing it whole", run_id, exc_info=True)
         appended = False
     if not appended:
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     if sizes is not None:
         sizes["len"] = new_len
     return "ok"
@@ -351,6 +396,25 @@ def _delete(engine: Any, run_id: str) -> None:
         log.warning("could not remove the kept conversation of %s", run_id, exc_info=True)
 
 
+def _move_failed(engine: Any, run_id: str, to_id: str) -> bool:
+    """v1.422.0 (B1): move a reply's kept list to its FAILED key (no longer
+    waiting). True when exactly that row moved. On the writer thread."""
+    from sqlalchemy import update
+
+    try:
+        with session_scope(engine) as db:
+            res = db.exec(  # type: ignore[call-overload]
+                update(RunTranscript)
+                .where(RunTranscript.run_id == run_id)
+                .values(run_id=to_id, waiting=None, updated_at=utcnow())
+            )
+            db.commit()
+            return int(getattr(res, "rowcount", 0) or 0) == 1
+    except Exception:  # noqa: BLE001 — a kept list never fails a reply
+        log.warning("could not keep the conversation of the failed reply %s", run_id, exc_info=True)
+        return False
+
+
 class ReplyRecord:
     """One coding-session turn's kept conversation (see the module doc).
 
@@ -369,6 +433,10 @@ class ReplyRecord:
         self.session_id = S.session_id_for(self.thread_id)
         self.resume_tail = list(resume_tail or [])
         self.resumed_from = str(resumed_from or "")
+        #: v1.422.0 (B1): how ``resumed_from`` is carried on — "restart" (the
+        #: boot's pass) or "failed" (the user's "Continue from where it
+        #: stopped" after an error); the reply line says which.
+        self.resume_kind = "restart"
         #: False once a save failed or the list went over its cap: nothing is
         #: written again for this turn (its list is gone; Retry stays).
         self.enabled = True
@@ -383,6 +451,24 @@ class ReplyRecord:
         #: appends only what was added. None: the next save writes it whole.
         self._kept: "list[tuple[int, str, int, int, bool, int]] | None" = None
         self._kept_len = 0
+        #: v1.422.0 review: why the reply runs at LOW trust ("" = full) —
+        #: noted by the lane before each save (:meth:`note_trust`) and written
+        #: with the rounds, so a restart's carry-on (and "Continue from where
+        #: it stopped") starts low from it (:func:`low_trust_of`).
+        self.low_trust = ""
+        self._low_written = False
+
+    def note_trust(self, state: Any) -> None:
+        """v1.422.0 review: the lane's trust record (``{low, tainted,
+        reason}``): once the reply is low it stays low (a taint never
+        reverses), and the next save writes it. Never raises."""
+        try:
+            if self.low_trust or not isinstance(state, dict):
+                return
+            if state.get("low") or state.get("tainted"):
+                self.low_trust = str(state.get("reason") or "").strip() or "low trust"
+        except Exception:  # noqa: BLE001
+            return
 
     def note_calls(self, model_calls: Any, calls: Any) -> None:
         """The REAL tool behind each call the model made (same ids): kept
@@ -406,8 +492,9 @@ class ReplyRecord:
         if not tail:
             return
         mark = (len(tail), id(tail[-1]))
-        if mark == self._last:
+        if mark == self._last and (self._low_written or not self.low_trust):
             return
+        low = self.low_trust
         snaps = [_Snap(m) for m in tail]
         prints = [_fingerprint(m) for m in tail]
         real = dict(self._real)
@@ -419,11 +506,11 @@ class ReplyRecord:
         if kept is not None and len(prints) > len(kept) and prints[:len(kept)] == kept:
             fut = loop.run_in_executor(
                 _writer(), _append, self.engine, self.run_id, self.session_id, snaps, real,
-                len(kept), self._kept_len, sizes,
+                len(kept), self._kept_len, sizes, low,
             )
         else:
             fut = loop.run_in_executor(
-                _writer(), _write, self.engine, self.run_id, self.session_id, snaps, real, sizes,
+                _writer(), _write, self.engine, self.run_id, self.session_id, snaps, real, sizes, low,
             )
         self._kept = None  # until this write is known to have landed
         try:
@@ -433,6 +520,8 @@ class ReplyRecord:
             loop.run_in_executor(_writer(), _delete, self.engine, self.run_id)
         if outcome == "ok":
             self._last = mark
+            if low:
+                self._low_written = True
             if "len" in sizes:
                 self._kept, self._kept_len = prints, sizes["len"]
             return
@@ -457,6 +546,37 @@ class ReplyRecord:
         except asyncio.TimeoutError:
             pass
 
+    @property
+    def kept_rounds(self) -> bool:
+        """v1.422.0 (B1): does the kept list hold anything past the question
+        (a round, a steer note, a resumed reply's earlier rounds)? A reply
+        that failed before that has nothing to continue from — its Retry is
+        the same thing."""
+        return self.enabled and self._last is not None and self._last[0] >= 2
+
+    async def keep_failed(self) -> bool:
+        """The reply ENDED ON AN ERROR (v1.422.0, Wave 2 "Never lose work",
+        B1): keep its list for "Continue from where it stopped" — MOVED to
+        :func:`failed_run_id_for` (the boot's resume pass never reads that
+        key), no longer waiting. Off the loop, on the writer thread (after
+        any save asked for before it). True only when a list holding a round
+        past the question was really kept; False leaves the caller to forget
+        it as before."""
+        if not self.kept_rounds:
+            return False
+        fut = asyncio.get_running_loop().run_in_executor(
+            _writer(), _move_failed, self.engine, self.run_id, failed_run_id_for(self.turn_id),
+        )
+        try:
+            moved = bool(await asyncio.wait_for(asyncio.shield(fut), SAVE_WAIT_S))
+        except asyncio.TimeoutError:
+            return False
+        if moved:
+            # Nothing more is written for this turn: its list now lives under
+            # the failed key, which only the user's press reads.
+            self.enabled = False
+        return moved
+
     async def forget(self) -> None:
         """The reply ended cleanly: its list is not kept."""
         fut = asyncio.get_running_loop().run_in_executor(_writer(), _delete, self.engine, self.run_id)
@@ -473,7 +593,9 @@ class ReplyRecord:
 
 def kept(engine: Any) -> list[dict[str, Any]]:
     """Every kept list: ``{turn_id, thread_id, waiting, updated_at}`` — the
-    key columns only (never a list's text), oldest first."""
+    key columns only (never a list's text), oldest first. A FAILED reply's
+    list (:data:`FAILED_PREFIX`, v1.422.0) is never among them: only the
+    user's "Continue from where it stopped" carries one on."""
     from sqlmodel import select
 
     from . import sessions as S
@@ -508,16 +630,66 @@ def drop(engine: Any, turn_id: str) -> None:
     _delete(engine, run_id_for(turn_id))
 
 
-def prune(engine: Any, *, days: int = KEEP_DAYS) -> int:
-    """Remove kept lists older than ``days``. Returns how many."""
+def low_trust_of(engine: Any, turn_id: str, *, failed: bool = False) -> str:
+    """v1.422.0 review: why the kept reply ran at LOW trust ("" = it did not,
+    or no list is kept) — the restart's list, or (``failed``) a failed
+    reply's. BLOCKING; never raises."""
+    key = failed_run_id_for(turn_id) if failed else run_id_for(turn_id)
+    try:
+        with session_scope(engine) as db:
+            row = db.get(RunTranscript, key)
+            return str(getattr(row, "low_trust", None) or "") if row is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def has_failed(engine: Any, turn_id: str) -> bool:
+    """v1.422.0 (B1): is a FAILED reply's list kept for ``turn_id``?"""
+    with session_scope(engine) as db:
+        return db.get(RunTranscript, failed_run_id_for(turn_id)) is not None
+
+
+def drop_failed(engine: Any, session_id: str) -> int:
+    """v1.422.0 (B1): forget every FAILED reply's list of one session (its
+    ``build:<thread id>``) — another turn of the session started, so "Continue
+    from where it stopped" is moot (a newer message, or Retry, which asks the
+    question again from the start). A list the starting turn just took has
+    already moved to that turn's own key. BLOCKING; never raises. Returns how
+    many."""
     from sqlalchemy import delete
+
+    sid = str(session_id or "")
+    if not sid:
+        return 0
+    try:
+        with session_scope(engine) as db:
+            res = db.exec(
+                delete(RunTranscript)  # type: ignore[call-overload]
+                .where(RunTranscript.run_id.like(FAILED_PREFIX + "%"))  # type: ignore[attr-defined]
+                .where(RunTranscript.session_id == sid)
+            )
+            db.commit()
+            return int(getattr(res, "rowcount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        log.warning("could not forget the failed replies of %s", sid, exc_info=True)
+        return 0
+
+
+def prune(engine: Any, *, days: int = KEEP_DAYS) -> int:
+    """Remove kept lists older than ``days`` — a failed reply's too
+    (v1.422.0). Returns how many."""
+    from sqlalchemy import delete, or_
 
     cutoff = _naive(utcnow() - timedelta(days=days))
     try:
         with session_scope(engine) as db:
             res = db.exec(
                 delete(RunTranscript)  # type: ignore[call-overload]
-                .where(RunTranscript.run_id.like(RUN_PREFIX + "%"))  # type: ignore[attr-defined]
+                # v1.422.0 (B1): a FAILED reply's kept list expires the same.
+                .where(or_(
+                    RunTranscript.run_id.like(RUN_PREFIX + "%"),  # type: ignore[attr-defined]
+                    RunTranscript.run_id.like(FAILED_PREFIX + "%"),  # type: ignore[attr-defined]
+                ))
                 .where(RunTranscript.updated_at < cutoff)
             )
             db.commit()
@@ -527,21 +699,33 @@ def prune(engine: Any, *, days: int = KEEP_DAYS) -> int:
         return 0
 
 
-def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None) -> "list[Any] | None":
+def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None,
+         failed: bool = False, session_id: str = "") -> "list[Any] | None":
     """The cut-off turn's messages ready to carry on from (its question first;
-    every call with no result answered), or None when none was kept."""
+    every call with no result answered), or None when none was kept.
+    ``failed`` (v1.422.0): read the list a FAILED reply kept
+    (:func:`failed_run_id_for`) instead of a cut-off one's.
+
+    v1.422.0 review: ``session_id`` (``build:<thread id>``) — None unless the
+    list was kept BY THAT SESSION. A turn id alone named the list, and Branch
+    from here copies a failed reply's line (its ``turnId``): Continue in the
+    branch took the ORIGINAL session's kept rounds."""
     from ..agents.transcript import load_for_resume
     from . import sessions as S
 
+    key = failed_run_id_for(turn_id) if failed else run_id_for(turn_id)
     with session_scope(engine) as db:
-        row = db.get(RunTranscript, run_id_for(turn_id))
+        row = db.get(RunTranscript, key)
         if row is None:
             return None
-        session_id = str(row.session_id or "")
-    if not session_id.startswith(S.SESSION_PREFIX):
+        owner = str(row.session_id or "")
+    if not owner.startswith(S.SESSION_PREFIX):
         return None
+    if session_id and owner != str(session_id):
+        return None
+    session_id = owner
     out = load_for_resume(
-        engine, run_id_for(turn_id), registry,
+        engine, key, registry,
         ledger_run_id=session_id, since=_naive(since) if since is not None else None,
     )
     if not out or getattr(out[0], "role", "") != "user":
@@ -549,7 +733,8 @@ def load(engine: Any, turn_id: str, registry: Any = None, *, since: Any = None) 
     return out
 
 
-def claim(engine: Any, turn_id: str, to_turn: str = "") -> bool:
+def claim(engine: Any, turn_id: str, to_turn: str = "", *, failed: bool = False,
+          session_id: str = "") -> bool:
     """TAKE a kept list for the ONE resume that carries it on, in one
     statement, so of two resumes of the same turn (a boot that runs twice, a
     retry racing the first) exactly one sees it. A list marked ``waiting`` is
@@ -560,24 +745,34 @@ def claim(engine: Any, turn_id: str, to_turn: str = "") -> bool:
     first save — after its grounding, a summary, its folder snapshot, which
     can take seconds or a model call — the list it was given is still kept
     under ITS name, so a stop in that window leaves the reply resumable by
-    the next boot instead of lost. "" removes it (the old take)."""
-    from sqlalchemy import delete, or_, update
+    the next boot instead of lost. "" removes it (the old take).
+
+    v1.422.0 (B1): ``failed`` — take a FAILED reply's list instead (the
+    user's "Continue from where it stopped": :func:`failed_run_id_for`). The
+    boot's pass never passes it, so it can never carry a failed reply on.
+    v1.422.0 review: ``session_id`` — only a list that session kept (see
+    :func:`load`)."""
+    from sqlalchemy import delete, or_, true, update
 
     not_waiting = or_(RunTranscript.waiting.is_(None), RunTranscript.waiting == False)  # noqa: E712
+    source = failed_run_id_for(turn_id) if failed else run_id_for(turn_id)
+    owned = RunTranscript.session_id == str(session_id) if session_id else true()
     try:
         with session_scope(engine) as db:
             if to_turn:
                 stmt = (
                     update(RunTranscript)
-                    .where(RunTranscript.run_id == run_id_for(turn_id))
+                    .where(RunTranscript.run_id == source)
                     .where(not_waiting)
+                    .where(owned)
                     .values(run_id=run_id_for(to_turn), updated_at=utcnow(), waiting=None)
                 )
             else:
                 stmt = (
                     delete(RunTranscript)
-                    .where(RunTranscript.run_id == run_id_for(turn_id))
+                    .where(RunTranscript.run_id == source)
                     .where(not_waiting)
+                    .where(owned)
                 )
             res = db.exec(stmt)  # type: ignore[call-overload]
             db.commit()
@@ -597,6 +792,8 @@ def started_at(engine: Any, turn_id: str) -> "datetime | None":
 
 
 __all__ = [
-    "KEEP_DAYS", "RESUME_NOTE", "RESUME_QUESTION", "RUN_PREFIX", "SAVE_WAIT_S", "ReplyRecord",
-    "claim", "drop", "has_record", "kept", "load", "prune", "run_id_for", "started_at", "turn_of",
+    "FAILED_PREFIX", "FAILED_RESUME_NOTE", "FAILED_RESUME_QUESTION", "KEEP_DAYS", "RESUME_NOTE",
+    "RESUME_QUESTION", "RUN_PREFIX", "SAVE_WAIT_S", "ReplyRecord", "claim", "drop", "drop_failed",
+    "failed_run_id_for", "has_failed", "has_record", "kept", "load", "low_trust_of", "prune", "run_id_for",
+    "started_at", "turn_of",
 ]

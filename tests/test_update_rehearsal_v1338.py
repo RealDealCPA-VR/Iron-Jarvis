@@ -326,6 +326,9 @@ def _as_older_schema(home: Path) -> None:
         # v1.391.0: and no `runtranscript.waiting` (a coding reply's kept
         # conversation says whether it was parked on the user).
         con.execute('ALTER TABLE "runtranscript" DROP COLUMN "waiting"')
+        # v1.422.0 review: and no `runtranscript.low_trust` (a reply's low
+        # trust, kept with its rounds).
+        con.execute('ALTER TABLE "runtranscript" DROP COLUMN "low_trust"')
         # v1.421.0 (Wave 1, A1): and no `toolinvocation.shell_syntax` (the
         # shell language a command was written in) — the cut-off tool call
         # below is reconciled into that table.
@@ -335,6 +338,7 @@ def _as_older_schema(home: Path) -> None:
         con.close()
     assert "failure_detail" not in _session_columns(home), "anti-vacuity: the older shape"
     assert "waiting" not in _table_columns(home, "runtranscript"), "anti-vacuity: the older shape"
+    assert "low_trust" not in _table_columns(home, "runtranscript"), "anti-vacuity: the older shape"
     assert "shell_syntax" not in _table_columns(home, "toolinvocation"), "anti-vacuity: the older shape"
 
 
@@ -422,6 +426,7 @@ def test_an_update_restart_brings_everything_back(tmp_path):
         # The older database gained the new column (nullable) and its rows read.
         assert _session_columns(home)["failure_detail"] == 0, "added, and nullable"
         assert _table_columns(home, "runtranscript")["waiting"] == 0, "added, and nullable"
+        assert _table_columns(home, "runtranscript")["low_trust"] == 0, "added, and nullable"
         assert _table_columns(home, "toolinvocation")["shell_syntax"] == 0, "added, and nullable"
         row = second.get(f"/sessions/{planted['session']}")
         assert row.status_code == 200, row.text

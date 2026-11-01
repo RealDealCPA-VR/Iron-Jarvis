@@ -834,6 +834,14 @@ class Notifier:
             payload = _event_field(event, "payload", {}) or {}
             if isinstance(payload, dict) and payload.get("kind") == "refusal":
                 return None
+            # v1.422.0 review (Wave 2, B1): a coding reply's round that its
+            # patience asked AGAIN after a passing failure — ONE notice per
+            # round (its first failure), never one per try: a 529 storm sent
+            # up to five "couldn't answer" toasts while the reply said it was
+            # trying again. The ledger keeps every try (`providers/
+            # retry_round`).
+            if isinstance(payload, dict) and payload.get("retry"):
+                return None
         # v1.118.0: fan out to EVERY channel whose per-registration config
         # allows this event type — not just the default. A channel config may
         # carry ``events: [...]`` to narrow what it receives (the Notifications

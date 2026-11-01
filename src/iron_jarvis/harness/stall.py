@@ -35,6 +35,25 @@ writes the call's failed row with the words :data:`STOPPED_LEDGER_NOTE`
 ("stopped by you"), and the lane hands the model :func:`stopped_result` — the
 reply carries on without the step. Every other call, and the reply, go on.
 
+STOP STOPS THE RUNNING STEPS TOO (v1.422.0, Wave 2 "Never lose work", B2).
+The reply's own Stop (and Esc, which presses it) used to end the answer being
+written and prevent the NEXT round — while a command already running ran on
+for up to its whole deadline (10 minutes) behind a reply that said it had
+stopped. :func:`run_step` now races every step against the turn's Stop
+(``core/turns.TurnHandle.wait_stopped`` — whoever stopped it: the page, the
+night's limit, Emergency stop): when Stop wins, the step gets
+:data:`STOP_GRACE_S` (3 s) to end by itself (a tool that watches the Stop on
+its own — the agent's browser — answers in its own words), then it is
+cancelled through the same cancel path as Stop the step (its command's
+process tree killed, its ledger row :data:`TURN_STOPPED_LEDGER_NOTE`), and the
+model's result says so (:func:`turn_stopped_result`) — never that it
+succeeded. A step that waits on a PERSON or runs a whole helper (the
+registry's ``deadline_exempt``: ``ask_user`` answers "stopped before the user
+answered" itself) is not raced. A program the
+session started IN THE BACKGROUND (``process_start`` without waiting for it)
+is not a running step: Stop leaves it running (archive, delete or the
+Session tab's Stop end it).
+
 THE PHONE (decision 3): :data:`PHONE_AFTER_S` — a coding session's card that
 stays unanswered in the app this long is published as ``approval.requested``
 (the agent runtime's own event), so ``comm/prompts`` registers the answerable
@@ -80,6 +99,21 @@ STOPPED_LEDGER_NOTE = (
     "stopped by you while it was running (it had shown no progress) — "
     "anything it did before it was stopped may have landed"
 )
+#: v1.422.0 (B2): ...and on the row of a step that was running when the user
+#: stopped the whole reply.
+TURN_STOPPED_LEDGER_NOTE = (
+    "stopped by you while it was running (you stopped the reply) — "
+    "anything it did before it was stopped may have landed"
+)
+#: Why a step task was stopped: Stop the step, or the reply's own Stop.
+STOP_STEP = "step"
+STOP_TURN = "turn"
+#: v1.422.0 (B2): when the reply's Stop lands while a step runs, the step is
+#: given this long to end BY ITSELF first — a tool that watches the turn's
+#: Stop on its own (the agent's browser closes itself and says so) answers in
+#: its own words; anything still running after it (a command) is cancelled and
+#: its tree killed. A hang bound, never a speed bar.
+STOP_GRACE_S = 3.0
 
 #: A once-only card's reasons that are SAFETY cards (``lib/onceReason``): a
 #: project's or a plugin's command line, a commit / push on a session's
@@ -415,8 +449,10 @@ async def _settle(task: "asyncio.Task[Any]") -> None:
 _STEPS_LOCK = threading.Lock()
 #: turn id -> call id -> (task, tool name)
 _STEPS: dict[str, dict[str, tuple["asyncio.Task[Any]", str]]] = {}
-#: The step tasks the USER stopped (the registry and :func:`run_step` read it).
-_STOPPED: "weakref.WeakSet[asyncio.Task[Any]]" = weakref.WeakSet()
+#: The step tasks the USER stopped, and why (:data:`STOP_STEP` — Stop the
+#: step — or :data:`STOP_TURN` — the reply's own Stop, v1.422.0). The
+#: registry and :func:`run_step` read it.
+_STOPPED: "weakref.WeakKeyDictionary[asyncio.Task[Any], str]" = weakref.WeakKeyDictionary()
 
 
 def stopped_result(name: str = "", after_s: "float | None" = None) -> str:
@@ -430,39 +466,148 @@ def stopped_result(name: str = "", after_s: "float | None" = None) -> str:
     )
 
 
+def turn_stopped_result(name: str = "") -> str:
+    """v1.422.0 (B2): what the model's result says about a step that was
+    running when the user stopped the whole reply (plain words; never that it
+    succeeded)."""
+    what = f"The {name} step" if name else "This step"
+    return (
+        f"{what} was stopped by the user, who stopped the reply while it was running. It did not "
+        "finish, and anything it did before it was stopped may have taken effect. Do not start it "
+        "again unless the user asks."
+    )
+
+
+def not_started_result(name: str = "") -> str:
+    """v1.422.0 review (B2): what the model's result says about a step the
+    reply had NOT started yet when the user stopped it — it never ran (plain
+    words; never that it succeeded)."""
+    what = f"The {name} step" if name else "This step"
+    return (
+        f"{what} was not run: the user stopped the reply before it started. Nothing it would "
+        "have done took effect. Do not start it again unless the user asks."
+    )
+
+
+def _task_or_current(task: "asyncio.Task[Any] | None") -> "asyncio.Task[Any] | None":
+    if task is not None:
+        return task
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
 def stopped_by_user(task: "asyncio.Task[Any] | None" = None) -> bool:
-    """Was this task (default: the current one) stopped with Stop the step?"""
-    if task is None:
-        try:
-            task = asyncio.current_task()
-        except RuntimeError:
-            return False
+    """Was this task (default: the current one) stopped by the user — with
+    Stop the step, or (v1.422.0) by the reply's own Stop while it ran?"""
+    task = _task_or_current(task)
     return task is not None and task in _STOPPED
+
+
+def stop_reason(task: "asyncio.Task[Any] | None" = None) -> str:
+    """v1.422.0 (B2): why this task (default: the current one) was stopped —
+    :data:`STOP_STEP`, :data:`STOP_TURN`, or "" when the user did not stop
+    it."""
+    task = _task_or_current(task)
+    if task is None:
+        return ""
+    return str(_STOPPED.get(task, "") or "")
+
+
+def stop_note() -> str:
+    """v1.422.0 (B2): the words the registry writes on the ledger row of the
+    CURRENT task's call when the user stopped it ("" when they did not)."""
+    reason = stop_reason()
+    if reason == STOP_TURN:
+        return TURN_STOPPED_LEDGER_NOTE
+    if reason == STOP_STEP:
+        return STOPPED_LEDGER_NOTE
+    return ""
+
+
+def _turn_handle(turn_id: str) -> Any:
+    """The running turn's Stop handle (``core/turns``), or None."""
+    if not turn_id:
+        return None
+    try:
+        from ..core.turns import TURNS
+
+        return TURNS.handle(turn_id)
+    except Exception:  # noqa: BLE001 — no handle: nothing to race
+        return None
 
 
 async def run_step(turn_id: str, call_id: str, name: str,
                    make: "Callable[[], Awaitable[Any]]",
-                   stopped: "Callable[[], Any]") -> Any:
+                   stopped: "Callable[[], Any]",
+                   turn_stopped: "Callable[[], Any] | None" = None,
+                   *, race: bool = True,
+                   not_started: "Callable[[], Any] | None" = None) -> Any:
     """Run one tool call of a coding session's turn as its OWN task,
     registered so :func:`stop_step` can cancel exactly it. A cancel the USER
     asked for returns ``stopped()`` (the call's result: the model is told);
-    a cancel of the turn itself (Stop, a shutdown) cancels the call and goes
-    on unwinding, as before."""
+    a cancel of the turn's own task (a shutdown) cancels the call and goes
+    on unwinding, as before.
+
+    v1.422.0 (B2): the step is RACED against the turn's Stop
+    (:func:`_turn_handle`): when the user stops the reply while the step
+    runs, the step is cancelled the same way (its command's tree killed, its
+    ledger row :data:`TURN_STOPPED_LEDGER_NOTE`) and the call's result is
+    ``turn_stopped()`` (else ``stopped()``) — the reply then ends at its next
+    Stop check, as before, instead of after the step's whole deadline. The
+    step first gets :data:`STOP_GRACE_S` to end by itself (a tool that watches
+    the Stop on its own answers in its own words). ``race=False`` (the lane
+    passes it for a tool that WAITS ON A PERSON or runs a whole helper — the
+    registry's ``deadline_exempt``: ``ask_user`` says "stopped before the user
+    answered" itself) runs the step as before, unraced.
+
+    v1.422.0 review (B2): A STEP OF A TURN ALREADY STOPPED IS NEVER STARTED.
+    A round's writers run one after another (``chat_turn._run_tool_round``)
+    and nothing between them looks for a Stop: when the user stopped the
+    reply while one call ran, the NEXT call of the round used to be started
+    anyway — given its grace, a file write or an edit finished inside it,
+    AFTER the user pressed Stop. With ``race`` and the turn's Stop already
+    set, ``make()`` is never called (the registry never sees the call: no
+    ledger row, nothing ran) and the call's result is ``not_started()``
+    (else ``turn_stopped()``, else ``stopped()``)."""
+    if race:
+        early = _turn_handle(str(turn_id or ""))
+        if early is not None and early.stopped:
+            return (not_started or turn_stopped or stopped)()
     task: "asyncio.Task[Any]" = asyncio.ensure_future(make())
     key, cid = str(turn_id or ""), str(call_id or "")
     with _STEPS_LOCK:
         _STEPS.setdefault(key, {})[cid] = (task, str(name or ""))
+    stop_wait: "asyncio.Future[Any] | None" = None
     try:
+        handle = _turn_handle(key) if race else None
+        if handle is not None:
+            stop_wait = asyncio.ensure_future(handle.wait_stopped())
+            await asyncio.wait({task, stop_wait}, return_when=asyncio.FIRST_COMPLETED)
+            if stop_wait.done() and not task.done():
+                # A tool that watches the Stop itself ends in its own words.
+                await asyncio.wait({task}, timeout=STOP_GRACE_S)
+            if stop_wait.done() and not task.done():
+                # THE REPLY'S STOP REACHES THE RUNNING STEP (v1.422.0, B2). A
+                # reason Stop the step set first stays (its words).
+                if task not in _STOPPED:
+                    _STOPPED[task] = STOP_TURN
+                task.cancel()
         return await task
     except asyncio.CancelledError:
         cur = asyncio.current_task()
         mine = cur is not None and cur.cancelling() > 0
         if task in _STOPPED and task.done() and not mine:
+            if _STOPPED.get(task) == STOP_TURN and turn_stopped is not None:
+                return turn_stopped()
             return stopped()
         if not task.done():
             task.cancel()
         raise
     finally:
+        if stop_wait is not None and not stop_wait.done():
+            stop_wait.cancel()
         with _STEPS_LOCK:
             steps = _STEPS.get(key)
             if steps is not None and steps.get(cid, (None,))[0] is task:
@@ -487,7 +632,7 @@ def stop_step(turn_id: str, call_id: str) -> bool:
     task = entry[0]
     if task.done():
         return False
-    _STOPPED.add(task)
+    _STOPPED[task] = STOP_STEP
     try:
         home = task.get_loop()
         try:
@@ -653,6 +798,8 @@ class PhoneAsk:
 
 __all__ = [
     "CLOCK", "DEADLINE_GRACE_S", "PHONE_AFTER_S", "SAFETY_REASONS", "STALL_AFTER_S", "STALL_FRAME", "STOPPED_LEDGER_NOTE",
+    "STOP_GRACE_S", "STOP_STEP", "STOP_TURN", "TURN_STOPPED_LEDGER_NOTE", "not_started_result", "stop_note", "stop_reason",
+    "turn_stopped_result",
     "StallWatch", "TICK_S", "keep", "listening", "minutes_words", "model_words", "notice_words", "now",
     "phone_may_ask", "progress_scope", "run_step", "running_steps", "step_words", "stop_step",
     "stopped_by_user", "stopped_result", "touch", "watched",

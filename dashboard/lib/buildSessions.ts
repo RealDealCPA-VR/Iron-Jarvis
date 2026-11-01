@@ -269,6 +269,13 @@ export type BuildMessage = PaneMessage & {
   /** v1.391.0: the turn id of the reply a restart cut off, on the hidden
    *  question that carried it on and on the reply that did (lib/buildResume). */
   resumedFrom?: string;
+  /** v1.422.0 (Wave 2 "Never lose work", B1): a reply that ENDED ON AN ERROR
+   *  kept its rounds — the screen offers "Continue from where it stopped"
+   *  first (lib/buildRetry `continueOffered`), Retry second. */
+  canContinue?: boolean;
+  /** v1.422.0 (B1): on the hidden question of that continue and on the reply
+   *  that carried it on — the failed reply's turn id (lib/buildResume). */
+  continuedFrom?: string;
   /** v1.392.0: the summary the reply wrote of its own older rounds to fit
    *  the model (raw; lib/buildLongJobs decodeSummarized). */
   summarized?: unknown;
@@ -448,6 +455,10 @@ const LINE_KEYS = [
   // restart's resume writes, and on the reply that carried on — the turn id
   // of the reply the restart cut off (lib/buildResume).
   "resumedFrom",
+  // v1.422.0 (Wave 2 "Never lose work", B1): a failed reply that kept its
+  // rounds ("Continue from where it stopped"), and the continue's turn link.
+  "canContinue",
+  "continuedFrom",
   // v1.392.0 (long jobs, Phase 3): the summary a reply wrote of its own older
   // rounds ({steps, times}), and the session's cap it met ({kind, limit}) —
   // lib/buildLongJobs.

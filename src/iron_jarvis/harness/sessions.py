@@ -155,6 +155,13 @@ LINE_KEYS: tuple[str, ...] = (
     # on: the turn id of the reply a restart cut off (the screen's one plain
     # line says the reply carried on by itself after Iron Jarvis restarted).
     "resumedFrom",
+    # v1.422.0 (Wave 2 "Never lose work", B1): on a reply that ENDED ON AN
+    # ERROR and kept its rounds, ``canContinue`` (the screen offers "Continue
+    # from where it stopped" first, Retry second); on the hidden question of
+    # that continue and on the reply that carried it on, ``continuedFrom`` —
+    # the failed reply's turn id (never ``resumedFrom``: the screen would
+    # call it a restart's carry-on).
+    "canContinue", "continuedFrom",
     # v1.392.0 (the long-jobs plan's Phase 3): on a reply, the summary it
     # wrote of its own older rounds to fit the model ({steps, times} —
     # "Summarized N earlier steps to fit the model"), and the session's cap it
@@ -1509,6 +1516,10 @@ def reconcile_interrupted_turns(engine: Any) -> int:
             carried = question.get("resumedFrom")
             if isinstance(carried, str) and carried.strip():
                 lines[-1]["resumedFrom"] = carried
+            # v1.422.0 (B1): ...and a continue the user pressed after an error.
+            continued = question.get("continuedFrom")
+            if isinstance(continued, str) and continued.strip():
+                lines[-1]["continuedFrom"] = continued
             # v1.393.0: a reply that carried on with another account of the
             # group keeps naming both accounts when a crash cuts it off.
             moved = question.get("accountMove")

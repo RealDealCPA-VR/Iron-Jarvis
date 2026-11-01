@@ -17,8 +17,8 @@
 import { memo, useId, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Check, ChevronDown, CircleAlert, GitFork, Loader2, TriangleAlert } from "lucide-react";
 import { HarnessFailureLine } from "@/components/harness/HarnessFailure";
-import { retryOffered } from "@/lib/buildRetry";
-import { RESUMED_LINE, resumedFrom } from "@/lib/buildResume";
+import { continueOffered, retryOffered } from "@/lib/buildRetry";
+import { CONTINUED_LINE, RESUMED_LINE, continuedFrom, resumedFrom } from "@/lib/buildResume";
 import { receiptFacts } from "@/lib/receiptFacts";
 import { answeredModelName } from "@/lib/answeredModel";
 import type { ModelOption } from "@/lib/types";
@@ -201,6 +201,9 @@ export interface HarnessRowHandlers {
   onKeepGoing: () => void;
   /** Retry the reply at this index. */
   onRetry: (index: number) => void;
+  /** v1.422.0 (B1): "Continue from where it stopped" for the failed reply
+   *  at this index (its rounds were kept). */
+  onContinue?: (index: number) => void;
   /** Open the "/rewind" list. */
   onOpenRewind: () => void;
   /** Open a document the receipt names. */
@@ -225,6 +228,8 @@ export interface HarnessMessageRowProps {
   newest: boolean;
   /** A restart cut this reply off and the app carried it on (lib/buildResume). */
   carriedOn: boolean;
+  /** v1.422.0 (B1): this failed reply was continued below (lib/buildResume). */
+  continuedBelow?: boolean;
   /** The session has a message to rewind to. */
   canRewind: boolean;
   /** The `at` of the user message before this reply (its changes window). */
@@ -255,6 +260,7 @@ function HarnessMessageRowImpl({
   branching,
   newest,
   carriedOn,
+  continuedBelow = false,
   canRewind,
   prevUserAt,
   teamRoster,
@@ -332,6 +338,13 @@ function HarnessMessageRowImpl({
         {resumedFrom(m) ? (
           <p data-testid="harness-resumed-line" className="mb-1 text-[12px] text-zinc-400">
             {RESUMED_LINE}
+          </p>
+        ) : null}
+        {/* v1.422.0 (B1): this reply carried on one that stopped on an
+            error, at the user's "Continue from where it stopped". */}
+        {continuedFrom(m) ? (
+          <p data-testid="harness-continued-line" className="mb-1 text-[12px] text-zinc-400">
+            {CONTINUED_LINE}
           </p>
         ) : null}
         {/* v1.393.0: this reply carried on with another account of
@@ -435,6 +448,9 @@ function HarnessMessageRowImpl({
           turnProvider={m.route?.provider || provider}
           retry={retryOffered(m, { newest, busy, archived })}
           onRetry={() => h.onRetry(index)}
+          canContinue={continueOffered(m, { newest, busy, archived })}
+          onContinue={h.onContinue ? () => h.onContinue?.(index) : undefined}
+          continuedBelow={continuedBelow}
           canRewind={canRewind}
           onRewind={h.onOpenRewind}
           carriedOn={carriedOn}

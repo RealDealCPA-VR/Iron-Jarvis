@@ -191,6 +191,31 @@ def _isolate_local_model_servers_probe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _round_patience_off_for_bare_tests():
+    """No bare test waits out a passing provider failure (v1.422.0, Wave 2
+    "Never lose work", B1: ``harness/patience``).
+
+    In production a coding session's round that fails with a transient error
+    (overloaded, busy, a 5xx, a timeout) is asked again after 5, 15, 30 and
+    60 REAL seconds. Many older pins make a harness turn fail on purpose with
+    exactly such an error and read the failure at once (the hold, the
+    account pin, the failure line); with the patience on they would sleep
+    out those seconds and time out. ``harness.patience.WAITS_S`` is ``()``
+    (no more tries) for the whole session; the patience's own pins
+    (``tests/test_build_patience_v14220.py``,
+    ``tests/test_build_continue_failed_v14220.py``) set it back to
+    ``DEFAULT_WAITS_S`` and make the waits instant."""
+    from iron_jarvis.harness import patience
+
+    original = patience.WAITS_S
+    patience.WAITS_S = ()
+    try:
+        yield
+    finally:
+        patience.WAITS_S = original
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_build_library_reflection():
     """No bare test starts the Build EXPERIENCE LIBRARY's background
     reflection (v1.370.0, IJ harness Phase 7).
