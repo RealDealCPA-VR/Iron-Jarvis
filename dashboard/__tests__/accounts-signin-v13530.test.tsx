@@ -250,9 +250,9 @@ describe("G34 — the Local Ollama row tells the truth and offers the one press"
     render(<ConnectionsPage />);
     const row = await screen.findByTestId("ollama-not-answering");
     expect(row.textContent).toMatch(/Not answering at the address you saved/);
-    expect(row.textContent).toMatch(/Rescan local CLIs/);
+    expect(row.textContent).toMatch(/Look again/);
     // The press it names is on this card.
-    expect(within(card()).getByRole("button", { name: /Rescan local CLIs/ })).toBeTruthy();
+    expect(within(card()).getByRole("button", { name: /Look again/ })).toBeTruthy();
     expect(screen.queryByTestId("get-ollama-row")).toBeNull();
     expect(screen.queryByRole("button", { name: "Use Ollama on this PC" })).toBeNull();
   });

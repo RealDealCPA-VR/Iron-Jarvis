@@ -72,7 +72,16 @@ describe("the daemon's scans never read the on-screen-only words (review 2)", ()
     const parsed = [...src.matchAll(/\{ word: "([^"]+)", re: \/(.+?)\/i, use:/g)].map((m) => m[1]);
     expect(parsed.length).toBeGreaterThan(10);
     for (const r of RETIRED_ON_SCREEN) expect(parsed, r.word).not.toContain(r.word);
-    expect(RETIRED_ON_SCREEN.map((r) => r.word)).toEqual(["worktree", "no safe inverse"]);
+    // Moved on purpose (v1.420.0, lane P): the Connections headings joined
+    // the on-screen list once their last reader was reworded.
+    expect(RETIRED_ON_SCREEN.map((r) => r.word)).toEqual([
+      "worktree",
+      "no safe inverse",
+      "Subscription & local providers",
+      "Rescan local CLIs",
+      "No OAuth client configured",
+      "Open Channels",
+    ]);
   });
 });
 

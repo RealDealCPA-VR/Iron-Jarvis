@@ -210,7 +210,7 @@ describe("an Anthropic-compatible server", () => {
       "Sonnet 9",
     ]);
     expect(within(panel).getByTestId("endpoint-models-protocol-note").textContent).toMatch(
-      /answered the Anthropic way, so the server type is now Anthropic-compatible/s,
+      /answered the Anthropic way, so Iron\s+Jarvis will talk to it as Anthropic-compatible/s, // v1.420.0 words
     );
     fireEvent.click(within(panel).getByText("Sonnet 9"));
     expect(modelField().value).toBe("claude-sonnet-9");

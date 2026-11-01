@@ -186,9 +186,10 @@ export function EmailComposeDialog({
               No email account is connected yet.
             </p>
             <p className="text-[13px] leading-relaxed text-zinc-400">
-              Add your email in Channels — its SMTP server to send, and its IMAP
-              server to save drafts — then use this button again. Until then,
-              Copy still puts the draft on your clipboard with its formatting.
+              Add your email in Settings › Notifications (its Email (sending)
+              details to send, and its Email (receiving) details to save drafts),
+              then use this button again. Until then, Copy still puts the draft on
+              your clipboard with its formatting.
             </p>
             <div className="flex justify-end gap-2 pt-1">
               <button
@@ -203,7 +204,7 @@ export function EmailComposeDialog({
                 onClick={onClose}
                 className="rounded-lg border border-accent/25 bg-accent/[0.1] px-3 py-1.5 text-[12px] text-accent-soft transition-colors hover:bg-accent/[0.18]"
               >
-                Open Channels
+                Open Notifications
               </Link>
             </div>
           </div>

@@ -42,7 +42,7 @@ import type { Health, IJEvent } from "@/lib/types";
  * pointer-events-none layer) it stays the decorative `role="img"` it was.
  */
 
-type Mood = "idle" | "thinking" | "alert";
+type Mood = "idle" | "thinking" | "waiting" | "alert";
 
 /** Best-effort key for grouping a session's lifecycle events. */
 function sid(e: IJEvent): string {
@@ -52,6 +52,9 @@ function sid(e: IJEvent): string {
 const COLOR: Record<Mood, string> = {
   idle: "#3f4651", // dim slate — present but resting
   thinking: "#22d3ee", // accent cyan
+  // v1.420.0 (C6.9): the ask tone (amber, the colour an approval card's
+  // waiting line uses) — every reply running is parked on the user.
+  waiting: "#fbbf24", // amber-400
   alert: "#fb7185", // rose-400
 };
 
@@ -61,6 +64,7 @@ const LABEL: Record<Mood, string> = {
   // words (the v1.388.0 re-audit, 0g.6), and the orb now also turns for a
   // chat or a Build coding session answering — not only a session.
   thinking: "Working — something is running",
+  waiting: "Waiting for you — a reply needs your answer",
   alert: "Attention needed — something is waiting for you",
 };
 
@@ -79,6 +83,19 @@ export function repliesRunning(health: Health | null | undefined): number {
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
   // v1.414.0: and a Build › Code reply (the user's own coding tool).
   return n(r.chat) + n(r.build) + n(r.build_app);
+}
+
+/**
+ * How many of those replies are PARKED on the user (v1.420.0, C6.9): an
+ * approval card or a question nobody has answered yet — /health's
+ * `replies.waiting`. Read defensively: an Iron Jarvis that does not send it
+ * yet (absent, not a number) counts 0, so the orb behaves exactly as before.
+ */
+export function repliesWaiting(health: Health | null | undefined): number {
+  const r = health?.replies as { waiting?: unknown } | null | undefined;
+  if (!r || typeof r !== "object") return 0;
+  const v = r.waiting;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
 }
 
 /** The /events types the orb reads (v1.311.0, wave 3): reviews and
@@ -149,6 +166,7 @@ export function MoodOrb({
   // it is offline, and a reply counted before a crash is not being written.
   const daemon = useDaemon();
   const replies = daemon.online ? repliesRunning(daemon.health) : 0;
+  const waiting = daemon.online ? repliesWaiting(daemon.health) : 0;
   // The START frames of runs the daemon said had ended when asked after a
   // reconnect (see above). Keyed by the frame, not the session: a continue
   // re-publishes session.created under the SAME session id, and that new
@@ -220,10 +238,15 @@ export function MoodOrb({
     // THINKING: a session/agent that started but hasn't completed yet — or
     // (harness gaps, fix 1) a reply being written: a chat's, a Build coding
     // session's.
+    // v1.420.0 (C6.9): EVERY reply running is parked on the user (and no
+    // session is in flight beside them) — nothing is working, the app is
+    // waiting for you. A session in flight may still be working, so it keeps
+    // the orb thinking.
+    if (inFlight.length === 0 && replies > 0 && waiting >= replies) return "waiting";
     if (inFlight.length > 0 || replies > 0) return "thinking";
 
     return "idle";
-  }, [events, inFlight, replies]);
+  }, [events, inFlight, replies, waiting]);
 
   const color = COLOR[mood];
   const thinking = mood === "thinking";

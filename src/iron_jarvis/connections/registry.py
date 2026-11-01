@@ -562,12 +562,24 @@ class ConnectionRegistry:
     # --- test / disconnect ------------------------------------------------
 
     def test(self, provider: str) -> dict:
-        """Probe a connection: ``{ok, detail}`` with a clear, user-facing detail."""
+        """Probe a connection: ``{ok, detail, kind[, status, via]}``.
+
+        ``detail`` is the probe's own text (unchanged for a headless caller,
+        and the Directory's key note reads it); v1.420.0 (C6.6) adds the TYPED
+        facts — ``kind`` (``connections.probe.PROBE_KINDS`` plus this
+        method's own: unknown, demo, inherited (``via`` = the CLI), own_server,
+        not_connected, no_credential), ``status`` for an HTTP answer — which
+        the Test route words for a person
+        (``daemon/routes/connections.probe_words``)."""
         spec = self.get_spec(provider)
         if spec is None:
-            return {"ok": False, "detail": f"unknown provider '{provider}'"}
+            return {"ok": False, "detail": f"unknown provider '{provider}'", "kind": "unknown"}
         if provider == "mock":
-            return {"ok": True, "detail": "The demo model is always ready (it runs on this PC)."}
+            return {
+                "ok": True,
+                "detail": "The demo model is always ready (it runs on this PC).",
+                "kind": "demo",
+            }
         record = self._get_record(provider)
         # Pixio's env fallback counts as connected (see status()) — Test must
         # probe the key that's actually in use, not report "not connected".
@@ -585,6 +597,8 @@ class ConnectionRegistry:
                         f"{spec.display_name} is served through the logged-in "
                         f"{alias.removesuffix('-cli')} CLI — no API key is stored"
                     ),
+                    "kind": "inherited",
+                    "via": alias,
                 }
             # A keyless model server (v1.354.0, G47): the status row calls it
             # connected, so Test must not answer "not connected" either. No
@@ -597,6 +611,7 @@ class ConnectionRegistry:
                         f"{spec.display_name} is your own server and needs no key. "
                         "Verify tools on its row asks it now."
                     ),
+                    "kind": "own_server",
                 }
             return {
                 "ok": False,
@@ -604,6 +619,7 @@ class ConnectionRegistry:
                     f"{spec.display_name} is not connected — "
                     "connect it on the Connections page"
                 ),
+                "kind": "not_connected",
             }
         cred = self.credential(provider) or env_key
         if not cred:
@@ -613,20 +629,31 @@ class ConnectionRegistry:
                     f"{spec.display_name} has no stored credential — "
                     "reconnect it on the Connections page"
                 ),
+                "kind": "no_credential",
             }
         # Real reachability probe (when wired): actually hit the provider so a
         # bad/expired/revoked credential is caught HERE, not at the first session
         # (where it would silently fall back to mock). Presence-only when no prober.
         if self._prober is not None:
             try:
-                ok, detail = self._prober(provider, cred)
-                return {"ok": bool(ok), "detail": detail}
+                raw = self._prober(provider, cred)
+                ok, detail = raw
+                # v1.420.0 (C6.6): the probe's TYPED facts; a plain pair (an
+                # injected prober) is read off the probe module's own words.
+                from .probe import kind_of
+
+                facts = raw if getattr(raw, "kind", "") else kind_of(provider, ok, detail)
+                out: dict = {"ok": bool(ok), "detail": detail, "kind": facts.kind}
+                if facts.status is not None:
+                    out["status"] = facts.status
+                return out
             except Exception as exc:  # a probe error must never crash Test
                 return {
                     "ok": False,
                     "detail": f"{spec.display_name}: probe failed ({exc})",
+                    "kind": "unreachable",
                 }
-        return {"ok": True, "detail": f"{spec.display_name} is connected"}
+        return {"ok": True, "detail": f"{spec.display_name} is connected", "kind": "unchecked"}
 
     def disconnect(self, provider: str) -> ConnectionRecord:
         """Drop the stored credential and mark the provider disconnected."""

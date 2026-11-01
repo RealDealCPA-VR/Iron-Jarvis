@@ -24,6 +24,8 @@ import { candidateFor, chooseForAnswers, decodeOnboardingModel } from "@/lib/onb
 import { DEMO_REPLIES } from "@/lib/demoWords";
 import { useDaemon } from "@/lib/daemon";
 import type { DoctorCheck, Onboarding, OnboardingStep } from "@/lib/types";
+// v1.420.0 (C6.12): the connect-apps step offers to bring tools over.
+import { ImportToolsOffer } from "@/components/onboarding/ImportToolsOffer";
 
 const DISMISS_KEY = "ij_onboarding_dismissed";
 
@@ -516,6 +518,9 @@ export function OnboardingWelcome({ state }: { state?: ApiState<Onboarding> } = 
                       ? "Your choices are just above — pick the one that should answer you."
                       : step.detail}
                   </p>
+                  {/* v1.420.0 (C6.12): tools Claude, Codex, Cursor or VS Code
+                      already use, offered here while this step is open. */}
+                  {step.key === "connect_apps" && !step.done && <ImportToolsOffer />}
                 </div>
                 {/* Always clickable — a completed step still links to its page
                     (e.g. "Connect your AI" done -> open Connections to manage

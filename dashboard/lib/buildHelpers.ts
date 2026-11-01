@@ -21,7 +21,8 @@ import { agentPhrase, agentRunName, type AgentRunStamp } from "@/lib/agentRun";
 import { readSavedPlan, settlePlan, toSavedPlan, type PlanView, type SavedPlan } from "@/lib/planChecklist";
 import { onceReasonOf, type OnceReason } from "@/lib/onceReason";
 import { answeredModelName, type CatalogRow } from "@/lib/answeredModel";
-import { providerDisplay } from "@/lib/onboarding";
+import { isOwnServerSlot, providerDisplay } from "@/lib/onboarding";
+import { endpointLabel, ranOnWords } from "@/lib/ranOnWords";
 
 export type HelperState = "starting" | "queued" | "running" | "waiting" | "done" | "failed" | "stopped";
 
@@ -363,6 +364,19 @@ export function workerModelName(provider: string, model: string, models: readonl
   if (!provider && !model) return "";
   // The demo model is named as the composer names it, never by its id.
   if (provider === "mock") return providerDisplay(provider);
+  // v1.420.0 (C6.7): a helper on a model server the user NAMED ("DGX
+  // Spark") names that MACHINE too ("glm on DGX Spark"), in the mission
+  // receipt's words (lib/ranOnWords: the server alias said once, by the
+  // machine's name). An unnamed server ("Ollama", "your own endpoint"), a
+  // subscription or a hosted API keeps the model alone: a generic place
+  // word tells the reader nothing the model name does not.
+  if (isOwnServerSlot(provider)) {
+    const where = endpointLabel(provider, models);
+    if (where && where !== providerDisplay(provider)) {
+      const words = ranOnWords(provider, model, models).text;
+      if (words) return words;
+    }
+  }
   return answeredModelName({ provider, model }, models) || providerDisplay(provider) || model;
 }
 

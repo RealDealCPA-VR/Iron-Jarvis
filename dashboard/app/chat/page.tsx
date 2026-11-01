@@ -142,6 +142,7 @@ import {
 // v1.355.0 (G62): an agent's line in the chat gets a receipt and, while a
 // remote is still working, its age.
 import { isNoReplyBack, lineAt, panelAskedAt, panelWaiting } from "@/lib/panelReceipt";
+import { PANEL_ERROR_LABEL, PANEL_STOPPED_LINE, panelKindWords, panelRoundEnded } from "@/lib/panelWords";
 import { PanelReplyLine, PanelWaiting } from "@/components/chat/PanelReceipt";
 // v1.355.0 (G29): the press beside a failed turn.
 import {
@@ -311,7 +312,11 @@ interface PanelEntry {
   role?: string;
   source?: string;
   content: string;
-  error?: boolean;
+  /** The daemon's own record of the failure (raw; the Agents page keeps it). */
+  error?: boolean | string;
+  /** v1.420.0 (C6.4): WHY the seat could not answer, in plain words
+   *  (agents/threads.seat_error_words): the line's content when it failed. */
+  error_words?: string;
   at?: string;
   /** v1.285.0: a remote that TOOK the task to answer later (202). */
   pending?: boolean;
@@ -342,6 +347,8 @@ interface PanelResponse {
    *  own copy of the round. An older daemon answers neither. */
   appended?: boolean;
   updated_at?: string | null;
+  /** v1.420.0 (C6.4): Stop ended the round before it answered. */
+  stopped?: boolean;
 }
 import { useEvents } from "@/lib/useEvents";
 import { CHAT_EVENT_TYPES } from "@/components/chat/chatEventTypes";
@@ -3140,13 +3147,17 @@ const MessageRow = memo(function MessageRow({
             {agentDisplayName(m.panelWho)}
           </span>
           {m.panelError && (
-            <span className="text-tone-danger">couldn&apos;t answer</span>
+            <span data-testid="panel-error-label" className="text-tone-danger">
+              {PANEL_ERROR_LABEL}
+            </span>
           )}
           {/* v1.285.0: what KIND of line a remote sent back, when it is not
-              a plain reply — a question, a "done", or "still working". */}
-          {m.panelKind && m.panelKind !== "message" && m.panelKind !== "progress" && (
+              a plain reply. v1.420.0 (C6.4): said through lib/panelWords
+              ("working…", "has a question"), never the raw kind word; a
+              finished ("done") or plain reply shows no label at all. */}
+          {!m.panelError && panelKindWords(m.panelKind) && (
             <span data-testid="panel-kind" className="text-zinc-500">
-              {m.panelKind === "pending" ? "working, will report back" : m.panelKind}
+              {panelKindWords(m.panelKind)}
             </span>
           )}
           {/* v1.355.0 (G62): still waiting on this remote's answer. */}
@@ -4065,6 +4076,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // null — keyed on the generation so a round of a LEFT conversation can
   // never clear (or be mistaken for) the open one's.
   const panelLiveRef = useRef<number | null>(null);
+  // v1.420.0 (C6.4): the @-round in flight, by the name the daemon knows it
+  // by (`round_id`), so Stop can end it: the daemon's round is told to stop
+  // (POST /chat/panel/{id}/stop) and this page's wait is aborted. Keyed on
+  // the conversation generation like panelLiveRef.
+  const panelRoundRef = useRef<{ id: string; gen: number; controller: AbortController } | null>(
+    null,
+  );
   // Caret offset in the composer. The picker keys off the "/" token AT THE
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
@@ -8283,7 +8301,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       undoable: row.undoable !== false,
       reason:
         row.undoable === false
-          ? "this action has no safe inverse"
+          ? "it can't be undone"
           : undefined,
       kind: row.kind,
     };
@@ -9898,8 +9916,26 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // never be mistaken for the open one's.
     setPanelLive({ names: mentions, since: Date.now() });
     panelLiveRef.current = gen;
+    // v1.420.0 (C6.4): the round's name and its abort, so Stop can end it.
+    const roundId = `pr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    const roundAbort = new AbortController();
+    panelRoundRef.current = { id: roundId, gen, controller: roundAbort };
     const roundOver = () => {
       if (panelLiveRef.current === gen) panelLiveRef.current = null;
+      if (panelRoundRef.current?.id === roundId) panelRoundRef.current = null;
+    };
+    // Stop pressed: the question stays (saved at send), a "Stopped." line is
+    // the record — the chat's own Stop does the same (v1.322.0).
+    const stoppedHere = () => {
+      if (!stillHere()) return;
+      setPanelLive(null);
+      const full: ChatMessage[] = [
+        ...messagesRef.current,
+        { role: "assistant", content: PANEL_STOPPED_LINE, at: new Date().toISOString() },
+      ];
+      messagesRef.current = full;
+      setMessages(full);
+      queueSave(full, box);
     };
     queueSave(history, box);
     await saveChainRef.current; // on disk (and named) before the daemon is asked
@@ -9912,6 +9948,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       : message;
     try {
       const res = await post<PanelResponse>("/chat/panel", {
+        round_id: roundId,
         message: wire,
         mentions,
         // The chat this round belongs to — the box's id, which the at-send
@@ -9924,8 +9961,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // (the daemon reads the saved chat's setup too).
         ...(localOnlyRef.current ? { local_only: true } : {}),
         ...(box.id ? { thread_id: box.id } : {}),
-      });
+      }, { signal: roundAbort.signal });
       roundOver();
+      if (res.stopped) {
+        stoppedHere();
+        return;
+      }
       if (!stillHere()) {
         // THE USER LEFT while the round ran. The daemon appended the replies
         // to the chat they were asked in (`appended`) — the rail's unread dot
@@ -10001,6 +10042,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
     } catch (e) {
       roundOver();
+      // v1.420.0 (C6.4): Stop aborted the wait — not a failure, no error line.
+      if (roundAbort.signal.aborted) {
+        stoppedHere();
+        return;
+      }
       if (!stillHere()) return; // the open conversation is somebody else's now
       setPanelLive(null);
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
@@ -10046,7 +10092,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       ...history,
       ...replies.map((e, idx) => ({
         role: "assistant" as const,
-        content: e.content || "(no reply)",
+        content: e.content || e.error_words || "(no reply)",
         panelWho: e.who,
         panelThreadId: res.thread_id,
         ...(e.error ? { panelError: true } : {}),
@@ -10099,6 +10145,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // Best-effort — even if the server-side cancel fails we stop waiting locally.
   function stop() {
     stoppedRef.current = true; // v1.325.0: see the queue and Try again effects
+    // v1.420.0 (C6.4): an @-ROUND in flight. Tell the daemon to end it by
+    // name, then stop waiting here; sendPanel's catch writes the "Stopped."
+    // line. The review: the wait is aborted only once the daemon has
+    // answered — a 404 in its own words means the round had ALREADY ended
+    // (its replies are on their way, and appended to the chat), so the
+    // answer is let land; aborting then dropped the reply and wrote
+    // "Stopped." beside the line the daemon had saved. Any other failure
+    // (no such route, no answer) still stops waiting here.
+    const round = panelRoundRef.current;
+    if (round && round.gen === convGenRef.current) {
+      post(`/chat/panel/${encodeURIComponent(round.id)}/stop`).then(
+        () => round.controller.abort(),
+        (e: unknown) => {
+          if (!panelRoundEnded(e)) round.controller.abort();
+        },
+      );
+      return;
+    }
     // CHAT: abort the stream. Bump the generation FIRST so the aborted
     // stream.run()'s throw lands in a torn-down completeChat (no POST fallback).
     if (chatBusy && stream.streaming) {
@@ -14080,7 +14144,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                         {/* Send, round and in the accent; while a reply streams the same
                             spot is Stop (v1.326.0). SendArrow subscribes to the box's text
                             (v1.250.0, S-05) so the page never re-renders per keystroke. */}
-                        {awaiting || (chatBusy && stream.streaming) ? (
+                        {/* v1.420.0 (C6.4): an @-round in flight shows Stop too. */}
+                        {awaiting || (chatBusy && (stream.streaming || panelLive !== null)) ? (
                           <button
                             type="button"
                             onClick={stop}

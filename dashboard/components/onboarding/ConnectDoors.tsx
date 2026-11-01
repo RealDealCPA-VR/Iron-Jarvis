@@ -88,6 +88,10 @@ import type { ConnectionTestResult } from "@/lib/types";
 import { AnswerPressNote, useAnswerPress } from "./AnswerPress";
 import { MODEL_SERVERS_TITLE } from "@/lib/modelServers";
 import { MODEL_NAME_LABEL, MODEL_SERVER_ADDRESS } from "@/lib/chatControlWords";
+// v1.420.0 (C6.6): the Test's plain words; (C6.12) the free tiers on record.
+import { testWords, type ConnectionTestWords } from "@/lib/connectionTestWords";
+import { DETAILS_WORDS } from "@/lib/failureActions";
+import { freeTierNote, freeTierWords } from "@/lib/freeTiers";
 // v1.357.0 (G76): the ONE demo name.
 import { DEMO_MODEL, DEMO_REPLIES } from "@/lib/demoWords";
 
@@ -381,6 +385,7 @@ export function ConnectDoors({
   const anyUnknown = states.some((s) => s.state === "unknown" || s.state === "checking");
   const showPress = demo && candidates.length > 0;
   const keyPick = KEY_PROVIDERS.find((p) => p.id === keyProvider);
+  const keyWords = testWords(keyResult as ConnectionTestWords | null);
 
   return (
     <div className={className}>
@@ -731,6 +736,14 @@ export function ConnectDoors({
                 }`}
               >
                 {p.label}
+                {/* v1.420.0 (C6.12): a provider with a free tier on record
+                    (lib/freeTiers) says so on its own button. Hidden from the
+                    button's name; the line under the form says it in words. */}
+                {freeTierWords(p.id) && (
+                  <span aria-hidden="true" data-testid={`key-door-free-${p.id}`} className="ml-1 text-tone-success">
+                    · {freeTierWords(p.id)}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -786,13 +799,23 @@ export function ConnectDoors({
           </form>
 
           {keyResult && (
-            <p role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-tone-success" : "text-tone-danger"}`}>
-              {keyResult.ok ? "Connected — " : "Not connected — "}
-              {keyResult.detail}
-              {/* v1.353.0 (G35): connected is not chosen — while replies are
-                  the demo, say the next step instead of stopping at "Connected". */}
-              {keyResult.ok && demo ? " Choose it above to use it for answers." : ""}
-            </p>
+            <div role="status" className={`mt-2 text-xs ${keyResult.ok ? "text-tone-success" : "text-tone-danger"}`}>
+              <p data-testid="key-door-result">
+                {/* v1.420.0 (C6.6): the daemon's plain words (title + fix);
+                    an older daemon's raw detail keeps the old prefix. */}
+                {!keyWords.worded && (keyResult.ok ? "Connected — " : "Not connected — ")}
+                {keyWords.text}
+                {/* v1.353.0 (G35): connected is not chosen — while replies are
+                    the demo, say the next step instead of stopping at "Connected". */}
+                {keyResult.ok && demo ? " Choose it above to use it for answers." : ""}
+              </p>
+              {keyWords.technical && (
+                <details data-testid="key-door-technical" className="mt-1 text-[11px] text-zinc-500">
+                  <summary className="cursor-pointer">{DETAILS_WORDS}</summary>
+                  <p className="mt-1 break-words font-mono">{keyWords.technical}</p>
+                </details>
+              )}
+            </div>
           )}
           {keyError && (
             <p role="alert" className="mt-2 text-xs text-tone-danger">
@@ -815,6 +838,12 @@ export function ConnectDoors({
                 {keyPick.keyLabel}
               </a>
               .
+              {freeTierWords(keyPick.id) && (
+                <span data-testid="key-door-free-tier">
+                  {" "}
+                  {keyPick.label} has a {freeTierWords(keyPick.id)}. {freeTierNote(keyPick.id)}
+                </span>
+              )}
             </p>
           )}
         </div>

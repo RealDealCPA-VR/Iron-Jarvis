@@ -283,11 +283,6 @@ const ALLOW: ReadonlyArray<{ file: string; text: string; why: string }> = [
   // (v1.420.0, C2.11 lane: the two HarnessSession.tsx lines were reworded
   // — "its own copy of the folder", "this change can't be undone" — and
   // their entries deleted.)
-  {
-    file: "app/chat/page.tsx",
-    text: "this action has no safe inverse",
-    why: "not reworded yet: app/chat/page.tsx belongs to another lane in wave 1; the receipt shows it as \"This change can't be undone.\" (TurnReceipt.cannotUndoTitle)",
-  },
 ];
 
 const allowed = (h: { file: string; text: string }) => ALLOW.some((a) => a.file === h.file && h.text.includes(a.text));

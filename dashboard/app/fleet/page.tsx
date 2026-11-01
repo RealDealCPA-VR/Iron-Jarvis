@@ -781,6 +781,9 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
 function AddNodeForm({ onAdded }: { onAdded: () => void }) {
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
+  // v1.420.0 (C6.12): the server's key, when it asks for one (a LiteLLM
+  // gateway with a master key). Saved the Connections endpoint form's way.
+  const [key, setKey] = useState("");
   const [probe, setProbe] = useState<FleetProbe | null>(null);
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
@@ -830,9 +833,33 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
     setSaving(true);
     setSaveError(null);
     try {
-      await post("/fleet/nodes", { base_url: u, label: label.trim() });
+      const created = await post<{ node?: { id?: string } }>("/fleet/nodes", {
+        base_url: u,
+        label: label.trim(),
+      });
+      const nodeId = created?.node?.id ?? "";
+      if (key.trim() && nodeId) {
+        // v1.420.0 (C6.12): the Connections endpoint form's pattern, byte
+        // for byte — the key is vaulted under a per-node name (never stored
+        // in config, never shown again), then wired to the node so every
+        // request to THIS server carries it (fleet/endpoint_auth).
+        const secretName = `endpoint_${nodeId}_key`;
+        await post("/secrets", {
+          name: secretName,
+          value: key.trim(),
+          kind: "api_key",
+          description: `API key for endpoint ${label.trim() || u}`,
+        });
+        await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, { api_key_name: secretName });
+        // The review: the node was ADDED (and its kind detected) before the
+        // key existed, so a keyed gateway was read keyless and kept the kind
+        // a 401 gives. Detect again now that the key is on the node.
+        // Best-effort: the node is saved either way.
+        await post(`/fleet/nodes/${encodeURIComponent(nodeId)}/detect`, {}).catch(() => {});
+      }
       setUrl("");
       setLabel("");
+      setKey("");
       setProbe(null);
       onAdded();
     } catch (err) {
@@ -864,6 +891,22 @@ function AddNodeForm({ onAdded }: { onAdded: () => void }) {
             aria-label="Label"
           />
         </div>
+        {/* v1.420.0 (C6.12): a server that asks for a key could not be added
+            here at all — the Connections endpoint form had the field, this
+            one did not. Optional; stored encrypted, sent only to this server. */}
+        <input
+          type="password"
+          className="field text-xs"
+          placeholder="API key (optional)"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          autoComplete="off"
+          aria-label="API key (optional)"
+          data-testid="fleet-add-key"
+        />
+        <p className="text-[11px] text-zinc-500">
+          Only if the server asks for one. It is stored encrypted and sent only to this server.
+        </p>
 
         {/* What we found, before saving anything. */}
         {probing && <div className="text-xs text-zinc-500">probing {url.trim()}…</div>}

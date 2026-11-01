@@ -53,6 +53,9 @@ import { stepGoalText, type PlanView } from "@/lib/planChecklist";
 import { PLAN_TOOL } from "@/lib/toolWords";
 import { ALLOW_ONCE, DENY, askPhrase, scopeLabel, undoLine } from "@/lib/approvalWords";
 import { ranOnWords, type RanOnRow } from "@/lib/ranOnWords";
+// v1.420.0 (C6.7): local or cloud, by the chat receipt's own rule.
+import { onThisNetworkOf, type WhereRow } from "@/lib/runWhere";
+import { replyWhere, type TurnRoute } from "@/components/chat/TurnReceipt";
 import { useModels } from "@/lib/useModels";
 import {
   MISSION_TERMINAL,
@@ -392,13 +395,29 @@ function receiptVerb(view: MissionView): string {
  *  mock answered (nothing real ran), with the daemon's route note when a
  *  failover touched the mission. Renders nothing when the daemon said
  *  nothing. */
-function MissionReceipt({ view, catalog }: { view: MissionView; catalog: readonly RanOnRow[] | undefined }) {
+function MissionReceipt({
+  view,
+  catalog,
+}: {
+  view: MissionView;
+  catalog: readonly (RanOnRow & WhereRow)[] | undefined;
+}) {
   const { provider, model, route_note: note } = view.session;
   if (!provider && !model && !note) return null;
   const mock = provider === "mock";
   const pair = [provider, model].filter((x, i, all) => x && all.indexOf(x) === i).join(" · ");
   const words = ranOnWords(provider, model, catalog);
   const answered = view.session.status === "completed";
+  // v1.420.0 (C6.7): "· local" / "· cloud" — TurnReceipt's replyWhere rule
+  // on the model's own `on_this_network` (lib/runWhere); nothing said when
+  // the catalog does not know the pair. The place is already in the words.
+  // The review: the pair is the one the session was STAMPED with (a failover
+  // never rewrites it), so when the route note says another model stood in,
+  // where the stamped model lives says nothing true about where the work
+  // went — say nothing.
+  const onNet = mock || note ? null : onThisNetworkOf(provider, model, catalog);
+  const where =
+    onNet === null ? null : replyWhere({ provider, model, on_this_network: onNet } as TurnRoute);
   return (
     <div
       data-testid="mission-receipt"
@@ -414,7 +433,15 @@ function MissionReceipt({ view, catalog }: { view: MissionView; catalog: readonl
           </Link>
         </span>
       ) : pair ? (
-        <span title={pair}>{receiptLine(receiptVerb(view), words.text || pair)}</span>
+        <span title={pair}>
+          {receiptLine(receiptVerb(view), words.text || pair)}
+          {where?.tail && (
+            <span data-testid="mission-receipt-where" title={where.title}>
+              {" "}
+              · {where.tail}
+            </span>
+          )}
+        </span>
       ) : null}
       {note && <div className={`${pair || mock ? "mt-0.5 " : ""}text-tone-warn`}>{note}</div>}
     </div>

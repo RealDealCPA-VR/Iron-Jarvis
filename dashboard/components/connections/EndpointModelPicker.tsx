@@ -42,6 +42,12 @@ export const PROTOCOL_LABELS: Record<EndpointProtocol, string> = {
   anthropic: "Anthropic-compatible",
 };
 
+/** The server-type question after a Fetch that could not tell. */
+export const PROTOCOL_CANNOT_TELL = "Fetch could not tell how this server answers. Pick one:";
+/** The same choice opened by hand (the review: a server that answers BOTH
+ *  ways — a LiteLLM proxy — reads "OpenAI", and the user may want the other). */
+export const PROTOCOL_BY_HAND = "How Iron Jarvis talks to this server:";
+
 /** The other protocol. */
 function otherProtocol(p: EndpointProtocol): EndpointProtocol {
   return p === "anthropic" ? "openai" : "anthropic";
@@ -55,14 +61,20 @@ function otherProtocol(p: EndpointProtocol): EndpointProtocol {
 export function EndpointProtocolChoice({
   value,
   onChange,
+  legend = PROTOCOL_CANNOT_TELL,
 }: {
   value: EndpointProtocol;
   onChange: (p: EndpointProtocol) => void;
+  /** The question the choice answers (the review: a choice the user opened
+   *  after Fetch DID tell is not "Fetch could not tell"). */
+  legend?: string;
 }) {
   const uid = useId();
   return (
     <fieldset className="space-y-1" data-testid="endpoint-protocol">
-      <legend className="text-[11px] font-medium text-zinc-400">Server type</legend>
+      {/* v1.420.0 (C6.6): shown only when Fetch could not tell (the form
+          decides); the legend says what is being asked, in plain words. */}
+      <legend className="text-[11px] font-medium text-zinc-400">{legend}</legend>
       <div className="flex flex-wrap gap-1.5">
         {(["openai", "anthropic"] as const).map((p) => {
           const on = value === p;
@@ -160,6 +172,7 @@ export function EndpointModelPicker({
   onChange,
   protocol = "openai",
   onProtocol,
+  onTold,
   label = "Model",
 }: {
   baseUrl: string;
@@ -173,6 +186,11 @@ export function EndpointModelPicker({
   protocol?: EndpointProtocol;
   /** Told which way the server answered when a list came back. */
   onProtocol?: (p: EndpointProtocol) => void;
+  /** v1.420.0 (C6.6): whether the picker could TELL which way the server
+   *  answers — true after a list came back, false after a Fetch that could
+   *  not tell, null when nothing was asked yet (a new address or key). The
+   *  form shows its server-type choice only when the picker could not tell. */
+  onTold?: (told: boolean | null) => void;
 }) {
   const uid = useId();
   const inputId = `${uid}-model`;
@@ -196,9 +214,13 @@ export function EndpointModelPicker({
   // A fetch that lands after the address or key changed is for a different
   // server: the generation drops it.
   const gen = useRef(0);
+  // The latest onTold, read by the reset below without re-running it.
+  const toldRef = useRef(onTold);
+  toldRef.current = onTold;
 
   useEffect(() => {
     gen.current += 1;
+    toldRef.current?.(null);
     setModels(null);
     setLabels({});
     setSwitchedTo(null);
@@ -249,8 +271,10 @@ export function EndpointModelPicker({
         setModels(null);
         setOpen(false);
         setError(res.error || "The server answered but lists no models. Type the model id yourself.");
+        onTold?.(false);
         return;
       }
+      onTold?.(true);
       setLabels(labelsOf(res, list));
       setSwitchedTo(answered !== first ? answered : null);
       onProtocol?.(answered);
@@ -265,6 +289,7 @@ export function EndpointModelPicker({
       setModels(null);
       setOpen(false);
       setError(requestWords(err));
+      onTold?.(false);
     } finally {
       if (mine === gen.current) setLoading(false);
     }
@@ -431,8 +456,8 @@ export function EndpointModelPicker({
           </p>
           {switchedTo && (
             <p data-testid="endpoint-models-protocol-note" className="px-2 text-[11px] leading-relaxed text-zinc-500">
-              This server answered the {switchedTo === "anthropic" ? "Anthropic" : "OpenAI"} way, so the
-              server type is now {PROTOCOL_LABELS[switchedTo]}.
+              This server answered the {switchedTo === "anthropic" ? "Anthropic" : "OpenAI"} way, so Iron
+              Jarvis will talk to it as {PROTOCOL_LABELS[switchedTo]}.
             </p>
           )}
         </div>

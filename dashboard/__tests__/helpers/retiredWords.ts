@@ -96,6 +96,11 @@ export const RETIRED_ON_SCREEN: readonly Retired[] = [
   onScreen("worktree", /\bworktrees?\b/i, "its own copy of the folder"),
   // The undo journal's word for a write it cannot reverse.
   onScreen("no safe inverse", /\bno safe inverse\b/i, "can't be undone"),
+  // Connections headings a person read as engine-room words (v1.420.0, lane P).
+  onScreen("Subscription & local providers", /subscription & local providers/i, "the tools' own headings (Claude Code, Codex, …)"),
+  onScreen("Rescan local CLIs", /rescan local clis/i, "Look again"),
+  onScreen("No OAuth client configured", /no oauth client configured/i, "the sign-in set-up sentence"),
+  onScreen("Open Channels", /\bopen channels\b/i, "Open Notifications"),
 ];
 
 /** The folders whose files a user reads. */

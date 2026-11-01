@@ -191,7 +191,9 @@ describe("a remote's inbound lines reach the chat (v1.285.0)", () => {
     expect(progress).toHaveTextContent("hermes");
     expect(progress).toHaveTextContent("Half way through the ledger.");
     await screen.findByText(/Done — the total is 1\.2M\./);
-    expect(screen.getByTestId("panel-kind")).toHaveTextContent("done");
+    // v1.420.0 (C6.4), moved ON PURPOSE: a finished reply shows NO kind label
+    // (lib/panelWords) — it used to print the raw word "done".
+    expect(screen.queryByTestId("panel-kind")).toBeNull();
     // saved with the thread, keyed by the room entry's timestamp
     await waitFor(() => expect(saved().at(-1)?.panelAt).toBe("2026-09-21T10:05:00Z"));
     const rows = saved();

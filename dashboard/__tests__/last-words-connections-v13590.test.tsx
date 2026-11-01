@@ -177,7 +177,7 @@ describe("the subscription rows say the product's name", () => {
     const banner = await screen.findByTestId("connections-ready-banner");
     expect(banner.textContent).toContain("Claude Code (");
     expect(banner.textContent).not.toMatch(/\bCLI\b/);
-    fireEvent.click(screen.getByRole("button", { name: /Rescan local CLIs/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Look again/ }));
     await waitFor(() => expect(document.body.textContent).toContain("Rescan complete: Claude Code ready to use (1 model)"));
     // Readiness 12A (G33, moved on purpose): a signed-out CLI has its own
     // line and its Sign in press, never a place inside the green note.
@@ -192,7 +192,7 @@ describe("the subscription rows say the product's name", () => {
     health([]);
     hooks.postResponses["/providers/rescan"] = { detected: [] };
     render(<ConnectionsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /Rescan local CLIs/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Look again/ }));
     await waitFor(() => expect(document.body.textContent).toContain("Rescan complete. Nothing found on this PC yet."));
     expect(document.body.textContent).toContain("Install Claude Code, Codex or the Grok CLI and sign in");
   });

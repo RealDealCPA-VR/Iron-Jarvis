@@ -37,6 +37,8 @@ import { get, post, put, patch, del, ApiError } from "@/lib/api";
 import {
   EndpointModelPicker,
   EndpointProtocolChoice,
+  PROTOCOL_BY_HAND,
+  PROTOCOL_LABELS,
   type EndpointProtocol,
 } from "@/components/connections/EndpointModelPicker";
 import { LocalServerChips, useFetchModelsSoon } from "@/components/connections/LocalServerChips";
@@ -124,6 +126,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
 import { DEMO_REPLIES } from "@/lib/demoWords";
+// v1.420.0 (C6.6): a Test's answer in plain words, the probe text folded.
+import { testWords, type ConnectionTestWords } from "@/lib/connectionTestWords";
+import { DETAILS_WORDS } from "@/lib/failureActions";
+
+/** v1.420.0 (C6.6): whose app id a sign-in needs — the card's name without
+ *  its "(memory)" note ("Dropbox (memory)" → "Dropbox"). */
+function appOwner(displayName: string): string {
+  return displayName.replace(/\s*\([^)]*\)\s*$/, "") || displayName;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Saved-endpoint row lines (v1.330.0, calm wave 12)                          */
@@ -602,6 +613,11 @@ function ConnectionCard({
   // server listed the Anthropic way also answers the Anthropic way. Set by
   // the user's choice, or by the way "Fetch available models" got an answer.
   const [protocol, setProtocol] = useState<EndpointProtocol>("openai");
+  // v1.420.0 (C6.6): did "Fetch available models" tell which way the server
+  // answers? The server-type choice shows only when it could NOT (false).
+  const [protocolTold, setProtocolTold] = useState<boolean | null>(null);
+  // The review: the user opened the server-type choice by hand.
+  const [protocolOpen, setProtocolOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
@@ -895,6 +911,7 @@ function ConnectionCard({
         setBaseUrl("");
         setModel("");
         setProtocol("openai");
+        setProtocolOpen(false);
         void reloadEndpoints();
       } else {
         await post(`/connections/${conn.provider}/key`, { key: key.trim() });
@@ -1054,9 +1071,10 @@ function ConnectionCard({
               <Link href="/secrets" className="font-medium text-accent-soft underline">
                 Secrets
               </Link>
-              , save its client id as <Code>{conn.provider}_oauth_client_id</Code>{" "}
-              and, if it has one, its secret as{" "}
-              <Code>{conn.provider}_oauth_client_secret</Code>.
+              , save the {appOwner(conn.display_name)} app id ({appOwner(conn.display_name)} uses
+              it to know which app is asking you to sign in) under the name{" "}
+              <Code>{conn.provider}_oauth_client_id</Code> and, if it has one, the app
+              secret under <Code>{conn.provider}_oauth_client_secret</Code>.
             </li>
             <li>Come back and press Set up &amp; log in.</li>
           </ol>
@@ -1142,15 +1160,16 @@ function ConnectionCard({
       )}
       {needsSecrets && (
         <div className="rounded-xl border border-tone-warn/25 bg-tone-warn/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300">
-          No OAuth client configured. Set{" "}
-          <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
-            {conn.provider}_oauth_client_id
-          </code>{" "}
-          in{" "}
+          No {appOwner(conn.display_name)} app id yet. {appOwner(conn.display_name)} needs one
+          to know which app is asking you to sign in. Save it in{" "}
           <Link href="/secrets" className="font-medium text-accent-soft underline">
             Secrets
           </Link>{" "}
-          to override the built-in client, then connect.
+          under the name{" "}
+          <code className="rounded bg-ink-900/80 px-1 font-mono text-tone-warn">
+            {conn.provider}_oauth_client_id
+          </code>
+          , then connect.
         </div>
       )}
     </div>
@@ -1260,7 +1279,7 @@ function ConnectionCard({
         <div data-testid="conn-card-actions" className="flex min-w-0 flex-wrap items-center gap-2">
           {isDefault ? (
             <span
-              title="Sessions use this provider by default"
+              title="Jarvis answers with this by default"
               data-testid="conn-default-mark"
               className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap px-2.5 py-1 text-xs font-medium text-tone-success"
             >
@@ -1270,7 +1289,7 @@ function ConnectionCard({
             <button
               onClick={makeDefault}
               disabled={busy}
-              title={`Use ${conn.display_name} for new sessions`}
+              title={`Have Jarvis answer with ${conn.display_name} by default`}
               className={`${CALM_ACTION} whitespace-nowrap`}
             >
               {busy ? <LoaderInline label="Setting…" /> : <><Star size={14} /> Make default</>}
@@ -1532,8 +1551,37 @@ function ConnectionCard({
                     </label>
                     {/* v1.329.0 (H3): which API the server speaks. Quiet,
                         two options; Fetch below sets it to the way the server
-                        answered, and the user can always change it. */}
-                    <EndpointProtocolChoice value={protocol} onChange={setProtocol} />
+                        answered. v1.420.0 (C6.6): shown ONLY when Fetch could
+                        not tell — a person asked "Server type?" before any
+                        server was asked could not know the answer. */}
+                    {protocolTold === false && (
+                      <EndpointProtocolChoice value={protocol} onChange={setProtocol} />
+                    )}
+                    {/* The review: the choice stays REACHABLE. A server that
+                        answers both ways (a LiteLLM proxy lists the OpenAI
+                        way and serves /v1/messages too) reads "OpenAI" and
+                        the user may want Anthropic: one quiet press opens
+                        the choice. And a type picked by hand is SENT even
+                        after a new address hides the Fetch result, so it
+                        stays on screen while it is not the default. */}
+                    {protocolTold !== false &&
+                      (protocolOpen || (protocolTold === null && protocol !== "openai")) && (
+                        <EndpointProtocolChoice
+                          value={protocol}
+                          onChange={setProtocol}
+                          legend={PROTOCOL_BY_HAND}
+                        />
+                      )}
+                    {protocolTold === true && !protocolOpen && (
+                      <button
+                        type="button"
+                        data-testid="endpoint-protocol-change"
+                        onClick={() => setProtocolOpen(true)}
+                        className="text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+                      >
+                        Talks to it as {PROTOCOL_LABELS[protocol]}. Change
+                      </button>
+                    )}
                     {/* v1.328.0 (B6): the Model field + "Fetch available
                         models" — the server lists its own models on request,
                         a searchable list fills the field, typing still works. */}
@@ -1544,6 +1592,7 @@ function ConnectionCard({
                       onChange={setModel}
                       protocol={protocol}
                       onProtocol={setProtocol}
+                      onTold={setProtocolTold}
                     />
                   </>
                 )}
@@ -1642,7 +1691,24 @@ function ConnectionCard({
 
       {/* Test result + errors */}
       {test &&
-        (test.ok ? <SuccessNote>{test.detail}</SuccessNote> : <ErrorNote>{test.detail}</ErrorNote>)}
+        (() => {
+          // v1.420.0 (C6.6): the Test's plain words (title + fix), the
+          // probe's own text folded under Details; an older daemon's raw
+          // detail exactly as before.
+          const w = testWords(test as ConnectionTestWords);
+          const body = (
+            <>
+              {w.text}
+              {w.technical && (
+                <details data-testid="conn-test-technical" className="mt-1 text-[11px] opacity-80">
+                  <summary className="cursor-pointer">{DETAILS_WORDS}</summary>
+                  <p className="mt-1 break-words font-mono">{w.technical}</p>
+                </details>
+              )}
+            </>
+          );
+          return test.ok ? <SuccessNote>{body}</SuccessNote> : <ErrorNote>{body}</ErrorNote>;
+        })()}
       {saveWarn && <WarnNote>{saveWarn}</WarnNote>}
       {error && <ErrorNote>{error}</ErrorNote>}
     </div>
@@ -1650,7 +1716,7 @@ function ConnectionCard({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Subscription & local providers (CLI-backed — detected, never configured)   */
+/*  Your plans and your own model servers (detected, never configured)        */
 /* -------------------------------------------------------------------------- */
 
 interface CliProviderInfo {
@@ -1826,7 +1892,7 @@ function CliProviderRow({
   ) : isOllama && addressSaved ? (
     <div data-testid="ollama-not-answering" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
       Not answering at the address you saved. Make sure Ollama is running there, then press
-      Rescan local CLIs.
+      Look again.
     </div>
   ) : isOllama ? (
     <div data-testid="get-ollama-row" className="mt-1 text-[11px] leading-relaxed text-zinc-500">
@@ -2091,7 +2157,7 @@ export default function ConnectionsPage() {
     return out;
   })();
 
-  /* --- Rescan local CLIs (POST /providers/rescan) --------------------------- */
+  /* --- Look again for local CLIs and servers (POST /providers/rescan) ---------- */
   // Re-detects locally installed CLI inference providers (Claude/Codex/Grok
   // CLIs) on demand, so a CLI installed mid-session shows up without a
   // daemon restart.
@@ -2361,21 +2427,21 @@ export default function ConnectionsPage() {
       <Reveal>
         <div id="subscription-providers" className="scroll-mt-24">
         <Card
-          title="Subscription & local providers"
+          title="Your plans and your own model servers"
           icon={<Terminal size={16} className="text-accent-soft" />}
           right={
             <button
               type="button"
               onClick={rescanClis}
               disabled={rescanBusy}
-              title="Re-detect locally installed CLI providers (Claude, Codex, Grok) without restarting Iron Jarvis"
+              title="Look again for Claude Code, Codex, Grok and Ollama on this PC, without restarting Iron Jarvis"
               className={CALM_ACTION}
             >
               {rescanBusy ? (
-                <LoaderInline label="Scanning…" />
+                <LoaderInline label="Looking…" />
               ) : (
                 <>
-                  <RefreshCw size={13} /> Rescan local CLIs
+                  <RefreshCw size={13} /> Look again
                 </>
               )}
             </button>

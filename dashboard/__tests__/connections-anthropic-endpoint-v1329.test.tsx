@@ -2,7 +2,7 @@
  * v1.329.0 (calm chat wave 6, H3): an Anthropic-compatible server can be
  * ADDED, and the endpoint form says so in plain words.
  *
- * - The form has a quiet two-option "Server type" choice (OpenAI-compatible /
+ * - The form has a quiet two-option server-type choice (OpenAI-compatible /
  *   Anthropic-compatible) and sends it as `protocol` on POST /fleet/nodes.
  * - "Fetch available models" asks the CHOSEN way first; when the server
  *   answered the other way, the choice moves to it and one quiet line says so.
@@ -207,27 +207,44 @@ const radio = (card: HTMLElement, p: "openai" | "anthropic") =>
 
 /* ========================================================================== */
 
+// v1.420.0 (C6.6), moved ON PURPOSE: the server-type choice is shown ONLY
+// when "Fetch available models" could not tell how the server answers (a
+// person asked "Server type?" before any server was asked could not know).
+// Each hand-choice test first makes a Fetch that cannot tell.
+const CANNOT_TELL = { models: [], error: "nothing set", reason: "failed" };
+async function fetchThatCannotTell(card: HTMLElement) {
+  hooks.answers = { openai: CANNOT_TELL, anthropic: CANNOT_TELL };
+  fireEvent.click(within(card).getByTestId("endpoint-fetch-models"));
+  return await within(card).findByTestId("endpoint-protocol");
+}
+
 describe("the server type", () => {
-  it("is a quiet two-option choice that starts on OpenAI-compatible", async () => {
+  it("is hidden until Fetch could not tell, then a two-option choice on OpenAI-compatible", async () => {
     const card = await openForm();
-    const group = within(card).getByTestId("endpoint-protocol");
+    expect(within(card).queryByTestId("endpoint-protocol")).toBeNull();
+    const group = await fetchThatCannotTell(card);
     expect(within(group).getAllByRole("radio")).toHaveLength(2);
     expect(within(group).getByLabelText("OpenAI-compatible")).toBe(radio(card, "openai"));
     expect(within(group).getByLabelText("Anthropic-compatible")).toBe(radio(card, "anthropic"));
     expect(radio(card, "openai").checked).toBe(true);
     expect(radio(card, "anthropic").checked).toBe(false);
+    expect(group.textContent).not.toMatch(/Server type/);
   });
 
   it("chosen by hand, it is sent with the endpoint and Fetch asks that way first", async () => {
-    hooks.answers.anthropic = CLAUDES;
     const card = await openForm();
+    await fetchThatCannotTell(card);
     fireEvent.click(radio(card, "anthropic"));
     expect(radio(card, "anthropic").checked).toBe(true);
 
+    hooks.answers = { openai: REFUSED, anthropic: CLAUDES };
+    const before = probes().length;
     fireEvent.click(within(card).getByTestId("endpoint-fetch-models"));
     const panel = await within(card).findByTestId("endpoint-model-picker");
-    expect(protocols()).toEqual(["anthropic"]); // its own way first, no second ask
+    expect(protocols().slice(before)).toEqual(["anthropic"]); // its own way first, no second ask
     expect(within(panel).queryByTestId("endpoint-models-protocol-note")).toBeNull();
+    // the server told: the choice goes away again
+    await waitFor(() => expect(within(card).queryByTestId("endpoint-protocol")).toBeNull());
     fireEvent.click(within(panel).getByText("Sonnet 9"));
 
     fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
@@ -247,10 +264,11 @@ describe("the server type", () => {
     fireEvent.click(within(card).getByTestId("endpoint-fetch-models"));
     const panel = await within(card).findByTestId("endpoint-model-picker");
     expect(protocols()).toEqual(["openai", "anthropic"]);
-    await waitFor(() => expect(radio(card, "anthropic").checked).toBe(true));
     expect(within(panel).getByTestId("endpoint-models-protocol-note").textContent).toMatch(
-      /answered the Anthropic way, so the server type is now Anthropic-compatible\./,
+      /answered the Anthropic way, so Iron\s+Jarvis will talk to it as Anthropic-compatible\./,
     );
+    // the server told, so the choice never showed
+    expect(within(card).queryByTestId("endpoint-protocol")).toBeNull();
     // The old warning is gone: a saved endpoint now chats its own way.
     expect(card.textContent).not.toMatch(/chats the OpenAI way/);
     expect(card.textContent).not.toMatch(/speaks both/);
@@ -261,16 +279,20 @@ describe("the server type", () => {
   });
 
   it("chosen Anthropic but the server answers the OpenAI way: it moves back", async () => {
-    hooks.answers = { anthropic: { models: [], error: "nope", reason: "not_model_server" }, openai: QWENS };
     const card = await openForm();
+    await fetchThatCannotTell(card);
     fireEvent.click(radio(card, "anthropic"));
+    hooks.answers = { anthropic: { models: [], error: "nope", reason: "not_model_server" }, openai: QWENS };
+    const before = probes().length;
     fireEvent.click(within(card).getByTestId("endpoint-fetch-models"));
     const panel = await within(card).findByTestId("endpoint-model-picker");
-    expect(protocols()).toEqual(["anthropic", "openai"]);
-    await waitFor(() => expect(radio(card, "openai").checked).toBe(true));
+    expect(protocols().slice(before)).toEqual(["anthropic", "openai"]);
     expect(within(panel).getByTestId("endpoint-models-protocol-note").textContent).toMatch(
-      /answered the OpenAI way, so the server type is now OpenAI-compatible\./,
+      /answered the OpenAI way, so Iron\s+Jarvis will talk to it as OpenAI-compatible\./,
     );
+    fireEvent.click(within(panel).getByText("qwen3"));
+    fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));
+    await waitFor(() => expect(saved()?.protocol).toBe("openai"));
   });
 
   it("an OpenAI answer to an OpenAI ask changes nothing and says nothing", async () => {
@@ -278,7 +300,7 @@ describe("the server type", () => {
     const card = await openForm();
     fireEvent.click(within(card).getByTestId("endpoint-fetch-models"));
     const panel = await within(card).findByTestId("endpoint-model-picker");
-    expect(radio(card, "openai").checked).toBe(true);
+    expect(within(card).queryByTestId("endpoint-protocol")).toBeNull();
     expect(within(panel).queryByTestId("endpoint-models-protocol-note")).toBeNull();
     fireEvent.click(within(panel).getByText("qwen3"));
     fireEvent.click(within(card).getByRole("button", { name: /Save endpoint/ }));

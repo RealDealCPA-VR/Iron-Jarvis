@@ -1558,6 +1558,36 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     }
 
 
+#: v1.420.0 (C6.4): the @-agent rounds running now, by the ``round_id`` the
+#: page names each round with — so Stop can end one. A round runs as its own
+#: task (``chat_panel``); ``POST /chat/panel/{round_id}/stop`` cancels that
+#: task, and the route answers ``stopped: true`` instead of a round. Entries
+#: leave the map when their round ends, however it ends.
+_PANEL_ROUNDS: dict[str, "asyncio.Task[Any]"] = {}
+#: Rounds Stop ended, so the route can tell a Stop from its own request being
+#: cancelled (a client that went away). Cleared with the round.
+_PANEL_STOPPED: set[str] = set()
+_ROUND_ID_RX = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def panel_round_id(raw: Any) -> str:
+    """The page's round name, or "" when absent or not a plain token."""
+    rid = str(raw or "").strip()
+    return rid if _ROUND_ID_RX.match(rid) else ""
+
+
+def stop_panel_round(round_id: str) -> bool:
+    """End the named round now (v1.420.0, C6.4). True when a running round
+    was told to stop; False when no round by that name is running (it ended,
+    or never existed). Never raises."""
+    task = _PANEL_ROUNDS.get(round_id)
+    if task is None or task.done():
+        return False
+    _PANEL_STOPPED.add(round_id)
+    task.cancel()
+    return True
+
+
 def panel_reply_lines(round_out: dict[str, Any], room_id: str) -> list[dict[str, Any]]:
     """The round's replies as the EXACT chat lines the page's ``sendPanel``
     composes (v1.345.0; read ``dashboard/app/chat/page.tsx`` sendPanel):
@@ -1587,7 +1617,12 @@ def panel_reply_lines(round_out: dict[str, Any], room_id: str) -> list[dict[str,
     for idx, e in enumerate(replies):
         line: dict[str, Any] = {
             "role": "assistant",
-            "content": str(e.get("content") or "") or "(no reply)",
+            # v1.420.0 (C6.4): a seat that could not answer says WHY in
+            # plain words (``threads.seat_error_words``), never "(no reply)"
+            # beside a red name — the page's roundMessages is pinned equal.
+            "content": str(e.get("content") or "")
+            or str(e.get("error_words") or "")
+            or "(no reply)",
             "panelWho": str(e.get("who")),
             "panelThreadId": room_id,
         }
@@ -2398,19 +2433,54 @@ def register(app: FastAPI, d) -> None:
             body.get("local_only") is True,
             str(body.get("thread_id") or "").strip() or chat_thread_id,
         )
-        try:
+        # v1.420.0 (C6.4): the round runs as its OWN task, named by the
+        # page's ``round_id``, so ``POST /chat/panel/{round_id}/stop`` can end
+        # it. A Stop answers ``stopped: true`` with no entries and appends
+        # nothing to the chat (the page writes its own "Stopped." line);
+        # this request being cancelled (the page went away) still cancels
+        # the round, as before.
+        round_id = panel_round_id(body.get("round_id"))
+
+        async def _round() -> dict[str, Any]:
             with _egress.local_only_scope(local_only):
-                round_out = await threads.run_round(
+                return await threads.run_round(
                     rec.id,
                     message,
                     d,
                     directed=[p["name"] for p in resolved],
                     chat_history=history,
                 )
+
+        round_task = asyncio.create_task(_round())
+        if round_id:
+            _PANEL_ROUNDS[round_id] = round_task
+        try:
+            round_out = await round_task
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            outer = bool(me is not None and me.cancelling())
+            if round_id and round_id in _PANEL_STOPPED and not outer:
+                return {
+                    "mode": "panel",
+                    "thread_id": rec.id,
+                    "unknown_mentions": unknown,
+                    "stopped": True,
+                    "entries": [],
+                    "spoke": [],
+                    "skipped": [],
+                }
+            raise
         except KeyError:
             raise HTTPException(status_code=404, detail="panel thread vanished")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            if round_id and _PANEL_ROUNDS.get(round_id) is round_task:
+                _PANEL_ROUNDS.pop(round_id, None)
+            if round_id:
+                _PANEL_STOPPED.discard(round_id)
+            if not round_task.done():
+                round_task.cancel()
         answer: dict[str, Any] = {
             "mode": "panel",
             "thread_id": rec.id,
@@ -2429,6 +2499,16 @@ def register(app: FastAPI, d) -> None:
             answer["appended"] = bool(appended.get("ok")) and int(appended.get("appended") or 0) > 0
             answer["updated_at"] = appended.get("updated_at")
         return answer
+
+    @app.post("/chat/panel/{round_id}/stop")
+    async def stop_chat_panel(round_id: str) -> dict[str, Any]:
+        """Stop an @-agent round (v1.420.0, C6.4) by the name the page gave
+        it. 404 when no round by that name is running — it already ended, or
+        never existed — never a silent success."""
+        rid = panel_round_id(round_id)
+        if not rid or not stop_panel_round(rid):
+            raise HTTPException(status_code=404, detail="That round isn't running.")
+        return {"ok": True, "stopped": rid}
 
     # --- Remote agents (run elsewhere) ------------------------------------
     # Registered BEFORE the /agents/{name} routes below so the literal
