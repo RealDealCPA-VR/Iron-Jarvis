@@ -1436,7 +1436,10 @@ def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, 
     the check's test command is the one its workers ran (the finish check's
     own ``_commands`` shape: ``(tool, args, handle, shell language)``; a
     helper runs Jarvis's own ``shell``, never a bash-written dialect tool).
-    BLOCKING; [] on any failure."""
+    v1.421.0 (Wave 1, A1): a helper's commands may be written in BASH (a
+    Build session's helper on Windows with Git for Windows' bash found) —
+    the row says so (``ToolInvocation.shell_syntax``), and the check re-runs
+    the command in that shell, never cmd.exe. BLOCKING; [] on any failure."""
     import json as _json
 
     try:
@@ -1452,7 +1455,8 @@ def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, 
             if not helpers:
                 return []
             rows = db.exec(
-                select(ToolInvocation.args_json, ToolInvocation.confinement, ToolInvocation.called_as)
+                select(ToolInvocation.args_json, ToolInvocation.confinement, ToolInvocation.called_as,
+                       ToolInvocation.shell_syntax)
                 .where(ToolInvocation.session_id.in_(helpers))  # type: ignore[attr-defined]
                 .where(ToolInvocation.tool == "shell")
                 .where(rowid > int(mark))
@@ -1462,7 +1466,7 @@ def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, 
     except Exception:  # noqa: BLE001
         return []
     out: list[tuple[str, dict[str, Any], str, str]] = []
-    for args_json, confinement, called_as in rows:
+    for args_json, confinement, called_as, syntax in rows:
         if confinement not in _RAN_CONFINEMENTS or called_as in HARNESS_CALLED_AS:
             continue
         try:
@@ -1470,7 +1474,7 @@ def helper_commands(engine: Any, session_id: str, mark: int) -> list[tuple[str, 
         except ValueError:
             continue
         if isinstance(args, dict) and isinstance(args.get("command"), str):
-            out.append(("shell", args, "", ""))
+            out.append(("shell", args, "", "bash" if syntax == "bash" else ""))
     return out
 
 

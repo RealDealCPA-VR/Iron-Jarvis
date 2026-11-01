@@ -107,17 +107,25 @@ NOT_BASH_NOTE = (
 )
 
 
-def bash_runtime_description(found: Any, *, build_tools: "tuple[str, ...] | None" = None) -> str:
+def bash_runtime_description(
+    found: Any, *, build_tools: "tuple[str, ...] | None" = None, background: str = "",
+) -> str:
     """The ``shell`` words for a command written in BASH (v1.386.0) on
     Windows — what really runs it: Git for Windows' bash when ``found`` (a
     ``sandbox/git_bash.GitBash``), else cmd.exe with :data:`NOT_BASH_NOTE`.
     ``build_tools``: a Build session's tools found on the PATH that shell
     sees (``native.build_env_tools``); None = a run with the scrubbed
-    environment. Never claims bash when cmd runs, nor cmd when bash runs."""
+    environment. Never claims bash when cmd runs, nor cmd when bash runs.
+    ``background`` (v1.421.0): how the tool keeps a program running
+    (``native.HELPER_BACKGROUND_WORDS`` for a coding session's helper); ""
+    keeps the words byte for byte. Only a FOUND bash takes it — a helper's
+    words never come through the not-found branch (it then runs cmd and is
+    shown the ordinary cmd words)."""
     if found is None:
         return runtime_description("nt", build_tools=build_tools) + " " + NOT_BASH_NOTE
     native = bash_env_description(
         getattr(found, "version", ""), build_tools or (), build=build_tools is not None,
+        **({"background": background} if background else {}),
     )
     return (
         "Run a shell command inside the sandboxed session workspace "

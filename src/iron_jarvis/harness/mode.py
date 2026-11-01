@@ -658,6 +658,14 @@ class HarnessTurn:
         #: never part of the fingerprint; "" (a byte-identical prompt) when
         #: there is none.
         self.skill_listing: str = ""
+        #: v1.421.0 (Wave 1, A3): the STANDARD this reply's HELPERS are judged
+        #: by (``harness/standard.HelperStandard`` — the folder's rule files,
+        #: the guardrails, the accepted lessons, the matching brief, the
+        #: checks), built once with the turn of a Build session that can
+        #: start a helper and has a folder; None for every other turn (its
+        #: helpers' prompts are exactly as before). Never in the LEAD's
+        #: prompt and never part of the fingerprint.
+        self.helper_standard: Any = None
 
     # -- the team lead ------------------------------------------------------ #
 
@@ -1058,6 +1066,10 @@ def build(
     tree = _components.compose(
         dialect_section=section, dialect_id=dialect.id, project=layer, rule_files=rule_files,
         mode=mode_text, library=library,
+        # v1.421.0 (A7): the folder's helper briefs are handed out when this
+        # turn's gate holds a helper door (a team lead's does), else followed
+        # by the model itself, as before.
+        helpers=bool(plan.gate & HELPER_TARGETS),
     )
     rendered = _components.render(tree)
     if today is None:

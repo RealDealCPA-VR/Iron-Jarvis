@@ -5821,6 +5821,31 @@ async def _build_harness(
             from ..harness import checkers as _checkers
 
             turn.checkers = await _checkers.for_turn(folder, harness_turn=turn)
+    _gate = getattr(turn.full_plan or turn.plan, "gate", None) or frozenset()
+    if build_call and folder and not text_only and not plan_mode and _gate & _mode.HELPER_TARGETS:
+        # (d) v1.421.0 (Wave 1, A3): the STANDARD this reply's HELPERS are
+        # judged by (harness/standard) — the lead's own folder rules (this
+        # turn's text, never read twice: the grounding's when it injected
+        # them, else the section read above), its guardrails and accepted
+        # lessons, the folder's helper briefs (scanned here) and what the
+        # finish check will really look at. Built ONCE, off the loop; every
+        # helper of the reply gets it (helpers.helper_definition). MIRROR
+        # NOTE (lock-step): both lanes build their harness turn here and hand
+        # it to their helpers through ``helper_base``.
+        from ..harness import standard as _standard
+
+        _team_turn = getattr(turn, "team", None)
+        _reviewer = bool(
+            getattr(getattr(_team_turn, "team", None), "reviewer", "")
+            or "review" in tuple(getattr(turn, "team_first", ()) or ())
+        )
+        turn.helper_standard = await asyncio.to_thread(
+            _standard.build,
+            rules_text=rules_section or str(getattr(grounding, "folder_rules", "") or ""),
+            layer=turn.layer, library=turn.tree.library, finish=turn.tree.finish,
+            checkers=turn.checkers, reviewer=_reviewer, low_trust=bool(low_trust),
+            event_bus=bus, session_id=str(session_id or "chat"),
+        )
     return turn, rules_section
 
 
@@ -6002,7 +6027,7 @@ def turn_session_id(session_id: "str | None") -> str:
 
 def helper_base(
     harness: "str | None", *, tool_session: str, tool_ws: Any, in_project_folder: bool,
-    project_id: "str | None", team: Any = None,
+    project_id: "str | None", team: Any = None, standard: Any = None,
 ):
     """The parts of a harness turn's :class:`~iron_jarvis.harness.helpers.
     HelperParent` known before the first round: the session, its folder, its
@@ -6016,7 +6041,13 @@ def helper_base(
     (``HarnessTurn.team``, a ``harness/team.TeamTurn``; None: solo). The
     helper doors route among its members only, a worker gets the whole
     coding set and the worker rules, the reviewer only reads. MIRROR NOTE
-    (lock-step): both lanes pass it."""
+    (lock-step): both lanes pass it.
+
+    v1.421.0 (Wave 1, A3): ``standard`` — the turn's
+    ``HarnessTurn.helper_standard`` (``harness/standard``): what every helper
+    of this reply is judged by, built once with the turn; None (every turn
+    that is not a Build session's with a folder) leaves every helper's prompt
+    exactly as before. MIRROR NOTE (lock-step): both lanes pass it."""
     if harness is None:
         return None
     from ..harness.command_shell import current as _command_rule_current
@@ -6040,6 +6071,8 @@ def helper_base(
         turn=_new_turn_key(),
         # v1.403.0: the coding-session team (None: solo).
         team=team,
+        # v1.421.0 (A3): the standard this reply's helpers are judged by.
+        standard=standard,
     )
 
 
@@ -9909,6 +9942,9 @@ async def run_chat_turn(
             project_id=(pid if resolved_proj is not None else None),
             # v1.403.0: the coding-session team (lock-step: the stream lane).
             team=getattr(_harness, "team", None),
+            # v1.421.0 (A3): the standard its helpers are judged by
+            # (lock-step: the stream lane).
+            standard=getattr(_harness, "helper_standard", None),
         )
         if armed else None
     )

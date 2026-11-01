@@ -4717,6 +4717,9 @@ async def chat_stream(
             project_id=(pid if resolved_proj is not None else None),
             # v1.403.0: the coding-session team (lock-step: chat_turn).
             team=getattr(_harness, "team", None),
+            # v1.421.0 (A3): the standard its helpers are judged by
+            # (lock-step: chat_turn).
+            standard=getattr(_harness, "helper_standard", None),
         )
         if ctx is not None else None
     )

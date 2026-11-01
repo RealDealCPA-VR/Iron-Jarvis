@@ -1383,6 +1383,14 @@ class AgentRuntime:
         #: the row (``Session.trust``/``tainted_at``) is the durable record
         #: and the ``trust.lowered`` event is published once per session.
         self._tainted: dict[str, bool] = {}
+        #: v1.421.0 (Wave 1, A1): session id -> the shell language this RUN's
+        #: commands are written in and run in (``"bash"``: a Build session's
+        #: helper on Windows with Git for Windows' bash found —
+        #: ``harness/command_env.helper_command_facts``). Decided once per
+        #: run; every tool context of the run carries it
+        #: (``ToolContext.shell_syntax``). Absent = the platform's own shell.
+        #: Dropped when the run ends.
+        self._shell_syntax: dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
     # TRUST (v1.298.0) — the posture a call runs under, and how it lowers
@@ -1933,6 +1941,7 @@ class AgentRuntime:
             # life on a runtime the orchestrator keeps forever.
             self._run_grants.pop(session.id, None)
             self._tainted.pop(session.id, None)
+            self._shell_syntax.pop(session.id, None)  # v1.421.0 (A1)
             # …and so are its cached file reads (D8): nothing reads them again.
             forget = getattr(getattr(self.p, "registry", None), "forget_session", None)
             if callable(forget) and session.id != "chat":
@@ -2228,13 +2237,29 @@ class AgentRuntime:
         # (``harness/command_env`` — keyed on the session), so its shell is
         # described that way: the tools really found on it, never the
         # scrubbed "no python". Every other run: the registered words.
-        if "shell" in armed_names and str(getattr(session, "origin", "") or "") == _HELPER_ORIGIN:
-            from ..harness.command_env import build_shell_description, is_build_call
+        # v1.421.0 (Wave 1, A1 — the owner's decision): and on Windows, when
+        # a Git for Windows bash is found, the helper's ``shell`` and
+        # ``process_start`` commands RUN in it — decided ONCE here, off the
+        # loop (``command_env.helper_command_facts``, the one source of both
+        # the words and the syntax), kept for the run's every tool context
+        # (``self._shell_syntax``) and its Environment line; the model is
+        # shown bash's words. No bash found: cmd and its words, as before.
+        if (
+            {"shell", "process_start"} & set(armed_names)
+            and str(getattr(session, "origin", "") or "") == _HELPER_ORIGIN
+        ):
+            from ..harness.command_env import helper_command_facts, is_build_call
 
             if is_build_call(session.id):
-                _shell_words = await asyncio.to_thread(build_shell_description)
+                _cmd = await asyncio.to_thread(helper_command_facts)
+                if _cmd.syntax:
+                    self._shell_syntax[session.id] = _cmd.syntax
                 tool_specs = [
-                    {**s, "description": _shell_words} if s.get("name") == "shell" else s
+                    {**s, "description": _cmd.shell_words}
+                    if s.get("name") == "shell" and _cmd.shell_words
+                    else {**s, "description": str(s.get("description") or "") + _cmd.start_note}
+                    if s.get("name") == "process_start" and _cmd.start_note
+                    else s
                     for s in tool_specs
                 ]
 
@@ -2560,11 +2585,15 @@ class AgentRuntime:
         # operate directly in the user's own folder, and the scratch line here
         # contradicted the task text ("you are working directly inside the
         # project folder") — so state whichever is actually true.
+        # v1.421.0 (A1): a helper whose commands run in Git for Windows' bash
+        # is never told "cmd.exe; no POSIX tools" (the run's own decision,
+        # ``self._shell_syntax``); every other run: the words byte for byte.
         try:
+            _os_line = host_os_line(bash=self._shell_syntax.get(session.id) == "bash")
             if is_direct_workspace(self.p.config, session.workspace_path):
                 system_prompt += (
                     "\n\n# Environment\n"
-                    f"- OS: {host_os_line()}\n"
+                    f"- OS: {_os_line}\n"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate "
                     f"directly in the project folder at {workspace} — these ARE "
@@ -2577,7 +2606,7 @@ class AgentRuntime:
             else:
                 system_prompt += (
                     "\n\n# Environment\n"
-                    f"- OS: {host_os_line()}\n"
+                    f"- OS: {_os_line}\n"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate in a "
                     "SCRATCH workspace — it is NOT where the user's files live.\n"
@@ -3943,6 +3972,10 @@ class AgentRuntime:
                 # ``options.chat_thread_id``), so a generation an agent starts
                 # comes home to that chat; "" for a run no chat waits on.
                 thread_id=_chat_delivery.chat_thread_of(session),
+                # v1.421.0 (A1): "bash" for a Build session's helper whose
+                # commands run in Git for Windows' bash (decided once per run,
+                # when its tools were armed); "" = the platform's own shell.
+                shell_syntax=self._shell_syntax.get(session.id, ""),
             )
 
             # Run the turn's tool calls as a TEAM: gather them concurrently so

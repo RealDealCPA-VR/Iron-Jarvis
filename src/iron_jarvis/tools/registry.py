@@ -203,6 +203,11 @@ _STORE_AS_SCHEMA = {
 }
 
 
+#: v1.421.0 (Wave 1, A1): the tools whose ledger row records the shell
+#: language their command was written in (``ToolInvocation.shell_syntax`` —
+#: the same pair ``harness/dialects.SHELL_TARGETS`` names).
+_COMMAND_TOOLS: frozenset[str] = frozenset({"shell", "process_start"})
+
 #: Ceiling on the failure text composed for a failed tool call (v1.174.0).
 #: Big enough for a real stack trace or a compiler's complaint, small enough
 #: that a failing loop cannot spend the context window on repeats.
@@ -1710,6 +1715,12 @@ class ToolRegistry:
             grant_id=str(grant_id or ""),
             # v1.366.0: the model's own name for a dialect-translated call.
             called_as=str(getattr(ctx, "called_as", "") or ""),
+            # v1.421.0 (Wave 1, A1): the shell language a COMMAND tool's call
+            # was written in ("bash" / "") — only on the two command tools
+            # (a helper's run carries its syntax on every call's context).
+            shell_syntax=(
+                str(getattr(ctx, "shell_syntax", "") or "") if name in _COMMAND_TOOLS else ""
+            ),
         )
         with session_scope(ctx.engine) as db:
             db.add(record)
