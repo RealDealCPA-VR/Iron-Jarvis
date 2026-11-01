@@ -512,6 +512,8 @@ class PiDriver(Driver):
         super().__init__(**kw)
         self._replies = ControlWaiter()
         self._n = 0
+        #: v1.422.0: the open turn's prompt id (its answer may come after a restart).
+        self._prompt_rid = ""
         self._interrupting = False
         self._errored = False
         #: The assistant message the stream is in (one per ``message_start``).
@@ -660,9 +662,19 @@ class PiDriver(Driver):
         # with `/rpc-input`), which may take the user any time.
         self._n += 1
         rid = f"ij-prompt-{self._n}"
+        self._prompt_rid = rid  # v1.422.0: kept across a restart (after_restore)
         fut = self._replies.make(rid)
         fut.add_done_callback(self._prompt_answered)
         await self.write({"id": rid, "type": "prompt", **msg})
+
+    def after_restore(self) -> None:
+        """v1.422.0 (kept across a restart): the prompt's answer (accepted,
+        handled, refused) settles a waiter that has no kept form — while the
+        turn still waits for it, it waits again."""
+        rid = getattr(self, "_prompt_rid", "")
+        if rid and self.turn_open and self._waiting_run:
+            fut = self._replies.make(rid)
+            fut.add_done_callback(self._prompt_answered)
 
     async def steer(self, ref: str, text: str, files: list[str]) -> str:
         """v1.412.0: Pi's own ``steer`` command — the note is QUEUED and Pi

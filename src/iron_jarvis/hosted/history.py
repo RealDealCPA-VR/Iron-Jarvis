@@ -63,8 +63,9 @@ log = logging.getLogger(__name__)
 #: texts under (the log's alone), and the key the log writes them as.
 FULL_KEY = getattr(_E, "FULL_KEY", "_full")
 LOG_FULL_KEY = getattr(_E, "LOG_FULL_KEY", "full")
-#: Never part of what a view sends.
-_PRIVATE = ("seq", LOG_FULL_KEY, FULL_KEY)
+#: Never part of what a view sends. (v1.422.0: ``htool`` / ``hseq`` — the code
+#: host's line an event came from, ``hosted/adopt.py`` — are the log's.)
+_PRIVATE = ("seq", LOG_FULL_KEY, FULL_KEY, "htool", "hseq")
 
 #: How many events the in-memory tail keeps (the view's default read).
 TAIL_EVENTS = 2000

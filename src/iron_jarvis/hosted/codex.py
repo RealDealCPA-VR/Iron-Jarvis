@@ -351,6 +351,25 @@ class CodexDriver(Driver):
         #: running command's output.
         self._out: dict[str, dict[str, Any]] = {}
 
+    def after_restore(self) -> None:
+        """v1.422.0 (kept across a restart): ``turn/start``'s answer names
+        the turn (Stop and a note need its id) and settles a waiter that has
+        no kept form — while a turn is open, the newest request waits again,
+        and an answer naming a turn is taken."""
+        if not (self.turn_open and self._n):
+            return
+        fut = self._replies.make(self._n)
+
+        def took(f: asyncio.Future) -> None:
+            if f.cancelled() or f.exception() is not None:
+                return
+            res = f.result()
+            turn = res.get("turn") if isinstance(res, dict) else None
+            if isinstance(turn, dict) and turn.get("id"):
+                self.turn_id = str(turn["id"])
+
+        fut.add_done_callback(took)
+
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         return ["app-server", "--listen", "stdio://"]
 

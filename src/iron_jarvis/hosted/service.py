@@ -93,6 +93,7 @@ from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from . import history as HIST  # v1.418.0 (C4.6, C4.11)
 from . import queued as Q  # v1.418.0 (C4.8)
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
+from . import hostlink as HL  # v1.422.0: the code host
 
 log = logging.getLogger(__name__)
 
@@ -695,6 +696,12 @@ class LiveSession:
         #: v1.418.0 (C4.8): the messages waiting behind the running reply
         #: (:class:`.queued.SessionQueue`; None until first read).
         self.queue: Any = None
+        #: v1.422.0 (the code host): what a restarted Iron Jarvis needs beside
+        #: the driver's own state (OpenCode's rules note, the MCP servers its
+        #: session and Grok's are told about).
+        self.kept: dict[str, Any] = {}
+        #: v1.422.0: "no code host, so this stops with a restart" said once.
+        self.no_host_said = False
 
     @property
     def running(self) -> bool:
@@ -1725,38 +1732,29 @@ class HostedService:
         # Claude Code and Pi take the id to save under (`--session-id`): minted
         # here, so the row names the conversation before it starts.
         sid = row.harness_session_id or (str(uuid.uuid4()) if row.harness in (CLAUDE, PI) else "")
-        cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver, OPENCODE: OpenCodeDriver,
-               GROK: GrokDriver}[row.harness]
-        proc_holder: dict[str, HarnessProcess] = {}
+        proc_holder: dict[str, Any] = {}
 
         async def write(obj: dict[str, Any]) -> None:
             p = proc_holder["p"]
-            await asyncio.to_thread(p.write, obj)
+            awrite = getattr(p, "awrite", None)
+            if awrite is not None:
+                await awrite(obj)  # v1.422.0: through the code host
+            else:
+                await asyncio.to_thread(p.write, obj)
 
-        driver = cls(
-            write=write,
-            emit=lambda ev: self._emit(live, ev),
-            ask=lambda a: self._ask(live, a),
-            on_session_id=lambda s: self._on_session_id(live, s),
-            mode=row.mode, model=row.model, effort=row.effort, cwd=row.folder,
-        )
-        if isinstance(driver, PiDriver):
-            driver.catalog_path = self._pi_catalog
-            driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
-        if isinstance(driver, OpenCodeDriver):
-            driver.catalog_path = self._oc_catalog
-            driver.rules_note = rules_note
-            driver.mcp_servers = list(connection.acp_servers)
-        if isinstance(driver, GrokDriver):
-            driver.catalog_path = self._grok_catalog
-            driver.mcp_servers = list(connection.acp_servers)
-        driver.steer_read = lambda ref: self._steer_read(live, ref)
-        proc = HarnessProcess(
-            argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv, env=env, cwd=row.folder,
-            name=f"hosted-{row.id}",
-            # v1.416.0 review: only Grok's stop ends what it left outside its Job.
-            ends_left_behind=bool(getattr(driver, "notes_started_on_stop", False)),
-        )
+        driver = self._new_driver(live, row, write, rules_note=rules_note, acp_servers=connection.acp_servers)
+        argv = argv0 + driver.argv(session_id=sid, resume=resume) + connection.argv
+        # v1.416.0 review: only Grok's stop ends what it left outside its Job.
+        ends_left_behind = bool(getattr(driver, "notes_started_on_stop", False))
+        if HL.enabled():
+            # v1.422.0: the tool runs in the CODE HOST, which outlives an Iron
+            # Jarvis restart (hosted/hostlink.py); no host = started as before.
+            proc: Any = HL.new_process(argv, env=env, cwd=row.folder, name=f"hosted-{row.id}",
+                                       ends_left_behind=ends_left_behind, home=self.home, sid=row.id)
+            live.kept = {"rules_note": rules_note, "acp_servers": list(connection.acp_servers)}
+        else:
+            proc = HarnessProcess(argv, env=env, cwd=row.folder, name=f"hosted-{row.id}",
+                                  ends_left_behind=ends_left_behind)
         proc_holder["p"] = proc
 
         def on_exit(code: int | None) -> None:
@@ -1779,12 +1777,48 @@ class HostedService:
             # one plain sentence, never a bare OSError.
             raise Refused(W.could_not_start(row.harness, argv0[0] if argv0 else "", exc)) from None
         live.proc, live.driver = proc, driver
+        if isinstance(proc, HL.RemoteProcess):
+            from . import adopt as ADOPT
+
+            ADOPT.watch(self, live, proc)
         try:
             await driver.open(session_id=sid, resume=resume)
         except Exception as exc:  # noqa: BLE001 — said in words below
             await self._stop_process(live)
             said = exc.args[0] if exc.args else type(exc).__name__
             raise Refused(f"{W.label(row.harness)} did not start: {clip(said, 200)}") from None
+        if isinstance(proc, HL.RemoteProcess):
+            proc.snapshot_now()
+            if proc.local is not None and not live.no_host_said:
+                live.no_host_said = True  # v1.422.0: said once per session
+                self._emit(live, make("notice", text=HL.NO_HOST_NOTE))
+
+    def _new_driver(self, live: LiveSession, row: Any, write: Any, *, emit: Any = None, ask: Any = None,
+                    rules_note: str = "", acp_servers: Any = ()) -> Driver:
+        """The driver for one process of this session (v1.422.0: lifted out of
+        :meth:`_start_process`, so a session adopted after a restart gets the
+        very same one — ``hosted/adopt.py`` passes its own ``emit`` / ``ask``)."""
+        cls = {CLAUDE: ClaudeDriver, CODEX: CodexDriver, PI: PiDriver, OPENCODE: OpenCodeDriver,
+               GROK: GrokDriver}[row.harness]
+        driver = cls(
+            write=write,
+            emit=emit or (lambda ev: self._emit(live, ev)),
+            ask=ask or (lambda a: self._ask(live, a)),
+            on_session_id=lambda s: self._on_session_id(live, s),
+            mode=row.mode, model=row.model, effort=row.effort, cwd=row.folder,
+        )
+        if isinstance(driver, PiDriver):
+            driver.catalog_path = self._pi_catalog
+            driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
+        if isinstance(driver, OpenCodeDriver):
+            driver.catalog_path = self._oc_catalog
+            driver.rules_note = rules_note
+            driver.mcp_servers = list(acp_servers)
+        if isinstance(driver, GrokDriver):
+            driver.catalog_path = self._grok_catalog
+            driver.mcp_servers = list(acp_servers)
+        driver.steer_read = lambda ref: self._steer_read(live, ref)
+        return driver
 
     def _on_session_id(self, live: LiveSession, sid: str) -> None:
         async def save() -> None:
@@ -1882,7 +1916,16 @@ class HostedService:
                 ev.setdefault("account", live.account)
                 live.limit = getattr(live.driver, "limit", None)
                 live.limit_since = datetime.now(timezone.utc).isoformat()
-        live.log.append(ev)
+        stamp = HL.stamp_of(live.proc)
+        if stamp is not None:
+            # v1.422.0: the log's copy names the tool's line it came from, so
+            # a restarted Iron Jarvis knows what was already shown
+            # (hosted/adopt.py); the turn's watchers get the event as before.
+            from . import adopt as ADOPT
+
+            live.log.append(ADOPT.stamped(ev, stamp))
+        else:
+            live.log.append(ev)
         if turn is not None and turn.running:
             turn.add(ev)
 
@@ -2445,13 +2488,24 @@ class HostedService:
                 stopped.append(live.sid)
         return stopped
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, *, keep_tools: bool = False) -> None:
         """The daemon is stopping: every harness process goes (tree kill, off
-        the loop), every running turn ends with what it wrote kept."""
+        the loop), every running turn ends with what it wrote kept.
+
+        v1.422.0: ``keep_tools`` (a RESTART, ``POST /shutdown`` with
+        ``restart``): a tool the code host runs is left running, its state
+        kept one last time — the next Iron Jarvis carries it on
+        (:meth:`adopt`). A tool that is not in the host still goes."""
         self._closing = True
         if self._reaper is not None:
             self._reaper.cancel()
         lives = list(self.live.values())
+        if keep_tools:
+            kept = [lv for lv in lives if HL.kept_by_host(lv.proc)]
+            for lv in kept:
+                lv.proc.final_snapshot()
+            await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in kept), return_exceptions=True)
+            lives = [lv for lv in lives if lv not in kept]
         for live in lives:
             self._expire_asks(live)
             if live.turn is not None and live.turn.running and not live.turn.ending:
@@ -2459,6 +2513,18 @@ class HostedService:
         await asyncio.gather(*(self._end_turn(lv, "interrupted") for lv in lives), return_exceptions=True)
         await asyncio.gather(*(self._stop_process(lv) for lv in lives), return_exceptions=True)
         await asyncio.gather(*(asyncio.to_thread(lv.log.close) for lv in lives), return_exceptions=True)
+
+    async def adopt(self) -> list[str]:
+        """v1.422.0 (boot): carry on every session whose tool the code host
+        kept running across the restart (``hosted/adopt.py``). Returns the
+        session ids now live again. Never raises."""
+        from . import adopt as ADOPT
+
+        try:
+            return await ADOPT.adopt_all(self)
+        except Exception:  # noqa: BLE001 — never block boot
+            log.warning("could not carry on the Code-view sessions kept across the restart", exc_info=True)
+            return []
 
     async def _row_with_saved_id(self, sid: str) -> Any:
         """v1.417.0 review: the row once the tool's session id it reported is
@@ -2724,18 +2790,24 @@ class HostedService:
 _RECONCILE_TAIL = 256 * 1024
 
 
-def reconcile_cut_turns(home: Any) -> int:
+def reconcile_cut_turns(home: Any, keep: Any = ()) -> int:
     """BLOCKING (boot, off the loop): a turn a crash cut off (its last event
     is not a ``done``) gets its error + ``done`` (interrupted) appended to the
     session's ``events.jsonl``, so a reopened window shows it ended. Returns
-    how many were closed. Never raises."""
+    how many were closed. Never raises.
+
+    v1.422.0: ``keep`` — sessions whose tool the code host still runs (its
+    turn may still be going): left alone, the adoption carries them on."""
     root = Path(home) / "hosted"
     closed = 0
+    skip = {str(s) for s in (keep or ()) if s}
     try:
         logs = list(root.glob("*/events.jsonl"))
     except OSError:
         return 0
     for path in logs[:2000]:
+        if path.parent.name in skip:
+            continue
         try:
             with open(path, "rb") as fh:
                 fh.seek(0, os.SEEK_END)

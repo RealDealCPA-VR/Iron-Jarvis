@@ -388,6 +388,15 @@ class AcpDriver(Driver):
         fut.add_done_callback(lambda f, rid=rid: self._prompt_answered(rid, f))
         return rid
 
+    def after_restore(self) -> None:
+        """v1.422.0 (kept across a restart): the turn ends when the tool
+        ANSWERS its prompts — the answer settles a waiter that has no kept
+        form, so each prompt still open waits again."""
+        for rid in list(self._pending):
+            if isinstance(rid, int):
+                fut = self._replies.make(rid)
+                fut.add_done_callback(lambda f, rid=rid: self._prompt_answered(rid, f))
+
     async def send_user(self, text: str, files: list[str]) -> None:
         blocks = await self._prompt_blocks(text, files)
         self.turn_open = True

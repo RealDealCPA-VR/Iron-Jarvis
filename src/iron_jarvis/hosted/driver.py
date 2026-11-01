@@ -9,6 +9,7 @@ never decides anything for the user: every permission question becomes an
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -16,6 +17,17 @@ from ..core.ids import new_id
 
 #: The decisions a user can give an ask (the route's vocabulary).
 DECISIONS: tuple[str, ...] = ("allow", "allow_session", "deny")
+#: v1.422.0: every answer that let a card through (Claude Code's "Allow all
+#: commands this session" included) — what a card answered before a restart
+#: tells its driver again (``hosted/adopt.py``).
+ALLOW_LIKE: tuple[str, ...] = ("allow", "allow_session", "allow_commands")
+
+#: v1.422.0 (the code host): while a tool's line is handed to its driver, the
+#: line's own name (``[<tool>-<seq>, n]``, set by ``hostlink.RemoteProcess``).
+#: A card raised by that line then gets an id DERIVED from it, so the same
+#: line read again after an Iron Jarvis restart raises the SAME card — the
+#: one the session's log already shows, and the one the user's answer names.
+ASK_SEED: ContextVar[list[Any] | None] = ContextVar("ij_hosted_ask_seed", default=None)
 
 
 class AskRefused(ValueError):
@@ -47,7 +59,78 @@ class Ask:
 
 
 def new_ask_id() -> str:
+    seed = ASK_SEED.get()
+    if seed is not None:
+        seed[1] += 1
+        return f"ask_{seed[0]}_{seed[1]}"
     return new_id("ask")
+
+
+# --------------------------------------------------------------------------- #
+# v1.422.0: a driver's state, kept across an Iron Jarvis restart
+# --------------------------------------------------------------------------- #
+#: A dict attribute keeps at most this many (newest) entries in a snapshot —
+#: maps that grow for a whole session (Claude Code's tool inputs, every
+#: message id) must not make each snapshot bigger forever.
+STATE_DICT_MAX = 500
+_TAGS = ("$t", "$s", "$d")
+
+
+class _NotKept(Exception):
+    """A value with no JSON form (a future, a timer, a path): not kept."""
+
+
+def _enc(v: Any, depth: int = 0, cap: int = 0) -> Any:
+    if depth > 40:
+        raise _NotKept
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, list):
+        return [_enc(x, depth + 1) for x in v]
+    if isinstance(v, tuple):
+        return {"$t": [_enc(x, depth + 1) for x in v]}
+    if isinstance(v, (set, frozenset)):
+        return {"$s": [_enc(x, depth + 1) for x in v]}
+    if isinstance(v, dict):
+        items = list(v.items())
+        if cap and len(items) > cap:
+            items = items[-cap:]
+        if all(isinstance(k, str) and k not in _TAGS for k, _ in items):
+            return {k: _enc(x, depth + 1) for k, x in items}
+        return {"$d": [[_enc(k, depth + 1), _enc(x, depth + 1)] for k, x in items]}
+    raise _NotKept
+
+
+def _dec(v: Any) -> Any:
+    if isinstance(v, list):
+        return [_dec(x) for x in v]
+    if isinstance(v, dict):
+        if len(v) == 1:
+            (k, x), = v.items()
+            if k == "$t" and isinstance(x, list):
+                return tuple(_dec(y) for y in x)
+            if k == "$s" and isinstance(x, list):
+                return {_hashable(_dec(y)) for y in x}
+            if k == "$d" and isinstance(x, list):
+                return {_hashable(_dec(p[0])): _dec(p[1]) for p in x if isinstance(p, list) and len(p) == 2}
+        return {k: _dec(x) for k, x in v.items()}
+    return v
+
+
+def _hashable(v: Any) -> Any:
+    return tuple(v) if isinstance(v, list) else v
+
+
+def encode_value(v: Any) -> Any:
+    """A value in the kept state's JSON form (raises ValueError when it has none)."""
+    try:
+        return _enc(v)
+    except _NotKept:
+        raise ValueError("no JSON form") from None
+
+
+def decode_value(v: Any) -> Any:
+    return _dec(v)
 
 
 class Driver:
@@ -147,6 +230,46 @@ class Driver:
 
     def on_exit(self) -> None:
         """The process ended: fail every pending control request."""
+
+    # -- v1.422.0: kept across an Iron Jarvis restart (the code host) -----------
+    #: Attributes never kept (whatever their value). Callables, futures,
+    #: timers, waiters and paths are never kept anyway (no JSON form); a
+    #: subclass names what it re-makes itself in :meth:`after_restore`.
+    STATE_SKIP: frozenset[str] = frozenset({"_write", "emit", "raise_ask", "on_session_id", "steer_read"})
+    #: Per attribute: how many (newest) dict entries are kept (default
+    #: :data:`STATE_DICT_MAX`).
+    STATE_DICT_CAPS: dict[str, int] = {}
+
+    def state(self) -> dict[str, Any]:
+        """Everything this driver knows that has a JSON form — a snapshot the
+        code host keeps, so a restarted Iron Jarvis carries the tool's
+        conversation on from it (``hosted/adopt.py``). An attribute with no
+        JSON form is left out and keeps its fresh value after a restore."""
+        out: dict[str, Any] = {}
+        for name, value in vars(self).items():
+            if name in self.STATE_SKIP or callable(value):
+                continue
+            try:
+                out[name] = _enc(value, cap=self.STATE_DICT_CAPS.get(name, STATE_DICT_MAX))
+            except _NotKept:
+                continue
+        return out
+
+    def restore(self, kept: dict[str, Any]) -> None:
+        """Put a :meth:`state` back (on a driver made for the same session),
+        then :meth:`after_restore`."""
+        for name, value in (kept or {}).items():
+            if name in self.STATE_SKIP or not isinstance(name, str):
+                continue
+            try:
+                setattr(self, name, _dec(value))
+            except Exception:  # noqa: BLE001 — a read-only attribute keeps its own value
+                continue
+        self.after_restore()
+
+    def after_restore(self) -> None:
+        """Re-make what has no JSON form (a reply this driver waits for, a
+        timer): a subclass's hook. The base driver needs none."""
 
 
 class ControlWaiter:

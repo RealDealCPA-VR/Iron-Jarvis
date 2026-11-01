@@ -430,6 +430,33 @@ def _isolate_grok_home():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _code_host_off_by_default():
+    """v1.422.0: Build › Code's tools run in the CODE HOST, a process that
+    outlives the daemon ON PURPOSE — a host started by an ordinary test would
+    outlive the test too (up to its orphan bounds). The suite therefore runs
+    the Code view the pre-v1.422.0 way (each tool a child of the daemon); the
+    code host's own tests turn it on (``monkeypatch.setenv``) and stop every
+    host they start (``tests/_code_host_helpers_v14220.py``). A subprocess
+    daemon inherits the switch through ``os.environ``. ``IJ_TEST_CODE_HOST=on``
+    runs every Code-view test THROUGH the host instead (a parity check)."""
+    from iron_jarvis.hosted import hostlink as _hl
+
+    if os.environ.get("IJ_TEST_CODE_HOST") == "on":
+        os.environ[_hl.ENV_SWITCH] = "on"
+        yield
+        return
+    old = os.environ.get(_hl.ENV_SWITCH)
+    os.environ[_hl.ENV_SWITCH] = "off"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_hl.ENV_SWITCH, None)
+        else:
+            os.environ[_hl.ENV_SWITCH] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

@@ -308,6 +308,26 @@ class PaneTokenStore:
         logger.info("minted a pane capability token (pane=%s)", pane)
         return token
 
+    def restore(self, pane_id: str, digest: str, capabilities: Mapping[str, Any] | None = None) -> bool:
+        """v1.422.0: take back a token minted BEFORE an Iron Jarvis restart —
+        by its DIGEST (the plaintext was never kept): a Build › Code tool kept
+        running across the restart (the code host) still holds it in its
+        environment. Replaces any token the pane holds now. False for an
+        empty id or digest, or at the cap."""
+        pane = str(pane_id or "").strip()
+        digest = str(digest or "").strip().lower()
+        if not pane or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            return False
+        record = _Record(token_sha256=digest, pane_id=pane, minted_at=self.clock(),
+                         minted_capabilities=normalise_capabilities(capabilities))
+        with self._lock:
+            self._records = [r for r in self._records if r.pane_id != pane]
+            if len(self._records) >= self.max_tokens:
+                return False
+            self._records.append(record)
+        logger.info("took back a pane capability token after a restart (pane=%s)", pane)
+        return True
+
     # --- resolving --------------------------------------------------------
 
     def resolve(self, token: str) -> PaneGrant | None:

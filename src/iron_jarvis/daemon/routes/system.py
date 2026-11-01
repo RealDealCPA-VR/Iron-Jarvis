@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
 from .. import app as _app
@@ -604,18 +604,27 @@ def register(app: FastAPI, d) -> None:
         return merged_usage(d.platform, days)
 
     @app.post("/shutdown")
-    def shutdown_daemon() -> dict[str, Any]:
+    def shutdown_daemon(body: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         """Gracefully stop the daemon — used by the desktop app on Quit.
 
         Token-guarded like every other route. The response returns FIRST (the
         Timer defers the signal) so the caller sees the ack instead of a reset
         connection; the desktop app then waits for process exit and only
         force-kills as a fallback.
+
+        v1.422.0: ``{"restart": true}`` — Iron Jarvis is coming straight back:
+        the coding tools the code host runs for Build › Code keep running and
+        the next Iron Jarvis carries them on. With no body (every older
+        desktop, the desktop's Quit and its update stop) it is a QUIT: they
+        are stopped (their conversations saved) and the host goes too.
         """
         import threading as _threading
 
+        if isinstance(body, dict) and body.get("restart") is True:
+            d.platform.code_host_keep = True
         _threading.Timer(0.2, _app._graceful_stop).start()
-        return {"ok": True, "detail": "Iron Jarvis is shutting down"}
+        return {"ok": True, "detail": "Iron Jarvis is restarting" if getattr(d.platform, "code_host_keep", False)
+                else "Iron Jarvis is shutting down"}
 
     @app.get("/schedules")
     def list_schedules() -> dict[str, Any]:

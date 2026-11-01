@@ -552,7 +552,9 @@ def test_a_turn_a_crash_cut_off_gets_its_done_at_boot(tmp_path):
 
 def test_the_boot_reconcile_is_hooked_off_the_loop():
     src = (Path(__file__).parents[1] / "src" / "iron_jarvis" / "daemon" / "app.py").read_text(encoding="utf-8")
-    assert "asyncio.to_thread(_hosted_reconcile, platform.config.home)" in src
+    # v1.422.0 (moved on purpose): it also takes the sessions the code host
+    # kept (``keep``) — still off the loop.
+    assert "asyncio.to_thread(_hosted_reconcile, platform.config.home" in src
 
 
 async def test_the_interrupt_route_answers_quickly_even_when_the_harness_does_not(app, work, monkeypatch):

@@ -229,6 +229,11 @@ def coalesce_into(out: list[dict[str, Any]], ev: dict[str, Any]) -> None:
     if out and _mergeable(out[-1], ev):
         merged = str(out[-1].get("delta") or "") + str(ev.get("delta") or "")
         out[-1] = {**out[-1], "delta": mask(merged)}
+        if "hseq" in ev:
+            # v1.422.0: a merged row names the NEWEST line it holds (the code
+            # host's "already shown" mark, ``hosted/adopt.py``) — the first
+            # one's would show the rest again after a restart.
+            out[-1]["hseq"] = ev["hseq"]
     elif out and _replaces_partial(out[-1], ev):
         # v1.418.0 review: a step's update while it is still being written
         # (or its output still arriving) takes the place of the one before —
