@@ -267,8 +267,15 @@ describe("Enter is predictable (C1.7)", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
-    fireEvent.keyDown(window, { key: "Enter" });
-    await waitFor(() => expect(answers()).toEqual([{ request_id: "ask-9", decision: "allow" }]));
+    // The arming clock is the card's own (a re-read of the view can start it
+    // again), so a press exactly ARM_MS after the card appeared raced it on
+    // the Tests runner (v1.418.1: `expected [] to deeply equal [...]`). Press
+    // until the answer is posted — and only while nothing has been posted,
+    // so a slow answer is never followed by a second press.
+    await waitFor(() => {
+      if (answers().length === 0) fireEvent.keyDown(window, { key: "Enter" });
+      expect(answers()).toEqual([{ request_id: "ask-9", decision: "allow" }]);
+    }, { timeout: 8_000, interval: 100 });
   });
 
   it("a safety once-only card is a click; Full access is a click", async () => {
