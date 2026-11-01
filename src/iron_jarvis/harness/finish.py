@@ -3539,7 +3539,16 @@ class FinishCheck:
         else:
             verdict = " It gave no verdict."
         # v1.421.0 (A4): the prose may be cut; the findings never are.
-        report = report_for_lead(report)
+        # Review: but never a FLAGGED report — cutting its prose first cut
+        # an instruction near its top away BEFORE the fence scanned it, so the
+        # fence showed the finding lines, unflagged, and the reply kept full
+        # trust (before A4 the fence saw the report's head, instruction
+        # included, withheld it and lowered the reply). A flagged report goes
+        # to the fence WHOLE, which withholds it and taints the reply.
+        if not flagged:
+            report = report_for_lead(report)
+        elif fence is None:
+            report = "[the reviewer's report is withheld: it read like an instruction]"
         if fence is not None:
             # Review: a flagged report lowers the reply "from" the tool that
             # carried it (``delegate``), never from the command tool the
