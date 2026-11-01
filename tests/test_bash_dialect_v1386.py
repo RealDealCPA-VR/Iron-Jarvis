@@ -269,16 +269,33 @@ def test_the_other_dialects_never_mark_a_call(tmp_path):
 
 
 def test_only_the_harness_ever_sets_the_shell_syntax():
-    """No other code path (a lane, the runtime, a route) writes it: plain
-    chat, agents, schedules and every other door keep the platform's shell.
-    The dialect table DECLARES which tool writes bash; only the harness's
-    ``ctx_for`` puts it on a call's context."""
+    """No other code path (a lane, a route) writes it: plain chat, agents,
+    schedules and every other door keep the platform's shell. The dialect
+    table DECLARES which tool writes bash; the harness's ``ctx_for`` puts it
+    on a call's context.
+
+    MOVED ON PURPOSE (v1.421.0, Wave 1 A1 — the owner reversed v1.386.2's
+    "helpers keep cmd"): the agent runtime is now the ONE other writer, for a
+    Build session's HELPER only — its value comes from the run's own
+    decision (``self._shell_syntax``, filled from ``command_env.
+    helper_command_facts`` under ``HELPER_ORIGIN`` + ``is_build_call``;
+    ``tests/test_helper_standard_v14210.py`` pins that), and the registry
+    RECORDS the context's value on the ledger row (it sets no context)."""
     root = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis"
     writers = sorted(str(p.relative_to(root)) for p in root.rglob("*.py")
                      if "shell_syntax=" in p.read_text(encoding="utf-8"))
-    assert writers == [os.path.join("harness", "dialects.py"), os.path.join("harness", "mode.py")], writers
+    assert writers == [
+        os.path.join("agents", "runtime.py"), os.path.join("harness", "dialects.py"),
+        os.path.join("harness", "mode.py"), os.path.join("tools", "registry.py"),
+    ], writers
     mode = (root / "harness" / "mode.py").read_text(encoding="utf-8")
     assert mode.count("shell_syntax=") == 1 and "replace(out, shell_syntax=syntax)" in mode
+    runtime = (root / "agents" / "runtime.py").read_text(encoding="utf-8")
+    assert runtime.count("shell_syntax=") == 1
+    assert "shell_syntax=self._shell_syntax.get(session.id, \"\")" in runtime
+    assert runtime.count("self._shell_syntax[session.id] =") == 1
+    registry = (root / "tools" / "registry.py").read_text(encoding="utf-8")
+    assert registry.count("shell_syntax=") == 1 and "getattr(ctx, \"shell_syntax\"" in registry
 
 
 # --------------------------------------------------------------------------- #
@@ -802,9 +819,19 @@ async def test_the_gpt_dialects_exec_command_keeps_cmd(app, tmp_path, monkeypatc
 
 
 @needs_win
-async def test_a_helper_agent_run_of_a_claude_build_turn_keeps_cmd(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize("bash_found", [True, False])
+async def test_a_helper_agent_run_of_a_claude_build_turn_keeps_cmd(app, tmp_path, monkeypatch, bash_found):
     """An AGENT run (here the helper a Claude Build turn starts with ``Task``)
-    is shown Jarvis's own ``shell`` and its commands keep cmd.exe."""
+    is shown Jarvis's own ``shell``.
+
+    MOVED ON PURPOSE (v1.421.0, Wave 1 A1 — the owner's decision): its
+    commands run in Git for Windows' bash when one is found, like the lead's
+    ``Bash`` (``harness/command_env.helper_command_facts``); with none found
+    they keep cmd.exe exactly as before."""
+    if bash_found and BASH is None:
+        pytest.skip("Git for Windows' bash is not installed here")
+    if not bash_found:
+        monkeypatch.setattr(git_bash, "find", lambda *a, **k: None)
     from iron_jarvis.providers.adapters.base import LLMResponse
     from iron_jarvis.providers.router import RouteResult
 
@@ -842,7 +869,10 @@ async def test_a_helper_agent_run_of_a_claude_build_turn_keeps_cmd(app, tmp_path
     status, raw = await open_turn(app, sid, {"text": "go", "turn_id": "helper-cmd"}, timeout=90)
     assert status == 200
     (call,) = _of(seen, "echo helper-cmd")
-    assert call["shell"] is True and call["argv"] == "echo helper-cmd"
+    if bash_found:
+        assert call["shell"] is False and (call["env"] or {}).get(git_bash.COMMAND_VAR) == "echo helper-cmd"
+    else:
+        assert call["shell"] is True and call["argv"] == "echo helper-cmd"
 
 
 class _OsProxy:

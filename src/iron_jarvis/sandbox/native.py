@@ -693,14 +693,28 @@ def _bash_version_words(version: str) -> str:
     return f"GNU bash {m.group(1).rstrip('.')}" if m else "GNU bash"
 
 
-def bash_env_description(version: str, tools: "tuple[str, ...] | list[str]", *, build: bool) -> str:
+#: How a bash-written command tool keeps a program running whose output is
+#: needed (v1.386.0: Claude Code's ``Bash`` has ``run_in_background``).
+BASH_BACKGROUND_WORDS = "use run_in_background"
+#: v1.421.0 (Wave 1, A1): a coding session's HELPER writes bash in Jarvis's
+#: own ``shell``, which has no such switch — its tool is ``process_start``.
+HELPER_BACKGROUND_WORDS = "start it with process_start and read it with process_read"
+
+
+def bash_env_description(
+    version: str, tools: "tuple[str, ...] | list[str]", *, build: bool,
+    background: str = BASH_BACKGROUND_WORDS,
+) -> str:
     """Model-facing truth about a BASH-WRITTEN command on Windows (v1.386.0,
     the IJ harness's Claude dialect): it runs in Git for Windows' bash
     (``sandbox/git_bash``), with the Build environment for a Build session
     (``build``) -- the tools REALLY found on the PATH bash sees (``tools``
     from :func:`build_env_tools` over that PATH) -- else the scrubbed one plus
     Git's own tools. Lives beside :func:`build_env_description` for the same
-    reason: the words and the truth must not drift."""
+    reason: the words and the truth must not drift. ``background`` (v1.421.0):
+    how the tool that shows these words keeps a program running whose output
+    is needed (:data:`HELPER_BACKGROUND_WORDS` for a coding session's helper);
+    the default keeps the words byte for byte."""
     names = [t for t in tools if t != "posix"]
     if build:
         where = "with the user's own PATH and home folder, as in their own terminal"
@@ -723,22 +737,32 @@ def bash_env_description(version: str, tools: "tuple[str, ...] | list[str]", *, 
         "'B:/', so write '//b' (or run the line as cmd //c \"...\"). A job started with a trailing "
         "'&' keeps running after this call returns, until the session ends, and "
         "what it prints after that is not shown: for a server or a watcher whose output you "
-        "need, use run_in_background. Prefer the built-in tools (rename_file, list_files, grep, "
+        f"need, {background}. Prefer the built-in tools (rename_file, list_files, grep, "
         "read_document/write_document) for file work."
     )
 
 
-def host_os_line(system: str | None = None) -> str:
+def host_os_line(system: str | None = None, *, bash: bool = False) -> str:
     """One model-facing line naming the OS this install runs on (v1.228.0,
     audit T6). ``platform.system()`` by default; on Windows it also says what
     a command will and will not resolve, because a tool authored around
     POSIX ``mv`` on the dev box (Git's ``mv.EXE`` is on ITS PATH) died 22/22
     on the packaged install. Lives beside :func:`scrubbed_env_description`
-    for the same reason it does: the words and the truth must not drift."""
+    for the same reason it does: the words and the truth must not drift.
+
+    ``bash`` (v1.421.0, Wave 1 A1): the run's commands run in Git for
+    Windows' bash (a coding session's helper when bash was found) — "cmd.exe;
+    no POSIX tools" would then be a lie that sends it back to Windows
+    commands. False: the words byte for byte."""
     import platform as _platform
 
     name = system or _platform.system() or os.name
     if name.lower().startswith("win"):
+        if bash:
+            return (
+                "Windows; your shell and process_start commands run in Git for Windows' bash "
+                "(write bash: Git's POSIX tools — ls, cat, grep, sed, rm, cp — resolve)"
+            )
         return (
             "Windows (cmd.exe; no POSIX mv/ls/cp/rm/cat/grep — use the "
             "built-in file tools or Windows commands)"

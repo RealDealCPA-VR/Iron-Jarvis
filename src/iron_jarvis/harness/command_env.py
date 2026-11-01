@@ -30,6 +30,7 @@ only (it still cards every command).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -85,7 +86,7 @@ def build_shell_description(os_name: "str | None" = None) -> str:
     return runtime_description(os_name, build_tools=build_env_tools())
 
 
-def bash_shell_description(build: bool) -> str:
+def bash_shell_description(build: bool, *, background: str = "") -> str:
     """The shell facts a BASH-WRITTEN command tool (the IJ harness's Claude
     dialect, ``Bash``) carries on Windows (v1.386.0) — what really runs its
     commands: Git for Windows' bash when ``sandbox/git_bash.find`` finds one,
@@ -94,7 +95,9 @@ def bash_shell_description(build: bool) -> str:
     found on the PATH THAT shell sees). "" on any other OS: there the
     platform's own shell is POSIX sh and its words already say so. BLOCKING
     (the first look runs ``bash --version``; tools are looked up on PATH):
-    async callers use ``asyncio.to_thread``."""
+    async callers use ``asyncio.to_thread``. ``background`` (v1.421.0): how
+    the tool keeps a program running (a helper's ``process_start``); "" =
+    Claude Code's ``run_in_background``, byte for byte."""
     if os.name != "nt":
         return ""
     from ..sandbox.git_bash import bash_path_for, find
@@ -109,7 +112,72 @@ def bash_shell_description(build: bool) -> str:
             key = next((k for k in env if k.upper() == "PATH"), "PATH")
             env = {**env, key: bash_path_for(found, env.get(key, ""))}
         tools = build_env_tools(env)
-    return bash_runtime_description(found, build_tools=tools)
+    return bash_runtime_description(found, build_tools=tools, background=background)
+
+
+# --------------------------------------------------------------------------- #
+# v1.421.0 (Wave 1, A1 — the owner's decision): a Build session's HELPERS
+# write and run bash too.
+# --------------------------------------------------------------------------- #
+#
+# The live record (2026-11-01): a glm worker of a coding session failed 182 of
+# 742 shell commands in one day, most of them Linux commands (head, tail, grep,
+# sed, ``;``, heredocs) run in cmd.exe. The LEAD's Claude ``Bash`` has run in
+# Git for Windows' bash since v1.386.0; its helpers were left on cmd by that
+# release's own scope (v1.386.2: "helpers ... keep cmd BYTE-FOR-BYTE"). Now a
+# helper of a Build session (:func:`is_build_call`) on Windows, when
+# ``sandbox/git_bash.find`` finds a bash, runs its ``shell`` and
+# ``process_start`` commands there (``ToolContext.shell_syntax = "bash"``, set
+# by the agent runtime for the whole run, decided ONCE) and is SHOWN bash's
+# words — :func:`helper_command_facts` is the one place both come from, so the
+# words and what runs cannot disagree. No bash found, another OS, or any run
+# that is not a Build session's helper: exactly as before (cmd.exe and its
+# words; chat, agents, schedules and a chat's own helpers are never switched).
+
+
+@dataclass(frozen=True)
+class HelperCommands:
+    """What a Build session's helper's command tools run in and say."""
+
+    #: ``"bash"`` (Git for Windows' bash runs them) or "" (the platform's own
+    #: shell, as before).
+    syntax: str = ""
+    #: ``shell``'s description for the helper ("" = leave it as it is).
+    shell_words: str = ""
+    #: What ``process_start``'s description gains ("" = nothing).
+    start_note: str = ""
+
+
+def helper_command_facts(os_name: "str | None" = None) -> HelperCommands:
+    """The command facts of a Build session's HELPER run (v1.421.0, A1):
+    Windows with a Git for Windows bash found → ``syntax "bash"``, ``shell``
+    described as that bash with the user's PATH (``background`` names the
+    helper's own ``process_start``, never Claude Code's
+    ``run_in_background``) and ``process_start`` told it starts there too;
+    else ``syntax ""`` and the Build cmd words of v1.377.0
+    (:func:`build_shell_description`). BLOCKING (the first look runs
+    ``bash --version``): the runtime calls it through ``asyncio.to_thread``,
+    once per run. Never raises (any fault reads as "no bash": cmd, as
+    before)."""
+    try:
+        if (os_name or os.name) == "nt":
+            from ..sandbox.git_bash import find
+            from ..sandbox.native import HELPER_BACKGROUND_WORDS, _bash_version_words
+
+            found = find()
+            if found is not None:
+                return HelperCommands(
+                    syntax="bash",
+                    shell_words=bash_shell_description(True, background=HELPER_BACKGROUND_WORDS),
+                    start_note=(
+                        "\n\nHow commands run here: the program starts in Git for Windows' bash "
+                        f"({_bash_version_words(getattr(found, 'version', ''))}), not cmd.exe — "
+                        "the same shell as your shell tool: write the command in bash."
+                    ),
+                )
+        return HelperCommands(shell_words=build_shell_description(os_name))
+    except Exception:  # noqa: BLE001 — unknown is cmd, exactly as before
+        return HelperCommands(shell_words=build_shell_description(os_name))
 
 
 def bash_identity() -> str:
@@ -125,6 +193,6 @@ def bash_identity() -> str:
 
 
 __all__ = [
-    "bash_identity", "bash_shell_description", "build_session_of", "build_shell_description",
-    "command_env", "is_build_call",
+    "HelperCommands", "bash_identity", "bash_shell_description", "build_session_of",
+    "build_shell_description", "command_env", "helper_command_facts", "is_build_call",
 ]

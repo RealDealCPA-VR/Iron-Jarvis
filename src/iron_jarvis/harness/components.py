@@ -229,6 +229,12 @@ class SubAgent:
     name: str
     description: str
     rel: str
+    #: v1.421.0 (Wave 1, A3): the brief's whole text AS READ (unscanned) —
+    #: never rendered into the lead's prompt (the lead reads the file with
+    #: its tools); ``harness/standard`` scans it before a HELPER whose name
+    #: matches gets it. Not part of equality or the repr (the fingerprint is
+    #: the rendered text, which never holds it).
+    body: str = field(default="", compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -505,7 +511,7 @@ def _validate(folder: Path, known_tools: "set[str] | None") -> ProjectLayer:
                 raise LayerInvalid(f"sub_agents/{f.name}'s description is over {MAX_TRIGGER_CHARS} characters")
             agent_bodies.append(text)
             layer.sub_agents.append(SubAgent(
-                name=stem, description=desc, rel=f"{HARNESS_REL}/sub_agents/{f.name}",
+                name=stem, description=desc, rel=f"{HARNESS_REL}/sub_agents/{f.name}", body=text,
             ))
     # scripts/* — present, regular, bounded; never read or run here
     scripts_dir = hdir / "scripts"
@@ -591,8 +597,12 @@ def _scan_layer(layer: ProjectLayer, *, event_bus: Any, session_id: str | None) 
         Skill(s.name, _one_line(guard(s.trigger, f"project harness skill {s.name}")), s.rel)
         for s in layer.skills
     ]
+    # v1.421.0: the brief's BODY rides along unscanned — it reaches no prompt
+    # here (the lead reads the file with its tools); ``harness/standard``
+    # scans it before a matching helper gets it.
     layer.sub_agents = [
-        SubAgent(a.name, _one_line(guard(a.description, f"project harness sub-agent {a.name}")), a.rel)
+        SubAgent(a.name, _one_line(guard(a.description, f"project harness sub-agent {a.name}")), a.rel,
+                 body=a.body)
         for a in layer.sub_agents
     ]
     return layer
@@ -683,6 +693,40 @@ class ComponentTree:
     #: fingerprint (``finish.mark()``), a folder that did not leaves it as it
     #: was.
     finish: Any = None
+    #: v1.421.0 (Wave 1, A7): can THIS turn start a helper (a helper door —
+    #: ``delegate`` / ``spawn_agent`` — in its gate)? Only the words of the
+    #: "Helper briefs" section depend on it (a folder with no ``sub_agents``
+    #: renders exactly as before, whatever it says).
+    helpers: bool = False
+
+
+#: v1.421.0 (Wave 1, A7): the "Helper briefs" section's first line. The old
+#: line ("No helper agent runs in this session…") was written before a coding
+#: session could start helpers (v1.372.0) and has been false for every turn
+#: that can; it stays, word for word, for a turn that cannot.
+SUB_AGENTS_SOLO = (
+    "No helper agent runs in this session: when a brief's description fits the work, read it "
+    "and follow it yourself."
+)
+SUB_AGENTS_HAND_OUT = (
+    "When a brief's description fits a piece of the work, hand that piece to a helper and tell "
+    "it, in its task, to read that brief first."
+)
+
+#: v1.421.0: the lessons' heading and line — the lead's tree and a helper's
+#: standard (``harness/standard``) say them in the same words.
+LIBRARY_HEADING = (
+    "## Lessons from earlier sessions in this folder\nThe user kept these. They are facts "
+    "about this project from earlier work here; check one against the code when it matters.\n"
+)
+
+
+def library_text(lessons: Iterable[str]) -> str:
+    """The lessons as their section ("" for none)."""
+    lines = [str(x) for x in lessons if str(x or "").strip()]
+    if not lines:
+        return ""
+    return LIBRARY_HEADING + "\n".join("- " + lesson.replace("\n", "\n  ") for lesson in lines)
 
 
 def plan_mode_text(*, exit_name: str, plan_name: str) -> str:
@@ -718,12 +762,16 @@ def compose(
     rule_files: Iterable[str] = (),
     mode: str = "",
     library: Iterable[str] = (),
+    helpers: bool = False,
 ) -> ComponentTree:
     """Layer the default, the family (its ``dialect_section``) and the
     project. Omitted-is-inherited: a project text file replaces its
     component; the guardrail floor and the dialect section are never
     replaced; memory is additive. ``mode`` (v1.367.0) is the session's
-    plan-mode text (:func:`plan_mode_text`); "" renders nothing."""
+    plan-mode text (:func:`plan_mode_text`); "" renders nothing.
+    ``helpers`` (v1.421.0, A7): the turn can start a helper (its gate holds a
+    helper door) — the folder's helper briefs are then handed out, never
+    "followed yourself"."""
     texts = project.texts if project.used else {}
     # v1.384.0 review: a planning turn (``mode``) is never told to make
     # changes one at a time — it has no editors. v1.402.0: both carry the
@@ -772,6 +820,7 @@ def compose(
         mode=str(mode or "").strip(),
         library=lessons,
         finish=finish,
+        helpers=bool(helpers),
     )
 
 
@@ -804,12 +853,9 @@ def render(tree: ComponentTree) -> str:
     if tree.library:
         # v1.370.0: the folder's experience library — lessons the user kept
         # from earlier sessions here. Facts about this project, below the
-        # guardrails (nothing here lifts them).
-        parts.append(
-            "## Lessons from earlier sessions in this folder\nThe user kept these. They are facts "
-            "about this project from earlier work here; check one against the code when it matters.\n"
-            + "\n".join("- " + lesson.replace("\n", "\n  ") for lesson in tree.library)
-        )
+        # guardrails (nothing here lifts them). v1.421.0: the same words a
+        # helper's standard says them in (:func:`library_text`).
+        parts.append(library_text(tree.library))
     parts.append("## Tools\n" + tree.tool_guidance)
     if tree.skills:
         parts.append(
@@ -818,9 +864,11 @@ def render(tree: ComponentTree) -> str:
             + "\n".join(f"- {s.name}: {s.trigger} (read {s.rel})" for s in tree.skills)
         )
     if tree.sub_agents:
+        # v1.421.0 (A7): what to DO with a brief depends on whether this turn
+        # can start a helper at all (``tree.helpers``, from its gate).
         parts.append(
-            "## Helper briefs in this folder\nNo helper agent runs in this session: when a "
-            "brief's description fits the work, read it and follow it yourself.\n"
+            "## Helper briefs in this folder\n"
+            + (SUB_AGENTS_HAND_OUT if tree.helpers else SUB_AGENTS_SOLO) + "\n"
             + "\n".join(f"- {a.name}: {a.description} (read {a.rel})" for a in tree.sub_agents)
         )
     if tree.scripts:

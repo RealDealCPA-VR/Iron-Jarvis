@@ -317,6 +317,14 @@ class ToolInvocation(SQLModel, table=True):
     #: ``tool`` is always the REAL tool — the gate, approvals and undo all
     #: judged that one. "" when the model used the real name. Additive.
     called_as: str = ""
+    #: v1.421.0 (Wave 1, A1): the shell language a ``shell`` /
+    #: ``process_start`` command was written in and run with — ``"bash"``
+    #: when its context said so (``ToolContext.shell_syntax``: Claude Code's
+    #: ``Bash`` in a coding session, and a coding session's HELPER on Windows
+    #: with Git for Windows' bash found). The finish check re-runs a helper's
+    #: test command in the shell it was written for (``harness/finish.
+    #: helper_commands``). "" = the platform's own shell. Additive.
+    shell_syntax: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 

@@ -23,7 +23,10 @@ user would notice:
   interrupted, an agent job is offered for Continue and Continue resumes its
   own conversation;
 * (readiness 12A review) a database an OLDER app made gains the columns this
-  one added (``session.failure_detail``), nullable, and its rows still read;
+  one added (``session.failure_detail``), nullable, and its rows still read —
+  (v1.421.0) ``toolinvocation.shell_syntax`` too: the boot reconcile writes
+  the cut-off tool call's row through the model, so a missing column would
+  lose that row;
 * after a hard kill the data folder is not left locked and the terminal is
   still restored;
 * (v1.391.0, the long-jobs plan's Phase 2) a CODING SESSION's reply stopped
@@ -323,11 +326,16 @@ def _as_older_schema(home: Path) -> None:
         # v1.391.0: and no `runtranscript.waiting` (a coding reply's kept
         # conversation says whether it was parked on the user).
         con.execute('ALTER TABLE "runtranscript" DROP COLUMN "waiting"')
+        # v1.421.0 (Wave 1, A1): and no `toolinvocation.shell_syntax` (the
+        # shell language a command was written in) — the cut-off tool call
+        # below is reconciled into that table.
+        con.execute('ALTER TABLE "toolinvocation" DROP COLUMN "shell_syntax"')
         con.commit()
     finally:
         con.close()
     assert "failure_detail" not in _session_columns(home), "anti-vacuity: the older shape"
     assert "waiting" not in _table_columns(home, "runtranscript"), "anti-vacuity: the older shape"
+    assert "shell_syntax" not in _table_columns(home, "toolinvocation"), "anti-vacuity: the older shape"
 
 
 def _table_columns(home: Path, table: str) -> dict[str, int]:
@@ -414,6 +422,7 @@ def test_an_update_restart_brings_everything_back(tmp_path):
         # The older database gained the new column (nullable) and its rows read.
         assert _session_columns(home)["failure_detail"] == 0, "added, and nullable"
         assert _table_columns(home, "runtranscript")["waiting"] == 0, "added, and nullable"
+        assert _table_columns(home, "toolinvocation")["shell_syntax"] == 0, "added, and nullable"
         row = second.get(f"/sessions/{planted['session']}")
         assert row.status_code == 200, row.text
         assert row.json()["session"]["failure_detail"] == ""

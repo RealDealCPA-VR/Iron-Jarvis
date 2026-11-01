@@ -580,12 +580,19 @@ def test_the_bash_words_match_the_behaviour(tmp_path):
 
 @pytest.mark.skipif(not WIN, reason="cmd.exe vs bash is a Windows question")
 async def test_a_helper_of_a_claude_turn_is_shown_cmd_words_for_its_cmd_shell(tmp_path, monkeypatch):
-    """The decision: a helper of a Claude Build turn keeps cmd.exe. It is
-    shown Jarvis's own ``shell`` (never Claude Code's ``Bash``), whose words
-    say cmd.exe — words and interpreter agree, the ';' guard and the true
-    hints cover the bash it may still write. (Evidence: Phase 7's 90 Jarvis
-    runs called no helper; bash for helpers would make the agent runtime a
-    second writer of a call's shell syntax.)"""
+    """The v1.386.2 decision was: a helper of a Claude Build turn keeps
+    cmd.exe. It is shown Jarvis's own ``shell`` (never Claude Code's
+    ``Bash``), whose words say cmd.exe — words and interpreter agree.
+
+    MOVED ON PURPOSE (v1.421.0, Wave 1 A1): the owner reversed it — a Build
+    session's helper runs in Git for Windows' bash WHEN ONE IS FOUND (the
+    live record: a worker failed 182 of 742 commands, most of them Linux
+    commands run in cmd.exe). This pin keeps the half that still holds: with
+    NO bash found the helper keeps cmd.exe and cmd's words, exactly as
+    before. (The bash half: ``tests/test_helper_standard_v14210.py``.)"""
+    from iron_jarvis.sandbox import git_bash as _gb
+
+    monkeypatch.setattr(_gb, "find", lambda *a, **k: None)
     from iron_jarvis.core import procs
     from iron_jarvis.daemon.app import create_app
     from iron_jarvis.providers.adapters.base import LLMResponse

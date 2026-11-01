@@ -228,6 +228,13 @@ class HelperParent:
     #: workers for code / test / read, the reviewer for a review); a worker
     #: gets the whole coding set and the worker rules, the reviewer only reads.
     team: Any = None
+    #: v1.421.0 (Wave 1, A3): the STANDARD every helper of this reply is
+    #: judged by (``harness/standard.HelperStandard`` — the lead's folder
+    #: rules, the guardrails, the accepted lessons, the matching brief, the
+    #: checks), built once with the lead's turn (``HarnessTurn.
+    #: helper_standard``). None: no section (a turn that is not a Build
+    #: session's with a folder) — every helper's prompt exactly as before.
+    standard: Any = None
 
     def grants(self) -> tuple[list[str], str]:
         """``(allow_tools, approval_mode)`` for the helper's row:
@@ -473,6 +480,32 @@ def helper_definition(parent: "HelperParent | None", definition: Any, *, custom:
     from .branches import prompt_line as branch_line
 
     prompt = str(getattr(definition, "system_prompt", "") or "") + branch_line()
+    # v1.421.0 (Wave 1, A3): THE STANDARD the session's work is judged by —
+    # the lead's folder rules, the guardrails, the accepted lessons, the
+    # folder's brief for this helper (by its member name, the agent asked
+    # for, its role, its type) and what the finish check looks at — for
+    # every helper of a Build session's turn that has a folder (workers,
+    # built-in helpers and the read-only reviewer, which checks against it).
+    # BEFORE the worker rules: the section is the same for every helper of
+    # the reply (a long shared prefix for the provider's prompt cache), and
+    # the worker's own job — "do only the piece you were given … end with a
+    # report" — closes its definition's words, after the standard it works
+    # to. Any other helper: nothing added, so its prompt is exactly as
+    # before.
+    standard = getattr(parent, "standard", None)
+    if standard is not None and parent.folder and build_thread_of(parent.session_id):
+        from .standard import helper_names
+
+        try:
+            # v1.421.0 review: composed to the share of the window of the
+            # model THIS helper runs on (a member's own, else the session's):
+            # the section rides the system prompt, which the run's transcript
+            # planner cannot shrink, so a small window would cost the TASK.
+            prompt += standard.for_helper(
+                helper_names(parent, definition), provider=parent.provider, model=parent.model,
+            )
+        except Exception:  # noqa: BLE001 — a helper's prompt never breaks its start
+            pass
     # v1.403.0 (the coding-session team): a WORKER is told its part — one
     # piece, only the files it names, its tests, a report. Only a worker of a
     # team turn (every other helper's prompt is exactly as before).

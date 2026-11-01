@@ -845,11 +845,13 @@ class JarvisRunner:
         from ..daemon.routes import chat as chat_routes
         from ..harness import components as harness_components
         from ..harness import checkers as harness_checkers
+        from ..harness import command_env as harness_command_env
         from ..harness import dialects as harness_dialects
         from ..harness import finish as harness_finish
         from ..harness import folder_changes as harness_folder_changes
         from ..harness import mode as harness_mode
         from ..harness import project_map as harness_project_map
+        from ..harness import standard as harness_standard
         from ..personas.builtins import BUILTIN_PERSONAS
 
         turn = self.harness()
@@ -874,6 +876,13 @@ class JarvisRunner:
                 # (the map itself is per folder, never in the fingerprint).
                 + b"\0" + _module_bytes(harness_project_map)
                 + b"\0" + _module_bytes(harness_checkers)
+                # v1.421.0 (Wave 1, A1 + A3) review: and what every HELPER of a
+                # Build session's turn is given — the standard it is judged by
+                # and the shell its commands are written in. Neither is in the
+                # lead's specs or fingerprint, so a change to either alone
+                # would otherwise reuse results its helpers never saw.
+                + b"\0" + _module_bytes(harness_standard)
+                + b"\0" + _module_bytes(harness_command_env)
             ),
             "dialect": turn.plan.dialect.id,
             "dialect_requested": self.dialect,
