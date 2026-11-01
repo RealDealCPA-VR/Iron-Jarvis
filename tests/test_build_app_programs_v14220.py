@@ -33,6 +33,9 @@ SERVER = Path(__file__).parent / "fixtures" / "listen_server_v14220.py"
 PYTHON = getattr(sys, "_base_executable", "") or sys.executable
 #: A pretend key on the server's command line: the row must never show it.
 SECRET = "sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+#: A secret in no key shape, after a secret-named flag: only the command-line
+#: rule (``harness/process._shown_command``) hides it.
+PLAIN = "plainsecret123"
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="the Code view's Job is a Windows Job")
 
@@ -111,7 +114,7 @@ async def _serve_in_tool(live, out: Path, started: list[int]) -> tuple[int, int]
     # Born suspended, put in the Job, then let run (a process joins a Job
     # only by itself — never what it already started: the v1.346.1 rule).
     proc = subprocess.Popen(  # noqa: S603 — a test fixture
-        [PYTHON, str(SERVER), str(out), "--api-key", SECRET],
+        [PYTHON, str(SERVER), str(out), "--api-key", SECRET, "--token", PLAIN],
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | procs.CREATE_SUSPENDED,
     )
     started.append(proc.pid)
@@ -155,6 +158,7 @@ async def test_a_listening_program_the_tool_started_keeps_it_and_its_end_frees_i
             assert view["programs"][0]["command"].startswith("python.exe listen_server_v14220.py srv.txt --api-key ")
             assert SECRET not in view["programs"][0]["command"], "a key on the command line reached the row"
             assert SECRET not in view["keep_note"]
+            assert PLAIN not in view["programs"][0]["command"] and PLAIN not in view["keep_note"],                 "the word after --token reached the row"
             assert view["keep_note"].startswith(f"Keeping Claude Code open: it runs a program on port {port} (")
             assert "Close Claude Code" in view["keep_note"], "the row does not say how to stop it"
             assert "pid" not in str(view["programs"]) and str(pid) not in str(view["programs"])
@@ -188,7 +192,7 @@ async def test_past_the_bound_it_is_stopped_and_what_it_ran_is_said_everywhere(
             said = [n for n in notes if n.startswith("Iron Jarvis closed Claude Code after 8 hours")]
             assert said, notes
             assert f"(port {port})" in said[0] and "listen_server_v14220.py" in said[0]
-            assert SECRET not in said[0]
+            assert SECRET not in said[0] and PLAIN not in said[0]
             # 2. the row says it
             row = (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]
             assert row["stopped_note"] == said[0] and row["programs"] == [] and row["keep_note"] == ""
@@ -227,6 +231,39 @@ async def test_a_listening_process_started_before_the_tool_acted_is_its_own(
             assert await svc.reap_once(now=svc.clock() + S.IDLE_S + 1) == [s["id"]]
             assert live.stopped_note == ""
             assert _gone_soon(pid) and _gone_soon(pid2)
+    finally:
+        await stop_all(app)
+
+
+async def test_each_new_process_counts_from_its_own_first_step(app, work, tmp_path, monkeypatch, started):
+    # After a stop the next message starts a NEW process: what it started
+    # before ITS first step (its MCP servers) is its own, whatever the old
+    # process did; what it starts after counts.
+    use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
+    monkeypatch.setattr(PG, "STARTED_SLACK_S", 0.0)
+    svc = S.service_for(app.state.platform)
+    try:
+        async with client(app) as c:
+            s = await new_session(c, work)
+            await _say(c, s["id"])
+            live = svc.live[s["id"]]
+            _step(live)
+            assert await svc.reap_once(now=svc.clock() + S.IDLE_S + 1) == [s["id"]]
+            await _say(c, s["id"], "t2")
+            assert live.proc is not None
+            own, _ = await _serve_in_tool(live, tmp_path / "own.txt", started)
+            # The new process has not acted yet: the OLD process's first step
+            # says nothing about it (its MCP servers start right now).
+            assert PG.first_step(live) is None
+            got = (await PG.read_many([live]))[live.sid]
+            assert got.known and got.programs == [], "the old process's first step counted for the new one"
+            await asyncio.sleep(0.05)
+            _step(live, "tu2")
+            await asyncio.sleep(0.05)
+            ran, port = await _serve_in_tool(live, tmp_path / "ran.txt", started)
+            assert await svc.reap_once(now=svc.clock() + S.IDLE_S + 1) == []
+            view = (await c.get(f"/build/app/sessions/{s['id']}")).json()["session"]
+            assert [p["ports"] for p in view["programs"]] == [[port]], view["programs"]
     finally:
         await stop_all(app)
 
@@ -334,9 +371,10 @@ async def test_a_look_counts_only_while_fresh(app, work, tmp_path, monkeypatch):
             svc.clock = lambda: t["now"]
             live = svc.live[s["id"]]
             live.last_active = live.last_heard = t["now"]
-            await c.post(f"/build/app/sessions/{s['id']}/seen")
-            t["now"] += PG.LOOK_FRESH_S + S.IDLE_S
-            assert await svc.reap_once() == [s["id"]]
+            t["now"] += 60
+            await c.post(f"/build/app/sessions/{s['id']}/seen")  # then the window went away
+            t["now"] += S.IDLE_S - 59  # 15 minutes quiet; the last look 14 minutes old
+            assert await svc.reap_once() == [s["id"]], "a look from long ago still counted"
     finally:
         await stop_all(app)
 
@@ -384,6 +422,16 @@ def test_a_real_child_by_parent_link_counts_and_the_tools_own_port_never(tmp_pat
     assert got.known
     assert [(p.pid, p.ports) for p in got.programs] == [(child_pid, (child_port,))], \
         "the tool's own listening port counted, or its child was missed"
+    # The Job path: a tool whose own process is a member (every Code-view
+    # tool is) and listens itself (OpenCode's own server) — never counted.
+    class _Job:
+        closed = False
+
+        def member_pids(self):
+            return [tool.pid, child_pid]
+
+    in_job = PG.read([("s1", tool.pid, _Job(), t0)])["s1"]
+    assert [p.pid for p in in_job.programs] == [child_pid], "the tool's own process counted as a program"
     late = PG.read([("s1", tool.pid, None, time.time() + 5)])["s1"]
     assert late.known and late.programs == [], "a program older than the tool's first step counted"
     assert PG.read([("s1", None, None, t0)])["s1"].programs == []
@@ -419,3 +467,19 @@ def test_the_words_name_each_program_on_its_own_line():
     assert keep.startswith("Keeping Codex open: it runs 2 programs (node server.js (port 3000); ")
     many = [PG.Program(i, float(i), (3000 + i,), f"p{i}") for i in range(PG.SHOWN_MAX + 2)]
     assert PG.stopped_words("Pi", many, why="evicted").endswith("\n- and 2 more")
+
+
+def test_the_code_views_beat_and_press_are_the_daemons():
+    """The dashboard's beat must come well inside a look's freshness, and the
+    press the daemon's line names must be the one the Code view draws."""
+    import re
+
+    ts = (Path(__file__).parents[1] / "dashboard" / "lib" / "buildApp.ts").read_text(encoding="utf-8")
+    ts = ts.replace("\r\n", "\n")
+    beat = re.search(r"export const CODE_SEEN_BEAT_MS = ([\d_]+);", ts)
+    assert beat, "the Code view's beat is gone"
+    assert int(beat.group(1).replace("_", "")) == int(PG.BEAT_S * 1000)
+    assert PG.LOOK_FRESH_S >= 2 * PG.BEAT_S, "one missed beat would end the look"
+    assert "idle: `Close ${toolName}`" in ts
+    line = PG.keep_words("Claude Code", [PG.Program(1, 1.0, (3000,), "node vite.js")])
+    assert "press Close Claude Code (" in line
