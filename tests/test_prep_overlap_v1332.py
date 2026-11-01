@@ -219,8 +219,11 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
     assert expected in system, f"{lane}: prep sections out of order:\n{system[-900:]!r}"
     ws_block = chat_turn._workspace_grounding_block(str(ws), (ws, False))
     assert ws_block and ws_block in system
-    assert system.index(expected) < system.index(ws_block), (
-        "the bound folder's block moved ahead of the skill section"
+    # v1.420.0 (C3.7, moved on purpose): the bound folder's block is part of
+    # the STABLE head; the attachments … skill sections are query-dependent
+    # and now come LAST (before: the folder followed the skill).
+    assert system.index(ws_block) < system.index(expected), (
+        "the bound folder's block must stay in the stable head, before the query tail"
     )
 
 

@@ -310,13 +310,16 @@ async def test_the_sessions_transcript_is_parsed_off_the_event_loop(app, work, m
 
     loop_thread = threading.current_thread()
     where: list[bool] = []
-    real = S.history
+    # v1.420.0 (C3.2, moved on purpose): a turn's history is read through
+    # ``history_of(..., last_work=True)`` now, not ``history(row)`` — the spy
+    # follows the parse to its new name.
+    real = S.history_of
 
-    def spy(row):
+    def spy(messages, **kw):
         where.append(threading.current_thread() is loop_thread)
-        return real(row)
+        return real(messages, **kw)
 
-    monkeypatch.setattr(S, "history", spy)
+    monkeypatch.setattr(S, "history_of", spy)
     wire(app, Script(["Hello."]))
     sid = new_session(app, work)["id"]
     status, _ = await open_turn(app, sid, {"text": "hi", "turn_id": "rv-offloop"})

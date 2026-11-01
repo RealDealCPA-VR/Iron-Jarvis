@@ -643,11 +643,14 @@ def history_for_turn(row: Any) -> tuple[list[dict[str, str]], str]:
     ("" when none). Pure apart from reading ``row``."""
     from . import sessions as S
 
+    # v1.420.0 (C3.2): the newest reply carries what it read, changed and ran
+    # (``sessions.last_work_note``) — never a reply the summary covers, so a
+    # summary and the note never say the same turn twice.
     rec = standing(S._setup(row))
-    if rec is None:
-        return S.history(row), ""  # no summary: exactly the history a turn always read
     messages = S._messages(row)
-    return S.history_of(messages[boundary(messages, rec):]), render(rec["summary"])
+    if rec is None:
+        return S.history_of(messages, last_work=True), ""
+    return S.history_of(messages[boundary(messages, rec):], last_work=True), render(rec["summary"])
 
 
 def survives_cut(record: "dict[str, Any] | None", messages: list[dict[str, Any]], keep: int) -> bool:

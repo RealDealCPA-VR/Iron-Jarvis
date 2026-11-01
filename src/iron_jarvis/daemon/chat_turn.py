@@ -41,7 +41,10 @@ import contextlib
 import contextvars
 import json as _json
 import logging
+import os as _os
 import re as _re
+import threading as _threading
+import time as _time
 
 from fastapi import HTTPException
 from pathlib import Path
@@ -338,6 +341,22 @@ async def _apply_compaction(
     key = _C.prefix_key([f"{r}\x1e{t}" for r, t in pairs])
     store = _compaction_store(d.platform)
     rec = store.get(key)
+    if rec is None:
+        # v1.420.0 (C3.5) — THE RE-SUMMARY LOOP: the exact key above covers
+        # every message but the newest KEEP_RECENT, so each new message moved
+        # it by two lines and a conversation past the ceiling paid one more
+        # summary on EVERY turn (measured: three turns, three calls). A stored
+        # summary of this conversation's own opening lines (content-addressed:
+        # a hit proves those lines are byte-identical) is reused until the
+        # lines it does not cover have grown past KEEP_RECENT more; only then
+        # is a new one written below.
+        # (Off the loop: it hashes every prefix and reads the table.)
+        _standing = getattr(store, "standing", None)
+        prior = await asyncio.to_thread(_standing, covered) if callable(_standing) else None
+        if prior is not None and 0 < int(getattr(prior, "covers", 0) or 0) <= len(covered) and (
+            len(covered) - prior.covers <= _C.KEEP_RECENT
+        ):
+            rec = prior
 
     # No cached summary and the ceiling is here: compact NOW, without asking.
     # There is no one to ask mid-turn, and the alternative is a turn that
@@ -396,6 +415,18 @@ async def _apply_compaction(
             }
         )
     return system, msgs, report
+
+
+def split_query_tail(full: str, head: str, tail: str) -> "tuple[str, str]":
+    """v1.420.0 (C3.7): ``(head', tail)`` after :func:`_apply_compaction` was
+    handed ``head + tail`` and answered ``full`` — what it appended (a stored
+    summary) joins the HEAD, so the query-dependent ``tail`` still goes last.
+    When ``full`` does not start with ``head + tail`` (nothing to split), the
+    whole of it is the head and the tail is ``""`` — never a section twice."""
+    joined = head + tail
+    if tail and full.startswith(joined):
+        return head + full[len(joined):], tail
+    return full, ""
 
 
 def _C_DEFAULT_WINDOW() -> int:
@@ -834,7 +865,7 @@ def harness_context_breakdown(
                 add("memory", brain.without_tools())
             except Exception:  # noqa: BLE001
                 pass
-        add("project", getattr(g, "project", ""))
+        add("project", getattr(g, "project", ""), getattr(g, "project_query", ""))
         _map = str(getattr(getattr(harness, "project_map", None), "text", "") or "")
         if _map:
             add("project", "\n\n" + _map)
@@ -3598,6 +3629,39 @@ def surface_for(body) -> "str | None":
         return SURFACE_PANE if str(getattr(body, "pane_id", "") or "").strip() else None
     except Exception:  # noqa: BLE001 — wording only
         return None
+
+
+def with_coding_offer(
+    entries: Any, body: Any, *, harness: Any = None, escalate: bool = False,
+    sidebar: bool = False,
+) -> list[Any]:
+    """The turn's door entries with the CODING OFFER (v1.420.0, C6.1): when
+    the user's last message asks to build a piece of software or names a task
+    on a repository (``tools.autoselect.coding_offer``), one door into Build ›
+    Code. ONLY A LINK — the chat still answers; nothing is armed or handed
+    off. A PLAIN CHAT turn only: never a coding session's own turn
+    (``harness``), a turn that escalated to an agent, the browser sidebar, a
+    Build pane's chat, the phone or a run (``failure_words.current_surface``
+    names the last three). Added BEFORE ``with_connect_door`` so the Connect
+    door keeps its place when the doors are full; :func:`doors.collect_doors`
+    still caps the list at ``MAX_DOORS``. Both lanes call it at the same seam
+    — MIRROR NOTE (lock-step). Never raises (the entries come back unchanged)."""
+    base = list(entries or [])
+    try:
+        if harness is not None or escalate or sidebar or surface_for(body):
+            return base
+        from ..providers.failure_words import SURFACE_CHAT, current_surface
+
+        if current_surface() != SURFACE_CHAT:
+            return base
+        from ..tools.autoselect import coding_offer
+
+        door = coding_offer(_last_user_text(getattr(body, "messages", None)))
+        if not door or any(isinstance(e, dict) and e.get("href") == door.get("href") for e in base):
+            return base
+        return base + [door]
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
 
 
 def _no_text_reply(
@@ -7415,6 +7479,23 @@ def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, st
             n = None
         if n:
             return int(n), "catalog"
+    # v1.420.0 (C3.5): Codex's window comes from Codex's OWN model catalog
+    # (``codex_context_window``: its models_cache.json, read off the loop in
+    # the background, else the documented table) — for codex-cli and for a
+    # keyless provider served through it. Before this rung a Codex turn
+    # planned against the 32k default and its history was summarised away
+    # long before Codex's own ~258k window was anywhere near full.
+    _served_by_codex = provider == "codex-cli"
+    if not _served_by_codex:
+        _inh = getattr(_providers, "inherited_from", None)
+        try:
+            _served_by_codex = callable(_inh) and _inh(provider) == "codex-cli"
+        except Exception:  # noqa: BLE001 — a broken manager just skips this rung
+            _served_by_codex = False
+    if _served_by_codex:
+        n = codex_context_window(model)
+        if n:
+            return int(n), "catalog"
     fleet = getattr(d.platform, "fleet", None)
     if fleet is not None and model:
         # THE GATEWAY-KEY FIX: a model proxy's own /model/info states each
@@ -7439,6 +7520,103 @@ def _ladder_window_source(d, provider: str, model: str) -> "tuple[int | None, st
         except Exception:  # noqa: BLE001 — budgets fall back to defaults
             pass
     return None, "default"
+
+
+#: v1.420.0 (C3.5): Codex's context windows when its own catalog cannot be
+#: read — COPIED FROM IT, not guessed. Codex writes its model catalog to
+#: ``<CODEX_HOME or ~/.codex>/models_cache.json``; read on this PC on
+#: 2026-10-31 (codex-cli 0.157.0), every model it lists (gpt-6-astra, -sol,
+#: -luna; gpt-5.6-sol, -terra, -luna) states ``context_window`` 272000 and
+#: ``effective_context_window_percent`` 95, i.e. 258,400 tokens Codex itself
+#: lets a thread fill. Matched by id PREFIX (first match wins); an id no row
+#: matches stays unknown (the planner's conservative default).
+CODEX_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
+    ("gpt-6", 258_400),
+    ("gpt-5.6", 258_400),
+    ("gpt-5", 258_400),
+    ("codex-", 258_400),
+)
+#: How long a reading of Codex's catalog is trusted before it is read again
+#: (in the background — a turn never waits for the 300 KB file).
+CODEX_CATALOG_TTL_S = 300.0
+_CODEX_CATALOG: dict[str, Any] = {"at": 0.0, "rows": None, "busy": False}
+_CODEX_CATALOG_LOCK = _threading.Lock()
+
+
+def _codex_home() -> Path:
+    override = (_os.environ.get("CODEX_HOME") or "").strip()
+    return Path(override) if override else Path.home() / ".codex"
+
+
+def refresh_codex_windows() -> "dict[str, int] | None":
+    """Read Codex's own model catalog (``models_cache.json``) READ-ONLY and
+    keep ``{model id: effective window}`` (``context_window`` x
+    ``effective_context_window_percent``). BLOCKING (a ~300 KB file): called
+    on a background thread by :func:`codex_context_window`, or directly by a
+    test. Never raises; None when the file is missing or unreadable."""
+    rows: "dict[str, int] | None" = None
+    try:
+        path = _codex_home() / "models_cache.json"
+        if path.is_file() and path.stat().st_size <= 8_000_000:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            models = data.get("models") if isinstance(data, dict) else data
+            rows = {}
+            for m in models if isinstance(models, list) else []:
+                if not isinstance(m, dict):
+                    continue
+                slug = str(m.get("slug") or m.get("id") or "").strip()
+                win = m.get("context_window")
+                if not slug or not isinstance(win, int) or isinstance(win, bool) or win <= 0:
+                    continue
+                pct = m.get("effective_context_window_percent")
+                if isinstance(pct, (int, float)) and not isinstance(pct, bool) and 0 < pct <= 100:
+                    win = int(win * pct / 100)
+                if m.get("visibility") in (None, "list"):
+                    rows[slug] = win
+                else:
+                    rows.setdefault("\x00hidden:" + slug, win)
+    except Exception:  # noqa: BLE001 — an unreadable catalog is "use the table"
+        log.debug("reading Codex's model catalog failed", exc_info=True)
+        rows = None
+    with _CODEX_CATALOG_LOCK:
+        _CODEX_CATALOG.update({"at": _time.monotonic(), "rows": rows, "busy": False})
+    return rows
+
+
+def codex_context_window(model: str) -> "int | None":
+    """The window (tokens) a Codex turn on ``model`` plans against: Codex's own
+    catalog when it has been read, else :data:`CODEX_WINDOW_TABLE`. A
+    placeholder pick ("", "default", "subscription", "auto" — Codex's own
+    default model) answers only when every model the catalog lists agrees.
+    Never blocks: a stale reading is refreshed on a background thread and the
+    last one (or the table) answers meanwhile. Never raises."""
+    try:
+        with _CODEX_CATALOG_LOCK:
+            stale = _time.monotonic() - float(_CODEX_CATALOG["at"] or 0.0) > CODEX_CATALOG_TTL_S
+            start = (stale or not _CODEX_CATALOG["at"]) and not _CODEX_CATALOG["busy"]
+            if start:
+                _CODEX_CATALOG["busy"] = True
+            rows = _CODEX_CATALOG["rows"]
+        if start:
+            _threading.Thread(target=refresh_codex_windows, name="codex-windows", daemon=True).start()
+        name = str(model or "").strip()
+        if rows:
+            hit = rows.get(name) or rows.get("\x00hidden:" + name)
+            if hit:
+                return int(hit)
+            listed = {v for k, v in rows.items() if not k.startswith("\x00")}
+            if name.lower() in ("", "default", "subscription", "auto"):
+                return int(next(iter(listed))) if len(listed) == 1 else None
+        if name.lower() in ("", "default", "subscription", "auto"):
+            wins = {w for _p, w in CODEX_WINDOW_TABLE}
+            return int(next(iter(wins))) if len(wins) == 1 else None
+        low = name.lower()
+        for prefix, win in CODEX_WINDOW_TABLE:
+            if low.startswith(prefix):
+                return int(win)
+    except Exception:  # noqa: BLE001 — unknown window, conservative budgets
+        log.debug("the Codex window lookup failed", exc_info=True)
+    return None
 
 
 def _attachment_budgets(d, provider: str, model: str) -> tuple[int, int, int]:
@@ -8078,13 +8256,20 @@ class _Grounding:
     """The grounded sections of ONE turn's system prompt (v1.311.0).
 
     Computed together by :func:`_gather_grounding` and JOINED by the lanes in
-    the fixed order the prompt has always had — the order is the contract
-    (``tests/test_wave3_chat_lanes_v1311.py`` pins it byte for byte)::
+    a fixed order — the order is the contract (``tests/test_wave3_chat_lanes_
+    v1311.py`` pins it byte for byte). v1.420.0 (C3.7, PROMPT ORDER FOR THE
+    CACHE): the sections that stay the same from one message to the next come
+    FIRST (:meth:`stable`, then the lane's roster / saved workflows, folder,
+    harness tree and tool list) and the ones that change with each question
+    LAST (:meth:`query`, after everything else), so a provider's prompt cache
+    reads the whole stable head again::
 
-        project block → project folder instructions → lessons → memory index
-        → fabric → connector memory → apps named in the message
-        [attachments + "/" skill: the lane's own, OUTSIDE the gather]
-        → roster → saved workflows
+        project block (instructions, brief, folder) → project folder
+        instructions → lessons → memory index → roster → saved workflows
+        … [the lane's folder line, harness tree, tools] …
+        → project knowledge + recent activity → fabric → connector memory
+        → apps named in the message
+        [then the lane's attachments + "/" skill, also query-dependent]
 
     Every field is a ready-to-append section ("" when there is nothing).
     The apps section (v1.354.0, G39) is "" unless the message names a
@@ -8093,7 +8278,7 @@ class _Grounding:
     """
 
     __slots__ = (
-        "project", "folder_rules", "folder_rules_used", "lessons", "index",
+        "project", "project_query", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
         "harness", "apps_phone", "late",
@@ -8102,6 +8287,12 @@ class _Grounding:
     def __init__(self) -> None:
         self.project = self.lessons = self.index = self.fabric = ""
         self.connector = self.roster = self.workflows = ""
+        #: v1.420.0 (C3.7): the project block's QUERY-DEPENDENT part —
+        #: "Project knowledge (reference)" (retrieved for this question) and
+        #: "Recent activity in this project" — joined by :meth:`query`, after
+        #: the stable head. ``project`` keeps the instructions, the brief and
+        #: the folder line.
+        self.project_query = ""
         #: Set by the lane once it knows the turn is a text-only pick
         #: (:func:`is_text_only_pick`, v1.330.0): the roster ("Who can take
         #: this work") is then left out, because the turn has no exit to
@@ -8157,14 +8348,30 @@ class _Grounding:
         return {"late": list(self.late)} if self.late else {}
 
     def before_attachments(self) -> str:
-        # The folder's own instructions ride RIGHT AFTER the project block they
-        # belong to, and before the planner like every grounded section ("" —
-        # a byte-identical prompt — when the project has no usable folder or
-        # no instruction files, or the setting is off).
+        """Every grounded section in the order before v1.420.0 (kept for a
+        reader that wants the whole block; the lanes join :meth:`stable` and
+        :meth:`query` apart since C3.7)."""
         return (
-            self.project + self.folder_rules + self.lessons + self.index
+            self.project + self.project_query + self.folder_rules + self.lessons + self.index
             + self.fabric + self.connector + self.apps
         )
+
+    def stable(self) -> str:
+        """v1.420.0 (C3.7): the grounded sections that stay the same from one
+        message to the next — the project's instructions, brief and folder,
+        the folder's own instruction files (right after the project block they
+        belong to), the lessons and the memory index. The lanes join it at
+        the old seam, in the prompt's stable head."""
+        return self.project + self.folder_rules + self.lessons + self.index
+
+    def query(self) -> str:
+        """v1.420.0 (C3.7): the grounded sections that change with each
+        question — the project knowledge retrieved for it and the project's
+        recent activity, the memory fabric's snippets, the connector memory
+        and the apps the message names. The lanes join it LAST, after the
+        tool list, with the attachments and the "/" skill (before the planner
+        still prices it)."""
+        return self.project_query + self.fabric + self.connector + self.apps
 
     def after_skill(self) -> str:
         # The packs note rides the shared join (v1.311.0 review), so both
@@ -8172,7 +8379,11 @@ class _Grounding:
         # it is "" (byte-identical prompt) whenever nothing is starting.
         note = packs_starting_note(self.packs_starting)
         roster = "" if (self.text_only or self.harness) else self.roster
-        return roster + self.workflows + (("\n\n" + note) if note else "")
+        # v1.420.0 (C3.8): a CODING turn is not offered the saved workflows
+        # either — it never hands work to a workflow (no workflow tool is in
+        # its set), so the list was cost without use.
+        workflows = "" if self.harness else self.workflows
+        return roster + workflows + (("\n\n" + note) if note else "")
 
 
 #: v1.418.0 (C3.4): how long a turn waits for its grounding hops before it
@@ -8589,14 +8800,19 @@ async def _gather_grounding(
                 block += f"\n\nProject folder (this session's worktree of it): {_proj_seen}"
             else:
                 block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+        # v1.420.0 (C3.7): the knowledge retrieved for THIS question and the
+        # recent activity change from one message to the next — kept apart
+        # (``project_query``) so the lanes join them after the stable head.
+        tail = ""
         if got.get("knowledge"):
-            block += f"\n\nProject knowledge (reference):\n{got['knowledge']}"
+            tail += f"\n\nProject knowledge (reference):\n{got['knowledge']}"
         if recent:
-            block += (
+            tail += (
                 "\n\nRecent activity in this project (newest first):\n"
                 + "\n".join(recent)
             )
         out.project = block
+        out.project_query = tail
     if "folder_rules" in got:
         out.folder_rules, out.folder_rules_used = got["folder_rules"]
     out.lessons = got.get("lessons", "")
@@ -8951,11 +9167,16 @@ async def run_chat_turn(
     system += _profile_text
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py. Added here, before
     # the budget planner runs, so its cost is priced like every other section.
-    system += DRAFT_BLOCK
+    # v1.420.0 (C3.8): a CODING turn (harness mode) is never asked for an
+    # email draft or a chart, so the two fences — and the browser section
+    # below — are not sent to it. MIRROR NOTE (lock-step): routes/chat.py.
+    if harness is None:
+        system += DRAFT_BLOCK
     # CHART FENCE (v1.325.0) — MIRROR NOTE (lock-step): stream copy in
     # routes/chat.py. Beside DRAFT_BLOCK and for the same reason: before the
     # planner, so its cost is priced.
-    system += CHART_BLOCK
+    if harness is None:
+        system += CHART_BLOCK
     # YOUR BROWSER (v1.236.0, D16/D21) — MIRROR NOTE (lock-step): stream copy in
     # routes/chat.py. A few lines naming the tab the user is looking at, fenced
     # as the site's own untrusted text, and only when a paired browser is
@@ -8965,7 +9186,9 @@ async def run_chat_turn(
     # added after the planner has a cost the budget cannot see. Kept by name
     # (v1.330.0) so a TEXT-ONLY turn can swap exactly these bytes for the
     # tool-free form below (`text_only_system`).
-    _browser_block = _browser_section(d, getattr(body, "pane_id", "") or "")
+    _browser_block = (
+        _browser_section(d, getattr(body, "pane_id", "") or "") if harness is None else ""
+    )
     system += _browser_block
     # (`pid` / `resolved_proj` are read above the Environment line — v1.351.0.)
 
@@ -8987,11 +9210,20 @@ async def run_chat_turn(
         ),
         brain_turn(d, pid, recall_query, writers=normalize_trust(trust) != TRUST_LOW),
     )
-    system += _brain.block
+    # v1.420.0 (C3.7, PROMPT ORDER FOR THE CACHE): what changes with each
+    # question — the brain's retrieved notes, the project knowledge and recent
+    # activity, the fabric, the connector memory, the named apps, then the
+    # attachments, page, resources, earlier chats and the "/" skill — is kept
+    # in ``_query_tail`` and joined LAST (after the tool list, below), so the
+    # stable head before it reads from a provider's prompt cache again. The
+    # planner and the compaction still price ``system + _query_tail``.
+    # MIRROR NOTE (lock-step): routes/chat.py keeps the same tail.
+    _query_tail = _brain.block
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block, before the planner).
     # MIRROR NOTE (lock-step): routes/chat.py joins the same object.
-    system += _grounding.before_attachments()
+    system += _grounding.stable()
+    _query_tail += _grounding.query()
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted above attachments): an explicit body choice
@@ -9039,7 +9271,7 @@ async def run_chat_turn(
     # guide, skills and notes. Before the planner. MIRROR NOTE (lock-step):
     # routes/chat.py swaps at the same seam.
     if (text_only_pick or _harness is not None) and _brain.block:
-        system = system.replace(_brain.block, _brain.without_tools(), 1)
+        _query_tail = _query_tail.replace(_brain.block, _brain.without_tools(), 1)
     _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
         d,
         provider_choice or d.platform.config.default_provider,
@@ -9155,7 +9387,7 @@ async def run_chat_turn(
 
     images, attach_block = await _prep.take("attachments")
     if attach_block:
-        system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+        _query_tail += "\n\n# Attachments (provided by the user this turn)" + attach_block
         _ctx_pieces.setdefault("attachments", []).append(
             "\n\n# Attachments (provided by the user this turn)" + attach_block
         )
@@ -9166,7 +9398,7 @@ async def run_chat_turn(
     # routes/chat.py's stream lane calls the same helper at the same seam.
     if _prep.has("page"):
         _page = await _prep.take("page")
-        system += _page
+        _query_tail += _page
         _ctx_pieces.setdefault("attachments", []).append(_page)
     # RESOURCES FROM THE USER'S APPS (v1.324.0): what the user picked with "@"
     # from a pack rides THIS message like an attachment — read off the loop
@@ -9178,7 +9410,7 @@ async def run_chat_turn(
         await _prep.take("resources") if _prep.has("resources") else ("", [])
     )
     if _res_block:
-        system += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
+        _query_tail += "\n\n# Resources from the user's apps (attached this turn)" + _res_block
         _ctx_pieces.setdefault("attachments", []).append(_res_block)
     # EARLIER CHATS THE USER POINTED TO (v1.326.0, "@ another chat"): up to
     # three saved conversations, read off the loop, title + newest messages
@@ -9189,7 +9421,7 @@ async def run_chat_turn(
     _refs_block, thread_refs_receipt = (
         await _prep.take("refs") if _prep.has("refs") else ("", [])
     )
-    system += _refs_block
+    _query_tail += _refs_block
     if _refs_block:
         _ctx_pieces.setdefault("attachments", []).append(_refs_block)
 
@@ -9219,7 +9451,7 @@ async def run_chat_turn(
             "FOLLOW this playbook for this request.\n"
             + _playbook
         )
-        system += _skill_text
+        _query_tail += _skill_text
         _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0): who could
@@ -9272,13 +9504,15 @@ async def run_chat_turn(
     # joins the system prompt and shortens the history, both of which the planner
     # then has to price. Signals at 70% and lets the user choose; acts alone only
     # at the ceiling. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    _system_before_compaction = system
-    system, _ctx_messages, context_report = await _apply_compaction(
-        d, body, system, provider_choice, model_choice
+    # v1.420.0 (C3.7): priced WITH the query tail (it is sent, last); a stored
+    # summary the compaction adds joins the head.
+    _system_before_compaction = system + _query_tail
+    _ctx_system, _ctx_messages, context_report = await _apply_compaction(
+        d, body, system + _query_tail, provider_choice, model_choice
     )
-    _ctx_system = system
+    system, _query_tail = split_query_tail(_ctx_system, system, _query_tail)
     plan = _plan_context(
-        d, body, system, provider_choice, model_choice, messages=_ctx_messages
+        d, body, system + _query_tail, provider_choice, model_choice, messages=_ctx_messages
     )
     if plan.recap:
         # The recap rides in the SYSTEM prompt, not as a fake user turn: it is
@@ -9619,6 +9853,10 @@ async def run_chat_turn(
     if _trust_state["low"]:
         overrides.update(low_trust_overrides(overrides))
         system += "\n\n" + LOW_TRUST_PROMPT
+    # v1.420.0 (C3.7): the query-dependent sections go LAST — after the tool
+    # list and everything else that stays the same from one message to the
+    # next. MIRROR NOTE (lock-step): routes/chat.py joins it at the same seam.
+    system += _query_tail
     # Arming a tool in the chat UI is an EXPLICIT, interactive per-turn grant,
     # so ALSO pass the armed set as session_allow. The deny-floor refuses to
     # raise a host-touching tool (e.g. mcp_call, base "ask") via
@@ -9978,19 +10216,9 @@ async def run_chat_turn(
                         "this needs more steps than a quick answer allows"
                     )
                 break
-            if (
-                _harness is not None and getattr(_harness, "checkers", None) is not None
-                and not _finish_round
-            ):
-                # THE PROJECT'S OWN CHECKERS (part 3, Phase 3 — harness/
-                # checkers): one command call per checker after a round's
-                # edit of a file it reads, as this round's own call (this lane
-                # cards nothing, and arms the command tool only where the
-                # user's permissions allow it). Never in low trust. MIRROR
-                # NOTE (lock-step): routes/chat.py's stream loop.
-                calls = _harness.checkers.schedule(
-                    calls, low_trust=finish_low_trust(_trust_state),
-                )
+            # THE PROJECT'S OWN CHECKERS (part 3, Phase 3) run ONCE, in the
+            # finish check's round, since v1.420.0 (C3.3) — no longer after
+            # each editing round. MIRROR NOTE (lock-step): routes/chat.py.
             if not _finish_round:
                 # (The finish check's own round put the model's reply in
                 # above, as words: the model called nothing.)
@@ -10733,6 +10961,9 @@ async def run_chat_turn(
     # called — unless app_connect already put its own answer up for it. Low
     # trust and local only too (a door only links). MIRROR NOTE (lock-step):
     # routes/chat.py does the same before its done frame.
+    # CODING OFFER (v1.420.0, C6.1): a request to build software gets a door
+    # into Build › Code (a link only). MIRROR NOTE (lock-step): routes/chat.py.
+    door_entries = with_coding_offer(door_entries, body, harness=harness, escalate=escalate)
     door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
     out: dict[str, Any] = {
         "reply": reply,

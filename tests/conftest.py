@@ -102,6 +102,25 @@ def _no_real_claude_model_discovery():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_codex_home():
+    """v1.420.0: ``chat_turn.codex_context_window`` reads
+    ``<CODEX_HOME>/models_cache.json`` on a background thread for any
+    codex-cli turn, so a bare test would read the developer's real
+    ``~/.codex``. Point it at an empty folder for the whole session; a test
+    of the reader sets its own ``CODEX_HOME`` through monkeypatch."""
+    prev = os.environ.get("CODEX_HOME")
+    tmp = tempfile.mkdtemp(prefix="ij-test-codexhome-")
+    os.environ["CODEX_HOME"] = tmp
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = prev
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_cli_provider_home():
     """Point locally-installed-CLI-provider detection at an empty home for the
     whole test session.
