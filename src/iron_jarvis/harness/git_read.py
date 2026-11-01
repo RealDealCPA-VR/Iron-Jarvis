@@ -44,6 +44,34 @@ each checked:
 * the output MASKED (``detections.redact.mask``) and cut to
   :data:`OUTPUT_CHARS`, saying so.
 
+v1.421.0 REVIEW (each measured against real git 2.50 with a trapped
+repository, each pinned in ``tests/test_git_read_review_v14210.py``): the
+first cut still ran a program the folder named, or read past it, through ONE
+allowed call —
+
+* ``status -v`` showed the staged diff through the folder's TEXTCONV (status
+  takes no ``--no-textconv``): ``--verbose`` and its shortenings, and a ``v``
+  in a cluster, are refused for status (:data:`_REFUSED_FOR`);
+* a filter whose NAME holds ``=`` could not be emptied (``git -c`` splits a
+  key at its first ``=``): such a folder is refused
+  (:data:`FILTER_NAME_REFUSAL`); the settings are read NUL-separated;
+* the repo's own ``format.pretty`` / ``pretty.<alias>`` holding ``%G?`` ran
+  ``gpg.program`` (and the ssh / x509 programs) on a plain ``git log`` of a
+  commit with a fake signature: every signature program is set EMPTY (git
+  says "cannot spawn" and runs nothing);
+* ``grep -nO<program>``: a ``-O`` INSIDE a cluster ran the pager — any
+  cluster holding ``O`` is refused, and a file glued to grep ``-f`` / blame
+  ``-S`` / ls-files ``-X`` is checked as a path;
+* ``diff.submodule = diff`` (the repo's own) or the model's
+  ``--submodule=diff`` ran ``git diff`` INSIDE a submodule, whose own
+  ``diff.external`` ran; the model's ``--ignore-submodules=none`` beat the
+  guard: ``diff.submodule=short`` and ``submodule.recurse=false`` are forced,
+  ``--submodule`` / ``--ignore-submodules`` refused;
+* ``core.worktree`` sent git to files OUTSIDE the folder: the working folder
+  git would use must CONTAIN this one (:func:`_worktree_problem`), and a
+  network spelling is refused by its text before git is asked;
+* ``describe --dirty`` / ``--broken`` REWROTE ``.git/index``: refused.
+
 Allow tier, READONLY (so replay-safe), on no roster: the review-only helper
 arms it ALWAYS (``harness/helpers.helper_definition``), and nothing else
 does. Its output is the folder's text another model wrote, so it is fenced
@@ -87,6 +115,12 @@ MAX_FILTERS = 20
 _REFUSED_EXACT = frozenset({
     "-c", "-o", "--output", "--ext-diff", "--textconv", "--no-index", "--show-signature",
     "--open-files-in-pager", "--exec", "--upload-pack", "--recurse-submodules",
+    # v1.421.0 review: ``--submodule=diff`` runs ``git diff`` INSIDE a
+    # submodule, whose own config (another repository a worker can write)
+    # names its external diff; ``--ignore-submodules=none`` came after the
+    # guard's ``=all`` and beat it (measured: both ran the submodule's
+    # ``diff.external``).
+    "--submodule", "--ignore-submodules",
 })
 _REFUSED_PREFIX = (
     "--output=", "--open-files-in-pager=", "--exec=", "--upload-pack=", "--recurse-submodules=",
@@ -130,6 +164,28 @@ _REFUSED_LONG = tuple(sorted(
 #: shortening: ``--text`` is diff's own "treat as text").
 _REAL_SHORT = frozenset({"--text"})
 
+#: v1.421.0 review: options refused for ONE command (their shortenings too),
+#: each with its own sentence. ``git status -v`` shows the staged diff
+#: through the folder's own TEXTCONV driver (status takes no
+#: ``--no-textconv``; measured: the program ran); ``git describe --dirty`` /
+#: ``--broken`` save the refreshed index (git takes the index lock whatever
+#: ``GIT_OPTIONAL_LOCKS`` says; measured: ``.git/index`` rewritten).
+_REFUSED_FOR: dict[str, tuple[tuple[str, ...], str]] = {
+    "status": (("--verbose",), "git_read does not take {opt} for status: it shows the change through "
+                               "the folder's own converters, which can run a program. Use git diff "
+                               "--cached to see the staged change."),
+    "describe": (("--dirty", "--broken"), "git_read does not take {opt} for describe: it rewrites "
+                                          "git's index. Use git status to see whether the folder "
+                                          "has changes."),
+}
+#: ... and their SHORT letters, inside any cluster (``-bv`` is ``-b -v``).
+_REFUSED_LETTER_FOR = {"status": ("v", "-v")}
+#: Short options that take a FILE glued to them (grep ``-f``, blame ``-S``,
+#: ls-files ``-X``): the rest of the word after one is checked as a path —
+#: ``-nf../x`` read a file outside the folder past the word's own check.
+#: Per command: log's ``-S`` is a STRING (``-S/api/v1`` is a search).
+_FILE_LETTERS: dict[str, str] = {"grep": "f", "blame": "S", "ls-files": "X"}
+
 
 def _shortened_refused(head: str) -> bool:
     return (head.startswith("--") and len(head) > 2 and head not in _REAL_SHORT
@@ -157,6 +213,30 @@ def refusal(command: str, args: list[str]) -> str:
             return f"git_read does not take {head}: it can write a file, run a program or read outside this folder."
         if arg.startswith("-O") or (arg.startswith("-o") and not arg.startswith("--")):
             return f"git_read does not take {arg[:2]}: it can write a file or run a program."
+        cluster = arg.startswith("-") and not arg.startswith("--") and len(arg) > 2
+        # v1.421.0 review: git reads a CLUSTER of short options letter by
+        # letter (measured: ``git grep -nO<program>`` ran the program as its
+        # pager) — a word that only STARTS with ``-O`` was all the first cut
+        # refused.
+        if cluster and "O" in arg[1:]:
+            return "git_read does not take -O: it can run a program or read a file outside this folder."
+        own = _REFUSED_FOR.get(command)
+        if own is not None:
+            opts, said = own
+            if head in opts or (head.startswith("--") and len(head) > 2
+                                and any(o.startswith(head) for o in opts)):
+                return said.format(opt=head)
+            letter = _REFUSED_LETTER_FOR.get(command)
+            if letter is not None and cluster and letter[0] in arg[1:]:
+                return said.format(opt=letter[1])
+            if letter is not None and arg == letter[1]:
+                return said.format(opt=arg)
+        if cluster and command in _FILE_LETTERS:
+            for k in range(2, len(arg)):
+                if arg[k - 1] in _FILE_LETTERS[command]:
+                    problem = _path_problem(arg[k:])
+                    if problem:
+                        return problem
         if arg.startswith("-c") and not arg.startswith("--"):
             return "git_read does not take -c: a setting can run a program."
         prev = args[i - 1] if i else ""
@@ -214,38 +294,105 @@ def _split_command(raw: Any, args: list[str]) -> tuple[str, list[str]]:
     return words[0].lower(), [*words[1:], *args]
 
 
-def _repo_filters(cwd: Any, env: dict[str, str]) -> "list[str] | None":
-    """The filter drivers the REPOSITORY's own config defines (local or
-    worktree scope — what a worker can write), or None when the config could
-    not be read. BLOCKING."""
+def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]] | None":
+    """``(filters, worktrees)``: the filter drivers the REPOSITORY's own
+    config defines (local or worktree scope — what a worker can write) and
+    every ``core.worktree`` it names (any scope); None when the config could
+    not be read. Read NUL-separated (``-z``): a driver's name may hold a
+    space. BLOCKING."""
     from ..git.integration import run_git
 
-    got = run_git(["--no-pager", "config", "--show-scope", "--get-regexp", r"^filter\."], cwd,
+    pattern = r"^(filter\.|core\.worktree$)"
+    got = run_git(["--no-pager", "config", "-z", "--show-scope", "--get-regexp", pattern], cwd,
                   timeout=15.0, env=env, identity=False, encoding="utf-8")
     scoped = True
     if got.code not in (0, 1) or got.timed_out:
         # An older git with no --show-scope: every filter is emptied.
-        got = run_git(["--no-pager", "config", "--get-regexp", r"^filter\."], cwd,
+        got = run_git(["--no-pager", "config", "-z", "--get-regexp", pattern], cwd,
                       timeout=15.0, env=env, identity=False, encoding="utf-8")
         scoped = False
         if got.code not in (0, 1) or got.timed_out:
             return None
+    tokens = [t for t in str(got.out or "").split("\0")]
     names: list[str] = []
-    for line in got.out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    worktrees: list[str] = []
+    i = 0
+    while i < len(tokens):
+        scope = ""
         if scoped:
-            scope, _, line = line.partition("\t")
-            if scope.strip() not in ("local", "worktree"):
-                continue
-        key = line.split(None, 1)[0] if line.split() else ""
-        if not key.lower().startswith("filter.") or key.count(".") < 2:
+            scope, i = tokens[i].strip(), i + 1
+            if i >= len(tokens):
+                break
+        entry, i = tokens[i], i + 1
+        if not entry.strip():
+            continue
+        key, _, value = entry.partition("\n")
+        low = key.lower()
+        if low == "core.worktree":
+            worktrees.append(value)
+            continue
+        if scoped and scope not in ("local", "worktree"):
+            continue
+        if not low.startswith("filter.") or key.count(".") < 2:
             continue
         name = key[len("filter."):].rsplit(".", 1)[0]
         if name and name not in names:
             names.append(name)
-    return names
+    return names, worktrees
+
+
+def _repo_filters(cwd: Any, env: dict[str, str]) -> "list[str] | None":
+    """The filter drivers the REPOSITORY's own config defines (local or
+    worktree scope — what a worker can write), or None when the config could
+    not be read. BLOCKING."""
+    got = _repo_settings(cwd, env)
+    return None if got is None else got[0]
+
+
+#: v1.421.0 review: ``git -c`` splits a key at its FIRST "=", so a filter
+#: driver whose NAME holds one (``[filter "a=b"]``, named by
+#: ``.gitattributes`` ``filter=a=b``) cannot be emptied — measured: the
+#: override set another key and the filter ran on diff, status and blame.
+FILTER_NAME_REFUSAL = ("This folder's git settings name a file filter git_read cannot switch off, so it "
+                       "ran nothing.")
+#: v1.421.0 review: ``core.worktree`` in the repository's config sends git to
+#: files OUTSIDE the folder (measured: ``git status`` listed them).
+WORKTREE_REFUSAL = ("This folder's git settings point git at files outside this folder, so git_read "
+                    "ran nothing.")
+
+
+def _network_spelling(value: str) -> bool:
+    """A UNC / device spelling, read from its TEXT (looking one up is a
+    connection to that host — the v1.379.0 rule)."""
+    v = str(value or "").strip()
+    return v.startswith(("\\\\", "//", "\\/", "/\\"))
+
+
+def _worktree_problem(cwd: Any, worktrees: list[str], filters: list[str],
+                      env: dict[str, str]) -> str:
+    """"" when the working folder git would use CONTAINS ``cwd`` (always, with
+    no ``core.worktree``: git found the repository by walking UP from it);
+    else :data:`WORKTREE_REFUSAL`. A network spelling is refused by its text,
+    before git is asked anything. BLOCKING."""
+    if not worktrees:
+        return ""
+    if any(_network_spelling(w) for w in worktrees):
+        return WORKTREE_REFUSAL
+    from ..git.integration import run_git
+
+    got = run_git(safe_argv("rev-parse", ["--show-toplevel"], filters), cwd, timeout=15.0, env=env,
+                  identity=False, encoding="utf-8")
+    top = str(got.out or "").strip().splitlines()[0].strip() if str(got.out or "").strip() else ""
+    if got.code != 0 or got.timed_out or not top or _network_spelling(top):
+        return WORKTREE_REFUSAL
+    try:
+        here = os.path.normcase(os.path.realpath(str(cwd)))
+        root = os.path.normcase(os.path.realpath(top))
+        if os.path.commonpath([here, root]) != root:
+            return WORKTREE_REFUSAL
+    except (OSError, ValueError):
+        return WORKTREE_REFUSAL
+    return ""
 
 
 def safe_argv(command: str, args: list[str], filters: list[str]) -> list[str]:
@@ -259,6 +406,21 @@ def safe_argv(command: str, args: list[str], filters: list[str]) -> list[str]:
         "-c", "protocol.allow=never",
         "-c", "core.quotepath=off",
         "-c", "color.ui=never",
+        # v1.421.0 review: a submodule's diff is never shown by running git
+        # INSIDE it (its own config is another repository a worker can write:
+        # the repo's ``diff.submodule = diff`` made ``git log -p`` run that
+        # submodule's ``diff.external``; measured), nor searched through it.
+        "-c", "diff.submodule=short",
+        "-c", "submodule.recurse=false",
+        # v1.421.0 review: no signature program — the repo's own
+        # ``format.pretty`` / ``pretty.<alias>`` holding ``%G?`` checked a
+        # (fake) signed commit's signature with the ``gpg.program`` the same
+        # config named, on a PLAIN ``git log`` (measured, for all three
+        # formats). Empty: git says "cannot spawn" and runs nothing.
+        "-c", "gpg.program=",
+        "-c", "gpg.openpgp.program=",
+        "-c", "gpg.x509.program=",
+        "-c", "gpg.ssh.program=",
     ]
     for name in filters:
         pre += ["-c", f"filter.{name}.clean=", "-c", f"filter.{name}.smudge=",
@@ -297,11 +459,17 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     from ..git.integration import run_git
 
     env = git_read_env()
-    filters = _repo_filters(cwd, env)
-    if filters is None:
+    settings = _repo_settings(cwd, env)
+    if settings is None:
         return ToolResult(ok=False, error="git_read could not read this folder's git settings, so it ran nothing.")
+    filters, worktrees = settings
     if len(filters) > MAX_FILTERS:
         return ToolResult(ok=False, error="This folder's git settings name too many file filters; git_read ran nothing.")
+    if any("=" in name for name in filters):
+        return ToolResult(ok=False, error=FILTER_NAME_REFUSAL, data={"command": command})
+    problem = _worktree_problem(cwd, worktrees, filters, env)
+    if problem:
+        return ToolResult(ok=False, error=problem, data={"command": command})
     got = run_git(safe_argv(command, args, filters), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
                   identity=False, encoding="utf-8")
     label = f"git {command}"

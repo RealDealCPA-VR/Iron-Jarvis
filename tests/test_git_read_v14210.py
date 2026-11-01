@@ -69,7 +69,9 @@ ALLOWED_CALLS = [
     ("blame", ["-L", "1,5", "app.py"]),
     ("ls-files", ["--others", "--exclude-standard"]),
     ("rev-parse", ["--abbrev-ref", "HEAD"]),
-    ("describe", ["--always", "--dirty"]),
+    # (review, moved on purpose: ``--dirty`` rewrites git's index —
+    # tests/test_git_read_review_v14210.py.)
+    ("describe", ["--always", "--tags"]),
     ("shortlog", ["-s", "-n", "HEAD"]),
     ("grep", ["-n", "TODO", "--", "src"]),
     ("grep", ["--only-matching", "x"]),
