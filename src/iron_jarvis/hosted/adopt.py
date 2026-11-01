@@ -41,6 +41,10 @@ WITHOUT starting anything, resuming anything, or showing anything twice:
    kept state is of another kind — the tool is stopped GRACEFULLY (its
    conversation saved), the running reply is closed with words, and the next
    message resumes the conversation with the CLI's own resume, as before.
+   (v1.422.0 review) The same holds for a kept session whose adoption RAISED,
+   ran out of time, or whose host went away in between: :func:`at_boot` is
+   the lifespan's one step and :func:`close_unadopted` ends each such one —
+   the boot reconcile left them all alone.
 
 Per tool (pinned in ``tests/test_code_host_adopt_v14220.py``): Claude Code,
 Codex, Pi, OpenCode and Grok are all carried on mid-reply by the same path —
