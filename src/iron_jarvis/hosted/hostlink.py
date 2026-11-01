@@ -100,6 +100,9 @@ class HostLink:
         self.welcome = welcome
         self.pid = int(welcome.get("pid") or 0)
         self.alive = True
+        #: v1.422.0 review: closed on purpose (a quit, a restart's detach, a
+        #: host of another version) — not a connection that broke.
+        self.deliberate = False
         self._n = 0
         self._lock = threading.Lock()
         self._pending: dict[int, list[Any]] = {}
@@ -205,23 +208,40 @@ class HostLink:
             self._cv.notify_all()
         for slot in pending.values():
             slot[0].set()
+        # v1.422.0 review: a connection that BROKE (a socket error, a frame
+        # that could not be read) while the host may still be running: each
+        # of its tools is told "stopped" below, so each must really stop — a
+        # host keeps running whatever an attached Iron Jarvis does not know
+        # about (its orphan rules wait for NO daemon), and the next message
+        # would start a SECOND process for the same conversation. They are
+        # stopped through the next link (made at once, in the background).
+        lost = set() if self.deliberate else {
+            p.tool_id for p in procs if p.local is None and not p.stopped and not p._ended}
         for proc in procs:
             proc._link_lost()
         with contextlib.suppress(OSError):
             self.sock.close()
+        key = _key(self.home)
         with _REG_LOCK:
-            if _LINKS.get(_key(self.home)) is self:
-                _LINKS.pop(_key(self.home), None)
+            if _LINKS.get(key) is self:
+                _LINKS.pop(key, None)
+            if lost:
+                _LOST.setdefault(key, set()).update(lost)
+        if lost:
+            threading.Thread(target=_stop_lost_soon, args=(self.home,), name="codehost-lost",
+                             daemon=True).start()
 
     # -- the host as a whole ------------------------------------------------------
     def quit(self, timeout: float = RETIRE_WAIT_S) -> None:
         """BLOCKING: stop every tool gracefully and let the host go."""
+        self.deliberate = True  # the host closes first: its end is no break
         with contextlib.suppress(Exception):
             self.request({"t": "quit", "graceful": True}, timeout=timeout)
         self.close()
 
     def detach(self) -> None:
         """BLOCKING (bounded): leave the host and its tools running — a restart."""
+        self.deliberate = True
         self.send({"t": "detach"})
         end = time.monotonic() + 2.0
         while time.monotonic() < end:
@@ -232,6 +252,7 @@ class HostLink:
         self.close()
 
     def close(self) -> None:
+        self.deliberate = True
         with contextlib.suppress(OSError):
             self.sock.shutdown(socket.SHUT_RDWR)
         self._lost()
@@ -242,6 +263,31 @@ class HostLink:
 # --------------------------------------------------------------------------- #
 _LINKS: dict[str, HostLink] = {}
 _REG_LOCK = threading.RLock()
+#: v1.422.0 review: per home, the tools a BROKEN link left in a host that may
+#: still run them — stopped by the next link (:func:`link_for`).
+_LOST: dict[str, set[str]] = {}
+
+
+def _stop_lost(lk: HostLink, key: str) -> None:
+    """BLOCKING (under ``_REG_LOCK``): stop, gracefully, every tool a broken
+    link left that this host still runs."""
+    lost = _LOST.pop(key, set())
+    for t in lk.tools:
+        tid = str(t.get("tool") or "")
+        if tid in lost and t.get("alive"):
+            try:
+                lk.request({"t": "stop", "tool": tid, "graceful": True}, timeout=STOP_REPLY_S)
+            except Exception:  # noqa: BLE001 — the host's own orphan rules remain
+                log.debug("could not stop a tool a broken link left", exc_info=True)
+
+
+def _stop_lost_soon(home: Any) -> None:
+    """A broken link's background step: reach the host again (never start
+    one) so what it still runs for the lost link is stopped now."""
+    try:
+        link_for(home, start=False)
+    except Exception:  # noqa: BLE001 — the next start tries again
+        log.debug("could not reach the code host after its link broke", exc_info=True)
 
 
 def _pid_alive(pid: Any) -> bool:
@@ -357,6 +403,8 @@ def link_for(home: Any, *, start: bool = True, wait_s: float = START_WAIT_S) -> 
                         time.sleep(0.1)
         if lk is not None:
             _LINKS[key] = lk
+            if _LOST.get(key):
+                _stop_lost(lk, key)
         return lk
 
 

@@ -13,11 +13,17 @@ pinned red first (``iron_jarvis/codehost.py``, ``hosted/adopt.py``).
 2. An unauthenticated connection could make the host allocate any amount of
    memory with its first frame (the payload size was read before the token
    was checked).
+3. A connection to the host that BROKE while the host lived (a socket error,
+   a frame that could not be read — not a restart) told every session "the
+   tool stopped" while each tool kept running in the host; the next message
+   reconnected (the host's orphan rules then never run: a daemon is
+   attached) and started a SECOND process for the same conversation.
 """
 
 from __future__ import annotations
 
 import asyncio
+import socket
 import sys
 from pathlib import Path
 
@@ -31,6 +37,7 @@ from iron_jarvis.hosted import hostlink as HL
 from tests._build_app_helpers_v1409 import client, frames, new_session, until
 from tests._code_host_helpers_v14220 import (
     boot,
+    two_turns,
     config_home,
     crash,
     events_of,
@@ -196,3 +203,84 @@ def test_a_first_frame_cannot_make_the_host_read_a_huge_payload():
     src = (Path(__file__).parents[1] / "src" / "iron_jarvis" / "codehost.py").read_text(encoding="utf-8")
     serve = src[src.index("def serve_conn("):src.index("def handle(")]
     assert "read_frame(rfile, max_payload=MAX_HELLO_PAYLOAD)" in serve, "the hello is read with the bound"
+
+
+# --------------------------------------------------------------------------- #
+# 3. a connection that broke while the host lived
+# --------------------------------------------------------------------------- #
+async def test_a_broken_link_never_leaves_a_second_process_on_one_conversation(hosts, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    log = tmp_path / "fake.log"
+    hosts.home(config_home(root))
+    hosts.logs.append(log)
+    use_fake(monkeypatch, two_turns(tmp_path), log)
+    work = tmp_path / "work"
+    work.mkdir()
+    app = create_app(str(root))
+    async with client(app) as c:
+        sid = (await new_session(c, work))["id"]
+        one = frames((await asyncio.wait_for(
+            c.post(f"/build/app/sessions/{sid}/turn", json={"text": "one", "turn_id": "t1"}), 60)).text)
+        assert one[-1]["stop"] == "completed"
+        svc = app.state.platform.hosted
+        proc = svc.live[sid].proc
+        old = proc.pid
+        host = CH.read_record(config_home(root))["pid"]
+        hosts.note()
+        proc.link.sock.shutdown(socket.SHUT_RDWR)  # the connection breaks; the host lives on
+        await until(lambda: not svc.live[sid].running, timeout=20)
+        assert psutil.pid_exists(host), "the host itself is fine"
+        await until(lambda: not psutil.pid_exists(old), timeout=30)  # the tool the session was told stopped, stopped
+        two = frames((await asyncio.wait_for(
+            c.post(f"/build/app/sessions/{sid}/turn", json={"text": "two", "turn_id": "t2"}), 60)).text)
+    assert two[-1]["type"] == "done", two
+    starts = [r for r in fake_rows(log) if "argv" in r]
+    assert len(starts) == 2 and "--resume" in starts[1]["argv"], "the next message resumes it"
+    assert [s_["pid"] for s_ in starts if psutil.pid_exists(s_["pid"])] == [starts[1]["pid"]],         "one process for the conversation"
+    await ADOPT.shutdown(app.state.platform, keep=False)
+
+
+def test_a_deliberate_close_is_never_taken_for_a_broken_link(hosts, tmp_path):
+    """A quit, a restart's detach and a plain close are on purpose: nothing is
+    stopped later for them (a restart's tools must keep running)."""
+    home = hosts.home(tmp_path / "home")
+    tool_py = tmp_path / "tool.py"
+    tool_py.write_text("import sys\nfor line in sys.stdin:\n    pass\n", encoding="utf-8")
+    import os
+
+    for how in ("detach", "close"):
+        proc = HL.RemoteProcess([sys.executable, str(tool_py)], env=dict(os.environ), cwd=str(tmp_path), name="t",
+                                home=home, sid=f"s-{how}")
+        proc.start(asyncio.new_event_loop(), lambda o: None, lambda c: None)
+        hosts.note()
+        hosts.pids.add(proc.pid)
+        lk = proc.link
+        seen: dict = {}
+        real_send = lk.send
+
+        def send(header, payload=b"", _real=real_send):
+            # The host answers a detach by closing its end at once: the link
+            # must already know the close is on purpose when it says detach.
+            seen.setdefault(header.get("t"), lk.deliberate)
+            return _real(header, payload)
+
+        lk.send = send
+        if how == "detach":
+            HL.detach_host(home)
+            assert seen.get("detach") is True, "deliberate BEFORE the host can close its end"
+        else:
+            lk.close()
+        assert not lk.alive and not HL._LOST.get(HL._key(home)), f"a {how} is not a broken link"
+        assert psutil.pid_exists(proc.pid), f"a {how} leaves the tool running"
+    # A quit, likewise, before the host can go.
+    lk = HL.link_for(home, start=False)
+    seen: dict = {}
+    real_request = lk.request
+
+    def request(header, payload=b"", timeout=HL.REPLY_TIMEOUT_S, _real=real_request):
+        seen.setdefault(header.get("t"), lk.deliberate)
+        return _real(header, payload, timeout)
+
+    lk.request = request
+    assert HL.quit_host(home, 30)
+    assert seen.get("quit") is True and not HL._LOST.get(HL._key(home))
