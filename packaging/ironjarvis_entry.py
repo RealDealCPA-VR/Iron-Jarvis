@@ -37,6 +37,11 @@ OCR_WORKER_SUBCOMMAND = "ocr-worker"
 #: exit code, and nothing printed on stdout (it carries the wire).
 REPL_WORKER_SUBCOMMAND = "repl-worker"
 MCP_STDIO_SUBCOMMAND = "mcp-stdio"
+#: v1.422.0: Build › Code's CODE HOST (iron_jarvis/codehost.py) and its
+#: launcher — a long-lived relay that needs ``core.procs`` and nothing of the
+#: daemon (~20 MB instead of the whole app). Same arguments as the hidden
+#: ``codehost`` subcommand: ``codehost [--launch] <home>``.
+CODEHOST_SUBCOMMAND = "codehost"
 
 
 def _fast_path(argv: list[str]) -> int | None:
@@ -61,6 +66,13 @@ def _fast_path(argv: list[str]) -> int | None:
         # The subcommand discards the worker's return value, so Typer exits 0.
         worker_main()
         return 0
+    if argv and argv[0] == CODEHOST_SUBCOMMAND and (
+        (len(argv) == 2 and not argv[1].startswith("-"))
+        or (len(argv) == 3 and argv[1] == "--launch" and not argv[2].startswith("-"))
+    ):
+        from iron_jarvis.codehost import main as codehost_main
+
+        return codehost_main(argv[1:])
     if argv and argv[0] == MCP_STDIO_SUBCOMMAND and len(argv) <= 2:
         url = argv[1] if len(argv) == 2 else ""
         if url.startswith("-"):

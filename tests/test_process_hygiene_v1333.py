@@ -649,6 +649,8 @@ ALLOWED_RAW_SPAWNS: dict[str, str] = {
     "terminals/recipes.py": "Build lane: a bounded --help probe of a CLI the pane launches",
     "mcp/client.py": "MCP packs: long-lived stdio child with its own kill-on-close Job",
     "iron_proxy/service.py": "Iron-Proxy must SURVIVE a daemon crash (re-adopted by the next one)",
+    "codehost.py": ("v1.422.0 Build › Code's code host and its launcher: the host must SURVIVE a restart, so it "
+                    "is never in a Job or the process tree of the daemon (its TOOLS start through core.procs)"),
     "daemon/cli.py": "terminal commands (dev serve, rollback's git probe), not the daemon",
     "daemon/routes/agents.py": "macOS/Linux 'open' launcher: the app it opens must outlive the call",
     "daemon/routes/documents.py": "macOS/Linux 'open' launcher: the app it opens must outlive the call",

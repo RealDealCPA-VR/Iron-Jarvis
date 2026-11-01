@@ -1039,16 +1039,34 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # v1.409.0: a Code-view turn a crash cut off gets its done (interrupted)
         # appended to its events.jsonl, so a reopened window shows it ended. Off
         # the loop (a tail read per session), bounded, never blocks boot.
+        # v1.422.0: a session whose tool the CODE HOST kept running across the
+        # restart is left alone here and carried on (hosted/adopt.py).
+        _hosted_kept: list[str] = []
+        try:
+            from ..hosted import adopt as _hosted_adopt
+
+            _hosted_kept = await asyncio.wait_for(
+                asyncio.to_thread(_hosted_adopt.keep_ids, platform.config.home), timeout=30.0
+            )
+        except Exception:  # noqa: BLE001 — never block boot
+            log.warning("could not ask the code host what it kept", exc_info=True)
         try:
             from ..hosted.service import reconcile_cut_turns as _hosted_reconcile
 
             _cut = await asyncio.wait_for(
-                asyncio.to_thread(_hosted_reconcile, platform.config.home), timeout=30.0
+                asyncio.to_thread(_hosted_reconcile, platform.config.home, _hosted_kept), timeout=30.0
             )
             if _cut:
                 log.info("closed %d Code-view turn(s) a restart or crash cut off", _cut)
         except Exception:  # noqa: BLE001 — never block boot
             log.warning("could not close Code-view turns a crash cut off", exc_info=True)
+        if _hosted_kept:
+            # v1.422.0 review: one step that carries them on AND ends, in
+            # words, each one that could not be (bounded inside; never raises).
+            try:
+                await _hosted_adopt.at_boot(platform, _hosted_kept)
+            except Exception:  # noqa: BLE001 — never block boot
+                log.warning("could not carry on the Code-view sessions the code host kept", exc_info=True)
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         # Assignments (v1.296.0): AFTER the session reconcile by contract —
         # every claimed/running row's session was just settled FAILED on a
@@ -2187,12 +2205,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # v1.409.0: every Code-view harness process (the user's real
             # Claude Code / Codex) goes with the daemon, its turns ended with
             # what they wrote kept. Only when the Code view was used.
-            _hosted = getattr(platform, "hosted", None)
-            if _hosted is not None:
-                try:
-                    await asyncio.wait_for(_hosted.shutdown(), timeout=30.0)
-                except Exception:  # noqa: BLE001 — shutdown never raises
-                    log.debug("code view shutdown failed", exc_info=True)
+            # v1.422.0: a QUIT (or an update) also stops every tool in the CODE
+            # HOST and the host itself (even one only a crash left); a RESTART
+            # (``POST /shutdown {"restart": true}``) leaves them running for the
+            # next Iron Jarvis (hosted/adopt.py).
+            try:
+                from ..hosted import adopt as _hosted_adopt
+
+                await asyncio.wait_for(
+                    _hosted_adopt.shutdown(platform, keep=bool(getattr(platform, "code_host_keep", False))),
+                    timeout=30.0,
+                )
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                log.debug("code view shutdown failed", exc_info=True)
             _codex = sys.modules.get("iron_jarvis.providers.adapters.codex_native.session")
             if _codex is not None:
                 try:

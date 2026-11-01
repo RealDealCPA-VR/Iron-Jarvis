@@ -231,6 +231,10 @@ class HostedTokens:
 
         self.svc = svc
         self.store = PaneTokenStore(pane_lookup=self.lookup)
+        #: v1.422.0: each session's token by its DIGEST only — kept with the
+        #: session's state in the code host, so a tool still running after an
+        #: Iron Jarvis restart keeps its Iron Jarvis tools (:meth:`restore`).
+        self.digests: dict[str, str] = {}
 
     def lookup(self, pane_id: str) -> Any:
         sid = session_of(pane_id)
@@ -241,13 +245,25 @@ class HostedTokens:
                         str(getattr(live, "folder", "") or ""))
 
     def mint(self, sid: str, caps: dict[str, bool]) -> str:
-        return self.store.mint(grant_id(sid), caps)
+        from ..browser.panetokens import token_sha256
+
+        token = self.store.mint(grant_id(sid), caps)
+        self.digests[sid] = token_sha256(token)
+        return token
+
+    def restore(self, sid: str, digest: str, caps: dict[str, bool]) -> bool:
+        """v1.422.0: the token a tool kept across a restart works again."""
+        ok = self.store.restore(grant_id(sid), digest, caps)
+        if ok:
+            self.digests[sid] = str(digest).lower()
+        return ok
 
     def resolve(self, token: str) -> Any:
         return self.store.resolve(token)
 
     def revoke(self, sid: str) -> None:
         """The token AND every MCP session it opened."""
+        self.digests.pop(sid, None)
         self.store.revoke_pane(grant_id(sid))
         sessions = getattr(getattr(self.svc, "platform", None), "mcp_sessions", None)
         if sessions is not None:

@@ -161,6 +161,25 @@ def mcp_stdio(
     raise typer.Exit(code=_shim_main(["mcp-stdio", url] if url else ["mcp-stdio"]))
 
 
+@app.command("codehost", hidden=True)
+def codehost(
+    home: str = typer.Argument(..., help="The state home whose Build › Code tools it runs."),
+    launch: bool = typer.Option(False, "--launch", help="Start the host and exit at once."),
+) -> None:
+    """Run Build › Code's CODE HOST (v1.422.0, internal; ``iron_jarvis/codehost.py``).
+
+    NOT for humans — the daemon starts ITSELF with ``codehost --launch
+    <home>`` (a launcher that starts the host and exits at once, so the host
+    is never in the daemon's process tree), and the host then runs the coding
+    tools so they outlive an Iron Jarvis restart. The frozen exe serves it
+    from ``packaging/ironjarvis_entry._fast_path`` without importing this CLI;
+    keep the two identical (same module, same ``main([...])``)."""
+    from ..codehost import LAUNCH_FLAG
+    from ..codehost import main as _codehost_main
+
+    raise typer.Exit(code=_codehost_main([LAUNCH_FLAG, home] if launch else [home]))
+
+
 @app.command("claude-inert-mcp", hidden=True)
 def claude_inert_mcp(
     manifest: str = typer.Argument(..., help="This request's tool manifest (JSON)."),

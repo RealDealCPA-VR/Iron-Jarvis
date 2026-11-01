@@ -135,7 +135,12 @@ async def test_shutdown_stops_every_process_and_ends_a_running_turn_kept(app, wo
 
 async def test_the_lifespan_shutdown_reaches_the_code_view():
     src = (Path(__file__).parents[1] / "src" / "iron_jarvis" / "daemon" / "app.py").read_text(encoding="utf-8")
-    assert '_hosted = getattr(platform, "hosted", None)' in src and "_hosted.shutdown()" in src
+    # v1.422.0 (moved on purpose): through hosted/adopt.shutdown, which stops
+    # the Code view's sessions AND tells the code host (quit, or keep on a
+    # restart).
+    assert "_hosted_adopt.shutdown(platform" in src
+    adopt = (Path(__file__).parents[1] / "src" / "iron_jarvis" / "hosted" / "adopt.py").read_text(encoding="utf-8")
+    assert 'getattr(platform, "hosted", None)' in adopt and "svc.shutdown(keep_tools=keep)" in adopt
 
 
 async def test_the_environment_is_a_terminals_with_the_accounts_home(app, work, tmp_path, monkeypatch):
