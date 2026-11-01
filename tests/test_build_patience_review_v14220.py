@@ -52,6 +52,12 @@ def test_an_accounts_own_limit_is_never_waited_out(exc):
     ProviderError("anthropic API error 429: rate_limit_error: Number of request tokens has exceeded"
                   " your per-minute rate limit", status_code=429),
     ProviderError("anthropic API error 529: overloaded_error", status_code=529),
+    # Gemini's per-MINUTE quota says "Quota exceeded" too — a passing limit.
+    ProviderError(
+        "google API error 429: You exceeded your current quota. Quota exceeded for metric:"
+        " generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 10,"
+        " model: gemini-2.0-flash. Please retry in 41.5s.", status_code=429,
+    ),
 ])
 def test_a_passing_limit_is_still_waited_out(exc):
     assert P.why_waited(exc) in ("busy", "overloaded")

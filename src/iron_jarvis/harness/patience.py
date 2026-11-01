@@ -127,11 +127,13 @@ def _says_overloaded(exc: BaseException | None) -> bool:
 #: quota (``insufficient_quota``), Claude Code's own limit lines ("You've hit
 #: your session limit", "You're out of usage credits"). A passing rate limit
 #: ("per-minute rate limit", "Rate limit reached for requests per min") is
-#: none of these and is still waited out.
+#: none of these and is still waited out — nor is Gemini's per-minute quota
+#: ("Quota exceeded for metric … Please retry in 41s"), which is why a bare
+#: "quota exceeded" is not an account word here.
 _ACCOUNT_LIMIT_RX = re.compile(
     r"\busage limit\b|\b(?:session|weekly|daily|monthly|5-hour|five-hour) limit\b"
     r"|you(?:'ve| have) (?:hit|reached) your\b|\bout of (?:usage )?credits\b|\bcredit balance\b"
-    r"|insufficient[_ ]quota|\bquota (?:exceeded|exhausted)\b",
+    r"|insufficient[_ ]quota",
     re.IGNORECASE,
 )
 
