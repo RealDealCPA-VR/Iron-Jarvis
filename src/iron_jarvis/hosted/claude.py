@@ -714,8 +714,12 @@ class ClaudeDriver(Driver):
         self._alone = False
 
     #: v1.422.0 (kept across a restart): the per-tool maps grow for a whole
-    #: session; only the newest entries can still be asked about.
-    STATE_DICT_CAPS = {"_tools": 200, "_tool_parent": 400}
+    #: session; only the newest entries can still be asked about (a step's
+    #: input is read again only when its result comes — a few are ever open),
+    #: and an input's text is kept to what the log keeps of it anyway (a
+    #: Write of a whole file would otherwise ride every state kept).
+    STATE_DICT_CAPS = {"_tools": 50, "_tool_parent": 400}
+    STATE_TEXT_CAPS = {"_tools": 24_000}
 
     def after_restore(self) -> None:
         """v1.422.0: a reply's end held back for a note (``_held``) waits on a

@@ -288,15 +288,18 @@ def test_a_drivers_state_comes_back_whole_and_bounded():
     d._tasks = {"bg": "local_agent"}
     d._streamed = {"m1", "m2"}
     d._tools = {f"t{i}": ("Write", {"file_path": f"f{i}"}) for i in range(260)}
+    d._tools["t259"] = ("Write", {"file_path": "f259", "content": "x" * 30_000})
     d.steers = {"n1": "sent"}
     kept = json.loads(json.dumps(d.state()))
     assert "_controls" not in kept and "_write" not in kept and "emit" not in kept, "no live objects kept"
-    assert len(kept["_tools"]) == 200, "a map that grows for the whole session keeps its newest 200"
+    assert len(kept["_tools"]) == 50, "a map that grows for the whole session keeps its newest 50"
+    assert len(json.dumps(kept)) < 40_000, "a whole file written by a step does not ride every state kept"
     e = _claude()
     e.restore(kept)
     assert (e.session_id, e.turn_open, e._turn_mid, e._tasks, e._streamed) == (
         "sid-1", True, "u-1", {"bg": "local_agent"}, {"m1", "m2"})
-    assert e._tools["t259"] == ("Write", {"file_path": "f259"}) and "t0" not in e._tools
+    assert e._tools["t258"] == ("Write", {"file_path": "f258"}) and "t0" not in e._tools
+    assert e._tools["t259"] == ("Write", {"file_path": "f259", "content": "x" * 24_000})
     assert e.background_tasks == 1 and e.steers == {"n1": "sent"}
     assert e._controls is not d._controls, "a fresh waiter, never a copied one"
 

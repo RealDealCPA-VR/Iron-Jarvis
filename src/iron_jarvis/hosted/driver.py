@@ -80,24 +80,28 @@ class _NotKept(Exception):
     """A value with no JSON form (a future, a timer, a path): not kept."""
 
 
-def _enc(v: Any, depth: int = 0, cap: int = 0) -> Any:
+def _enc(v: Any, depth: int = 0, cap: int = 0, text: int = 0) -> Any:
+    """``cap``: a dict keeps its newest ``cap`` entries (top level only);
+    ``text``: a string anywhere inside is cut to ``text`` characters."""
     if depth > 40:
         raise _NotKept
-    if v is None or isinstance(v, (bool, int, float, str)):
+    if isinstance(v, str):
+        return v[:text] if text and len(v) > text else v
+    if v is None or isinstance(v, (bool, int, float)):
         return v
     if isinstance(v, list):
-        return [_enc(x, depth + 1) for x in v]
+        return [_enc(x, depth + 1, 0, text) for x in v]
     if isinstance(v, tuple):
-        return {"$t": [_enc(x, depth + 1) for x in v]}
+        return {"$t": [_enc(x, depth + 1, 0, text) for x in v]}
     if isinstance(v, (set, frozenset)):
-        return {"$s": [_enc(x, depth + 1) for x in v]}
+        return {"$s": [_enc(x, depth + 1, 0, text) for x in v]}
     if isinstance(v, dict):
         items = list(v.items())
         if cap and len(items) > cap:
             items = items[-cap:]
         if all(isinstance(k, str) and k not in _TAGS for k, _ in items):
-            return {k: _enc(x, depth + 1) for k, x in items}
-        return {"$d": [[_enc(k, depth + 1), _enc(x, depth + 1)] for k, x in items]}
+            return {k: _enc(x, depth + 1, 0, text) for k, x in items}
+        return {"$d": [[_enc(k, depth + 1), _enc(x, depth + 1, 0, text)] for k, x in items]}
     raise _NotKept
 
 
@@ -239,6 +243,8 @@ class Driver:
     #: Per attribute: how many (newest) dict entries are kept (default
     #: :data:`STATE_DICT_MAX`).
     STATE_DICT_CAPS: dict[str, int] = {}
+    #: Per attribute: the longest string kept inside it (0 = whole).
+    STATE_TEXT_CAPS: dict[str, int] = {}
 
     def state(self) -> dict[str, Any]:
         """Everything this driver knows that has a JSON form — a snapshot the
@@ -250,7 +256,8 @@ class Driver:
             if name in self.STATE_SKIP or callable(value):
                 continue
             try:
-                out[name] = _enc(value, cap=self.STATE_DICT_CAPS.get(name, STATE_DICT_MAX))
+                out[name] = _enc(value, cap=self.STATE_DICT_CAPS.get(name, STATE_DICT_MAX),
+                                 text=self.STATE_TEXT_CAPS.get(name, 0))
             except _NotKept:
                 continue
         return out
