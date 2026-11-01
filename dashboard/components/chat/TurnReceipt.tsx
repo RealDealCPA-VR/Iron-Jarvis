@@ -536,7 +536,7 @@ export interface ReceiptUndoState {
  *  a person reads "This change can't be undone." Any other reason ("already
  *  undone") is shown as it comes. */
 export function cannotUndoTitle(reason: string | null | undefined): string {
-  if (reason && /no safe inverse|non-reversible/i.test(reason)) return "This change can't be undone.";
+  if (reason && /no safe inverse|non-reversible|can't be undone/i.test(reason)) return "This change can't be undone.";
   return `Can't undo: ${reason || "not undoable"}`;
 }
 

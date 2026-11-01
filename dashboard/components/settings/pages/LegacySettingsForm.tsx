@@ -380,7 +380,7 @@ const FIELDS: FieldDef[] = [
     label: "Git-native workspaces",
     type: "boolean",
     section: "advanced",
-    hint: "Run each session on its own real git worktree/branch.",
+    hint: "Run each session on its own git branch, in its own copy of the folder.",
   },
   {
     key: "self_dev_enabled",

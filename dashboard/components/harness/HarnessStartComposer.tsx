@@ -345,7 +345,7 @@ export function HarnessStartComposer({
               Work on a new branch
               <span className="block text-[11px] text-zinc-500">
                 {onBranch
-                  ? `A worktree beside the repository, on its own ij/ branch from ${git?.branch || "the current commit"}. Your checkout is not touched.`
+                  ? `Its own copy of the folder beside the repository, on its own ij/ branch from ${git?.branch || "the current commit"}. Your checkout is not touched.`
                   : "Off: the session works in the folder directly, on the branch checked out there."}
               </span>
             </span>
