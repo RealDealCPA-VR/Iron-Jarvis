@@ -166,6 +166,13 @@ PLAN_RUN_LOW_TRUST = (
 CONTINUE_LOW_TRUST = (
     "the reply it continues read something flagged before it stopped, so it carries on at low trust"
 )
+#: v1.422.0 review: why the restart's carry-on (v1.391.0) runs at LOW trust —
+#: the reply a restart cut off had gone low, and its kept rounds hold what
+#: lowered it.
+RESTART_LOW_TRUST = (
+    "the reply it carries on read something flagged before Iron Jarvis restarted,"
+    " so it carries on at low trust"
+)
 #: thread id -> {"from": the plan turn's id, "taken": bool, "low_trust": the
 #: reason when the plan turn ended at low trust, else ""} — an approved plan
 #: whose act turn is due (set when the plan turn's clean ``done`` goes out,
@@ -2625,6 +2632,10 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str, *,
         ), None)
         if isinstance(line, dict) and str(line.get("trust") or "") == "low":
             low = CONTINUE_LOW_TRUST
+    # ...and the kept record says so too (written with the rounds): a reply a
+    # RESTART cut off has no error line, only its record.
+    if not low and RR.low_trust_of(platform.engine, turn_id, failed=failed):
+        low = CONTINUE_LOW_TRUST if failed else RESTART_LOW_TRUST
     return {
         "low_trust": low,
         "history": S.history_of(messages[start:idx], last_work=True),

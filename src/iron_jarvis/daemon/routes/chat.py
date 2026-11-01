@@ -4978,6 +4978,9 @@ async def chat_stream(
                     # conversation — here, with the last round's results
                     # (and any note above) in, before the model is asked
                     # again. Off the loop; never fails the turn.
+                    # v1.422.0 review: a reply at LOW trust says so in the
+                    # same save (its restart's carry-on starts low).
+                    reply_record.note_trust(_trust_state)
                     await reply_record.save(msgs, _head)
                 # THE SUMMARY MID-REPLY (v1.392.0): past ~90% of the model's
                 # window a coding reply has its own model write a summary of
@@ -5409,6 +5412,7 @@ async def chat_stream(
                         # ending on this turn, and a resume tells the model
                         # each call was cut off (never runs it again blindly).
                         reply_record.note_calls(_model_calls, calls)
+                        reply_record.note_trust(_trust_state)
                         await reply_record.save(msgs, _head)
                 # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
                 # runtime's grouping. Read this round's calls AHEAD with the

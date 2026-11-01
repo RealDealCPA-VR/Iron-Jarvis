@@ -285,7 +285,8 @@ def _fit(rows: list[dict[str, Any]], cap: int) -> "str | None":
 
 
 def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
-           real: dict[str, str], sizes: "dict[str, int] | None" = None) -> str:
+           real: dict[str, str], sizes: "dict[str, int] | None" = None,
+           low_trust: str = "") -> str:
     """"ok", "over" (over the cap even after leaving the earliest rounds out:
     the row is removed), or "failed" (the row is removed when it can be). On
     the writer thread. ``sizes`` (v1.418.0) receives the stored text's length
@@ -307,6 +308,9 @@ def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
             row.session_id = session_id
             row.messages_json = text
             row.updated_at = utcnow()
+            if low_trust:
+                # v1.422.0 review: in the same write as the rounds it covers.
+                row.low_trust = low_trust
             db.add(row)
             db.commit()
         if sizes is not None:
@@ -320,7 +324,7 @@ def _write(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
 
 def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
             real: dict[str, str], start: int, expect: int,
-            sizes: "dict[str, int] | None" = None) -> str:
+            sizes: "dict[str, int] | None" = None, low_trust: str = "") -> str:
     """v1.418.0 (C3.6): add ``snaps[start:]`` to the stored list, whose text
     is ``expect`` chars long: only those messages are encoded, and SQLite
     joins them onto the row (``messages_json`` minus its closing ``]``, then
@@ -338,10 +342,10 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
         rows = _encode_rows(snaps[start:], real)
         delta = "".join(", " + json.dumps(r) for r in rows) + "]"
     except Exception:  # noqa: BLE001 — the whole write decides
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     new_len = expect - 1 + len(delta)
     if new_len > _transcript.MAX_TRANSCRIPT_CHARS:
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     try:
         with session_scope(engine) as db:
             col = RunTranscript.messages_json
@@ -351,7 +355,10 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
                 .where(RunTranscript.session_id == session_id)
                 .where(func.length(col) == expect)
                 .values(messages_json=func.substr(col, 1, expect - 1).op("||")(delta),
-                        updated_at=utcnow())
+                        updated_at=utcnow(),
+                        # v1.422.0 review: the reply's low trust, in the same
+                        # statement as the rounds it covers.
+                        **({"low_trust": low_trust} if low_trust else {}))
             )
             db.commit()
             appended = int(getattr(res, "rowcount", 0) or 0) == 1
@@ -359,7 +366,7 @@ def _append(engine: Any, run_id: str, session_id: str, snaps: list[_Snap],
         log.warning("could not add to the conversation of %s; writing it whole", run_id, exc_info=True)
         appended = False
     if not appended:
-        return _write(engine, run_id, session_id, snaps, real, sizes)
+        return _write(engine, run_id, session_id, snaps, real, sizes, low_trust)
     if sizes is not None:
         sizes["len"] = new_len
     return "ok"
@@ -444,6 +451,24 @@ class ReplyRecord:
         #: appends only what was added. None: the next save writes it whole.
         self._kept: "list[tuple[int, str, int, int, bool, int]] | None" = None
         self._kept_len = 0
+        #: v1.422.0 review: why the reply runs at LOW trust ("" = full) —
+        #: noted by the lane before each save (:meth:`note_trust`) and written
+        #: with the rounds, so a restart's carry-on (and "Continue from where
+        #: it stopped") starts low from it (:func:`low_trust_of`).
+        self.low_trust = ""
+        self._low_written = False
+
+    def note_trust(self, state: Any) -> None:
+        """v1.422.0 review: the lane's trust record (``{low, tainted,
+        reason}``): once the reply is low it stays low (a taint never
+        reverses), and the next save writes it. Never raises."""
+        try:
+            if self.low_trust or not isinstance(state, dict):
+                return
+            if state.get("low") or state.get("tainted"):
+                self.low_trust = str(state.get("reason") or "").strip() or "low trust"
+        except Exception:  # noqa: BLE001
+            return
 
     def note_calls(self, model_calls: Any, calls: Any) -> None:
         """The REAL tool behind each call the model made (same ids): kept
@@ -467,8 +492,9 @@ class ReplyRecord:
         if not tail:
             return
         mark = (len(tail), id(tail[-1]))
-        if mark == self._last:
+        if mark == self._last and (self._low_written or not self.low_trust):
             return
+        low = self.low_trust
         snaps = [_Snap(m) for m in tail]
         prints = [_fingerprint(m) for m in tail]
         real = dict(self._real)
@@ -480,11 +506,11 @@ class ReplyRecord:
         if kept is not None and len(prints) > len(kept) and prints[:len(kept)] == kept:
             fut = loop.run_in_executor(
                 _writer(), _append, self.engine, self.run_id, self.session_id, snaps, real,
-                len(kept), self._kept_len, sizes,
+                len(kept), self._kept_len, sizes, low,
             )
         else:
             fut = loop.run_in_executor(
-                _writer(), _write, self.engine, self.run_id, self.session_id, snaps, real, sizes,
+                _writer(), _write, self.engine, self.run_id, self.session_id, snaps, real, sizes, low,
             )
         self._kept = None  # until this write is known to have landed
         try:
@@ -494,6 +520,8 @@ class ReplyRecord:
             loop.run_in_executor(_writer(), _delete, self.engine, self.run_id)
         if outcome == "ok":
             self._last = mark
+            if low:
+                self._low_written = True
             if "len" in sizes:
                 self._kept, self._kept_len = prints, sizes["len"]
             return
@@ -600,6 +628,19 @@ def has_record(engine: Any, turn_id: str) -> bool:
 
 def drop(engine: Any, turn_id: str) -> None:
     _delete(engine, run_id_for(turn_id))
+
+
+def low_trust_of(engine: Any, turn_id: str, *, failed: bool = False) -> str:
+    """v1.422.0 review: why the kept reply ran at LOW trust ("" = it did not,
+    or no list is kept) — the restart's list, or (``failed``) a failed
+    reply's. BLOCKING; never raises."""
+    key = failed_run_id_for(turn_id) if failed else run_id_for(turn_id)
+    try:
+        with session_scope(engine) as db:
+            row = db.get(RunTranscript, key)
+            return str(getattr(row, "low_trust", None) or "") if row is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def has_failed(engine: Any, turn_id: str) -> bool:
@@ -753,6 +794,6 @@ def started_at(engine: Any, turn_id: str) -> "datetime | None":
 __all__ = [
     "FAILED_PREFIX", "FAILED_RESUME_NOTE", "FAILED_RESUME_QUESTION", "KEEP_DAYS", "RESUME_NOTE",
     "RESUME_QUESTION", "RUN_PREFIX", "SAVE_WAIT_S", "ReplyRecord", "claim", "drop", "drop_failed",
-    "failed_run_id_for", "has_failed", "has_record", "kept", "load", "prune", "run_id_for",
+    "failed_run_id_for", "has_failed", "has_record", "kept", "load", "low_trust_of", "prune", "run_id_for",
     "started_at", "turn_of",
 ]

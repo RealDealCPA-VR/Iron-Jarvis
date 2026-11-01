@@ -378,6 +378,13 @@ class RunTranscript(SQLModel, table=True):
     #: never resumes such a reply by itself. NULL for every agent run (and
     #: for a reply that is working). Additive; the reconciler adds it.
     waiting: bool | None = None
+    #: v1.422.0 review (Wave 2 "Never lose work"): a coding session's reply
+    #: that ran at LOW trust (from its door, or a flagged tool result) — the
+    #: reason, written by the SAME save that keeps the rounds holding what
+    #: lowered it. The restart's carry-on and "Continue from where it
+    #: stopped" start low from it. NULL for every other row. Additive; the
+    #: reconciler adds it.
+    low_trust: str | None = None
 
 
 class RunPlan(SQLModel, table=True):
