@@ -174,6 +174,11 @@ export const CODE_RUNNING_REREAD_MS = 2_000;
 /** While Iron Jarvis is not answering mid-reply: how often to look again
  *  (the reply is followed again once it is back). */
 export const CODE_LOST_REREAD_MS = 3_000;
+/** v1.422.0 review: while a limit card WAITS by itself (it carries the reply
+ *  on at the reset, or on another account of the group, with nobody
+ *  pressing anything), how often the open session is read again — so the
+ *  carried-on reply shows here as it runs. */
+export const CODE_WAIT_REREAD_MS = 15_000;
 // v1.412.0: the mode chip lives in its own file (the start composer uses it
 // too); its two-press timings are re-exported here, where tests read them.
 export { FULL_ARM_GUARD_MS, FULL_DISARM_MS, ModeChip } from "@/components/buildCode/ModeChip";
@@ -615,6 +620,21 @@ function SessionPane({
   // Iron Jarvis stopped answering mid-reply: look again until it is back,
   // then follow the reply again (the read rejoins a running turn).
   useVisibleInterval(() => void load({ follow: true }), CODE_LOST_REREAD_MS, lost && !following);
+  // v1.422.0 review: a limit card that waits by itself carries the reply on
+  // with nobody pressing anything — read the session again while it waits
+  // (one read at a time), so the carried-on reply is followed here.
+  const waitReadOutRef = useRef(false);
+  useVisibleInterval(
+    () => {
+      if (waitReadOutRef.current) return;
+      waitReadOutRef.current = true;
+      void load({ follow: true }).finally(() => {
+        waitReadOutRef.current = false;
+      });
+    },
+    CODE_WAIT_REREAD_MS,
+    carryFacts.wait !== null && !running && !following && !lost,
+  );
   // v1.417.0 (a USER BUG: "it seems to be getting stuck"): the reply ended
   // while helpers work on in the background; when they finish, the tool
   // writes a report of its own that no message owns. Read the session again
