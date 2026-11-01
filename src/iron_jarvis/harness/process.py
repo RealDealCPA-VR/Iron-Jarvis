@@ -33,6 +33,7 @@ THE RULES, each from an earlier lesson:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import os
 import subprocess
@@ -720,7 +721,22 @@ class ProcessStartTool(Tool):
             until_exit = _bool_arg(args.get("until_exit"), "until_exit")
         except ValueError:
             until_exit = False
-        await _wait_for_output(mp, wait_ms, 0, until_exit=until_exit)
+        try:
+            await _wait_for_output(mp, wait_ms, 0, until_exit=until_exit)
+        except asyncio.CancelledError:
+            # v1.422.0 (Wave 2 "Never lose work", B2): a command this call WAITS
+            # ON (``until_exit``: Codex's exec_command, the gpt dialect's
+            # command) dies with its call — the user's Stop (the reply's, or
+            # Stop the step) kills its whole tree, as the shell tool's own
+            # cancel does; it is never left running behind a stopped reply. A
+            # program started to run in the BACKGROUND (no ``until_exit``)
+            # keeps running: the session started it on purpose. The tree kill
+            # blocks, so off the loop; shielded so a second cancel cannot
+            # leave it half done.
+            if until_exit:
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(asyncio.to_thread(_stop, mp))
+            raise
         text, dropped, more = mp.take()
         lead = f"Started {mp.handle} (pid {getattr(proc, 'pid', '?')}): {command}"
         data = _data(mp, text, dropped, more)

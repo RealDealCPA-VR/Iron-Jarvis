@@ -26,6 +26,13 @@ import type { QueuedItem } from "@/lib/buildComposer";
 /** The press's words — the ones the daemon's sentences already say. */
 export const RETRY_WORDS = "Retry";
 
+/** v1.422.0 (Wave 2 "Never lose work", B1): the FIRST press on a reply that
+ *  ended on an error and kept its rounds — carry it on from them. */
+export const CONTINUE_WORDS = "Continue from where it stopped";
+/** ...its tooltip, and Retry's beside it (Retry asks the question again). */
+export const CONTINUE_TITLE = "Carry this reply on from the work it already did";
+export const RETRY_FROM_START_TITLE = "Ask this reply's question again from the start";
+
 /** Does this reply offer Retry? `newest`: it is the conversation's last
  *  message. */
 export function retryOffered(
@@ -41,6 +48,19 @@ export function retryOffered(
   // retry was a plain turn on the session's own model.
   if (m.attempts) return false;
   return (typeof m.error === "string" && m.error.trim() !== "") || m.interrupted === true;
+}
+
+/** v1.422.0 (B1): does this reply offer "Continue from where it stopped"?
+ *  Retry's own guards (the newest reply, nothing running, not archived, never
+ *  a safety refusal, never beside an account's limit card or an attempts
+ *  card), plus: it FAILED and the daemon kept its rounds (`canContinue`). */
+export function continueOffered(
+  m: BuildMessage | null | undefined,
+  o: { newest: boolean; busy: boolean; archived: boolean },
+): boolean {
+  if (!m || m.canContinue !== true) return false;
+  if (!(typeof m.error === "string" && m.error.trim() !== "")) return false;
+  return retryOffered(m, o);
 }
 
 function strs(v: unknown): string[] {

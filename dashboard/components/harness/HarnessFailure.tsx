@@ -19,6 +19,10 @@
  *  - Retry on the NEWEST failed or cut-off reply (lib/buildRetry) — never
  *    while a reply runs, never on a safety refusal (its way out stays the
  *    rewind list), never beside an account's limit card;
+ *  - v1.422.0 (Wave 2 "Never lose work", B1): on a failed reply whose rounds
+ *    the daemon KEPT (`canContinue`), "Continue from where it stopped" comes
+ *    first — the reply carries on from the work it already did — and Retry
+ *    (the question again from the start) is the second press;
  *  - the server's own words folded under Details — a real toggle (keyboard
  *    and touch reach it, never a hover), masked by the daemon, kept on the
  *    line so a reload still has them.
@@ -26,7 +30,7 @@
 
 import { useId, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, CircleAlert, History, RotateCcw } from "lucide-react";
+import { ChevronRight, CircleAlert, History, Play, RotateCcw } from "lucide-react";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import {
   DETAILS_WORDS,
@@ -35,13 +39,16 @@ import {
   REWIND_PICK_WORDS,
   failureAction,
 } from "@/lib/failureActions";
-import { RETRY_WORDS } from "@/lib/buildRetry";
-import { CUT_CARRIED_ON } from "@/lib/buildResume";
+import { CONTINUE_TITLE, CONTINUE_WORDS, RETRY_FROM_START_TITLE, RETRY_WORDS } from "@/lib/buildRetry";
+import { CONTINUED_BELOW, CUT_CARRIED_ON } from "@/lib/buildResume";
 import type { BuildMessage } from "@/lib/buildSessions";
 import type { Health } from "@/lib/types";
 
 const PRESS =
   "inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50";
+/** v1.422.0 (B1): the line's MAIN press ("Continue from where it stopped"). */
+const PRESS_MAIN =
+  "inline-flex items-center gap-1.5 rounded-md bg-white/[0.06] px-2 py-1 text-[12px] font-medium text-zinc-100 transition-colors hover:bg-white/[0.1] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50";
 
 /** The server's own words behind a failure, folded: a quiet toggle and the
  *  text under it. Nothing when there are none. */
@@ -91,6 +98,9 @@ export function HarnessFailureLine({
   canRewind,
   onRewind,
   carriedOn = false,
+  canContinue = false,
+  onContinue,
+  continuedBelow = false,
 }: {
   /** The failed (or cut-off) reply. */
   m: BuildMessage;
@@ -109,6 +119,13 @@ export function HarnessFailureLine({
   /** v1.391.0: a restart cut this reply off and the app carried it on by
    *  itself (lib/buildResume) — the line says so instead of "press Retry". */
   carriedOn?: boolean;
+  /** v1.422.0 (B1): lib/buildRetry.continueOffered for this reply — its
+   *  rounds were kept, so "Continue from where it stopped" is the first
+   *  press (Retry the second). */
+  canContinue?: boolean;
+  onContinue?: () => void;
+  /** v1.422.0 (B1): the user already continued this failed reply below. */
+  continuedBelow?: boolean;
 }) {
   const failed = typeof m.error === "string" && m.error.trim() !== "";
   if (!failed && m.interrupted !== true) return null;
@@ -178,17 +195,37 @@ export function HarnessFailureLine({
           {KEY_LINK_WORDS}
         </Link>
       ) : null}
+      {/* v1.422.0 (B1): the reply's rounds were KEPT — carry it on from the
+          work it already did (the main press); Retry asks the question again
+          from the start. */}
+      {canContinue && onContinue ? (
+        <button
+          type="button"
+          data-testid="harness-continue"
+          onClick={onContinue}
+          title={CONTINUE_TITLE}
+          className={PRESS_MAIN}
+        >
+          <Play size={12} aria-hidden />
+          {CONTINUE_WORDS}
+        </button>
+      ) : null}
       {retry ? (
         <button
           type="button"
           data-testid="harness-retry"
           onClick={onRetry}
-          title="Send this reply's question again"
+          title={canContinue ? RETRY_FROM_START_TITLE : "Send this reply's question again"}
           className={PRESS}
         >
           <RotateCcw size={12} aria-hidden />
           {RETRY_WORDS}
         </button>
+      ) : null}
+      {continuedBelow ? (
+        <p data-testid="harness-continued-below" className="basis-full text-[12px] text-zinc-500">
+          {CONTINUED_BELOW}
+        </p>
       ) : null}
       <FailureDetails technical={m.errorDetail} testId="harness-reply-error-details" />
     </div>

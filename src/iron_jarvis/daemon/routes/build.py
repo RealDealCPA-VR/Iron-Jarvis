@@ -322,6 +322,21 @@ class BuildTurnBody(BaseModel):
     #: three; more is refused in words, not a 422). Empty: the words decide
     #: ("try this with A, B and C"), and an ordinary message is unchanged.
     try_on: list[TryOnPick] = Field(default_factory=list, max_length=10)
+    #: v1.422.0 (Wave 2 "Never lose work", B1): "Continue from where it
+    #: stopped" — the turn id of the session's reply that ENDED ON AN ERROR
+    #: and kept its rounds (its line says ``canContinue``). The turn carries
+    #: that reply on from them (``text`` and what rides it are not read: the
+    #: daemon writes the hidden continue question). 409 in words when its
+    #: rounds are no longer kept.
+    continue_turn: str = Field(default="", max_length=80)
+
+
+#: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing
+#: left to continue from.
+CONTINUE_GONE = (
+    "This reply can no longer be continued from where it stopped: its saved progress is gone "
+    "(something newer was sent, or it is more than a week old). Press Retry to ask again."
+)
 
 
 class BuildStopStepBody(BaseModel):
@@ -811,6 +826,16 @@ class _ReplyWatch:
         #: ("" for every other turn) — kept on the reply line as
         #: ``resumedFrom``, the one plain line the screen says it by.
         self.resumed_from = ""
+        #: v1.422.0 (Wave 2, B1): how this turn carries the earlier one on —
+        #: "restart" (the boot's pass: ``resumedFrom``) or "failed" (the
+        #: user's "Continue from where it stopped" after an error: the line
+        #: says ``continuedFrom`` instead, so the screen never tells a
+        #: continue the user pressed as a restart's carry-on).
+        self.resume_kind = "restart"
+        #: v1.422.0 (B1): this turn FAILED and its kept conversation was
+        #: kept (``ReplyRecord.keep_failed``) — the line says ``canContinue``
+        #: and the screen offers "Continue from where it stopped".
+        self.can_continue = False
         #: v1.392.0: the newest summary the reply wrote of its own older
         #: rounds (the ``summarized`` frame, ``harness/reply_summary``) —
         #: kept on the line as ``summarized`` ({steps, times}).
@@ -843,7 +868,15 @@ class _ReplyWatch:
             self.text.append(str(data.get("text") or ""))
         elif event == "reset":
             # The lane discarded what was streamed (a nudge, a rewrite).
-            self.text = []
+            # v1.422.0 (B1): a round tried again after a passing provider
+            # failure takes back only ITS OWN words (`drop` characters); the
+            # earlier rounds' words stay.
+            drop = data.get("drop")
+            if isinstance(drop, int) and not isinstance(drop, bool) and drop > 0:
+                kept = "".join(self.text)
+                self.text = [kept[: max(0, len(kept) - drop)]] if len(kept) > drop else []
+            else:
+                self.text = []
         elif event == "thinking":
             chunk = str(data.get("text") or "")
             room = THINKING_CAP - self.thinking_chars
@@ -1215,7 +1248,13 @@ class _ReplyWatch:
                 line["error"] = _durable.INTERRUPTED_DETAIL
         if self.resumed_from:
             # v1.391.0: this reply carried on a reply a restart cut off.
-            line["resumedFrom"] = self.resumed_from
+            # v1.422.0 (B1): ...or one that FAILED, at the user's press.
+            key = "continuedFrom" if self.resume_kind == "failed" else "resumedFrom"
+            line[key] = self.resumed_from
+        if self.can_continue and self.error is not None:
+            # v1.422.0 (B1): its rounds were kept — "Continue from where it
+            # stopped" is the line's first press.
+            line["canContinue"] = True
         if self.account_move:
             # v1.393.0: this reply carried on with another account of the
             # group ("<A> reached its limit; carried on with <B>").
@@ -1919,6 +1958,23 @@ def plan_run_low_trust(watch: "_ReplyWatch") -> str:
     return PLAN_RUN_LOW_TRUST if trust != "full" else ""
 
 
+def keeps_failed_record(watch: "_ReplyWatch") -> bool:
+    """v1.422.0 (Wave 2, B1): does a reply that ENDED ON AN ERROR keep its
+    rounds for "Continue from where it stopped"? Yes, except: a safety
+    refusal (the same conversation is declined again — Rewind is its way
+    out), a reply that ended on an account's limit card (Resume when ready /
+    Choose account are its way out), and a "try this on several models"
+    turn (its card keeps each attempt). Pure."""
+    err = watch.error
+    if err is None or watch.done is not None:
+        return False
+    if str(err.get("fix_kind") or "") == "refusal":
+        return False
+    if watch.account_limit or watch.attempts:
+        return False
+    return True
+
+
 async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, *,
                         pin: Any = None, platform: Any = None, no_limit: bool = False,
                         record: Any = None, account_move: "dict[str, Any] | None" = None):
@@ -1940,10 +1996,16 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     ``waiting`` while a card or a question parks the reply on the user, and
     DELETED when the turn ends — done, failed or stopped. A turn cut off by a
     shutdown keeps it, for the next boot to carry the reply on; a resumed
-    turn's line says so (``resumedFrom``)."""
+    turn's line says so (``resumedFrom``).
+
+    v1.422.0 (Wave 2 "Never lose work", B1): a turn that FAILED keeps it too —
+    moved to the failed key the boot never reads (:func:`keeps_failed_record`
+    says which failures) BEFORE the reply line is written, so the line can say
+    ``canContinue`` and the screen offers "Continue from where it stopped"."""
     watch = _ReplyWatch()
     watch.no_limit = bool(no_limit)
     watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
+    watch.resume_kind = str(getattr(record, "resume_kind", "") or "restart")
     # v1.393.0: a turn that carries the reply on with another account of the
     # group names both accounts on its line.
     watch.account_move = dict(account_move) if isinstance(account_move, dict) and account_move else None
@@ -2059,6 +2121,12 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
                             "from": turn_id, "taken": False,
                             "low_trust": plan_run_low_trust(watch),
                         }
+                if terminal and watch.done is None and watch.error is not None and record is not None \
+                        and keeps_failed_record(watch):
+                    # v1.422.0 (B1): A FAILED REPLY KEEPS ITS ROUNDS — moved
+                    # off the key the boot's resume pass reads (it is never
+                    # carried on by itself), BEFORE the line is written.
+                    watch.can_continue = bool(await asyncio.shield(record.keep_failed()))
                 if terminal and (watch.done is not None or watch.error is not None):
                     await asyncio.shield(end("done" if watch.done is not None else "error"))
                 yield chunk
@@ -2086,7 +2154,9 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
             await asyncio.shield(end(status))
         # v1.391.0: a turn that ENDED (done, failed, stopped) is never resumed:
         # its kept conversation goes. A turn a shutdown cut off keeps it.
-        if record is not None and status != "interrupted":
+        # v1.422.0 (B1): a FAILED turn whose rounds were kept for "Continue
+        # from where it stopped" keeps them (under the failed key).
+        if record is not None and status != "interrupted" and not watch.can_continue:
             with contextlib.suppress(BaseException):
                 await asyncio.shield(record.forget())
         # v1.376.0 (part 2, Phase 5) DECISION: a Stop CLOSES the session's
@@ -2448,7 +2518,9 @@ def _resume_root(messages: "list[dict[str, Any]]", idx: int) -> int:
     not a carry-on."""
     seen: set[str] = set()
     while 0 <= idx < len(messages):
-        prev = str(messages[idx].get("resumedFrom") or "")
+        # v1.422.0 (B1): a continue the user pressed after an error
+        # (``continuedFrom``) chains back the same way.
+        prev = str(messages[idx].get("resumedFrom") or messages[idx].get("continuedFrom") or "")
         if not prev or prev in seen:
             break
         seen.add(prev)
@@ -2459,7 +2531,8 @@ def _resume_root(messages: "list[dict[str, Any]]", idx: int) -> int:
     return idx
 
 
-def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | None":
+def _resume_inputs(platform: Any, row: Any, turn_id: str, *,
+                   failed: bool = False) -> "dict[str, Any] | None":
     """What carrying on turn ``turn_id`` needs (v1.391.0), or None when it
     cannot be: the session's history BEFORE that turn's question (the
     standing summary's rule — a summary that covers the question leaves
@@ -2493,8 +2566,10 @@ def _resume_inputs(platform: Any, row: Any, turn_id: str) -> "dict[str, Any] | N
     start = _compact.boundary(messages, standing) if standing is not None else 0
     if start > idx:
         return None
+    # v1.422.0 (B1): ``failed`` — the list a reply that ENDED ON AN ERROR
+    # kept for "Continue from where it stopped" (its own key).
     loaded = RR.load(platform.engine, turn_id, getattr(platform, "registry", None),
-                     since=RR.started_at(platform.engine, turn_id))
+                     since=RR.started_at(platform.engine, turn_id), failed=failed)
     if not loaded:
         return None
     question = messages[idx]
@@ -2626,6 +2701,7 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            continuation: bool = False,
                            resume_of: "dict[str, Any] | None" = None,
                            resume_turn: str = "",
+                           resume_failed: bool = False,
                            account_move: "dict[str, Any] | None" = None,
                            started_by: str = "person",
                            pressed: bool = False,
@@ -2712,7 +2788,17 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
     v1.402.0 review: ``low_trust`` — a reason, and the turn starts at LOW
     trust with it (an approved plan whose planning turn went to low trust:
-    :data:`PLAN_RUN_LOW_TRUST`). "" = as before."""
+    :data:`PLAN_RUN_LOW_TRUST`). "" = as before.
+
+    v1.422.0 (Wave 2 "Never lose work", B1): ``resume_failed`` (with
+    ``resume_turn``; the user's "Continue from where it stopped" only) —
+    carry on a reply that ENDED ON AN ERROR from the rounds it kept
+    (``reply_record.keep_failed``), exactly the restart resume's way: the
+    same history, question, files and skill (``_resume_root``), its rounds,
+    then :data:`~iron_jarvis.harness.reply_record.FAILED_RESUME_NOTE`. The
+    question line says ``continuedFrom``. And EVERY turn that starts forgets
+    the session's other failed replies' lists (``reply_record.drop_failed``):
+    once anything else was said, continuing an older failure is moot."""
     from .chat import _turn_logs
     from ...harness import night as _night
     from ...harness import reply_record as RR
@@ -2930,7 +3016,9 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
         # v1.391.0: a reply a restart cut off, carried on (the boot's pass).
         resume: "dict[str, Any] | None" = None
         if resume_turn:
-            resume = await asyncio.to_thread(_resume_inputs, platform, row, resume_turn)
+            resume = await asyncio.to_thread(
+                _resume_inputs, platform, row, resume_turn, failed=resume_failed,
+            )
             if resume is None:
                 raise ResumeGone(thread_id)
             if resume["folder_skill"]:
@@ -3079,9 +3167,15 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
 
             record = RR.ReplyRecord(
                 platform.engine, thread_id, turn_id,
-                resume_tail=[*resume["tail"], LLMMessage(role="user", content=RR.RESUME_NOTE)],
+                resume_tail=[*resume["tail"], LLMMessage(
+                    role="user",
+                    # v1.422.0 (B1): a failed reply's continue says what
+                    # stopped it (an error), never "Iron Jarvis restarted".
+                    content=RR.FAILED_RESUME_NOTE if resume_failed else RR.RESUME_NOTE,
+                )],
                 resumed_from=resume_turn,
             )
+            record.resume_kind = "failed" if resume_failed else "restart"
         else:
             record = RR.ReplyRecord(platform.engine, thread_id, turn_id)
         # v1.392.0 (the long-jobs plan's Phase 3): when the reply BEGAN — its
@@ -3235,17 +3329,25 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                 # statement, so a second resume of it starts nothing. Review:
                 # MOVED to this turn's key, so a stop before this turn's own
                 # first save still leaves the reply resumable.
-                if not await asyncio.to_thread(RR.claim, platform.engine, resume_turn, turn_id):
+                if not await asyncio.to_thread(
+                    RR.claim, platform.engine, resume_turn, turn_id, failed=resume_failed,
+                ):
                     with contextlib.suppress(Exception):
                         await gen.aclose()
                     raise ResumeGone(thread_id)
+            # v1.422.0 (B1): a turn starts — every OTHER failed reply's kept
+            # rounds of this session are moot now (the one this turn carries
+            # on, if any, has just moved to this turn's own key).
+            await asyncio.to_thread(RR.drop_failed, platform.engine, S.session_id_for(thread_id))
             question: dict[str, Any] = {"role": "user", "content": content, "turnId": turn_id, **line_extra}
             if attachments:
                 question["attachmentPaths"] = list(attachments)
             if picked:
                 question["filePaths"] = list(picked)
             if resume is not None:
-                question["resumedFrom"] = resume_turn
+                # v1.422.0 (B1): a continue after an error says so in its own
+                # key (the screen never reads it as a restart's carry-on).
+                question["continuedFrom" if resume_failed else "resumedFrom"] = resume_turn
             elif chat_body.skill or folder_skill:
                 question["skill"] = chat_body.skill or folder_skill
                 # v1.377.0 review: WHERE it came from, so a rewind or a
@@ -4828,6 +4930,15 @@ def register(app: FastAPI, d: Any) -> None:
 
         platform = d.platform
         text = (body.text or "").strip()
+        # v1.422.0 (B1): "Continue from where it stopped" — the daemon writes
+        # the (hidden) question; nothing typed is read.
+        continue_turn = (body.continue_turn or "").strip()
+        if continue_turn:
+            if not _TURN_ID_RX.match(continue_turn):
+                raise HTTPException(status_code=400, detail="continue_turn may hold letters, digits, '-', '_' and '.' only")
+            from ...harness import reply_record as _RR
+
+            text = _RR.FAILED_RESUME_QUESTION
         # v1.373.0 review: a blank entry is no file — `{"files": ["  "]}` used
         # to pass this check and start a turn that sent the model nothing.
         has_files = any(str(p or "").strip() for p in [*(body.attachments or []), *(body.files or [])])
@@ -4871,6 +4982,24 @@ def register(app: FastAPI, d: Any) -> None:
                 return _follow_response(existing.follow(with_ids=body.ids))
         else:
             turn_id = "bt_" + secrets.token_hex(8)
+        if continue_turn:
+            # v1.422.0 (B1): carry the failed reply on from its kept rounds
+            # (the restart resume's own path) — never attempts, never a new
+            # question. The user pressed it: their posture is kept.
+            try:
+                lg = await start_build_turn(
+                    d, thread_id, text, turn_id, preview_url=body.preview_url,
+                    continuation=True, resume_turn=continue_turn, resume_failed=True,
+                    pressed=True,
+                )
+            except SessionBusy:
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
+                )
+            except ResumeGone:
+                raise HTTPException(status_code=409, detail=CONTINUE_GONE) from None
+            return _follow_response(lg.follow(with_ids=body.ids))
         # v1.397.0 (harness/attempts): "try this with A, B and C" — or the
         # box's "Try on…" control — starts ATTEMPTS, each on its own branch
         # and its own model. A message whose names are none of the user's

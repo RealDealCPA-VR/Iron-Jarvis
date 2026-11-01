@@ -3758,6 +3758,15 @@ def error_payload(d, body, exc: Exception, *, detail: "str | None" = None) -> di
         # terminal) gets a way out it can take; every other turn reads the
         # surface it runs in (the chat's, the phone's, a Build session's).
         words = friendly_error(exc, provider=hint, manager=manager, surface=surface_for(body))
+        # v1.422.0 (Wave 2, B1): a coding reply's round that WAITED OUT a
+        # passing failure first says how long it kept trying, before the fix
+        # ("" for every other failure: the words are unchanged).
+        from ..harness.patience import tried_words
+
+        tried = tried_words(exc)
+        if tried and isinstance(words, dict):
+            fix = str(words.get("fix") or "").strip()
+            words = {**words, "fix": f"{tried} {fix}".strip()}
     except Exception:  # noqa: BLE001 - the error must still be answered
         log.debug("friendly words for a chat error failed", exc_info=True)
         return {"detail": base}
@@ -10070,22 +10079,33 @@ async def run_chat_turn(
             )
             # v1.335.0: a "too long for this model" refusal is shrunk and
             # tried ONCE more (lock-step: the stream lane's _router_frames).
-            route = await _complete_refitting(
-                d.platform.router,
-                refit=_overflow_refit(
-                    d, msgs, system, provider_choice, model_choice, head=_head,
-                    record=_refit_note,
+            # v1.422.0 (Wave 2, B1): a HARNESS turn's round waits out a
+            # passing provider failure on the same provider (no frames here:
+            # this lane streams nothing). Every other turn: `await` the call,
+            # exactly as before. MIRROR NOTE (lock-step): the stream lane's
+            # `_patience.round_frames`.
+            from ..harness import patience as _patience
+
+            route = await _patience.patient_call(
+                lambda: _complete_refitting(
+                    d.platform.router,
+                    refit=_overflow_refit(
+                        d, msgs, system, provider_choice, model_choice, head=_head,
+                        record=_refit_note,
+                    ),
+                    provider=provider_choice or None,
+                    model=model_choice or None,
+                    system=_send_system,
+                    messages=_send,
+                    tools=tool_specs,
+                    task_class="chat",
+                    # v1.263.0: the user's reasoning level; the router applies
+                    # it only where the serving model offers one. Passed ONLY
+                    # when set (router doubles that predate the knob).
+                    # Lock-step: stream lane.
+                    **_reasoning_kw(body),
                 ),
-                provider=provider_choice or None,
-                model=model_choice or None,
-                system=_send_system,
-                messages=_send,
-                tools=tool_specs,
-                task_class="chat",
-                # v1.263.0: the user's reasoning level; the router applies it
-                # only where the serving model offers one. Passed ONLY when set
-                # (router doubles that predate the knob). Lock-step: stream lane.
-                **_reasoning_kw(body),
+                patient=_harness is not None,
             )
             _u = route.response.usage or {}
             usage_in += int(_u.get("input_tokens", 0) or 0)

@@ -93,6 +93,9 @@ from ...harness import timeline as _timeline_mod
 # v1.392.0 (the long-jobs plan's Phase 3): a coding session's reply never
 # stalls silently — Stop the step, the phone, the summary mid-reply, the cap.
 from ...harness import stall as _stall
+# v1.422.0 (Wave 2 "Never lose work", B1): a harness turn's round waits out a
+# passing provider failure instead of ending the reply.
+from ...harness import patience as _patience
 from ...harness import reply_cap as _reply_cap_mod
 from ...harness.reply_summary import SUMMARY_FRAME as _SUMMARY_FRAME
 from ..chat_turn import (
@@ -2935,9 +2938,18 @@ def register(app: FastAPI, d) -> None:
         A turn that supplied no ``turn_id`` never registered and is therefore
         honestly unknown here.
 
-        HONESTY: a tool already executing is NOT killed. Its worker thread
-        finishes and its write lands (v1.228.0). Stop ends the answer being
-        generated and prevents the NEXT round; no surface may imply more.
+        HONESTY: Stop ends the answer being generated and prevents the NEXT
+        round. v1.422.0 (Wave 2, B2): in a CODING SESSION (a Build reply,
+        whose every tool call runs as its own step — ``harness/stall.
+        run_step``) every step running when Stop lands is stopped too — after
+        at most ``stall.STOP_GRACE_S`` (3 s) to end by itself — a command's
+        process tree is killed, its ledger row says the user stopped it, and
+        its result never says it succeeded (a question waiting on the user
+        ends in its own words). A program the
+        session started in the background (``process_start`` without waiting)
+        is not a running step and keeps running. In any OTHER turn a tool
+        already executing is not killed: its worker thread finishes and its
+        write lands (v1.228.0); no surface may imply more.
         """
         if not TURNS.stop(turn_id):
             raise HTTPException(
@@ -5020,30 +5032,46 @@ async def chat_stream(
                     d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head
                 )
                 _call_t0 = time.perf_counter()  # v1.390.0: this call's start (Timeline)
+
+                def _round_call():
+                    return _router_frames(
+                        d.platform.router,
+                        # v1.335.0: a "too long for this model" refusal before
+                        # the first word is shrunk and tried ONCE more
+                        # (lock-step: chat_turn's _complete_refitting).
+                        refit=_chat_turn._overflow_refit(
+                            d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head,
+                            record=_refit_note,
+                        ),
+                        provider=provider_choice or None,
+                        model=model_choice or None,
+                        system=_send_system,
+                        messages=_send,
+                        tools=tool_specs,
+                        task_class="chat",
+                        # v1.263.0: the user's reasoning level; the router
+                        # applies it only where the serving model offers one.
+                        # Passed ONLY when set, so every router double that
+                        # predates the knob sees the call it always saw.
+                        # Lock-step: chat_turn.
+                        **_reasoning_kw(body),
+                    )
+
                 # v1.287.0: raced against Stop (see `_frames_until_stop`), so a
                 # Stop pressed before the model's first frame ends the turn now
                 # instead of when that frame finally arrives — and CLOSED when
                 # the lane leaves this loop, whichever way it leaves.
-                async with contextlib.aclosing(_frames_until_stop(_router_frames(
-                    d.platform.router,
-                    # v1.335.0: a "too long for this model" refusal before the
-                    # first word is shrunk and tried ONCE more (lock-step:
-                    # chat_turn's _complete_refitting).
-                    refit=_chat_turn._overflow_refit(
-                        d, _eff_msgs, _eff_system, provider_choice, model_choice, head=_head,
-                        record=_refit_note,
-                    ),
-                    provider=provider_choice or None,
-                    model=model_choice or None,
-                    system=_send_system,
-                    messages=_send,
-                    tools=tool_specs,
-                    task_class="chat",
-                    # v1.263.0: the user's reasoning level; the router applies
-                    # it only where the serving model offers one. Passed ONLY
-                    # when set, so every router double that predates the knob
-                    # sees the call it always saw. Lock-step: chat_turn.
-                    **_reasoning_kw(body),
+                # v1.422.0 (Wave 2, B1): a HARNESS turn's round WAITS OUT a
+                # passing provider failure (overloaded, busy, a 5xx, a timeout,
+                # a dropped connection) on the same provider, model and
+                # account, saying so on the live line (`harness/patience`);
+                # every other turn gets `_round_call()` itself, unchanged.
+                # MIRROR NOTE (lock-step): chat_turn's `patient_call`.
+                async with contextlib.aclosing(_frames_until_stop(_patience.round_frames(
+                    _harness is not None,
+                    _round_call,
+                    provider=provider_choice or route_provider,
+                    manager=getattr(d.platform, "providers", None),
                 ), handle)) as _frames:
                     async for frame in _frames:
                         if await _stop():
@@ -5058,10 +5086,12 @@ async def chat_stream(
                             # writer, and no frame is emitted (the SSE frame
                             # sequence is a fixed contract).
                             #
-                            # HONESTY: this does not kill a tool that is already
-                            # running. Its worker thread finishes and its write
-                            # lands (v1.228.0). Stop ends the answer being
-                            # generated and prevents the NEXT round.
+                            # HONESTY: no tool runs while the model writes (a
+                            # round's tools run after its answer). A coding
+                            # session's tool that IS running when Stop lands is
+                            # stopped by its own race (v1.422.0, B2:
+                            # `_stall.run_step`); any other turn's tool runs to
+                            # its end (its write lands, v1.228.0).
                             _persist_once(AgentState.CANCELLED)
                             return
                         ftype = frame.get("type")
@@ -5088,7 +5118,21 @@ async def chat_stream(
                         elif ftype == "reset":
                             # A pre-first-token failover swapped providers — tell the
                             # client to discard any partial text streamed so far.
-                            yield _ev("reset", {"reason": frame.get("reason", "")})
+                            # v1.422.0: a retried round takes back only ITS OWN
+                            # words (`drop`: that try's characters); the
+                            # earlier rounds' words stay.
+                            _drop = frame.get("drop")
+                            yield _ev("reset", {
+                                "reason": frame.get("reason", ""),
+                                **({"drop": _drop} if isinstance(_drop, int) and _drop > 0 else {}),
+                            })
+                        elif ftype == _patience.PATIENCE_TYPE:
+                            # v1.422.0 (B1): the round waits out a passing
+                            # failure — the live line says so; the next try
+                            # starts the call's clock again (Timeline).
+                            if frame.get("state") == "trying":
+                                _call_t0 = time.perf_counter()
+                            yield _sse(_patience.FRAME, _patience.frame_data(frame))
                         elif ftype == "final":
                             final_resp = frame.get("response")
                             route_provider = frame.get("provider") or route_provider
@@ -6390,6 +6434,11 @@ async def chat_stream(
                                 # command's tree killed, its row "stopped by
                                 # you" — and the model is told; the reply
                                 # carries on. Every other turn: as before.
+                                # v1.422.0 (Wave 2, B2): and the reply's OWN
+                                # Stop (Esc too) stops it the same way — the
+                                # step is raced against the turn's Stop, so a
+                                # running command no longer runs on for its
+                                # whole deadline behind a stopped reply.
                                 result = await _stall.run_step(
                                     _step_turn, tc.id, tc.name,
                                     lambda: _registry_invoke(
@@ -6397,6 +6446,15 @@ async def chat_stream(
                                     ),
                                     lambda: _ToolResult(
                                         ok=False, error=_stall.stopped_result(tc.name),
+                                    ),
+                                    turn_stopped=lambda: _ToolResult(
+                                        ok=False, error=_stall.turn_stopped_result(tc.name),
+                                    ),
+                                    # A tool that waits on a PERSON or runs
+                                    # a whole helper (`deadline_exempt`:
+                                    # ask_user) ends on Stop in its own words.
+                                    race=not getattr(
+                                        d.platform.registry.get(tc.name), "deadline_exempt", False,
                                     ),
                                 )
                                 return result, ""

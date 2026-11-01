@@ -84,7 +84,7 @@ export type SSEEvent =
   /** v1.311.0 (W3-1): "discard the reply text streamed so far; the tokens
    *  that follow replace it" — the daemon's streamed language rewrite. The
    *  daemon may send a `reason`; nothing here needs it. */
-  | { type: "reset"; check?: "finish" }
+  | { type: "reset"; check?: "finish"; drop?: number }
   /** v1.384.0: a TAGGED follow's first frame (Build's page asks for one,
    *  daemon/durable_turns): `resumed` false = the frames after it are the
    *  WHOLE turn from its start (drop what you hold); true = only what came
@@ -638,8 +638,17 @@ export function sseEventFrom(
       // v1.323.0: reasoning deltas, display-only. Text only — a junk payload
       // is an empty delta, never "[object Object]" in the disclosure.
       return { type: "thinking", text: typeof data.text === "string" ? data.text : "", ...finishTag(data) };
-    case "reset":
-      return { type: "reset", ...finishTag(data) };
+    case "reset": {
+      // v1.422.0 (Wave 2, B1): a coding reply's round tried again after a
+      // passing provider failure takes back only ITS OWN words — `drop`
+      // characters off the end; the earlier rounds' words stay.
+      const drop = data.drop;
+      return {
+        type: "reset",
+        ...finishTag(data),
+        ...(typeof drop === "number" && Number.isInteger(drop) && drop > 0 ? { drop } : {}),
+      };
+    }
     case "resume": {
       // v1.384.0 review: a WHOLE replay of a running turn says when it
       // started (ms), so a reload counts "Working for" from there.
@@ -1980,9 +1989,11 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
               // falls back to `acc`, and must see only the replacement. The
               // empty bubble rides the same once-a-frame publish as a token.
               // NOT `committed`: a reset is not work; the tokens around it are.
-              acc = "";
+              // v1.422.0 (B1): a `drop` takes back only that many characters
+              // (a retried round's own words), never the earlier rounds'.
+              acc = ev.drop ? acc.slice(0, Math.max(0, acc.length - ev.drop)) : "";
               if (!replaying) {
-                textRef.current = "";
+                textRef.current = acc;
                 scheduleText();
               }
               onReset?.();

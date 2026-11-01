@@ -35,6 +35,29 @@ export const TIMELINE_CUT = "Iron Jarvis stopped while this reply worked. This i
 export const TIMELINE_CUT_CARRIED = `${TIMELINE_CUT} It carried on in the next reply.`;
 /** The Timeline's reply list marks a reply that carried on. */
 export const CARRIED_CHOICE = "(carried on)";
+/** v1.422.0 (Wave 2 "Never lose work", B1): the one line on a reply the user
+ *  continued from where a failed one stopped ("Continue from where it
+ *  stopped"), and the failed reply's line once it was. */
+export const CONTINUED_LINE = "Continued from where the reply above stopped.";
+export const CONTINUED_BELOW = "You continued it below, from where it stopped.";
+
+/** v1.422.0 (B1): the failed reply's turn id a line continues ("" for every
+ *  other line). Never read as a restart's carry-on. */
+export function continuedFrom(m: BuildMessage | null | undefined): string {
+  const v = (m as { continuedFrom?: unknown } | null | undefined)?.continuedFrom;
+  return typeof v === "string" ? v.trim().slice(0, 120) : "";
+}
+
+/** v1.422.0 (B1): the failed replies the user continued (a later line names
+ *  them). */
+export function continuedTurns(messages: readonly BuildMessage[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of messages) {
+    const from = continuedFrom(m);
+    if (from) out.add(from);
+  }
+  return out;
+}
 
 /** The turn id a line carries on ("" for every other line). */
 export function resumedFrom(m: BuildMessage | null | undefined): string {

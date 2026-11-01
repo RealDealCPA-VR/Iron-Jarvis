@@ -983,11 +983,12 @@ class ToolRegistry:
             # v1.392.0 (never stalls silently): a coding session's step the
             # USER stopped with "Stop the step" says so, in those words — it
             # was not the run that was cancelled, and the reply carries on.
+            # v1.422.0 (B2): a step that was running when the user stopped
+            # the whole REPLY says that (``stall.stop_note``).
             try:
-                from ..harness.stall import STOPPED_LEDGER_NOTE, stopped_by_user
+                from ..harness.stall import stop_note
 
-                if stopped_by_user():
-                    note = STOPPED_LEDGER_NOTE
+                note = stop_note() or note
             except Exception:  # noqa: BLE001 — wording only; never masks the cancel
                 pass
             job = asyncio.ensure_future(

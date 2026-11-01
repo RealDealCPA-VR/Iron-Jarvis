@@ -44,7 +44,10 @@ import { ApiError, get, post, put } from "@/lib/api";
 // Harness gaps (fix 2, fix 3): the chat's failure line and receipt facts.
 import { FailureDetails } from "@/components/harness/HarnessFailure";
 import { retryItemFor } from "@/lib/buildRetry";
-import { carriedOn, carriedOnTurns } from "@/lib/buildResume";
+import { carriedOn, carriedOnTurns, continuedTurns } from "@/lib/buildResume";
+// v1.422.0 (Wave 2 "Never lose work", B1): the live line while a round waits
+// out a passing provider error.
+import { PROVIDER_WAIT_FRAME, decodeProviderWait, type ProviderWait } from "@/lib/buildPatience";
 import { useDaemon } from "@/lib/daemon";
 import { useModels } from "@/lib/useModels";
 import { useChatStream, useLiveText, StreamError, type StreamSeed } from "@/lib/useChatStream";
@@ -336,6 +339,10 @@ interface TurnExtras {
   typed?: string;
   /** v1.397.0: the models the "Try on…" control picked for this message. */
   tryOn?: TryOnPick[];
+  /** v1.422.0 (B1): "Continue from where it stopped" — the failed reply's
+   *  turn id; the daemon carries it on from its kept rounds (nothing typed
+   *  is sent, nothing goes back in the box). */
+  continueTurn?: string;
 }
 
 /** The live reply: subscribed HERE, so the session does not re-render per token.
@@ -846,6 +853,9 @@ export function HarnessSession({
   // Stop the step under way and what it said, the summary the running reply
   // wrote of its own older rounds, and the ⋯ menu's cap form.
   const [stall, setStall] = useState<StallNotice | null>(null);
+  // v1.422.0 (B1): a round waiting out a passing provider error (the
+  // daemon's `provider_wait` frame), until its next try.
+  const [providerWait, setProviderWait] = useState<ProviderWait | null>(null);
   const [stallStopping, setStallStopping] = useState(false);
   const [stallNote, setStallNote] = useState<string | null>(null);
   const [liveSummarized, setLiveSummarized] = useState<Summarized | null>(null);
@@ -1137,10 +1147,14 @@ export function HarnessSession({
       if (event === "token") {
         tapLenRef.current += typeof data.text === "string" ? data.text.length : 0;
       } else if (event === "reset") {
-        tapLenRef.current = 0;
+        // v1.422.0 (B1): a retried round takes back only `drop` characters
+        // (its own words): the steps placed before them stay where they are.
+        const drop = typeof data.drop === "number" && data.drop > 0 ? Math.floor(data.drop) : 0;
+        const len = drop ? Math.max(0, tapLenRef.current - drop) : 0;
+        tapLenRef.current = len;
         if (turnRef.current) {
           const offs = liveOffsetsFor(turnRef.current);
-          for (const k of offs.keys()) offs.set(k, 0);
+          for (const [k, v] of offs) if (v > len) offs.set(k, len);
         }
       } else if (event === "tool_call" && turnRef.current) {
         const cid = typeof data.id === "string" ? data.id : "";
@@ -1174,6 +1188,13 @@ export function HarnessSession({
     } else if (event === "attempt") {
       // v1.397.0: an attempt's row (its state, steps, an approval card).
       pageRef.current = { ...page, attempts: applyAttemptFrame(page.attempts, data) };
+    } else if (event === PROVIDER_WAIT_FRAME) {
+      // v1.422.0 (B1): the model's service failed for a moment; the daemon
+      // asks it again after a wait — said on the live line until then.
+      const w = decodeProviderWait(data);
+      if (w === "trying") setProviderWait(null);
+      else if (w) setProviderWait(w);
+      return;
     } else if (event === STALL_FRAME) {
       // v1.392.0: no progress for ten minutes (once per episode), or the
       // progress that ended it.
@@ -1245,6 +1266,7 @@ export function HarnessSession({
         setStall(null);
         setStallNote(null);
         setLiveSummarized(null);
+        setProviderWait(null);
       }
       setTurnsEnded((n) => n + 1);
       onChanged();
@@ -1360,6 +1382,8 @@ export function HarnessSession({
         setStall(null);
         setLiveSummarized(null);
       }
+      // v1.422.0 (B1): a wait line belongs to the turn that sent it.
+      setProviderWait(null);
       setStallNote(null);
       // v1.390.0: and its own Timeline (a rejoin's replay folds it again).
       if (!resume) timeline.reset(id);
@@ -1390,7 +1414,17 @@ export function HarnessSession({
         const res = await stream.run(
           rejoinId
             ? undefined
-            : {
+            : extras?.continueTurn
+              ? {
+                  // v1.422.0 (B1): carry a failed reply on from its kept
+                  // rounds (the daemon writes the hidden question).
+                  text: text ?? "",
+                  turn_id: id,
+                  continue_turn: extras.continueTurn,
+                  ...(preview ? { preview_url: preview } : {}),
+                  ids: true,
+                }
+              : {
                 text,
                 turn_id: id,
                 ...(ups.length ? { attachments: ups.map((f) => f.path) } : {}),
@@ -1473,8 +1507,10 @@ export function HarnessSession({
         } else if (!started && text !== null) {
           // Never started: the words and what rode them go back in the box,
           // nothing was lost (v1.373.0: a file-only message too).
+          // v1.422.0 (B1): a "Continue from where it stopped" typed nothing
+          // — its refusal is said on the error line, the box is left alone.
           setPending(null);
-          restoreToBox(text, extras);
+          if (!extras?.continueTurn) restoreToBox(text, extras);
         }
       } finally {
         // v1.384.0: only the NEWEST run owns these (a 409 above hands over to
@@ -2726,6 +2762,9 @@ export function HarnessSession({
   // v1.391.0: the replies a restart cut off that the app carried on by
   // itself (a later line names them — lib/buildResume).
   const carried = carriedOnTurns(view?.messages ?? []);
+  // v1.422.0 (B1): the failed replies the user continued (a later line names
+  // them).
+  const continued = continuedTurns(view?.messages ?? []);
   /** Retry: send the failed reply's question again, as a new turn (its
    *  words, uploads, "@" files and "/" skill — lib/buildRetry). The box keeps
    *  whatever the user has typed. */
@@ -2734,12 +2773,25 @@ export function HarnessSession({
     const item = retryItemFor(shown, index, view.messages ?? [], view.folder);
     if (item) void send(item);
   };
+  /** v1.422.0 (Wave 2 "Never lose work", B1): "Continue from where it
+   *  stopped" — a new turn that carries the failed reply on from the rounds
+   *  the daemon kept (nothing is typed: the question it continues is the
+   *  failed reply's own). The box keeps whatever the user has typed. */
+  const continueReply = (index: number) => {
+    if (busy || !view || view.archived) return;
+    const reply = shown[index];
+    const turn = reply?.role === "assistant" && typeof reply.turnId === "string" ? reply.turnId : "";
+    if (!turn) return;
+    atBottomRef.current = true;
+    void runTurn("", undefined, { attachments: [], files: [], skill: null, continueTurn: turn });
+  };
   // v1.417.0 (C2.1): what the rows and the panes hand back — ONE object of
   // functions stable for the session's life (they call the newest closures
   // through a ref), so a memoised row or pane is never redrawn for a new
   // function that does the same thing.
   const liveHandlers = useRef({
     retryReply,
+    continueReply,
     send,
     compact,
     onRewound,
@@ -2747,7 +2799,7 @@ export function HarnessSession({
     load,
     onChanged,
   });
-  liveHandlers.current = { retryReply, send, compact, onRewound, branchFrom, load, onChanged };
+  liveHandlers.current = { retryReply, continueReply, send, compact, onRewound, branchFrom, load, onChanged };
   const rowHandlers = useMemo<HarnessRowHandlers>(
     () => ({
       onRewound: (q, extras) => void liveHandlers.current.onRewound(q, extras),
@@ -2758,6 +2810,7 @@ export function HarnessSession({
       },
       onKeepGoing: () => void liveHandlers.current.send({ text: KEEP_GOING_TEXT }),
       onRetry: (index) => liveHandlers.current.retryReply(index),
+      onContinue: (index) => liveHandlers.current.continueReply(index),
       onOpenRewind: () => setRewindOpen(true),
       onOpenDocument: (path) => {
         post("/documents/open", { path }).catch(() => {});
@@ -3196,6 +3249,7 @@ export function HarnessSession({
               branching={branching}
               newest={m === newestReply}
               carriedOn={carriedOn(m, carried)}
+              continuedBelow={m.role === "assistant" && !!m.turnId && continued.has(m.turnId)}
               canRewind={canRewindHere}
               prevUserAt={rowPrevUserAts[i]}
               teamRoster={teamRoster}
@@ -3272,6 +3326,18 @@ export function HarnessSession({
               <LiveFinishLine stream={stream} />
               {/* v1.392.0: the reply summarized its own older rounds. */}
               <SummarizedLine summarized={liveSummarized} />
+              {/* v1.422.0 (B1): the model's service failed for a moment —
+                  the round is asked again after a wait, said here. */}
+              {providerWait ? (
+                <p
+                  data-testid="harness-provider-wait"
+                  role="status"
+                  className="flex items-start gap-1.5 text-[12px] text-zinc-400"
+                >
+                  <Loader2 size={12} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
+                  <span className="min-w-0 break-words">{providerWait.words}</span>
+                </p>
+              ) : null}
               {/* v1.392.0: ten minutes with no progress — said once per
                   episode, with Stop the step (only that call) and Stop. */}
               {stall ? (
