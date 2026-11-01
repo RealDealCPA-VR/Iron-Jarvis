@@ -23,10 +23,23 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (4800+, offline). ALWAYS run before shipping.
-# Serial ~16min; -n auto runs one worker per core (~4.5min) and is what CI
-# uses. Measured parallel-safe over three runs — identical pass counts.
-uv run pytest -q --no-header -n auto
+# THE FULL SUITES RUN ON GITHUB, NEVER ON THIS PC (the user's decision,
+# 2026-10-31). This PC is the user's daily driver: one -n auto run is ~12
+# workers x 600-900 MB (~9 GB), and two sessions doing it at once filled the
+# RAM. Locally, run ONLY the test files your change touches plus the files
+# that pin the same area, with at most 4 workers:
+uv run pytest -q --no-header -n 4 tests/test_<area>*.py
+cd dashboard && pnpm vitest run __tests__/<area>   # + npx tsc --noEmit
+# The full gate, before you push to master: push your BRANCH and let GitHub run
+# everything (pushing a branch triggers nothing by itself):
+git push origin <branch>
+gh workflow run tests.yml --ref <branch>      # the whole suite, ~15 min, no installer
+gh run list --workflow tests.yml --branch <branch> --limit 1   # then read its result
+# (a workflow change: `gh workflow run release.yml --ref <branch> -f dry_run=true`)
+# The release gate on master runs the whole suite again and publishes nothing
+# unless it is green. A failure GitHub shows is reproduced LOCALLY by running
+# THAT one file (with PYTHONDONTWRITEBYTECODE unset when it smells of stale
+# bytecode — CI writes .pyc files, this PC does not).
 # Dashboard build (must show "Generating static pages (44/44)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
