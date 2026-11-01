@@ -23,6 +23,14 @@ PR that ships it.
 | The built-in stand-in that answers when no AI model is chosen (provider id `mock`) | **demo model**; what it says is "a scripted demo, not real answers"; under one reply: "Demo answer. No AI model ran." | mock, offline mock, offline demo, offline model, simulated mode |
 | One shell or CLI window on the Build page | **terminal** | pane |
 | The chat page's other view (v1.406.0: the switch at its top reads **Chat \| Code**), where Jarvis writes, runs and checks code in a folder, one conversation per session | the view is **Code**; its list is **Coding sessions**; one of them is a **coding session** | IJ harness, harness, Build session |
+| **Chat › Code**: the chat page's Code view (the row above), where Jarvis itself writes, runs and checks the code | **Code** under Chat; where a row must be told apart from Build's, one session is a **coding session (Jarvis)** | — |
+| **Build › Code**: Build's Code view (v1.409.0; Build's switch reads **Code \| Terminal**), where the user's OWN Claude Code, Codex, Pi, OpenCode or Grok does the work and Iron Jarvis shows it and answers its questions as cards | **Code** under Build; one session is a **coding session (Claude Code)** / **(Codex)** / **(Pi)** / **(OpenCode)** / **(Grok)**, named by its tool | App view |
+| A coding session's separate checkout of its own branch, beside the repository (v1.375.0) | **its own copy of the folder** | worktree |
+| The program that keeps several Claude Code / Codex / Grok accounts and picks one for each call (Iron-Proxy) | on the coding surfaces: **your accounts** (the **Several accounts** card on Connections); when the program itself is meant: **the account manager** | Iron-Proxy (on the coding surfaces; it stays the program's own name on its Connections card and in its own errors) |
+| A change the undo journal cannot reverse | **can't be undone** | no safe inverse |
+| How much Jarvis asks before it acts (the chat's chip, a coding session's picker, Settings › Approvals in chat), each named by what it does | **Ask before every action**, **Ask before commands** (the default), **Accept edits**, **Auto (its own safety check)**, **Don't ask**; a coding session also offers **Plan** | Ask first, Ask when risky, Ask before everything, Approve for me, Auto-approve, Auto mode |
+| A chat that keeps its words off the cloud | **Local only**: nothing leaves **this PC or your own network** without asking | — |
+| A run the user (or Emergency stop) ended before it finished | **Stopped** (grey; its own lane on the Session board) | — |
 | A coding session's reply drawn on one time axis, the tab beside Plan (v1.390.0): the model you talk to, each step it took, each helper with its model | **Timeline**; its pieces are **steps**, **model calls** and **helpers** (the run log's words) | trace, span, waterfall, orchestrator, LLM call, round (never shown) |
 | The agents that take pieces of a coding session's or an objective's work, each on its OWN model (Settings › Model team, v1.394.0) | **model team**; one of them is a **team member** (a custom agent with one or more **roles**: read, code, review, test); the button that builds one from what is connected is **Make a starter team** | — |
 | How a team member's pieces of work for one role went, and the one sentence that says why it was given a piece (v1.395.0) | its **record** for that role ("good (4 of 5 passed)", "no record yet"); the sentence is the **why** line ("Why: local: good record for reading") | routing decision, dispatch reason |
@@ -207,6 +215,39 @@ session is waiting for your OK", "Open the Build session") now say "coding
 session"; "Build session" survives only in code comments and the daemon's own
 internal sentences. "IJ harness", "harness" and "coding session" are search
 aliases on **Chat** now, and Ctrl K has a row for **Code** itself.
+
+### Two Code views, told apart by the tool (v1.420.0)
+
+v1.409.0 gave Build a **Code | Terminal** switch of its own: Build › Code is
+the user's OWN Claude Code, Codex, Pi, OpenCode or Grok, driven from a view,
+while Chat › Code is Jarvis writing the code itself. Both were "Code", and
+Running now called a session of either "Coding session". The decision
+(fix plan 2026-10-31, D6, accepted as proposed): both views keep the name
+**Code** — each lives under its own page, and the page names it — and a row
+that must tell them apart names the TOOL in brackets: **Coding session
+(Jarvis)** for Chat › Code, **Coding session (Claude Code)** / **(Codex)** /
+**(Pi)** / **(OpenCode)** / **(Grok)** for Build › Code
+(`lib/buildWords.codingSessionWith`). A Build › Code row whose tool is not
+known is a plain "Coding session" — never a guess. Build's blurb names the
+terminals AND its Code view, and "code", "claude code" and "codex" find Build
+in search ("code" finds Chat too).
+
+The same wave retired the engine-room words the audit listed from the
+dashboard: **worktree** → "its own copy of the folder", **Iron-Proxy** on the
+coding surfaces → "your accounts" / "the account manager", **no safe
+inverse** → "can't be undone", "Attaching to sessions…" → "Opening your
+terminals…", and a stopped run left the red Failed lane for a grey
+**Stopped** lane on the Session board. "worktree" and "no safe inverse" are
+on the dashboard scan's `RETIRED_ON_SCREEN` list only, because the daemon's
+own sentences (other lanes' files) still say them; each moves into `RETIRED`
+(which the Python scans read too) when the daemon's last one is reworded.
+
+The approval levels are named by what they do (decision D3): the default is
+**Ask before commands** (it edits files freely and asks before a command; in
+Build › Code "Ask first" asks before a file change too, so one name meant two
+things), **Auto (its own safety check)** says who decides, and **Don't ask**
+names what it covers and what still asks. The old words still find their
+level in chat (`settings/tools._RETIRED_OPTION_WORDS`).
 
 ## Reserved
 

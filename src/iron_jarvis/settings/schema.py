@@ -729,8 +729,11 @@ SETTINGS: tuple[SettingDef, ...] = (
     # label as well as a value). Pinned equal: tests/test_approval_words_v13520.py.
     S("device.approval_mode", "Approvals in chat", "permissions", "enum",
       "How chat asks before acting, on this device.",
-      options=(("always_ask", "Ask before every action"), ("approve_for_me", "Ask first"),
-               ("accept_edits", "Accept edits"), ("auto", "Auto"), ("yolo", "Don't ask")),
+      # v1.420.0 (fix plan C1.8, decision D3): named by what each does, the
+      # same words as the chat chip (dashboard/lib/permissionLevels.ts; a pin
+      # holds the two equal). Older words: settings/tools._RETIRED_OPTION_WORDS.
+      options=(("always_ask", "Ask before every action"), ("approve_for_me", "Ask before commands"),
+               ("accept_edits", "Accept edits"), ("auto", "Auto (its own safety check)"), ("yolo", "Don't ask")),
       # v1.406.0 part 2: Auto lets calls through with no card, so turning it
       # on from chat is ask-floor like Don't ask; Accept edits is allow.
       tier="allow", floor_when=("yolo", "auto"), store="device",

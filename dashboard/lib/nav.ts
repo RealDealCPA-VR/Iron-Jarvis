@@ -121,6 +121,9 @@ export const NAV: NavSectionDef[] = [
         // so it stays here: a word the app taught keeps finding the page.
         // v1.406.0 (part 1): Build is the terminals only — the coding
         // sessions moved to Chat's Code view (their aliases moved with them).
+        // v1.420.0 (C5.1): Build's own Code view (v1.409.0) drives the real
+        // Claude Code / Codex, so "code" finds Build too (and Chat), and the
+        // tools' own names find the page that runs them.
         aliases: [
           "terminal",
           "terminals",
@@ -129,6 +132,9 @@ export const NAV: NavSectionDef[] = [
           "console",
           "cli",
           "pane",
+          "code",
+          "claude code",
+          "codex",
         ],
         blurb: BUILD_BLURB,
       },

@@ -131,9 +131,10 @@ describe("an agent's setup names the levels as the chat chip does", () => {
     ]);
     // The chip's words, literally — the acceptance a new user reads.
     expect(options.map((o) => o.textContent)).toEqual([
-      "As usual (Ask first)",
+      // v1.420.0 (fix plan C1.8, moved on purpose): named by what each does.
+      "As usual (Ask before commands)",
       "Ask before every action",
-      "Ask first",
+      "Ask before commands",
       "Don't ask (chat only)",
     ]);
     // The posted VALUES are unchanged; "Don't ask" can never be picked.

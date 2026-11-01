@@ -67,6 +67,7 @@ export function assignBoardLanes(
     review: [],
     completed: [],
     failed: [],
+    stopped: [],
   };
   for (const s of sessions) out[boardLaneFor(s, !!reviews[s.id])].push(s);
   return out;
@@ -91,7 +92,7 @@ function asLaneId(lane: BoardLaneId): LaneId {
  * whose parent is not on the board (filtered out, deleted, different project
  * scope) renders exactly as before — flat, in its own lane. */
 
-const LANE_ORDER: BoardLaneId[] = ["queued", "active", "review", "completed", "failed"];
+const LANE_ORDER: BoardLaneId[] = ["queued", "active", "review", "completed", "failed", "stopped"];
 
 export interface TeamRow {
   session: SessionView;
@@ -164,6 +165,7 @@ export function layoutTeams(
     review: [],
     completed: [],
     failed: [],
+    stopped: [],
   };
   const emitted = new Set<string>();
   function emit(laneId: BoardLaneId, s: SessionView, depth: number) {
@@ -328,10 +330,10 @@ export function KanbanBoard({
     [reload],
   );
 
-  async function clearLane(lane: "completed" | "failed") {
+  async function clearLane(lane: "completed" | "failed" | "stopped") {
     setToast(null);
-    // The Failed lane holds both failed AND cancelled sessions (see laneFor).
-    const statuses = lane === "completed" ? ["completed"] : ["failed", "cancelled"];
+    // v1.420.0: a stopped (cancelled) session has its own lane (see laneFor).
+    const statuses = lane === "completed" ? ["completed"] : lane === "failed" ? ["failed"] : ["cancelled"];
     try {
       const res = await post<{ cleared: number }>("/sessions/clear", { statuses });
       setToast({
@@ -380,8 +382,20 @@ export function KanbanBoard({
           variant="calm"
           label={`Clear failed (${laneSessions.failed.length})`}
           confirmLabel="Confirm clear?"
-          title="Remove every failed or cancelled session from the board"
+          title="Remove every failed session from the board"
           onConfirm={() => clearLane("failed")}
+          className="-my-1 whitespace-nowrap"
+        />
+      );
+    }
+    if (laneId === "stopped" && laneSessions.stopped.length > 0) {
+      return (
+        <ConfirmButton
+          variant="calm"
+          label={`Clear stopped (${laneSessions.stopped.length})`}
+          confirmLabel="Confirm clear?"
+          title="Remove every stopped session from the board"
+          onConfirm={() => clearLane("stopped")}
           className="-my-1 whitespace-nowrap"
         />
       );
@@ -460,7 +474,7 @@ export function KanbanBoard({
           className={`grid grid-cols-1 gap-4 ${
             compact
               ? "sm:grid-cols-2"
-              : `md:grid-cols-2 ${columns.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"}`
+              : `md:grid-cols-2 ${columns.length >= 6 ? "xl:grid-cols-6" : columns.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"}`
           }`}
         >
           {columns.map((lane) => (

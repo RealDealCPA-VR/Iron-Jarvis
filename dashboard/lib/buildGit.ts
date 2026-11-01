@@ -116,7 +116,7 @@ export function decodeSessionGit(raw: unknown): SessionGit | null {
 /** The header's words: "ij/fix-3f2a from main" (and what became of it). */
 export function branchLine(g: SessionGit): string {
   const from = g.base ? ` from ${g.base}` : "";
-  const end = g.removed ? " · worktree removed" : g.merged ? ` · merged into ${g.mergedInto || g.base}` : "";
+  const end = g.removed ? " · its own copy of the folder removed" : g.merged ? ` · merged into ${g.mergedInto || g.base}` : "";
   return `${g.branch}${from}${end}`;
 }
 

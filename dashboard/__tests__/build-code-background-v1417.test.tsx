@@ -292,11 +292,12 @@ describe("Running now", () => {
     const [helpers] = buildAppReplyItems([
       { turn_id: "bg:a1", thread_id: "a1", surface: "build_app", harness: "claude-code", started_at: "", waiting: false, title: "Teams", background: true, helpers: 2 },
     ]);
-    expect(helpers.line).toBe("Coding session · Claude Code · helpers working");
+    // v1.420.0 (C5.1, moved on purpose): the tool in brackets.
+    expect(helpers.line).toBe("Coding session (Claude Code) · helpers working");
     expect(helpers.detail).toBe("Teams");
     const [report] = buildAppReplyItems([
       { turn_id: "bg:a1", thread_id: "a1", surface: "build_app", harness: "claude-code", started_at: "", waiting: false, title: "Teams", background: true, helpers: 0 },
     ]);
-    expect(report.line).toBe("Coding session · Claude Code · replying on its own");
+    expect(report.line).toBe("Coding session (Claude Code) · replying on its own");
   });
 });

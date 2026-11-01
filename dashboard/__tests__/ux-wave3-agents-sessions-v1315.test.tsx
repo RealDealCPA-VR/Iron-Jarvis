@@ -529,10 +529,11 @@ describe("Project board (WorldBoard) is compact: two lanes a row, empty lanes co
     expect(lane()?.getAttribute("data-collapsed")).toBe("true");
   });
 
-  it("CONTROL: the standalone board (/kanban) keeps four lanes at xl and never collapses", () => {
+  it("CONTROL: the standalone board (/kanban) keeps its lanes side by side at xl and never collapses", () => {
     w3.responses["/sessions/teams"] = { parents: {} };
     render(<KanbanBoard sessions={[sv("s-a", "active")]} reviews={NO_REVIEWS} reload={() => {}} />);
-    expect(classes(gridOf())).toContain("xl:grid-cols-4");
+    // v1.420.0 (moved on purpose): a fifth lane, Stopped, for cancelled runs.
+    expect(classes(gridOf())).toContain("xl:grid-cols-5");
     expect(document.querySelectorAll('[data-collapsed="true"]').length).toBe(0);
   });
 });

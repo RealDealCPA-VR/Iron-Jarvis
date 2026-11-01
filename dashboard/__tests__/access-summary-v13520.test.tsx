@@ -175,7 +175,8 @@ describe("every approval level says reading never asks", () => {
     // "Ask first" included: it asks before edits and commands, never reads.
     expect(PERMISSION_LEVELS.always_ask.description).toMatch(/^Asks before it edits files/);
     // The no-ask level still says it runs without asking and still warns.
-    expect(PERMISSION_LEVELS.yolo.description).toMatch(/without asking you first/);
+    // v1.420.0 (C6.7, moved on purpose): it names what it covers and what still asks.
+    expect(PERMISSION_LEVELS.yolo.description).toMatch(/without asking;.*still ask\./);
     expect(PERMISSION_LEVELS.yolo.description).toMatch(/Use with care$/);
   });
 
@@ -246,7 +247,7 @@ describe("Settings › Permissions & ledger opens with what Jarvis can reach", (
     );
     expect(within(block).getByTestId("access-agent-browser").textContent).toContain("Off.");
     const level = within(block).getByTestId("access-level");
-    expect(level.textContent).toContain("Ask first");
+    expect(level.textContent).toContain("Ask before commands"); // v1.420.0 (C1.8): named by what it does
     expect(level.textContent).toContain(PERMISSION_LEVELS.approve_for_me.description);
     const grants = within(block).getByTestId("access-grants");
     await waitFor(() => expect(grants.textContent).toContain("2 approvals you gave stay in place"), W);

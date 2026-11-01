@@ -212,7 +212,7 @@ describe("Running now, for a reply the tool started by itself", () => {
     const [pi] = buildAppReplyItems([
       { turn_id: "bg:p1", thread_id: "p1", surface: "build_app", harness: "pi", started_at: "", waiting: false, title: "Docs", background: true, helpers: 0 },
     ]);
-    expect(pi.line).toBe("Coding session · Pi · replying on its own");
+    expect(pi.line).toBe("Coding session (Pi) · replying on its own"); // v1.420.0: the tool in brackets
   });
 });
 

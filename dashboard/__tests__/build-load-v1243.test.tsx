@@ -153,7 +153,7 @@ describe("Build draws its panes before the catalogs answer", () => {
     // The pane list answered; nothing else has. The panes are there anyway.
     expect(await screen.findByTestId("terminal-pane-t1")).toBeInTheDocument();
     expect(screen.getByTestId("terminal-pane-t2")).toBeInTheDocument();
-    expect(screen.queryByText("Attaching to sessions…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Opening your terminals…")).not.toBeInTheDocument(); // v1.420.0 (C5.2)
   });
 
   it("the catalogs still arrive afterwards", async () => {

@@ -443,7 +443,7 @@ describe("the permission chip in the pane's composer card", () => {
     render(<PaneChat paneId="p1" cwd={CWD} />);
     const card = screen.getByTestId("pane-chat-composer");
     const chip = within(card).getByTestId("permission-chip");
-    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask first");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask before commands");
   });
 
   it("shows the thread's stored level, and that level rides the turn", async () => {
@@ -505,7 +505,7 @@ describe("the permission chip in the pane's composer card", () => {
     for (const cls of PANE_PERMISSION_COMPACT.split(" ")) expect(wrap.className).toContain(cls);
     // The level is still said to a screen reader and on hover.
     expect(within(wrap).getByTestId("permission-chip").getAttribute("aria-label")).toBe(
-      "Permissions: Ask first",
+      "Permissions: Ask before commands",
     );
     cleanup();
     width.px = PANE_COMPOSER_NARROW_PX + 120;

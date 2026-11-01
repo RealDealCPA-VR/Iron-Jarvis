@@ -31,7 +31,7 @@ import { originLabel } from "@/components/sessions/OriginChip";
 import { agentLabel } from "./agentWorlds";
 import { buildCodeHref, toolLabel } from "./buildApp";
 import { buildSessionHref } from "./buildLinks";
-import { CODING_SESSION_LABEL } from "./buildWords";
+import { CODING_SESSION_JARVIS, CODING_SESSION_LABEL, codingSessionWith } from "./buildWords";
 import { normalizeIso } from "./format";
 import { sessionHref } from "./missionLinks";
 import { statusWords, type ThreadSummary } from "./threadStatus";
@@ -194,8 +194,9 @@ function chatItem(t: ThreadSummary): RunningItem {
   };
 }
 
-/** A Build coding session answering (harness gaps, fix 1): "Coding session ·
- *  12 min", its title under it, opened on that session in Build. */
+/** A Chat › Code coding session answering (harness gaps, fix 1): "Coding
+ *  session (Jarvis) · 12 min" (v1.420.0, C5.1: the tool in brackets tells it
+ *  from a Build › Code session), its title under it, opened on that session. */
 function buildItem(r: RunningReplyRow, now: number): RunningItem {
   const thread = String(r.thread_id ?? "").trim();
   const waiting = r.waiting === true;
@@ -209,19 +210,21 @@ function buildItem(r: RunningReplyRow, now: number): RunningItem {
     key: `b:${r.turn_id}`,
     kind: "build",
     href: buildSessionHref(thread),
-    who: CODING_SESSION_LABEL,
+    who: CODING_SESSION_JARVIS,
     when,
     detail: oneLine(title) || `Untitled ${CODING_SESSION_LABEL.toLowerCase()}`,
-    line: when ? `${CODING_SESSION_LABEL} · ${when}` : CODING_SESSION_LABEL,
-    title: title || CODING_SESSION_LABEL,
+    line: when ? `${CODING_SESSION_JARVIS} · ${when}` : CODING_SESSION_JARVIS,
+    title: title || CODING_SESSION_JARVIS,
     waiting,
     queued: false,
   };
 }
 
 /** v1.414.0: a Build › Code reply (the user's own Claude Code, Codex, Pi or
- *  OpenCode): "Coding session · Claude Code · 12 min", its title under it,
- *  opened on that session in Build › Code. */
+ *  OpenCode): "Coding session (Claude Code) · 12 min" (v1.420.0, C5.1: the
+ *  tool in brackets, the same shape as Chat › Code's "(Jarvis)"), its title
+ *  under it, opened on that session in Build › Code. An unknown tool is not
+ *  guessed at: the label alone, with no tool in brackets. */
 function buildAppItem(r: RunningReplyRow, now: number): RunningItem {
   const session = String(r.thread_id ?? "").trim();
   const waiting = r.waiting === true;
@@ -236,7 +239,7 @@ function buildAppItem(r: RunningReplyRow, now: number): RunningItem {
   const when = parts.filter(Boolean).join(" · ");
   const h = String(r.harness ?? "").trim();
   const tool = h ? toolLabel(h) : "";
-  const who = tool ? `${CODING_SESSION_LABEL} · ${tool}` : CODING_SESSION_LABEL;
+  const who = tool ? codingSessionWith(tool) : CODING_SESSION_LABEL;
   const title = (r.title || "").trim();
   return {
     key: `a:${r.turn_id}`,

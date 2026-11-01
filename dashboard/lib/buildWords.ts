@@ -46,13 +46,32 @@ export const CODING_SESSION_LABEL = "Coding session";
 /** One session of the view, mid-sentence ("a coding session"). */
 export const CODING_SESSION = CODING_SESSION_LABEL.toLowerCase();
 
+/** v1.420.0 (fix plan C5.1, decision D6): there are TWO Code views — Chat ›
+ *  Code (Jarvis writes the code) and Build › Code (the user's own Claude
+ *  Code, Codex, Pi, OpenCode or Grok, driven from a view). Both keep the
+ *  name "Code"; a row that must tell them apart (Running now) names the
+ *  TOOL in brackets: "Coding session (Jarvis)" / "Coding session (Codex)". */
+export const JARVIS_CODING_TOOL = "Jarvis";
+
+/** One session named by the tool that writes its code (a tool's display
+ *  name: "Claude Code", "Codex"…; blank = Jarvis, the Chat › Code tool). */
+export function codingSessionWith(tool: string): string {
+  const t = (tool || "").trim() || JARVIS_CODING_TOOL;
+  return `${CODING_SESSION_LABEL} (${t})`;
+}
+
+/** A Chat › Code session where a row must be told apart from Build › Code. */
+export const CODING_SESSION_JARVIS = codingSessionWith(JARVIS_CODING_TOOL);
+
 /** Where the coding sessions live, mid-sentence ("in Chat › Code"). */
 export const CODING_SESSIONS_PLACE = `${CHAT_VIEW_NAME} › ${CODE_VIEW_NAME}`;
 
 /** Build in one plain line — the page's blurb in Ctrl K and Everything, and
- *  Help's "Build" entry. v1.406.0: the terminals only. */
+ *  Help's "Build" entry. v1.406.0: the terminals only; v1.420.0 (C5.1): the
+ *  terminals AND its Code view (v1.409.0), where the real coding tools are
+ *  driven from a view. */
 export const BUILD_BLURB =
-  "Terminals for your own coding tools — Claude Code, Codex or any command line — in your project folders.";
+  "Terminals for your own coding tools — Claude Code, Codex or any command line — and a Code view that drives them.";
 
 /** Chat in one plain line (v1.406.0): its Code switch is where the coding
  *  sessions are. */

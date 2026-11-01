@@ -333,17 +333,18 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
     expect(chip).toBeTruthy();
     expect(chip.getAttribute("data-mode")).toBe("approve_for_me");
     // The level's name is real text on the chip (not sr-only) and in its name.
-    const words = within(chip).getByText("Ask first");
+    const words = within(chip).getByText("Ask for commands");
     expect(classes(words)).not.toContain("sr-only");
-    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask first");
+    expect(chip.getAttribute("aria-label")).toBe("Permissions: Ask before commands");
     fireEvent.click(chip);
     const items = within(screen.getByTestId("permission-menu")).getAllByTestId("permission-item");
     expect(items.map((i) => i.getAttribute("data-mode"))).toEqual(["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"]);
     expect(items.map((i) => i.querySelector("span.block")?.textContent)).toEqual([
+      // v1.420.0 (fix plan C1.8, moved on purpose): named by what each does.
       "Ask before every action",
-      "Ask first",
+      "Ask before commands",
       "Accept edits",
-      "Auto",
+      "Auto (its own safety check)",
       "Don't ask",
     ]);
   });

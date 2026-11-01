@@ -94,7 +94,7 @@ export default function KanbanPage() {
                 title="No sessions yet"
                 action={{ label: "Start a session", href: "/sessions?new=1" }}
               >
-                Each task you give an agent becomes a card here, in the lane for where it stands: running, waiting for your review, done, or failed.
+                Each task you give an agent becomes a card here, in the lane for where it stands: running, waiting for your review, done, failed, or stopped.
               </Empty>
             </div>
             <KanbanBoard sessions={[]} reviews={reviewsState.reviews} reload={refreshAll} />

@@ -198,7 +198,7 @@ describe("Iron-Proxy's numbers carry their age", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
     await screen.findByTestId("code-usage-proxy");
     expect(screen.getByTestId("code-usage-proxy-when").textContent).toBe(
-      "From Iron-Proxy's last look at this account, 2 h ago.",
+      "From the account manager's last look at this account, 2 h ago.",
     );
   });
 });

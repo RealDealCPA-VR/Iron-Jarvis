@@ -277,7 +277,7 @@ describe("a phone", () => {
     render(<ChatPage />);
     const c = await chip();
     expect(classes(c)).toEqual(expect.arrayContaining(["max-sm:w-[30px]", "max-sm:px-0", "max-sm:justify-center"]));
-    const words = within(c).getByText("Ask first");
+    const words = within(c).getByText("Ask for commands");
     expect(classes(words)).toContain("max-sm:hidden");
     const svgs = Array.from(c.querySelectorAll("svg"));
     expect(svgs).toHaveLength(2);
@@ -285,7 +285,7 @@ describe("a phone", () => {
     expect(classes(svgs[0])).not.toContain("max-sm:hidden");
     expect(classes(svgs[1])).toContain("max-sm:hidden");
     // The level is still named for a screen reader and on hover.
-    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask first");
+    expect(c.getAttribute("aria-label")).toBe("Permissions: Ask before commands");
     expect(c.title.length).toBeGreaterThan(0);
   });
 });

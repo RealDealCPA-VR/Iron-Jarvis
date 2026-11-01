@@ -270,7 +270,8 @@ describe("the header names the branch and its base", () => {
   it("says when the branch was merged, and when its worktree was removed", () => {
     const g = view().git!;
     expect(branchLine({ ...g, merged: true, mergedInto: "main" })).toBe(`${BRANCH} from main · merged into main`);
-    expect(branchLine({ ...g, removed: true })).toBe(`${BRANCH} from main · worktree removed`);
+    // v1.420.0 (C5.2, moved on purpose): "worktree" left the screen.
+    expect(branchLine({ ...g, removed: true })).toBe(`${BRANCH} from main · its own copy of the folder removed`);
   });
 });
 
@@ -402,7 +403,7 @@ describe("the Branch view", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm merge" }));
     expect(await screen.findByTestId("branch-note")).toHaveTextContent(`Merged into main in ${REPO}.`);
     const offer = await screen.findByTestId("branch-merged");
-    fireEvent.click(within(offer).getByRole("button", { name: "Remove the worktree" }));
+    fireEvent.click(within(offer).getByRole("button", { name: "Remove its copy of the folder" }));
     expect(posted("/build/sessions/s1/git/discard")).toEqual([]);
     fireEvent.click(within(offer).getByRole("button", { name: "Confirm remove" }));
     await waitFor(() => expect(onGone).toHaveBeenCalled());

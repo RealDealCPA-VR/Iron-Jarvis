@@ -337,7 +337,7 @@ export function accountStatusLine(a: BuildAccount, now: Date = new Date()): Acco
   }
   if (a.status === "needs_sign_in") return { kind: "sign_in", text: "Needs to sign in again" };
   if (a.status === "off") return { kind: "off", text: "Turned off" };
-  if (a.status === "missing") return { kind: "missing", text: "Removed from Iron-Proxy" };
+  if (a.status === "missing") return { kind: "missing", text: "No longer in your accounts" };
   if (a.usage) {
     const pct = Math.round(a.usage.percent);
     return {
@@ -403,7 +403,7 @@ function warnsKind(kind: AccountStatusLine["kind"]): boolean {
  *  shows the limit card, with Resume when ready). */
 export function accountBlockedReason(a: BuildAccount): string {
   if (a.status === "off") return "Turn it on in Connections to use it.";
-  if (a.status === "missing") return "Iron-Proxy no longer has this account. Choose another one.";
+  if (a.status === "missing") return "This account is no longer in your accounts. Choose another one.";
   return "";
 }
 

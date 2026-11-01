@@ -40,10 +40,11 @@ describe("the one switch", () => {
     fireEvent.click(chip);
     expect(rows().map((r) => r.dataset.mode)).toEqual(["always_ask", "approve_for_me", "accept_edits", "auto", "yolo"]);
     expect(rows().map((r) => r.querySelector("span.block")?.textContent)).toEqual([
+      // v1.420.0 (fix plan C1.8, moved on purpose): named by what each does.
       "Ask before every action",
-      "Ask first",
+      "Ask before commands",
       "Accept edits",
-      "Auto",
+      "Auto (its own safety check)",
       "Don't ask",
     ]);
   });

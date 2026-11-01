@@ -241,7 +241,7 @@ describe("1. a local-only chat asks up front for an endpoint the daemon says lea
     await type("summarize the payroll file");
     const card = await screen.findByTestId("cloud-ask-card");
     expect(within(card).getByText("This chat is local only")).toBeTruthy();
-    expect(screen.getByTestId("cloud-ask-body").textContent).toMatch(/It will leave this PC\.$/);
+    expect(screen.getByTestId("cloud-ask-body").textContent).toMatch(/It will leave this PC and your own network\.$/);
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
