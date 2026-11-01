@@ -30,7 +30,15 @@ export type ChangesSource = "git" | "tool" | "none";
 export interface CodeChange extends FileChange {
   /** The tool's own file tools reported changing this file. */
   byTool: boolean;
+  /** v1.420.0 (C4.12): the file's bytes as the daemon read them (git's blob
+   *  id; "" for a deleted file) — Revert refuses when the file changed since. */
+  blob: string;
+  /** A renamed file's old name (Revert puts it back too). */
+  oldRel: string;
 }
+
+/** v1.420.0 (C4.12): which changes the list covers. */
+export type ChangesScope = "session" | "turn";
 
 export interface CodeChanges {
   source: ChangesSource;
@@ -40,8 +48,45 @@ export interface CodeChanges {
   files: number;
   more: boolean;
   byTool: number;
-  /** Why there is no Undo here. */
+  /** Why there is no Undo here (and, for git, what Revert does). */
   noUndo: string;
+  /** The scope the daemon REALLY listed (a turn it could not tell apart is
+   *  listed as the whole session, and its words say why). */
+  scope: ChangesScope;
+  /** The message the turn scope covers ("" otherwise). */
+  turn: string;
+  /** A file can be put back (git only). */
+  canRevert: boolean;
+}
+
+/** The two scopes' names on the toggle. */
+export const SCOPE_WORDS: Record<ChangesScope, string> = {
+  turn: "This message",
+  session: "Whole session",
+};
+
+/** The Revert press's words. */
+export const REVERT_LABEL = "Revert this file";
+export function revertConfirmWords(name: string): string {
+  return `Put ${name} back?`;
+}
+/** Said instead of the Revert presses while a reply runs. */
+export const REVERT_WAITS = "Revert is offered once the reply has finished.";
+
+/** The body `POST /build/app/sessions/{id}/changes/revert` takes. */
+export function revertBody(c: CodeChange, data: CodeChanges): Record<string, string> {
+  return {
+    path: c.rel || c.path,
+    blob: c.blob,
+    old_rel: c.oldRel,
+    scope: data.scope,
+    turn: data.turn,
+  };
+}
+
+/** The read's address for one scope. */
+export function changesQuery(scope: ChangesScope): string {
+  return scope === "turn" ? "?scope=turn" : "";
 }
 
 export function decodeCodeChanges(raw: unknown): CodeChanges | null {
@@ -68,6 +113,8 @@ export function decodeCodeChanges(raw: unknown): CodeChanges | null {
       size: num(c.size),
       note: str(c.note, 300) || undefined,
       byTool: c.by_tool === true,
+      blob: str(c.blob, 80),
+      oldRel: str(c.old_rel, 1_000),
     });
   }
   return {
@@ -77,7 +124,11 @@ export function decodeCodeChanges(raw: unknown): CodeChanges | null {
     files: num(r.files) ?? changes.length,
     more: r.truncated_files === true,
     byTool: num(r.by_tool) ?? changes.filter((c) => c.byTool).length,
-    noUndo: str(r.no_undo, 300),
+    noUndo: str(r.no_undo, 400),
+    scope: r.scope === "turn" ? "turn" : "session",
+    turn: str(r.turn, 120),
+    // An older daemon sends no flag: no Revert press (it has no route).
+    canRevert: r.can_revert === true && source === "git",
   };
 }
 

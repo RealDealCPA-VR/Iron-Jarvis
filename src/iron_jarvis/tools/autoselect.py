@@ -1059,6 +1059,42 @@ _RECORD_NOUN = (
 #: the web rule by IDENTITY (v1.354.0, G39: :func:`_web_signal_is_an_app`).
 _WEB_WEIGHTS: dict[str, int] = {"web_search": 8, "web_fetch": 3}
 
+#: v1.420.0 (C6.1, the re-audit's "what apps can you work with?", "what are
+#: missions", "what is build for" → nothing armed): a question ABOUT one of
+#: Iron Jarvis's own features, answered by the Guide. Every alternative is
+#: either about "you" (the one asked) or a feature word only this app has,
+#: and the everyday senses are kept out by where the sentence ENDS: the
+#: words may be followed only by the end of the sentence, "here", "for" or
+#: "in Jarvis" / "in this app" ("what are missions in the Bible", "what is
+#: the build for the release", "what does the code view do in Dreamweaver",
+#: "what apps can you use to edit photos" are not these).
+_FEATURE_END = r"(?=\s*(?:[?!]|\.(?!\w)|\Z))"  # never "build.gradle" (v1.420.0 review)
+_FEATURE_HERE = r"(?:\s+(?:here|in\s+(?:iron\s*)?jarvis|in\s+this\s+app))?"
+_FEATURE_QUESTION = (
+    # "what apps can you work with?", "which services do you connect to?",
+    # "what can you connect to?", "what apps do you support?"
+    r"(?:what|which)\s+(?:other\s+|kinds?\s+of\s+|sorts?\s+of\s+)?"
+    r"(?:apps?|applications?|services?|integrations?|programs?|accounts?|tools?|software)\s+"
+    r"(?:can|could|do|does|will)\s+(?:you|(?:iron\s*)?jarvis)\s+(?:(?:work|connect|integrate|talk|link|sync|hook\s+up)"
+    r"\s+(?:with|to|into)|support|access|reach|use)" + _FEATURE_HERE + _FEATURE_END
+    + r"|what\s+(?:else\s+)?(?:can|could)\s+(?:you|(?:iron\s*)?jarvis)\s+(?:connect|integrate|link|sync|hook\s+up)"
+    r"\s+(?:to|with|into)" + _FEATURE_HERE + _FEATURE_END
+    # "what are missions", "what are missions for", "what's a mission here"
+    + r"|what(?:\s+(?:are|is)|['’](?:s|re))\s+(?:the\s+)?missions(?:\s+for)?" + _FEATURE_HERE
+    + _FEATURE_END
+    + r"|what(?:\s+is|['’]s)\s+an?\s+mission\s+(?:here|in\s+(?:iron\s*)?jarvis|in\s+this\s+app)"
+    + _FEATURE_END
+    # "what is build for", "what does Build do", "what is the Build page",
+    # "what is Build?" — "Build" capitalised, or bare with no article, or
+    # with its page word; never "what is the build for the release".
+    + r"|what(?:\s+(?:is|does)|['’]s)\s+(?:(?:the\s+)?build\s+(?:module|page|view|tab|section)"
+    r"|(?:the\s+)?(?-i:Build)|build)(?:\s+(?:for|do|used\s+for))?" + _FEATURE_HERE
+    + _FEATURE_END
+    # "what does the Code view do", "what is Chat › Code", "what is Build › Code for"
+    + r"|what(?:\s+(?:is|does|are)|['’]s)\s+(?:the\s+)?(?:code\s+view|(?:chat|build)\s*›\s*code)"
+    r"(?:\s+(?:for|do|used\s+for))?" + _FEATURE_HERE + _FEATURE_END
+)
+
 #: THE GUIDE RULE (v1.224.0; v1.353.0 G38; v1.360.0 lane 10B) — its pattern
 #: and its weights, one object each so the rule loop can tell the rule by
 #: IDENTITY (:func:`_guide_fires`). See the rule's note in ``_RULES``.
@@ -1072,7 +1108,11 @@ _GUIDE_RX = re.compile(
     r"connect|schedule|chat|text|add|install|pair|send|automate))|"
     r"can\s+(?:i|you)\b[^.!?\n]{0,60}?\b(?:(?:from|on)\s+my\s+(?:phone|browser)|on\s+a\s+schedule)|"
     r"do\s+i\s+have\s+(?:a|an|any)\s+(?:project|workflow|schedule|reflex|goal|skill|agent)|"
-    r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?)\b",
+    r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?|"
+    # v1.420.0 (C6.1): a FEATURE QUESTION about Iron Jarvis — see
+    # :data:`_FEATURE_QUESTION`. Each alternative ends the sentence (or says
+    # "here" / "in Jarvis"), so "what are missions in the Bible" stays out.
+    r"(?P<guide_feature>" + _FEATURE_QUESTION + r"))\b",
     re.IGNORECASE,
 )
 _GUIDE_WEIGHTS: dict[str, int] = {"guide_search": 6, "app_search": 5, "app_status": 3}
@@ -1110,6 +1150,14 @@ _ABOUT_JARVIS_STRONG_RX = re.compile(
     # ...and "you" / "your" as the one asked, in words the first cut missed
     # ("how do I change your personality", "a folder you can read").
     r"|\byour\s+(?:personality|persona|instructions|behaviou?r)\b"
+    # v1.420.0 (C6.1): "how do I use Build", "how do I open the Code view",
+    # "how do I start a session in Chat › Code" — Build capitalised as the
+    # thing used or opened (never "Build a …" or "build tools"), a bare
+    # lower-case "use build" ending the sentence, the Code view, the "›"
+    # places.
+    r"|\b(?:use|open|find|get\s+to|start|try)\s+(?:the\s+)?(?-i:Build)\b"
+    r"(?!\s+(?:a|an|the|my|our|tools?|systems?|scripts?|files?|steps?|process|servers?)\b)"
+    r"|\buse\s+build(?=\s*(?:[?.!]|\Z))|\bcode\s+view\b|\b(?:chat|build)\s*›\s*code\b"
     r"|\byou\s+(?:can|could|will)\s+(?:read|see|reach|use|access|open)\b",
     re.IGNORECASE,
 )
@@ -1323,12 +1371,18 @@ def _guide_fires(msg: str) -> bool:
     except Exception:  # noqa: BLE001
         return True
 
+#: v1.420.0 review: "latest" right before a MAIL word ("reply to the latest
+#: email", "proofread my latest email below", "the latest email about the
+#: invoice said ...") names a message, never a web search; "search the web for
+#: the latest emails from Apple" keeps its "search" and its "web".
+_LATEST_WEB = r"latest(?!\s+(?:e-?mails?|mail|inbox|messages?)\b)"
+
 #: The web rule's words minus the bare search verbs ("search", "look up",
 #: "browse") and with "google" only as itself (never "Google Drive"/"Google
 #: Maps", which are apps). When a message names a catalog app, only one of
 #: these still makes it a web search (v1.354.0, G39).
 _STRONG_WEB_RX = re.compile(
-    r"\b(?:google|research|online|internet|web(?:sites?)?|latest|news|headlines?|"
+    r"\b(?:google|research|online|internet|web(?:sites?)?|" + _LATEST_WEB + r"|news|headlines?|"
     r"up.to.date|weather|price of|stock|release date|who won|trending)\b",
     re.IGNORECASE,
 )
@@ -1466,7 +1520,7 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             # boundary sits after "web" — so "look that up on the IRS website"
             # armed the brain and NOTHING that can reach the internet. A named
             # site is the least ambiguous web signal there is.
-            r"web(?:sites?)?|latest|news|headline|up.to.date|weather|price of|stock|"
+            r"web(?:sites?)?|" + _LATEST_WEB + r"|news|headline|up.to.date|weather|price of|stock|"
             r"release date|who won|trending)\b",
             re.IGNORECASE,
         ),
@@ -3527,3 +3581,90 @@ def tools_named_in_playbook(
             hits.append((m.start(), name))
     hits.sort()
     return [name for _, name in hits[:cap]]
+
+
+# --------------------------------------------------------------------------- #
+# v1.420.0 (C6.1): the CODING OFFER — a door, never a hand-off.
+# --------------------------------------------------------------------------- #
+#: Where a coding task is best done: Build › Code, the real Claude Code /
+#: Codex / Pi / OpenCode working in a folder the user picks (the address
+#: ``routes/build_app.py`` and the dashboard's ``/terminals?view=code`` use).
+CODING_OFFER_HREF = "/terminals?view=code"
+CODING_OFFER_LABEL = "Work on this in a coding session (Build › Code)"
+#: The software things a "build me a …" asks for. A word that is also a
+#: physical or office thing is guarded by what follows it ("a tool shed",
+#: "a game plan", "a website logo"); "script" counts only with a language
+#: before it ("a python script" — "write me a script" is a film or a speech).
+_SOFTWARE_THING = (
+    r"(?:apps?|application|web\s*app|website|web\s*site|site|webpage|web\s+page"
+    r"|landing\s+page|game|bot|chat\s*bot|discord\s+bot|cli|command[\s-]+line\s+tool"
+    r"|api|back\s*end|front\s*end|plugin|plug-in|extension|add-?on|library"
+    r"|package|server|microservice|prototype|mvp|saas"
+    r"|(?:python|bash|powershell|node|javascript|js|typescript|shell|ruby|go|rust)\s+"
+    r"(?:script|program|tool|app|cli))"
+)
+_NOT_SOFTWARE_AFTER = (
+    r"(?!\s+(?:shed|box|belt|kit|chest|list|plan|schedule|budget|outline|ideas?|names?"
+    r"|logos?|copy|description|pitch|proposal|map|visit|tour|trip|night|show|review"
+    r"|reviews|recommendations?|suggestions?|of|cords?|leads?|ladders?|requests?|forms?"
+    r"|icons?|logs?|rooms?|racks?|summary|summaries|checklists?"
+    r"|in\s+(?:sharepoint|excel|word|powerpoint|notion|canva|wix|squarespace"
+    r"|google\s+(?:sheets|docs|slides|sites)))\b)"
+)
+#: The polite or "can you" lead-in an imperative may open with.
+_OFFER_LEAD_IN = (
+    r"(?:\A|[.!?\n]\s*)\s*(?:(?:please|now|ok(?:ay)?|hey|jarvis|so)[\s,]+)*"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need)\s+you\s+to\s+"
+    r"|i['’]?d\s+like\s+you\s+to\s+|help\s+me\s+|let['’]?s\s+|go\s+ahead\s+and\s+)?"
+)
+#: "build me a …" / "write an app that …" / "can you make me a website".
+_BUILD_ME_RX = re.compile(
+    _OFFER_LEAD_IN
+    + r"(?:build|write|make|create|code|develop|program|scaffold|spin\s+up)"
+    r"(?:\s+(?:me|us))?\s+(?:a|an|the|my|our|some|one)\s+"
+    r"(?:(?!(?:of|for|about|with|to|from|on|in|that|which)\b)[\w'’-]+\s+){0,3}?"
+    + _SOFTWARE_THING + r"\b" + _NOT_SOFTWARE_AFTER,
+    re.IGNORECASE,
+)
+#: A task on a REPOSITORY: an acting verb, then (in the same sentence) the
+#: user's repo / codebase or a GitHub address — "fix the failing test in my
+#: repo", "add a README to github.com/acme/site". Never a question ("what is
+#: a repository") and never "a repository of knowledge".
+_REPO_WORDS = (
+    r"(?:\b(?:my|our|the|this|that)\s+(?:git\s*hub\s+|git\s+|local\s+|project\s+)?"
+    r"(?:repo|repos|repository|codebase|code\s+base)\b(?!\s+of\b)"
+    r"|\bgithub\.com/[\w.-]+/[\w.-]+)"
+)
+_REPO_TASK_RX = re.compile(
+    _OFFER_LEAD_IN
+    + r"(?:fix|refactor|add|implement|update|change|edit|debug|clean\s+up|work\s+on"
+    r"|go\s+through|build|migrate|upgrade|port|rewrite|document|write\s+tests\s+(?:for|in)"
+    r"|set\s+up|bump|rename|remove|delete|speed\s+up|optimi[sz]e)\b"
+    r"[^.!?\n]{0,120}?" + _REPO_WORDS,
+    re.IGNORECASE,
+)
+
+
+def coding_offer(text: str) -> "dict[str, str] | None":
+    """The door a chat reply may carry for a CODING task (v1.420.0, C6.1):
+    ``{"href", "label"}`` into Build › Code when *text* asks to build a piece
+    of software ("build me a todo app", "write me an app", "can you make me a
+    website") or names a task on a repository ("fix the failing test in my
+    repo", "add a README to github.com/acme/site"); ``None`` otherwise — a
+    question about software ("how do I build an app", "what is a
+    repository"), office work ("make me a spreadsheet", "build me a budget"),
+    a physical thing ("build me a shed") or a script that is words ("write me
+    a script for my wedding toast").
+
+    ONLY AN OFFER: the chat still answers; nothing is handed off and no tool
+    is armed by it. The shape is a ``daemon.doors`` entry, so a lane can add
+    it to its doors list beside the Connect door. Pure; never raises."""
+    try:
+        t = str(text or "")[:4000]
+        if not t.strip():
+            return None
+        if _BUILD_ME_RX.search(t) or _REPO_TASK_RX.search(t):
+            return {"href": CODING_OFFER_HREF, "label": CODING_OFFER_LABEL}
+        return None
+    except Exception:  # noqa: BLE001 — no offer beats a broken turn
+        return None

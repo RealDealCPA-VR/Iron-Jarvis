@@ -2176,6 +2176,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.wait_for(asyncio.to_thread(_codex.POOL.stop_all), timeout=30.0)
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     log.debug("codex sessions at shutdown failed", exc_info=True)
+            # v1.420.0: a claude-cli call's CLI exits in the background after
+            # its answer left; wait for those teardowns so no child outlives
+            # the daemon. Bounded — a stuck exit must not hold shutdown.
+            _claude_t = sys.modules.get("iron_jarvis.providers.adapters.claude_native.transport")
+            if _claude_t is not None:
+                try:
+                    await asyncio.wait_for(_claude_t.drain_teardowns(), timeout=15.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("claude-cli teardowns at shutdown failed", exc_info=True)
             # v1.333.0 (D3): every REPL child goes with the daemon. The kills
             # run off the loop; bounded so a stuck kill cannot hold exit.
             _repl = getattr(platform, "repl", None)

@@ -35,6 +35,7 @@ import {
 import { get, post } from "@/lib/api";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { ChangesReview } from "@/components/harness/ChangesReview";
+import { ConfirmButton } from "@/components/ui";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { Row, Section } from "@/components/harness/HarnessSessionRail";
 import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
@@ -61,7 +62,15 @@ import {
   decodeCodeUsage,
   lastCodeAttachment,
   noWindowsWords,
+  REVERT_LABEL,
+  REVERT_WAITS,
+  revertBody,
+  revertConfirmWords,
+  SCOPE_WORDS,
+  changesQuery,
   windowLine,
+  type ChangesScope,
+  type CodeChange,
   type CodeChanges,
   type CodeOverview,
   type CodeUsage,
@@ -106,6 +115,8 @@ function usePaneRead<T>(
   decode: (raw: unknown) => T | null,
   refresh: number,
   running: boolean,
+  /** v1.420.0: the read's query (the Changes scope), "" for none. */
+  query = "",
 ): { data: T | null; error: string | null; again: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +130,7 @@ function usePaneRead<T>(
   const again = useCallback(() => {
     const n = ++seq.current;
     inFlight.current = n;
-    get(`/build/app/sessions/${encodeURIComponent(sessionId)}/${part}`)
+    get(`/build/app/sessions/${encodeURIComponent(sessionId)}/${part}${query}`)
       .then((raw) => {
         if (n !== seq.current) return;
         setData(decodeRef.current(raw));
@@ -131,7 +142,7 @@ function usePaneRead<T>(
       .finally(() => {
         if (inFlight.current === n) inFlight.current = 0;
       });
-  }, [sessionId, part]);
+  }, [sessionId, part, query]);
   useEffect(() => {
     again();
   }, [again, refresh]);
@@ -281,9 +292,46 @@ function ChangesPane({
   refresh: number;
   running: boolean;
 }) {
-  const { data, error, again } = usePaneRead<CodeChanges>(sessionId, "changes", decodeCodeChanges, refresh, running);
+  // v1.420.0 (C4.12): "This message" beside "Whole session" (the whole
+  // session stays the default — what the pane always listed).
+  const [scope, setScope] = useState<ChangesScope>("session");
+  const { data, error, again } = usePaneRead<CodeChanges>(
+    sessionId, "changes", decodeCodeChanges, refresh, running, changesQuery(scope),
+  );
+  const [revertNote, setRevertNote] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => setRevertNote(null), [scope, sessionId]);
+  async function revert(c: CodeChange) {
+    if (!data) return;
+    try {
+      const res = (await post(
+        `/build/app/sessions/${encodeURIComponent(sessionId)}/changes/revert`,
+        revertBody(c, data),
+      )) as { words?: unknown } | null;
+      const words = res && typeof res.words === "string" ? res.words : "";
+      setRevertNote({ ok: true, text: words || `${c.name || c.rel || c.path} was put back.` });
+    } catch (e) {
+      setRevertNote({ ok: false, text: errText(e) });
+    }
+    again();
+  }
   return (
     <div data-testid="code-pane-changes" className="space-y-2 pb-4">
+      <div role="group" aria-label="Which changes" className="flex items-center gap-1" data-testid="code-changes-scope">
+        {(["session", "turn"] as const).map((s) => (
+          <button
+            key={s}
+            type="button"
+            data-testid={`code-changes-scope-${s}`}
+            aria-pressed={scope === s}
+            onClick={() => setScope(s)}
+            className={`h-7 rounded-md px-2 text-[12px] transition-colors ${
+              scope === s ? "bg-white/[0.08] text-zinc-100" : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-200"
+            }`}
+          >
+            {SCOPE_WORDS[s]}
+          </button>
+        ))}
+      </div>
       <div className="flex items-start gap-2">
         <p data-testid="code-changes-source" className="min-w-0 flex-1 text-[12px] text-zinc-500">
           {data ? data.words : "What this session changed on disk."}
@@ -325,8 +373,48 @@ function ChangesPane({
               {data.noUndo}
             </p>
           ) : null}
+          {data.canRevert ? (
+            running ? (
+              <p data-testid="code-changes-revert-waits" className={QUIET}>
+                {REVERT_WAITS}
+              </p>
+            ) : (
+              <ul data-testid="code-changes-revert" aria-label="Put a file back" className="space-y-1">
+                {data.changes.map((c, i) => (
+                  // v1.420.0 review: keyed by the SCOPE too — a press armed
+                  // under one scope must never confirm under the other (the
+                  // same file goes back to a different base there).
+                  <li
+                    key={`${data.scope}:${data.turn}:${c.path}`}
+                    className="flex min-w-0 items-center gap-2 text-[12px] text-zinc-400"
+                  >
+                    <span className="min-w-0 flex-1 truncate" title={c.rel || c.path}>
+                      {c.rel || c.name || c.path}
+                    </span>
+                    <span data-testid={`code-revert-${i}`}>
+                      <ConfirmButton
+                        label={REVERT_LABEL}
+                        confirmLabel={revertConfirmWords(c.name || c.rel || c.path)}
+                        title={`Put ${c.name || c.rel || c.path} back; every other file stays`}
+                        onConfirm={() => revert(c)}
+                      />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
         </>
       )}
+      {revertNote ? (
+        <p
+          role={revertNote.ok ? "status" : "alert"}
+          data-testid="code-changes-revert-note"
+          className={revertNote.ok ? QUIET : "text-[12px] text-tone-danger"}
+        >
+          {revertNote.text}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -406,7 +494,7 @@ function UsagePane({
             {/* v1.414.0 review: with its age — Iron-Proxy sees a number only
                 when the account makes a call, which can be hours ago. */}
             <p data-testid="code-usage-proxy-when" className={QUIET}>
-              From Iron-Proxy&apos;s last look at this account{acc.at && agoWords(acc.at) ? `, ${agoWords(acc.at)}` : ""}.
+              From the account manager&apos;s last look at this account{acc.at && agoWords(acc.at) ? `, ${agoWords(acc.at)}` : ""}.
             </p>
             <WindowRows windows={acc.windows} testid="code-usage-proxy" />
           </>

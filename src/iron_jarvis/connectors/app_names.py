@@ -150,10 +150,60 @@ _NOT_MAIL_ITSELF = (
 #: connected. Only "my email(s)" names the mailbox, and not when it points at
 #: text in the message ("my email below:", "my email draft").
 _NOT_A_PASTED_ONE = r"(?!\s*(?::|(?:below|above|here|drafts?)\b))"
+#: v1.420.0 (C6.1, the re-audit's "summarize my latest emails" → web
+#: search): the everyday mail words with a FRESHNESS word between ("my
+#: latest emails", "my new mail", "my unread messages", "my recent inbox"),
+#: "my mail" itself, and "any new mail" / "any emails from Bob". Each is the
+#: user's own mailbox; the freshness word sits INSIDE the app's words, so
+#: the web rule's "latest" is blanked with them and never makes the request
+#: a web search. Guards beyond :data:`_NOT_MAIL_ITSELF`: never the mail as a
+#: trade or a list ("my mail carrier", "any email marketing tips", "my email
+#: list"). "messages" counts only with a freshness word ("my new messages"),
+#: and not when the message names a chat or texting place (see
+#: :data:`_CHAT_PLACE_RX`, applied where the words are read).
+_MAIL_FRESH = (
+    r"(?:(?:latest|recent|new|newest|unread|last|today['’]?s|todays|incoming|important"
+    r"|most\s+recent|old|older|oldest|archived|sent)\s+){1,2}"
+)
+_NOT_MAIL_TRADE = (
+    r"(?!\s+(?:carriers?|man|men|woman|lady|truck|trucks|slots?|order|orders|forwarding"
+    r"|marketing|campaigns?|lists?|newsletters?|clients?|apps?|providers?|services?"
+    r"|servers?|domains?|accounts?|merge|blast)\b)"
+)
+#: ...and, for the older "my email(s)" words too (v1.420.0), never the
+#: marketing list ("build my email list", "my email campaign"). Narrow on
+#: purpose: "check my email account" stays the mailbox.
+_NOT_A_LIST = (
+    r"(?!\s+(?:marketing|campaigns?|lists?|newsletters?|blasts?|merge)\b)"
+)
+_MAIL_EVERYDAY_NEW = (
+    r"|\bmy\s+" + _MAIL_FRESH + r"(?:e-?mails?|mail|inbox|mailbox|messages)\b"
+    + _NOT_MAIL_ITSELF + _NOT_MAIL_TRADE + _NOT_A_PASTED_ONE
+    + r"|\bmy\s+mail\b" + _NOT_MAIL_ITSELF + _NOT_MAIL_TRADE + _NOT_A_PASTED_ONE
+    + r"|\bany\s+(?:(?:new|unread|more)\s+)?(?:e-?mails?|mail)\b"
+    + _NOT_MAIL_ITSELF + _NOT_MAIL_TRADE
+    # v1.420.0 review: an act on "THE latest email" ("reply to the latest
+    # email", "forward the newest email to Dana") is the mailbox too — a
+    # freshness word after "the" names a message in it; never one in hand
+    # ("... below:"), and never the bare "the email" (the v1.354.0 rule).
+    + r"|\b(?:reply\s+to|respond\s+to|answer|forward|delete|archive|trash|flag|star)\s+the\s+"
+    + _MAIL_FRESH + r"(?:e-?mails?|mail|messages)\b"
+    + _NOT_MAIL_ITSELF + _NOT_MAIL_TRADE + _NOT_A_PASTED_ONE
+)
+#: A chat or texting place in the message ("my new messages on slack", "read
+#: my unread messages in teams", "my latest text messages"): "messages"
+#: there is not the mailbox. Read only for the "messages" reading.
+_CHAT_PLACE_RX = re.compile(
+    r"\b(?:slack|teams|texts?|texting|sms|whats\s*app|telegram|discord|signal|imessages?"
+    r"|phone|linkedin|instagram|facebook|messenger|voicemails?|twitter|dms?|chats?"
+    r"|channels?|notion|github|jira|asana|trello|wechat|line|viber|skype|zoom)\b",
+    re.IGNORECASE,
+)
 _GMAIL_WORDS = re.compile(
     r"\bg-?mail\b"
-    r"|\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_PASTED_ONE
-    + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF,
+    r"|\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_LIST + _NOT_A_PASTED_ONE
+    + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF
+    + _MAIL_EVERYDAY_NEW,
     re.IGNORECASE,
 )
 _OTHER_MAIL = re.compile(
@@ -178,10 +228,25 @@ KIND_APPS: dict[str, tuple[str, ...]] = {
 _KIND_HIT_ID: dict[str, str] = {"mail": "gmail", "calendar": "microsoft_365"}
 #: The everyday mail words — :data:`_GMAIL_WORDS` without Gmail's own name.
 _GENERIC_MAIL_RX = re.compile(
-    r"\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_PASTED_ONE
-    + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF,
+    r"\bmy\s+e-?mails?\b" + _NOT_MAIL_ITSELF + _NOT_A_LIST + _NOT_A_PASTED_ONE
+    + r"|\b(?:my|the)\s+(?:e-?mail\s+)?(?:inbox|mailbox)\b" + _NOT_MAIL_ITSELF
+    + _MAIL_EVERYDAY_NEW,
     re.IGNORECASE,
 )
+
+
+def _mail_match_ok(m: "re.Match[str]", t: str) -> bool:
+    """Is one match of the everyday mail words really the mailbox (v1.420.0)?
+    A "messages" reading ("my new messages") is not when the text names a chat
+    or texting place (:data:`_CHAT_PLACE_RX`). Pure."""
+    return not (
+        re.search(r"\bmessages\Z", m.group(0), re.IGNORECASE) and _CHAT_PLACE_RX.search(t)
+    )
+
+
+def _mail_hits(rx: "re.Pattern[str]", t: str) -> list["re.Match[str]"]:
+    """Every match of *rx* (the mail words) in *t* that is the mailbox."""
+    return [m for m in rx.finditer(t) if _mail_match_ok(m, t)]
 #: "my calendar" (never "my calendar year"), and not "my Outlook calendar".
 _GENERIC_CALENDAR_RX = re.compile(r"\bmy\s+calendar(?!\s+years?\b)", re.IGNORECASE)
 #: Each kind's apps BY NAME: a message that names one is not generic.
@@ -285,7 +350,7 @@ def apps_named(text: str) -> list[str]:
                 r"\bg-?mail\b", t, re.IGNORECASE
             ):
                 continue
-            if rx.search(t):
+            if (_mail_hits(rx, t) if cid == "gmail" else rx.search(t)):
                 out.append(cid)
     except Exception:  # noqa: BLE001 — a matcher fault names nothing
         return []
@@ -305,7 +370,8 @@ def app_name_hits(text: str) -> list[tuple[str, int, int]]:
                 r"\bg-?mail\b", t, re.IGNORECASE
             ):
                 continue
-            hits += [(cid, m.start(), m.end()) for m in rx.finditer(t)]
+            found = _mail_hits(rx, t) if cid == "gmail" else rx.finditer(t)
+            hits += [(cid, m.start(), m.end()) for m in found]
     except Exception:  # noqa: BLE001
         return []
     return hits
@@ -340,7 +406,7 @@ def generic_kinds(text: str) -> list[str]:
     out: list[str] = []
     try:
         if (
-            _GENERIC_MAIL_RX.search(t)
+            _mail_hits(_GENERIC_MAIL_RX, t)
             and not _MAIL_BRAND_RX.search(t)
             and not _OTHER_MAIL.search(t)
         ):
@@ -891,6 +957,23 @@ def _own_verdict(
     if _STATE_AFTER_RX.match(after) or (
         _STATE_BARE_RX.match(after)
         and (_STATE_BARE_END_RX.match(after) or _STATE_ASKED_RX.search(clause))
+    ):
+        return True
+    # v1.420.0 (C6.1): the everyday mail / calendar words that open with the
+    # user's own ("my latest emails", "my calendar") or ask for new mail
+    # ("any new emails from Bob?") — "what's my latest email about?" asks
+    # about the user's own mail, never "what is <app>"; a how-to or a topic
+    # still reads as before.
+    if (
+        cid in _KIND_HIT_ID.values()
+        # (v1.420.0 review: or an act on "the latest email" — see
+        # :data:`_MAIL_EVERYDAY_NEW`'s last reading)
+        and re.match(
+            r"(?:my|our|any|reply|respond|answer|forward|delete|archive|trash|flag|star)\b",
+            hit, re.IGNORECASE,
+        )
+        and not _HOW_TO_RX.search(clause)
+        and not _TOPIC_RX.search(clause)
     ):
         return True
     if _HOW_TO_RX.search(clause) or _WHAT_IS_RX.search(clause) or _TOPIC_RX.search(clause):
