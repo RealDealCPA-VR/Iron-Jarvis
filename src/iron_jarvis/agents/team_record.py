@@ -433,7 +433,16 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
     for a verdict (its task is handed on unchanged), so the pieces before it
     are usually unjudged — and the finish check's review of the reply must
     still judge them. The pieces a named review DID judge (its report ended
-    on a verdict line) are skipped anyway (``review = ''``)."""
+    on a verdict line) are skipped anyway (``review = ''``).
+
+    v1.421.0 review: a piece handed BY NAME that wrote NO file is not judged
+    either. Its role is Iron Jarvis's inference (a builder-based worker's
+    piece is ``code``), so the lead's QUESTION to its worker ("read app.py,
+    what is X?") was a ``code`` row, and one "changes needed" counted TWO
+    failed code pieces — a :data:`FAIL_STREAK` that marked the worker not
+    good for code by itself. A review reads the CHANGE; the finish check's
+    own credit reads only the helpers that changed files, the same rule. A
+    piece asked for by ROLE is judged as before (v1.395.0)."""
     if verdict not in (REVIEW_GOOD, REVIEW_BAD) or engine is None or not scope or not review_row:
         return 0
     try:
@@ -455,8 +464,9 @@ def credit_review(engine: Any, *, scope: str, review_row: "str | None", verdict:
             floor = int(prev[0]) if prev is not None and prev[0] is not None else 0
             res = db.exec(text(  # type: ignore[call-overload]
                 "UPDATE teamrolerun SET review = :v WHERE scope = :scope AND role IN ('code', 'test') "
-                "AND review = '' AND turn = :turn AND rowid > :floor AND rowid < :mine"
-            ).bindparams(v=verdict, scope=scope, turn=turn, floor=floor, mine=mine))
+                "AND review = '' AND turn = :turn AND rowid > :floor AND rowid < :mine "
+                "AND NOT (COALESCE(asked, '') = :named AND COALESCE(files_json, '[]') IN ('[]', ''))"
+            ).bindparams(v=verdict, scope=scope, turn=turn, floor=floor, mine=mine, named=ASKED_BY_NAME))
             db.commit()
             return int(getattr(res, "rowcount", 0) or 0)
     except Exception:  # noqa: BLE001

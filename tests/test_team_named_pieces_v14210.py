@@ -332,8 +332,11 @@ def test_a_named_review_does_not_hide_earlier_pieces_from_the_replys_review(tmp_
     p = build_platform(str(tmp_path))
 
     def row(member, role, sid, asked):
+        # (review, moved on purpose: a named piece is judged by a review only
+        # when it CHANGED a file — tests/test_review_findings_review_v14210.py.)
         return TR.note_run(p.engine, member=member, role=role, session_id=sid, scope="build:s",
-                           finished=True, turn="reply-1", asked=asked)
+                           finished=True, turn="reply-1", asked=asked,
+                           files=["app.py"] if role == "code" else [])
 
     row("qwen", "code", "h1", "name")
     row("rev", "review", "h2", "name")  # the lead asked the reviewer to look, no verdict asked

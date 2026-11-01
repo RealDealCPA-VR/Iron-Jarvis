@@ -72,3 +72,42 @@ async def test_a_clean_long_report_still_keeps_every_finding(world):  # noqa: F8
     for f in findings:
         assert f in note, f[:20]
     assert out["done"].get("trust") != "low"
+
+
+# --------------------------------------------------------------------------- #
+# A2 review: a named piece that changed nothing is not judged by the review
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_review_verdict_judges_only_the_named_pieces_that_changed_files(world):  # noqa: F811
+    """A2 records a piece handed BY NAME under the role Iron Jarvis infers
+    (``model_team.piece_role``: a builder-based worker's piece is ``code``),
+    so the lead's QUESTION to its worker ("read app.py, what is X?") was a
+    ``code`` row too — and the reply's review verdict judged it: one
+    "changes needed" counted TWO failed code pieces, a streak that marks the
+    worker not good for code by itself (``team_record.FAIL_STREAK``). The
+    review read the CHANGE; a named piece that changed no file is no part of
+    it (the finish check's own credit already reads only helpers that changed
+    files)."""
+    from sqlmodel import select
+
+    from iron_jarvis.agents import team_record as TR
+    from iron_jarvis.core.db import session_scope
+
+    members(world.p)
+    world.main = [_named("q1", "qwen", "Read app.py and tell me what X is."),
+                  _named("n1", "qwen", "Set X to 2 in app.py."), "The worker set X to 2.",
+                  answer_note(world)]
+    world.worker = ["X is 1.", write_x(2), "Changed app.py."]
+    world.reviewer = ["X must be 3.\nVERDICT: changes needed"]
+    out = await stream(world.p, body(world.ws))
+    assert out["done"]["finish"]["review"]["verdict"] == "changes_needed"
+    with session_scope(world.p.engine) as db:
+        rows = [(r.member, r.role, r.asked, TR.files_of(r), r.review)
+                for r in db.exec(select(TR.TeamRoleRun)) if r.member == "qwen"]
+    assert len(rows) == 2, rows
+    by_files = {bool(files): review for (_m, _r, _a, files, review) in rows}
+    assert by_files == {True: TR.REVIEW_BAD, False: ""}, rows
+    # One review is one failure on the worker's code record, not a streak.
+    rec = TR.role_record(world.p.engine, "qwen", "code")
+    assert rec.streak <= 1, rec
