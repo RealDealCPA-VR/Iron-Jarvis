@@ -43,7 +43,6 @@ from iron_jarvis.agents import model_team as MT
 from iron_jarvis.agents import team_record as TR
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import AgentType
-from iron_jarvis.harness import helpers as H
 from iron_jarvis.harness import team as T
 from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import ToolCall
@@ -79,7 +78,7 @@ def _named(cid: str, who: str, task: str) -> list[ToolCall]:
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_worker_named_by_the_lead_is_on_its_record_with_its_files_and_both_verdicts(world):
+async def test_a_worker_named_by_the_lead_is_on_its_record_with_its_files_and_both_verdicts(world):  # noqa: F811
     members(world.p)
     world.main = [_named("n1", "qwen", "Set X to 2 in app.py."), "The worker set X to 2.",
                   answer_note(world)]
@@ -111,7 +110,7 @@ async def test_a_worker_named_by_the_lead_is_on_its_record_with_its_files_and_bo
     assert [(r.role, r.asked) for r in review_rows] == [("review", TR.ASKED_BY_ROLE)]
 
 
-async def test_the_reviewer_named_by_the_lead_is_a_review_row_and_its_task_is_unchanged(world):
+async def test_the_reviewer_named_by_the_lead_is_a_review_row_and_its_task_is_unchanged(world):  # noqa: F811
     members(world.p)
     world.main = [_named("r1", "rev", "Review app.py."), "The reviewer read it."]
     world.reviewer = ["Looks fine."]

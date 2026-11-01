@@ -730,10 +730,12 @@ def test_a_review_only_parent_cuts_any_definition_to_the_reading_tools(world):
                             review_only=True)
     for custom in (False, True):
         out = H.helper_definition(parent, builder, custom=custom)
-        assert out.tools == ["read_file", "glob", "grep", "list_files"]
-    # With NO turn tools a reviewer is cut to nothing — never left with its own.
+        # v1.421.0 (A4, moved on purpose): and read-only git, always.
+        assert out.tools == ["read_file", "glob", "grep", "list_files", "git_read"]
+    # With NO turn tools a reviewer is cut to read-only git alone — never
+    # left with its own definition's tools.
     empty = H.HelperParent(session_id=SESSION, folder="", provider="p", model="m", review_only=True)
-    assert H.helper_definition(empty, builder).tools == []
+    assert H.helper_definition(empty, builder).tools == ["git_read"]
     # An ordinary helper is unchanged by the field.
     plain = H.HelperParent(session_id=SESSION, folder="", provider="p", model="m", tools=turn)
     assert "write_file" in H.helper_definition(plain, builder).tools
