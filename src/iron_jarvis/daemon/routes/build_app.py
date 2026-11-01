@@ -294,3 +294,20 @@ def register(app: FastAPI, d: Any) -> None:
             return await svc().continue_on(sid, (body.account if body else "") or "")
         except S.Refused as r:
             raise _http(r) from None
+
+    # v1.422.0 (B4, C4.7): the Code view's beat while it shows a session (the
+    # reaper gives the session in front 60 minutes, not 15), and the user's own
+    # "Close it now" for a session kept open because its tool runs a program.
+    @app.post("/build/app/sessions/{sid}/seen")
+    async def app_seen(sid: str) -> dict[str, Any]:
+        try:
+            return await svc().seen(sid)
+        except S.Refused as r:
+            raise _http(r) from None
+
+    @app.post("/build/app/sessions/{sid}/close")
+    async def app_close(sid: str) -> dict[str, Any]:
+        try:
+            return await svc().close_tool(sid)
+        except S.Refused as r:
+            raise _http(r) from None

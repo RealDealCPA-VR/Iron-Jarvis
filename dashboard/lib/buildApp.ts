@@ -411,6 +411,16 @@ export interface CodeSession {
   /** v1.417.0: the tool is writing a reply no message of the user's owns
    *  (Claude Code's report once its helpers end). */
   selfReply: boolean;
+  /** v1.422.0 (B4): the programs the coding tool started that still serve
+   *  (a dev server listening on a port) and that keep the session open past
+   *  its idle stop — masked command + ports, never a pid. [] otherwise. */
+  programs: KeptProgram[];
+  /** v1.422.0 (B4): the daemon's line while it keeps the session open for
+   *  them, and how to stop it ("" when it keeps nothing). */
+  keepNote: string;
+  /** v1.422.0 (B4): what the last idle stop or the pool ENDED with the tool
+   *  (named, until the next message starts it again; "" otherwise). */
+  stoppedNote: string;
   /** v1.412.0: started with no folder chosen — its own folder is made with
    *  its first message (`folder` names it once made). */
   noFolder: boolean;
@@ -421,6 +431,12 @@ export interface CodeSession {
    *  this session (all off until the user ticks one). Absent from an older
    *  Iron Jarvis and from a conversation found on disk. */
   jarvisTools?: JarvisTools;
+}
+
+/** v1.422.0 (B4): one program a Code-view tool started that serves. */
+export interface KeptProgram {
+  command: string;
+  ports: number[];
 }
 
 /** v1.414.0: the two Capabilities Iron Jarvis serves to a coding tool (the
@@ -487,11 +503,47 @@ export const CODE_COMMANDS_REREAD_MS = 20_000;
 
 /** v1.417.0: how often to read the session again for work no reply owns
  *  (0 = not at all). Never while a reply of the user's runs (it is followed). */
-export function backgroundRereadMs(s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> | null, running: boolean): number {
+export function backgroundRereadMs(
+  s: Pick<CodeSession, "background" | "backgroundHelpers" | "selfReply"> & Partial<Pick<CodeSession, "programs">> | null,
+  running: boolean,
+): number {
   if (!s || running) return 0;
   if (s.selfReply || s.backgroundHelpers > 0) return CODE_BACKGROUND_REREAD_MS;
-  if (s.background > 0) return CODE_COMMANDS_REREAD_MS;
+  // v1.422.0 (B4): a session kept open for a program it runs is read again
+  // like one with background commands — its line stays true (the program can
+  // end), and each read tells Iron Jarvis the session is still in front.
+  if (s.background > 0 || (s.programs?.length ?? 0) > 0) return CODE_COMMANDS_REREAD_MS;
   return 0;
+}
+
+/** v1.422.0 (C4.7): how often the Code view tells Iron Jarvis it still shows
+ *  a session (only while the window is seen): the session in front is closed
+ *  after 60 minutes with nothing to do, not 15 (hosted/programs BEAT_S). */
+export const CODE_SEEN_BEAT_MS = 60_000;
+
+/** v1.422.0 (B4): the press that closes a session kept open for its
+ *  programs — they stop with it (two presses). */
+export function closeToolWords(toolName: string): { idle: string; armed: string; title: string } {
+  return {
+    idle: `Close ${toolName}`,
+    armed: "Close it and stop what it runs?",
+    title: `Closes ${toolName} and every program it started. The conversation stays: your next message starts it again.`,
+  };
+}
+
+function keptPrograms(v: unknown): KeptProgram[] {
+  if (!Array.isArray(v)) return [];
+  const out: KeptProgram[] = [];
+  for (const item of v.slice(0, 20)) {
+    const r = obj(item);
+    if (!r) continue;
+    const command = str(r.command, 300);
+    const ports = Array.isArray(r.ports)
+      ? r.ports.filter((p): p is number => typeof p === "number" && Number.isInteger(p) && p > 0 && p < 65536)
+      : [];
+    if (command) out.push({ command, ports });
+  }
+  return out;
 }
 
 /** v1.417.0: the one quiet line under the conversation while work goes on in
@@ -539,6 +591,9 @@ export function decodeCodeSession(raw: unknown): CodeSession | null {
     background: count(r.background),
     backgroundHelpers: count(r.background_helpers),
     selfReply: r.self_reply === true,
+    programs: keptPrograms(r.programs),
+    keepNote: str(r.keep_note, 1_000),
+    stoppedNote: str(r.stopped_note, 2_000),
     noFolder: r.no_folder === true,
     workRoot: r.no_folder === true ? str(r.work_root, 1_000) : "",
     ...(obj(r.capabilities)

@@ -68,6 +68,7 @@ import {
   MoreHorizontal,
   Plus,
   Search,
+  Server,
   ShieldAlert,
   Square,
   UserRound,
@@ -126,6 +127,8 @@ import {
   sessionRowLine,
   backgroundRereadMs,
   backgroundWorkWords,
+  CODE_SEEN_BEAT_MS,
+  closeToolWords,
   signsInItself,
   sessionTitle,
   STEER_RETURNED_WORDS,
@@ -642,6 +645,15 @@ function SessionPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgOn, sessionId]);
 
+  // v1.422.0 (C4.7): while this session is on screen (the window seen), say
+  // so to Iron Jarvis once a minute: the session in front is closed after 60
+  // minutes with nothing to do instead of 15. Never on mount (the first read
+  // already says it); a hidden window stops beating, and within minutes the
+  // session is back on the 15-minute rule. Errors change nothing.
+  useVisibleInterval(() => {
+    post(`${SESSIONS}/${encodeURIComponent(sessionId)}/seen`).catch(() => undefined);
+  }, CODE_SEEN_BEAT_MS);
+
   // The newest stays in view only for a reader who is AT the bottom (the
   // chat's rule); one who scrolled up is left where they are, with "Jump to
   // latest".
@@ -932,6 +944,19 @@ function SessionPane({
       setNote(errorWords(e, "Stop did not reach the coding tool.")),
     );
   }, [session]);
+
+  // v1.422.0 (B4): the user's own "Close it now" for a session kept open
+  // because its tool runs a program (two presses: the program stops too).
+  const closeTool = useCallback(async () => {
+    if (!session) return;
+    try {
+      await post(`${SESSIONS}/${encodeURIComponent(session.id)}/close`);
+      setNote(null);
+      void load({ follow: false });
+    } catch (e) {
+      setNote(errorWords(e, `${toolName} could not be closed.`));
+    }
+  }, [session, toolName, load]);
 
   const answer = useCallback(
     async (ask: OpenAsk, a: CodeAnswer) => {
@@ -1389,6 +1414,29 @@ function SessionPane({
             {bgWords ? (
               <p role="status" data-testid="code-background" className="mt-3 text-[12px] text-zinc-500">
                 {bgWords}
+              </p>
+            ) : null}
+            {/* v1.422.0 (B4): kept open past its idle stop because the tool
+                runs a program it started that serves (a dev server) — said,
+                with the way to close it now; and what the last stop ENDED. */}
+            {!running && session.keepNote ? (
+              <div data-testid="code-keeping" className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p role="status" className="min-w-0 text-[12px] text-zinc-500">
+                  {session.keepNote}
+                </p>
+                <span data-testid="code-close-tool" className="shrink-0">
+                  <ConfirmButton
+                    label={closeToolWords(toolName).idle}
+                    confirmLabel={closeToolWords(toolName).armed}
+                    title={closeToolWords(toolName).title}
+                    onConfirm={closeTool}
+                  />
+                </span>
+              </div>
+            ) : null}
+            {!running && !session.keepNote && session.stoppedNote ? (
+              <p role="status" data-testid="code-stopped-programs" className="mt-3 whitespace-pre-line text-[12px] text-zinc-500">
+                {session.stoppedNote}
               </p>
             ) : null}
             {lost ? (
@@ -2021,6 +2069,13 @@ export function BuildCodeView({
           ) : null}
           {s.waiting ? <ShieldAlert size={11} className="shrink-0 text-tone-warn" aria-label="Waiting for your OK" /> : null}
           {s.lastError ? <AlertTriangle size={11} className="shrink-0 text-tone-warn" aria-label="Last reply failed" /> : null}
+          {/* v1.422.0 (B4): kept open because its tool runs a program it
+              started (a dev server); the session's own line says how to stop it. */}
+          {(s.programs?.length ?? 0) > 0 ? (
+            <span data-testid={`code-row-keeping-${s.id}`} title={s.keepNote || undefined} className="inline-flex shrink-0">
+              <Server size={11} className="text-zinc-400" aria-label="Kept open: it runs a program" />
+            </span>
+          ) : null}
           <span className="truncate">{sessionTitle(s, tools)}</span>
         </span>
         <span data-testid={`code-row-line-${s.id}`} className="truncate text-[11px] text-zinc-500">

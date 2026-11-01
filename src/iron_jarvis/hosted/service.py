@@ -92,6 +92,7 @@ from . import news as NEWS
 from .events import TEXT_CHARS, EventLog, clip, coalesce_into, make, session_dir
 from . import history as HIST  # v1.418.0 (C4.6, C4.11)
 from . import queued as Q  # v1.418.0 (C4.8)
+from . import programs as PG  # v1.422.0 (B4, C4.7)
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 
 log = logging.getLogger(__name__)
@@ -692,6 +693,20 @@ class LiveSession:
         #: v1.417.0 (C4.7): why the last process went ("idle" | "evicted"),
         #: said when the next message starts one again.
         self.stopped_why = ""
+        #: v1.422.0 (B4, C4.7 — :mod:`.programs`): when the Code view last
+        #: showed this session (service clock; a view read or its beat), the
+        #: process whose FIRST step was noted and when (wall clock), what the
+        #: reaper last kept it for (a :class:`.programs.Reading`, or None),
+        #: reads in a row that could not answer, and — said at the next start
+        #: and on the row — the programs the last stop ended and after how long.
+        self.looked_at = float("-inf")
+        self.first_step_proc: Any = None
+        self.first_step_at: float | None = None
+        self.keeping: Any = None
+        self.unread = 0
+        self.stopped_programs: list[str] = []
+        self.stopped_note = ""
+        self.stopped_after_s = 0.0
         #: v1.418.0 (C4.8): the messages waiting behind the running reply
         #: (:class:`.queued.SessionQueue`; None until first read).
         self.queue: Any = None
@@ -1240,6 +1255,14 @@ class HostedService:
         # the Code view reads the session again while either holds.
         view["background_helpers"] = live.background_helpers if live and live.running else 0
         view["self_reply"] = bool(live and live.replying_alone(self.clock()))
+        # v1.422.0 (B4): the programs the reaper keeps this session open for
+        # (masked command + ports, never a pid) with the line that says so and
+        # how to stop it; and the words of a stop that ended programs (until
+        # the next start says it).
+        kept = live.keeping.programs if live and live.running and live.keeping is not None else []
+        view["programs"] = [p.row() for p in kept]
+        view["keep_note"] = PG.keep_words(W.label(view.get("harness") or ""), kept) if kept else ""
+        view["stopped_note"] = live.stopped_note if live and not live.running else ""
         return view
 
     def _disk_rows(self, folder: str, used: set[str], account: str = "") -> list[dict[str, Any]]:
@@ -1277,6 +1300,10 @@ class HostedService:
         # memory view below replaced the file read that followed this line.)
         session = self._with_live(store.view(row))
         live = self.live.get(sid)
+        if live is not None:
+            # v1.422.0 (C4.7): the Code view shows this session — the reaper
+            # gives the session in front 60 minutes, not 15 (:mod:`.programs`).
+            PG.note_looked(live, self.clock())
         # v1.418.0 (C4.11): from memory when this daemon drove the session
         # (the file is read once); else the file.
         got = await self._view_events(sid, live, max(1, min(int(limit or DEFAULT_EVENTS), 20_000)))
@@ -1660,12 +1687,18 @@ class HostedService:
                 label=W.label(row.harness), tasks=W.background_count(live.background_tasks))))
             return
         if live.running and live.restart:
+            # v1.422.0 (B4): what the old process ran that serves (a dev
+            # server) stops with it — read first, said after (never silent).
+            ended = PG.known_programs((await PG.read_many([live])).get(live.sid), live)
             # v1.413.0: the old process goes WITHOUT ending the turn that is
             # starting now (it is already ``live.turn``) — this stop used to
             # end that very turn "interrupted" before it began, so a Claude
             # Code effort change or a model back to the default never reached
             # the next message (found by the OpenCode mode-change pin).
             await self._stop_process(live, end_turn=False)
+            if ended:
+                self._said_stopped(live, ended, why="restart")
+                live.stopped_programs, live.stopped_note = [], ""  # said now, in this very reply
         live.restart = False
         argv0 = await asyncio.to_thread(binary_for, row.harness)  # a PATH walk: off the loop
         if argv0 is None:
@@ -1686,12 +1719,17 @@ class HostedService:
                 now = self.clock()
                 # v1.417.0 review: least recently HEARD first, like the reaper
                 # (a reply the tool started by itself owns no turn).
-                idle = sorted((lv for lv in others if not lv.busy and not lv.keeps_working(now)),
-                              key=lambda lv: max(lv.last_active, lv.last_heard))
+                idle = [lv for lv in others if not lv.busy and not lv.keeps_working(now)]
                 if not idle:
                     raise Refused(W.POOL_FULL)
-                await self._stop_process(idle[0])
-                idle[0].stopped_why = "evicted"  # v1.417.0 (C4.7)
+                # v1.422.0 (B4): a session running a program it started that
+                # serves (a dev server) is picked LAST, one the user looks at
+                # next-to-last — and when one must go, what it ran is SAID.
+                readings = await PG.read_many(idle)
+                victim = PG.evict_pick(idle, readings, now, key=lambda lv: max(lv.last_active, lv.last_heard))
+                await self._stop_process(victim)
+                victim.stopped_why = "evicted"  # v1.417.0 (C4.7)
+                self._said_stopped(victim, PG.known_programs(readings.get(victim.sid), victim), why="evicted")
             await self._start_process(live, row, argv0)
         self._ensure_reaper()
 
@@ -1861,6 +1899,7 @@ class HostedService:
     # -- events ----------------------------------------------------------------
     def _emit(self, live: LiveSession, ev: dict[str, Any]) -> None:
         turn = live.turn
+        PG.note_event(live, ev)  # v1.422.0 (B4): when the tool first acted
         if ev.get("type") == "done":
             # The ONE way a turn ends (the row is stamped first).
             stop = str(ev.get("stop") or "completed")
@@ -2283,9 +2322,18 @@ class HostedService:
             return
         why = "restart" if live.running else live.stopped_why
         live.stopped_why = ""
-        self._emit(live, make("notice", text=W.start_notice(
-            row.harness, why=why, resumed=bool(row.harness_session_id), idle_minutes=int(IDLE_S // 60),
-        )))
+        # v1.422.0 (B4, C4.7): the idle stop said with the limit it really
+        # used (60 minutes for the session the user looked at, the 8-hour
+        # bound for one kept for its programs), and the programs that stop
+        # ended, named again — then forgotten (the row stops saying it).
+        after_s, live.stopped_after_s = live.stopped_after_s, 0.0
+        ended, live.stopped_programs = live.stopped_programs, []
+        live.stopped_note = ""
+        base = W.start_notice(row.harness, why=why, resumed=bool(row.harness_session_id),
+                              idle_minutes=int(IDLE_S // 60))
+        if why == "idle" and after_s and int(after_s) != int(IDLE_S):
+            base = PG.idle_start_words(W.label(row.harness), after_s)
+        self._emit(live, make("notice", text=PG.start_text(base, ended)))
 
     def turn(self, turn_id: str) -> HostedTurn | None:
         self._evict_turns()
@@ -2431,19 +2479,84 @@ class HostedService:
     async def _reap_loop(self) -> None:
         while not self._closing:
             await asyncio.sleep(REAP_EVERY_S)
-            await self.reap_once()
+            try:
+                await self.reap_once()
+            except Exception:  # noqa: BLE001 — v1.422.0: one bad minute never ends the reaper
+                log.warning("the Code view's idle check failed; it looks again in a minute", exc_info=True)
 
     async def reap_once(self, now: float | None = None) -> list[str]:
-        """Stop every process idle longer than :data:`IDLE_S`."""
+        """Stop every process idle longer than its limit (:data:`IDLE_S`;
+        v1.422.0: 60 minutes for the session the user looks at), unless its
+        tool still runs a program it started that serves (:mod:`.programs`)
+        — and say what a stop ended."""
         now = self.clock() if now is None else now
         stopped = []
+        due: list[tuple[LiveSession, float]] = []
         for live in list(self.live.values()):
             quiet = now - max(live.last_active, live.last_heard)
             if live.running and not live.busy and not live.keeps_working(now) and quiet >= IDLE_S:
-                await self._stop_process(live)
-                live.stopped_why = "idle"  # v1.417.0 (C4.7): said at the next start
-                stopped.append(live.sid)
+                due.append((live, quiet))
+            else:
+                live.keeping = None  # not at risk: nothing to say on its row
+        if not due:
+            return stopped
+        # v1.422.0 (B4): ONE read of every due session's tree, off the loop
+        # and bounded (only sessions past the 15 minutes are ever read).
+        readings = await PG.read_many([lv for lv, _ in due])
+        for live, _was in due:
+            quiet = now - max(live.last_active, live.last_heard)
+            if not live.running or live.busy or live.keeps_working(now) or quiet < IDLE_S:
+                continue  # it changed while the trees were read (a message came)
+            verdict = PG.decide(live, readings.get(live.sid), quiet=quiet, now=now, base=IDLE_S)
+            if verdict.keep:
+                continue
+            await self._stop_process(live)
+            live.stopped_why = "idle"  # v1.417.0 (C4.7): said at the next start
+            live.stopped_after_s = verdict.after_s or IDLE_S
+            self._said_stopped(live, list(verdict.programs), why=verdict.why, after_s=verdict.after_s)
+            stopped.append(live.sid)
         return stopped
+
+    def _said_stopped(self, live: LiveSession, programs: list[Any], *, why: str, after_s: float = 0.0) -> None:
+        """v1.422.0 (B4): a stop that ENDED programs the tool started is
+        never silent — a notice in the session's own conversation now, the
+        row's ``stopped_note``, and the next start's notice name them."""
+        live.keeping = None
+        live.stopped_programs = [p.words() for p in programs]
+        words = PG.stopped_words(W.label(live.harness), programs, why=why, after_s=after_s, max_live=MAX_LIVE)
+        live.stopped_note = words
+        if words:
+            log.info("Code-view session %s: its coding tool was closed (%s) with %d program(s) it started",
+                     live.sid, why, len(programs))
+            self._emit(live, make("notice", text=words))
+
+    async def seen(self, sid: str) -> dict[str, Any]:
+        """v1.422.0 (C4.7): the Code view still shows this session (its beat,
+        every :data:`.programs.BEAT_S` while the window is seen)."""
+        live = self.live.get(sid)
+        if live is None:
+            await self._row(sid)  # 404 for a session that does not exist
+            return {"ok": True}
+        PG.note_looked(live, self.clock())
+        return {"ok": True}
+
+    async def close_tool(self, sid: str) -> dict[str, Any]:
+        """v1.422.0 (B4): the user's own "Close it now" — the coding tool and
+        everything it runs stop (a tree kill); the conversation stays, and the
+        next message resumes it. Refused while a reply runs."""
+        await self._row(sid)
+        live = self.live.get(sid)
+        if live is None or not live.running:
+            return {"ok": True, "closed": False}
+        if (live.turn is not None and live.turn.running) or live.claim:
+            raise Refused(W.RUNNING)
+        ended = list(live.keeping.programs) if live.keeping is not None else []
+        await self._stop_process(live)
+        live.stopped_why = ""
+        live.keeping = None
+        live.stopped_programs = []
+        live.stopped_note = ""
+        return {"ok": True, "closed": True, "stopped": [p.words() for p in ended]}
 
     async def shutdown(self) -> None:
         """The daemon is stopping: every harness process goes (tree kill, off
