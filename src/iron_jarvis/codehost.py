@@ -939,6 +939,24 @@ def launch(home: Any) -> int:
     return 0
 
 
+def held_pid(raw: str) -> int:
+    """v1.422.0 review: the process the inherited handle REALLY names (0 =
+    none). Only an open handle keeps the launcher's pid from being handed out
+    again; the variable's number alone proves nothing (a number that came
+    without its handle names nothing, or another handle of this process)."""
+    if sys.platform != "win32" or not str(raw).strip().isdigit():
+        return 0
+    import ctypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.GetProcessId.argtypes = [ctypes.c_void_p]
+    k.GetProcessId.restype = ctypes.c_uint32
+    try:
+        return int(k.GetProcessId(ctypes.c_void_p(int(raw))) or 0)
+    except (OSError, ValueError, OverflowError):
+        return 0
+
+
 def serve(home: Any) -> int:
     """The HOST: run until told to quit or the orphan rules say go."""
     home = Path(home)
@@ -962,7 +980,7 @@ def serve(home: Any) -> int:
         "protocol": PROTOCOL, "started": time.time(), "exe": sys.executable,
     })
     log(f"started (version {__version__}, protocol {PROTOCOL}, port {host.port}, "
-        f"{'holding its launcher' if held else 'no launcher handle'})")
+        + (f"holding its launcher (pid {held_pid(held)})" if held_pid(held) else "no launcher handle") + ")")
     try:
         while not host.exiting.is_set():
             try:

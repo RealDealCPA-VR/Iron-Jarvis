@@ -104,7 +104,22 @@ def test_the_host_keeps_its_launcher_s_pid_from_being_reused(hosts, tmp_path):
     lk = HL.link_for(home, start=True)
     assert lk is not None
     hosts.note()
-    assert "holding its launcher" in CH.log_path(home).read_text(encoding="utf-8")
+    # v1.422.0 review: the HANDLE is held, not only its number (the log line
+    # used to be written for the variable alone): the pid it names is the
+    # launcher's — the host's parent, or (a venv's trampoline in front of
+    # Python) its grandparent.
+    import re
+
+    said = CH.log_path(home).read_text(encoding="utf-8")
+    m = re.search(r"holding its launcher \(pid (\d+)\)", said)
+    assert m, said
+    host = psutil.Process(int(CH.read_record(home)["pid"]))
+    up = [host.ppid()]
+    try:
+        up.append(psutil.Process(up[0]).ppid())
+    except psutil.Error:
+        pass
+    assert int(m.group(1)) in up, (m.group(1), up)
 
 
 # --------------------------------------------------------------------------- #

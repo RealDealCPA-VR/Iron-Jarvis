@@ -304,3 +304,92 @@ async def test_the_line_stamps_never_reach_any_build_code_view(hosts, tmp_path, 
     for name, body in (("the stream", rest), ("the view", view), ("a page", page)):
         assert "hseq" not in body and "htool" not in body, name
     await ADOPT.shutdown(app2.state.platform, keep=False)
+
+
+# --------------------------------------------------------------------------- #
+# The builder's guarantees that had no pin
+# --------------------------------------------------------------------------- #
+def test_a_tool_in_the_host_is_started_with_breakaway_refused(tmp_path, monkeypatch):
+    """v1.386.0's rule holds in the host too: Git Bash starts every program
+    it runs with CREATE_BREAKAWAY_FROM_JOB whenever the Job allows it, and a
+    dev server it started would then outlive the session."""
+    from iron_jarvis.core import procs
+
+    seen: dict = {}
+
+    def spawn(argv, **kw):
+        seen.update(kw)
+        raise OSError("not started in this test")
+
+    monkeypatch.setattr(procs, "spawn", spawn)
+    host = CH.Host(tmp_path)
+    tool = CH.Tool(host, "t1", "s1", [sys.executable, "-c", "pass"], {}, str(tmp_path), False)
+    with pytest.raises(OSError):
+        tool.start()
+    assert seen.get("breakaway_ok") is False
+
+
+def test_the_host_listens_on_loopback_only_and_keeps_no_credential_in_its_own_environment(hosts, tmp_path,
+                                                                                          monkeypatch):
+    monkeypatch.setenv("IRONJARVIS_TOKEN", "the-daemons-bearer-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    monkeypatch.setenv("IJ_REVIEW_PLAIN", "kept")
+    home = hosts.home(tmp_path / "home")
+    assert HL.link_for(home, start=True) is not None
+    hosts.note()
+    host = psutil.Process(int(CH.read_record(home)["pid"]))
+    listening = [c for c in host.net_connections(kind="inet") if c.status == psutil.CONN_LISTEN]
+    assert listening and all(c.laddr.ip == "127.0.0.1" for c in listening), listening
+    env = host.environ()
+    assert env.get("IJ_REVIEW_PLAIN") == "kept", "the host runs in the daemon's environment"
+    assert "IRONJARVIS_TOKEN" not in env and "ANTHROPIC_API_KEY" not in env, "but never with its credentials"
+    said = CH.log_path(home).read_text(encoding="utf-8")
+    assert CH.read_record(home)["token"] not in said, "the host never logs its token"
+
+
+async def test_a_card_raised_by_a_line_read_again_is_the_same_card_end_to_end(hosts, tmp_path, monkeypatch):
+    """The state was last kept BEFORE the card's line (it came, was shown,
+    and Iron Jarvis died before keeping the state again): after the restart
+    the line is read again and must raise the card the window already shows
+    — same id — answerable by that id, the answer reaching the tool once.
+    (The id's derivation was pinned only as a unit; an end-to-end run with
+    random ids stayed green.)"""
+    from tests._code_host_helpers_v14220 import CARD_RID, with_card
+
+    root = tmp_path / "root"
+    log = tmp_path / "fake.log"
+    hosts.home(config_home(root))
+    hosts.logs.append(log)
+    use_fake(monkeypatch, with_card(tmp_path), log)
+    work = tmp_path / "work"
+    work.mkdir()
+    app = create_app(str(root))
+    c = client(app)
+    sid = (await new_session(c, work))["id"]
+    monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 3600.0)  # the state is kept with the message only
+    follow = asyncio.ensure_future(c.post(f"/build/app/sessions/{sid}/turn", json={"text": "go", "turn_id": "t1"}))
+    svc = app.state.platform.hosted
+    await until(lambda: svc.live.get(sid) and svc.live[sid].asks)
+    ask_id = next(iter(svc.live[sid].asks))
+    home = config_home(root)
+    await until(lambda: any(e.get("request_id") == ask_id for e in events_of(home, sid, app)))
+    crash(app)
+    hosts.note()
+    monkeypatch.setattr(HL, "SNAP_AFTER_LINE_S", 1.0)
+    follow.cancel()
+    await c.aclose()
+    app2 = await boot(root)
+    svc2 = app2.state.platform.hosted
+    await until(lambda: svc2.live[sid].proc is not None and svc2.live[sid].proc.replay is None)  # lines read again
+    assert list(svc2.live[sid].asks) == [ask_id], "the card the window shows, by its own id"
+    async with client(app2) as c2:
+        r = await c2.post(f"/build/app/sessions/{sid}/answer", json={"request_id": ask_id, "decision": "allow"})
+        assert r.status_code == 200, r.text
+        rest = frames((await asyncio.wait_for(c2.get(f"/build/app/sessions/{sid}/turns/t1/stream"), 60)).text)
+    assert rest[-1]["type"] == "done" and rest[-1]["stop"] == "completed", rest
+    answers = [r_["in"] for r_ in fake_rows(log) if "in" in r_ and r_["in"].get("type") == "control_response"
+               and (r_["in"].get("response") or {}).get("request_id") == CARD_RID]
+    assert len(answers) == 1, "the answer reached it once"
+    drawn = [e for e in events_of(home, sid, app2) if e["type"] == "approval"]
+    assert [e.get("request_id") for e in drawn] == [ask_id], "drawn once"
+    await ADOPT.shutdown(app2.state.platform, keep=False)
