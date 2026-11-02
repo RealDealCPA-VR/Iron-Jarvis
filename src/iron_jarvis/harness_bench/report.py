@@ -603,6 +603,9 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
     from .team_report import usage_section
 
     lines += usage_section(config, records)
+    # v1.425.0 (C2): what each run's coding session added (the product path)
+    # and every wait the round's patience made (either path).
+    lines += coding_session_section(config, records)
     lines += [
         "",
         f"Means per run: {_num(s['mean_tool_calls'])} tool calls, {_num(s['mean_model_rounds'])} model "
@@ -616,6 +619,137 @@ def config_report(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -
         "",
     ]
     return "\n".join(lines)
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def finish_words(fin: Mapping[str, Any]) -> str:
+    """A run's finish check in one plain line (v1.425.0) — the words the app
+    shows under the reply (``dashboard/lib/stepWords.finishWords``), built
+    only from the record."""
+    tests, after = fin.get("tests"), fin.get("after")
+    if tests == "passed":
+        parts = ["tests passed, then failed" if after == "failed" else "tests passed"]
+        if fin.get("reused"):
+            parts[0] += " (not run again)"
+    elif tests == "failed":
+        parts = ["tests failed, then fixed" if after == "passed" else "tests failed"]
+    elif tests == "not_run" or after:
+        parts = ["tests passed after the check" if after == "passed" else
+                 "tests failed after the check" if after == "failed" else
+                 "tests not run" + (f" ({fin.get('why')})" if fin.get("why") else "")]
+    else:
+        parts = ["no tests found"]
+    for key, word, tail in (("removed", "scratch file", "removed"), ("kept", "new file", "kept"),
+                            ("unmet", "point", "needed more work")):
+        n = fin.get(key)
+        if isinstance(n, int) and n > 0:
+            parts.append(f"{_plural(n, word)} {tail}")
+    review = fin.get("review")
+    if isinstance(review, Mapping):
+        state = review.get("state")
+        if state != "done":
+            parts.append({"failed": "review failed", "stopped": "review stopped"}.get(str(state), "review not run"))
+        else:
+            who = f"reviewed by {review.get('member')}" if review.get("member") else "reviewed by your team"
+            verdict = {"approved": ": approved", "changes_needed": ": changes needed"}.get(
+                str(review.get("verdict") or ""), "")
+            parts.append(who + verdict)
+    return "Checked: " + ", ".join(parts)
+
+
+def _patience_words(p: Any) -> str:
+    if not isinstance(p, Mapping) or not p.get("waits"):
+        return "none"
+    return f"{_plural(int(p['waits']), 'wait')}, {float(p.get('seconds') or 0):g} s"
+
+
+def coding_session_section(config: Mapping[str, Any], records: list[Mapping[str, Any]]) -> list[str]:
+    """v1.425.0 (C2): "What each coding session did" — for a PRODUCT-PATH
+    setup, each run's steps as its session saved them (how many failed, how
+    many were Iron Jarvis's own checks), its finish check in the app's own
+    words, the step limit it met, the cards and questions the benchmark
+    answered, and the waits the round's patience made; for a LANE setup only
+    a line on the waits when there were any. Nothing for a CLI setup."""
+    from .team_report import is_product_path, run_path
+
+    if not run_path(config):
+        return []
+    live = [r for r in records if not r.get("stale") and not r.get("interrupted")]
+    if not is_product_path(config):
+        waited = [r for r in live if isinstance((r.get("extra") or {}).get("patience"), Mapping)]
+        if not waited:
+            return []
+        total = sum(int(((r.get("extra") or {}).get("patience") or {}).get("waits") or 0) for r in waited)
+        return ["", f"The round's patience waited out a passing provider failure {_plural(total, 'time')} "
+                    f"in {_plural(len(waited), 'run')}."]
+    lines = [
+        "", "## What each coding session did", "",
+        "Each task ran as a real coding session (the product path): \"Ask first\", every card "
+        "answered \"Allow once\" and every question skipped by the benchmark. Steps are the ones the "
+        "session saved (its own checks counted apart); Waited is the time its rounds waited out a "
+        "passing provider failure.", "",
+        "| Task | Steps | Failed | Own checks | Finish check | Step limit | Cards / questions | Waited |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in sorted(live, key=lambda r: (repeat_of(r), str(r.get("task_id")))):
+        extra = r.get("extra") or {}
+        cs = extra.get("coding_session") if isinstance(extra.get("coding_session"), Mapping) else {}
+        asks = (r.get("facts") or {}).get("asks") or {}
+        fin = cs.get("finish")
+        limit = cs.get("step_limit")
+        task = str(r.get("task_id") or "?") + (f" (repeat {repeat_of(r)})" if repeat_of(r) > 1 else "")
+        steps = cs.get("step_count") if cs.get("line_saved") else None
+        lines.append(
+            f"| {task} | {_num(steps, '{:.0f}')} | {_num(cs.get('failed_steps'), '{:.0f}')} | "
+            f"{_num(cs.get('own_steps'), '{:.0f}')} | "
+            f"{finish_words(fin).replace('|', '/') if isinstance(fin, Mapping) else 'did not run'} | "
+            f"{('met (' + str(limit.get('limit')) + ')') if isinstance(limit, Mapping) else '-'} | "
+            f"{int(asks.get('cards') or 0)} / {int(asks.get('questions') or 0)} | "
+            f"{_patience_words(extra.get('patience'))} |"
+        )
+    return lines
+
+
+def _coding_sessions_summary(summaries: list[tuple[Mapping[str, Any], list[Mapping[str, Any]], Any]]) -> list[str]:
+    """v1.425.0: one row per PRODUCT-PATH setup — in how many runs the finish
+    check ran and what it found, how many steps were the session's own
+    checks, the cards and questions the benchmark answered, and the waits."""
+    from .team_report import is_product_path
+
+    rows = []
+    for config, records, _s in summaries:
+        if not is_product_path(config):
+            continue
+        live = [r for r in records if not r.get("stale") and not r.get("interrupted")]
+        sessions = [((r.get("extra") or {}).get("coding_session") or {}) for r in live]
+        fins = [cs.get("finish") for cs in sessions if isinstance(cs.get("finish"), Mapping)]
+        passed = sum(1 for f in fins if f.get("tests") == "passed" or f.get("after") == "passed")
+        failed = sum(1 for f in fins if (f.get("tests") == "failed" and f.get("after") != "passed")
+                     or f.get("after") == "failed")
+        own = sum(int(cs.get("own_steps") or 0) for cs in sessions)
+        cards = sum(int(((r.get("facts") or {}).get("asks") or {}).get("cards") or 0) for r in live)
+        questions = sum(int(((r.get("facts") or {}).get("asks") or {}).get("questions") or 0) for r in live)
+        waits = [((r.get("extra") or {}).get("patience") or {}) for r in live]
+        n_waits = sum(int(w.get("waits") or 0) for w in waits if isinstance(w, Mapping))
+        seconds = sum(float(w.get("seconds") or 0) for w in waits if isinstance(w, Mapping))
+        rows.append(
+            f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | {_setup(config)} | "
+            f"{len(fins)} of {len(live)} | {passed} / {failed} | {own} | {cards} / {questions} | "
+            f"{_plural(n_waits, 'wait')}, {seconds:g} s |"
+        )
+    if not rows:
+        return []
+    return ["", "## What running each task as a coding session added", "",
+            "The product path runs each task the way the app runs a coding session (\"Ask first\", every "
+            "card answered \"Allow once\" and every question skipped by the benchmark). Finish check: the "
+            "runs whose reply was checked before it ended; tests passed / failed as that check last saw "
+            "them.", "",
+            "| Runner | Model | Setup | Finish check ran | Tests passed / failed | Own check steps | "
+            "Cards / questions answered | Patience waited |",
+            "|---|---|---|---|---|---|---|---|", *rows]
 
 
 def _setup(config: Mapping[str, Any]) -> str:
@@ -748,6 +882,9 @@ def combined_report(configs: list[tuple[Mapping[str, Any], list[Mapping[str, Any
             f"| {runner_label(config)} | {config.get('model') or NOT_NAMED} | {_setup(config)} | "
             f"{'not known' if per is None else f'{per:.1f}'} | {s.get('would_ask_not_known', 0)} |"
         )
+    # v1.425.0 (C2): what running each task as a real coding session added,
+    # per product-path setup (none: the section is left out).
+    lines += _coding_sessions_summary(summaries)
     # v1.396.0: a TEAM setup beside the single-model ones, and the answer.
     from .team_report import side_by_side
 

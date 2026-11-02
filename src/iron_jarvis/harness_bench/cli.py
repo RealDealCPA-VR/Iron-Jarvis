@@ -51,7 +51,20 @@ def run_command(
         "all", "--tier",
         help="core, hard, frontier, team or all (default all), or several tiers joined by commas "
         "(frontier,team: both in one run, in any order)."),
-    rounds: int = typer.Option(None, "--rounds", help="Jarvis only: tool rounds per task (default 60)."),
+    rounds: int = typer.Option(
+        None, "--rounds",
+        help="jarvis and jarvis-team only: tool rounds per task. The lane path's default is 60; the product "
+        "path's default is the coding session's own step limit (none, unless the benchmark's home sets one), "
+        "and --rounds sets it for the benchmark's turns only. A team's members get 60 steps a piece unless "
+        "the team file or --rounds says otherwise."),
+    path: str = typer.Option(
+        None, "--path",
+        help="jarvis and jarvis-team only: product (the default) runs each task as a real Chat › Code coding "
+        "session, the way you use it: the session made and started the way the app does, \"Ask first\" "
+        "with every card answered \"Allow once\" by the benchmark, its finish check, its step limit and "
+        "its record. lane runs the bare chat lane under \"Don't ask\" (how the benchmark ran before "
+        "v1.425.0), for comparison. The path is part of the setup: a lane result is never reused for a "
+        "product run."),
     dry_run: bool = typer.Option(False, "--dry-run", help="List what would run; no model is called."),
     root: str = typer.Option(".", "--root", help="Where the benchmark keeps its state (a scratch folder)."),
     binary: str = typer.Option("", "--binary", help="claude/codex only: the executable to run."),
@@ -71,7 +84,7 @@ def run_command(
     with_alone: bool = typer.Option(
         False, "--with-alone",
         help="jarvis-team only: after the team, run its PLANNER alone (the jarvis runner on the planner's "
-        "provider and model, with the same tasks, repeats, seed, effort, rounds and dialect) in the same "
+        "provider and model, with the same tasks, repeats, seed, effort, rounds, dialect and path) in the same "
         "home, so one command makes both rows and the report answers whether the team passes as many "
         "tasks while using less of the planner's subscription. They run one after the other, never at "
         "once: both draw on the same account's usage windows."),
@@ -115,6 +128,11 @@ def run_command(
     if runner not in ("jarvis", "jarvis-team") and rounds is not None:
         typer.echo("--rounds applies to the jarvis and jarvis-team runners only.")
         raise typer.Exit(code=2)
+    if refine and (path or "").strip().lower() == "product":
+        # v1.425.0: the refine loop tries candidate harness layers on the
+        # bare lane (a coding session reads the folder's own layer).
+        typer.echo("--refine runs on --path lane (it tries candidate harness layers on the bare chat lane).")
+        raise typer.Exit(code=2)
     if refine and runner != "jarvis":
         typer.echo("--refine improves Iron Jarvis's own harness: run it with --runner jarvis.")
         raise typer.Exit(code=2)
@@ -150,8 +168,10 @@ def run_command(
         home = resolve_bench_home(root)
         bench_runner = make_runner(
             runner, root=root, provider=provider, model=model,
-            rounds=rounds if rounds is not None else DEFAULT_ROUNDS, binary=binary or None,
-            dialect=dialect, effort=effort, team=team,
+            # v1.425.0: None = no --rounds (the product path then uses the
+            # coding session's own step limit; the lane path 60).
+            rounds=rounds, binary=binary or None,
+            dialect=dialect, effort=effort, team=team, path=path,
         )
     except (BenchRefused, ValueError) as exc:
         typer.echo(str(exc))
@@ -166,6 +186,8 @@ def run_command(
         setups.append(JarvisRunner(
             bench_runner.platform, provider=bench_runner.provider, model=bench_runner.model,
             round_budget=bench_runner.round_budget, dialect=bench_runner.dialect, effort=bench_runner.effort,
+            # v1.425.0: the same path (and step limit) as the team's.
+            path=bench_runner.path, own_step_limit=bench_runner.own_step_limit,
         ))
     unbalanced = False
     for setup in setups:

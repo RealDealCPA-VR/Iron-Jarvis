@@ -99,6 +99,7 @@ from .runners import (
     EFFORTS,
     MEMBER_PROMPT,
     NOT_OFFERED,
+    PATH_LANE,
     JarvisRunner,
     _bench_made,
     _members,
@@ -397,9 +398,13 @@ class JarvisTeamRunner(JarvisRunner):
     name = TEAM_RUNNER
 
     def __init__(self, platform: Any, *, team: TeamSpec, round_budget: int = DEFAULT_ROUNDS,
-                 dialect: str = DEFAULT_DIALECT, effort: str = "") -> None:
+                 dialect: str = DEFAULT_DIALECT, effort: str = "", path: str = PATH_LANE,
+                 own_step_limit: bool = False) -> None:
+        # v1.425.0: ``path`` / ``own_step_limit`` as for the Jarvis runner (the
+        # command line runs the team as a real coding session by default).
         super().__init__(platform, provider=team.planner_provider, model=team.planner_model,
-                         round_budget=round_budget, dialect=dialect, effort=effort)
+                         round_budget=round_budget, dialect=dialect, effort=effort,
+                         path=path, own_step_limit=own_step_limit)
         self.team = team
         self._reads = 0
         #: v1.396.0 review: what the checks before the first task could only
@@ -459,6 +464,20 @@ class JarvisTeamRunner(JarvisRunner):
 
         return _armed()
 
+    def session_team(self) -> "dict[str, Any] | None":
+        """v1.425.0 (the product path): a ``team = true`` file's team rides
+        the coding session's own setup (``harness/team.SETUP_KEY``) — the way
+        a Build session with a team keeps it, and the way ``start_build_turn``
+        arms it for each turn (the lane path arms it around the turn instead,
+        :meth:`turn_scope`). Checked against the model team as it is now
+        (the members :meth:`prepare` made). None for any other file."""
+        team = self.team.session_team()
+        if team is None:
+            return None
+        from ..harness import team as harness_team
+
+        return harness_team.validate(self.platform, {"workers": list(team.workers), "reviewer": team.reviewer})
+
     def dry_run_lines(self) -> list[str]:
         lines = [f"Team: planner {self.team.planner_provider} / {self.team.planner_model}; "
                  f"{len(self.team.members)} member(s):"]
@@ -476,6 +495,8 @@ class JarvisTeamRunner(JarvisRunner):
         if self.ready_notes:
             lines.append("Checked before the first task:")
             lines += [f"  {note}" for note in self.ready_notes]
+        # v1.425.0: the path each task runs on (a coding session, or the lane).
+        lines.append(self.path_line())
         return lines
 
     # -- the members ------------------------------------------------------- #
