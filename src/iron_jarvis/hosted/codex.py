@@ -766,8 +766,14 @@ class CodexDriver(Driver):
         elif method == "turn/started":
             # v1.426.0 (E4): a compaction's turn has no ``turn/start`` answer to
             # name it (Stop needs its id); for any other turn it is the same id.
+            # v1.426.0 review (lane B): only THIS session's thread — Codex has
+            # sub-agent threads, and a turn of another thread must never become
+            # the turn Stop and a note are sent to (a frame naming no thread is
+            # taken, as before).
             turn = p.get("turn")
-            if self.turn_open and isinstance(turn, dict) and turn.get("id"):
+            thread = str(p.get("threadId") or "")
+            if (self.turn_open and isinstance(turn, dict) and turn.get("id")
+                    and (not thread or not self.session_id or thread == self.session_id)):
                 self.turn_id = str(turn["id"])
         elif method == "mcpServer/startupStatus/updated":
             # v1.426.0 (E4): its own MCP servers starting, as it says them.
