@@ -531,10 +531,15 @@ class ProcessStartTool(Tool):
         "(p1, p2, …) and what it printed in its first `wait_ms` (default 1000, "
         "at most 30000). Then process_read reads new output, process_write "
         "types into it, process_stop stops it. It keeps running until "
-        "process_stop, the end of the agent run that started it, or Iron "
-        "Jarvis shutting down. Use shell instead for a command that finishes "
-        "on its own."
+        "process_stop, until the session or agent run that started it ends "
+        "(a coding session ends when it is archived or deleted), or until "
+        "Iron Jarvis shuts down. Use shell instead for a command that "
+        "finishes on its own."
     )
+    # v1.425.0 (Wave 5, C5): "the end of the agent run that started it" was
+    # untrue for a coding session's own turn — its programs belong to the
+    # SESSION (``build:<id>``) and end when it is archived or deleted
+    # (``harness/sessions.end_session_programs``), never with the reply.
     permission_key = "process_start"
     risk_class = RiskClass.EXTERNAL_COMMIT
     input_schema = {

@@ -185,6 +185,10 @@ class ViewImageTool(_ImageTool):
                     f"supported: {_VIEW_SUPPORTED} (image_convert can re-encode it)"
                 ),
             )
+        serving = getattr(ctx, "picture_read", None)
+        if serving:
+            # v1.425.0 (Wave 5, C4): an IJ harness turn's IMAGE READ.
+            return await self._picture_read(raw, path, media_type, args, ctx, serving)
         blob = await asyncio.to_thread(path.read_bytes)
         if len(blob) > _MAX_VIEW_BYTES:
             return ToolResult(
@@ -194,6 +198,15 @@ class ViewImageTool(_ImageTool):
                     "vision limit) — downscale it first with image_resize"
                 ),
             )
+        return await self._describe(raw, media_type, blob, args, ctx)
+
+    async def _describe(
+        self, raw: str, media_type: str, blob: bytes, args: dict[str, Any], ctx: ToolContext,
+    ) -> ToolResult:
+        """Ask a model that can see to answer ``question`` about the picture
+        (the description path; v1.425.0 lifted it out of ``_run`` unchanged,
+        so an image read that cannot attach the picture describes it the
+        same way)."""
         question = str(args.get("question") or "").strip() or _DEFAULT_QUESTION
         message = LLMMessage(
             role="user",
@@ -249,6 +262,174 @@ class ViewImageTool(_ImageTool):
             **route_kwargs,
         )
         return _vision_result(result, raw, media_type, blob)
+
+    async def _picture_read(
+        self, raw: str, path: Path, media_type: str, args: dict[str, Any], ctx: ToolContext,
+        serving: Any,
+    ) -> ToolResult:
+        """v1.425.0 (Wave 5, C4): an IJ harness turn READ a picture — Claude
+        Code's ``Read`` (or Qwen Code's ``read_file``) of an image, Codex's
+        ``view_image``. The native tools hand their model the picture itself;
+        this tool used to ask a vision model to DESCRIBE it, so the coding
+        model worked from another model's words.
+
+        When the model that served the round takes a picture inside a tool
+        result (``serving`` — ``carries_tool_pictures``: claude-cli, the
+        Anthropic API, Codex's app-server), the PICTURE comes back
+        (:attr:`ToolResult.images`), bounded like ``page_screenshot``: a big
+        one re-encoded and shrunk (:func:`fit_picture`), one still over
+        ``page_shot.HARD_IMAGE_BYTES`` is not attached. Both chat lanes keep
+        pictures on the newest two results only (``trim_tool_images``), and
+        the router never moves a turn for a tool's picture (v1.371.0).
+        Otherwise the picture is DESCRIBED exactly as before, and the result
+        says the model cannot see it here (:data:`PICTURE_DESCRIBED_NOTE`).
+        Off the loop: the file read, the size check and Pillow."""
+        from ..harness.page_shot import HARD_IMAGE_BYTES
+
+        size = await asyncio.to_thread(lambda: path.stat().st_size)
+        if size > PICTURE_SOURCE_MAX_BYTES:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"{raw} is {size:,} bytes — too large to open here "
+                    f"(at most {PICTURE_SOURCE_MAX_BYTES // (1024 * 1024)} MB)"
+                ),
+            )
+        provider, model = _serving_pair(serving)
+        router = self._router_resolver()
+        takes = await asyncio.to_thread(
+            serving_takes_pictures, getattr(router, "manager", None), provider, model,
+        )
+        blob = await asyncio.to_thread(path.read_bytes)
+        note = PICTURE_DESCRIBED_NOTE
+        if takes:
+            data, media, width, height = await asyncio.to_thread(fit_picture, blob, media_type)
+            if len(data) <= HARD_IMAGE_BYTES:
+                shrunk = (
+                    f", shrunk from {len(blob):,} bytes to fit" if data is not blob else ""
+                )
+                shape = f"{width}×{height}, " if width and height else ""
+                return ToolResult(
+                    ok=True,
+                    output=(
+                        f"The picture {raw} ({shape}{len(data):,} bytes{shrunk}) is attached to "
+                        "this result: look at it."
+                    ),
+                    data={
+                        "path": raw, "media_type": media, "bytes": len(data),
+                        "source_bytes": len(blob), "attached": True,
+                        "width": width, "height": height,
+                    },
+                    images=[{"media_type": media, "data_b64": base64.b64encode(data).decode("ascii")}],
+                )
+            note = PICTURE_TOO_LARGE_NOTE
+        # DESCRIBED (the model cannot be shown it here, or it is too large):
+        # today's path — the session's held model, else the vision role —
+        # on a copy small enough for any vision model.
+        if len(blob) > _MAX_VIEW_BYTES:
+            fitted, fitted_media, _w, _h = await asyncio.to_thread(fit_picture, blob, media_type)
+            if len(fitted) > _MAX_VIEW_BYTES:
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"{raw} is {len(blob):,} bytes and could not be made small enough to "
+                        "look at here"
+                    ),
+                )
+            blob, media_type = fitted, fitted_media
+        described = await self._describe(raw, media_type, blob, args, ctx)
+        if not described.ok:
+            return described
+        return ToolResult(
+            ok=True,
+            output=note.format(path=raw) + "\n\n" + str(described.output or ""),
+            data={**dict(described.data or {}), "attached": False},
+        )
+
+
+#: v1.425.0 (C4): the largest picture file an image READ opens (it is then
+#: shrunk to fit); Claude Code's own Read refuses past 128 MB.
+PICTURE_SOURCE_MAX_BYTES = 64 * 1024 * 1024
+#: v1.425.0 (C4): what an image read that comes back DESCRIBED says first —
+#: the model reads another model's words about the picture, never the
+#: picture, and must know it.
+PICTURE_DESCRIBED_NOTE = (
+    "[You cannot be shown pictures in this reply's tool results, so {path} was "
+    "described for you instead; the description follows.]"
+)
+#: v1.425.0 (C4): the same for a picture too large to attach even shrunk.
+PICTURE_TOO_LARGE_NOTE = (
+    "[{path} is too large to show you as a picture even shrunk, so it was described "
+    "for you instead; the description follows.]"
+)
+#: Bounds a picture handed to a model is fitted to (``page_shot``'s: JPEG
+#: re-encoded past MAX, never attached past HARD) — and the largest side any
+#: of the three carriers takes (the Anthropic API refuses past 8,000 px).
+_PICTURE_MAX_SIDE = 8000
+
+
+def _serving_pair(serving: Any) -> "tuple[str, str]":
+    try:
+        provider, model = serving
+        return str(provider or ""), str(model or "")
+    except (TypeError, ValueError):
+        return "", ""
+
+
+def serving_takes_pictures(manager: Any, provider: str, model: str) -> bool:
+    """BLOCKING (an adapter may be built): does the ``(provider, model)`` that
+    served a round take a picture inside a tool result (v1.425.0, C4)? The
+    manager's adapter for that pair (a keyless ``anthropic`` resolves to the
+    signed-in claude-cli, as the router's did), read by
+    ``carries_tool_pictures``. False when unknown — no manager, no provider,
+    a lookup that fails: the picture is then described, never claimed."""
+    if manager is None or not provider:
+        return False
+    try:
+        from ..providers.adapters.base import carries_tool_pictures
+
+        adapter = manager.get(provider, model or None)
+        return carries_tool_pictures(adapter)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def fit_picture(blob: bytes, media_type: str) -> "tuple[bytes, str, int, int]":
+    """BLOCKING: ``(bytes, media type, width, height)`` small enough to hand a
+    model (v1.425.0, C4): the picture as it is when it is within
+    ``page_shot.MAX_IMAGE_BYTES`` and no side is over 8,000 px; else a JPEG,
+    re-encoded and, when that is not enough, shrunk (2048, then 1568, then
+    1024 px on the long side). Width/height 0 when Pillow cannot read it (the
+    bytes are then handed back as they are). Never raises."""
+    from ..harness.page_shot import MAX_IMAGE_BYTES
+
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(blob))
+        width, height = img.size
+    except Exception:  # noqa: BLE001 — not readable: hand it back as it is
+        return blob, media_type, 0, 0
+    if len(blob) <= MAX_IMAGE_BYTES and max(width, height) <= _PICTURE_MAX_SIDE:
+        return blob, media_type, width, height
+    try:
+        img.load()
+        rgb = _flatten_to_rgb(img)  # JPEG has no alpha: onto white
+        for side in (None, 2048, 1568, 1024):
+            frame = rgb.copy()
+            bound = min(side or _PICTURE_MAX_SIDE, _PICTURE_MAX_SIDE)
+            if max(frame.size) > bound:
+                frame.thumbnail((bound, bound), Image.Resampling.LANCZOS)
+            for quality in (85, 70):
+                buf = io.BytesIO()
+                frame.save(buf, format="JPEG", quality=quality)
+                if buf.tell() <= MAX_IMAGE_BYTES:
+                    return buf.getvalue(), "image/jpeg", frame.width, frame.height
+    except Exception:  # noqa: BLE001 — hand back what we have
+        pass
+    return blob, media_type, width, height
 
 
 def _vision_result(result: Any, raw: str, media_type: str, blob: bytes) -> ToolResult:

@@ -5199,7 +5199,10 @@ async def chat_stream(
                 # read them); `_model_calls` is what the model said.
                 _model_calls = calls
                 if _harness is not None:
-                    calls = _harness.translate_calls(calls)
+                    # v1.425.0 (Wave 5, C4): with the round's serving model, so
+                    # an image read hands the PICTURE back when that model
+                    # takes one (lock-step: chat_turn).
+                    calls = _harness.translate_calls(calls, serving=(route_provider, route_model))
                 # A REPLY CUT OFF AT THE OUTPUT LIMIT (v1.387.0) — the
                 # lock-step copy of chat_turn's: never the no-tools final
                 # answer; ONE note and the turn goes on (complete calls run
