@@ -3614,6 +3614,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import team as _team_routes
 
     _team_routes.register(app, d)
+    # Copy as a fix request (v1.423.0): the problems the coding sessions and
+    # their team ran into, as a report for the agent that fixes Iron Jarvis.
+    from .routes import fix_request as _fix_request_routes
+
+    _fix_request_routes.register(app, d)
     # Preferences you approve (v1.305.0): kept / suggested / never-ask rows,
     # and the consent-per-press look through Claude Code / Codex messages.
     from .routes import preferences as _preferences_routes

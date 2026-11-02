@@ -36,6 +36,7 @@ import { REVIEWER_WORDS, TEAM_LEAD_WORDS, WORKERS_WORDS } from "@/lib/sessionTea
 import { helperName, type HelperView } from "@/lib/buildHelpers";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { useNow } from "@/components/chat/TurnClock";
+import { FixRequestButton } from "@/components/team/FixRequestButton";
 import type { BuildMessage, BuildSessionView } from "@/lib/buildSessions";
 import {
   CHANGES_POLL_MS,
@@ -168,6 +169,7 @@ export function SessionRail({
         onOpenChanges={onOpenChanges}
       />
       <Background view={view} helpers={helpers} busy={busy} refreshKey={refreshKey} />
+      <FixRequestButton session={view.id} />
     </div>
   );
 }

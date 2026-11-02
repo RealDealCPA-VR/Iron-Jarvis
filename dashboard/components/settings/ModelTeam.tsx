@@ -40,6 +40,7 @@ import {
 import type { ModelOption } from "@/lib/types";
 import { Button, Card, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { TeamRoleChecks } from "@/components/agents/TeamRoleChecks";
+import { FixRequestButton } from "@/components/team/FixRequestButton";
 
 interface AccountRow {
   id: string;
@@ -422,6 +423,7 @@ export function ModelTeam() {
           planner sees each member&apos;s model, where it runs, what it costs and how much of its plan it has used.
           The model you talk to stays the one you picked.
         </p>
+        <FixRequestButton />
         {team.loading && !team.data ? <LoaderInline /> : null}
         {team.error ? <ErrorNote>{team.error.message}</ErrorNote> : null}
         {team.data && view.members.length === 0 ? (
