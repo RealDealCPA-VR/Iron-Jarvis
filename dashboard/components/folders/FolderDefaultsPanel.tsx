@@ -11,7 +11,10 @@
  * folder's — and Clear. The start composers apply what is saved here.
  *
  * `useFolderDefaults` is the composers' one read (lib/folderDefaults' cache:
- * a folder is read once).
+ * a folder is read once) — and every reader on screen hears a save made
+ * anywhere in this window (v1.426.0 review: the panel and a start composer are
+ * on screen together; a Clear here left the composer starting the next
+ * session with the defaults just cleared).
  */
 
 import { useEffect, useState } from "react";
@@ -21,6 +24,8 @@ import {
   SAVE_DEFAULTS_LABEL,
   cachedFolderDefaults,
   folderBaseName,
+  folderDefaultsKey,
+  onFolderDefaultsSaved,
   readFolderDefaults,
   saveFolderDefaults,
   usingDefaultsLine,
@@ -30,7 +35,8 @@ import {
 } from "@/lib/folderDefaults";
 
 /** The folder's defaults (null while there is no folder or the read is out).
- *  `version` bumps after a save made elsewhere so the reader reads again. */
+ *  A save of THIS folder's defaults anywhere in the window is heard at once
+ *  (`onFolderDefaultsSaved`). */
 export function useFolderDefaults(folder: string | null): FolderDefaults | null {
   const [got, setGot] = useState<FolderDefaults | null>(() => (folder ? cachedFolderDefaults(folder) ?? null : null));
   useEffect(() => {
@@ -43,8 +49,13 @@ export function useFolderDefaults(folder: string | null): FolderDefaults | null 
     void readFolderDefaults(folder).then((d) => {
       if (live) setGot(d);
     });
+    const key = folderDefaultsKey(folder);
+    const off = onFolderDefaultsSaved((saved, d) => {
+      if (live && saved === key) setGot(d);
+    });
     return () => {
       live = false;
+      off();
     };
   }, [folder]);
   return got;
@@ -98,11 +109,12 @@ export function FolderDefaultsPanel<V extends "code" | "tool">({
   current: (V extends "code" ? CodeDefaults : ToolDefaults) | null;
   testId: string;
 }) {
-  const defaults = useFolderDefaults(folder);
-  const [saved, setSaved] = useState<FolderDefaults | null>(null);
+  // v1.426.0 review: what the hook says (it hears every save in the window —
+  // a copy of this panel's own last save would hide a later one made in a
+  // start composer).
+  const shown = useFolderDefaults(folder);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const shown = saved ?? defaults;
   const mine = shown ? (view === "code" ? shown.code : shown.tool) : null;
   const words = mine ? describe(mine as never) : "";
   const currentWords = current ? describe(current as never) : "";
@@ -111,7 +123,7 @@ export function FolderDefaultsPanel<V extends "code" | "tool">({
     setBusy(true);
     setProblem(null);
     try {
-      setSaved(await saveFolderDefaults(folder, view, value));
+      await saveFolderDefaults(folder, view, value);
     } catch (e) {
       setProblem(e instanceof Error && e.message ? e.message : "The defaults were not saved.");
     } finally {

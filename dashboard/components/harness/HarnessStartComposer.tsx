@@ -159,7 +159,6 @@ export function HarnessStartComposer({
   const codeDefaults = folderDefaults?.code ?? null;
   const pickTouchedRef = useRef(!!seeded?.provider);
   const postureTouchedRef = useRef(!!seeded?.approval_mode);
-  const [savedDefaults, setSavedDefaults] = useState<CodeDefaults | null | undefined>(undefined);
   const [defaultsNote, setDefaultsNote] = useState<string | null>(null);
 
   // The caret is in the box the moment the composer shows.
@@ -212,7 +211,10 @@ export function HarnessStartComposer({
   // v1.426.0 (E5): an untouched model / approval chip follows the folder —
   // its defaults when it has them (a model only while it can answer), the
   // app's own when it has none (a folder chosen after another one).
-  const shownDefaults = savedDefaults === undefined ? codeDefaults : savedDefaults;
+  // v1.426.0 review: the hook's value only — it hears every save in this
+  // window (the folder heading's panel too); a copy of this box's own last
+  // save would keep defaults the panel just cleared.
+  const shownDefaults = codeDefaults;
   const defaultPick = shownDefaults?.provider ? `${shownDefaults.provider}::${shownDefaults.model ?? ""}` : "";
   const defaultPickUsable = !!defaultPick && options.some((o) => o.value === defaultPick);
   useEffect(() => {
@@ -220,7 +222,6 @@ export function HarnessStartComposer({
     if (!postureTouchedRef.current) setPosture(shownDefaults?.approval_mode ?? null);
   }, [defaultPick, defaultPickUsable, shownDefaults?.approval_mode]);
   useEffect(() => {
-    setSavedDefaults(undefined);
     setDefaultsNote(null);
   }, [folder]);
   // The folder's reasoning level rides the create only while the model chip
@@ -244,8 +245,7 @@ export function HarnessStartComposer({
     if (!folder || !chosen) return;
     setDefaultsNote(null);
     try {
-      const got = await saveFolderDefaults(folder, "code", chosen);
-      setSavedDefaults(got.code);
+      await saveFolderDefaults(folder, "code", chosen);
     } catch (e) {
       setDefaultsNote(e instanceof Error && e.message ? e.message : "The defaults were not saved.");
     }

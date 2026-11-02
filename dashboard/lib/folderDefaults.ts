@@ -13,8 +13,9 @@
  * default (the daemon refuses them in words).
  *
  * Every read goes through ONE in-memory cache per folder (a composer opening
- * again on a folder reads nothing); a save replaces the folder's entry. An
- * older Iron Jarvis (a 404) reads as "no defaults", quietly.
+ * again on a folder reads nothing); a save replaces the folder's entry and
+ * every reader on screen hears it (`onFolderDefaultsSaved`, v1.426.0 review).
+ * An older Iron Jarvis (a 404) reads as "no defaults", quietly.
  */
 
 import { get, put } from "@/lib/api";
@@ -83,6 +84,23 @@ export function decodeFolderDefaults(raw: unknown): FolderDefaults {
 
 const cache = new Map<string, FolderDefaults>();
 const inFlight = new Map<string, Promise<FolderDefaults>>();
+/** v1.426.0 review (lane B): every reader in this window hears a save. A
+ *  start composer and the folder heading's panel are on screen TOGETHER (the
+ *  empty view and the list beside it): a Clear pressed in the panel left the
+ *  open composer starting the next session with the defaults just cleared. */
+const listeners = new Set<(key: string, got: FolderDefaults) => void>();
+/** Per folder: how many saves this window made (a read that began before a
+ *  save never writes its older answer over the saved one). */
+const saves = new Map<string, number>();
+
+/** Hear every save of a folder's defaults in this window; returns the
+ *  unsubscribe. */
+export function onFolderDefaultsSaved(fn: (key: string, got: FolderDefaults) => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
 
 /** The daemon's key for a folder: separators folded, no trailing one, case
  *  folded (harness/sessions.folder_key). */
@@ -104,9 +122,12 @@ export function readFolderDefaults(folder: string): Promise<FolderDefaults> {
   if (hit) return Promise.resolve(hit);
   const out = inFlight.get(key);
   if (out) return out;
+  const before = saves.get(key) ?? 0;
   const p = get<unknown>(`/build/folders/defaults?folder=${encodeURIComponent(folder)}`)
     .then((raw) => {
       const got = decodeFolderDefaults(raw);
+      // A save made while this read was out wins (its answer is newer).
+      if ((saves.get(key) ?? 0) !== before) return cache.get(key) ?? got;
       cache.set(key, got);
       return got;
     })
@@ -125,7 +146,16 @@ export async function saveFolderDefaults(
 ): Promise<FolderDefaults> {
   const raw = await put<unknown>("/build/folders/defaults", { folder, view, defaults: value });
   const got = decodeFolderDefaults(raw);
-  cache.set(folderDefaultsKey(folder), got);
+  const key = folderDefaultsKey(folder);
+  saves.set(key, (saves.get(key) ?? 0) + 1);
+  cache.set(key, got);
+  for (const fn of [...listeners]) {
+    try {
+      fn(key, got);
+    } catch {
+      // a reader's trouble never fails the save
+    }
+  }
   return got;
 }
 
@@ -133,6 +163,7 @@ export async function saveFolderDefaults(
 export function resetFolderDefaultsCache(): void {
   cache.clear();
   inFlight.clear();
+  saves.clear();
 }
 
 // ── words ───────────────────────────────────────────────────────────────────

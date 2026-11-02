@@ -74,6 +74,7 @@ import {
   modeLabel,
   ownSignInWords,
   toolChoiceWords,
+  toolLabel,
   toolUnavailable,
   type CodeSession,
   type CodingTool,
@@ -246,12 +247,12 @@ export function StartComposer({
   // v1.426.0 (E5): the folder's defaults for new sessions — a chip the user
   // touched wins; an untouched one shows the folder's value.
   const folderDefaults = useFolderDefaults(folder);
-  const [savedDefaults, setSavedDefaults] = useState<ToolDefaults | null | undefined>(undefined);
   const [defaultsNote, setDefaultsNote] = useState<string | null>(null);
-  const toolDefaults = savedDefaults === undefined ? folderDefaults?.tool ?? null : savedDefaults;
+  // v1.426.0 review: the hook's value only — it hears every save in this
+  // window (the folder heading's panel too).
+  const toolDefaults = folderDefaults?.tool ?? null;
   const touched = useRef({ tool: false, mode: false, model: false, effort: false });
   useEffect(() => {
-    setSavedDefaults(undefined);
     setDefaultsNote(null);
   }, [folder]);
   // The folder's tool, when the user has not picked one and it can start.
@@ -386,7 +387,7 @@ export function StartComposer({
 
   // v1.426.0 (E5): the folder's defaults in words, and what the chips say now.
   const defaultsWords = toolDefaultsWords(toolDefaults, {
-    tool: (id) => tools?.find((t) => t.id === id)?.label ?? id,
+    tool: (id) => toolLabel(id, tools),
     model: (tid, id) => tools?.find((t) => t.id === tid)?.models.find((m) => m.id === id)?.label ?? id,
     mode: (tid, id) => modeLabel(id, tools?.find((t) => t.id === tid) ?? null),
   });
@@ -399,14 +400,31 @@ export function StartComposer({
       }
     : null;
   const dangerousMode = !!tool && tool.modes.some((m) => m.id === mode.id && m.dangerous);
+  // v1.426.0 review (lane B): the words never claim what the chips do not do.
+  // A folder's tool that cannot start here (signed out, not installed, not
+  // listed) is NOT used — Chat › Code's twin says so for a model that cannot
+  // answer; this one said "start with: Codex" over a Claude Code chip. Same
+  // for a model the tool no longer offers. A chip the user picked is theirs
+  // (nothing to say: the save press beside the words offers to change them).
+  const defaultsNotUsed = (() => {
+    if (!toolDefaults || !tools || !tool) return "";
+    const want = tools.find((x) => x.id === toolDefaults.harness) ?? null;
+    if (tool.id !== toolDefaults.harness) {
+      if (touched.current.tool) return "";
+      if (want && !toolUnavailable(want)) return "";
+      return ` ${toolLabel(toolDefaults.harness, tools)} cannot start right now, so ${tool.label} does.`;
+    }
+    if (toolDefaults.model && !touched.current.model && !tool.models.some((m) => m.id === toolDefaults.model))
+      return ` ${toolDefaults.model} is not offered by ${tool.label} right now, so its default model does.`;
+    return "";
+  })();
   const offerSave = !!folder && !!chosenDefaults && !dangerousMode && !sameToolDefaults(chosenDefaults, toolDefaults);
 
   async function saveDefaults() {
     if (!folder || !chosenDefaults) return;
     setDefaultsNote(null);
     try {
-      const got = await saveFolderDefaults(folder, "tool", chosenDefaults);
-      setSavedDefaults(got.tool);
+      await saveFolderDefaults(folder, "tool", chosenDefaults);
     } catch (e) {
       setDefaultsNote(errorWords(e, "The defaults were not saved."));
     }
@@ -708,7 +726,10 @@ export function StartComposer({
         {folder && (defaultsWords || offerSave || defaultsNote) ? (
           <p data-testid="code-start-folder-defaults" className="flex flex-wrap items-center gap-x-2 px-2 text-[12px] text-zinc-500">
             {defaultsWords ? (
-              <span data-testid="code-start-folder-defaults-words">{usingDefaultsLine(folderBaseName(folder), defaultsWords)}</span>
+              <span data-testid="code-start-folder-defaults-words">
+                {usingDefaultsLine(folderBaseName(folder), defaultsWords)}
+                {defaultsNotUsed}
+              </span>
             ) : null}
             {offerSave ? (
               <button
