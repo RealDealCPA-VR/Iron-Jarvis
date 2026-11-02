@@ -33,7 +33,7 @@ from iron_jarvis.agents import fix_request as FR
 from iron_jarvis.core.db import open_db, session_scope
 from iron_jarvis.core.models import AgentRun, ChatThreadRecord
 from iron_jarvis.harness import attempts as A
-from tests.test_fix_request_v14230 import _call, _failure
+from tests.test_fix_request_v14230 import _call, _event, _failure
 
 NOW = datetime(2026, 11, 2, 12, 0, 0, tzinfo=timezone.utc)
 T0 = NOW - timedelta(days=2)
@@ -144,6 +144,12 @@ def _seed(engine) -> None:
         for iid, aid, at, prog in calls:
             _call(db, iid=iid, sid=f"build:{THREAD}{A.SID_SEP}{aid}", tool="shell", ok=False,
                   args={"command": f"{prog} --version"}, output=_not_found(prog), at=at)
+        # A tool call written as TEXT (the nudge's event) by each kind of attempt.
+        for eid, aid, at, call in (("e_full", "try1", t1 + timedelta(minutes=3), "fullnudge"),
+                                   ("e_low", "try2", t1 + timedelta(minutes=3), "lownudge"),
+                                   ("e_unknown", "try3", t1 + timedelta(minutes=3), "unknownnudge")):
+            _event(db, eid=eid, type_="autonomy.nudged", sid=f"build:{THREAD}{A.SID_SEP}{aid}", at=at,
+                   payload={"kind": "text_tool_call", "call": call, "round": 2})
         db.commit()
 
 
@@ -152,9 +158,12 @@ def test_the_report_reads_an_attempts_calls_only_when_its_row_says_full(tmp_path
     _seed(engine)
     g = FR.gather(engine, now=NOW, version="1.423.0", os_name="Windows 11")
     text = FR.render(g)
-    assert "fullprog" in text
-    for prog in ("lowprog", "unknownprog", "lowtwoprog", "cutprog", "strayprog"):
+    assert "fullprog" in text and "fullnudge" in text
+    for prog in ("lowprog", "unknownprog", "lowtwoprog", "cutprog", "strayprog", "lownudge", "unknownnudge"):
         assert prog not in text, prog
+    # The "N of M" counts only the calls that were read (try1's left-out
+    # calls in the second turn and outside any row are not in its total).
+    assert "1 of 1 shell calls" in text
     # Each attempt left out is counted once, low and not known apart.
     assert g.attempts_low_left_out == 2
     assert g.attempts_unknown_left_out == 3
@@ -181,7 +190,8 @@ def test_an_attempts_full_trust_call_is_still_a_problem_it_reports(tmp_path):
         db.commit()
     g = FR.gather(engine, now=NOW, version="1.423.0", os_name="Windows 11")
     text = FR.render(g)
-    for prog in ("fullprog", "lowprog", "unknownprog", "lowtwoprog", "cutprog"):
+    for prog in ("fullprog", "lowprog", "unknownprog", "lowtwoprog", "cutprog", "fullnudge", "lownudge",
+                 "unknownnudge"):
         assert prog in text, prog
     assert "strayprog" not in text  # still no row's span holds it
     assert g.attempts_low_left_out == 0 and g.attempts_unknown_left_out == 1
