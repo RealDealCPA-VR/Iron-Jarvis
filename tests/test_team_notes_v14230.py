@@ -562,6 +562,20 @@ def test_decline_rests_the_findings_and_remove_takes_a_habit_back(tmp_path):
     assert client.post("/team/notes/nope/remove").status_code == 404
 
 
+def test_a_habit_for_a_member_that_is_gone_goes_stale_and_writes_nothing(tmp_path):
+    app, p = _app(tmp_path)
+    client = TestClient(app)
+    row = _add(p, CoachProposalRecord(agent=f"custom:{WORKER}", kind="team_note", target=WORKER, after=HABIT))
+    p.agents_registry.remove(WORKER)
+    r = client.post(f"/coach/proposals/{row.id}/accept")
+    assert r.status_code == 409 and "no longer exists" in r.json()["detail"]
+    assert TN.active_notes(p.engine) == []
+    with session_scope(p.engine) as db:
+        assert db.get(CoachProposalRecord, row.id).status == "stale"
+    # A non-member is never distilled.
+    assert asyncio.run(TN.distill(p, "nobody")).reason == TN.REASON_NOT_MEMBER
+
+
 def test_an_instructions_proposal_is_accepted_exactly_as_before(tmp_path):
     app, p = _app(tmp_path)
     client = TestClient(app)
@@ -633,33 +647,52 @@ def test_a_flagged_paragraph_in_team_notes_md_never_reaches_a_prompt(plat):
 
 
 async def test_the_members_next_team_piece_carries_the_habits_and_its_other_runs_do_not(tmp_path, monkeypatch):
-    """Through the REAL coding-session lane (the harness of
-    ``test_session_team_v1403``): a worker piece's system prompt carries the
-    accepted habit; with the setting off it does not; the same member's
-    plain run never does."""
-    from tests.test_session_team_v1403 import TEAM, body, members, piece, stream, wire, worker_calls
+    """THE WHOLE LOOP through the REAL coding-session lane (the harness of
+    ``test_session_team_v1403``: the real router, registry, delegate door and
+    runtime; only the models are scripted): a seeded record (4 confirmed
+    findings across 2 sessions) → the REVIEWER's own model distills one
+    habit with its citations → Accept writes TEAM-NOTES.md → the worker's
+    next team piece's system prompt carries it. With the setting off that
+    prompt is BYTE-IDENTICAL to one with no habits at all; the same member's
+    own run never carries it."""
+    from iron_jarvis.coach.engine import CoachEngine
+    from tests.test_session_team_v1403 import CLOUD, TEAM, body, members, piece, stream, wire, worker_calls
 
     p = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "app.py").write_bytes(b"X = 1\n")
     w = wire(p, monkeypatch, ws)
-    members(p)
-    _accepted(p, "qwen")
-    w.main = [piece("p1", "Set X to 2 in app.py."), "Done."]
-    w.worker = ["I set it."]
-    await stream(p, body(ws), team=TEAM)
-    (first, *_rest) = worker_calls(w)
-    assert TN.HABITS_HEADER in first["system"] and HABIT in first["system"]
-    # Off: the same piece's prompt has no section at all.
-    p.config.team_notes = False
+    members(p)  # qwen (code, test, read) on the local model; rev (review) on the cloud one
+
+    async def piece_prompt(task: str) -> str:
+        w.calls.clear()
+        TN.note_turn_started("team-session")  # a new reply (start_build_turn does this)
+        w.main = [piece("p", task), "Done."]
+        w.worker = ["I set it."]
+        await stream(p, body(ws, task), team=TEAM)
+        (first, *_rest) = worker_calls(w)
+        return first["system"]
+
+    before = await piece_prompt("Set X to 2 in app.py.")
+    assert TN.HABITS_HEADER not in before
+    _seed(p, tmp_path)
     w.calls.clear()
-    TN.note_turn_started("team-session")
-    w.main = [piece("p2", "Set X to 3 in app.py."), "Done."]
-    w.worker = ["I set it."]
-    await stream(p, body(ws, "set X to 3"), team=TEAM)
-    (off, *_rest) = worker_calls(w)
-    assert TN.HABITS_HEADER not in off["system"] and HABIT not in off["system"]
+    w.reviewer = [ANSWER]
+    out = await TN.distill(p, "qwen")
+    (row,) = out.minted
+    (call,) = [c for c in w.calls if c["provider"] == CLOUD[0]]
+    assert call["system"] == TN.DISTILL_SYSTEM and "F1." in call["task"]
+    assert [c["what"] for c in json.loads(row.evidence_json)] == ["problem 1.1", "problem 0.1"]
+    _accepted_row, note, _lib = CoachEngine(p).accept_with_note(row.id)
+    assert note == "" and HABIT in TN.notes_path(p, "qwen").read_text(encoding="utf-8")
+    carried = await piece_prompt("Set X to 3 in app.py.")
+    assert TN.HABITS_HEADER in carried and f"- {HABIT}" in carried
+    # Off: the next piece's prompt has no section and nothing of the file
+    # (byte-identical: the next test).
+    p.config.team_notes = False
+    off = await piece_prompt("Set X to 2 in app.py.")
+    assert TN.HABITS_HEADER not in off and HABIT not in off
     # The member's OWN run (not a team piece): never.
     p.config.team_notes = True
     from iron_jarvis.agents.orchestrator import Orchestrator
@@ -673,6 +706,39 @@ async def test_the_members_next_team_piece_carries_the_habits_and_its_other_runs
     await AgentRuntime(p).run(sess, p.agents_registry.definition("qwen"))
     own = [c for c in w.calls if c["provider"] == "ollama"]
     assert own and all(TN.HABITS_HEADER not in c["system"] for c in own)
+
+
+async def test_setting_off_leaves_a_team_piece_prompt_byte_identical(tmp_path, monkeypatch):
+    """Three homes, one identical first turn each, the same folder: no habit
+    at all / a habit accepted but the setting OFF / a habit accepted and ON.
+    The off prompt is BYTE-IDENTICAL to the no-habit one; the on prompt is
+    that same prompt with exactly the one section added."""
+    from tests.test_session_team_v1403 import TEAM, body, members, piece, stream, wire, worker_calls
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "app.py").write_bytes(b"X = 1\n")
+
+    async def first_piece(home: str, *, habit: bool, on: bool) -> str:
+        p = build_platform(str(tmp_path / home))
+        w = wire(p, monkeypatch, ws)
+        members(p)
+        if habit:
+            _accepted(p, "qwen")
+        p.config.team_notes = on
+        TN.note_turn_started("team-session")
+        w.main = [piece("p", "Set X to 2 in app.py."), "Done."]
+        w.worker = ["I set it."]
+        await stream(p, body(ws, "Set X to 2 in app.py."), team=TEAM)
+        (ws / "app.py").write_bytes(b"X = 1\n")
+        return worker_calls(w)[0]["system"].replace(str(tmp_path / home), "<HOME>")
+
+    plain = await first_piece("h-plain", habit=False, on=True)
+    off = await first_piece("h-off", habit=True, on=False)
+    on = await first_piece("h-on", habit=True, on=True)
+    assert off == plain
+    section = TN.HABITS_HEADER + "\n- " + HABIT
+    assert section in on and on.replace("\n\n" + section, "", 1) == plain
 
 
 # --------------------------------------------------------------------------- #
@@ -692,19 +758,41 @@ async def test_the_librarys_idle_pacing_distills_the_sessions_members(plat, tmp_
     await asyncio.sleep(0.05)
     await TN.drain(5)
     assert len(plat.router.calls) == 1 and len(_proposals(plat)) == 1
-    # A session whose account is at its limit is not spent on it.
-    thread = _thread(plat, tmp_path / "limited", account_limit={"kind": "limit"})
-    scope = f"build:{thread}"
-    _add(plat, TeamRoleRun(member=WORKER, role="code", session_id="w-l", scope=scope, finished=True))
-    with session_scope(plat.engine) as db:
-        state = db.get(TN.TeamNoteState, WORKER)
-        state.last_attempt_at = utcnow() - timedelta(days=2)
-        db.add(state)
-        db.commit()
-    library.note_turn_finished(plat, thread, "turn-2")
-    library.flush(plat, thread)  # an archive's flush
+
+    def eligible_again() -> None:
+        # The proposal declined long ago and the last attempt two days back:
+        # the member may be distilled again.
+        with session_scope(plat.engine) as db:
+            for row in db.exec(select(CoachProposalRecord)):
+                row.status = "declined"
+                row.decided_at = utcnow() - timedelta(days=TN.SUPPRESS_DAYS + 1)
+                db.add(row)
+            state = db.get(TN.TeamNoteState, WORKER)
+            state.last_attempt_at = utcnow() - timedelta(days=2)
+            db.add(state)
+            db.commit()
+
+    def worked_in(folder: str, **setup) -> str:
+        thread = _thread(plat, tmp_path / folder, **setup)
+        _add(plat, TeamRoleRun(member=WORKER, role="code", session_id=f"w-{folder}", scope=f"build:{thread}",
+                               finished=True))
+        return thread
+
+    # A session whose account is at its limit is not spent on it (an
+    # archive's flush: ``library.flush``) …
+    eligible_again()
+    limited = worked_in("limited", account="acct-1",
+                        account_limit={"account": "acct-1", "kind": "limit"})
+    library.note_turn_finished(plat, limited, "turn-2")
+    library.flush(plat, limited)
     await TN.drain(5)
     assert len(plat.router.calls) == 1
+    # … while the same member in a session with room is (the control).
+    roomy = worked_in("roomy")
+    library.note_turn_finished(plat, roomy, "turn-3")
+    library.flush(plat, roomy)
+    await TN.drain(5)
+    assert len(plat.router.calls) == 2
 
 
 async def test_pacing_is_off_with_the_setting(plat, tmp_path, monkeypatch):
@@ -715,8 +803,11 @@ async def test_pacing_is_off_with_the_setting(plat, tmp_path, monkeypatch):
     plat.config.team_notes = False
     threads = _seed(plat, tmp_path)
     library.note_turn_finished(plat, threads[0], "turn-1")
+    # Off: nothing is even noted (no wait, no task) …
+    assert threads[0] not in TN._NOTED and threads[0] not in TN._TIMERS
     await asyncio.sleep(0.05)
     await TN.drain(5)
+    # … and nothing is called.
     assert plat.router.calls == []
 
 
@@ -750,6 +841,36 @@ async def test_a_habit_two_coders_were_given_becomes_a_role_brief_edit(tmp_path)
 
     layer = read_project_layer(tmp_path / "ws1", session_id=None)
     assert layer.used and [a.name for a in layer.sub_agents] == ["code"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a junction is a Windows link")
+def test_a_role_briefs_folder_that_leads_outside_is_never_written(tmp_path):
+    """A ``sub_agents`` junction would carry the write out of the folder: the
+    library refuses to propose it, and refuses an Accept of one proposed
+    before the junction appeared — nothing is written outside."""
+    import _winapi
+
+    from iron_jarvis.harness import library
+
+    app, p = _app(tmp_path)
+    threads = _seed(p, tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    hdir = tmp_path / "ws1" / ".ironjarvis" / "harness"
+    hdir.mkdir(parents=True)
+    _winapi.CreateJunction(str(outside), str(hdir / "sub_agents"))
+    row, why = library.propose_role_brief_edit(p, thread_id=threads[1], role="code", line=HABIT, why="w",
+                                                evidence={})
+    assert row is None and "leads outside the folder" in why
+    # One proposed before the junction: its Accept refuses, nothing written.
+    (hdir / "sub_agents").rmdir()
+    row, why = library.propose_role_brief_edit(p, thread_id=threads[1], role="code", line=HABIT, why="w",
+                                                evidence={})
+    assert row is not None, why
+    _winapi.CreateJunction(str(outside), str(hdir / "sub_agents"))
+    with pytest.raises(library.LibraryRefused, match="leads outside the folder"):
+        library.accept(p.engine, row.id)
+    assert list(outside.iterdir()) == []
 
 
 def test_the_library_edits_only_a_role_brief_beside_its_four_files():

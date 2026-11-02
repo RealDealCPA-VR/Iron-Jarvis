@@ -19,6 +19,11 @@
  *
  * An OLDER DAEMON has no coach route: the GET 404s and the panel renders
  * nothing.
+ *
+ * v1.423.0 (Team notes, Phase 2): a model team member's suggested WORKING
+ * HABIT is a proposal of kind `team_note` on the same list — drawn as the
+ * habit and the confirmed findings it cites in plain words (no diff: it
+ * never touches the instructions), with the same Accept / Decline.
  */
 
 import { useEffect, useRef, useState } from "react";

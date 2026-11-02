@@ -7,6 +7,15 @@
 * ``GET  /coach/proposals?agent=&status=``;
 * ``POST /coach/proposals/{id}/accept`` | ``/decline`` → ``{proposal}``.
 
+v1.423.0 (Team notes, Phase 2): a proposal's KIND decides what its decision
+does. An ``instructions`` proposal is exactly as before. A ``team_note`` (a
+model team member's WORKING HABIT, ``agents/team_notes``) is accepted into
+the member's TEAM-NOTES.md — never its instructions — and the answer carries
+``note`` when there is something to say (the file was kept as the user
+edited it; team notes are off); a habit two members of one role were given
+also becomes a suggested edit of that role's brief (the library's own
+proposal, announced like any). Decline is the coach's for both.
+
 Refusals are plain sentences: 404 for an unknown agent or proposal, 409 for
 a proposal already decided or whose agent's instructions moved since it was
 written (``stale`` — "ask the coach again"), 422 for a bad status filter,
