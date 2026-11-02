@@ -1826,7 +1826,12 @@ def _gather_findings(engine: Any, out: Gathered, occurrences: list[Occurrence], 
             # Only a finding the lead was ASKED to answer (team_findings'
             # own rule: ``mark_asked``) is ever counted.
             "WHERE f.asked = 1 AND f.created_at >= :lo AND f.created_at <= :hi"
-            f"{where} ORDER BY f.created_at DESC LIMIT :n",
+            # v1.423.0 review: a review's findings are stored in one go and
+            # their ``created_at`` TIE (``utcnow`` ticks every 15.6 ms on 3.12
+            # Windows) — the v1.286.0 rule: ties break on the rowid, newest
+            # stored first (SQLite's own tie order is the scan's, oldest
+            # first, and "What happened" named the first finding stored).
+            f"{where} ORDER BY f.created_at DESC, f.rowid DESC LIMIT :n",
             **params,
         )
     except Exception:  # noqa: BLE001

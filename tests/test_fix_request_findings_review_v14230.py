@@ -183,3 +183,38 @@ def test_a_finding_between_two_replies_is_judged_by_neither(tmp_path):
     out = _report(engine)
     assert "A reviewer's finding the lead never answered" not in out["text"], out["text"]
     assert out["problems"] == 0, out["text"]
+
+
+# --------------------------------------------------------------------------- #
+# 4. the same tick: newest STORED first (the v1.286.0 rule)
+# --------------------------------------------------------------------------- #
+# A review's findings are stored in one go, and on Python 3.12 Windows
+# ``utcnow()`` ticks every 15.6 ms: their ``created_at`` TIE. The reader had no
+# tie-break, so SQLite's own tie order (the table's scan order: OLDEST stored
+# first) stood in for "newest first" — "What happened" showed the first
+# finding stored as the newest. Ties now break on the rowid, newest first.
+
+
+def test_findings_stored_in_one_tick_are_listed_newest_stored_first(tmp_path):
+    from datetime import timedelta
+
+    from iron_jarvis.agents import team_findings as TF
+    from iron_jarvis.core.db import session_scope
+    from tests.test_fix_request_findings_v14230 import REVIEW_A, THREAD_A, _finding, _review, _thread
+    from tests.test_fix_request_v14230 import T0
+
+    engine = _engine(tmp_path)
+    a = T0 + timedelta(minutes=10)
+    with session_scope(engine) as db:
+        _thread(db, THREAD_A, "t", T0, turn="turn-a")
+        _review(db, row="trr_reva0001", session=REVIEW_A, scope=f"build:{THREAD_A}", at=a)
+        for n in (1, 2, 3):  # stored in this order, one tick
+            _finding(db, scope=f"build:{THREAD_A}", review_row="trr_reva0001", review_session=REVIEW_A,
+                     number=n, path="cart.py", line=n, what=f"thing {n} is wrong", change="x",
+                     status=TF.DID_NOT_APPLY, at=a, answer=f"reason {n}")
+            db.flush()
+        db.commit()
+    text = _report(engine)["text"]
+    evidence = [ln for ln in text.splitlines() if ln.startswith("  - ")]
+    assert [e.split("finding: `", 1)[1][:2] for e in evidence] == ["R3", "R2", "R1"], evidence
+    assert "What happened: `thing 3 is wrong" in text, text
