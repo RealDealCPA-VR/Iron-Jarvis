@@ -37,7 +37,10 @@ never counted three times):
   A ``delegate`` / ``spawn_agent`` row is read only when NO run started (the
   team router found no one → ``router_refused``; any other refusal →
   ``helper_not_started``): a helper that started and then failed is read off
-  its own Session row instead.
+  its own Session row instead. A call Iron Jarvis made ITSELF is named as
+  its own (``called_as`` "finish check" / "project check" → "Iron Jarvis's
+  finish check", its module first under "Where in Iron Jarvis"), and the
+  name the model used is said beside the tool ("shell (as Bash)").
 * Helper / teammate ``Session`` rows that ended FAILED (``summary`` and
   ``failure_detail``): ran out of steps, a context window too small for the
   piece (``runtime.context_too_small_result``), or any other failure (a
@@ -51,7 +54,10 @@ never counted three times):
   "Iron Jarvis tried N times" — ``harness/patience.tried_words``), a reply
   cut off at its output limit (``route.cut_off``, ``truncated``), and the
   finish check's team review that failed, did not run, or ran past its time
-  limit (``finish.review``).
+  limit (``finish.review``). v1.423.0 review: the reply line is the team
+  review's ONE record — its synthetic ``delegate`` row (``called_as`` "team
+  review") and its review-only helper run (``options.review_only``) are not
+  read, or one review that failed was two problems.
 
 THE RULE FOR WHAT IS LEFT OUT (the user's choices and ordinary work are not
 defects):
@@ -62,20 +68,27 @@ defects):
   ask"), a Stop the user pressed (the registry's cancel / stop notes, a
   helper stopped with its reply, a CANCELLED helper run), Emergency stop, a
   reply the user stopped, a provider's safety refusal, a sign-in or key the
-  user has to fix, an account's limit, and a restart that cut a reply off.
+  user has to fix, an account's limit, and a restart that cut a reply off —
+  for a helper's run and a helper door's refusal too (:func:`users_to_fix`).
 * ORDINARY WORK: a command that RAN and exited non-zero — a test command
   that failed because the user's tests fail is the user's code, not Iron
   Jarvis. Only a command that could NOT RUN AT ALL counts: the shell did not
   know the program ("is not recognized", "command not found"), it was
   written for another shell ("was unexpected at this time", the ``;``
   guard), a guard refused it (the git guard, a ``cwd`` outside the folder),
-  or it ran until its time limit.
+  or it ran until its time limit. An output line is that marker only when it
+  IS the shell's own message (or Iron Jarvis's appended hint) at the start of
+  its line (``_NOT_FOUND_LINE`` / ``_WRONG_SHELL_LINE``): a failing test whose
+  output QUOTES "is not recognized" ran.
 * LOW TRUST: nothing is read from a run that ended at LOW trust (a helper
   whose row says ``trust = low``, or a lead's reply whose line says so — the
   lead's calls inside that reply's time window are skipped too, and a
   low-trust reply with no time window skips that session's lead calls): its
   text may be an injected instruction, and this report is pasted into
-  another agent's prompt. The count left out is said.
+  another agent's prompt. The count left out is said. FAIL CLOSED (v1.423.0
+  review): a lead's call whose session's lines could NOT be read (the replies
+  unreadable, or the session deleted) is left out too — nobody can say it
+  was not in a low-trust reply — and that count is said as well.
 
 EVERY value that came from a model, a tool, a file or the user (an error, an
 argument, a path, a title, a member's name) is masked
@@ -85,6 +98,16 @@ the shapes it does not know) and then promptguard-scanned
 BEFORE any cut. The whole report is at most :data:`REPORT_CHARS` characters
 and lists at most :data:`MAX_PROBLEMS` problems, most frequent first; what
 did not fit is said.
+
+WHAT IS SHOWN OF A CALL (v1.423.0 review — the user's own text stays out):
+a command that could not run by the lines that SHOW it
+(:func:`command_failure_words`: the header and the shell's own message,
+never the rest of what it printed — a ``type clients.csv & tail`` printed a
+client file before the pipe failed); its command with every here-document's
+body left out; any other tool's arguments with WHERE it acted first and every
+other long value by its size (:func:`args_words`: sorted JSON put a
+``write_file``'s ``content`` first, so the row was the file's text and the
+path was cut off).
 
 NOT RECORDED ANYWHERE (so not in the report): a helper's own reply cut off at
 its output limit (the agent runtime notes it inside the run, nothing is
@@ -428,7 +451,7 @@ _NOTHING_ASKED = re.compile(
 #: A command that could NOT RUN (the marker line names it).
 _NOT_FOUND = re.compile(
     r"is not recognized as an internal or external command"
-    r"|is not recognized as the name of a cmdlet"
+    r"|is not recognized as (?:the|a) name of a cmdlet"
     r"|command not found"
     r"|is not a valid win32 application"
     r"|cannot execute binary file"
@@ -442,9 +465,48 @@ _WRONG_SHELL = re.compile(
     r"|syntax error near unexpected token"
     r"|unexpected eof while looking for matching"
     r"|is not a valid statement separator"
-    r"|does not separate commands",
+    r"|does not separate commands"
+    # v1.423.0 review: Iron Jarvis's own hint under Git Bash
+    # (``sandbox/git_bash`` — a cmd.exe idiom in a bash line).
+    r"|this shell is git for windows' bash, not cmd\.exe",
     re.IGNORECASE,
 )
+#: v1.423.0 review: a line of the command's OUTPUT is a marker only when it
+#: IS the shell's own message (or Iron Jarvis's appended hint) — at the start
+#: of the line, as the shell prints it. A command that RAN and failed can
+#: print the same words inside its own output (a failing test's assertion
+#: quoting "'grep' is not recognized …", a log, a diff): that is the user's
+#: work, never "a command the shell could not run". The tool's own error
+#: (the header) is Iron Jarvis's or the shell's words and is read as before.
+_SHELL_PREFIX = r"(?:(?:/usr/bin/|/bin/)?(?:ba|z|da)?sh(?:\.exe)?: )?(?:-c: )?(?:line \d+: )?"
+_NOT_FOUND_LINE = re.compile(
+    # cmd.exe quotes the name it could not find as it was typed, quotes
+    # included (``'[A-Z]''``, ``''sales_order''`` — both on the owner's PC).
+    r"^'[^\n]{1,200}?' is not recognized as an internal or external command"
+    rf"|^{_SHELL_PREFIX}[^\s:'\"]{{1,80}}: command not found"
+    r"|^zsh: command not found: "
+    # Windows PowerShell names it first ("COUNT: : The term 'COUNT:' …").
+    r"|^(?:[^\n]{1,80}? : )?the term '[^\n]{1,200}?' is not recognized as (?:the|a) name of a cmdlet"
+    rf"|^{_SHELL_PREFIX}[^\n]{{0,200}}: cannot execute binary file"
+    rf"|^{_SHELL_PREFIX}[^\n]{{0,200}}: exec format error"
+    r"|^[^\n]{0,200} is not a valid win32 application"
+    r"|^python was not found; run without arguments to install",
+    re.IGNORECASE,
+)
+_WRONG_SHELL_LINE = re.compile(
+    r"^[^\s][^\n]{0,80} was unexpected at this time\.?\s*$"
+    r"|^the syntax of the command is incorrect\.?\s*$"
+    rf"|^{_SHELL_PREFIX}syntax error near unexpected token"
+    rf"|^{_SHELL_PREFIX}unexpected eof while looking for matching"
+    r"|^(?:\+ )?\s{0,8}the token '[^'\n]{1,40}' is not a valid statement separator"
+    # Iron Jarvis's own hint lines (``sandbox/shell_tool.SEMICOLON_HINT``,
+    # ``sandbox/git_bash``): appended as their own line, at its start.
+    r"|^\(this shell is windows cmd\.exe: ';' does not separate commands"
+    r"|^\(this shell is git for windows' bash, not cmd\.exe",
+    re.IGNORECASE,
+)
+#: cmd.exe's second line of its "not recognized" message.
+_CMD_CONTINUATION = re.compile(r"^operable program or batch file\.?\s*$", re.IGNORECASE)
 _REFUSED_CMD = re.compile(
     r"^refused:"
     r"|^`cwd` .{0,300}(?:is not a folder|is outside the)",
@@ -488,6 +550,43 @@ _TRIED = re.compile(r"iron jarvis tried \d+ times", re.IGNORECASE)
 #: A restart that cut a reply off (``durable_turns.INTERRUPTED_DETAIL``,
 #: ``harness/attempts.CUT_OFF_LINE``).
 _RESTART = re.compile(r"^iron jarvis stopped while", re.IGNORECASE)
+#: v1.423.0 review: a provider's safety refusal and a key the provider
+#: refused, in ``providers/failure_words``' own words (a helper's summary).
+_USER_FIX_WORDS = re.compile(
+    r"\brefused your key\b|\bdeclined to (?:do|finish) this task\b"
+    r"|\bdeclined to answer this conversation\b|\bdeclined to finish this answer\b",
+    re.IGNORECASE,
+)
+
+
+def users_to_fix(text: Any) -> bool:
+    """True when a helper's failure is the USER's to fix or a provider's own
+    call, never Iron Jarvis's (v1.423.0 review — the module's rule held for
+    the lead's replies only): a CLI that is not signed in
+    (``cli_auth.is_sign_in_refusal``), a key the provider refused, an
+    account's limit (``harness/patience``'s reading), a safety refusal.
+    Never raises."""
+    words = str(text or "")
+    if not words:
+        return False
+    if _USER_FIX_WORDS.search(words):
+        return True
+    try:
+        from ..providers.cli_auth import is_sign_in_refusal
+
+        if is_sign_in_refusal(words):
+            return True
+    except Exception:  # noqa: BLE001 — a reading fault reads "not the user's"
+        pass
+    try:
+        from ..harness import patience as _patience
+
+        limit = getattr(_patience, "_ACCOUNT_LIMIT_RX", None)
+        if limit is not None and limit.search(words):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -557,7 +656,10 @@ def clean(value: Any, limit: int) -> str:
 
 _QUOTED = re.compile(r"'[^'\n]{0,200}'|\"[^\"\n]{0,200}\"|`[^`\n]{0,200}`|‘[^’\n]{0,200}’|“[^”\n]{0,200}”")
 _UNC = re.compile(r"\\\\[^\s'\"`,;)]+")
-_WINPATH = re.compile(r"\b[A-Za-z]:[\\/][^\s'\"`,;)]*")
+#: v1.423.0 review: a drive path runs to its LAST separator on the line (a
+#: folder name may hold spaces: ``C:\Users\VR\Open Source QB\a.ts``), then its
+#: last part — or the same error about two files reads as two problems.
+_WINPATH = re.compile(r"\b[A-Za-z]:[\\/](?:[^'\"`\n]*[\\/])?[^\s'\"`,;)\\/]*")
 _SLASHPATH = re.compile(r"(?<![\w<])(?:\.{0,2}[\\/])?[\w.\-]+(?:[\\/][\w.\-]+)+")
 _FILE = re.compile(r"\b[\w\-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|json|md|txt|toml|ya?ml|css|html|sql|sh|ps1|bat|cmd|exe|diff|log|ini|cfg|lock)\b", re.IGNORECASE)
 _ID = re.compile(r"\b[a-z]+_[0-9a-f]{6,}\b", re.IGNORECASE)
@@ -624,6 +726,8 @@ def classify_call(tool: str, output: Any, denied_kind: str = "") -> "tuple[str, 
     if tool in HELPER_TOOLS:
         if _CHILD_RAN.search(text):
             return None  # the helper's own Session row is the record
+        if users_to_fix(head):
+            return None  # a sign-in, a key, a limit: the user's to fix
         if _ROUTER.search(head):
             return "router_refused", head
         return "helper_not_started", head
@@ -632,12 +736,17 @@ def classify_call(tool: str, output: Any, denied_kind: str = "") -> "tuple[str, 
             return "command_timed_out", head
         if _REFUSED_CMD.search(head):
             return "command_refused", head
-        lines = [head, *body]
-        for ln in lines:
-            if _WRONG_SHELL.search(ln):
+        # The header is the tool's / Iron Jarvis's own words; an output line
+        # counts only when it IS the shell's message (``_*_LINE``).
+        if _WRONG_SHELL.search(head):
+            return "command_wrong_shell", head
+        for ln in body:
+            if _WRONG_SHELL_LINE.search(ln.rstrip()):
                 return "command_wrong_shell", ln.strip()
-        for ln in lines:
-            if _NOT_FOUND.search(ln):
+        if _NOT_FOUND.search(head):
+            return "command_not_found", head
+        for ln in body:
+            if _NOT_FOUND_LINE.search(ln.rstrip()):
                 return "command_not_found", ln.strip()
         return None  # it RAN and exited non-zero: the user's own work
     return "tool_failed", head or _first_line(text)
@@ -677,21 +786,85 @@ def failure_example(output: Any) -> str:
     return " · ".join(p for p in [head, " ".join(ln.strip() for ln in body)] if p)
 
 
+def command_failure_words(output: Any) -> str:
+    """A command that could NOT run, in the words that SHOW it (v1.423.0
+    review): the tool's header ("exit 255", "command timed out") and only the
+    output lines that are the shell's own message or Iron Jarvis's hint
+    (``_NOT_FOUND_LINE`` / ``_WRONG_SHELL_LINE``, cmd.exe's second line of
+    "not recognized"). Never the rest of what the command printed: a line
+    like ``type clients.csv & tail -5`` printed the user's client file before
+    the pipe failed, and this report is pasted into another agent's prompt.
+    Raw — the caller cleans it."""
+    head, body = split_failure(output)
+    kept: list[str] = []
+    after_marker = False
+    for ln in body:
+        line = ln.rstrip()
+        if _NOT_FOUND_LINE.search(line) or _WRONG_SHELL_LINE.search(line):
+            kept.append(line.strip())
+            after_marker = True
+        elif after_marker and _CMD_CONTINUATION.search(line.strip()):
+            kept.append(line.strip())
+            after_marker = False
+        else:
+            after_marker = False
+    return " · ".join(p for p in [head, " ".join(kept)] if p)
+
+
+#: The argument names a call's evidence row leads with (where it acted).
+_PATH_KEYS = ("path", "file_path", "paths", "file", "folder", "cwd", "url", "pattern", "glob", "role")
+#: An argument value longer than this is shown by its size, never its text
+#: (a file's content, an edit's new text: the user's work, and the cap would
+#: cut the path off the row).
+ARG_VALUE_CHARS = 80
+
+
+def _sized(value: Any) -> Any:
+    """``value`` with every string longer than :data:`ARG_VALUE_CHARS`
+    replaced by its size (recursively)."""
+    if isinstance(value, str):
+        return value if len(value) <= ARG_VALUE_CHARS else f"<{len(value):,} characters>"
+    if isinstance(value, dict):
+        return {str(k): _sized(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sized(v) for v in value]
+    return value
+
+
 def args_words(tool: str, args_json: Any) -> str:
-    """A call's arguments as one line (raw — the caller cleans it): a
-    command tool's command, else the arguments as sorted JSON."""
+    """A call's arguments as one line (raw — the caller cleans it).
+
+    v1.423.0 review: a command tool's command with every here-document's
+    BODY left out (``harness/finish.strip_heredocs`` — the body is the file
+    the model meant to write, not the command's shape); any other tool's
+    arguments as JSON with WHERE it acted first (``_PATH_KEYS``) and every
+    long text shown by its size. Sorted JSON put ``content`` / ``new`` first,
+    so the 200-character row was the user's file text and the path was cut
+    off it."""
     try:
         args = json.loads(args_json) if isinstance(args_json, str) else args_json
     except (TypeError, ValueError):
-        return str(args_json or "")
+        return str(_sized(str(args_json or "")))
     if not isinstance(args, dict):
-        return str(args or "")
+        return str(_sized(args) if args is not None else "")
     if tool in COMMAND_TOOLS and isinstance(args.get("command"), str):
-        return args["command"]
+        command = args["command"]
+        try:
+            from ..harness.finish import strip_heredocs
+
+            command = strip_heredocs(command)
+        except Exception:  # noqa: BLE001 — a reading fault shows the size, never the text
+            command = str(_sized(command))
+        return command
+    lead = [k for k in _PATH_KEYS if k in args]
+    rest = sorted(str(k) for k in args if k not in lead)
+    # Where it acted is shown whole (the row's own cap still bounds it);
+    # every other long value by its size.
+    ordered = {str(k): (args[k] if k in lead else _sized(args[k])) for k in [*lead, *rest]}
     try:
-        return json.dumps(args, sort_keys=True, ensure_ascii=False)
+        return json.dumps(ordered, ensure_ascii=False)
     except (TypeError, ValueError):
-        return str(args)
+        return str(ordered)
 
 
 def model_words(provider: Any, model: Any) -> str:
@@ -780,6 +953,9 @@ class Occurrence:
     program: str = ""
     #: A plain fact for the evidence row that is no error ("in round 3").
     note: str = ""
+    #: The name the MODEL called the tool by (its dialect: "Bash", "Agent"),
+    #: when it differs from Iron Jarvis's own (``ToolInvocation.called_as``).
+    called_as: str = ""
 
 
 @dataclass
@@ -813,6 +989,10 @@ class Gathered:
     sessions: int = 0
     pieces: int = 0
     low_trust_left_out: int = 0
+    #: v1.423.0 review: a lead's calls whose coding session's replies could
+    #: not be read (unreadable, or the session is gone) — whether they ran in
+    #: a low-trust reply is not known, so they are left out (fail closed).
+    unknown_trust_left_out: int = 0
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -897,6 +1077,29 @@ def _lead_who(session_id: str) -> str:
     return "the lead"
 
 
+#: The calls Iron Jarvis makes ITSELF inside a coding session's reply
+#: (``ToolInvocation.called_as``, ``harness/finish.HARNESS_CALLED_AS``) —
+#: never the lead's: a coding agent sent to the model's prompt for a command
+#: the finish check re-ran would look in the wrong place.
+_HARNESS_WHO: dict[str, str] = {
+    "finish check": "Iron Jarvis's finish check",
+    "project check": "Iron Jarvis's project checks",
+}
+#: The module that makes each of those calls (it leads "Where in Iron Jarvis").
+_HARNESS_MODULES: dict[str, str] = {
+    "Iron Jarvis's finish check": "src/iron_jarvis/harness/finish.py",
+    "Iron Jarvis's project checks": "src/iron_jarvis/harness/checkers.py",
+}
+#: The finish check's team review (``harness/finish.REVIEW_CALLED_AS``).
+REVIEW_CALLED_AS = "team review"
+
+
+def _harness_who(session_id: str, called_as: Any) -> str:
+    """Who made a coding session's call: Iron Jarvis's own check, or the lead
+    (or an attempt)."""
+    return _HARNESS_WHO.get(str(called_as or ""), "") or _lead_who(session_id)
+
+
 def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "datetime | None" = None,
            version: "str | None" = None, os_name: "str | None" = None) -> Gathered:
     """What the records say (the module docstring). BLOCKING; never raises,
@@ -948,6 +1151,10 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
 
     setups: dict[str, str] = {}
     lines_by_thread: dict[str, list[dict[str, Any]]] = {}
+    #: v1.423.0 review: the sessions whose lines WERE read — a lead's call
+    #: is read only from one of these (whether its reply ended at low trust
+    #: is known only from the reply's line; unreadable or gone = left out).
+    known_threads: set[str] = set()
     for row in threads:
         tid = str(row[0])
         try:
@@ -959,7 +1166,9 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
         try:
             msgs = json.loads(row[2] or "[]")
         except (TypeError, ValueError):
-            msgs = []
+            msgs = None
+        if isinstance(msgs, list):
+            known_threads.add(tid)
         lines_by_thread[tid] = [m for m in msgs if isinstance(m, dict)] if isinstance(msgs, list) else []
 
     # Low-trust replies: their time windows (the lead's calls inside are
@@ -986,6 +1195,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             replies.append((tid, m, at))
 
     def _in_low(thread: str, dt: "datetime | None") -> bool:
+        if thread not in known_threads:
+            return True  # fail closed: its replies (and their trust) were not read
         if thread in low_all:
             return True
         if dt is None:
@@ -1028,21 +1239,23 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             engine,
             "SELECT t.session_id, t.tool, t.created_at, s.origin, s.agent_name, s.agent_type, "
             "s.provider, s.model, s.trust, CASE WHEN json_valid(s.options_json) "
-            "THEN json_extract(s.options_json, '$.build_session') END "
+            "THEN json_extract(s.options_json, '$.build_session') END, t.called_as "
             "FROM toolinvocation AS t LEFT JOIN session AS s ON s.id = t.session_id "
             f"WHERE t.created_at >= :lo AND t.created_at <= :hi AND {clause} "
             "ORDER BY t.created_at DESC LIMIT :n",
             lo=s_lo, hi=s_hi, n=MAX_LEAD_CALLS, **params,
         )
-        for sid, tool, created, origin, aname, atype, prov, model, trust, build in got:
+        for sid, tool, created, origin, aname, atype, prov, model, trust, build, called in got:
             sid = str(sid or "")
             at = _utc(created)
+            if str(called or "") == REVIEW_CALLED_AS:
+                continue  # the team review's own call: read off the reply line
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
                 threads_seen.add(thread)
                 if _in_low(thread, at):
                     continue
-                totals[(_lead_who(sid), leads.at(thread, at), str(tool))] += 1
+                totals[(_harness_who(sid, called), leads.at(thread, at), str(tool))] += 1
             else:
                 if str(trust or "").strip().lower() == "low":
                     continue
@@ -1079,20 +1292,29 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
         got = _rows(
             engine,
             "SELECT t.id, t.session_id, t.tool, t.output, t.args_json, t.created_at, s.origin, "
-            "s.agent_name, s.agent_type, s.provider, s.model, s.trust "
+            "s.agent_name, s.agent_type, s.provider, s.model, s.trust, t.called_as "
             "FROM toolinvocation AS t LEFT JOIN session AS s ON s.id = t.session_id "
             f"WHERE t.ok = 0 AND t.created_at >= :lo AND t.created_at <= :hi AND {clause} "
             "ORDER BY t.created_at DESC LIMIT :n",
             lo=s_lo, hi=s_hi, n=MAX_FAILED_CALLS, **params,
         )
-        for iid, sid, tool, output, args_json, created, origin, aname, atype, prov, model, trust in got:
-            sid, tool = str(sid or ""), str(tool or "")
+        for (iid, sid, tool, output, args_json, created, origin, aname, atype, prov, model, trust,
+             called) in got:
+            sid, tool, called = str(sid or ""), str(tool or ""), str(called or "")
             at = _utc(created)
+            if called == REVIEW_CALLED_AS:
+                # v1.423.0 review: the finish check's TEAM REVIEW is read off
+                # the reply line (``finish.review``) — its own ``delegate``
+                # row would count the same review a second time.
+                continue
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
+                if thread not in known_threads:
+                    out.unknown_trust_left_out += 1
+                    continue
                 if _in_low(thread, at):
                     continue
-                who, mw, surface = _lead_who(sid), leads.at(thread, at), "a coding session"
+                who, mw, surface = _harness_who(sid, called), leads.at(thread, at), "a coding session"
             else:
                 if str(trust or "").strip().lower() == "low":
                     continue
@@ -1101,11 +1323,14 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             if verdict is None:
                 continue
             kind, line = verdict
+            # A command that could not run is shown by the lines that SHOW it,
+            # never by the rest of its output (the user's own data).
+            words = command_failure_words(output) if tool in COMMAND_TOOLS else failure_example(output)
             occurrences.append(Occurrence(
                 kind=kind, who=who, model=mw, tool=tool, shape=group_shape(kind, line), surface=surface,
-                session=sid, at=at, example=failure_example(output), args=args_words(tool, args_json),
-                error=failure_example(output),
+                session=sid, at=at, example=words, args=args_words(tool, args_json), error=words,
                 program=program_of(line) if kind == "command_not_found" else "",
+                called_as=called if called and called != tool and called not in _HARNESS_WHO else "",
             ))
     except Exception:  # noqa: BLE001
         log.warning("fix request: failed calls unreadable", exc_info=True)
@@ -1114,7 +1339,7 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
 
     # ---- helper / teammate runs -------------------------------------------- #
     from ..agents.team import MISSION_MEMBER_ORIGIN
-    from ..harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN
+    from ..harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN, REVIEW_ONLY_OPTION
 
     pieces: Counter[tuple[str, str]] = Counter()
     helper_sessions: dict[str, tuple[str, str, str, bool]] = {}
@@ -1123,24 +1348,26 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             got = _rows(
                 engine,
                 "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
-                "failure_detail, trust, created_at, NULL FROM session "
+                "failure_detail, trust, created_at, NULL, json_extract(options_json, :rkey) FROM session "
                 "WHERE origin = :ho AND json_valid(options_json) AND json_extract(options_json, :key) = :t "
                 "AND created_at >= :lo AND created_at <= :hi ORDER BY created_at DESC LIMIT :n",
                 ho=HELPER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}", t=scope, lo=s_lo, hi=s_hi,
-                n=MAX_HELPER_RUNS,
+                n=MAX_HELPER_RUNS, rkey=f"$.{REVIEW_ONLY_OPTION}",
             )
         else:
             got = _rows(
                 engine,
                 "SELECT id, origin, agent_name, agent_type, provider, model, status, summary, "
                 "failure_detail, trust, created_at, CASE WHEN json_valid(options_json) "
-                "THEN json_extract(options_json, :key) END FROM session "
+                "THEN json_extract(options_json, :key) END, CASE WHEN json_valid(options_json) "
+                "THEN json_extract(options_json, :rkey) END FROM session "
                 "WHERE origin IN (:ho, :mo) AND created_at >= :lo AND created_at <= :hi "
                 "ORDER BY created_at DESC LIMIT :n",
                 ho=HELPER_ORIGIN, mo=MISSION_MEMBER_ORIGIN, key=f"$.{BUILD_SESSION_OPTION}",
-                lo=s_lo, hi=s_hi, n=MAX_HELPER_RUNS,
+                rkey=f"$.{REVIEW_ONLY_OPTION}", lo=s_lo, hi=s_hi, n=MAX_HELPER_RUNS,
             )
-        for sid, origin, aname, atype, prov, model, status, summary, detail, trust, created, build in got:
+        for (sid, origin, aname, atype, prov, model, status, summary, detail, trust, created, build,
+             review_only) in got:
             who, mw, surface = _who_of_session(origin, aname, atype, prov, model)
             low = str(trust or "").strip().lower() == "low"
             helper_sessions[str(sid)] = (who, mw, surface, low)
@@ -1152,9 +1379,13 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             pieces[(who, mw)] += 1
             if str(status or "").strip().lower() != "failed":
                 continue  # completed (its failed calls are read above) / stopped by the user
+            if review_only in (1, True, "1", "true"):
+                continue  # the finish check's team review: read off the reply line
             words = str(summary or "")
             if any(m in words.lower() for m in _STOP_MARKERS):
                 continue
+            if users_to_fix(words):
+                continue  # a sign-in, a key, a limit, a safety refusal: not Iron Jarvis's
             kind = ("context_too_small" if _TOO_SMALL.search(words)
                     else "helper_step_limit" if _STEP_LIMIT.search(words)
                     else "helper_failed")
@@ -1205,6 +1436,9 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             call = str(p.get("call") or "").strip()
             if sid.startswith("build:"):
                 thread = bare_thread(sid)
+                if thread not in known_threads:
+                    out.unknown_trust_left_out += 1
+                    continue
                 if _in_low(thread, at):
                     continue
                 threads_seen.add(thread)
@@ -1309,7 +1543,11 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
         evidence = [{
             "at": when(o.at),
             "session": short_id(o.session),
-            "tool": clean(o.tool, NAME_CHARS),
+            # v1.423.0 review: and the name the model called it by (its
+            # dialect: "shell (as Bash)") — which dialect wrote the call.
+            "tool": clean(o.tool, NAME_CHARS) + (
+                f" (as {clean(o.called_as, NAME_CHARS)})" if o.called_as and o.tool else ""
+            ),
             "args": clean(o.args, ARGS_CHARS),
             "error": clean(o.error, ERROR_CHARS),
             "note": clean(o.note, ERROR_CHARS),
@@ -1365,7 +1603,16 @@ def nothing_line(g: Gathered) -> str:
         else "in the coding sessions and their model team"
     )
     extra = f" (could not read: {', '.join(g.unreadable)})" if g.unreadable else ""
+    if g.unknown_trust_left_out:
+        extra += f" ({_unknown_words(g.unknown_trust_left_out)} were left out)"
     return f"Nothing to report: Iron Jarvis ran into no problems {where} in {_window_words(g.days)}{extra}."
+
+
+def _unknown_words(n: int) -> str:
+    return (
+        f"{_plural(n, 'call')} from coding sessions whose replies could not be read "
+        "(whether they ended at low trust is not known)"
+    )
 
 
 def _problem_block(n: int, p: Problem) -> str:
@@ -1394,6 +1641,9 @@ def _problem_block(n: int, p: Problem) -> str:
     extra = TOOL_MODULES.get(p.tool) if p.kind == "tool_failed" else None
     if extra and extra not in owners:
         owners.insert(0, extra)
+    caller = _HARNESS_MODULES.get(p.who)
+    if caller and caller not in owners:
+        owners.insert(0, caller)
     lines.append("- Where in Iron Jarvis: " + ", ".join(f"`{o}`" for o in owners) + ".")
     lines.append("- Evidence:")
     for ev in p.evidence:
@@ -1412,8 +1662,15 @@ def _problem_block(n: int, p: Problem) -> str:
 
 def render(g: Gathered, *, max_problems: int = MAX_PROBLEMS, max_chars: int = REPORT_CHARS) -> str:
     """The Markdown (deterministic: the same records give the same text)."""
+    return render_listed(g, max_problems=max_problems, max_chars=max_chars)[0]
+
+
+def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
+                  max_chars: int = REPORT_CHARS) -> tuple[str, int]:
+    """``(the Markdown, how many problems it LISTS)`` (v1.423.0 review: the
+    button says how many it copied, never the count found)."""
     if not g.problems:
-        return nothing_line(g)
+        return nothing_line(g), 0
     facts = [
         f"- Iron Jarvis version: {g.version}",
         f"- Operating system: {g.os}",
@@ -1431,6 +1688,8 @@ def render(g: Gathered, *, max_problems: int = MAX_PROBLEMS, max_chars: int = RE
             f"- Left out: {_plural(g.low_trust_left_out, 'reply or helper run', 'replies or helper runs')} "
             "that ended at low trust (Iron Jarvis never reads their text)"
         )
+    if g.unknown_trust_left_out:
+        facts.append(f"- Left out: {_unknown_words(g.unknown_trust_left_out)}")
     if g.unreadable:
         facts.append(f"- Could not read: {', '.join(g.unreadable)}")
     head = "\n".join([TITLE, "", INSTRUCTION, "", *facts])
@@ -1454,15 +1713,19 @@ def render(g: Gathered, *, max_problems: int = MAX_PROBLEMS, max_chars: int = RE
             else f"the report is capped at {max_chars:,} characters"
         )
         tail.append(f"Left out: {_plural(left, 'more problem')} ({why}).")
-    return "\n\n".join([head, *blocks, *tail])
+    return "\n\n".join([head, *blocks, *tail]), listed
 
 
 def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "datetime | None" = None,
                  version: "str | None" = None, os_name: "str | None" = None) -> dict[str, Any]:
-    """``{"text", "problems", "since", "until", "sessions"}`` — the route's
-    answer. BLOCKING (call it off the loop); never raises except
-    :class:`UnknownSession`. ``problems`` counts every problem found (the
-    text lists at most :data:`MAX_PROBLEMS`)."""
+    """``{"text", "problems", "listed", "complete", "since", "until",
+    "sessions"}`` — the route's answer. BLOCKING (call it off the loop); never
+    raises except :class:`UnknownSession`. ``problems`` counts every problem
+    found; v1.423.0 review: ``listed`` how many of them the text holds (at
+    most :data:`MAX_PROBLEMS`, fewer when the character cap is met), and
+    ``complete`` False when a source could not be read or a lead's calls were
+    left out (their trust not known) — the button then says the text's own
+    line, never a bare "nothing to report"."""
     try:
         g = gather(engine, days=days, session=session, now=now, version=version, os_name=os_name)
     except UnknownSession:
@@ -1474,9 +1737,12 @@ def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", no
         g = Gathered(version=str(version or "not known"), os=os_name or "not known", days=days_n,
                      since=until - timedelta(days=days_n), until=until,
                      unreadable=["Iron Jarvis's records"])
+    text, listed = render_listed(g)
     return {
-        "text": render(g),
+        "text": text,
         "problems": len(g.problems),
+        "listed": listed,
+        "complete": not g.unreadable and not g.unknown_trust_left_out,
         "since": iso_z(g.since),
         "until": iso_z(g.until),
         "sessions": g.sessions,
@@ -1487,6 +1753,6 @@ __all__ = [
     "COMMAND_TOOLS", "DEFAULT_DAYS", "Gathered", "HELPER_TOOLS", "INSTRUCTION", "KIND_TABLE",
     "MAX_DAYS", "MAX_PROBLEMS", "MIN_DAYS", "Occurrence", "Problem", "REPORT_CHARS", "TITLE",
     "TOOL_MODULES", "UnknownSession", "args_words", "bare_thread", "build_report", "clamp_days",
-    "classify_call", "clean", "failure_example", "gather", "group_shape", "member_name", "nothing_line", "os_words",
+    "classify_call", "clean", "command_failure_words", "users_to_fix", "failure_example", "gather", "render_listed", "group_shape", "member_name", "nothing_line", "os_words",
     "program_of", "render", "shape", "short_id", "split_failure",
 ]

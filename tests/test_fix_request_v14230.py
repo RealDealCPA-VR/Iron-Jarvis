@@ -481,8 +481,10 @@ def test_the_whole_report_is_capped_and_says_what_did_not_fit(tmp_path):
         _thread(db)
         _helper_session(db)
         for k in range(20):
+            # v1.423.0 review: many short arguments (a long one is shown by its
+            # size now, so it no longer fills the row).
             _call(db, iid=f"tool_big{k}", sid=HELPER, tool=f"tool{k:02d}", ok=False,
-                  verdict=PermissionMode.ALLOW, args={"blob": "a" * 1000},
+                  verdict=PermissionMode.ALLOW, args={f"k{i}": "a" * 70 for i in range(5)},
                   output=f"{chr(65 + k)} " + ("long error words " * 200),
                   at=T0 + timedelta(minutes=2, seconds=k))
         db.commit()
@@ -620,7 +622,9 @@ def test_the_route_answers_the_report(tmp_path, held_clock):
     res = client.get("/team/fix-request", params={"days": 7})
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"text", "problems", "since", "until", "sessions"}
+    # v1.423.0 review: and how many of them the text lists.
+    assert set(body) == {"text", "problems", "listed", "complete", "since", "until", "sessions"}
+    assert body["listed"] == 3 and body["complete"] is True
     assert body["problems"] == 3 and body["sessions"] == 1
     assert body["since"] == "2026-10-26T12:00:00Z" and body["until"] == "2026-11-02T12:00:00Z"
     assert body["text"].startswith(FR.TITLE) and "## 3. A tool call written as text" in body["text"]
