@@ -158,7 +158,8 @@ describe("U8 — chat controls explain themselves", () => {
     // it the default model and recomputes when either changes.
     expect(chat).toContain("const defaultModelName = useDaemon().health?.default_model ?? \"\";");
     expect(chat).toContain("modelTriggerOf(choice, models, defaultProviderId, defaultModelName)");
-    expect(chat).toContain("[choice, models, defaultProviderId, defaultModelName],");
+    // v1.424.0 (D6): the chosen account also changes the trigger.
+    expect(chat).toContain("[choice, models, defaultProviderId, defaultModelName, chatAccount]);");
     expect(src("components/chat/ModelMenu.tsx")).toContain(
       "label = defaultModelName ? `default · ${defaultModelName}` : \"default model\";",
     );

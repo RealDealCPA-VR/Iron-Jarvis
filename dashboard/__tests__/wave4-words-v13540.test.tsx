@@ -69,7 +69,8 @@ describe("a refused key: one sentence in the chat line, on the run, in the bell"
     // The join is the daemon's own (failure_words.plain_reason).
     expect(failureSentence(K.title, K.fix)).toBe(K.sentence);
     const py = src("../src/iron_jarvis/providers/failure_words.py");
-    expect(py).toContain('return f"{words[0]}. {words[1]}"');
+    // v1.424.0: the join is unchanged; D1 wraps it to add the not-moved sentence.
+    expect(py).toContain('f"{words[0]}. {words[1]}"');
   });
 
   it("a failure without the plain words keeps its own message, and no hover", () => {

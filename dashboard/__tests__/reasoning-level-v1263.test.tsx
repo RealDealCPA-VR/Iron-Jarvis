@@ -219,7 +219,8 @@ describe("the reasoning control exists only where it is an option (v1.263.0)", (
     // object names the field, and the restore reads it back through the
     // vocabulary guard.
     const page = readFileSync(join(__dirname, "..", "app", "chat", "page.tsx"), "utf8").replace(/\r\n/g, "\n");
-    expect(page).toMatch(/approval_mode: approvalMode,\s*reasoning,\s*\};/);
+    // v1.424.0 (D6): the chat's account may follow it in the same object.
+    expect(page).toMatch(/approval_mode: approvalMode,\s*reasoning,\s*(?:\/\/[^\n]*\n\s*)?(?:\.\.\.\(chatAccountRef|\};)/);
     expect(page).toMatch(/setReasoning\(REASONING_LEVELS\.includes\(setup\.reasoning \?\? ""\)/);
   });
 
