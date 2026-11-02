@@ -84,7 +84,14 @@ holding the same role, the library is asked for a ``layer_edit`` of that
 role's brief (``.ironjarvis/harness/sub_agents/<role>.md``) in the newest
 coding-session folder among the cited findings' sessions
 (``library.propose_role_brief_edit``) — through the library's own validators
-and Accept path.
+and Accept path, and (v1.423.0, lane E) only while the library's own switch
+``build_reflect`` ("learn from Build sessions") is on: off means no library
+suggestion of any kind.
+
+MEASUREMENT (Phase 3, ``agents/team_measure``): each accepted habit's
+member record is split at its acceptance — first-pass approval, confirmed
+findings per piece, check pass rate — and a habit that seems to make things
+worse is FLAGGED on ``GET /team``, never removed by Iron Jarvis.
 
 Every reader and writer here is BLOCKING (SQLite, files) and never raises;
 the async ones hop.
@@ -1380,11 +1387,16 @@ def _read(path: Any) -> "str | None":
     is none, it cannot be read as UTF-8 text, or it is longer than
     :data:`NOTES_READ_BYTES` (never read whole)."""
     try:
-        with path.open("rb") as fh:
-            data = fh.read(NOTES_READ_BYTES + 1)
+        return _text(_raw(path))
     except OSError:
         return None
-    if len(data) > NOTES_READ_BYTES:
+
+
+def _text(data: "bytes | None") -> "str | None":
+    """v1.423.0 (lane E): the text of :func:`_raw`'s bytes (CRLF read as LF,
+    a BOM dropped), or None when there are none, they are not UTF-8 text, or
+    the file is longer than :data:`NOTES_READ_BYTES`."""
+    if data is None or len(data) > NOTES_READ_BYTES:
         return None
     try:
         text = data.decode("utf-8")
@@ -1393,6 +1405,56 @@ def _read(path: Any) -> "str | None":
     # (Line ends never make an edit: ``AgentFiles`` writes the OS's, and an
     # editor that only re-saves with other line ends changed nothing.)
     return text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _raw(path: Any) -> "bytes | None":
+    """v1.423.0 (lane E): the file's BYTES, at most :data:`NOTES_READ_BYTES`
+    + 1 (never read whole) — None when there is no file. RAISES ``OSError``
+    on any other failure (the caller decides what an unreadable file means)."""
+    try:
+        with path.open("rb") as fh:
+            return fh.read(NOTES_READ_BYTES + 1)
+    except FileNotFoundError:
+        return None
+
+
+class _ChangedWhileWriting(OSError):
+    """The file changed between the decision to write it and the replace."""
+
+
+def _write_temp(path: Any, text: str) -> Any:
+    """Write ``text`` to a fresh temp file beside ``path`` — as
+    ``agents/files._atomic_write`` writes (UTF-8, the OS's line ends) — and
+    return it."""
+    import uuid
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.ij-{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    return tmp
+
+
+def _replace_unless_changed(path: Any, text: str, *, expect: "bytes | None") -> None:
+    """v1.423.0 (lane E, a round-2 review leftover — the
+    ``profile/share._atomic_write(expect=)`` pattern): write ``text`` to a
+    temp file, read the file AGAIN right before the replace, and abandon the
+    write (:class:`_ChangedWhileWriting`) when it no longer holds the bytes
+    the decision read (``expect``; None = there was no file). A save the
+    user made while Iron Jarvis was deciding wins — the window left is the
+    re-read-to-replace gap, not the whole render."""
+    import os
+
+    tmp = _write_temp(path, text)
+    try:
+        if _raw(path) != expect:
+            raise _ChangedWhileWriting("TEAM-NOTES.md changed while Iron Jarvis was writing it")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass
@@ -1410,7 +1472,13 @@ def render(platform: Any, member: str) -> Rendered:
     since, is the USER's: kept as it is, and :data:`KEPT_SENTENCE` says so.
     Atomic, with a revision copy of the previous text (``revisions/
     team-notes/``). A member with no habit and no file gets no file.
-    BLOCKING; never raises."""
+    BLOCKING; never raises.
+
+    v1.423.0 (lane E, a round-2 review leftover): the file is read ONCE as
+    bytes for the decision and AGAIN right before the replace
+    (:func:`_replace_unless_changed`): a save the user made in between (an
+    editor open on the file) is never overwritten — the write is abandoned
+    and the file kept, said like any other hand edit."""
     engine = platform.engine
     with _RENDER_LOCK:
         try:
@@ -1421,8 +1489,13 @@ def render(platform: Any, member: str) -> Rendered:
             habits = [n.text for n in active_notes(engine, member)]
             want = render_text(habits)
             state = _state(engine, member)
-            current = _read(path) if path.exists() else None
-            if path.exists() and current is None:
+            try:
+                before = _raw(path)
+            except OSError:
+                # There, but unreadable: the user's — kept, never written over.
+                return Rendered(state="kept", path=str(path), sentence=KEPT_SENTENCE)
+            current = _text(before)
+            if before is not None and current is None:
                 return Rendered(state="kept", path=str(path), sentence=KEPT_SENTENCE)
             if current is not None and current == want:
                 # Already exactly what Iron Jarvis would write: nothing to do
@@ -1436,9 +1509,14 @@ def render(platform: Any, member: str) -> Rendered:
                 return Rendered(state="kept", path=str(path), sentence=KEPT_SENTENCE)
             if current is not None:
                 _revision(path, current)
-            from .files import _atomic_write
-
-            _atomic_write(path, want)
+            try:
+                _replace_unless_changed(path, want, expect=before)
+            except _ChangedWhileWriting:
+                # The user saved it while Iron Jarvis was deciding: theirs now
+                # — kept, and Iron Jarvis's last-written text unchanged (so it
+                # reads as a hand edit until they put it back).
+                log.info("TEAM-NOTES.md changed while it was being written; the user's file was kept")
+                return Rendered(state="kept", path=str(path), sentence=KEPT_SENTENCE)
             _save_state(engine, member, written_sha=_sha(want))
             return Rendered(state="written", path=str(path))
         except Exception as exc:  # noqa: BLE001
