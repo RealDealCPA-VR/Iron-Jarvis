@@ -41,9 +41,9 @@ a marker file), a skill, a command, an agent, and an installed plugin:
 * ``CLAUDE_CODE_PLUGIN_DIRS`` (an ENVIRONMENT variable, read from the binary:
   ``split`` on the path delimiter, absolute local paths only) naming a plugin
   folder of Iron Jarvis's own that holds ``.mcp.json``, ``hooks/hooks.json`` and
-  junctions ``skills``/``commands``/``agents`` to the owner's folders (the
-  shipped layout links each SKILL folder on its own inside a real ``skills``
-  folder — the real-CLI pin measures that layout too), plus an
+  ``skills``/``commands``/``agents`` (measured with junctions to the owner's
+  folders AND with copies of them — the shipped layout, see THE FOLDER; the
+  real-CLI pin measures copies), plus an
   installed plugin's folder after an ``;``: EVERYTHING listed, under the
   plugin's name — ``my:owner-cmd``, ``my:owner-skill``, agent
   ``my:owner-agent``, server ``plugin:my:owner-mcp`` connected, the hook fired,
@@ -53,6 +53,10 @@ a marker file), a skill, a command, an agent, and an installed plugin:
   the variable). The owner's ``skills/synced/<account>/…`` (claude.ai's own,
   per account) and ``skills/.trash/…`` were NOT loaded through the junction.
   Claude Code wrote only its own ``plugins/data/my-inline`` into the account.
+* v1.424.0 review: a ``plugin.json`` whose ``skills`` / ``commands`` /
+  ``agents`` name the owner's folders by an ABSOLUTE path, or by a ``../``
+  path out of the plugin, is not loaded at all (nothing listed); only paths
+  inside the plugin are.
 * a ``${VAR}`` that is not set stays LITERAL (the server got the text
   ``${IJ_…}``, never another value); a plugin folder that does not exist is
   skipped and Claude Code starts normally.
@@ -81,7 +85,7 @@ WHAT CROSSES, WHAT NEVER DOES. From the owner's config folder
 (``CLAUDE_CONFIG_DIR`` as the app itself runs, else ``~/.claude``): the
 user-scope ``mcpServers`` of ``.claude.json``, the ``hooks`` of
 ``settings.json`` (none when it says ``disableAllHooks``), each skill folder
-(one link each: never ``synced`` — claude.ai's skills of the owner's ACCOUNT —
+(one copy each: never ``synced`` — claude.ai's skills of the owner's ACCOUNT —
 never a dot folder such as ``.trash``), the ``commands`` and ``agents`` folders,
 and the installed plugins ``enabledPlugins`` does not turn off. NEVER: credentials (``.credentials.json``, OAuth), the
 ``projects`` / trust / history of ``.claude.json``, local-scope servers,
@@ -97,27 +101,57 @@ name is a hash of the server's WHOLE definition and the field, so a terminal
 started before the owner changed a server never fills the new file with an old
 value: it gets the literal reference (measured) and that server does not start
 until a new terminal. A server with any other field that looks like a secret
-(``detections.redact.mask`` would change it) is left out; so is a hook whose
-definition looks like one. What was left out is said on the card.
+(``detections.redact.mask`` would change it, or the night shift's commit screen
+``harness.night_commit.secrets_in`` finds one — v1.424.0 review: ``mask`` alone
+missed a Google ``AIza…`` key given as ``--key``) is left out; so is a hook
+whose definition looks like one. A copied skill, command or agent never carries
+a file with a secret's own name (``.env``, ``*.pem``, ``credentials.json`` —
+``night_commit.secret_name``) or a text file holding a key (``secrets_in``):
+the owner's file stays where it is, only the copy skips it. What was left out
+is said on the card.
 
 THE FOLDER (``<userData>/claude-setup`` beside the state home, like the
 downloaded backgrounds; a dev or test home keeps it at ``<home>/claude-setup``
-and ``create_backup`` / the storage report leave it out — Python's ``os.walk``
-and ``rglob`` follow a junction): Iron Jarvis's files are written only when
-their bytes change, with the sha256 kept in ``state.json``; a file whose bytes
-are not the ones Iron Jarvis wrote (a hand edit) is never overwritten or
-removed; a junction is replaced only when ``state.json`` says Iron Jarvis made
-it, a real folder in its place is left alone; nothing is ever deleted
-recursively (a junction is removed with ``os.rmdir``, which never touches its
-target). Turning the setting off, or an owner setup that became empty, takes
-Iron Jarvis's files and junctions away, so a terminal started earlier finds no
-folder (measured: Claude Code starts normally) — off is today exactly for the
-next start.
+and ``create_backup`` / the storage report leave it out: copies of the owner's
+own files, remade when needed). The skills, commands and agents are COPIES,
+NEVER LINKS (v1.424.0 review). The first cut linked them with directory
+junctions, and a junction in a folder Iron Jarvis does not delete itself is
+only as safe as EVERY program that may one day delete that folder. MEASURED on
+this PC (2026-11-02, scratch junctions to scratch folders, never a real home):
+Python 3.12 ``shutil.rmtree``, Windows PowerShell 5.1 and PowerShell 7
+``Remove-Item -Recurse -Force``, ``rd /s /q``, Git's ``rm -rf`` and Node 20's
+``fs.rmSync`` remove the junction and leave its target — but NSIS 3.0.4.1
+``RMDir /r`` (the installed app's uninstaller runs it over ``%APPDATA%\Iron
+Jarvis`` when given ``--delete-app-data``, electron-builder's
+``uninstaller.nsh``) and Electron 42's Node 24.17 ``fs.rmSync(dir,
+{recursive: true})`` (the desktop shell's, the dashboard server's and
+Iron-Proxy's runtime) FOLLOWED the junctions and deleted the owner's real
+files. A copy cannot lose anything by being deleted, and Claude Code on
+another account cannot write into the owner's real skills through it either.
+A copy is refreshed when its source's files, sizes or times change (a
+signature in ``state.json``; an unchanged source reads nothing); its walk is
+by hand (Python 3.12's ``os.walk`` descends into a junction) and never follows
+or copies a link inside the owner's folder; bounded per file, per folder and
+per start (said on the card). Iron Jarvis's files are written only when their
+bytes change, with each sha256 kept in ``state.json``; a file whose bytes are
+not the ones Iron Jarvis wrote (a hand edit) is never overwritten or removed;
+nothing is written or removed THROUGH a link in Iron Jarvis's folder (a link
+it did not make is left alone and said); a folder is removed only when empty
+(``os.rmdir``) and nothing is ever deleted recursively. A junction the first
+cut made (recorded in ``state.json``) is removed with ``os.rmdir`` — which
+never touches its target — and replaced by a copy. Turning the setting off, or
+an owner setup that became empty, takes Iron Jarvis's files and copies away,
+so a terminal started earlier finds no folder (measured: Claude Code starts
+normally) — off is today exactly for the next start.
 
-Chat's Claude Code (``providers/adapters/claude_native``) is untouched: it runs
-with ``--setting-sources ""``, ``--strict-mcp-config``,
+Chat's Claude Code (``providers/adapters/claude_native``) gets none of it: it
+runs with ``--setting-sources ""``, ``--strict-mcp-config``,
 ``--disable-slash-commands`` and ``--tools ""`` on EVERY account, the one this
-PC is signed in to included, so there is no owner setup to match.
+PC is signed in to included, so there is no owner setup to match — and
+(v1.424.0 review, measured) a ``CLAUDE_CODE_PLUGIN_DIRS`` the user set
+themselves is honoured even under that argv (its plugin's SessionStart hook
+ran), so the shared login guard ``providers.claude_models.child_env`` drops it
+and every ``IJ_MY_SETUP_*`` value.
 
 Every function here BLOCKS (stats, small reads, writes) and never raises into
 its caller: a failure is logged once and the environment is returned as it was.
@@ -166,7 +200,10 @@ HOME_VAR = "CLAUDE_CONFIG_DIR"
 MAX_SERVERS = 50
 MAX_ENV_CHARS = 16_000
 MAX_JSON_BYTES = 32 * 1024 * 1024
-MAX_POLICY_BYTES = 1024 * 1024
+#: Claude Code reads a policy or server-managed cache up to 8 MB (``xo=8388608``
+#: in the 2.1.316 binary); a smaller bound read a larger one as "not
+#: forbidding", and then Claude Code would refuse to start (v1.424.0 review).
+MAX_POLICY_BYTES = 8 * 1024 * 1024
 #: Files looked at when counting commands / agents (a count, not a bound on use).
 MAX_COUNT = 2000
 
@@ -217,12 +254,23 @@ def _mask(text: str) -> str:
 
 
 def _secretish(value: Any) -> bool:
-    """Would ``detections.redact.mask`` change this value's JSON?"""
+    """Would ``detections.redact.mask`` change this value's JSON — or does it
+    hold a value the night shift's commit screen calls a key
+    (``harness.night_commit.secrets_in``)?
+
+    v1.424.0 review: ``mask`` alone missed a Google ``AIza…`` key given as
+    ``--key AIza…`` (no ``key=`` / ``Authorization`` shape), so a hook holding
+    one was written to ``hooks.json`` in plain text. Both screens, either one
+    enough."""
     try:
         dump = json.dumps(value, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return True
-    return _mask(dump) != dump
+    if _mask(dump) != dump:
+        return True
+    from ..harness.night_commit import secrets_in
+
+    return bool(secrets_in(dump))
 
 
 _JSON_CACHE: dict[str, tuple[int, int, Any]] = {}
@@ -283,10 +331,10 @@ class OwnerSetup:
     env: dict[str, str] = field(default_factory=dict)
     hooks: dict[str, Any] | None = None
     hook_count: int = 0
-    #: The owner's SKILL folders, one link each (never ``synced``, a dot
+    #: The owner's SKILL folders, one COPY each (never ``synced``, a dot
     #: folder, or a plugin kept in the skills folder — see :func:`_skills`).
     skills: list[Path] = field(default_factory=list)
-    #: The owner's ``commands`` / ``agents`` folders, linked whole (None =
+    #: The owner's ``commands`` / ``agents`` folders, copied whole (None =
     #: nothing there; neither ever holds anything of one account's).
     commands: Path | None = None
     agents: Path | None = None
@@ -449,12 +497,12 @@ _NOT_SKILLS = frozenset({"synced"})
 
 
 def _skills(cfg: Path, setup: OwnerSetup) -> None:
-    """Each skill folder of the owner's, ONE LINK EACH (v1.424.0 review: the
-    whole folder linked would carry ``synced/<account>/…`` — claude.ai's skills of
-    the owner's ACCOUNT — into another account the day Claude Code reads one
-    level deeper; per-skill links make that Iron Jarvis's guarantee, not a
-    measured habit). Never a dot folder (``.trash``), never ``synced``; a plugin
-    kept here is passed on as a plugin."""
+    """Each skill folder of the owner's, ONE COPY EACH (the first cut's review:
+    the whole folder carried would bring ``synced/<account>/…`` — claude.ai's
+    skills of the owner's ACCOUNT — into another account the day Claude Code
+    reads one level deeper; one per skill makes that Iron Jarvis's guarantee,
+    not a measured habit). Never a dot folder (``.trash``), never ``synced``; a
+    plugin kept here is passed on as a plugin."""
     base = cfg / "skills"
     try:
         entries = sorted(os.scandir(base), key=lambda e: e.name)
@@ -539,8 +587,8 @@ def read_owner() -> OwnerSetup:
             if n:
                 setup.agents, setup.agent_count = agents, n
         _installed_plugins(cfg, settings, setup)
-        # A junction cannot lead to a network folder (and a link to one would be
-        # an SMB connection at every Claude Code start): left out, said so.
+        # A folder on a network share is left out, said so: copying it would
+        # open an SMB connection at every Claude Code start.
         if any(_is_network(p) for p in setup.skills):
             setup.skills = []
             setup.left_out.append("your skills (they are on a network folder)")
@@ -611,15 +659,23 @@ def sideload_forbidden(account_home: str, env: Mapping[str, str] | None = None) 
     Claude Code from starting at all — measured in the binary.) Never raises;
     a policy that cannot be read counts as not forbidding."""
     try:
-        paths = [Path(account_home) / "remote-settings.json", managed_dir() / "managed-settings.json"]
+        paths = [Path(account_home) / "remote-settings.json"]
+        folders = [managed_dir()]
         override = str((env or {}).get("CLAUDE_CODE_MANAGED_SETTINGS_PATH") or "").strip()
-        if override:
+        if override and not _is_network(override):
+            # v1.424.0 review: the binary calls this "the policy folder (or the
+            # one CLAUDE_CODE_MANAGED_SETTINGS_PATH names)" — a FOLDER, read the
+            # way the machine's own is. Read as a file too (an older build):
+            # reading more can only keep the variable unset, never set it.
             paths.append(Path(override))
-        drop_in = managed_dir() / "managed-settings.d"
-        try:
-            paths += sorted(p for p in drop_in.iterdir() if p.suffix.lower() == ".json")[:50]
-        except OSError:
-            pass
+            folders.append(Path(override))
+        for base in folders:
+            paths.append(base / "managed-settings.json")
+            drop_in = base / "managed-settings.d"
+            try:
+                paths += sorted(p for p in drop_in.iterdir() if p.suffix.lower() == ".json")[:50]
+            except OSError:
+                pass
         for p in paths:
             if _forbids(_read_json(p, MAX_POLICY_BYTES)):
                 return True
@@ -700,6 +756,9 @@ def _load_state(folder: Path) -> dict[str, Any]:
     if not isinstance(doc, dict):
         doc = {}
     doc["files"] = doc.get("files") if isinstance(doc.get("files"), dict) else {}
+    doc["trees"] = doc.get("trees") if isinstance(doc.get("trees"), dict) else {}
+    # The first cut's junctions (a dev or test home that ran it): each is
+    # removed with ``os.rmdir`` at the next start, never followed.
     doc["links"] = doc.get("links") if isinstance(doc.get("links"), dict) else {}
     return doc
 
@@ -708,7 +767,21 @@ def _save_state(folder: Path, doc: dict[str, Any]) -> None:
     _write(folder / STATE_FILE, json.dumps(doc, indent=2, sort_keys=True).encode("utf-8"))
 
 
+#: v1.424.0 review: the owner's skills, commands and agents are COPIED (never
+#: linked — see the module docstring). Bounds: one file, one folder (a skill,
+#: the commands, the agents), all copies of one start, a file read for a key.
+MAX_COPY_FILE_BYTES = 8 * 1024 * 1024
+MAX_TREE_FILES = 2000
+MAX_TREE_DEPTH = 8
+MAX_COPY_BYTES = 128 * 1024 * 1024
+MAX_SCAN_BYTES = 1024 * 1024
+#: Folders never copied: a cache Python remakes by itself.
+_SKIP_DIRS = frozenset({"__pycache__"})
+
+
 def _wanted(setup: OwnerSetup) -> tuple[dict[str, bytes | None], dict[str, Path | None]]:
+    """``(files, trees)``: Iron Jarvis's own three files, and each folder of the
+    owner's that is COPIED (``skills/<name>``, ``commands``, ``agents``)."""
     plugin = {
         "name": PLUGIN_NAME,
         "version": "1.0.0",
@@ -721,33 +794,246 @@ def _wanted(setup: OwnerSetup) -> tuple[dict[str, bytes | None], dict[str, Path 
         "hooks/hooks.json": json.dumps({"hooks": setup.hooks}, indent=2, sort_keys=True).encode("utf-8")
         if setup.hooks else None,
     }
-    links: dict[str, Path | None] = {f"skills/{p.name}": p for p in setup.skills}
-    links.update({"commands": setup.commands, "agents": setup.agents})
-    return files, links
+    trees: dict[str, Path | None] = {f"skills/{p.name}": p for p in setup.skills}
+    trees.update({"commands": setup.commands, "agents": setup.agents})
+    return files, trees
+
+
+def _unit_words(unit: str) -> str:
+    """``skills/pixio`` -> "your skill pixio"; ``commands`` -> "your commands"."""
+    if unit.startswith("skills/"):
+        return f"your skill {unit.split('/', 1)[1]}"
+    return f"your {unit}"
+
+
+def _link_on_the_way(root: Path, path: Path) -> str:
+    """The first part of ``path`` (from ``root`` itself down) that is a LINK,
+    as a path relative to ``root`` (``"."`` = root itself), else "". Nothing is
+    ever written or removed through one: it would land wherever it points."""
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return str(path)
+    cur = root
+    if _is_link(cur):
+        return "."
+    for part in rel.parts:
+        cur = cur / part
+        if _is_link(cur):
+            return cur.relative_to(root).as_posix()
+    return ""
+
+
+def _plan_tree(src: Path) -> tuple[list[tuple[str, Path, int, int]], list[str], bool]:
+    """BLOCKING: the files of the owner's folder ``src`` a copy carries —
+    ``[(posix rel, path, size, mtime_ns)]`` sorted, words for what stays
+    behind, and whether it fits the bounds. A LINK inside it (a junction, a
+    symlink) is never followed and never copied; a dot entry (``.git``,
+    ``.trash``, an ``.env``) and ``__pycache__`` never either. Hand-walked:
+    Python 3.12's ``os.walk`` descends into a junction (measured)."""
+    out: list[tuple[str, Path, int, int]] = []
+    left: list[str] = []
+    stack: list[tuple[Path, str, int]] = [(src, "", 0)]
+    while stack:
+        folder, prefix, depth = stack.pop()
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError:
+            continue
+        for e in entries:
+            name = e.name
+            if name.startswith(".") or name in _SKIP_DIRS:
+                continue
+            rel = prefix + name
+            try:
+                if e.is_symlink() or bool(getattr(e, "is_junction", lambda: False)()):
+                    continue
+                if e.is_dir(follow_symlinks=False):
+                    if depth + 1 < MAX_TREE_DEPTH:
+                        stack.append((Path(e.path), rel + "/", depth + 1))
+                    continue
+                if not e.is_file(follow_symlinks=False):
+                    continue
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if st.st_size > MAX_COPY_FILE_BYTES:
+                left.append(f"{rel} (too large to copy)")
+                continue
+            out.append((rel, Path(e.path), int(st.st_size), int(st.st_mtime_ns)))
+            if len(out) > MAX_TREE_FILES:
+                return out, left, False
+    out.sort(key=lambda t: t[0])
+    return out, left, True
+
+
+def _signature(src: Path, entries: list[tuple[str, Path, int, int]]) -> str:
+    h = hashlib.sha256(_key(src).encode("utf-8"))
+    for rel, _p, size, mtime in entries:
+        h.update(f"\0{rel}\0{size}\0{mtime}".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _holds_key(rel: str, data: bytes) -> bool:
+    """Is this a file a copy must NOT carry: a secret's own file name
+    (``.env``, ``*.pem``, ``credentials.json``…) or a text file holding a value
+    the night shift's commit screen calls a key (its rules: ``harness/
+    night_commit``)? The owner's file stays where it is; only the copy skips it."""
+    from ..harness.night_commit import secret_name, secrets_in
+
+    if secret_name(rel):
+        return True
+    if len(data) > MAX_SCAN_BYTES:
+        return False
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return bool(secrets_in(text))
+
+
+def _prune_empty(root: Path, top: Path) -> None:
+    """Remove the EMPTY folders under ``top`` (``top`` too) — ``os.rmdir`` only,
+    deepest first, never a link (``os.rmdir`` on a junction removes the
+    junction, which is not an empty folder of ours), never through one."""
+    if _link_on_the_way(root, top) or not top.is_dir():
+        return
+    folders: list[Path] = [top]
+    i = 0
+    while i < len(folders) and len(folders) < 50_000:
+        try:
+            entries = list(os.scandir(folders[i]))
+        except OSError:
+            entries = []
+        for e in entries:
+            try:
+                if e.is_symlink() or bool(getattr(e, "is_junction", lambda: False)()):
+                    continue
+                if e.is_dir(follow_symlinks=False):
+                    folders.append(Path(e.path))
+            except OSError:
+                continue
+        i += 1
+    for f in sorted(folders, key=lambda p: len(p.parts), reverse=True):
+        try:
+            os.rmdir(f)
+        except OSError:
+            pass
+
+
+def _remove_copy(root: Path, unit: str, files: Mapping[str, str], said: list[str]) -> None:
+    """Take Iron Jarvis's copy of ``unit`` away: each file it wrote whose bytes
+    are still its own is unlinked (one file at a time — never a recursive
+    delete); a hand edit stays (said); then the empty folders go."""
+    top = root / unit
+    edited = False
+    for rel, sha in files.items():
+        dest = top / rel
+        if _link_on_the_way(root, dest):
+            continue
+        cur = _read(dest)
+        if cur is None:
+            continue
+        if _sha(cur) == sha:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        else:
+            edited = True
+    if edited:
+        said.append(f"{unit} in Iron Jarvis's folder was changed by hand, so it was left as it is")
+    _prune_empty(root, top)
+
+
+def _copy_tree(
+    root: Path, unit: str, src: Path, rec: Mapping[str, Any], said: list[str], budget: list[int]
+) -> dict[str, Any]:
+    """Bring Iron Jarvis's copy of ``src`` at ``root/unit`` up to date and
+    return the unit's new record. An unchanged source (same files, sizes and
+    times) whose copied files are all still there reads and writes nothing. A
+    file in the copy whose bytes are not the ones Iron Jarvis wrote is a hand
+    edit: never overwritten, never removed."""
+    entries, left, fits = _plan_tree(src)
+    old = rec.get("files") if isinstance(rec.get("files"), dict) else {}
+    if not fits:
+        _remove_copy(root, unit, old, said)
+        return {"files": {}, "left": [f"{_unit_words(unit)} (more than {MAX_TREE_FILES} files to copy)"]}
+    sig = _signature(src, entries)
+    if rec.get("sig") == sig and all((root / unit / rel).is_file() for rel in old):
+        return dict(rec)
+    files: dict[str, str] = {}
+    edited = False
+    for rel, path, size, _mtime in entries:
+        if budget[0] + size > MAX_COPY_BYTES:
+            left.append(f"{rel} (the copies are too large)")
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if _holds_key(rel, data):
+            left.append(f"{rel} (it looks like it holds a key)")
+            continue
+        dest = root / unit / rel
+        if _link_on_the_way(root, dest):
+            continue
+        cur = _read(dest)
+        mine = old.get(rel)
+        if cur is not None and cur != data and (mine is None or _sha(cur) != mine):
+            edited = True
+            continue
+        try:
+            if cur != data:
+                _write(dest, data)
+        except OSError:
+            left.append(f"{rel} (it could not be copied)")
+            continue
+        files[rel] = _sha(data)
+        budget[0] += len(data)
+    # Iron Jarvis's files the owner's folder no longer has (or no longer gives).
+    for rel, sha in old.items():
+        if rel in files:
+            continue
+        dest = root / unit / rel
+        cur = None if _link_on_the_way(root, dest) else _read(dest)
+        if cur is None:
+            continue
+        if _sha(cur) == sha:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        else:
+            edited = True
+    if edited:
+        said.append(f"{unit} in Iron Jarvis's folder was changed by hand, so it was left as it is")
+    _prune_empty(root, root / unit)
+    # A copy changed by hand keeps no signature: it is looked at again at the
+    # next start, so the owner's newer file arrives once the edit is gone.
+    return {"sig": "" if edited else sig, "files": files,
+            "left": [f"{_unit_words(unit)}: {w}" for w in left]}
 
 
 def _sync(
-    folder: Path, files: dict[str, bytes | None], links: dict[str, Path | None], *, write: bool = True
+    folder: Path, files: dict[str, bytes | None], trees: dict[str, Path | None], *, write: bool = True
 ) -> list[str]:
-    """Make Iron Jarvis's files and links in ``folder/my`` what ``files`` and
-    ``links`` say (None = not there), by the module docstring's rules. Returns
-    plain words for what was left alone. ``write=False``: only the words (the
-    card's read; nothing on disk changes)."""
+    """Make Iron Jarvis's files and copies in ``folder/my`` what ``files`` and
+    ``trees`` say (None = not there), by the module docstring's rules. Returns
+    plain words for what was left alone or left out. ``write=False``: only the
+    words (the card's read; nothing on disk changes, nothing is copied — the
+    copies' words are the ones the last start recorded)."""
     root = folder / PLUGIN_DIR
     doc = _load_state(folder)
     said: list[str] = []
-    # A link Iron Jarvis made that is no longer wanted (a skill the owner
-    # removed, everything when retiring) goes — removals first, so a link is
-    # never made inside one that is about to go.
-    links = {**{rel: None for rel in doc["links"] if rel not in links}, **links}
-    links = dict(sorted(links.items(), key=lambda kv: kv[1] is not None))
     for rel, data in files.items():
         path = root / rel
-        cur = _read(path)
-        mine = doc["files"].get(rel)
-        if _is_link(path):
+        on_the_way = _link_on_the_way(root, path)
+        if on_the_way:
             said.append(f"{rel} in Iron Jarvis's folder is a link, so it was left alone")
             continue
+        cur = _read(path)
+        mine = doc["files"].get(rel)
         if cur is not None and cur != data and (mine is None or _sha(cur) != mine):
             # Not the bytes Iron Jarvis wrote (or never wrote): a hand edit.
             said.append(f"{rel} in Iron Jarvis's folder was changed by hand, so it was left as it is")
@@ -763,37 +1049,60 @@ def _sync(
         if cur != data:
             _write(path, data)
         doc["files"][rel] = _sha(data)
-    # The skills folder is Iron Jarvis's own REAL folder; if something made it a
-    # link, a skill's link would land in whatever it points at — never.
-    skills_blocked = _is_link(root / "skills")
-    if skills_blocked and any(rel.startswith("skills/") for rel in links):
-        said.append("skills in Iron Jarvis's folder is a link Iron Jarvis did not make, so it was left alone")
-    for rel, target in links.items():
-        path = root / rel
-        if skills_blocked and rel.startswith("skills/"):
-            continue
-        if os.path.lexists(path):
-            if not _is_link(path):
-                said.append(f"{rel} in Iron Jarvis's folder is a real folder, so it was left alone")
-                doc["links"].pop(rel, None)
-                continue
-            if target is not None and _key(_link_target(path)) == _key(target):
-                doc["links"][rel] = _key(target)
-                continue
-            if rel not in doc["links"]:
-                said.append(f"{rel} in Iron Jarvis's folder is a link Iron Jarvis did not make, so it was left alone")
-                continue
-            if not write:
-                continue
-            _drop_link(path)
-            doc["links"].pop(rel, None)
-        if target is None or not write:
-            doc["links"].pop(rel, None)
-            continue
-        _make_link(target, path)
-        doc["links"][rel] = _key(target)
     if not write:
-        return said
+        # Links are looked at live (cheap: no read); what a copy left out and
+        # the hand edits are what the last start recorded (finding them reads
+        # every file).
+        blocked: set[str] = set()
+        for unit, src in trees.items():
+            if src is None:
+                continue
+            on_the_way = _link_on_the_way(root, root / unit)
+            if on_the_way and on_the_way not in blocked and not (on_the_way == unit and unit in doc["links"]):
+                blocked.add(on_the_way)
+                said.append(f"{on_the_way if on_the_way != '.' else PLUGIN_DIR} in Iron Jarvis's "
+                            "folder is a link Iron Jarvis did not make, so it was left alone")
+            rec = doc["trees"].get(unit)
+            if isinstance(rec, dict) and isinstance(rec.get("left"), list):
+                said += [w for w in rec["left"] if isinstance(w, str)]
+        if isinstance(doc.get("said"), list):
+            said += [w for w in doc["said"] if isinstance(w, str) and "changed by hand" in w]
+        return list(dict.fromkeys(said))
+    tree_said: list[str] = []
+    # A unit Iron Jarvis copied — or, before this review, LINKED (a dev or test
+    # home that ran the first cut) — that is no longer wanted goes; removals
+    # first. Such a junction is removed with ``os.rmdir``, never its target.
+    trees = dict(trees)
+    for unit in sorted(set(doc["trees"]) | set(doc["links"])):
+        trees.setdefault(unit, None)
+    blocked: set[str] = set()
+    budget = [0]
+    for unit, src in sorted(trees.items(), key=lambda kv: (kv[1] is not None, kv[0])):
+        target = root / unit
+        on_the_way = _link_on_the_way(root, target)
+        if on_the_way == unit and unit in doc["links"]:
+            try:
+                _drop_link(target)
+            except OSError:
+                pass
+            on_the_way = _link_on_the_way(root, target)
+        doc["links"].pop(unit, None)
+        if on_the_way:
+            if on_the_way not in blocked:
+                blocked.add(on_the_way)
+                tree_said.append(f"{on_the_way if on_the_way != '.' else PLUGIN_DIR} in Iron Jarvis's "
+                                 "folder is a link Iron Jarvis did not make, so it was left alone")
+            continue
+        rec = doc["trees"].get(unit)
+        rec = rec if isinstance(rec, dict) else {}
+        if src is None:
+            old = rec.get("files") if isinstance(rec.get("files"), dict) else {}
+            _remove_copy(root, unit, old, tree_said)
+            doc["trees"].pop(unit, None)
+            continue
+        doc["trees"][unit] = _copy_tree(root, unit, src, rec, tree_said, budget)
+    said += tree_said
+    doc["said"] = tree_said
     # Empty folders go with the last file in them (``os.rmdir`` removes only an
     # EMPTY folder: anything someone put there keeps its folder).
     leaving = [root / "hooks", root / "skills"]
@@ -811,14 +1120,15 @@ def _sync(
 
 
 def folder_words(home: str | os.PathLike[str], setup: OwnerSetup) -> list[str]:
-    """READ-ONLY: what the next start would leave alone in Iron Jarvis's
-    folder (a hand edit, a link it did not make). Never raises."""
+    """READ-ONLY: what the last start left alone or left out in Iron Jarvis's
+    folder (a hand edit, a link it did not make, a file holding a key). Never
+    raises."""
     try:
         folder = folder_for(home)
         if not folder.exists() or not setup.plugin_needed:
             return []
-        files, links = _wanted(setup)
-        return _sync(folder, files, links, write=False)
+        files, trees = _wanted(setup)
+        return _sync(folder, files, trees, write=False)
     except Exception as exc:  # noqa: BLE001
         _note("inspect", exc)
         return []
@@ -831,8 +1141,8 @@ def sync(home: str | os.PathLike[str], setup: OwnerSetup) -> tuple[Path | None, 
     with _LOCK:
         if not setup.plugin_needed:
             return None, _retire_locked(folder)
-        files, links = _wanted(setup)
-        said = _sync(folder, files, links)
+        files, trees = _wanted(setup)
+        said = _sync(folder, files, trees)
         root = folder / PLUGIN_DIR
         return (root if (root / ".claude-plugin" / "plugin.json").is_file() else None), said
 
@@ -841,7 +1151,7 @@ def _retire_locked(folder: Path) -> list[str]:
     if not folder.exists():
         return []
     files = {rel: None for rel in (".claude-plugin/plugin.json", ".mcp.json", "hooks/hooks.json")}
-    # Every link Iron Jarvis made goes (``_sync`` adds each one it recorded).
+    # Every copy Iron Jarvis made goes (``_sync`` adds each one it recorded).
     return _sync(folder, files, {})
 
 
@@ -980,7 +1290,10 @@ def card_line(config: Any) -> dict[str, Any]:
         words = (
             f"Claude Code on your other accounts uses your MCP servers, skills and commands ({listed}); "
             f"they show with “{PLUGIN_NAME}:” in front, like /{PLUGIN_NAME}:<name>. "
-            "Turn this off in Settings › Connections."
+            # v1.424.0 review (privacy): say plainly which data crosses.
+            "What your MCP servers can read, your skills and commands, and what your hooks print "
+            "reach the Claude account that session is signed in to, which may belong to another "
+            "organization. Turn this off in Settings › Connections."
         )
         if setup.left_out:
             words += " Left out: " + "; ".join(setup.left_out[:5]) + "."

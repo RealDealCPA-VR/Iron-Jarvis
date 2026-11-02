@@ -160,8 +160,10 @@ def _with_pane_env(
     adds `CLAUDE_CODE_PLUGIN_DIRS` (+ the MCP values it references) when the
     setting is on. This is the ONE place a Build terminal AND a Build › Code
     process get their environment, so both start with it. It BLOCKS (small
-    reads and writes in Iron Jarvis's own folder): every caller is already off
-    the event loop (a pane's spawn; `hosted.service` hops before `build_env`).
+    reads and writes in Iron Jarvis's own folder; the review's copies of the
+    owner's skills, commands and agents are re-made only when they changed,
+    bounded): every caller is already off the event loop (a pane's spawn, a
+    restore thread; `hosted.service` hops before `build_env`).
     Never raises; off, no account, or this PC's own login = unchanged.
     """
     base = dict(env) if env is not None else os.environ.copy()

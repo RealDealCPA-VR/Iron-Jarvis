@@ -172,14 +172,13 @@ def test_a_second_account_gets_the_plugin_dirs_and_the_values_ride_the_environme
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
     commands = [h["command"] for g in hooks["SessionStart"] for h in g["hooks"]]
     assert commands == ["echo hello"]
-    # the owner's folders are LINKED, never copied: each skill on its own,
-    # commands and agents whole
-    assert not CS._is_link(plugin / "skills") and (plugin / "skills").is_dir()
-    assert CS._key(CS._link_target(plugin / "skills" / "owner-skill")) == CS._key(owner / "skills" / "owner-skill")
-    for kind in ("commands", "agents"):
-        link = plugin / kind
-        assert CS._is_link(link), kind
-        assert CS._key(CS._link_target(link)) == CS._key(owner / kind)
+    # v1.424.0 review (moved on purpose): the owner's folders are COPIED, never
+    # linked — NSIS's RMDir /r and Electron's Node 24 fs.rmSync follow a
+    # junction (measured; tests/test_claude_setup_review_v14240.py).
+    for rel in ("skills/owner-skill/SKILL.md", "commands/owner-cmd.md", "agents/owner-agent.md"):
+        assert (plugin / rel).read_bytes() == (owner / rel).read_bytes(), rel
+    for unit in ("skills", "skills/owner-skill", "commands", "agents"):
+        assert (plugin / unit).is_dir() and not CS._is_link(plugin / unit), unit
     # the pane's identity still wins and nothing else moved
     assert env["IRONJARVIS_PANE_ID"] == "p1" and env["PATH"] == "C:\\bin"
 

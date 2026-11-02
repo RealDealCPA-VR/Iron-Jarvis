@@ -125,6 +125,19 @@ def child_env(base: "dict[str, str] | None" = None) -> dict[str, str]:
             "CLAUDE_CODE_EXTRA_BODY",
         ):
             env.pop(key, None)
+    # v1.424.0 review (audit D4): never a plugin folder from the environment.
+    # MEASURED (claude 2.1.316, scratch homes): a ``CLAUDE_CODE_PLUGIN_DIRS``
+    # the user set themselves is honoured even under chat's ``--setting-sources
+    # ""`` argv — its plugin's SessionStart hook RAN on every chat turn. Chat's
+    # child loads none of the user's setup on ANY account, so it goes, with the
+    # owner-setup values Iron Jarvis gives a second account's Build terminal
+    # (``iron_proxy.claude_setup``'s ``IJ_MY_SETUP_*``; a daemon started from
+    # such a terminal would otherwise hand them on). Case-blind: Windows
+    # environment names are.
+    for key in list(env):
+        upper = key.upper()
+        if upper == "CLAUDE_CODE_PLUGIN_DIRS" or upper.startswith("IJ_MY_SETUP_"):
+            env.pop(key, None)
     # v1.303.0: never pass a PARENT Claude Code session's markers (a daemon
     # started from inside one) — the child is its own session; the parent's
     # messaging token must not travel. Same list as the Build panes'.
