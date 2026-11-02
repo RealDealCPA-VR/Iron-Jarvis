@@ -465,7 +465,7 @@ describe("an approval, in the composer's place", () => {
   it("shows the change and the tool's own session-wide allow; Allow once posts the answer and the card goes", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(card.dataset.kind).toBe("approval");
     expect(within(card).getByTestId("code-ask-diff")).toBeInTheDocument();
     expect(within(card).getByTestId("code-ask-allow-session")).toBeInTheDocument();
@@ -501,7 +501,7 @@ describe("an approval, in the composer's place", () => {
     seed([sess("a1")]);
     openSession("a1", { session: sess("a1"), events, running: true, pending: [] });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
     expect(within(card).getByTestId("code-ask-command").textContent).toContain("Get-ChildItem -Force");
     // v1.417.0 (C1.7, moved on purpose): asked once every time, but for no
@@ -512,7 +512,7 @@ describe("an approval, in the composer's place", () => {
   it("Enter allows an ordinary card (after the first moment); Esc denies", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     (document.activeElement as HTMLElement | null)?.blur();
     // A key in the first moment does nothing.
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
@@ -528,7 +528,7 @@ describe("an approval, in the composer's place", () => {
   it("Esc denies", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     (document.activeElement as HTMLElement | null)?.blur();
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
     fireEvent.keyDown(window, { key: "Escape" });
@@ -540,7 +540,7 @@ describe("an approval, in the composer's place", () => {
   it("Enter NEVER allows while the session runs in Full access; Esc still denies", async () => {
     waitingOnEdit("a1", { mode: "full" });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
     // From the card itself and from the page body.
@@ -605,7 +605,7 @@ describe("a question from the tool", () => {
   it("draws lettered choices; Send posts the answers keyed by the question's own words", async () => {
     waitingOnQuestion();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(card.dataset.kind).toBe("question");
     expect(within(card).getByTestId("code-ask-send")).toBeDisabled();
     const opt = within(card).getByTestId("code-ask-option-0-0");
@@ -624,7 +624,7 @@ describe("a question from the tool", () => {
   it("a letter key picks (never sends); Skip posts deny", async () => {
     waitingOnQuestion();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
     fireEvent.keyDown(within(card).getByTestId("code-ask-option-0-0"), { key: "b" });
     expect(within(card).getByTestId("code-ask-option-0-1")).toHaveAttribute("aria-checked", "true");
@@ -755,7 +755,7 @@ describe("a running turn is followed again on open", () => {
     H.frameMs = 5;
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(H.streams[0]).toEqual({ path: "/build/app/sessions/a1/turns/turn_7/stream", body: undefined });
     // Once, and it STAYS once (v1.409.2: the record named the turn "turn-1"
     // while the running turn is "turn_7"; the old cut kept the saved question
@@ -774,7 +774,7 @@ describe("a running turn is followed again on open", () => {
     H.frameMs = 5;
     waitingOnEdit("a1", {}, "turn-1");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(H.streams[0]?.path).toBe("/build/app/sessions/a1/turns/turn-1/stream");
     for (let k = 0; k < 8; k++) {
       expect(screen.getAllByTestId("code-user")).toHaveLength(1);
@@ -812,7 +812,7 @@ describe("a running turn is followed again on open", () => {
       pending: [pendingAsk],
     });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-command").textContent).toContain("Get-ChildItem -Force");
   });
 });
@@ -1090,7 +1090,7 @@ describe("review: the transcript stays where the reader put it", () => {
   it("a reader at the bottom follows the newest step; one who scrolled up is left there, with Jump to latest", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     const scroller = screen.getByTestId("code-transcript");
     scrollTo(scroller, 1500); // at the bottom
     spy.mockClear();
@@ -1158,7 +1158,7 @@ describe("review: an ask settled once is drawn once", () => {
       finish = r;
     });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     H.postReply["/build/app/sessions/a1/answer"] = slow;
     fireEvent.click(within(card).getByTestId("code-ask-allow"));
     // The tool's resolved frame arrives first...
@@ -1178,7 +1178,7 @@ describe("review: drawing only what changed (the v1.250.0 rule)", () => {
   it("twenty streamed words redraw only the reply that grows, at most once a frame", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     fireEvent.click(within(card).getByTestId("code-ask-allow"));
     await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
     await pause(40);
@@ -1255,7 +1255,7 @@ describe("review: Full access cannot be given by a held or doubled key", () => {
       pending: [],
     });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
@@ -1333,7 +1333,7 @@ describe("review: polish", () => {
   it("after the last card is answered, the caret is back in the message box", async () => {
     waitingOnEdit();
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     fireEvent.click(within(card).getByTestId("code-ask-allow"));
     await waitFor(() => expect(screen.queryByTestId("code-ask")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("code-box")));

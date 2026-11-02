@@ -304,7 +304,7 @@ describe("the mode at any time", () => {
     asking();
     H.postReply["PATCH /build/app/sessions/a1"] = { session: sess("a1", { mode: "full" }), applied: { mode: "now" } };
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(screen.getByTestId("code-composer")).not.toBeVisible();
     // Reachable: shown (not just in the page) and not disabled.
     expect(screen.getByTestId("code-ask-mode-button")).toBeVisible();

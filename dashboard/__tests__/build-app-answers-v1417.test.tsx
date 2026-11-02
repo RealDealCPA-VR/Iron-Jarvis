@@ -192,7 +192,7 @@ describe("Allow all commands this session (C1.1)", () => {
   it("the card offers it beside the tool's own, renamed; the press posts allow_commands", async () => {
     open("a1", upToAsk("claude_allow_all_commands"), "turn_1");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-allow-commands").textContent).toBe(ALLOW_ALL_COMMANDS);
     expect(within(card).getByTestId("code-ask-allow-session").textContent).toBe(ALLOW_SIMILAR);
     fireEvent.click(within(card).getByTestId("code-ask-allow-commands"));
@@ -203,7 +203,7 @@ describe("Allow all commands this session (C1.1)", () => {
   it("a card that does not offer it keeps 'Allow for this session' and shows no third button", async () => {
     open("a1", upToAsk("claude_tool_approval_edit"), "turn_1");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).queryByTestId("code-ask-allow-commands")).toBeNull();
     const session = within(card).queryByTestId("code-ask-allow-session");
     if (session) expect(session.textContent).toBe("Allow for this session");
@@ -216,7 +216,7 @@ describe("the plan card (C4.1)", () => {
   it("shows the plan, and 'No, tell it what to do instead' sends the words as the deny message", async () => {
     open("a1", upToAsk("claude_plan_deny_with_words"), "turn_1");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     const plan = within(card).getByTestId("code-ask-plan");
     expect(within(plan).getByRole("heading", { name: "Plan" })).toBeInTheDocument();
     expect(plan.textContent).toContain("Write b.txt with its words reversed.");
@@ -232,7 +232,7 @@ describe("the plan card (C4.1)", () => {
   it("the words go with Enter (and only words: an empty box sends nothing)", async () => {
     open("a1", upToAsk("claude_plan_deny_with_words"), "turn_1");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     await pause(ARM_MS);
     fireEvent.click(within(card).getByTestId("code-ask-redirect"));
     const box = within(card).getByTestId("code-ask-redirect-input");
@@ -250,7 +250,7 @@ describe("the plan card (C4.1)", () => {
   it("Codex reads no words with a no: its card offers no such press", async () => {
     open("c1", upToAsk("codex_deny"), "turn_1", { harness: "codex" });
     render(<BuildCodeView initialSession="c1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).queryByTestId("code-ask-redirect")).toBeNull();
   });
 });
@@ -263,7 +263,7 @@ describe("Enter is predictable (C1.7)", () => {
   it("Enter allows a once-only card ONCE when no safety reason keeps it a click", async () => {
     open("a1", [{ type: "user", at: "x", turn: "t", text: "go" }, once], "t");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
@@ -289,7 +289,7 @@ describe("Enter is predictable (C1.7)", () => {
   it("a safety once-only card is a click; Full access is a click", async () => {
     open("a1", [{ type: "user", at: "x", turn: "t", text: "go" }, { ...once, once_reason: "git" }], "t");
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    await screen.findByTestId("code-ask");
+    await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");

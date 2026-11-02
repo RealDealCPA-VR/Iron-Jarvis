@@ -289,7 +289,7 @@ describe("the view", () => {
   it("a command card offers no Allow for this session", async () => {
     waitingOn("grok_command_allowed_once");
     render(<BuildCodeView initialSession="g1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-allow")).toBeInTheDocument();
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
   });
@@ -297,7 +297,7 @@ describe("the view", () => {
   it("an edit card offers Allow for this session, and posts it", async () => {
     waitingOn("grok_asks_before_an_edit");
     render(<BuildCodeView initialSession="g1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     fireEvent.click(within(card).getByTestId("code-ask-allow-session"));
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/build/app/sessions/g1/answer")?.body).toEqual({

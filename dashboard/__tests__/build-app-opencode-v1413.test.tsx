@@ -337,7 +337,7 @@ describe("the view", () => {
   it("an edit card offers Allow for this session, and posts it", async () => {
     waitingOn("opencode_asks_before_an_edit");
     render(<BuildCodeView initialSession="o1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-diff")).toBeInTheDocument();
     fireEvent.click(within(card).getByTestId("code-ask-allow-session"));
     await waitFor(() =>

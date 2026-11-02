@@ -348,7 +348,7 @@ describe("the view", () => {
   it("an extension's confirm shows the edit it is about; Enter allows it ONCE (v1.417.0 C1.7); the answer posts", async () => {
     waitingOn("pi_extension_confirm_before_an_edit");
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(card.dataset.kind).toBe("approval");
     expect(within(card).getByTestId("code-ask-diff")).toBeInTheDocument();
     expect(within(card).queryByTestId("code-ask-allow-session")).toBeNull();
@@ -370,7 +370,7 @@ describe("the view", () => {
   it("an extension's select is a question: a choice and Send posts it keyed by the question's words", async () => {
     waitingOn("pi_extension_select_before_a_command");
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(card.dataset.kind).toBe("question");
     fireEvent.click(within(card).getByTestId("code-ask-option-0-0"));
     fireEvent.click(within(card).getByTestId("code-ask-send"));
@@ -394,7 +394,7 @@ describe("the review's fixes", () => {
     expect(inp?.type === "question" && inp.questions[0].freeText).toBe(true);
     waitingOn("pi_extension_select_before_a_command");
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-option-0-0")).toBeInTheDocument();
     expect(within(card).queryByTestId("code-ask-other-0")).toBeNull();
   });
@@ -402,7 +402,7 @@ describe("the review's fixes", () => {
   it("an input keeps its typed answer", async () => {
     waitingOn("pi_extension_command_asks_for_input");
     render(<BuildCodeView initialSession="p1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(within(card).getByTestId("code-ask-other-0")).toBeInTheDocument();
   });
 

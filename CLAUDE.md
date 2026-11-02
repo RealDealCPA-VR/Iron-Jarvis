@@ -13958,6 +13958,15 @@ does not need a bump, stop and bump it.
   plugin wrapping `routes/build.recorded_turn`): old shape CI's exact error
   plus two siblings, new shape green. In the product the window starts a
   moment after the card shows, which changes nothing a person can see.
+  v1.426.2 (test-only; v1.426.1's Release gate went red, nothing published):
+  `build-app-grok-v1416` "an edit card offers Allow for this session" waited
+  for the Build › Code card with testing-library's DEFAULT 1 s
+  (`findByTestId("code-ask")`), and the Release gate's smaller machine took
+  longer to read the session and draw it. All 31 such waits across the seven
+  Build › Code view files now give the card 10 s. Reproduced by holding the
+  mocked reads 1.2 s (old shape: CI's exact "Unable to find
+  [data-testid=\"code-ask\"]"; new shape green). A `findBy…` on a surface
+  that needs a read and a stream first must name its own timeout.
 
 ## Map (where things live)
 

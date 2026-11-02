@@ -178,7 +178,7 @@ describe("a helper's card answered while a background read is out", () => {
       pending: answered ? [] : [ASK],
     });
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
-    const card = await screen.findByTestId("code-ask");
+    const card = await screen.findByTestId("code-ask", {}, { timeout: 10_000 });
     expect(card.dataset.kind).toBe("approval");
 
     // A background read goes out (the card still open on the daemon)…
