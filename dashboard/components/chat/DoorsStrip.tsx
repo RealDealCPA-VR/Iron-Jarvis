@@ -36,9 +36,14 @@ export interface Door {
 export interface DoorsStripProps {
   /** Absent/null/empty on messages from before v1.199.0 — render nothing. */
   doors?: Door[] | null;
+  /** v1.426.0 (Wave 6, E2): the host's own handling of a door it knows (the
+   *  chat page's coding offer carries the user's request into the Code view
+   *  — lib/codingStart). Answers true when it handled the press: the link's
+   *  own navigation is then not taken. Absent: every door is a plain link. */
+  onOpen?: (door: Door) => boolean;
 }
 
-export function DoorsStrip({ doors }: DoorsStripProps) {
+export function DoorsStrip({ doors, onOpen }: DoorsStripProps) {
   if (!doors || doors.length === 0) return null;
   // Degenerate persisted shapes only (the props cross a JSON boundary): a
   // door without an href cannot be a link. This is shape-checking, never
@@ -55,7 +60,10 @@ export function DoorsStrip({ doors }: DoorsStripProps) {
           href={d.href}
           // Tally BEFORE navigating, like the Sidebar's recordOpen — the
           // local counter for the emergent-surface metric, not telemetry.
-          onClick={() => recordDoorOpen(d.href)}
+          onClick={(e) => {
+            recordDoorOpen(d.href);
+            if (onOpen?.(d)) e.preventDefault();
+          }}
           className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
         >
           <DoorOpen size={11} className="shrink-0 text-accent-soft/70" />

@@ -7312,8 +7312,10 @@ async def chat_stream(
         # links). MIRROR NOTE (lock-step): chat_turn.run_chat_turn does the
         # same before its response.
         # CODING OFFER (v1.420.0, C6.1): the lock-step copy of chat_turn's —
-        # a door into Build › Code for a request to build software (a link
-        # only; never the sidebar, a pane, a coding session or an escalation).
+        # a door into a coding session for a request to build software
+        # (v1.426.0: Chat › Code, the request carried into its box by the
+        # dashboard; a link only; never the sidebar, a pane, a coding session
+        # or an escalation).
         door_entries = _chat_turn.with_coding_offer(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
         )

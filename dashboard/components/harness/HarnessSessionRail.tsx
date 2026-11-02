@@ -18,8 +18,8 @@
  * only while the window is on screen.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AtSign, FolderOpen, GitBranch, Loader2, Monitor, Paperclip, Sparkles, Square } from "lucide-react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { AtSign, FileText, FolderOpen, GitBranch, Loader2, Monitor, Paperclip, Sparkles, Square } from "lucide-react";
 import { post } from "@/lib/api";
 import { fetchTurnChangeSet } from "@/components/chat/ChangedFiles";
 import { latestContext, decodeCompaction, meterTitle, offersCompact, readingIsBeforeSummary } from "@/lib/buildContext";
@@ -46,14 +46,19 @@ import {
   branchWords,
   earlierAttachments,
   fetchPrograms,
+  fetchSessionInstructions,
   helpersWorking,
+  instructionLayerWords,
+  instructionToolWords,
   instructionWords,
   lastAttachment,
+  newestInstructions,
   openablePath,
   othersWords,
   programWords,
   sentWhen,
   stopProgram,
+  type SessionInstructions,
   type SessionProgram,
 } from "@/lib/sessionRail";
 
@@ -154,6 +159,7 @@ export function SessionRail({
     <div data-testid="pane-session" className="space-y-5 pb-4">
       <WhereItWorks view={view} messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
       <WhatAnswers view={view} modelWords={modelWords} account={account} onMakeDefault={onMakeDefault} />
+      <Instructions view={view} messages={messages} />
       <HowFull view={view} busy={busy} compacting={compacting} onCompact={onCompact} />
       <LastAttachmentSection messages={messages} opening={opening} onOpen={(p) => void openPath(p)} />
       {openError ? (
@@ -315,6 +321,123 @@ function WhatAnswers({
             <p>
               {REVIEWER_WORDS}: {team.reviewer.label || team.reviewer.name}
             </p>
+          ) : null}
+        </div>
+      ) : null}
+    </Section>
+  );
+}
+
+/** v1.426.0 (Wave 6, E1): what Iron Jarvis told the model — whose tool
+ *  names it was shown, what the instructions were built from, the folder's
+ *  own instruction files when they were NOT used (the daemon's sentence, in
+ *  the warning tone), and a way to read them: "Show the instructions" puts
+ *  them together NOW for this session's folder and model, as a turn does
+ *  (GET /build/sessions/{id}/harness), read-only — never kept. */
+function Instructions({ view, messages }: { view: BuildSessionView; messages: readonly BuildMessage[] }) {
+  const reply = newestInstructions(messages);
+  const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState<SessionInstructions | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const panelId = useId();
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (!next) return;
+    // Put together afresh on every opening: the folder's files may have
+    // changed since (nothing is kept between openings).
+    setReading(true);
+    setReadError(null);
+    fetchSessionInstructions(view.id)
+      .then((got) => setShown(got))
+      .catch((e: unknown) => {
+        setShown(null);
+        setReadError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => setReading(false));
+  }
+
+  const tools = reply ? instructionToolWords(reply) : "";
+  const layers = reply ? instructionLayerWords(reply.layers) : "";
+  // The note said once: the newest reply's, else (no reply yet, or the
+  // folder changed since) what the view just put together says.
+  const note = reply?.note || (open ? shown?.note : "") || "";
+  return (
+    <Section id="instructions" title="Instructions">
+      {reply ? (
+        <>
+          {tools ? (
+            <Row icon={<FileText size={14} aria-hidden />}>
+              <span data-testid="session-rail-instructions-tools">
+                {tools}
+                {reply.plan ? <span className="text-zinc-500"> · planning only</span> : null}
+              </span>
+            </Row>
+          ) : null}
+          {layers ? (
+            <p data-testid="session-rail-instructions-layers" className={QUIET}>
+              The newest reply's instructions came from {layers}.
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p data-testid="session-rail-instructions-none" className={QUIET}>
+          Iron Jarvis puts its instructions together for each reply.
+        </p>
+      )}
+      {note ? (
+        <p data-testid="session-rail-instructions-note" role="status" className="text-[12px] text-tone-warn">
+          {note}
+        </p>
+      ) : null}
+      <p className={QUIET}>
+        <button
+          type="button"
+          data-testid="session-rail-instructions-show"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={toggle}
+          className="rounded-md text-zinc-400 underline-offset-2 transition-colors hover:text-zinc-100 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+        >
+          {open ? "Hide the instructions" : "Show the instructions"}
+        </button>
+      </p>
+      {open ? (
+        <div id={panelId} data-testid="session-rail-instructions-panel" className="space-y-1.5">
+          {reading ? (
+            <p className={`${QUIET} flex items-center gap-1.5`}>
+              <Loader2 size={12} className="animate-spin" aria-hidden /> Putting them together…
+            </p>
+          ) : readError ? (
+            <p role="alert" data-testid="session-rail-instructions-error" className="text-[12px] text-tone-danger">
+              The instructions could not be read: {readError}
+            </p>
+          ) : shown?.error ? (
+            <p role="alert" data-testid="session-rail-instructions-error" className="text-[12px] text-tone-danger">
+              {shown.error}
+            </p>
+          ) : shown ? (
+            <>
+              <p className={QUIET}>
+                What Iron Jarvis gives this session's model now, for its folder and model
+                {shown.plan ? " (planning only)" : ""}. Read-only; each reply also gets the date, a
+                map of the folder and the skills it can load.
+              </p>
+              <pre
+                data-testid="session-rail-instructions-text"
+                tabIndex={0}
+                className="max-h-[24rem] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white/[0.04] p-2 font-mono text-[12px] leading-relaxed text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+              >
+                {shown.text}
+              </pre>
+              {shown.cut ? (
+                <p data-testid="session-rail-instructions-cut" className={QUIET}>
+                  Only the first part is shown: they are longer than this view holds.
+                </p>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : null}

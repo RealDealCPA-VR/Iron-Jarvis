@@ -3722,6 +3722,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_library as _build_library_routes
 
     _build_library_routes.register(app, d)
+    # v1.426.0 (Wave 6, E1): SEE the instructions Iron Jarvis gives a coding
+    # session's model — the component tree, put together as a turn does it,
+    # read-only and never stored.
+    from .routes import build_harness as _build_harness_routes
+
+    _build_harness_routes.register(app, d)
     # A Build session's own git branch (v1.375.0, part 2 Phase 4): the
     # Branch view, Commit (a drafted message), Push, Create PR, Merge into
     # the base, Discard — each a person's action.

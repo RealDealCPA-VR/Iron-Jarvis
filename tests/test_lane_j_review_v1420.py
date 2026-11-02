@@ -12,7 +12,8 @@ mid-path.
 
 THE CODING OFFER (C6.1): ``tools.autoselect.coding_offer`` is wired into BOTH
 chat lanes beside the Connect door (``chat_turn.with_coding_offer``): a plain
-chat turn asking to build software ends with one door into Build › Code; a
+chat turn asking to build software ends with one door into a coding session
+(v1.426.0: Chat › Code — the request carried into its box); a
 physical thing, a coding session's own turn, a Build pane's chat, the phone
 and the browser sidebar get none. Driven through the REAL lanes (the model is
 the only double and never calls a tool).
@@ -190,15 +191,16 @@ def test_the_helper_keeps_the_door_cap_and_never_doubles_the_door():
     assert with_coding_offer([], b, harness=object()) == []
 
 
-def test_the_door_opens_build_code_whose_page_reads_view_code():
-    """The label says Build › Code, so the address is Build's (`/terminals`),
-    and the Build page reads `?view=code` (``lib/buildApp``). The chat's own
-    Code view is `/chat?view=code` — a different place."""
+def test_the_door_opens_chat_code_whose_page_reads_view_code():
+    """v1.426.0 (Wave 6, E2), moved on purpose: the door opens Chat › Code
+    (the coding session the owner uses; Build › Code opened EMPTY and the
+    request was retyped). The label says so, and the chat page reads
+    `?view=code` (``lib/chatSurface.viewFromSearch``)."""
     from pathlib import Path
 
-    assert CODING_OFFER_HREF == "/terminals?view=code"
-    assert "Build › Code" in CODING_OFFER_LABEL
-    src = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "buildApp.ts").read_text(
+    assert CODING_OFFER_HREF == "/chat?view=code"
+    assert "Chat › Code" in CODING_OFFER_LABEL
+    src = (Path(__file__).resolve().parents[1] / "dashboard" / "lib" / "chatSurface.ts").read_text(
         encoding="utf-8"
     )
-    assert 'q.get("view")' in src
+    assert 'q.get("view")' in src and 'CODE_VIEW_HREF = "/chat?view=code"' in src

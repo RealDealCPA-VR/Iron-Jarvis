@@ -201,6 +201,7 @@ import { chatRefRowParts } from "@/lib/chatRefsRows";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
+import { startCodingFromDoor } from "@/lib/codingStart";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
 import { ConfigCards } from "@/components/chat/ConfigCards";
@@ -2940,6 +2941,10 @@ export interface RowHandlers {
   /** Readiness 12B (G15): Continue under reply `index` after the app it
    *  offered to connect was connected somewhere else. */
   continueElsewhere: (index: number) => void;
+  /** v1.426.0 (Wave 6, E2): a door under reply `index` was pressed — the
+   *  coding offer carries the user's request (and the chat's project folder)
+   *  into Chat › Code's start composer (lib/codingStart). True = handled. */
+  openDoor: (index: number, door: Door) => boolean;
   /** v1.320.0: the user rated reply `index` — store it on the message, save. */
   rateReply: (index: number, rating: ReplyRatingValue) => void;
   crystallize: (threadId: string) => void;
@@ -3529,7 +3534,7 @@ const MessageRow = memo(function MessageRow({
           SERVER-derived from the tools that executed ok (files excluded; the
           ArtifactsRail owns files). Rides the message, so live and persisted
           turns render alike; a pre-v1.199.0 message has none. */}
-      <DoorsStrip doors={m.doors} />
+      <DoorsStrip doors={m.doors} onOpen={(d) => h.openDoor(i, d)} />
       {/* Readiness 12B (G15): the app this reply offered to connect was
           connected somewhere else — the key card's own words and Continue.
           v1.406.0 part 4: drawn INSIDE the next-step box under the newest
@@ -11226,6 +11231,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
       send(text);
     },
+    // v1.426.0 (Wave 6, E2): "Work on this in a coding session" — the
+    // request the reply answers goes into the Code view's box (and the
+    // project's folder is chosen), never retyped; nothing is sent until the
+    // user presses Send there. Any other door is a plain link.
+    // v1.426.0 review: a Local only chat's request starts its coding session
+    // Local only too (the door must not carry the words out of that promise).
+    openDoor: (index, door) =>
+      startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current),
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),
@@ -11329,6 +11342,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       continueConnected: (index, cardIndex) =>
         rowImplRef.current.continueConnected(index, cardIndex),
       continueElsewhere: (index) => rowImplRef.current.continueElsewhere(index),
+      openDoor: (index, door) => rowImplRef.current.openDoor(index, door),
       promote: (content) => rowImplRef.current.promote(content),
       openDocument: (path) => rowImplRef.current.openDocument(path),
       undoFor: (path) => rowImplRef.current.undoFor(path),

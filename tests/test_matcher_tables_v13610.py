@@ -1312,7 +1312,9 @@ def test_a_coding_task_is_offered_build_code_and_nothing_else_is():
     assert wrong == [], wrong
     door = coding_offer("build me a todo app")
     assert door == {"href": CODING_OFFER_HREF, "label": door["label"]}
-    assert CODING_OFFER_HREF == "/terminals?view=code" and "Build › Code" in door["label"]
+    # v1.426.0 (Wave 6, E2), moved on purpose: the door opens Chat › Code
+    # (the coding session the owner uses), the request carried into its box.
+    assert CODING_OFFER_HREF == "/chat?view=code" and "Chat › Code" in door["label"]
     assert sum(1 for _t, w in CODING if w) >= 12
     assert sum(1 for _t, w in CODING if not w) >= 12
     # An offer never ARMS anything: the coding words alone arm no tool.
