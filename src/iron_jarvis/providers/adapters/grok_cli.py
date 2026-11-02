@@ -31,6 +31,30 @@ and has a Grok CLI account, each call reads the session from THAT account's
 reports a limit/sign-in refusal (Iron-Proxy parks the account) or a success,
 and retries with the next Grok account only while nothing has streamed. Off,
 not running, or no account: exactly as before.
+
+THE OUTPUT BUDGET IS THE GROK CLI'S OWN (v1.424.0, audit D7). Every request
+used to carry a fixed ``max_output_tokens: 4096`` — a long answer, or a large
+file written through a tool, stopped there. MEASURED with grok 1.0.70 in a
+scratch ``GROK_HOME`` against a stand-in Responses server (no model call; the
+request bodies are in ``tests/fixtures/grok_cli_requests_v14240.json``): the
+CLI sends ``max_output_tokens`` ONLY when the user's config sets
+``max_completion_tokens`` (``[model."<id>"]``, the server's model list, else
+``[models]`` — its docs, ``05-configuration.md`` / ``11-custom-models.md``);
+its built-in models leave it unset (``models_cache.json``:
+``max_completion_tokens: null``), so their requests carry NO cap and xAI's
+own limit applies. :func:`output_cap` reads the same settings from the same
+home (an Iron-Proxy account's own ``GROK_HOME`` for a leased call) and the
+request carries a cap only when one is set there.
+
+A REPLY CUT AT THE LIMIT SAYS SO (v1.424.0): the Responses stream of an
+answer that ran out of output tokens ends with ``response.incomplete``
+(``incomplete_details.reason: max_output_tokens``) — the 1.0.70 program knows
+that event and a ``max_output_tokens`` stop class — and it used to raise
+"stream ended without response.completed". It is now an answer with
+``finish_reason="max_tokens"`` (the chat offers Continue, v1.323.0), and a
+tool call whose arguments never closed is reported by name in ``cut_calls``
+and NEVER run (the lanes' cut-off recovery, v1.387.0) — the same reading as
+the ChatGPT backend's (``openai._incomplete_for_tokens``).
 """
 
 from __future__ import annotations
@@ -42,14 +66,77 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Callable
 
-from ..cli_detect import GROK_PROXY_BASE, grok_session, grok_session_expired
+from ..cli_detect import GROK_PROXY_BASE, grok_home, grok_session, grok_session_expired
 from .base import (
     LLMAdapter,
     LLMMessage,
     LLMResponse,
     ToolCall,
+    complete_arguments,
     provider_error_from_response,
 )
+
+
+def _positive(value: Any) -> int | None:
+    """A positive whole number of tokens, else None (a bool is not one)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    """A TOML file as a dict, ``{}`` on any problem (missing, locked, broken)."""
+    try:
+        import tomllib
+
+        if not path.is_file() or path.stat().st_size > 2_000_000:
+            return {}
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 — a broken config never breaks a reply
+        return {}
+
+
+def output_cap(model: str, home: str | Path | None = None) -> int | None:
+    """BLOCKING (two small file reads; never raises): the ``max_output_tokens``
+    the Grok CLI itself would send for ``model`` from the Grok home ``home``
+    (default: ``cli_detect.grok_home()``), or None — send none, as the CLI
+    does for its built-in models. In the CLI's own order: the user's
+    ``[model."<id>"] max_completion_tokens`` (matched by its key or its
+    ``model``), the server's model list (``models_cache.json``), then the
+    user's ``[models] max_completion_tokens``."""
+    try:
+        root = Path(home) if home else grok_home()
+        cfg = _read_toml(root / "config.toml")
+        mine = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+        for key, spec in mine.items():
+            if isinstance(spec, dict) and (key == model or spec.get("model") == model):
+                cap = _positive(spec.get("max_completion_tokens"))
+                if cap:
+                    return cap
+        from ..cli_detect import _read_json
+
+        cache = _read_json(root / "models_cache.json")
+        models = cache.get("models") if isinstance(cache, dict) else None
+        for key, entry in (models if isinstance(models, dict) else {}).items():
+            info = entry.get("info") if isinstance(entry, dict) else None
+            if isinstance(info, dict) and model in (key, info.get("id"), info.get("model")):
+                cap = _positive(info.get("max_completion_tokens"))
+                if cap:
+                    return cap
+        every = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
+        return _positive(every.get("max_completion_tokens"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cut_for_tokens(response: Any) -> bool:
+    """True when a Responses ``response`` object stopped because it ran out of
+    OUTPUT tokens (v1.424.0; ``openai._incomplete_for_tokens``' reading)."""
+    if not isinstance(response, dict) or response.get("status") != "incomplete":
+        return False
+    details = response.get("incomplete_details") or {}
+    return isinstance(details, dict) and details.get("reason") == "max_output_tokens"
 
 
 class GrokCliAdapter(LLMAdapter):
@@ -68,7 +155,7 @@ class GrokCliAdapter(LLMAdapter):
         *,
         session_provider: Callable[[], dict[str, Any] | None] | None = None,
         http: Any = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         base_url: str | None = None,
     ) -> None:
         self.model = model
@@ -76,8 +163,45 @@ class GrokCliAdapter(LLMAdapter):
         #: Defaults to reading ``~/.grok`` fresh; injectable for tests.
         self._session_provider = session_provider or grok_session
         self._http = http
+        #: v1.424.0 (D7): None = the Grok CLI's own rule (:func:`output_cap`:
+        #: the user's Grok config, else no cap at all); a number a caller
+        #: passes is sent as it is. It used to be a fixed 4,096.
         self.max_tokens = max_tokens
         self._base_url = (base_url or GROK_PROXY_BASE).rstrip("/")
+
+    def _cap_for(self, lease: Any) -> int | None:
+        """BLOCKING: the ``max_output_tokens`` for one call, or None to send
+        none — the caller's number, else the Grok CLI's own rule read from the
+        call's Grok home (an Iron-Proxy account's, when leased)."""
+        if self.max_tokens is not None:
+            return _positive(self.max_tokens)
+        home = getattr(lease, "home", None) if lease is not None else None
+        return output_cap(self.model, home or None)
+
+    def _body(self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]],
+              cap: int | None) -> dict[str, Any]:
+        """The Responses request both paths send (``max_output_tokens`` only
+        when there is a cap, as the Grok CLI does)."""
+        body: dict[str, Any] = {
+            "model": self.model,
+            "input": self._to_input(system, messages),
+            "store": False,  # the proxy keeps no server-side state
+            "stream": True,  # the endpoint is SSE-only
+        }
+        if cap:
+            body["max_output_tokens"] = cap
+        if tools:
+            body["tools"] = self._to_tools(tools)
+            body["tool_choice"] = "auto"
+        return body
+
+    @staticmethod
+    def _stamp_cap(response: LLMResponse, cap: int | None) -> LLMResponse:
+        """A capped reply carries its cap (``extra["max_tokens"]``), so a
+        cut-off note can name the limit (``reply_budget.cut_off_note``)."""
+        if cap:
+            response.extra["max_tokens"] = cap
+        return response
 
     # -- transport ----------------------------------------------------------
     def _client(self) -> Any:
@@ -164,12 +288,21 @@ class GrokCliAdapter(LLMAdapter):
                 continue
             if event.get("type") == "response.completed":
                 completed = event.get("response") or {}
+            elif event.get("type") == "response.incomplete" and _cut_for_tokens(event.get("response")):
+                # v1.424.0 (D7): an answer that ran out of output tokens ends
+                # here, not in `.completed` — a (cut) answer, said as
+                # `max_tokens` below. Any OTHER incomplete reason still ends
+                # in the honest "ended without" error.
+                completed = event.get("response") or {}
         if completed is None:
             raise RuntimeError(
                 "grok-cli: stream ended without response.completed: " + raw[:300]
             )
+        cut = _cut_for_tokens(completed)
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        #: v1.424.0 (D7): the calls the limit cut mid-arguments — never run.
+        cut_calls: list[str] = []
         for item in completed.get("output") or []:
             kind = item.get("type")
             if kind == "message":
@@ -178,6 +311,16 @@ class GrokCliAdapter(LLMAdapter):
                         text_parts.append(part.get("text") or "")
             elif kind == "function_call":
                 args_str = item.get("arguments") or ""
+                status = str(item.get("status") or "")
+                if cut and (
+                    status in ("incomplete", "in_progress")
+                    or (complete_arguments(args_str) is None
+                        and not (status == "completed" and not str(args_str).strip()))
+                ):
+                    # Half-written arguments: a half-parsed write_file would
+                    # write half a file. Named, so the lanes continue the turn.
+                    cut_calls.append(str(item.get("name") or ""))
+                    continue
                 try:
                     args = json.loads(args_str) if args_str else {}
                 except json.JSONDecodeError:
@@ -190,14 +333,21 @@ class GrokCliAdapter(LLMAdapter):
                     )
                 )
         usage = completed.get("usage") or {}
+        if cut:
+            finish = "max_tokens"
+        elif tool_calls:
+            finish = "tool_use"
+        else:
+            finish = "stop"
         return LLMResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
-            finish_reason="tool_use" if tool_calls else "stop",
+            finish_reason=finish,
             usage={
                 "input_tokens": int(usage.get("input_tokens", 0) or 0),
                 "output_tokens": int(usage.get("output_tokens", 0) or 0),
             },
+            cut_calls=cut_calls,
         )
 
     # -- the interface ------------------------------------------------------
@@ -272,16 +422,9 @@ class GrokCliAdapter(LLMAdapter):
             "User-Agent": f"grok-shell/{version} (windows; x86_64)",
             "Accept": "text/event-stream",
         }
-        body: dict[str, Any] = {
-            "model": self.model,
-            "input": self._to_input(system, messages),
-            "max_output_tokens": self.max_tokens,
-            "store": False,  # the proxy keeps no server-side state
-            "stream": True,  # the endpoint is SSE-only
-        }
-        if tools:
-            body["tools"] = self._to_tools(tools)
-            body["tool_choice"] = "auto"
+        # v1.424.0 (D7): the Grok CLI's own output cap (a config read: off the loop).
+        cap = await asyncio.to_thread(self._cap_for, lease)
+        body = self._body(system, messages, tools, cap)
 
         resp = await self._client().post(
             f"{base_url}/responses", headers=headers, json=body
@@ -299,7 +442,7 @@ class GrokCliAdapter(LLMAdapter):
             # Typed error so the router classifies transient (429/5xx) vs
             # permanent (401/426) by status and honours any Retry-After.
             raise _with_signal(provider_error_from_response("grok-cli", resp, detail), resp, detail)
-        return self._parse_sse(getattr(resp, "text", "") or "")
+        return self._stamp_cap(self._parse_sse(getattr(resp, "text", "") or ""), cap)
 
     # -- streaming (FX-01) --------------------------------------------------
     async def stream(
@@ -398,16 +541,8 @@ class GrokCliAdapter(LLMAdapter):
             "User-Agent": f"grok-shell/{version} (windows; x86_64)",
             "Accept": "text/event-stream",
         }
-        body: dict[str, Any] = {
-            "model": self.model,
-            "input": self._to_input(system, messages),
-            "max_output_tokens": self.max_tokens,
-            "store": False,
-            "stream": True,
-        }
-        if tools:
-            body["tools"] = self._to_tools(tools)
-            body["tool_choice"] = "auto"
+        cap = await asyncio.to_thread(self._cap_for, lease)  # v1.424.0 (D7)
+        body = self._body(system, messages, tools, cap)
 
         raw_lines: list[str] = []
         async with self._client().stream(
@@ -452,7 +587,7 @@ class GrokCliAdapter(LLMAdapter):
 
         # Build the final aggregate with the SAME parser complete() uses, so the
         # response is byte-identical (raises if the stream lacked completed).
-        final = self._parse_sse("\n".join(raw_lines))
+        final = self._stamp_cap(self._parse_sse("\n".join(raw_lines)), cap)
         yield {"type": "final", "response": final}
 
 
