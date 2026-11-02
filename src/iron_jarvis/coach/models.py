@@ -29,7 +29,15 @@ STATUSES = (PENDING, ACCEPTED, DECLINED, STALE)
 
 KIND_INSTRUCTIONS = "instructions"
 KIND_NOTE = "note"
-KINDS = (KIND_INSTRUCTIONS, KIND_NOTE)
+#: v1.423.0 (Team notes, Phase 2): a WORKING HABIT for a model team member,
+#: distilled from its reviewers' confirmed findings (``agents/team_notes``):
+#: ``after`` = the habit (one line), ``before`` = "", ``rationale`` = "From N
+#: confirmed findings across M sessions", ``evidence_json`` = the cited
+#: findings, ``signature`` = member + sorted finding ids. Accepting one never
+#: touches the agent's instructions: it becomes a ``team_notes.TeamNote`` and
+#: a line of the member's ``TEAM-NOTES.md``.
+KIND_TEAM_NOTE = "team_note"
+KINDS = (KIND_INSTRUCTIONS, KIND_NOTE, KIND_TEAM_NOTE)
 
 #: How long a declined signature stays suppressed.
 DECLINE_SUPPRESS_DAYS = 14

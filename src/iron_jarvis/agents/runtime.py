@@ -2484,6 +2484,20 @@ class AgentRuntime:
             )
             if notebook:
                 system_prompt += "\n\n" + notebook
+            # TEAM NOTES (v1.423.0, Phase 2): a model team member's WORKING
+            # HABITS — the ones the owner accepted from its reviewers'
+            # confirmed findings (its TEAM-NOTES.md, scanned, bounded) — ride
+            # ONLY its TEAM pieces (a coding session's helper, a mission's
+            # teammate), read once per reply; never its other runs, nothing at
+            # all while the setting is off (``agents/team_notes``). A file
+            # read: off the loop, before the planner (its cost is counted).
+            from . import team_notes as _team_notes
+
+            habits = await asyncio.to_thread(
+                _team_notes.habits_for_run, self.p, session, parent_id
+            )
+            if habits:
+                system_prompt += "\n\n" + habits
         reports_to = " ".join(str(getattr(agent_def, "reports_to", "") or "").split())
         if reports_to:
             system_prompt += (

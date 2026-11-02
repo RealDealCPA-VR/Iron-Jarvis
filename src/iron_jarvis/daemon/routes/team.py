@@ -6,7 +6,13 @@
   (v1.395.0) its RECORD per role in plain words (``records``), and (v1.423.0,
   Team notes) its reviewers' FINDINGS over the last 30 days (``findings``:
   ``{confirmed, did_not_apply, said_fixed, open, first_pass: {approved,
-  of}}`` — ``agents/team_findings.findings_for``; zeros when none);
+  of}}`` — ``agents/team_findings.findings_for``; zeros when none), and
+  (v1.423.0, Team notes Phase 2) its WORKING HABITS (``notes``:
+  ``{accepted: [{id, text, findings, accepted_at}], suggested, hand_edited}``
+  — ``agents/team_notes.notes_for``);
+* ``POST /team/notes/{id}/remove`` → takes an accepted working habit back
+  (``team_notes.remove``: the member's TEAM-NOTES.md is written again —
+  never over a hand edit): ``{note, file, message}``; 404 / 409 in words;
 * ``GET  /team/starter?paid=0|1`` → the **Make a starter team** preview
   (``agents/model_team.starter_preview``) — NOTHING is created;
 * ``POST /team/starter {rows: [{key, name?, roles?}], paid}`` → creates the
@@ -57,7 +63,8 @@ class FromModelBody(BaseModel):
 
 
 def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = None,
-               findings: "dict[str, Any] | None" = None) -> dict[str, Any]:
+               findings: "dict[str, Any] | None" = None,
+               notes: "dict[str, Any] | None" = None) -> dict[str, Any]:
     """One member as Settings › Model team shows it. Never raises.
 
     v1.395.0: ``records`` — the member's RECORD per role it holds
@@ -113,6 +120,21 @@ def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = No
         "paused": bool(str(getattr(record, "paused_reason", "") or "")),
         "records": _records_view(facts.get("roles") or [], (records or {}).get(record.name) or {}),
         "findings": _findings_view((findings or {}).get(record.name)),
+        # v1.423.0 (Team notes, Phase 2): its accepted working habits and how
+        # many wait for the owner (``team_notes.notes_for``).
+        "notes": _notes_view((notes or {}).get(record.name)),
+    }
+
+
+def _notes_view(mine: Any) -> dict[str, Any]:
+    """A member's working habits as the row carries them (none for none or
+    anything unreadable)."""
+    if not isinstance(mine, dict):
+        return {"accepted": [], "suggested": 0, "hand_edited": False}
+    return {
+        "accepted": list(mine.get("accepted") or []),
+        "suggested": int(mine.get("suggested") or 0),
+        "hand_edited": bool(mine.get("hand_edited")),
     }
 
 
@@ -150,10 +172,14 @@ def team_view(platform: Any) -> dict[str, Any]:
     from ...agents.team_findings import findings_for
 
     findings = findings_for(getattr(platform, "engine", None), [r.name for r in members])
+    # v1.423.0 (Team notes, Phase 2): the working habits, every member at once.
+    from ...agents.team_notes import notes_for
+
+    notes = notes_for(platform, [r.name for r in members])
     with cached_verdicts():
         return {
             "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],
-            "members": [member_row(platform, r, records, findings) for r in members],
+            "members": [member_row(platform, r, records, findings, notes) for r in members],
         }
 
 
@@ -172,6 +198,19 @@ def register(app: FastAPI, d) -> None:
                 status_code=503, detail=f"The model list could not be read: {type(exc).__name__}"
             ) from None
         return T.starter_preview(d.platform, catalog, paid=paid)
+
+    @app.post("/team/notes/{note_id}/remove")
+    def post_remove_team_note(note_id: str) -> dict[str, Any]:
+        """v1.423.0 (Team notes, Phase 2): take an accepted working habit back
+        — it is no longer shown to the member, and its TEAM-NOTES.md is
+        written again unless the user edited that file by hand (then
+        ``message`` says the user's file was kept)."""
+        from ...agents import team_notes as TN
+
+        try:
+            return TN.remove(d.platform, note_id)
+        except TN.NoteRefused as refused:
+            raise HTTPException(status_code=refused.status, detail=str(refused)) from None
 
     @app.get("/team/starter")
     def get_starter(paid: int = 0) -> dict[str, Any]:

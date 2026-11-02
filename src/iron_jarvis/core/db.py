@@ -256,6 +256,7 @@ _LATE_MODEL_MODULES = (
     "..harness.ci_fix",       # CiWatchRecord — a pull request's checks watched and fixed (v1.406.0)
     "..hosted.models",        # HostedSessionRecord — a Code-view session (Build, v1.409.0)
     "..agents.team_findings",  # TeamFinding — a reviewer's finding and what became of it (v1.423.0)
+    "..agents.team_notes",    # TeamNote + TeamNoteState — a member's accepted working habits (v1.423.0)
 )
 
 

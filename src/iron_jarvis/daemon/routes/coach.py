@@ -62,8 +62,24 @@ def _known(d, name: str) -> str:
 
 
 def _decision(coach, proposal_id: str, action: str) -> dict[str, Any]:
+    out, _minted = _decided(coach, proposal_id, action)
+    return out
+
+
+def _decided(coach, proposal_id: str, action: str) -> tuple[dict[str, Any], list]:
+    """``(answer, library_rows)``. v1.423.0 (Team notes): the decision goes by
+    the proposal's KIND — an accepted ``team_note`` answers ``note`` beside
+    the proposal when there is something to say (its TEAM-NOTES.md was kept
+    as the user edited it; team notes are off), and may have proposed a
+    role-brief edit (``library_rows``, published by the route); an
+    ``instructions`` proposal answers ``{proposal}`` exactly as before."""
+    note = ""
+    minted: list = []
     try:
-        row = getattr(coach, action)(proposal_id)
+        if action == "accept":
+            row, note, minted = coach.accept_with_note(proposal_id)
+        else:
+            row = getattr(coach, action)(proposal_id)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"no coach proposal {proposal_id!r}"
@@ -72,7 +88,10 @@ def _decision(coach, proposal_id: str, action: str) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
-    return {"proposal": proposal_view(row)}
+    out: dict[str, Any] = {"proposal": proposal_view(row)}
+    if note:
+        out["note"] = note
+    return out, minted
 
 
 def register(app: FastAPI, d) -> None:
@@ -116,7 +135,16 @@ def register(app: FastAPI, d) -> None:
     @app.post("/coach/proposals/{proposal_id}/accept")
     async def coach_accept(proposal_id: str) -> dict[str, Any]:
         coach = _coach(d)
-        return await asyncio.to_thread(_decision, coach, proposal_id, "accept")
+        out, minted = await asyncio.to_thread(_decided, coach, proposal_id, "accept")
+        if minted:
+            # v1.423.0: a working habit two members of one role were given
+            # became a suggested edit of that role's brief (the library's own
+            # proposal) — said like any library suggestion.
+            from ...harness.library import _publish
+
+            for row in minted:
+                await _publish(d.platform, row)
+        return out
 
     @app.post("/coach/proposals/{proposal_id}/decline")
     async def coach_decline(proposal_id: str) -> dict[str, Any]:

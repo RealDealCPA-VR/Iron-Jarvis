@@ -30,6 +30,7 @@ import {
   decodeStarter,
   decodeTeam,
   findingsWords,
+  notesWords,
   placeWords,
   recordWords,
   usageWords,
@@ -37,8 +38,9 @@ import {
   type StarterRow,
   type TeamMember,
 } from "@/lib/modelTeam";
+import { agentsPath } from "@/lib/mission";
 import type { ModelOption } from "@/lib/types";
-import { Button, Card, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
+import { Button, Card, ConfirmButton, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { TeamRoleChecks } from "@/components/agents/TeamRoleChecks";
 import { FixRequestButton } from "@/components/team/FixRequestButton";
 
@@ -125,6 +127,18 @@ function MemberRow({
     }
   }
 
+  // v1.423.0 (Team notes): take an accepted habit back (the daemon writes
+  // its TEAM-NOTES.md again — never over a hand edit) and read the team again.
+  async function removeNote(id: string) {
+    setError(null);
+    try {
+      await post(`/team/notes/${encodeURIComponent(id)}/remove`);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
+
   const where = [placeWords(m.place), costWords(m.cost)].filter(Boolean).join(" · ");
   return (
     <li
@@ -174,6 +188,54 @@ function MemberRow({
         >
           {findingsWords(m.findings)}
         </p>
+      ) : null}
+      {/* v1.423.0 (Team notes, Phase 2): its WORKING HABITS — one quiet
+          line ("Working habits: 2 · 1 suggested") with a way to its coach
+          card, where a suggested habit is accepted or declined, and the
+          accepted ones listed, each with a two-press Remove. Nothing at all
+          when it has none and none waits (or the daemon is older). */}
+      {notesWords(m.notes) && m.notes ? (
+        <div data-testid={`team-notes-${m.name}`} className="space-y-1">
+          <p className="text-[12px] text-zinc-400">
+            <span data-testid={`team-notes-line-${m.name}`}>{notesWords(m.notes)}</span>
+            {" · "}
+            <a
+              data-testid={`team-notes-link-${m.name}`}
+              href={agentsPath({ kind: "team", agent: m.rosterName })}
+              className="text-accent-soft hover:underline"
+              title="Suggested habits are accepted or declined on this agent's coach card"
+            >
+              {m.notes.suggested ? "Review the suggestions" : "Open its card"}
+            </a>
+          </p>
+          {m.notes.handEdited ? (
+            <p data-testid={`team-notes-hand-${m.name}`} className="text-[12px] text-zinc-500">
+              Its TEAM-NOTES.md was changed by hand, so Iron Jarvis keeps your text as it is.
+            </p>
+          ) : null}
+          {m.notes.accepted.length ? (
+            <ul className="space-y-1">
+              {m.notes.accepted.map((n) => (
+                <li
+                  key={n.id}
+                  data-testid={`team-note-${n.id}`}
+                  className="flex items-start gap-2 text-[12px] text-zinc-300"
+                >
+                  <span className="min-w-0 flex-1" title={`From ${n.findings} confirmed findings`}>
+                    {n.text}
+                  </span>
+                  <ConfirmButton
+                    variant="calm"
+                    label="Remove"
+                    confirmLabel="Remove?"
+                    title="Stop showing this habit to the member"
+                    onConfirm={() => removeNote(n.id)}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       <RoleChecks
         scope={m.name}

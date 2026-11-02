@@ -816,6 +816,22 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // has the whole of it, with the diff.
     const agent = typeof p.agent === "string" && p.agent ? p.agent : "an agent";
     const rationale = typeof p.rationale === "string" ? p.rationale.trim() : "";
+    if (p.kind === "team_note") {
+      // v1.423.0 (Team notes, Phase 2): a WORKING HABIT suggested for a
+      // model team member from its reviewers' confirmed findings — a QUIET
+      // row (never a desktop ping): nothing is used until the owner accepts
+      // it on the agent's coach card. Its name, never "custom:".
+      const who = agent.startsWith("custom:") ? agent.slice("custom:".length) : agent;
+      return {
+        id: e.id,
+        ts: e.ts,
+        href: agentHref(p.agent),
+        icon: GraduationCap,
+        title: `A working habit is suggested for ${who}`,
+        body: rationale.length > 140 ? `${rationale.slice(0, 139)}…` : rationale,
+        quiet: true,
+      };
+    }
     return {
       id: e.id,
       ts: e.ts,

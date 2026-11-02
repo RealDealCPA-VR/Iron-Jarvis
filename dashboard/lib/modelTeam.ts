@@ -71,6 +71,28 @@ export interface TeamMember {
   /** v1.423.0 (Team notes): its reviewers' findings over the last 30 days
    *  (null from an older daemon, which sends none). */
   findings: TeamFindings | null;
+  /** v1.423.0 (Team notes, Phase 2): its WORKING HABITS — the accepted ones
+   *  and how many wait on its coach card (null from an older daemon). */
+  notes: TeamNotes | null;
+}
+
+/** v1.423.0 (Team notes, Phase 2): one working habit the owner accepted
+ *  (the daemon's agents/team_notes.note_view). */
+export interface TeamNoteRow {
+  id: string;
+  text: string;
+  /** How many confirmed findings it generalizes. */
+  findings: number;
+  acceptedAt: string | null;
+}
+
+/** A member's working habits (the daemon's `notes` on a GET /team row). */
+export interface TeamNotes {
+  accepted: TeamNoteRow[];
+  /** Suggested habits waiting for Accept / Decline on its coach card. */
+  suggested: number;
+  /** Its TEAM-NOTES.md holds text Iron Jarvis did not write (kept as is). */
+  handEdited: boolean;
 }
 
 /** v1.423.0 (Team notes, Phase 1b): what became of the problems a reviewer
@@ -188,6 +210,46 @@ export function findingsWords(f: TeamFindings | null): string {
   return body ? `Reviewers' findings (30 days): ${body}` : "";
 }
 
+/** A member row's `notes`, defensively: an older daemon sends none (null),
+ *  a habit with no id or text is left out, junk counts read as zero. */
+export function decodeNotes(raw: unknown): TeamNotes | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const accepted: TeamNoteRow[] = [];
+  for (const item of Array.isArray(r.accepted) ? r.accepted : []) {
+    const x = rec(item);
+    const id = str(x?.id, 120);
+    const text = str(x?.text, 400);
+    if (!x || !id || !text) continue;
+    accepted.push({ id, text, findings: count(x.findings), acceptedAt: str(x.accepted_at, 60) || null });
+  }
+  return { accepted, suggested: count(r.suggested), handEdited: r.hand_edited === true };
+}
+
+/** The member card's ONE quiet line: "Working habits: 2 · 1 suggested" —
+ *  a part that is zero is left out ("Working habits: 1 suggested"), and ""
+ *  (no line at all) when it has none and none waits. */
+export function notesWords(n: TeamNotes | null): string {
+  if (!n) return "";
+  const kept = n.accepted.length;
+  const parts = [kept ? String(kept) : "", n.suggested ? `${n.suggested} suggested` : ""].filter(Boolean);
+  return parts.length ? `Working habits: ${parts.join(" · ")}` : "";
+}
+
+/** A cited finding in plain words (a `team_note` proposal's evidence):
+ *  "src/app.py line 12: X is 1 — set it to 2", "General: …" for none. */
+export function findingWords(raw: unknown): string {
+  const r = rec(raw);
+  if (!r) return "";
+  const path = str(r.path, 300);
+  const line = num(r.line);
+  const what = str(r.what, 600);
+  const change = str(r.change, 600);
+  if (!what) return "";
+  const place = path ? (line && line > 0 ? `${path} line ${Math.round(line)}` : path) : "General";
+  return `${place}: ${what}${change ? ` — ${change}` : ""}`;
+}
+
 /** "reading: good (4 of 5 passed) · coding: no record yet" — a member's
  *  record, one role after another, in the daemon's own words ("" for none). */
 export function recordWords(m: Pick<TeamMember, "roles" | "records">): string {
@@ -218,6 +280,7 @@ export function decodeMember(raw: unknown): TeamMember | null {
     paused: r.paused === true,
     records: decodeRecords(r.records, cleanRoles(r.roles)),
     findings: decodeFindings(r.findings),
+    notes: decodeNotes(r.notes),
   };
 }
 
