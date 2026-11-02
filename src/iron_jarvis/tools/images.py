@@ -304,6 +304,8 @@ class ViewImageTool(_ImageTool):
         note = PICTURE_DESCRIBED_NOTE
         if takes:
             data, media, width, height = await asyncio.to_thread(fit_picture, blob, media_type)
+            if not (width and height):
+                return ToolResult(ok=False, error=PICTURE_UNREADABLE.format(path=raw))
             if len(data) <= HARD_IMAGE_BYTES:
                 shrunk = (
                     f", shrunk from {len(blob):,} bytes to fit" if data is not blob else ""
@@ -366,6 +368,14 @@ PICTURE_TOO_LARGE_NOTE = (
 #: re-encoded past MAX, never attached past HARD) — and the largest side any
 #: of the three carriers takes (the Anthropic API refuses past 8,000 px).
 _PICTURE_MAX_SIDE = 8000
+#: Pillow's name for a format -> the media type the three carriers take.
+_PIL_MEDIA_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "GIF": "image/gif", "WEBP": "image/webp"}
+#: v1.425.0 (C4): a file named like a picture that Pillow cannot read is
+#: never attached — one picture a provider refuses fails the WHOLE turn
+#: (``page_shot.HARD_IMAGE_BYTES``'s reason), so it is refused here in words.
+PICTURE_UNREADABLE = (
+    "{path} could not be read as a picture (it may be damaged, or not really an image)"
+)
 
 
 def _serving_pair(serving: Any) -> "tuple[str, str]":
@@ -410,6 +420,9 @@ def fit_picture(blob: bytes, media_type: str) -> "tuple[bytes, str, int, int]":
 
         img = Image.open(io.BytesIO(blob))
         width, height = img.size
+        # The media type the bytes REALLY are (a JPEG saved as .png is
+        # refused by a provider that checks), never the suffix's guess.
+        media_type = _PIL_MEDIA_TYPES.get(str(img.format or "").upper(), media_type)
     except Exception:  # noqa: BLE001 — not readable: hand it back as it is
         return blob, media_type, 0, 0
     if len(blob) <= MAX_IMAGE_BYTES and max(width, height) <= _PICTURE_MAX_SIDE:

@@ -254,6 +254,50 @@ async def test_a_big_picture_is_shrunk_and_one_too_big_even_shrunk_is_described(
     assert I.PICTURE_TOO_LARGE_NOTE.format(path="big.png") in tool2.content
 
 
+def _picture_read(tmp_path: Path, name: str, data: bytes) -> ToolResult:
+    """One image read straight through ``view_image``, served by an adapter
+    that takes a tool's picture."""
+    import asyncio
+
+    from iron_jarvis.tools.base import ToolContext
+
+    (tmp_path / name).write_bytes(data)
+
+    class _Sees(LLMAdapter):
+        takes_tool_pictures = True
+
+        async def complete(self, **kw):  # pragma: no cover
+            raise AssertionError
+
+    class _Router:
+        class manager:  # noqa: N801 — a stand-in
+            @staticmethod
+            def get(provider, model=None):
+                return _Sees()
+
+    ctx = ToolContext(workspace=tmp_path, session_id="s", agent_run_id="r", config=None,
+                      event_bus=None, engine=None, picture_read=("anthropic", "m"))
+    return asyncio.run(I.ViewImageTool(lambda: _Router()).execute({"path": name}, ctx))
+
+
+def test_a_picture_goes_with_the_media_type_its_bytes_really_are(tmp_path):
+    """A JPEG saved as .png: a provider that checks refuses a mismatch, and one
+    refused picture fails the whole turn."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 3), (255, 0, 0)).save(buf, format="JPEG")
+    res = _picture_read(tmp_path, "really.png", buf.getvalue())
+    assert res.ok and res.images and res.images[0]["media_type"] == "image/jpeg"
+    assert "4×3" in res.output
+
+
+def test_a_file_that_is_no_picture_is_refused_never_attached(tmp_path):
+    res = _picture_read(tmp_path, "broken.png", b"not an image at all")
+    assert not res.ok and not res.images
+    assert res.error == I.PICTURE_UNREADABLE.format(path="broken.png")
+
+
 def test_a_view_image_outside_a_harness_read_is_exactly_as_before(tmp_path):
     """No ``picture_read`` on the context (plain chat, agents, the generic
     dialect's own view_image): the vision model answers, no picture, no note."""
