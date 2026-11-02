@@ -782,12 +782,18 @@ def ask_sentence(
             parts.append(", ".join(always) + " always waits for the user's approval.")
         rest = " ".join(parts)
     elif mode == "auto" and not low_trust:
+        # "may", as under Ask first: a page's own check decides a page call
+        # whatever a session grant says (``page_open`` / ``page_screenshot``:
+        # the Browser pane's page runs unasked, another local page always
+        # asks), so "unless the user allowed that tool" was a promise the
+        # lane does not keep either way.
+        page = _PREVIEW_PAGE_WORDS + ", " if asking & _PAGE_REAL else ""
         rest = (
-            f"Calls to {', '.join(shown)} pause while the user approves them, unless the user "
-            "already allowed that tool for this session or Iron Jarvis's rules or a quick check "
-            "find the call routine for what the user asked (a call its rules read as deleting, "
-            "overwriting, sending or paying for something, or one that edits a file outside this "
-            f"folder, is never found routine); {_DECLINE_WORDS}"
+            f"Calls to {', '.join(shown)} pause while the user approves them; {page}a call of a "
+            "tool the user already allowed for this session, or one Iron Jarvis's rules or a quick "
+            "check find routine for what the user asked, may run without asking (a call its rules "
+            "read as deleting, overwriting, sending or paying for something, or one that edits a "
+            f"file outside this folder, is never found routine); {_DECLINE_WORDS}"
         )
     else:
         # Ask first (the default) and Accept edits (which adds only file

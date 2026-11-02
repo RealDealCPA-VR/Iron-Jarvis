@@ -314,6 +314,10 @@ def test_autos_never_routine_list_is_what_its_rules_read(tmp_path):
     assert "always pauses" not in auto
     assert "edits a file outside this folder" in auto
     assert "never found routine" in auto
+    # A page's own check decides a page call whatever a grant says: the
+    # Browser pane's page runs unasked, another local page always asks.
+    assert "a look at the page the user's Browser pane shows" in auto
+    assert "unless the user already allowed that tool" not in auto
 
 
 def test_a_local_only_chat_names_every_tool_that_asks_every_time(tmp_path):

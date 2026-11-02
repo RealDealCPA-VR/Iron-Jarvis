@@ -349,7 +349,8 @@ def test_the_approval_sentence_is_true_for_each_posture(tmp_path):
     line = next(x for x in strict.splitlines() if x.startswith("Calls to "))
     assert "Write" in line and "Edit" in line and "WebFetch" in line, "it cards edits and the web too"
     auto = _turn(platform, mode="auto").rendered
-    assert "a quick check find the call routine" in auto
+    # v1.425.0 review (moved on purpose): "may", as a page's own check decides.
+    assert "a quick check find routine for what the user asked, may run without asking" in auto
     yolo = _turn(platform, mode="yolo").rendered
     assert "run without pausing, except a few calls that still wait" in yolo
     # v1.425.0 review (moved on purpose): the git guard's whole reach.
