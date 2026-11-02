@@ -1279,13 +1279,21 @@ class _ReplyWatch:
             # the error branch writes — "Copy as a fix request" reads nothing
             # from a reply at low trust, and finds that reply by this line.
             low_reason = self.stopped_trust()
+            # v1.423.0 review: ...but only when a CALL is on the record (a
+            # finished step, or one still running when the Stop landed) — the
+            # calls are what the report must leave out. A reply that STARTED
+            # low (a carry-on of a low reply, a flagged CI fix, a night task)
+            # and was stopped before it ran anything has nothing in its
+            # window, and its line would read "Answered in 0.4 s · cut off"
+            # over nothing — so it keeps no line, as at full trust.
+            low_window = bool(low_reason) and bool(self.steps or self._started)
             if not partial.strip() and not self.helpers and not self.attempts and not keep_empty \
-                    and not low_reason:
+                    and not low_window:
                 return out  # stopped before a word: nothing to keep
             # (v1.372.0: a turn stopped while its helpers worked keeps a line
             # for them — what they did is part of the session. v1.423.0: so
-            # does one that went to LOW trust, even with no words — its line
-            # is the window the fix request leaves out.)
+            # does one that went to LOW trust after it ran a call, even with
+            # no words — its line is the window the fix request leaves out.)
             line.update({"content": partial, "interrupted": True})
             if status == "interrupted":
                 line["error"] = _durable.INTERRUPTED_DETAIL

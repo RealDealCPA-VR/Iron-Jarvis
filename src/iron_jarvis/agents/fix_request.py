@@ -802,7 +802,9 @@ def clean(value: Any, limit: int) -> str:
     "a mask fault never lets a value through" branch here was dead: the mask
     is asked to RAISE on a fault (``strict``) and the value is dropped
     (:data:`LEFT_OUT_UNMASKED`); a scan that cannot run drops it too
-    (:data:`LEFT_OUT_UNSCANNED`)."""
+    (:data:`LEFT_OUT_UNSCANNED` — the review: the scan is asked to RAISE on
+    its own fault too, ``scan_context(strict=True)``, which by default hands
+    the text back unscanned)."""
     text = str(value or "")
     if not text:
         return ""
@@ -815,7 +817,11 @@ def clean(value: Any, limit: int) -> str:
     try:
         from ..core.promptguard import scan_context
 
-        text = scan_context(text, source="Iron Jarvis's records", cap=None).text
+        # v1.423.0 (lane D review): ``strict`` — by default ``scan_context``
+        # swallows its own fault and hands the text back UNSCANNED, so the
+        # branch below was as dead as the mask's was: asked to RAISE, a scan
+        # that cannot run drops the value.
+        text = scan_context(text, source="Iron Jarvis's records", cap=None, strict=True).text
     except Exception:  # noqa: BLE001 — an unscanned value is never shown
         return LEFT_OUT_UNSCANNED
     text = " ".join(str(text).split()).replace("`", "'")
