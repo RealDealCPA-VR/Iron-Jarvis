@@ -590,26 +590,35 @@ def refusal(command: str, args: list[str]) -> str:
 def _check(command: str, args: list[str]) -> tuple[str, list[str]]:
     """:func:`refusal`'s work: ``(the sentence or "", the option spellings
     the words used, in order)``. Pure."""
+    problem, used_names, _revision = _walk(command, args)
+    return problem, used_names
+
+
+def _walk(command: str, args: list[str]) -> tuple[str, list[str], bool]:
+    """:func:`_check`'s reading, plus whether a word BEFORE ``--`` is a
+    revision or a path (not an option's value). Pure."""
     if command not in ALLOWED:
         return (f"git_read runs only read-only git commands ({', '.join(ALLOWED)}); "
-                f"\"{command or '(none)'}\" is not one of them."), []
+                f"\"{command or '(none)'}\" is not one of them."), [], False
     if len(args) > MAX_ARGS:
-        return f"git_read takes at most {MAX_ARGS} words after the command.", []
+        return f"git_read takes at most {MAX_ARGS} words after the command.", [], False
     used_names: list[str] = []
     listing = False
     positional = False
+    revision = False
     ended = False
     i = 0
     while i < len(args):
         arg = args[i]
         problem = _word_problem(arg)
         if problem:
-            return problem, used_names
+            return problem, used_names, revision
         if ended or not arg.startswith("-"):
             problem = _path_problem(arg)
             if problem:
-                return problem, used_names
+                return problem, used_names, revision
             positional = True
+            revision = revision or not ended
             i += 1
             continue
         if arg == "--":
@@ -618,7 +627,7 @@ def _check(command: str, args: list[str]) -> tuple[str, list[str]]:
             continue
         names: list[str]
         if arg == "-":
-            return _unknown(command, arg), used_names
+            return _unknown(command, arg), used_names, revision
         if command in _COUNTS and re.fullmatch(r"-\d{1,6}", arg):
             problem, used, names = "", 0, []
         elif arg.startswith("--"):
@@ -627,15 +636,39 @@ def _check(command: str, args: list[str]) -> tuple[str, list[str]]:
         else:
             problem, used, names = _cluster_problem(command, arg, args, i)
         if problem:
-            return problem, used_names
+            return problem, used_names, revision
         used_names += names
         if any(n in _LISTING.get(command, ()) for n in names):
             listing = True
         i += 1 + used
     if command in _LISTING and positional and not listing:
         return (f"git {command} with a name makes a new {command}; git_read only lists them — add "
-                "--list (the names are then patterns)."), used_names
-    return "", used_names
+                "--list (the names are then patterns)."), used_names, revision
+    return "", used_names, revision
+
+
+#: v1.422.2 REVIEW: ``git shortlog`` with no revision reads its STANDARD
+#: INPUT (git adds HEAD only when that is a terminal), and git_read's is
+#: empty — so a reviewer's ``shortlog -sn`` answered "(git printed nothing)"
+#: as if nobody had committed (measured). With no word before ``--`` (and no
+#: ``--all``), HEAD is the revision, as in a terminal
+#: (:func:`_default_revision`); a shortlog that still prints nothing says why.
+SHORTLOG_EMPTY = ("git shortlog printed nothing: with no revision it reads its input, which is empty "
+                  "here. Name one, such as HEAD or --all.")
+
+
+def _default_revision(command: str, args: list[str]) -> list[str]:
+    """``args`` with HEAD as ``shortlog``'s revision when it names none (see
+    :data:`SHORTLOG_EMPTY`); every other call unchanged. Pure."""
+    if command != "shortlog":
+        return list(args)
+    problem, names, revision = _walk(command, args)
+    if problem or revision or "--all" in names:
+        return list(args)
+    if "--" in args:
+        k = args.index("--")
+        return [*args[:k], "HEAD", *args[k:]]
+    return [*args, "HEAD"]
 
 
 def _path_problem(arg: str) -> str:
@@ -930,6 +963,7 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     """BLOCKING: one checked, read-only git call in ``cwd``."""
     from ..git.integration import run_git
 
+    args = _default_revision(command, args)
     env = git_read_env()
     settings = _repo_settings(cwd, env)
     if settings is None:
@@ -965,6 +999,8 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
             f"\n\n[cut: the first {OUTPUT_CHARS:,} of {total:,} characters were shown — narrow it "
             "with a path, -n, --stat or --name-only]"
         )
+    if not out.strip() and command == "shortlog":
+        out = SHORTLOG_EMPTY
     return ToolResult(ok=True, output=out or "(git printed nothing)",
                       data={"command": command, "chars": total, "truncated": cut})
 
