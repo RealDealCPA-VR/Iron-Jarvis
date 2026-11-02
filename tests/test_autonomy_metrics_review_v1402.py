@@ -256,7 +256,12 @@ def test_a_sibling_settled_by_a_grant_is_one_interruption_not_two():
     got = A.compute(threads=[_thread("c", lines)], sessions=[], events=ev, days=30, now=NOW)
     i = got["interruptions"]
     assert i["total"] == 1 and i["by_kind"]["card"] == 1 and i["by_tool"] == [{"tool": "shell", "count": 1}]
-    assert got["weekly"][-1]["interruptions"] == 1
+    # v1.422.0 (test-only): the row of the week the task STARTED in — NOW is
+    # the real clock, and in the first 15 minutes of a Monday (UTC) the task
+    # (NOW - 900) began in the previous week, so `weekly[-1]` read 0 (the
+    # Release/Tests gate for v1.422.0 ran at 00:15 UTC on a Monday).
+    week = A._week_start(NOW - 900)
+    assert next(w for w in got["weekly"] if w["week"] == week)["interruptions"] == 1
 
 
 def test_the_weekly_rows_add_up_to_the_window_even_when_it_starts_late_in_a_week():
