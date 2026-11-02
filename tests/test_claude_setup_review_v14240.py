@@ -332,7 +332,7 @@ def test_a_reference_that_also_carries_a_key_is_held_in_the_environment(owner, a
     MUTATION: keep a reference whenever ``mask`` leaves it unchanged -> the key
     is on disk -> red."""
     data = json.loads((owner / ".claude.json").read_text(encoding="utf-8"))
-    data["mcpServers"]["mixed"] = {"type": "stdio", "command": "C:\t\m.exe",
+    data["mcpServers"]["mixed"] = {"type": "stdio", "command": r"C:\t\m.exe",
                                    "env": {"OPTS": "${HOME} --key " + GOOGLE_KEY, "PLAIN": "${GITHUB_TOKEN}"}}
     _w(owner / ".claude.json", json.dumps(data))
     os.utime(owner / ".claude.json", ns=(4, 4))

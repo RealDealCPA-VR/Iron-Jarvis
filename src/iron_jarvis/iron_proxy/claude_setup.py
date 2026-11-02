@@ -121,7 +121,7 @@ this PC (2026-11-02, scratch junctions to scratch folders, never a real home):
 Python 3.12 ``shutil.rmtree``, Windows PowerShell 5.1 and PowerShell 7
 ``Remove-Item -Recurse -Force``, ``rd /s /q``, Git's ``rm -rf`` and Node 20's
 ``fs.rmSync`` remove the junction and leave its target — but NSIS 3.0.4.1
-``RMDir /r`` (the installed app's uninstaller runs it over ``%APPDATA%\Iron
+``RMDir /r`` (the installed app's uninstaller runs it over ``%APPDATA%\\Iron
 Jarvis`` when given ``--delete-app-data``, electron-builder's
 ``uninstaller.nsh``) and Electron 42's Node 24.17 ``fs.rmSync(dir,
 {recursive: true})`` (the desktop shell's, the dashboard server's and
