@@ -17,8 +17,11 @@
  * happened, in a status line that is mounted with the button (a live region
  * mounted with its words is often not announced — the v1.352.0 bell lesson):
  *
- *  - "Copied: N problems from the last 7 days";
- *  - "Nothing to report from the last 7 days" — and copies NOTHING;
+ *  - "Copied: N problems from the last 7 days" ("Copied: 15 of 60 …" when
+ *    the report could list only some — the daemon's `listed`);
+ *  - "Nothing to report from the last 7 days" — and copies NOTHING; when a
+ *    source could not be read (`complete: false`), the daemon's own line,
+ *    which names it (never a silent "nothing found");
  *  - a copy that could not reach the clipboard is never reported as one (the
  *    DraftCard rule): the text is shown in a box to select by hand;
  *  - any other failure in words.
@@ -51,9 +54,13 @@ function windowWords(days: number): string {
   return days === 1 ? "the last day" : `the last ${days} days`;
 }
 
-/** What the status line says after a copy. */
-export function copiedWords(problems: number, days: number = FIX_REQUEST_DAYS): string {
-  return `Copied: ${problems} problem${problems === 1 ? "" : "s"} from ${windowWords(days)}`;
+/** What the status line says after a copy. v1.423.0 review: `listed` — how
+ *  many of the `problems` the copied text HOLDS (the daemon's report lists at
+ *  most 20 and stops at 30,000 characters); said as "15 of 60" when fewer, so
+ *  the line never claims a copy of problems that are not in it. */
+export function copiedWords(problems: number, days: number = FIX_REQUEST_DAYS, listed?: number): string {
+  const of = typeof listed === "number" && listed >= 0 && listed < problems ? `${listed} of ` : "";
+  return `Copied: ${of}${problems} problem${problems === 1 ? "" : "s"} from ${windowWords(days)}`;
 }
 
 /** What the status line says when there is nothing to copy. */
@@ -77,15 +84,24 @@ export function fixRequestTitle(session?: string | null, days: number = FIX_REQU
 export const CLIPBOARD_UNAVAILABLE =
   "Your clipboard could not be reached, so nothing was copied. Select the report below and copy it.";
 
-type Report = { text: string; problems: number };
+type Report = { text: string; problems: number; listed?: number; complete: boolean };
+
+function count(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
+}
 
 function decode(raw: unknown): Report | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.text !== "string") return null;
-  const problems =
-    typeof r.problems === "number" && Number.isFinite(r.problems) && r.problems >= 0 ? Math.floor(r.problems) : 0;
-  return { text: r.text, problems };
+  return {
+    text: r.text,
+    problems: count(r.problems) ?? 0,
+    listed: count(r.listed),
+    // v1.423.0 review: `complete: false` — a source could not be read, or
+    // calls were left out; an older Iron Jarvis says nothing (complete).
+    complete: r.complete !== false,
+  };
 }
 
 /** An older Iron Jarvis has no such route: FastAPI's own 404 ("Not Found"). */
@@ -126,7 +142,13 @@ export function FixRequestButton({
         return;
       }
       if (report.problems <= 0) {
-        setSaid({ tone: "quiet", text: nothingWords(days) });
+        // Never a silent "nothing found" (v1.423.0 review): when a source
+        // could not be read, the daemon's own line says which.
+        setSaid(
+          report.complete
+            ? { tone: "quiet", text: nothingWords(days) }
+            : { tone: "warn", text: report.text },
+        );
         return;
       }
       // The app's own copy path (the desktop bridge first, then the browser),
@@ -134,7 +156,7 @@ export function FixRequestButton({
       const { copyPlain } = await import("@/components/settings/MaintenanceTools");
       const outcome = await copyPlain(report.text);
       if (outcome === "copied") {
-        setSaid({ tone: "quiet", text: copiedWords(report.problems, days) });
+        setSaid({ tone: "quiet", text: copiedWords(report.problems, days, report.listed) });
       } else {
         setFallback(report.text);
         setSaid({ tone: "warn", text: CLIPBOARD_UNAVAILABLE });
