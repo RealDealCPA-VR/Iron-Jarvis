@@ -312,7 +312,10 @@ describe("the view", () => {
     await waitFor(() =>
       expect(screen.getByTestId("code-start").textContent).toContain("Claude Code, Codex, Pi, OpenCode or Grok"),
     );
-    fireEvent.click(await screen.findByTestId("code-start-tool"));
+    // v1.423.0: the chip is disabled until the tool list loads; a click on a
+    // disabled button dispatches nothing — wait for it to be enabled first.
+    await waitFor(() => expect(screen.getByTestId("code-start-tool")).not.toBeDisabled(), { timeout: 10_000 });
+    fireEvent.click(screen.getByTestId("code-start-tool"));
     expect(await screen.findByTestId("code-start-tool-grok")).toBeInTheDocument();
   });
 
@@ -322,7 +325,10 @@ describe("the view", () => {
     await waitFor(() =>
       expect(screen.getByTestId("code-start").textContent).toContain("Claude Code, Codex, Pi or OpenCode"),
     );
-    fireEvent.click(await screen.findByTestId("code-start-tool"));
+    // v1.423.0: the chip is disabled until the tool list loads; a click on a
+    // disabled button dispatches nothing — wait for it to be enabled first.
+    await waitFor(() => expect(screen.getByTestId("code-start-tool")).not.toBeDisabled(), { timeout: 10_000 });
+    fireEvent.click(screen.getByTestId("code-start-tool"));
     await screen.findByTestId("code-start-tool-menu");
     expect(screen.queryByTestId("code-start-tool-grok")).toBeNull();
     expect(screen.getByTestId("code-start").textContent).not.toContain("Grok");

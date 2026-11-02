@@ -13560,6 +13560,20 @@ does not need a bump, stop and bump it.
   (both go to Wave 3 round 2). Pins: `tests/test_team_findings{,_review}_v14230.py`,
   `tests/test_fix_request{,_review}_v14230.py`,
   `dashboard/__tests__/{team-findings,fix-request,fix-request-review}-v1423-0.test.tsx`.
+  v1.423.1 (test-only; v1.423.0's Release gate went red on
+  `build-app-opencode-v1413` "New session for OpenCode", so it published no
+  installer): the start composer's tool chip is DISABLED until the tool list
+  loads, and the test clicked it as soon as it was drawn — a click on a
+  disabled button dispatches nothing, so on the Release gate's smaller machine
+  the menu never opened. The test (and the same shape in
+  `build-app-grok-v1416` ×2 and `build-app-pi-v1411`) now waits for the chip
+  to be ENABLED; a 1.5 s hold on the tool list reproduced the gate's exact
+  error. Same release, three older load races the branch suite met, each
+  reproduced locally by holding one step back: the phone's second "approve"
+  now waits for its answerable prompt (`test_build_phone_ask_review_v1392`),
+  the claude relay test waits until the relay finished handling before
+  closing (`test_claude_native_round_cost_v1420`, `_handled`), and the
+  plan-run view is read until the plan is let go (`test_plan_runs_v1402`).
 
 ## Map (where things live)
 
