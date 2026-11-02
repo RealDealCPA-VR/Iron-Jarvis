@@ -44,6 +44,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from ..providers import subscription_clis as _SUBS
+
 log = logging.getLogger(__name__)
 
 #: A keyword default that is not None (None is a real value: "no account",
@@ -129,11 +131,11 @@ COST_FREE, COST_PLAN, COST_PAY = "free", "plan", "pay"
 COST_WORDS: dict[str, str] = {COST_FREE: "free", COST_PLAN: "your plan", COST_PAY: "pay per use"}
 
 #: Subscription CLIs: work on them is covered by the user's plan.
-_PLAN_CLIS = frozenset({"claude-cli", "codex-cli", "grok-cli"})
+_PLAN_CLIS = _SUBS.PROVIDER_SET  # v1.426.0 (E5): THE table (providers/subscription_clis)
 #: A model id that means "the provider's own default".
 _PLACEHOLDER_MODELS = frozenset({"", "subscription", "default", "auto"})
 #: The vendor CLI each Iron-Proxy-backed provider is (for its account).
-_CLI_LABELS = {"claude-cli": "Claude Code", "codex-cli": "Codex", "grok-cli": "Grok"}
+_CLI_LABELS = dict(_SUBS.TEAM_LABELS)
 
 
 def _manager(platform: Any) -> Any:

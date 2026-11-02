@@ -59,6 +59,7 @@ from typing import Any, Callable
 
 import httpx
 
+from ..providers import subscription_clis as _SUBS
 from .client import IronProxyClient
 
 log = logging.getLogger(__name__)
@@ -194,7 +195,8 @@ REPLACE_LIMIT = 2
 REPLACE_WINDOW_S = 600.0
 
 #: Iron Jarvis provider id -> the Iron-Proxy provider whose CLI accounts it runs as.
-JARVIS_TO_PROXY = {"claude-cli": "anthropic", "codex-cli": "openai", "grok-cli": "xai"}
+#: v1.426.0 (E5): read from THE table (``providers/subscription_clis``).
+JARVIS_TO_PROXY = dict(_SUBS.PROVIDER_TO_PROXY)
 
 NOT_ANSWERING = (
     "Iron-Proxy is on but not answering — Iron Jarvis will not use this PC's own "

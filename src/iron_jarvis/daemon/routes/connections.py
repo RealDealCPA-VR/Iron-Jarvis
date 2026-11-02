@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 from ...providers.reasoning import reasoning_default, reasoning_levels
+from ...providers import subscription_clis as _SUBS
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -531,7 +532,7 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
             "local"
             if is_local_provider(prov)
             else "cli"
-            if prov in ("claude-cli", "codex-cli", "grok-cli")
+            if prov in _SUBS.PROVIDER_SET  # v1.426.0 (E5): THE table
             else "api"
         )
         m["on_this_network"] = _on_this_network(prov, str(m.get("model") or ""))

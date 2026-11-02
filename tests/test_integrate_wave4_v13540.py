@@ -385,6 +385,14 @@ def test_the_failure_headlines_name_providers_like_the_model_menu():
     block = src[at : src.index("};", at)]
     ts = {k.strip('"'): v for k, v in re.findall(r'^\s*("?[a-z-]+"?):\s*"([^"]+)"', block, re.M)}
     assert ts, "the FRIENDLY table moved"
+    # v1.426.0 (E5, moved on purpose): the subscription CLIs' names are spread
+    # in from the GENERATED twin of the one table (lib/subscriptionClis.ts) —
+    # read them where they are written.
+    if "...SUBSCRIPTION_CLI_NAMES" in block:
+        twin = (ROOT / "dashboard" / "lib" / "subscriptionClis.ts").read_text(encoding="utf-8")
+        rows = re.findall(r'"provider": "([^"]+)"[^{}]*?"name": "([^"]+)"', twin, re.S)
+        assert rows, "the generated twin moved"
+        ts = {**dict(rows), **ts}
     extra = {k: v for k, v in PLAIN_NAMES.items() if k not in ts}
     assert {k: PLAIN_NAMES[k] for k in ts} == ts
     assert extra == {"mock": "the demo model", "auto": "Auto"}
