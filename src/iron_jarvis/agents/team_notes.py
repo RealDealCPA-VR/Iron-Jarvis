@@ -169,6 +169,11 @@ REASON_LOCAL_ONLY = (
 REASON_MODEL_FAILED = "the distilling call failed"
 REASON_NOTHING = "no habit the findings support was left to suggest"
 REASON_BUSY = "the session is answering"
+#: v1.423.0 review: the attempt could not be written before the call, so the
+#: daily limit could not be kept — nothing is sent.
+REASON_NOT_SAVED = (
+    "the attempt could not be recorded, so nothing was sent (the once-a-day limit could not be kept)"
+)
 KEPT_SENTENCE = (
     "TEAM-NOTES.md was changed by hand, so Iron Jarvis kept your file as it is. The habit is "
     "saved; edit the file yourself, or put it back as Iron Jarvis wrote it, to have it updated."
@@ -485,11 +490,19 @@ def _state(engine: Any, member: str) -> TeamNoteState:
     return TeamNoteState(member=member)
 
 
+#: v1.423.0 review: every write of a member's state row goes through ONE lock
+#: — the daily limit's claim reads and writes in one step under it (two
+#: sessions idling at once each passed a separate check and BOTH paid calls
+#: went out), and two writers of a row that did not exist yet no longer race
+#: to insert it (one write was lost to a UNIQUE error).
+_STATE_LOCK = threading.Lock()
+
+
 def _save_state(engine: Any, member: str, **changes: Any) -> None:
     from ..core.db import session_scope
 
     try:
-        with session_scope(engine) as db:
+        with _STATE_LOCK, session_scope(engine) as db:
             row = db.get(TeamNoteState, member) or TeamNoteState(member=member)
             for key, value in changes.items():
                 setattr(row, key, value)
@@ -497,6 +510,34 @@ def _save_state(engine: Any, member: str, **changes: Any) -> None:
             db.commit()
     except Exception:  # noqa: BLE001 — a state row never breaks a distill
         log.warning("team note state could not be saved", exc_info=True)
+
+
+def claim_attempt(engine: Any, member: str, *, now: "datetime | None" = None) -> str:
+    """v1.423.0 review: THE DAILY LIMIT, claimed ATOMICALLY right before the
+    call — the last attempt re-read and the new one written in one step under
+    :data:`_STATE_LOCK`. "" = claimed (and WRITTEN: the call may go);
+    :data:`REASON_DAILY` = another distill holds the day; and
+    :data:`REASON_NOT_SAVED` when the write failed — then NO call goes out
+    (a database that refuses the write would otherwise give no daily limit
+    at all: a paid call every idle period). BLOCKING; never raises."""
+    from ..core.db import session_scope
+
+    stamp = now or utcnow()
+    try:
+        with _STATE_LOCK, session_scope(engine) as db:
+            row = db.get(TeamNoteState, member)
+            last = _naive(row.last_attempt_at) if row is not None else None
+            if last is not None and last > _naive(stamp - timedelta(seconds=DISTILL_EVERY_S)):
+                return REASON_DAILY
+            row = row or TeamNoteState(member=member)
+            row.last_attempt_at = stamp
+            row.last_reason = ""
+            db.add(row)
+            db.commit()
+        return ""
+    except Exception:  # noqa: BLE001
+        log.warning("a team notes distill attempt could not be recorded", exc_info=True)
+        return REASON_NOT_SAVED
 
 
 def attempted_recently(engine: Any, member: str, *, now: "datetime | None" = None) -> bool:
@@ -978,8 +1019,15 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
         out.reason = REASON_FEW
         return out
     # THE DAILY LIMIT: the ATTEMPT is kept before the call (a crash or a
-    # failed call still counts — the plan's limits are the user's).
-    await asyncio.to_thread(_save_state, engine, member, last_attempt_at=utcnow(), last_reason="")
+    # failed call still counts — the plan's limits are the user's). v1.423.0
+    # review: CLAIMED atomically (:func:`claim_attempt` — the early
+    # :func:`attempted_recently` above is only the cheap way out; two
+    # sessions idling at once both passed it), and a claim that could not be
+    # WRITTEN sends nothing.
+    claim = await asyncio.to_thread(claim_attempt, engine, member)
+    if claim:
+        out.reason = claim
+        return out
     route = await _complete(platform, rev, prompt, pin=pin, local_only=local)
     if route is None:
         out.reason = REASON_MODEL_FAILED
@@ -1690,6 +1738,13 @@ def role_edit_for(platform: Any, note: TeamNote) -> Any:
             return None
         findings = _findings_by_id(engine, [*_note_ids(note), *_note_ids(match)])
         findings.sort(key=lambda f: _naive(f.created_at) or datetime.min, reverse=True)
+        # v1.423.0 review: a role's brief rides EVERY helper of that role in
+        # its folder — cloud ones too — so a habit distilled from a Local
+        # only session's findings (kept on this network for its member) never
+        # goes into one (``any_local_only``: unsure counts as Local only).
+        if any_local_only(engine, findings):
+            log.info("a role brief edit was not proposed: a cited finding came from a Local only session")
+            return None
         from ..harness import library as _library
 
         tried: set[str] = set()
@@ -1721,7 +1776,8 @@ __all__ = [
     "Accepted", "DISTILL_EVERY_S", "Distilled", "Eligibility", "HABITS_HEADER", "INJECT_CHARS",
     "KEPT_SENTENCE", "MAX_HABITS", "MAX_HABIT_CHARS", "MIN_CITED", "MIN_FINDINGS", "MIN_SESSIONS",
     "NOTES_FILE", "NoteRefused", "SAME_HABIT_OVERLAP", "SUPPRESS_DAYS", "TeamNote", "TeamNoteState",
-    "accept", "active_notes", "check_habits", "distill", "distill_prompt", "distill_session", "drain",
+    "REASON_NOT_SAVED", "accept", "active_notes", "check_habits", "claim_attempt", "distill",
+    "distill_prompt", "distill_session", "drain",
     "eligibility", "flush", "habits_for_run", "members_who_worked", "note_turn_finished",
     "note_turn_started", "notes_body", "notes_for", "parse_habits", "remove", "render", "render_text",
     "role_edit_for", "same_habit", "section_for", "shutdown", "word_overlap",

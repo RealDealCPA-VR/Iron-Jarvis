@@ -134,7 +134,9 @@ def editable_file(name: Any) -> bool:
         return False
     from .components import _NAME_RX
 
-    return bool(_NAME_RX.match(parts[1][: -len(".md")]))
+    # v1.423.0 review: the WHOLE name (``fullmatch``) — ``match`` with ``$``
+    # took a trailing newline (``sub_agents/code\n.md``).
+    return bool(_NAME_RX.fullmatch(parts[1][: -len(".md")]))
 #: Evidence handed to the reflector, at most.
 PROMPT_STEPS = 30
 STEP_OUTPUT_CHARS = 600
@@ -837,7 +839,14 @@ def role_brief_file(layer_folder: str, role: str) -> str:
     role = str(role or "").strip().lower()
     for stem in (role, ROLE_NOUNS.get(role, "")):
         name = f"{SUB_AGENTS_DIR}/{stem}.md"
-        if stem and editable_file(name) and read_layer_file(layer_folder, name):
+        if not stem or not editable_file(name):
+            continue
+        # v1.423.0 review: never READ through a link (a junction to a network
+        # share is a sign-in sent to that host): a candidate with a link on
+        # its way is the answer, and the caller's own link check refuses it.
+        if _link_problem(layer_folder, name):
+            return name
+        if read_layer_file(layer_folder, name):
             return name
     return f"{SUB_AGENTS_DIR}/{role}.md"
 
@@ -873,6 +882,9 @@ def propose_role_brief_edit(
         key = folder_key(folder)
         if _open_count(engine, key) >= OPEN_LIMIT:
             return None, REASON_FULL
+        # v1.423.0 review: :func:`role_brief_file` checks each candidate for
+        # a link BEFORE it reads it, and answers the first one with a link on
+        # its way — refused just below, never read through.
         name = role_brief_file(layer_at, role)
         if not editable_file(name):
             return None, REASON_NOTHING
@@ -1572,10 +1584,39 @@ LINK_SENTENCE = (
 )
 
 
+def _is_link(path: Path) -> bool:
+    """v1.423.0 review: is ``path`` ITSELF a link — a symlink, a junction,
+    any NAME-SURROGATE reparse point (``git_read``'s rule: OneDrive and
+    ProjFS placeholders are reparse points that hold the folder's OWN files,
+    never links)? ``lstat`` never follows the last part. Missing: no. Any
+    other ``OSError`` is raised (the caller refuses)."""
+    import stat as _stat
+
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    if _stat.S_ISLNK(st.st_mode):
+        return True
+    attrs = getattr(st, "st_file_attributes", 0) or 0
+    if not attrs & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+        return False
+    return bool((getattr(st, "st_reparse_tag", 0) or 0) & 0x20000000)
+
+
 def _link_problem(folder: str, name: str) -> str:
     """Why writing ``<folder>/.ironjarvis/harness/<name>`` would land
     OUTSIDE the folder ("" = it would not): the harness folder must resolve
-    inside the folder, and the file must not be a link."""
+    inside the folder, and the file must not be a link.
+
+    v1.423.0 review: NO LINK ON THE WAY AT ALL — ``.ironjarvis``,
+    ``harness``, a role brief's ``sub_agents`` and the file are each looked at
+    with ``lstat``, SHALLOWEST FIRST, and the first link (a symlink, a
+    junction — even one that leads back INSIDE the folder: a ``sub_agents``
+    junction to ``<project>/src`` put the brief into ``src``) is refused
+    before anything below it is touched; nothing is resolved or read through
+    a link (``lstat`` of a deeper part would follow it, and a junction to a
+    network share is a sign-in sent to that host)."""
     from .components import _inside
 
     try:
@@ -1589,11 +1630,13 @@ def _link_problem(folder: str, name: str) -> str:
     parts = [hdir.parent, hdir]
     if path.parent != hdir:
         parts.append(path.parent)
+    parts.append(path)
     for part in parts:
-        if part.is_symlink() or (part.exists() and not _inside(part, root)):
+        try:
+            if _is_link(part) or (part.exists() and not _inside(part, root)):
+                return LINK_SENTENCE.format(name=name)
+        except OSError:
             return LINK_SENTENCE.format(name=name)
-    if path.is_symlink() or (path.exists() and not _inside(path, root)):
-        return LINK_SENTENCE.format(name=name)
     return ""
 
 
