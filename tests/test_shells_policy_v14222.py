@@ -89,6 +89,65 @@ def test_the_policy_keys_are_exactly_windows_own_paths():
         assert all(32 <= ord(c) < 127 for c in path + name), repr(path)
 
 
+#: The two Windows PowerShell argvs a NEW terminal is given.
+PLAIN = ["powershell", "-NoLogo"]
+FLAGGED = ["powershell", "-NoLogo", "-ExecutionPolicy", "RemoteSigned"]
+
+
+@pytest.mark.parametrize("unset,saved,expect", [
+    # A policy the user set AFTER the pane was opened: the restored terminal
+    # (a new process) must not override it with the flag it was saved with —
+    # process scope beats the user's own and the machine's own policy.
+    (False, FLAGGED, PLAIN),
+    # Still no policy: the flag stays.
+    (True, FLAGGED, FLAGGED),
+    # A pane saved before v1.422.2 (or while a policy was set) on a PC that
+    # now has none: it runs scripts like a new terminal does.
+    (True, PLAIN, FLAGGED),
+    (False, PLAIN, PLAIN),
+])
+def test_a_restored_windows_powershell_pane_follows_the_policy_rule_of_today(monkeypatch, tmp_path, unset,
+                                                                             saved, expect):
+    """v1.422.2 REVIEW: a restored pane is a NEW PowerShell process started
+    from its saved argv, so a saved ``-ExecutionPolicy RemoteSigned`` would
+    beat a CurrentUser / LocalMachine policy the user set since (process scope
+    wins over both). The flag a restore starts with is decided by the same
+    rule as a new terminal's — for the two argvs Iron Jarvis itself gives
+    Windows PowerShell only; any other saved argv is kept as it was."""
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.manager import TerminalManager
+
+    monkeypatch.setattr(SH, "script_policy_unset", lambda: unset)
+    m = TerminalManager()
+    try:
+        got = m.restore({"id": "term_ps", "cwd": str(tmp_path), "shell": "powershell", "argv": list(saved)},
+                        backend=FakeBackend())
+        assert got is not None and got.argv == expect, (unset, saved, got and got.argv)
+    finally:
+        m.kill_all()
+
+
+@pytest.mark.parametrize("unset", [True, False])
+@pytest.mark.parametrize("shell,saved", [
+    ("powershell", ["powershell", "-NoLogo", "-NoProfile"]),  # not an argv Iron Jarvis gives
+    ("powershell", ["powershell", "-NoLogo", "-ExecutionPolicy", "AllSigned"]),
+    ("pwsh", ["C:/Program Files/PowerShell/7/pwsh.exe", "-NoLogo"]),
+    ("cmd", ["cmd"]),
+])
+def test_any_other_saved_argv_is_restored_as_it_was(monkeypatch, tmp_path, unset, shell, saved):
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.manager import TerminalManager
+
+    monkeypatch.setattr(SH, "script_policy_unset", lambda: unset)
+    m = TerminalManager()
+    try:
+        got = m.restore({"id": "term_x", "cwd": str(tmp_path), "shell": shell, "argv": list(saved)},
+                        backend=FakeBackend())
+        assert got is not None and got.argv == saved
+    finally:
+        m.kill_all()
+
+
 @win
 def test_the_real_registry_reader_reads_a_value_windows_always_has():
     assert SH._registry_value("HKLM", r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuild")

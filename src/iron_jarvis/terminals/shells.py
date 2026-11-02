@@ -40,6 +40,11 @@ machine's own, the user's own, or ``PSExecutionPolicyPreference`` in the
 environment). It is the PROCESS scope: that terminal only, nothing on the PC
 changes, and a group policy would still win. A policy anyone DID set (even
 ``Restricted``, even ``AllSigned``) is respected and the flag is not added.
+Review: a RESTORED Windows PowerShell pane is a new process too, so its flag
+is decided by the same rule when its saved argv is one Iron Jarvis gave
+(:func:`restored_argv`) — a saved flag would beat a policy the user set since
+(process scope wins over the user's and the machine's own); any other saved
+argv is kept as it was.
 """
 
 from __future__ import annotations
@@ -161,6 +166,24 @@ def _windows_powershell_argv() -> list[str]:
     if script_policy_unset():
         argv += ["-ExecutionPolicy", NEW_TERMINAL_POLICY]
     return argv
+
+
+def restored_argv(name: str | None, argv: list[str]) -> list[str]:
+    """The argv a RESTORED pane starts with (v1.422.2 review): its saved one,
+    except that for the two argvs Iron Jarvis itself gives Windows PowerShell
+    (``powershell -NoLogo``, with or without ``-ExecutionPolicy
+    RemoteSigned``) the policy flag is decided by today's rule, as for a new
+    terminal. A restore is a NEW PowerShell process: a saved flag would beat a
+    CurrentUser / LocalMachine policy the user set since (process scope wins
+    over both) — "a policy anyone set is respected" — and a pane saved before
+    the flag existed, on a PC with no policy, would still refuse the coding
+    CLIs' ``.ps1`` files. Any other saved argv (the Store copy's path, a
+    user's own flags) is kept exactly as it was."""
+    saved = list(argv)
+    plain = ["powershell", "-NoLogo"]
+    if name != "powershell" or saved not in (plain, [*plain, "-ExecutionPolicy", NEW_TERMINAL_POLICY]):
+        return saved
+    return _windows_powershell_argv()
 
 
 def available_shells() -> list[dict]:

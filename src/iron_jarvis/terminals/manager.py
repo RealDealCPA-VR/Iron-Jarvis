@@ -17,7 +17,7 @@ from ..core.ids import new_id
 from .backend import PipeBackend, PtyBackend
 from .modes import restore_reset
 from .session import TerminalSession, normalise_pane_capabilities
-from .shells import resolve_shell
+from .shells import resolve_shell, restored_argv
 
 log = logging.getLogger(__name__)
 
@@ -1119,6 +1119,10 @@ class TerminalManager:
         argv = entry.get("argv")
         if not argv:
             name, argv = resolve_shell(name)
+        else:
+            # v1.422.2 review: Windows PowerShell's script-policy flag is
+            # today's (a policy the user set since must win).
+            argv = restored_argv(name, argv)
         try:
             cols = int(entry.get("cols") or 80)
             rows = int(entry.get("rows") or 24)
