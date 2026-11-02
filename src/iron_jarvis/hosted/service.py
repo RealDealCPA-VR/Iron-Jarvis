@@ -950,6 +950,12 @@ class HostedService:
         from .claude import LAST_COMMANDS
 
         rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        if not rows and harness == CODEX:
+            # v1.426.0 (E4): Codex's own compact is there before its first
+            # start (its skills are read when it starts).
+            from .tool_setup import CODEX_COMPACT_ROW
+
+            rows = [dict(CODEX_COMPACT_ROW)]
         # v1.418.0 (C4.8): the `/` menu shows each command's argument hint.
         # v1.426.0 (E4): a Codex skill is typed ``$<name>`` (``prefix``).
         return [{"name": c["name"], "description": c.get("description", ""),

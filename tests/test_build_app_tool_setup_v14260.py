@@ -250,3 +250,19 @@ def test_skill_rows_keep_enabled_safe_names_once():
     assert [(r["name"], r["prefix"]) for r in rows] == [("a", "$"), ("b", "$"), ("c", "$")]
     assert rows[1]["description"] == "line one"
     assert T.codex_skill_rows(None) == [] and T.codex_skill_rows({"data": "x"}) == []
+
+
+async def test_codex_compact_is_listed_before_its_first_start(app, work, monkeypatch):
+    """Never a start just to ask: before Codex has run here, its `/` menu
+    still offers its own compact (its skills come with its first start)."""
+    from iron_jarvis.hosted import claude as CL
+
+    monkeypatch.setattr(CL, "LAST_COMMANDS", {})
+    c = client(app)
+    try:
+        sid = (await new_session(c, work, harness="codex"))["id"]
+        cmds = (await c.get(f"/build/app/sessions/{sid}/commands")).json()["commands"]
+    finally:
+        await c.aclose()
+        await stop_all(app)
+    assert cmds == [T.CODEX_COMPACT_ROW]
