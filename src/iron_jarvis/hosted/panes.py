@@ -551,8 +551,55 @@ def forget_kept_index(home: Any, sid: str) -> None:
     try:
         with _kept_lock(path):
             path.unlink(missing_ok=True)
+            _rules_file(path).unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _rules_file(path: Path) -> Path:
+    """v1.425.0 (review): beside a kept index, the fingerprint of the ignore
+    rules it was last brought up to date under (:func:`_rules_print`)."""
+    return path.with_name(path.name + ".rules")
+
+
+def _rules_print(folder: str, exclude: str, top: str) -> str:
+    """v1.425.0 (review): the ignore rules ``git add -A .`` reads that the add
+    itself does not report — ``.git/info/exclude`` and every ``.gitignore``
+    from the folder's parent up to the repository's top — as each file's
+    size and time (BLOCKING; a few stats, never raises). The folder's OWN
+    ``.gitignore`` files are reported by the add itself (``-v``)."""
+    names = [exclude]
+    try:
+        cur = os.path.normcase(os.path.realpath(folder))
+        stop = os.path.normcase(os.path.realpath(top))
+        if cur != stop and cur.startswith(stop.rstrip("\\/") + os.sep):
+            d = os.path.dirname(cur)
+            for _ in range(64):
+                names.append(os.path.join(d, ".gitignore"))
+                if d == stop or os.path.dirname(d) == d:
+                    break
+                d = os.path.dirname(d)
+    except (OSError, ValueError):
+        pass
+    parts = []
+    for name in names:
+        try:
+            st = os.stat(name)
+            parts.append(f"{os.path.normcase(name)}|{st.st_size}|{st.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{os.path.normcase(name)}|-")
+    return "\n".join(parts)
+
+
+def _rules_touched(out: str) -> bool:
+    """v1.425.0 (review): did ``git add -A -v`` add, change or remove a
+    ``.gitignore`` (a line ``add '<path>'`` / ``remove '<path>'``)?"""
+    for line in str(out or "").splitlines():
+        if (line.startswith("add '") or line.startswith("remove '")) and line.endswith("'"):
+            path = line[line.index("'") + 1:-1]
+            if path.rsplit("/", 1)[-1] == ".gitignore":
+                return True
+    return False
 
 
 def _kept_lock(path: Path) -> threading.Lock:
@@ -564,9 +611,11 @@ def _kept_lock(path: Path) -> threading.Lock:
         return lock
 
 
-def _write_tree(folder: str, idx: str) -> str:
+def _write_tree(folder: str, idx: str, *, watch_rules: bool = False) -> str:
     """``git add -A .`` into the index file *idx*, then ``git write-tree``.
-    Raises :class:`GitUnreadable`. BLOCKING."""
+    Raises :class:`GitUnreadable`. BLOCKING. ``watch_rules`` (a KEPT index,
+    v1.425.0 review): "" — and no tree written — when the add changed a
+    ``.gitignore`` (the caller starts the kept index again)."""
     from ..git.integration import git_env, run_git
     from ..harness import branches as B
 
@@ -576,9 +625,11 @@ def _write_tree(folder: str, idx: str) -> str:
         return run_git(["-c", "core.quotepath=off", *args], Path(folder), env=env,
                        identity=False, encoding="utf-8", timeout=B.QUICK_S)
 
-    added = run(["add", "-A", "--", "."])
+    added = run(["add", "-A", *(["-v"] if watch_rules else []), "--", "."])
     if not added.ok:
         raise GitUnreadable(added)
+    if watch_rules and _rules_touched(added.out):
+        return ""
     tree = run(["write-tree"])
     if not tree.ok or not tree.out.strip():
         raise GitUnreadable(tree)
@@ -616,28 +667,72 @@ def snapshot_tree(folder: str, *, keep: "Path | str | None" = None) -> str:
     with a fresh copy, 306-416 ms with the kept one. A kept index git cannot
     use (another repository's after the folder moved, a damaged file) is
     copied again from the user's. One read at a time per kept index (a lock;
-    git would refuse a second writer)."""
+    git would refuse a second writer).
+
+    v1.425.0 (review — THE KEPT INDEX FOLLOWS THE IGNORE RULES): ``git add
+    -A`` never drops an entry an index already holds, so a file a snapshot
+    once added as untracked (a ``node_modules`` installed before its
+    ``.gitignore`` line) stayed in the kept index after a rule came to ignore
+    it — the tree was no longer the fresh copy's, "This message" listed
+    ignored files, and every later snapshot re-read them. Whenever a rule
+    changed since the kept index was last brought up to date — a
+    ``.gitignore`` in the folder (the add reports it, ``-v``), one above it up
+    to the repository's top, or ``.git/info/exclude`` (a fingerprint kept
+    beside the index, :func:`_rules_print`) — the kept index is copied again
+    from the user's: the fresh copy's tree. Not followed (a residual
+    difference, said here): the user's own global excludes file, and a change
+    of the USER's index inside the folder (``git rm --cached`` of a file
+    already ignored, or a file force-added with ``-f``) after the copy."""
     import shutil
     import tempfile
 
+    if keep is not None:
+        where = _git(["rev-parse", "--git-path", "index", "--git-path", "info/exclude",
+                      "--show-toplevel"], folder)
+        lines = [ln.strip() for ln in where.out.splitlines()] if where.ok else []
+        if len(lines) < 3 or not lines[0] or not lines[2]:
+            raise GitUnreadable(where)
+        src = os.path.join(folder, lines[0])
+        rules = _rules_print(folder, os.path.join(folder, lines[1]), lines[2])
+        path = Path(str(keep))
+        with _kept_lock(path):
+            # Review (v1.425.0): a git this code ran and then KILLED at its
+            # time limit leaves the kept index's lock file behind, and every
+            # later ``git add`` refused ("index.lock: File exists") — the
+            # session never had a message's tree again. The index is private
+            # and this lock is held: no git of ours is using it now, so a lock
+            # file here is a leftover.
+            try:
+                Path(str(path) + ".lock").unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                same_rules = _rules_file(path).read_text(encoding="utf-8") == rules
+            except OSError:
+                same_rules = False
+            fresh = not path.is_file() or not same_rules
+            if fresh:
+                _copy_index(src, path)
+            try:
+                tree = _write_tree(folder, str(path), watch_rules=not fresh)
+            except GitUnreadable:
+                if fresh:
+                    raise
+                tree = ""  # a kept index git refused
+            if not tree:
+                # A rule changed since the last snapshot, or git refused the
+                # kept index: start again from the user's.
+                _copy_index(src, path)
+                tree = _write_tree(folder, str(path))
+            try:
+                _rules_file(path).write_text(rules, encoding="utf-8")
+            except OSError:
+                pass  # the next snapshot copies again: slower, never wrong
+            return tree
     where = _git(["rev-parse", "--git-path", "index"], folder)
     if not where.ok or not where.out.strip():
         raise GitUnreadable(where)
     src = os.path.join(folder, where.out.strip())
-    if keep is not None:
-        path = Path(str(keep))
-        with _kept_lock(path):
-            fresh = not path.is_file()
-            if fresh:
-                _copy_index(src, path)
-            try:
-                return _write_tree(folder, str(path))
-            except GitUnreadable:
-                if fresh:
-                    raise
-            # A kept index git refused: start again from the user's.
-            _copy_index(src, path)
-            return _write_tree(folder, str(path))
     tmp = tempfile.mkdtemp(prefix="ij-turn-tree-")
     try:
         idx = os.path.join(tmp, "index")

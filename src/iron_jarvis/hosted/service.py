@@ -614,6 +614,12 @@ class HostedTurn:
         self._chars = 0
         #: True once the turn's end is being written (the done follows).
         self.ending = False
+        #: v1.425.0 (review, B7): True from the moment ``_drive`` takes this
+        #: message until it hands it to the tool (``send_user``) — while it
+        #: waits for a place in the pool or its tool STARTS (the handshake
+        #: included). A Stop then ends the turn itself: the tool has nothing to
+        #: interrupt. False for every turn that did not begin in ``_drive``.
+        self.unsent = False
 
     @property
     def running(self) -> bool:
@@ -2474,6 +2480,7 @@ class HostedService:
             user["carry"] = dict(carry)  # v1.422.0: Iron Jarvis carried it on
         self._emit(live, user)
         started = False
+        turn.unsent = True  # v1.425.0 (review, B7): not the tool's yet (``interrupt``)
         try:
             if not carry:
                 # v1.422.0 (B5): the user's own message ends a limit's wait
@@ -2501,6 +2508,7 @@ class HostedService:
                 # v1.425.0 (B7): Stop ended this turn while its tool started (or
                 # while it waited for a place): the tool never hears it.
                 raise _StoppedWhileWaiting()
+            turn.unsent = False  # from here a Stop is the tool's to act on
             await live.driver.send_user(text, files)
             if turn.running:
                 await turn.finished.wait()
@@ -2643,6 +2651,16 @@ class HostedService:
             await asyncio.to_thread(CO.note_stopped, self.home, sid, live.turn.id)
         except Exception:  # noqa: BLE001
             log.warning("could not keep a Code-view session's Stop", exc_info=True)
+        turn = live.turn
+        if turn is not None and turn.running and turn.unsent:
+            # v1.425.0 (review, B7): the message is not the tool's yet — it
+            # waits for a place, or the tool is still STARTING (its process up,
+            # its handshake not done). Telling the tool to interrupt stopped
+            # nothing (no reply runs there), the turn stayed open and the
+            # message was sent once the start finished. The turn ends here;
+            # ``_drive`` then never hands it over.
+            await self._end_turn(live, "interrupted")
+            return {"ok": True, "running": True}
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:

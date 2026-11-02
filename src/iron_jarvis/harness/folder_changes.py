@@ -275,8 +275,9 @@ def _repo_top(root: Path) -> "Path | None":
     cur = root
     for _ in range(_REPO_LOOKUP_DEPTH):
         try:
-            if (cur / ".git").exists():
-                return cur
+            dot = cur / ".git"
+            if dot.exists():
+                return None if _git_folder_on_a_share(dot, root) else cur
         except OSError:
             return None
         parent = cur.parent
@@ -284,6 +285,31 @@ def _repo_top(root: Path) -> "Path | None":
             return None
         cur = parent
     return None
+
+
+def _git_folder_on_a_share(dot: Path, root: Path) -> bool:
+    """v1.425.0 (review): is ``dot`` a ``.git`` FILE whose ``gitdir:`` names a
+    network share, while the session's own folder is on this PC? git would
+    open that share on EVERY reply (the finish check runs it by itself) — an
+    SMB connection sends this PC's sign-in hash (the v1.379.0 lesson), and a
+    downloaded folder can carry such a file. Read from the file's TEXT (at
+    most 4 KB), nothing resolved; such a folder is walked, as before git's
+    way. BLOCKING."""
+    from .sessions import _network_spelling
+
+    if _network_spelling(str(root)):
+        return False  # the folder itself is on a share: no new place
+    try:
+        if not dot.is_file():
+            return False
+        with open(dot, "rb") as fh:
+            head = fh.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return True  # unreadable: never guessed safe
+    for line in head.splitlines():
+        if line.strip().lower().startswith("gitdir:"):
+            return _network_spelling(line.split(":", 1)[1].strip())
+    return False
 
 
 def _not_a_project_repo(top: Path) -> bool:
@@ -315,10 +341,27 @@ def _git_names(root: Path, deadline: float, started: float,
     left = deadline - (clock() - started)
     if left <= 0:
         return None, PROBLEM_TOO_SLOW.format(seconds=deadline)
+    env = git_env({"GIT_OPTIONAL_LOCKS": "0"})
+    if os.path.normcase(str(top)) != os.path.normcase(str(root)):
+        # Review (v1.425.0): a session folder the enclosing repository
+        # IGNORES (``scratch/`` in its .gitignore — the dotfiles case below
+        # the home folder) gets an EMPTY listing from git: every change a
+        # command made there was silently missed. Such a folder is walked,
+        # as before git's way (exit 0: ignored; 1: not; anything else: git
+        # refused — the walk too).
+        ign = run_git(["-c", "core.fsmonitor=false", "check-ignore", "-q", "--", "./"],
+                      root, env=env, identity=False, timeout=max(0.1, left))
+        if ign.timed_out:
+            return None, PROBLEM_TOO_SLOW.format(seconds=deadline)
+        if ign.code != 1:
+            return None, ""
+        left = deadline - (clock() - started)
+        if left <= 0:
+            return None, PROBLEM_TOO_SLOW.format(seconds=deadline)
     listed = run_git(
         ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off",
          "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        root, env=git_env({"GIT_OPTIONAL_LOCKS": "0"}), identity=False,
+        root, env=env, identity=False,
         timeout=max(0.1, left), keep_bytes=True,
     )
     if listed.timed_out:
@@ -374,7 +417,12 @@ def _git_take(root: Path, limit: int, deadline: float, started: float,
             if len(files_wanted) > limit:
                 return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
                                 seconds=clock() - started, how="git")
-        # Every folder on the way to it is listed (and only those).
+        # Every folder on the way to it is listed (and only those). Cut where
+        # the FOLDED path has its "/" (review, v1.425.0: a name can change
+        # length when lower-cased — "İ" is two characters lower-cased — and a
+        # cut at the unfolded path's position named no folder at all: its
+        # files were missing from both snapshots, a change there never seen).
+        cut = key.rfind("/")
         while cut > 0:
             d = key[:cut]
             if d in need:
