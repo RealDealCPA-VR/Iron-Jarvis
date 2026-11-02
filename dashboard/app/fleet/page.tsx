@@ -21,6 +21,8 @@ import {
 import { useApi, usePolledApi } from "@/lib/useApi";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import { providerDisplay } from "@/lib/onboarding";
+// v1.424.0 (D8): each model's own tools / vision, in words.
+import { capabilityOf, toolsChip, visionChip, type CapView } from "@/lib/modelCapability";
 import {
   Badge,
   Card,
@@ -152,6 +154,43 @@ function Commands({ commands }: { commands: string[] }) {
 /*  Models                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * v1.424.0 (D8): what ONE model can do by itself — a live check of it, its
+ * server's own statement, or "not known". Drawn only when the daemon answers
+ * per model (an older one sent the node's one flag, which this row never
+ * showed). Quiet words; the title says what each answer means.
+ */
+function CapChips({ view, model }: { view: CapView | null; model: string }) {
+  if (!view) return null;
+  const chips = [toolsChip(view, model), visionChip(view, model)];
+  return (
+    <span data-testid="fleet-model-caps" className="inline-flex flex-wrap items-center gap-x-2">
+      {chips.map((c) => (
+        <span
+          key={c.text}
+          data-testid="fleet-model-cap"
+          data-known={c.known ? "yes" : "no"}
+          title={c.title}
+          className={c.known ? "text-zinc-400" : "text-zinc-600"}
+        >
+          {c.text}
+          {c.yes && (
+            <>
+              {" "}
+              <span aria-hidden className="text-tone-success">✓</span>
+            </>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** The capability view a model entry carries (a v1.424.0 daemon), else null. */
+function entryCaps(model: FleetModel): CapView | null {
+  return "tool_use" in model || "vision" in model ? (model as CapView) : null;
+}
+
 function ModelRow({ model }: { model: FleetModel }) {
   const ctx = fmtCtx(model.context_length ?? model.max_model_len);
   const vram = num(model.size_vram);
@@ -190,6 +229,7 @@ function ModelRow({ model }: { model: FleetModel }) {
           </span>
         )}
         {unload?.kind === "expired" && <span className="text-zinc-600">unloading</span>}
+        <CapChips view={entryCaps(model)} model={model.id} />
       </div>
     </div>
   );
@@ -214,13 +254,25 @@ function ChildRow({ snap }: { snap: NodeSnapshot }) {
           <span className="font-mono text-xs font-medium text-zinc-200">
             {snap.node.alias || nodeName(snap.node)}
           </span>
-          {snap.node.tool_use && (
-            <span
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400"
-              title="Checked: this endpoint calls tools."
-            >
-              tools <span className="text-tone-success">✓</span>
+          {/* v1.424.0 (D8): the PROXY's answer for this name (a live check
+              of it, or the proxy's own statement) — never the endpoint's
+              one flag. An older daemon: the child's own flag, as before. */}
+          {snap.model_capabilities ? (
+            <span className="text-[11px] leading-none text-zinc-500">
+              <CapChips
+                view={capabilityOf(snap, snap.node.alias || model || "")}
+                model={snap.node.alias || model || ""}
+              />
             </span>
+          ) : (
+            snap.node.tool_use && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-1.5 py-0.5 text-[11px] leading-none text-zinc-400"
+                title="Checked: this endpoint calls tools."
+              >
+                tools <span className="text-tone-success">✓</span>
+              </span>
+            )
           )}
           {snap.proxy_verdict && snap.proxy_verdict !== "unknown" && (
             <span

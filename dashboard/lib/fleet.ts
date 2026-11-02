@@ -95,6 +95,13 @@ export interface FleetModel {
   /** vLLM's underlying checkpoint, e.g. deepseek-ai/DeepSeek-V4-Flash-DSpark. */
   root?: string | null;
   hf_id?: string | null;
+  /** v1.424.0 (D8): what THIS model can do by itself (null = not known) and
+   *  where the answer came from ("checked" / "stated" / ""). Absent from an
+   *  older daemon. Words: lib/modelCapability. */
+  tool_use?: boolean | null;
+  vision?: boolean | null;
+  tool_use_from?: string | null;
+  vision_from?: string | null;
 }
 
 /** LiteLLM /health rollup, as reported BY THE PROXY (secondhand evidence). */
@@ -129,6 +136,15 @@ export interface NodeSnapshot {
    */
   children?: NodeSnapshot[] | null;
   proxy_health?: ProxyHealth | null;
+  /** v1.424.0 (D8): `{model: {tool_use, vision, tool_use_from, vision_from}}`
+   *  for every name this row speaks for (a proxy's model: the proxy's answer
+   *  for its served name). Absent from an older daemon. */
+  model_capabilities?: Record<string, {
+    tool_use?: boolean | null;
+    vision?: boolean | null;
+    tool_use_from?: string | null;
+    vision_from?: string | null;
+  }> | null;
   /**
    * The proxy's per-child verdict from /health ("healthy"/"unhealthy"/
    * "unknown"), lifted out of the wire's `proxy_health` string by

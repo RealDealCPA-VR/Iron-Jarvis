@@ -329,7 +329,11 @@ describe("G47: a save whose check could not reach the server says so", () => {
     const c = await card();
     await saveEndpoint(c, "http://box:1234/v1");
     await waitFor(() =>
-      expect(within(c).getByText(/Endpoint saved\. Pick "box" in any model picker\. It runs tools/)).toBeInTheDocument(),
+      // v1.424.0 (D8, MOVED ON PURPOSE): the note is about the MODEL the
+      // check asked ("It runs tools" spoke for the whole server).
+      expect(
+        within(c).getByText(/Endpoint saved\. Pick "box" in any model picker\. This model calls tools/),
+      ).toBeInTheDocument(),
     );
     expect(c.querySelector('[data-tone="warn"]')).toBeNull();
   });

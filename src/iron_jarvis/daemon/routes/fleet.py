@@ -163,7 +163,61 @@ def _dump(obj: Any) -> Any:
     return obj
 
 
-def _node_rows(sampler: Any) -> list[Any]:
+def _model_names(row: dict[str, Any]) -> list[str]:
+    """The model names a ``GET /fleet`` row speaks for, in the order the page
+    lists them: what the server reported, then the node's default model —
+    ALWAYS, as ``""`` when the node saved none (the name the Connections row
+    reads it by; the node's own record is that model's answer) — then (a
+    proxy's model) the name the proxy routes by. Never raises."""
+    names: list[str] = []
+    try:
+        for entry in row.get("models") or []:
+            if isinstance(entry, dict) and entry.get("id"):
+                names.append(str(entry["id"]))
+        node = row.get("node") or {}
+        names.append(str(node.get("default_model") or "").strip())
+        alias = str(node.get("alias") or "").strip()
+        if alias:
+            names.append(alias)
+    except Exception:  # noqa: BLE001
+        pass
+    seen: list[str] = []
+    for name in names:
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _with_capabilities(row: Any, snap: Any, fleet: Any) -> Any:
+    """v1.424.0 (D8): a ``GET /fleet`` row says what EACH model can do — the
+    row gains ``model_capabilities`` (``{model: {tool_use, vision,
+    tool_use_from, vision_from}}``, ``None`` / ``""`` = not known) and every
+    entry in its ``models`` list carries its own ``tool_use`` / ``vision`` /
+    ``*_from``. Before, the page read the node's ONE flag for every model
+    behind a gateway. Read from the registry (``FleetRegistry.
+    capability_rows``: a live check of that model, the server's own
+    statement, the node's record for its default model). Never a network
+    call; a row the registry cannot answer is returned as it was."""
+    if not isinstance(row, dict) or fleet is None:
+        return row
+    fn = getattr(fleet, "capability_rows", None)
+    node = getattr(snap, "node", None)
+    if not callable(fn) or node is None:
+        return row
+    try:
+        caps = fn(node, _model_names(row)) or {}
+    except Exception:  # noqa: BLE001 — the page shows "not known"
+        return row
+    row["model_capabilities"] = caps
+    for entry in row.get("models") or []:
+        if isinstance(entry, dict):
+            view = caps.get(str(entry.get("id") or ""))
+            if view:
+                entry.update(view)
+    return row
+
+
+def _node_rows(sampler: Any, fleet: Any = None) -> list[Any]:
     """The ``nodes`` list of ``GET /fleet``: every snapshot, each with
     ``checked`` (v1.329.0).
 
@@ -184,6 +238,8 @@ def _node_rows(sampler: Any) -> list[Any]:
         row = _dump(snap)
         if isinstance(row, dict):
             row["checked"] = bool(checked)
+            # v1.424.0 (D8): each model's own capability.
+            row = _with_capabilities(row, snap, fleet)
         rows.append(row)
     return rows
 
@@ -308,6 +364,28 @@ def register(app: FastAPI, d) -> None:
         if refusal:
             raise HTTPException(status_code=409, detail=refusal)
 
+    def _record_check(node_id: str, model: str, *, default: "bool | None", **flags: Any) -> None:
+        """Save one live check (v1.424.0, D8) — per MODEL through the
+        registry's ``record_check`` (the node's own flags too, only for its
+        default model). A registry without it (an older stand-in) gets the
+        node-wide write every check made before v1.424.0."""
+        record = getattr(d.fleet, "record_check", None)
+        if callable(record):
+            record(node_id, model, at=time.time(), default=default, **flags)
+        else:
+            d.fleet.update(node_id, verified_at=time.time(), **flags)
+
+    def _target_tool_use(provider: str, model: str, node: Any) -> "bool | None":
+        """The coding-route TARGET model's own tool answer (v1.424.0, D8);
+        the node's one flag when the registry cannot answer per model."""
+        fn = getattr(d.fleet, "model_capability", None)
+        if callable(fn):
+            try:
+                return fn(provider, model).get("tool_use")
+            except Exception:  # noqa: BLE001 — not known
+                return None
+        return getattr(node, "tool_use", None) if node is not None else None
+
     def _code_route_view() -> dict[str, Any]:
         """Code-routing config + what it RESOLVES to right now.
 
@@ -356,7 +434,10 @@ def register(app: FastAPI, d) -> None:
                     circuit = "open" if health.is_open(provider) else "closed"
                 except Exception:  # noqa: BLE001
                     circuit = "unknown"
-            tool_use = getattr(node, "tool_use", None) if node is not None else None
+            # v1.424.0 (D8): the TARGET MODEL's own answer (a live check of
+            # it, its server's statement, the node record for its default
+            # model) — the node's one flag spoke for every model behind it.
+            tool_use = _target_tool_use(provider, model, node) if node is not None else None
             if node is None:
                 why = f"{provider} isn't a routable fleet node"
             elif available is not True:
@@ -372,9 +453,12 @@ def register(app: FastAPI, d) -> None:
             elif circuit == "open":
                 why = f"{provider}'s circuit is open after repeated failures"
             elif tool_use is False:
-                why = f"{provider} can't call tools, so coding work would fail"
+                why = f"{model or provider} can't call tools, so coding work would fail"
             else:
-                unverified = " (tool use unverified)" if tool_use is None else ""
+                unverified = (
+                    (f" (tool use unverified for {model})" if model else " (tool use unverified)")
+                    if tool_use is None else ""
+                )
                 why = f"coding work goes to {target}{unverified}"
 
         return {
@@ -433,7 +517,7 @@ def register(app: FastAPI, d) -> None:
             sampler = d.fleet_sampler
             sampler.touch()
             return {
-                "nodes": _node_rows(sampler),
+                "nodes": _node_rows(sampler, getattr(d, "fleet", None)),
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
@@ -457,7 +541,7 @@ def register(app: FastAPI, d) -> None:
                 await asyncio.to_thread(sampler.sample_once)
             sampler.touch()
             return {
-                "nodes": _node_rows(sampler),
+                "nodes": _node_rows(sampler, getattr(d, "fleet", None)),
                 "sampling": sampler.status(),
                 "code_route": _code_route_view(),
                 "error": "",
@@ -758,7 +842,12 @@ def register(app: FastAPI, d) -> None:
                 "hint": "",
             }
         tool_use = bool(getattr(resp, "tool_calls", None))
-        d.fleet.update(node_id, tool_use=tool_use, verified_at=time.time())
+        # v1.424.0 (D8): the answer is THIS model's (``model_caps``); it is
+        # also the node's own flag only when this is the node's default
+        # model — one model's check no longer speaks for every model behind
+        # a gateway.
+        asked = model or str(getattr(adapter, "model", "") or "")
+        _record_check(node_id, asked, default=None if model else True, tool_use=tool_use)
         # The completion above proves the endpoint is REACHABLE right now —
         # record it, so availability agrees with what verify just observed.
         # (Previously a green "tools ✓" could still read unavailable until the
@@ -799,13 +888,13 @@ def register(app: FastAPI, d) -> None:
         except Exception as exc:  # noqa: BLE001 — unknown capability, not False
             vision_error = _err(exc)
         if vision is not None:
-            d.fleet.update(node_id, vision=vision, verified_at=time.time())
+            _record_check(node_id, asked, default=None if model else True, vision=vision)
         return {
             "node": _dump(d.fleet.get(node_id)),
             "tool_use": tool_use,
             "vision": vision,
             "vision_error": vision_error,
-            "model": model or getattr(adapter, "model", ""),
+            "model": asked,
             "error": "",
             "hint": "",
         }
@@ -851,11 +940,13 @@ def register(app: FastAPI, d) -> None:
                         ),
                         timeout=90,
                     )
+                    # v1.424.0 (D8): recorded for the model it asked.
+                    asked = str(node.default_model or getattr(adapter, "model", "") or "")
+                    out["model"] = asked
                     if hasattr(tresp, "tool_calls"):
                         out["tool_use"] = bool(tresp.tool_calls)
-                        d.fleet.update(
-                            node.id, tool_use=out["tool_use"], verified_at=time.time()
-                        )
+                        # It asked the node's DEFAULT model (none named).
+                        _record_check(node.id, asked, default=True, tool_use=out["tool_use"])
                     d.fleet.set_reachable(node.id, True)
                     # Vision probe — same red-square contract as the single verify.
                     try:
@@ -883,9 +974,7 @@ def register(app: FastAPI, d) -> None:
                         )
                         answer = (getattr(vresp, "text", "") or "").strip().lower()
                         out["vision"] = "red" in answer
-                        d.fleet.update(
-                            node.id, vision=out["vision"], verified_at=time.time()
-                        )
+                        _record_check(node.id, asked, default=True, vision=out["vision"])
                     except Exception:  # noqa: BLE001 — vision unknown, tools stand
                         pass
                 except Exception as exc:  # noqa: BLE001 — this node only

@@ -70,11 +70,14 @@ interface EndpointRow {
   base_url: string;
   default_model: string;
   api_key_name: string;
-  /** Live-verified tool support: true/false = asked the server; null = never
-   *  verified (tool turns then route elsewhere — the chip says so). */
+  /** v1.424.0 (D8): what the row's MODEL (its default model) can do BY ITSELF
+   *  — a live check of it, its server's own statement, or not known (null).
+   *  Read from the daemon's per-model answer (`model_capabilities`); an older
+   *  daemon's one node-wide flag otherwise. */
   tool_use: boolean | null;
-  /** Live-verified vision support (same probe run): null = unknown. */
   vision: boolean | null;
+  /** Where each answer came from ("checked" / "stated" / "" = not known). */
+  caps: CapView;
   /** v1.329.0: the API the endpoint chats in ("openai" when absent). */
   protocol: EndpointProtocol;
 }
@@ -93,10 +96,19 @@ interface EndpointNodeDump {
   protocol?: string;
 }
 
+/** A `GET /fleet` row as the endpoint list reads it (v1.424.0: the per-model
+ *  capabilities ride beside the node). */
+interface EndpointFleetRow {
+  node?: EndpointNodeDump;
+  model_capabilities?: Record<string, CapView> | null;
+}
+
 /** POST /fleet/nodes/{id}/verify response (tool + vision capability probes). */
 interface VerifyResult {
   tool_use: boolean | null;
   vision?: boolean | null;
+  /** v1.424.0: the model the check asked. */
+  model?: string;
   error?: string;
   /** v1.355.0: the server ANSWERED with an error (it was reached). */
   answered?: boolean;
@@ -129,6 +141,8 @@ import { DEMO_REPLIES } from "@/lib/demoWords";
 // v1.420.0 (C6.6): a Test's answer in plain words, the probe text folded.
 import { testWords, type ConnectionTestWords } from "@/lib/connectionTestWords";
 import { DETAILS_WORDS } from "@/lib/failureActions";
+// v1.424.0 (D8): one model's own tools / vision, in words.
+import { capabilityOf, saveCheckWords, toolsChip, visionChip, type CapView } from "@/lib/modelCapability";
 
 /** v1.420.0 (C6.6): whose app id a sign-in needs — the card's name without
  *  its "(memory)" note ("Dropbox (memory)" → "Dropbox"). */
@@ -711,7 +725,10 @@ function ConnectionCard({
       // /fleet alone (v1.103.1). The seeded slot used to be read separately
       // from /settings to render its own row; it now comes through as a node
       // like any other, so that extra request bought nothing.
-      const f = await get<{ nodes?: { node?: EndpointNodeDump }[] }>("/fleet");
+      const f = await get<{ nodes?: EndpointFleetRow[] }>("/fleet");
+      // v1.424.0 (D8): each row's chips are its DEFAULT MODEL's own answer.
+      const capsById = new Map<string, EndpointFleetRow>();
+      for (const row of f.nodes ?? []) if (row.node?.id) capsById.set(row.node.id, row);
       setEndpoints(
         (f.nodes ?? [])
           .map((row) => row.node)
@@ -724,17 +741,21 @@ function ConnectionCard({
             (n): n is EndpointNodeDump =>
               Boolean(n && n.id && (n.source === "user" || n.source === "config") && n.routable),
           )
-          .map((n) => ({
-            id: n.id,
-            seeded: n.source === "config",
-            label: n.label || n.id,
-            base_url: n.base_url || "",
-            default_model: n.default_model || "",
-            api_key_name: n.api_key_name || "",
-            tool_use: n.tool_use ?? null,
-            vision: n.vision ?? null,
-            protocol: (n.protocol === "anthropic" ? "anthropic" : "openai") as EndpointProtocol,
-          })),
+          .map((n) => {
+            const caps = capabilityOf(capsById.get(n.id), n.default_model || "", n);
+            return {
+              id: n.id,
+              seeded: n.source === "config",
+              label: n.label || n.id,
+              base_url: n.base_url || "",
+              default_model: n.default_model || "",
+              api_key_name: n.api_key_name || "",
+              tool_use: caps.tool_use ?? null,
+              vision: caps.vision ?? null,
+              caps,
+              protocol: (n.protocol === "anthropic" ? "anthropic" : "openai") as EndpointProtocol,
+            };
+          }),
       );
     } catch {
       /* the list is best-effort — an unreachable daemon just shows nothing */
@@ -866,9 +887,12 @@ function ConnectionCard({
           });
         }
         const shown = epName.trim() || created.node?.label || nodeId || "it";
-        // AUTO-VERIFY tool support right away (live ping-tool probe): without
-        // it the router treats the endpoint as tools-incapable and quietly
-        // sends every tool-using turn to another provider.
+        // AUTO-VERIFY tool support right away (live ping-tool probe) for the
+        // MODEL typed: without it that model reads as one that can't call
+        // tools. v1.424.0 (D8): that is never "every tool turn goes to
+        // another provider" (it was not, since v1.131.0) — picked by name it
+        // answers in text only; as the default, it gets the tools written
+        // into its instructions.
         let verifyNote = "";
         // v1.354.0 (G47): the check's own error when it could not reach the
         // server. It used to be dropped, so a mistyped address still got a
@@ -886,12 +910,9 @@ function ConnectionCard({
               if (v.answered === true) answeredError = v.error;
               else unreachable = v.error;
             } else {
-              verifyNote =
-                v.tool_use === true
-                  ? " It runs tools, so turns that use the web or files can run here."
-                  : v.tool_use === false
-                    ? " This server can't run tools, so turns that use the web or files go to another model."
-                    : " Tool support could not be checked yet. The server may be asleep; press Verify tools on its row later.";
+              // v1.424.0 (D8): about the MODEL the check asked, and true to
+              // what happens next (lib/modelCapability).
+              verifyNote = saveCheckWords(v.tool_use, model.trim() || v.model || "");
             }
           } catch (verr) {
             unreachable = verr instanceof ApiError ? verr.message : String(verr);
@@ -1397,31 +1418,30 @@ function ConnectionCard({
                       {ep.default_model}
                     </span>
                   )}
-                  {/* Capability chips. They decide whether tool and image
-                      turns stay on this endpoint or go to another model. */}
-                  {ep.vision === true && (
+                  {/* Capability chips: what the row's MODEL can do by itself
+                      (v1.424.0, D8 — a live check of it, or its server's own
+                      statement; the gateway's one flag no longer speaks for
+                      every model behind it). Words: lib/modelCapability. */}
+                  {ep.vision !== null && (
                     <span
                       data-testid="endpoint-row-vision"
                       className={ENDPOINT_CHIP}
-                      title="Checked: this model saw the test image, so image turns and scanned PDFs can run here."
+                      title={visionChip(ep.caps, ep.default_model).title}
                     >
-                      vision <span aria-hidden className="text-tone-success">✓</span>
-                    </span>
-                  )}
-                  {ep.vision === false && (
-                    <span
-                      data-testid="endpoint-row-vision"
-                      className={ENDPOINT_CHIP}
-                      title="Checked: this model answered but did not see the test image, so image turns go to a model that can."
-                    >
-                      no vision
+                      {ep.vision ? (
+                        <>
+                          vision <span aria-hidden className="text-tone-success">✓</span>
+                        </>
+                      ) : (
+                        "no vision"
+                      )}
                     </span>
                   )}
                   {ep.tool_use === true ? (
                     <span
                       data-testid="endpoint-row-tools"
                       className={ENDPOINT_CHIP}
-                      title="Checked: this server runs tools, so turns that use the web or files stay here."
+                      title={toolsChip(ep.caps, ep.default_model).title}
                     >
                       tools <span aria-hidden className="text-tone-success">✓</span>
                     </span>
@@ -1429,7 +1449,7 @@ function ConnectionCard({
                     <span
                       data-testid="endpoint-row-tools"
                       className={ENDPOINT_CHIP}
-                      title="Checked: this server can't run tools, so turns that use the web or files go to another model. The reply says so."
+                      title={toolsChip(ep.caps, ep.default_model).title}
                     >
                       <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-tone-warn" />
                       no tools
@@ -1441,7 +1461,7 @@ function ConnectionCard({
                       onClick={() => void verifyEndpoint(ep)}
                       disabled={epBusy === ep.id}
                       className={`${ENDPOINT_CHIP_BUTTON} ${ROW_ACTION}`}
-                      title="Tool support is not checked yet, so tool turns go to another model for now. Press to check this server."
+                      title={`${toolsChip(ep.caps, ep.default_model).title} Press to check it.`}
                     >
                       {epBusy === ep.id ? "…" : "Verify tools"}
                     </button>

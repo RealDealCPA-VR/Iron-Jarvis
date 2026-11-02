@@ -22,7 +22,7 @@ anything from here, and its ``metrics`` stay ``None``.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -83,6 +83,16 @@ class FleetNode(BaseModel):
     #: The API this node chats in (see :data:`NodeProtocol`). Last, and with a
     #: default, so every stored row written before v1.329.0 loads unchanged.
     protocol: NodeProtocol = "openai"
+    #: v1.424.0 (D8): what a live check found for EACH model behind this
+    #: node, by model name: ``{"tool_use": bool, "vision": bool,
+    #: "verified_at": float}`` (a flag only once that check answered). The
+    #: node-level ``tool_use`` / ``vision`` above describe its DEFAULT model
+    #: (every check before v1.424.0 asked that one); another model has only
+    #: its own entry here, else what its server states, else "not known"
+    #: (``fleet/adapter.model_capability``). Last, with a default, so every
+    #: stored row written before v1.424.0 loads unchanged; an empty map is
+    #: never written (``FleetRegistry._save``).
+    model_caps: dict[str, dict[str, Any]] = {}
 
 
 class ModelEntry(BaseModel):

@@ -226,8 +226,13 @@ def test_a_stated_capability_reaches_the_adapter_and_a_denial_changes_nothing():
     assert node_capabilities(rec, "vision", caps) == {"tool_use": True, "vision": True}
     # the table says glm cannot see: the record's answer (unverified = False) stands
     assert node_capabilities(rec, "glm-5.3-flash", caps)["vision"] is False
+    # v1.424.0 (D8, MOVED ON PURPOSE): the node's own record speaks for its
+    # DEFAULT model only. It used to speak for every name behind the gateway
+    # ("never forced False"), so a vision check of one model made glm "see".
     seen = rec.model_copy(update={"vision": True})
-    assert node_capabilities(seen, "glm-5.3-flash", caps)["vision"] is True  # never forced False
+    assert node_capabilities(seen, "glm-5.3-flash", caps)["vision"] is False  # the server says no
+    seen_default = rec.model_copy(update={"vision": True, "default_model": "glm-5.3-flash"})
+    assert node_capabilities(seen_default, "glm-5.3-flash", caps)["vision"] is True  # its own check wins
     assert node_capabilities(rec, "fleet", caps) == {"tool_use": False, "vision": False}  # unknown
     assert node_capabilities(rec, "vision", lambda m: 1 / 0) == {"tool_use": False, "vision": False}
     adapter = FleetAdapter(node=rec, model="vision", caps=caps)

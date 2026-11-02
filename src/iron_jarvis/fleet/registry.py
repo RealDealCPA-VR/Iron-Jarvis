@@ -228,8 +228,15 @@ class FleetRegistry:
         # an unverified node carries tool_use=None/vision=None). Dropping the
         # None keys is lossless — they reload as None via the model defaults,
         # which is exactly what "never verified" means.
+        # v1.424.0: an EMPTY map (``model_caps`` before any per-model check)
+        # is not written either — every row saved before it reads back the
+        # same, so nothing is rewritten just because the field exists.
         payload = [
-            {k: v for k, v in n.model_dump().items() if v is not None} for n in rows
+            {
+                k: v for k, v in n.model_dump().items()
+                if v is not None and not (isinstance(v, dict) and not v)
+            }
+            for n in rows
         ]
         if payload != list(getattr(self.config, "fleet_nodes", None) or []):
             self._revision += 1
@@ -634,6 +641,110 @@ class FleetRegistry:
             return table.caps(model)
         except Exception:  # noqa: BLE001 — unknown, never a guess
             return unknown
+
+    # -- per-model capability (v1.424.0, D8) ---------------------------------
+
+    #: At most this many per-model check results are kept on one node (the
+    #: newest win) — a proxy can list hundreds of names.
+    MAX_MODEL_CHECKS = 64
+
+    def record_check(
+        self,
+        node_id: str,
+        model: str,
+        *,
+        tool_use: "bool | None" = None,
+        vision: "bool | None" = None,
+        at: "float | None" = None,
+        default: "bool | None" = None,
+    ) -> FleetNode:
+        """Save what a live check of *model* on *node_id* found (v1.424.0,
+        D8): into ``model_caps[model]``, and — when *model* is the node's
+        DEFAULT model (``fleet/adapter.is_default_model``, or ``default``
+        True: the check asked the node with no model named, i.e. its own
+        default) — onto the node's own ``tool_use`` / ``vision`` too, which
+        keep their meaning (the default model's answer). A flag left
+        ``None`` (that check did not answer) is not written. Raises
+        ``KeyError`` for an unknown node and ``ChildNodeError`` for a proxy's
+        model, like :meth:`update`."""
+        import time as _time
+
+        from .adapter import is_default_model
+
+        node = self.get(node_id)
+        if node is None:
+            raise KeyError(node_id)
+        when = float(_time.time() if at is None else at)
+        name = (model or "").strip() or (node.default_model or "").strip() or "default"
+        held = {
+            str(k): dict(v) for k, v in (node.model_caps or {}).items() if isinstance(v, dict)
+        }
+        entry = dict(held.pop(name, {}) or {})
+        if tool_use is not None:
+            entry["tool_use"] = bool(tool_use)
+        if vision is not None:
+            entry["vision"] = bool(vision)
+        entry["verified_at"] = when
+        held[name] = entry  # newest last
+        if len(held) > self.MAX_MODEL_CHECKS:
+            held = dict(list(held.items())[-self.MAX_MODEL_CHECKS:])
+        fields: dict[str, Any] = {"model_caps": held, "verified_at": when}
+        if default if default is not None else is_default_model(node, name):
+            if tool_use is not None:
+                fields["tool_use"] = bool(tool_use)
+            if vision is not None:
+                fields["vision"] = bool(vision)
+        return self.update(node_id, **fields)
+
+    def model_capability(self, provider: str, model: str) -> dict[str, Any]:
+        """What *model* on the node behind *provider* (``fleet-<id>``, or the
+        ``custom`` / ``ollama`` slot) can do BY ITSELF (v1.424.0, D8):
+        ``fleet/adapter.model_capability`` over the node's record and its
+        server's own statement. Every key ``None`` / ``""`` (not known) for a
+        provider that is no node. NEVER a network call. Never raises."""
+        from .adapter import CAP_FLAGS, model_capability
+
+        unknown: dict[str, Any] = {}
+        for key in CAP_FLAGS:
+            unknown[key] = None
+            unknown[f"{key}_from"] = ""
+        try:
+            node_id = self._node_id_for(provider)
+            node = self.get(node_id) if node_id else None
+            if node is None:
+                return unknown
+            return model_capability(
+                node, model, lambda m, p=provider: self.model_caps(p, m)
+            )
+        except Exception:  # noqa: BLE001 — not known, never a guess
+            return unknown
+
+    def capability_rows(self, node: FleetNode, names: "list[str]") -> dict[str, dict[str, Any]]:
+        """``{model: model_capability(...)}`` for each name *node* serves, for
+        the Fleet page (``GET /fleet``). A proxy's CHILD (a topology node) is
+        answered by its PROXY: the proxy's check of the child's served name
+        and the proxy's own statement about it — never the child's own copy
+        of an old node-wide flag. Never raises; what was read so far on a
+        fault."""
+        from .adapter import model_capability
+
+        out: dict[str, dict[str, Any]] = {}
+        try:
+            owner = node
+            if node.parent_id:
+                owner = self._top_level().get(node.parent_id) or node
+            provider = provider_name(owner.id)
+            for name in names:
+                # "" is the node's DEFAULT model when it saved none by name.
+                name = (name or "").strip()
+                if name in out:
+                    continue
+                out[name] = model_capability(
+                    owner, name, lambda m, p=provider: self.model_caps(p, m)
+                )
+        except Exception:  # noqa: BLE001 — the page shows "not known"
+            return out
+        return out
 
     # -- reachability (routing hot path) -------------------------------------
 

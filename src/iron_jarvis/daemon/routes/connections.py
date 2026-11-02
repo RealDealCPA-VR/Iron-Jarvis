@@ -525,6 +525,17 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
             _where[key] = bool(stays_on_this_network(prov, providers, cfg, model))
         return _where[key]
 
+    _fleet = getattr(d, "fleet", None)
+
+    def _model_capability(prov: str, model: str) -> dict[str, Any]:
+        fn = getattr(_fleet, "model_capability", None)
+        if not callable(fn):
+            return {}
+        try:
+            return dict(fn(prov, model) or {})
+        except Exception:  # noqa: BLE001 — not known, never breaks the picker
+            return {}
+
     for m in models:
         prov = str(m.get("provider") or "")
         m["kind"] = (
@@ -546,6 +557,17 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
         # v1.263.0: the reasoning levels this model offers (empty = none), so
         # the chat composer shows the control only where it does something.
         m["reasoning"] = list(reasoning_levels(prov, str(m.get("model") or "")))
+        # v1.424.0 (D8): an endpoint row says what THIS model can do — a
+        # live check of it, its server's own statement, or the node's record
+        # for its default model; ``None`` = not known (the router then treats
+        # it as not able, the honest side). Before, every model behind one
+        # gateway carried the gateway's one flag. Endpoint rows only (a
+        # cloud API or a subscription declares its own); before the
+        # ``reasoning_default`` key, which stays LAST.
+        if prov.startswith("fleet-"):
+            view = _model_capability(prov, str(m.get("model") or ""))
+            m["tool_use"] = view.get("tool_use")
+            m["vision"] = view.get("vision")
         # v1.330.0: the level that model runs at when NOTHING is sent ("" =
         # unknown, never a guess), so the chip can say it with no pick. A
         # keyless API provider served through a CLI runs on that CLI's own

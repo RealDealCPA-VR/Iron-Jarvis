@@ -164,6 +164,8 @@
           "size_b": null,
           "inherited_from": null,
           "reasoning": [],
+          "tool_use": null,
+          "vision": null,
           "reasoning_default": ""
         }
       ]
@@ -197,6 +199,8 @@
           "size_b": null,
           "inherited_from": null,
           "reasoning": [],
+          "tool_use": null,
+          "vision": null,
           "reasoning_default": ""
         }
       ]
