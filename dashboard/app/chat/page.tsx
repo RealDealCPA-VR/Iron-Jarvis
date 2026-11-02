@@ -11158,7 +11158,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // request the reply answers goes into the Code view's box (and the
     // project's folder is chosen), never retyped; nothing is sent until the
     // user presses Send there. Any other door is a plain link.
-    openDoor: (index, door) => startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot),
+    // v1.426.0 review: a Local only chat's request starts its coding session
+    // Local only too (the door must not carry the words out of that promise).
+    openDoor: (index, door) =>
+      startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current),
     promote: (content) => promoteNoteToKnowledge(content),
     openDocument: (path) => openDocPreview(path),
     undoFor: (path) => undoForPath(path),

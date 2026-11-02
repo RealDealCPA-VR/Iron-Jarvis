@@ -251,7 +251,13 @@ export function IjHarnessView({
   // (it keeps its words), and what a refused first message hands back to it.
   const [newAgain, setNewAgain] = useState<StartAgain | null>(null);
   const [newSeed, setNewSeed] = useState<StartSeed | null>(
-    handed ? { request: { folder: handed.folder ?? "", text: handed.text, files: [] }, problem: "" } : null,
+    // v1.426.0 review: a Local only chat's request starts Local only.
+    handed
+      ? {
+          request: { folder: handed.folder ?? "", text: handed.text, files: [], ...(handed.localOnly ? { local_only: true } : {}) },
+          problem: "",
+        }
+      : null,
   );
   useEffect(() => {
     if (handed) clearCodingStart();

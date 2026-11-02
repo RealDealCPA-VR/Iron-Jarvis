@@ -254,6 +254,21 @@ describe("the Code view opens with the request typed", () => {
     expect((created?.body as { folder?: string }).folder).toBe("C:\\work\\shop");
   });
 
+  it("v1.426.0 review: a request from a Local only chat opens the composer Local only", async () => {
+    stageCodingStart({ text: REQUEST, folder: null, localOnly: true });
+    renderView();
+    await screen.findByTestId("harness-new-box");
+    expect(screen.getByTestId("harness-new-local-only")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("v1.426.0 review: an ordinary chat's request leaves Local only as the user left it (off)", async () => {
+    stageCodingStart({ text: REQUEST, folder: null });
+    expect(peekCodingStart()).toEqual({ text: REQUEST, folder: null });
+    renderView();
+    await screen.findByTestId("harness-new-box");
+    expect(screen.getByTestId("harness-new-local-only")).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("with nothing staged the composer opens empty, as before", async () => {
     renderView();
     const box = (await screen.findByTestId("harness-new-box")) as HTMLTextAreaElement;

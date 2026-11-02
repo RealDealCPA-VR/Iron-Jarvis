@@ -140,7 +140,7 @@ vi.mock("react-markdown", () => ({ default: ({ children }: { children?: string }
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import ChatPage from "@/app/chat/page";
-import { CHAT_VIEW_EVENT, viewOfEvent } from "@/lib/chatSurface";
+import { CHAT_VIEW_EVENT, resetViewMemory, viewOfEvent } from "@/lib/chatSurface";
 import { CODING_OFFER_HREF, CODING_START_KEY, peekCodingStart } from "@/lib/codingStart";
 
 const DOOR = { href: CODING_OFFER_HREF, label: "Work on this in a coding session (Chat › Code)" };
@@ -167,6 +167,9 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/chat");
   window.localStorage.clear();
   window.sessionStorage.clear();
+  // v1.426.0 review: a door press switches the page to Code and the WINDOW
+  // remembers it (module state): every test starts on the Chat view.
+  resetViewMemory();
   Element.prototype.scrollIntoView = vi.fn();
 });
 afterEach(() => {
@@ -205,6 +208,16 @@ describe("the coding door on the chat page", () => {
     expect(H.stream.bodies.length).toBe(turns);
     expect(window.location.href).not.toContain("todo");
     expect(sessionStorage.getItem(CODING_START_KEY)).toContain(REQUEST);
+  });
+
+  it("v1.426.0 review: a Local only chat's request starts its coding session Local only", async () => {
+    render(<ChatPage />);
+    // The chat is kept on this PC (the composer's own Local only chip).
+    fireEvent.click(await screen.findByTestId("local-only-chip"));
+    await waitFor(() => expect(screen.getByTestId("local-only-chip")).toHaveAttribute("aria-pressed", "true"));
+    const link = await askAndAnswer();
+    fireEvent.click(link);
+    expect(peekCodingStart()).toEqual({ text: REQUEST, folder: null, localOnly: true });
   });
 
   it("a chat in a project hands over the project's folder", async () => {

@@ -43,6 +43,12 @@ export interface CodingStart {
   text: string;
   /** The chat's project folder, or null (the composer starts with none). */
   folder: string | null;
+  /** v1.426.0 review: the chat was Local only — the coding session starts
+   *  Local only too (its chip on; the user may turn it off before Send). The
+   *  app's own door must never carry a Local only chat's words into a
+   *  session that sends them to a cloud model by default. Present only when
+   *  true. */
+  localOnly?: boolean;
 }
 
 /** Is `href` the coding offer's door? */
@@ -56,7 +62,8 @@ export function stageCodingStart(start: CodingStart, now: number = Date.now()): 
   try {
     const text = String(start.text ?? "").slice(0, CODING_START_MAX_CHARS);
     const folder = typeof start.folder === "string" && start.folder.trim() ? start.folder : null;
-    window.sessionStorage.setItem(CODING_START_KEY, JSON.stringify({ text, folder, at: now }));
+    const local = start.localOnly === true ? { localOnly: true } : {};
+    window.sessionStorage.setItem(CODING_START_KEY, JSON.stringify({ text, folder, ...local, at: now }));
   } catch {
     /* storage blocked */
   }
@@ -68,13 +75,13 @@ export function peekCodingStart(now: number = Date.now()): CodingStart | null {
   try {
     const raw = window.sessionStorage.getItem(CODING_START_KEY);
     if (!raw) return null;
-    const r = JSON.parse(raw) as { text?: unknown; folder?: unknown; at?: unknown };
+    const r = JSON.parse(raw) as { text?: unknown; folder?: unknown; localOnly?: unknown; at?: unknown };
     const at = typeof r.at === "number" && Number.isFinite(r.at) ? r.at : 0;
     if (!at || now - at > CODING_START_TTL_MS || at - now > 60_000) return null;
     const text = typeof r.text === "string" ? r.text.slice(0, CODING_START_MAX_CHARS) : "";
     const folder = typeof r.folder === "string" && r.folder.trim() ? r.folder : null;
     if (!text.trim() && !folder) return null;
-    return { text, folder };
+    return r.localOnly === true ? { text, folder, localOnly: true } : { text, folder };
   } catch {
     return null;
   }
@@ -118,8 +125,9 @@ export function startCodingFromDoor(
   index: number,
   href: string,
   folder: string | null,
+  localOnly: boolean = false,
 ): boolean {
   if (!isCodingOffer(href)) return false;
-  stageCodingStart({ text: requestBefore(messages, index), folder });
+  stageCodingStart({ text: requestBefore(messages, index), folder, localOnly });
   return announceChatViewLink(href);
 }
