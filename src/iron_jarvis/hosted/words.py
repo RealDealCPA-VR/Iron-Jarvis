@@ -86,6 +86,11 @@ NOT_INSTALLED = "{label} is not installed on this PC, so this session cannot sta
 FULL_NEEDS_CONFIRM = (
     "Full access lets {label} run anything without asking — press it twice to confirm."
 )
+#: v1.425.0 (Wave 5, B7): said once while a message waits for a place.
+POOL_WAITING = (
+    "Six coding sessions are working right now — this message starts as soon as one "
+    "of them finishes."
+)
 POOL_FULL = (
     "Six Code-view sessions are already working right now — wait for one to finish, "
     "then send this again."
