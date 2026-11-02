@@ -49,6 +49,12 @@ import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
 import { cachedFolders, dropEndedTurns, keepFolders, keepView, viewFor } from "@/lib/turnCache";
+// v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
+import { useModels } from "@/lib/useModels";
+import { modelRowName } from "@/lib/onboarding";
+import { friendlyModelName } from "@/lib/friendlyModelName";
+import { FOLDER_POSTURES, codeDefaultsWords, type CodeDefaults } from "@/lib/folderDefaults";
+import type { PermissionMode } from "@/lib/permissionLevels";
 import {
   ONE,
   SESSION_DRAG_TYPE,
@@ -552,6 +558,29 @@ export function IjHarnessView({
   // ---- the shared pane column of a split ----
   const [paneSlot, setPaneSlot] = useState<HTMLDivElement | null>(null);
 
+  // v1.426.0 (E5): the open session's settings as a folder's defaults (read
+  // at the press from the view this window keeps), and the words for them.
+  const settingsOf = useCallback((id: string): CodeDefaults | null => {
+    const v = viewFor<BuildSessionView>(id);
+    if (!v) return null;
+    const posture = v.setup.approvalMode as PermissionMode;
+    const out: CodeDefaults = {
+      ...(v.setup.provider ? { provider: v.setup.provider, ...(v.setup.model ? { model: v.setup.model } : {}) } : {}),
+      ...(v.setup.provider && v.setup.reasoning ? { reasoning: v.setup.reasoning } : {}),
+      ...(FOLDER_POSTURES.includes(posture) ? { approval_mode: posture } : {}),
+    };
+    return Object.keys(out).length ? out : null;
+  }, []);
+  const catalog = useModels();
+  const describeDefaults = useCallback(
+    (d: CodeDefaults) =>
+      codeDefaultsWords(d, (provider, model) => {
+        const row = catalog.models.find((m) => m.provider === provider && m.model === model);
+        return row ? modelRowName(row, catalog.models) : friendlyModelName(model || provider);
+      }),
+    [catalog.models],
+  );
+
   const sidebar = (
     <HarnessSidebar
       folders={folders}
@@ -580,6 +609,8 @@ export function IjHarnessView({
       }}
       onStart={(folder) => openNew(folder)}
       onRename={rename}
+      settingsOf={settingsOf}
+      describeDefaults={describeDefaults}
       archived={archived}
       onBringBack={bringBack}
       terminals={terminals}

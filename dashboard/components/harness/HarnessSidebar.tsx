@@ -51,6 +51,9 @@ import { formatAge } from "@/lib/threadStatus";
 import { archivedCount, BRING_BACK_WORDS, type BuildFolder } from "@/lib/buildSessions";
 import { SESSION_DRAG_TYPE } from "@/lib/codeSplit";
 import { HARNESS_LIST_ATTR, HARNESS_ROW_ATTR, moveRowFocus } from "@/lib/harnessKeys";
+// v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
+import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
+import type { CodeDefaults } from "@/lib/folderDefaults";
 
 /** v1.420.0 (fix plan C2.9): the attribute that marks a session row (↑/↓
  *  move between them) and the one that marks the list as the harness's. */
@@ -95,6 +98,8 @@ function FolderGroup({
   onOpenBeside,
   onNew,
   onRename,
+  settingsOf,
+  describeDefaults,
 }: {
   folder: BuildFolder;
   selectedId: string | null;
@@ -103,8 +108,13 @@ function FolderGroup({
   onOpenBeside?: (id: string) => void;
   onNew: (folder: string) => void;
   onRename: (path: string, name: string) => Promise<string | null>;
+  /** v1.426.0 (E5): a session's settings as a folder's defaults (null: not
+   *  known). Absent: no defaults button on the heading. */
+  settingsOf?: (sessionId: string) => CodeDefaults | null;
+  describeDefaults?: (d: CodeDefaults) => string;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [defaultsOpen, setDefaultsOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -193,6 +203,15 @@ function FolderGroup({
             >
               <Pencil size={11} />
             </button>
+            {settingsOf && describeDefaults ? (
+              <FolderDefaultsButton
+                name={folder.name}
+                open={defaultsOpen}
+                onToggle={() => setDefaultsOpen((v) => !v)}
+                testId="harness-folder-defaults"
+                className={defaultsOpen ? "" : "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/head:opacity-100 focus-visible:opacity-100"}
+              />
+            ) : null}
             <button
               type="button"
               data-testid="harness-folder-new"
@@ -210,6 +229,15 @@ function FolderGroup({
         <p role="alert" className="px-2 text-[12px] text-tone-danger">
           {problem}
         </p>
+      ) : null}
+      {defaultsOpen && settingsOf && describeDefaults && !folder.noFolder ? (
+        <FolderDefaultsPanel
+          folder={folder.path}
+          view="code"
+          describe={describeDefaults}
+          current={selectedId && folder.sessions.some((s) => s.id === selectedId) ? settingsOf(selectedId) : null}
+          testId="harness-folder-defaults-panel"
+        />
       ) : null}
       <ul className="space-y-0.5">
         {folder.sessions.map((s) => {
@@ -384,6 +412,8 @@ export function HarnessSidebar({
   onRename,
   terminals,
   onOpenTerminal,
+  settingsOf,
+  describeDefaults,
   newRequest = 0,
   searchRequest = 0,
   tonightOpen = false,
@@ -430,6 +460,10 @@ export function HarnessSidebar({
   onRename: (path: string, name: string) => Promise<string | null>;
   terminals: RailPane[];
   onOpenTerminal: (id: string) => void;
+  /** v1.426.0 (E5): a session's settings as a folder's defaults, and the
+   *  defaults in words — both given: each folder heading offers them. */
+  settingsOf?: (sessionId: string) => CodeDefaults | null;
+  describeDefaults?: (d: CodeDefaults) => string;
 }) {
   const [busyFolder, setBusyFolder] = useState<string | null>(null);
   const [groupProblem, setGroupProblem] = useState<string | null>(null);
@@ -580,6 +614,8 @@ export function HarnessSidebar({
               onOpenBeside={onOpenBeside}
               onNew={(path) => void startIn(path)}
               onRename={onRename}
+              settingsOf={settingsOf}
+              describeDefaults={describeDefaults}
             />
           ))
         )}

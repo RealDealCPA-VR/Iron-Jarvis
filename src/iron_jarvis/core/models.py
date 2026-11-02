@@ -589,6 +589,12 @@ class BuildFolderRecord(SQLModel, table=True):
     #: name | ""}`` as JSON, "" = none. Additive (the reconciler adds the
     #: column to an older database); the display name above is untouched by it.
     team_json: str = ""
+    #: v1.426.0 (Wave 6 lane B, E5): what NEW coding sessions in this folder
+    #: start with, per view — ``{"code": {provider, model, reasoning,
+    #: approval_mode}, "tool": {harness, model, effort, mode}}`` as JSON
+    #: (``harness/folder_defaults``), "" = none. Additive like ``team_json``:
+    #: the reconciler adds it to an older database, whose rows read as none.
+    defaults_json: str = ""
 
 
 class SavedPromptRecord(SQLModel, table=True):

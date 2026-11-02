@@ -111,6 +111,7 @@ import {
   folderKey,
   isArchived,
   isFullAccess,
+  modeLabel,
   reuseItems,
   decodeCodeEvent,
   decodeItemText,
@@ -190,6 +191,9 @@ import { ModeChip } from "@/components/buildCode/ModeChip";
 import { decodeCarry, type CarryFacts } from "@/lib/buildCodeCarry";
 import { LOOKING_BEAT_MS, noteLooking, stopLooking } from "@/lib/buildWatching";
 import { JarvisToolsChip, ProfileShareOffer } from "@/components/buildCode/JarvisTools";
+// v1.426.0 (Wave 6 lane B, E5): a folder's defaults for new sessions.
+import { FolderDefaultsButton, FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
+import { toolDefaultsWords, type ToolDefaults } from "@/lib/folderDefaults";
 /** "At the bottom" for the transcript, in pixels. */
 const BOTTOM_SLACK_PX = 48;
 
@@ -1858,6 +1862,8 @@ export function BuildCodeView({
   const [openId, setOpenId] = useState<string | null>(initialSession);
   const [creating, setCreating] = useState(false);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
+  // v1.426.0 (E5): the folder whose defaults panel is open under its heading.
+  const [defaultsFor, setDefaultsFor] = useState<string | null>(null);
   const [rowNote, setRowNote] = useState<string | null>(null);
   // v1.420.0 (fix plan C4.10): rename a session in its row, and search the
   // list by title and folder (the list the view holds; no new read).
@@ -2104,6 +2110,21 @@ export function BuildCodeView({
     [query, tools],
   );
   const groups = useMemo(() => groupByFolder((sessions ?? []).filter(matches)), [sessions, matches]);
+  // v1.426.0 (E5): the settings of the session open in front, when it is one
+  // of `folder`'s — what "Use for new sessions in this folder" saves (Full
+  // access never: a folder does not keep it).
+  const frontDefaults = (folder: string): ToolDefaults | null => {
+    const s = sessions?.find((x) => x.id === openId) ?? null;
+    if (!s || !s.tool || folderKey(s.folder) !== folderKey(folder)) return null;
+    const t = tools?.find((x) => x.id === s.tool) ?? null;
+    const dangerous = !!t?.modes.some((m) => m.id === s.mode && m.dangerous);
+    return {
+      harness: s.tool,
+      ...(s.model ? { model: s.model } : {}),
+      ...(s.effort ? { effort: s.effort } : {}),
+      ...(s.mode && !dangerous ? { mode: s.mode } : {}),
+    };
+  };
   const archivedGroups = useMemo(
     () => groupByFolder((archivedRows ?? []).filter(matches), { archived: true }),
     [archivedRows, matches],
@@ -2392,7 +2413,30 @@ export function BuildCodeView({
                   >
                     <Plus size={12} aria-hidden="true" />
                   </button>
+                  {g.noFolder ? null : (
+                    <FolderDefaultsButton
+                      name={g.name}
+                      open={defaultsFor === g.folder}
+                      onToggle={() => setDefaultsFor((cur) => (cur === g.folder ? null : g.folder))}
+                      testId={`code-folder-defaults-${folderKey(g.folder)}`}
+                    />
+                  )}
                 </h3>
+                {!g.noFolder && defaultsFor === g.folder ? (
+                  <FolderDefaultsPanel
+                    folder={g.folder}
+                    view="tool"
+                    describe={(d: ToolDefaults) =>
+                      toolDefaultsWords(d, {
+                        tool: (id) => tools?.find((t) => t.id === id)?.label ?? id,
+                        model: (tid, id) => tools?.find((t) => t.id === tid)?.models.find((m) => m.id === id)?.label ?? id,
+                        mode: (tid, id) => modeLabel(id, tools?.find((t) => t.id === tid) ?? null),
+                      })
+                    }
+                    current={frontDefaults(g.folder)}
+                    testId="code-folder-defaults-panel"
+                  />
+                ) : null}
                 <ul className="mt-0.5">{g.sessions.map((s) => row(s, false))}</ul>
                 {g.noFolder ? null : savedFor(g.folder)}
               </section>

@@ -50,6 +50,16 @@ import { ApiError, post } from "@/lib/api";
 import { FolderChip } from "@/components/folders/FolderChip";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { ModeChip } from "@/components/buildCode/ModeChip";
+import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
+import {
+  SAVE_DEFAULTS_LABEL,
+  folderBaseName,
+  saveFolderDefaults,
+  sameToolDefaults,
+  toolDefaultsWords,
+  usingDefaultsLine,
+  type ToolDefaults,
+} from "@/lib/folderDefaults";
 import {
   AttachButton,
   AttachmentChips,
@@ -61,6 +71,7 @@ import {
   accountStatusWords,
   decodeCodeSession,
   effortsFor,
+  modeLabel,
   ownSignInWords,
   toolChoiceWords,
   toolUnavailable,
@@ -232,6 +243,24 @@ export function StartComposer({
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const toolShift = useInsideWindow(toolMenuRef, toolOpen);
   const accountShift = useInsideWindow(accountMenuRef, accountOpen);
+  // v1.426.0 (E5): the folder's defaults for new sessions — a chip the user
+  // touched wins; an untouched one shows the folder's value.
+  const folderDefaults = useFolderDefaults(folder);
+  const [savedDefaults, setSavedDefaults] = useState<ToolDefaults | null | undefined>(undefined);
+  const [defaultsNote, setDefaultsNote] = useState<string | null>(null);
+  const toolDefaults = savedDefaults === undefined ? folderDefaults?.tool ?? null : savedDefaults;
+  const touched = useRef({ tool: false, mode: false, model: false, effort: false });
+  useEffect(() => {
+    setSavedDefaults(undefined);
+    setDefaultsNote(null);
+  }, [folder]);
+  // The folder's tool, when the user has not picked one and it can start.
+  useEffect(() => {
+    const want = toolDefaults?.harness;
+    if (!want || touched.current.tool || !tools || want === toolId) return;
+    const t = tools.find((x) => x.id === want);
+    if (t && !toolUnavailable(t)) setToolId(want);
+  }, [toolDefaults?.harness, tools, toolId]);
 
   // The tool: the last one used, else the first that can start (once read).
   useEffect(() => {
@@ -251,7 +280,26 @@ export function StartComposer({
     setModel("");
     setEffort("");
     setChipProblem(null);
+    touched.current = { ...touched.current, mode: false, model: false, effort: false };
   }, [tool]);
+  // v1.426.0 (E5): then the folder's own mode, model and effort for THAT tool
+  // (declared after the reset above, so it wins in the same commit) — each
+  // only while untouched and only when the tool offers it (Full access never
+  // comes from a folder: the daemon refuses to keep it).
+  useEffect(() => {
+    if (!tool) return;
+    const d = toolDefaults && toolDefaults.harness === tool.id ? toolDefaults : null;
+    if (!touched.current.mode) {
+      const m = d?.mode ? tool.modes.find((x) => x.id === d.mode && !x.dangerous) : null;
+      setMode({ id: m ? m.id : (tool.modes[0]?.id ?? ""), confirm: false });
+    }
+    const m2 = d?.model && tool.models.some((x) => x.id === d.model) ? d.model : "";
+    if (!touched.current.model) setModel(m2);
+    if (!touched.current.effort) {
+      setEffort(d?.effort && effortsFor(tool, touched.current.model ? model : m2).includes(d.effort) ? d.effort : "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, toolDefaults]);
   // v1.412.0 review: the effort levels are the chosen MODEL's; an effort the
   // model does not take is dropped (the chip hides when it takes none).
   const efforts = useMemo(() => effortsFor(tool, model), [tool, model]);
@@ -274,6 +322,7 @@ export function StartComposer({
 
   function chooseTool(id: string) {
     setToolOpen(false);
+    touched.current.tool = true;
     if (id === toolId) return;
     setToolId(id);
     const next = tools?.find((t) => t.id === id) ?? null;
@@ -334,6 +383,34 @@ export function StartComposer({
       void start();
     }
   };
+
+  // v1.426.0 (E5): the folder's defaults in words, and what the chips say now.
+  const defaultsWords = toolDefaultsWords(toolDefaults, {
+    tool: (id) => tools?.find((t) => t.id === id)?.label ?? id,
+    model: (tid, id) => tools?.find((t) => t.id === tid)?.models.find((m) => m.id === id)?.label ?? id,
+    mode: (tid, id) => modeLabel(id, tools?.find((t) => t.id === tid) ?? null),
+  });
+  const chosenDefaults: ToolDefaults | null = tool
+    ? {
+        harness: tool.id,
+        ...(model ? { model } : {}),
+        ...(effort && efforts.includes(effort) ? { effort } : {}),
+        ...(mode.id ? { mode: mode.id } : {}),
+      }
+    : null;
+  const dangerousMode = !!tool && tool.modes.some((m) => m.id === mode.id && m.dangerous);
+  const offerSave = !!folder && !!chosenDefaults && !dangerousMode && !sameToolDefaults(chosenDefaults, toolDefaults);
+
+  async function saveDefaults() {
+    if (!folder || !chosenDefaults) return;
+    setDefaultsNote(null);
+    try {
+      const got = await saveFolderDefaults(folder, "tool", chosenDefaults);
+      setSavedDefaults(got.tool);
+    } catch (e) {
+      setDefaultsNote(errorWords(e, "The defaults were not saved."));
+    }
+  }
 
   const toolWords = !tools
     ? toolsError
@@ -572,7 +649,10 @@ export function StartComposer({
             <ModeChip
               tool={tool}
               value={mode.id}
-              onChange={(id, confirm) => setMode({ id, confirm })}
+              onChange={(id, confirm) => {
+                touched.current.mode = true;
+                setMode({ id, confirm });
+              }}
               disabled={busy}
               testId="code-start-mode"
             />
@@ -585,7 +665,10 @@ export function StartComposer({
               data-testid="code-start-model"
               value={model}
               disabled={busy}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) => {
+                touched.current.model = true;
+                setModel(e.target.value);
+              }}
               aria-invalid={chipProblem?.field === "model" || undefined}
               className={CHIP_SELECT}
             >
@@ -604,7 +687,10 @@ export function StartComposer({
               data-testid="code-start-effort"
               value={effort}
               disabled={busy}
-              onChange={(e) => setEffort(e.target.value)}
+              onChange={(e) => {
+                touched.current.effort = true;
+                setEffort(e.target.value);
+              }}
               aria-invalid={chipProblem?.field === "effort" || undefined}
               className={CHIP_SELECT}
             >
@@ -619,6 +705,29 @@ export function StartComposer({
           <ChipProblem field="effort" problem={chipProblem} />
         </div>
 
+        {folder && (defaultsWords || offerSave || defaultsNote) ? (
+          <p data-testid="code-start-folder-defaults" className="flex flex-wrap items-center gap-x-2 px-2 text-[12px] text-zinc-500">
+            {defaultsWords ? (
+              <span data-testid="code-start-folder-defaults-words">{usingDefaultsLine(folderBaseName(folder), defaultsWords)}</span>
+            ) : null}
+            {offerSave ? (
+              <button
+                type="button"
+                data-testid="code-start-save-defaults"
+                disabled={busy}
+                onClick={() => void saveDefaults()}
+                className="rounded-md px-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+              >
+                {SAVE_DEFAULTS_LABEL}
+              </button>
+            ) : null}
+            {defaultsNote ? (
+              <span role="alert" className="text-tone-danger">
+                {defaultsNote}
+              </span>
+            ) : null}
+          </p>
+        ) : null}
         {toolsError ? (
           <p role="alert" data-testid="code-start-tools-error" className="px-2 text-[12px] text-tone-danger">
             {toolsError}
