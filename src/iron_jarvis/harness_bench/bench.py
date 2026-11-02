@@ -966,6 +966,21 @@ def resolve_bench_home(root: str) -> Path:
                 "That is the Iron Jarvis app's own folder. Run the benchmark with --root pointing "
                 "at a scratch folder instead."
             )
+    # v1.425.0 (review): NOR THE FOLDER OF THE SETTINGS EVERY PROCESS READS.
+    # ``--root <your user folder>`` made the bench home ``~/.ironjarvis`` —
+    # the folder whose ``config.toml`` every Iron Jarvis on this PC layers in
+    # (``core/config.global_config_path``: the installed app's too). The
+    # product path makes real coding sessions there and answers every card
+    # "Allow once", so a settings change a task's model asked for would have
+    # landed in the owner's own settings.
+    from ..core.config import global_config_path
+
+    shared = global_config_path().parent.resolve()
+    if home.resolve() == shared:
+        raise BenchRefused(
+            f"That is the folder of the settings every Iron Jarvis on this PC reads ({shared}). "
+            "Run the benchmark with --root pointing at a scratch folder instead."
+        )
     return home
 
 

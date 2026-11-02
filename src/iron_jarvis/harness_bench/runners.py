@@ -655,6 +655,49 @@ def layer_tree_hash(layer_dir: Path) -> str:
     return h.hexdigest()
 
 
+def forget_reply_record_when_done(engine: Any, turn_id: str, task: Any) -> dict[str, Any]:
+    """v1.425.0 (review): A BENCHMARK TURN IS NEVER CARRIED ON. Drop a
+    product-path turn's reply record (``harness/reply_record``,
+    ``build-turn:<turn id>``) once the turn's task has ENDED — however it
+    ended. A turn cut off (the time limit's Stop did not end it within the
+    grace, the follow's last bound, the whole run cancelled) keeps that record:
+    it is how a restart carries a reply on, and the boot's resume pass of any
+    daemon started on the benchmark's home would carry a benchmark turn on by
+    itself — a model call nobody asked for, in a task copy already graded. The
+    drop is queued on the record's OWN writer (one thread, in order), so a save
+    still in flight when the task ended lands BEFORE it, never after; and it is
+    registered on the task, so a cancel path that cannot await still drops it.
+    Returns a holder whose ``"future"`` is the queued drop (set once the task
+    has ended). Never raises."""
+    holder: dict[str, Any] = {}
+
+    def _done(_task: Any) -> None:
+        try:
+            from ..harness import reply_record as RR
+
+            holder["future"] = RR._writer().submit(RR.drop, engine, turn_id)
+        except Exception:  # noqa: BLE001 — a record never breaks a run
+            pass
+
+    try:
+        task.add_done_callback(_done)
+    except Exception:  # noqa: BLE001 — no task to wait for: drop it now
+        _done(None)
+    return holder
+
+
+async def reply_record_dropped(holder: dict[str, Any], timeout_s: float = 10.0) -> None:
+    """Wait (bounded) for :func:`forget_reply_record_when_done`'s drop. The
+    task's done callbacks run on the loop's next turn, so one is given first.
+    Never raises."""
+    await asyncio.sleep(0)
+    fut = holder.get("future")
+    if fut is None:
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(asyncio.wrap_future(fut), timeout_s)
+
+
 #: v1.425.0: the fields of one patience wait (a ``provider_wait`` frame,
 #: ``harness/patience.FRAME``) a record keeps — never its words.
 WAIT_KEYS: tuple[str, ...] = ("attempt", "of", "wait_s", "why", "provider")
@@ -1457,6 +1500,7 @@ class JarvisRunner:
         observed: dict[str, Any] = {}
         state: dict[str, bool] = {"stopped": False, "cut": False}
         lg: Any = None
+        dropped: dict[str, Any] = {}
         rounds, _no_limit = self.step_limit(task)
 
         async def _time_limit() -> None:
@@ -1482,6 +1526,23 @@ class JarvisRunner:
             if task_ is not None and not task_.done():
                 await asyncio.wait({task_}, timeout=_GRACE_S)
 
+        async def _end_turn_now() -> None:
+            # v1.425.0 (review): the turn is its OWN task (``TurnLogs``) — a
+            # follow that ended early (a fault in the benchmark's own reading)
+            # must not leave it running on, unwatched, behind a run that is
+            # already being graded: stopped the way the time limit stops it,
+            # then cut off if it does not end within the grace.
+            task_ = getattr(lg, "task", None)
+            if task_ is None or task_.done():
+                return
+            with contextlib.suppress(Exception):
+                TURNS.stop(turn_id)
+            await asyncio.wait({task_}, timeout=_GRACE_S)
+            if not task_.done():
+                state["cut"] = True
+                task_.cancel()
+                await asyncio.wait({task_}, timeout=_GRACE_S)
+
         with session_ended_on_escape(session), \
                 counting_router(self.platform, rollout, observed, reasoning_for=self.call_reasoning), \
                 hidden_environ():
@@ -1499,6 +1560,9 @@ class JarvisRunner:
                 except build_routes.SessionBusy:
                     reading.error = "the coding session was busy"
                 if lg is not None:
+                    # v1.425.0 (review): its reply record goes when it ends,
+                    # however it ends (``forget_reply_record_when_done``).
+                    dropped = forget_reply_record_when_done(self.platform.engine, turn_id, lg.task)
                     stopper = asyncio.ensure_future(_time_limit())
                     try:
                         async with asyncio.timeout(float(timeout_s) + 2 * _GRACE_S + 30.0):
@@ -1518,6 +1582,9 @@ class JarvisRunner:
                     await _turn_ended()
             except Exception as exc:  # noqa: BLE001 — recorded, never raised past the run
                 reading.error = f"{type(exc).__name__}: {exc}"
+                if stopper is not None and not stopper.done():
+                    stopper.cancel()
+                await _end_turn_now()
             except BaseException:
                 # A cancel (Ctrl+C, the bench's own stop): the turn runs as its
                 # own task, so it is stopped too, never left running.
@@ -1529,6 +1596,9 @@ class JarvisRunner:
             finally:
                 if stopper is not None and not stopper.done():
                     stopper.cancel()
+        # v1.425.0 (review): the turn's reply record is gone before the run
+        # returns (nothing a daemon on this home would carry on).
+        await reply_record_dropped(dropped)
         stopped = await asyncio.to_thread(procs.end_session, session)
         if stopped:
             out.notes.append(f"stopped {len(stopped)} program(s) the turn left running")
