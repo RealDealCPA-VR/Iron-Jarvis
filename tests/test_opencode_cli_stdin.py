@@ -91,8 +91,13 @@ def test_the_flattened_prompt_rides_stdin_and_the_json_reply_still_parses():
 
     resp = _complete(_adapter(_runner), "ping")
 
-    assert seen["argv"] == [
-        "/usr/bin/opencode", "run", "--format", "json", "-m", "spark/fleet",
+    # v1.424.0 (D5, moved on purpose): the run names Iron Jarvis's own
+    # tool-free agent (a fresh name per call) — see test_opencode_text_only_v14240.
+    argv = seen["argv"]
+    agent = argv[argv.index("--agent") + 1]
+    assert agent.startswith("iron-jarvis-text-")
+    assert argv == [
+        "/usr/bin/opencode", "run", "--format", "json", "--agent", agent, "-m", "spark/fleet",
     ]
     assert seen["stdin"] == "USER: ping"
     # Output handling is untouched by the stdin move.

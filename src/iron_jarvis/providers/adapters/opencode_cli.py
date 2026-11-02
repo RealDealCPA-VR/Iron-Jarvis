@@ -9,6 +9,52 @@ paid remote models (its hosted tier, or a passthrough alias on your own proxy),
 and the user asked for local only — so an unrecognised model is an honest error,
 never a "well, it probably works" call that quietly bills them. See
 ``providers/opencode.py`` for how locality is decided.
+
+OPENCODE'S OWN TOOLS ARE OFF (v1.424.0, audit D5). ``opencode run`` keeps
+every tool of OpenCode's on, and OpenCode's own default runs every one of them
+without asking (``"*": "allow"``; an ``ask`` in ``opencode run`` is auto-
+rejected, an ``allow`` just runs). As the model behind a CHAT turn or an agent
+run that meant OpenCode could edit files and run commands Iron Jarvis never
+saw: no card, no ledger row, no Undo. Here Iron Jarvis carries out every tool
+itself (the router's prompted-tools wrap) or the turn is text-only, so the
+call runs with EVERY OpenCode tool denied — and a tool OpenCode denies with
+the pattern ``*`` is REMOVED from what the model is offered (measured, below).
+
+MEASURED on this PC with the installed opencode 1.18.18, in scratch config /
+data folders (``XDG_CONFIG_HOME`` and friends), with ``opencode debug agent
+<name>`` (the agent's resolved rules and the tools it offers — no model call)
+and ``opencode run --agent <name> -m nonexistent/none`` (whether ``run`` takes
+the agent — no model call). Recorded in
+``tests/fixtures/opencode_text_only_v14240.json``:
+
+* ``OPENCODE_PERMISSION`` (JSON) is merged OVER the config's ``permission``
+  (``hosted/opencode``'s merge model: a key the user already has keeps its
+  PLACE, a new key is appended, the last matching rule wins). ``{"*":
+  "deny"}`` alone LOST to a user's ``"*": "allow"`` followed by ``"bash":
+  "allow"`` (bash stayed offered). So every key of the user's own global
+  rules is named ``deny`` too (:func:`text_only_setup`, through
+  ``hosted.opencode.user_rules``, the Code view's reader — the user's files
+  are only ever read).
+* An AGENT's own ``permission`` in the user's config is placed AFTER the
+  config's (and the environment's) rules: ``agent.build.permission.bash =
+  "allow"`` beat every deny above. So the call runs as an agent of Iron
+  Jarvis's OWN, defined for that process only in ``OPENCODE_CONFIG_CONTENT``
+  (merged into an inline config of the user's, never replacing it) and named
+  with ``--agent``: its own all-``deny`` permission is the LAST rule for every
+  tool. The name is FRESH per call (``iron-jarvis-text-<hex>``): a user agent
+  of the same name (a ``.md`` agent file is merged BEFORE the inline config,
+  in place) would put its own rules around ours.
+* ``opencode run --agent <name>`` with an agent it cannot find prints
+  ``agent "<name>" not found. Falling back to default agent`` on stderr and
+  runs the user's default agent (tools on). That warning, and any
+  ``tool_use`` event in the reply, makes the reply an honest ERROR here
+  (:func:`fell_back`, :func:`tools_run`) — never an answer passed on as if
+  nothing happened.
+* ``opencode run`` adds session rules after the agent's (``question``,
+  ``plan_enter``, ``plan_exit``: all deny) and nothing that allows.
+
+Build's Code view (``hosted/opencode``) is the OTHER way round on purpose —
+the user picked the real tool there — and none of this reaches it.
 """
 
 from __future__ import annotations
@@ -16,6 +62,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import secrets
 import shutil
 import subprocess
 from typing import Any, Callable
@@ -27,6 +75,125 @@ log = logging.getLogger(__name__)
 
 #: OpenCode boots a server and may run a tool loop; give it room but never hang.
 _TIMEOUT_S = 300.0
+
+#: v1.424.0 (D5): OpenCode's own tools, every one named ``deny`` beside
+#: ``"*"`` (the Code view's two lists, plus the tools ``opencode debug agent
+#: build`` listed on 1.18.18 — ``write``, ``question`` — and the edit family's
+#: other names and the plan switches). ``"*"`` already covers them; naming
+#: each keeps a tool denied even where a rule of the user's sits after ``"*"``.
+_EXTRA_TOOLS: tuple[str, ...] = (
+    "write", "patch", "apply_patch", "multiedit", "question", "plan_enter", "plan_exit",
+)
+
+#: The agent each call runs as: Iron Jarvis's own, defined only in that
+#: process's ``OPENCODE_CONFIG_CONTENT`` (``iron-jarvis-text-<8 hex>``).
+AGENT_PREFIX = "iron-jarvis-text-"
+
+
+def _agent_name() -> str:
+    """A fresh agent name for one call (a seam: the fixture's regeneration
+    fixes it)."""
+    return AGENT_PREFIX + secrets.token_hex(4)
+
+
+class TextOnlyRefused(RuntimeError):
+    """Iron Jarvis could not make sure OpenCode's own tools are off for this
+    call, so OpenCode was not started (fail closed)."""
+
+
+def builtin_tools() -> tuple[str, ...]:
+    """Every OpenCode tool Iron Jarvis knows by name (the Code view's lists +
+    :data:`_EXTRA_TOOLS`), each once, in a stable order."""
+    from ...hosted.opencode import ACTING_TOOLS, READ_ONLY_TOOLS
+
+    return tuple(dict.fromkeys(READ_ONLY_TOOLS + ACTING_TOOLS + _EXTRA_TOOLS))
+
+
+def deny_all(rules: dict[str, Any] | str) -> dict[str, str]:
+    """``{"*": "deny"}`` + every built-in tool + every key of the user's own
+    rules (``rules``: ``hosted.opencode.user_rules``' answer — a whole-config
+    string rule names no key), each ``deny``. Pure."""
+    out: dict[str, str] = {"*": "deny"}
+    for name in builtin_tools():
+        out[name] = "deny"
+    if isinstance(rules, dict):
+        for key in rules:
+            out[str(key)] = "deny"
+    return out
+
+
+def text_only_setup(environ: dict[str, str], folder: str) -> tuple[dict[str, str], str]:
+    """BLOCKING (reads the user's OpenCode config files, read-only): ``(the
+    child's environment, the agent to run as)`` for an ``opencode run`` whose
+    own tools are ALL off (see the module docstring). ``folder`` is the
+    folder OpenCode will run in (its project config files count too).
+
+    Raises :class:`TextOnlyRefused` when the user's own
+    ``OPENCODE_CONFIG_CONTENT`` is not a JSON object with an ``agent`` object
+    (Iron Jarvis would have to drop it to add its agent): nothing starts."""
+    from ...hosted.opencode import user_rules
+
+    env = dict(environ)
+    deny = deny_all(user_rules(folder, env))
+    name = _agent_name()
+    raw = str(env.get("OPENCODE_CONFIG_CONTENT") or "").strip()
+    content: Any = {}
+    if raw:
+        try:
+            content = json.loads(raw)
+        except ValueError:
+            content = None
+    agents = content.get("agent", {}) if isinstance(content, dict) else None
+    if not isinstance(content, dict) or not isinstance(agents, dict):
+        raise TextOnlyRefused(
+            "opencode-cli: your OPENCODE_CONFIG_CONTENT setting is not a config "
+            "Iron Jarvis can add to, so it cannot make sure OpenCode's own tools "
+            "stay off — OpenCode was not started. Fix or remove that setting."
+        )
+    agents = dict(agents)
+    agents[name] = {
+        "mode": "primary",
+        "description": "Iron Jarvis: answer in text; Iron Jarvis runs every tool itself.",
+        "permission": dict(deny),
+    }
+    content = dict(content)
+    content["agent"] = agents
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(content, separators=(",", ":"))
+    # One OPENCODE_PERMISSION: an object of the user's own already there is
+    # read by `user_rules` (its keys are denied above) and replaced — every
+    # rule here says deny, so nothing of theirs is loosened.
+    env["OPENCODE_PERMISSION"] = json.dumps(deny, separators=(",", ":"))
+    return env, name
+
+
+def fell_back(out: str, err: str, agent: str) -> bool:
+    """Did ``opencode run`` refuse Iron Jarvis's agent and fall back to the
+    user's default one (its own tools on)? Its own warning: ``agent "<name>"
+    not found. Falling back to default agent`` (or "is a subagent")."""
+    needle = f'agent "{agent}"'
+    return needle in (err or "") or needle in (out or "")
+
+
+def tools_run(stdout: str) -> list[str]:
+    """The OpenCode tools a reply's JSON event stream says RAN (``tool_use``
+    events), each once. ``invalid`` — OpenCode's answer to a call of a tool
+    it does not offer — ran nothing and is left out."""
+    names: list[str] = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(evt, dict) or evt.get("type") != "tool_use":
+            continue
+        part = evt.get("part") if isinstance(evt.get("part"), dict) else {}
+        name = str(part.get("tool") or "?").strip() or "?"
+        if name != "invalid" and name not in names:
+            names.append(name)
+    return names
 
 
 def _run(
@@ -171,13 +338,19 @@ class OpencodeCliAdapter(LLMAdapter):
         # Same live-hit that moved the codex/claude adapters to stdin on
         # 2026-07-20; `opencode run` with no positional message reads its prompt
         # from piped stdin.
-        argv = [exe, "run", "--format", "json", "-m", model]
+        # v1.424.0 (D5): OpenCode's own tools OFF — its permission rules and an
+        # agent of Iron Jarvis's own, built from the user's config (read-only,
+        # off the loop) for the folder the CLI runs in (it inherits ours).
+        env, agent = await asyncio.to_thread(text_only_setup, dict(os.environ), os.getcwd())
+        argv = [exe, "run", "--format", "json", "--agent", agent, "-m", model]
         try:
             if self._runner is not None:
-                code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
+                code, out, err = await asyncio.to_thread(
+                    lambda: self._runner(argv, prompt, env=env)
+                )
             else:
                 # Stop / a closed tab kills the CLI tree, not just the await.
-                code, out, err = await run_cli(argv, prompt, timeout=_TIMEOUT_S)
+                code, out, err = await run_cli(argv, prompt, timeout=_TIMEOUT_S, env=env)
         except subprocess.TimeoutExpired as exc:
             timed_out = ProviderError(
                 f"opencode-cli: CLI timed out after {_TIMEOUT_S:.0f}s", transient=True
@@ -187,6 +360,22 @@ class OpencodeCliAdapter(LLMAdapter):
             timed_out.kind = "timeout"  # type: ignore[attr-defined]
             timed_out.failed_provider = "opencode-cli"  # type: ignore[attr-defined]
             raise timed_out from exc
+        # v1.424.0 (D5): checked BEFORE the exit code — a run that fell back to
+        # the user's own agent, or that ran a tool of OpenCode's, is said as
+        # that whatever else went wrong. Its answer is never passed on.
+        if fell_back(out, err, agent):
+            raise RuntimeError(
+                "opencode-cli: OpenCode did not take the tool-free setup Iron Jarvis "
+                "gives it and ran your default agent instead, so its answer was not "
+                "used (OpenCode's own tools may have run)."
+            )
+        ran = tools_run(out)
+        if ran:
+            raise RuntimeError(
+                "opencode-cli: OpenCode ran its own tools ("
+                + ", ".join(ran[:8])
+                + ") outside Iron Jarvis, so its answer was not used."
+            )
         if code != 0:
             detail = (err or out).strip()[:400]
             raise RuntimeError(f"opencode-cli: CLI exited {code}: {detail}")
