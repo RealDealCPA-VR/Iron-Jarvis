@@ -41,7 +41,6 @@ import contextlib
 import contextvars
 import json as _json
 import logging
-import os as _os
 import re as _re
 import threading as _threading
 import time as _time

@@ -1921,7 +1921,7 @@ def register(app: FastAPI, d) -> None:
         if not served:
             return (
                 f"'{row['name']}' is a {row['vendor_label']} account, and an account only "
-                "applies to an agent that runs on Claude Code or Codex — pick its model first"
+                "applies to an agent that runs on Claude Code, Codex or Grok — pick its model first"
             )
         if served != row["provider"]:
             return (

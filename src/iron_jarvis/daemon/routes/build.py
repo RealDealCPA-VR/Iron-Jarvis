@@ -560,7 +560,8 @@ CONTINUE_TEXT = (
 )
 ACCOUNT_OFF = "Iron-Proxy is off; turn it on in Connections first."
 ACCOUNT_UNKNOWN = (
-    "There is no Claude Code or Codex account like that in Iron-Proxy — choose one from "
+    # v1.424.0 (D6): Grok's accounts are a session's choices too.
+    "There is no Claude Code, Codex or Grok account like that in Iron-Proxy — choose one from "
     "the account list."
 )
 ACCOUNT_TURNED_OFF = (

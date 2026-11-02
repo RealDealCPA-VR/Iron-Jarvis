@@ -661,7 +661,7 @@ async def test_patch_refuses_an_unknown_or_turned_off_account_in_words(app, fake
     await enable(app)
     sid = (await _new(app, work))["id"]
     status, body = await asgi(app, "PATCH", f"/build/sessions/{sid}", {"account": "nope"})
-    assert status == 400 and body["detail"].startswith("There is no Claude Code or Codex account")
+    assert status == 400 and body["detail"].startswith("There is no Claude Code, Codex or Grok account")  # v1.424.0: Grok
     fake.profiles["c-spare"]["enabled"] = False
     await asyncio.to_thread(app.state.platform.iron_proxy.refresh_accounts)
     status, body = await asgi(app, "PATCH", f"/build/sessions/{sid}", {"account": "c-spare"})

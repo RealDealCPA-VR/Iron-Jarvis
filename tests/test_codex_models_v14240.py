@@ -25,7 +25,6 @@ fields only, no account data.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 from pathlib import Path
@@ -287,3 +286,26 @@ def test_the_fixture_carries_no_account_data():
     text = FIXTURE.read_text(encoding="utf-8").lower()
     for word in ("identity", "etag", "email", "account", "token"):
         assert word not in text
+
+
+def test_a_reading_of_another_codex_home_is_never_answered(codex_home, tmp_path, monkeypatch):
+    """The reading is keyed by the home it is OF: after ``CODEX_HOME`` moves
+    (a test's own folder, an account's home), the old list is not this one's."""
+    _with_list(codex_home)
+    assert CM.offered()
+    other = tmp_path / "other-home"
+    other.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(other))
+    assert CM.catalog() is None and CM.runs("gpt-4o") is None
+
+
+def test_with_codex_home_unset_the_suite_never_reads_the_real_one(monkeypatch):
+    """Several suites DELETE ``CODEX_HOME`` (Iron-Proxy isolation); the reader
+    then falls back to the suite's empty folder (tests/conftest.py), never
+    the developer's ``~/.codex``."""
+    from pathlib import Path as _P
+
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    assert CM.TEST_HOME_FALLBACK is not None
+    assert CM.codex_home() == _P(CM.TEST_HOME_FALLBACK)
+    assert CM.codex_home() != _P.home() / ".codex"

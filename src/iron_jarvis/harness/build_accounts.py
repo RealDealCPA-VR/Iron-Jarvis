@@ -590,7 +590,7 @@ def group_problem(svc: Any, groups: Any, kept: Any = None) -> str | None:
         return GROUP_NOT_READ
     for pid in new:
         if find(svc, pid) is None:
-            return f"there is no Claude Code or Codex account “{pid}” in Iron-Proxy"
+            return f"there is no Claude Code, Codex or Grok account “{pid}” in Iron-Proxy"
     return None
 
 
