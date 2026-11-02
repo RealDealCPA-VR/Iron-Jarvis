@@ -68,6 +68,23 @@ export interface TeamMember {
   paused: boolean;
   /** v1.395.0: its record per role it holds ({} from an older daemon). */
   records: Record<string, TeamRoleRecord>;
+  /** v1.423.0 (Team notes): its reviewers' findings over the last 30 days
+   *  (null from an older daemon, which sends none). */
+  findings: TeamFindings | null;
+}
+
+/** v1.423.0 (Team notes, Phase 1b): what became of the problems a reviewer
+ *  named in a member's work (the daemon's agents/team_findings.findings_for):
+ *  confirmed = the lead said fixed AND a later piece changed that file;
+ *  saidFixed = the lead said fixed, nothing later changed the file;
+ *  open = never answered. firstPass = the replies where a reviewer approved
+ *  the member's FIRST judged piece, of those it judged. */
+export interface TeamFindings {
+  confirmed: number;
+  didNotApply: number;
+  saidFixed: number;
+  open: number;
+  firstPass: { approved: number; of: number };
 }
 
 export interface StarterRow {
@@ -134,6 +151,43 @@ function decodeRecords(raw: unknown, roles: readonly string[]): Record<string, T
   return out;
 }
 
+const count = (v: unknown): number => {
+  const n = num(v);
+  return n === null ? 0 : Math.max(0, Math.round(n));
+};
+
+/** A member row's `findings`, defensively: an older daemon sends none (null),
+ *  and junk reads as zero. */
+export function decodeFindings(raw: unknown): TeamFindings | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const fp = rec(r.first_pass);
+  const of = count(fp?.of);
+  return {
+    confirmed: count(r.confirmed),
+    didNotApply: count(r.did_not_apply),
+    saidFixed: count(r.said_fixed),
+    open: count(r.open),
+    firstPass: { approved: Math.min(count(fp?.approved), of), of },
+  };
+}
+
+/** The member card's ONE quiet line: "Reviewers' findings (30 days):
+ *  6 confirmed, 1 did not apply · first-pass approval 3 of 7" — a part that
+ *  is zero is left out, and "" (no line at all) when everything is zero. */
+export function findingsWords(f: TeamFindings | null): string {
+  if (!f) return "";
+  const parts = [
+    f.confirmed ? `${f.confirmed} confirmed` : "",
+    f.saidFixed ? `${f.saidFixed} said fixed but not confirmed` : "",
+    f.didNotApply ? `${f.didNotApply} did not apply` : "",
+    f.open ? `${f.open} not answered` : "",
+  ].filter(Boolean);
+  const first = f.firstPass.of ? `first-pass approval ${f.firstPass.approved} of ${f.firstPass.of}` : "";
+  const body = [parts.join(", "), first].filter(Boolean).join(" · ");
+  return body ? `Reviewers' findings (30 days): ${body}` : "";
+}
+
 /** "reading: good (4 of 5 passed) · coding: no record yet" — a member's
  *  record, one role after another, in the daemon's own words ("" for none). */
 export function recordWords(m: Pick<TeamMember, "roles" | "records">): string {
@@ -163,6 +217,7 @@ export function decodeMember(raw: unknown): TeamMember | null {
     available: typeof r.available === "boolean" ? r.available : null,
     paused: r.paused === true,
     records: decodeRecords(r.records, cleanRoles(r.roles)),
+    findings: decodeFindings(r.findings),
   };
 }
 

@@ -2350,7 +2350,12 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
     and ``asked`` (``team_record.ASKED_BY_ROLE`` / ``ASKED_BY_NAME``) says
     which; the row also keeps the files the piece's session wrote
     (``team_record.piece_files``, read in the same hop off the loop). Every
-    rule above holds for a named piece as for a role's."""
+    rule above holds for a named piece as for a role's.
+
+    v1.423.0 (Team notes, Phase 1b): a ``review`` piece's report also yields
+    its FINDINGS (``agents/team_findings.record_findings``) — under exactly
+    the verdict's conditions (finished, written by the reviewer, not at low
+    trust), whether or not its last line is a verdict."""
     import asyncio
 
     from . import team_record as TR
@@ -2371,10 +2376,20 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
     try:
         row = await asyncio.to_thread(_write)
         if role == "review" and finished and row and not _runtime_wrote(report):
-            verdict = TR.verdict_of(report)
-            if verdict and not await asyncio.to_thread(_low_trust, platform.engine, session_id):
-                await asyncio.to_thread(TR.credit_review, platform.engine, scope=scope,
-                                        review_row=row, verdict=verdict)
+            if not await asyncio.to_thread(_low_trust, platform.engine, session_id):
+                verdict = TR.verdict_of(report)
+                if verdict:
+                    await asyncio.to_thread(TR.credit_review, platform.engine, scope=scope,
+                                            review_row=row, verdict=verdict)
+                # v1.423.0 (Team notes, Phase 1b): the reviewer's FINDINGS
+                # become records under exactly the verdict's conditions (a
+                # finished run, a report the reviewer wrote, not low trust) —
+                # masked, each scanned (a flagged one is dropped) and
+                # attributed to the worker whose piece wrote that path
+                # (``agents/team_findings``).
+                from . import team_findings as TF
+
+                await asyncio.to_thread(TF.record_findings, platform.engine, review_row=row, report=report)
     except Exception:  # noqa: BLE001 — a record never breaks a delegation
         log.debug("model team piece record failed", exc_info=True)
 

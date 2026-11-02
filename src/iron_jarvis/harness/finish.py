@@ -65,6 +65,17 @@ note goes to the model first, and the model answers it in one more round:
     a team lead to hand each finding to the worker who changed that file
     (:data:`TEAM_REVIEW_ASK`).
 
+    v1.423.0 (Team notes, Phase 1b): the findings become RECORDS
+    (``agents/team_findings``, stored when the review piece settles) and the
+    note asks the model to answer each on its own line — ``R1 fixed`` or
+    ``R2 does not apply: <why>`` (:data:`ANSWER_FORM_ASK`); those lines stay
+    in the reply the user keeps. Everything the model writes after a review
+    note that showed a report is that review's ANSWER WINDOW
+    (:meth:`FinishCheck.heard`), and when the reply ends
+    (:meth:`FinishCheck.record`, never at low trust) the answers settle the
+    review's findings: "fixed" is confirmed only by a later write of that
+    file.
+
 The model answers point by point; when the tests failed, a point is unmet or
 a stray file must go, it keeps working in the same reply, within the reply's
 normal step limit. The check itself never runs twice in a reply.
@@ -164,6 +175,10 @@ MAX_REVIEW_NAMED = 30
 #: :data:`MAX_FINDING_CHARS`.
 MAX_REVIEW_FINDINGS = 40
 MAX_FINDING_CHARS = 800
+#: v1.423.0 (Team notes, Phase 1b): what one review's answer window keeps of
+#: the model's answers after its note (:meth:`FinishCheck.heard`).
+MAX_ANSWER_TEXTS = 40
+MAX_ANSWER_WINDOW_CHARS = 60_000
 #: What the note says where it cut a long report's prose.
 PROSE_CUT_NOTE = "[the rest of its words are left out; every finding is kept]"
 #: v1.421.0 (A4): files in the brief's "Who changed what" list.
@@ -1939,11 +1954,20 @@ CHANGE_BEGINS = "----- the change begins -----"
 CHANGE_ENDS = "----- the change ends -----"
 #: The source a flagged piece of the change is named by (``promptguard``).
 REVIEW_CHANGE_SOURCE = "the change (team review)"
+#: v1.423.0 (Team notes, Phase 1b): the ONE form the lead answers each finding
+#: in, on its own line — plain code reads it back (``agents/team_findings.
+#: parse_answers``) and the lines stay in the reply the user keeps (unlike the
+#: "N. met" lines, :func:`drop_met_lines`).
+ANSWER_FORM_ASK = (
+    "answer the points by their R numbers, each on its own line, in exactly this form: "
+    "\"R1 fixed\" or \"R2 does not apply: <why>\"."
+)
 #: What the note says after the reviewer's report (the planner answers it).
+#: v1.423.0: the closing sentence became one answer line per finding
+#: (:data:`ANSWER_FORM_ASK`), the records' evidence.
 REVIEW_ASK = (
     "The reviewer can be wrong: check each point against the code before you change anything. "
-    "Fix what is right with your tools; in your closing sentence say which points, by their R "
-    "numbers, you fixed and which did not apply."
+    "Fix what is right with your tools. Then " + ANSWER_FORM_ASK
 )
 #: v1.403.0 (the coding-session team): the same, for a team LEAD — it holds no
 #: tool that changes a file; its workers make the fixes.
@@ -1955,8 +1979,7 @@ TEAM_REVIEW_ASK = (
     "The reviewer can be wrong: check each point against the code first. Hand each finding that "
     "is right to the worker who changed that file, by name, with its R number, the file and what "
     "to change; only when Iron Jarvis tells you that no worker can take it may you do it yourself, "
-    "and then say so. In your closing sentence say which points, by their R numbers, you had "
-    "fixed and which did not apply."
+    "and then say so. When the fixes are done, " + ANSWER_FORM_ASK
 )
 #: v1.403.0: what a SECOND review's brief adds (the change it reads is the fix).
 SECOND_REVIEW_ASK = (
@@ -2400,6 +2423,16 @@ class FinishCheck:
         #: brief and the lead's note.
         self._who: list[tuple[str, str]] = []
         self._review_low = False
+        # v1.423.0 (Team notes, Phase 1b): the review run whose report the
+        # note carries (its findings are stored under that session by
+        # ``model_team.note_piece``), the ledger mark when it settled (what
+        # the session wrote AFTER it), and one ANSWER WINDOW per review note
+        # that showed a report — what the model wrote after that note, until
+        # the next one: its "R1 fixed" lines answer THAT review's numbers
+        # (a second review's R1 is another finding).
+        self._review_child = ""
+        self._answer_mark = 0
+        self._answer_windows: list[dict[str, Any]] = []
         # v1.403.0: how many reviews this reply handed out (1 or 2), the
         # current review call's id, the ledger mark when the first review
         # settled (what the workers changed AFTER it is the second review's
@@ -2609,7 +2642,21 @@ class FinishCheck:
 
     def heard(self, text: str) -> None:
         """A model answer arrived. The FIRST one after the note is its
-        point-by-point answer."""
+        point-by-point answer.
+
+        v1.423.0 (Team notes, Phase 1b): and EVERY one after a review note
+        that showed a report is kept in that review's answer window (bounded:
+        :data:`MAX_ANSWER_TEXTS` answers, :data:`MAX_ANSWER_WINDOW_CHARS`
+        characters) — the lead answers the findings over several rounds (it
+        hands the fixes out, then writes its closing lines), and
+        :meth:`record` reads the R answers from all of them."""
+        if self._answer_windows:
+            window = self._answer_windows[-1]
+            said = str(text or "")
+            if said.strip() and len(window["texts"]) < MAX_ANSWER_TEXTS and window["chars"] < MAX_ANSWER_WINDOW_CHARS:
+                said = said[: MAX_ANSWER_WINDOW_CHARS - window["chars"]]
+                window["texts"].append(said)
+                window["chars"] += len(said)
         if not self._note_sent or self._answer_heard:
             return
         self._answer_heard = True
@@ -3352,10 +3399,16 @@ class FinishCheck:
             verdict = ""
         self._review_low = low
         self._settle_review(REVIEW_DONE, member=member, model=model, verdict=verdict, report=report)
+        # v1.423.0 (Team notes, Phase 1b): the review whose findings the next
+        # note's answers settle ("" for a low-trust run: none were stored),
+        # and where the ledger stood — what is written after it may confirm
+        # a "fixed".
+        self._review_child = child if not low else ""
+        self._answer_mark = await asyncio.to_thread(ledger_mark, self.engine)
         if self.team is not None and self.review_rounds == 1:
             # v1.403.0: what the workers change AFTER this is the second
             # review's change (``_second_review``).
-            self._review_mark = await asyncio.to_thread(ledger_mark, self.engine)
+            self._review_mark = self._answer_mark
 
     def _settle_tests(self) -> None:
         if self.tests in (TESTS_NONE,) or not self.runs:
@@ -3563,6 +3616,19 @@ class FinishCheck:
                 fenced = fence(report)
             report = str(await fenced)
         ask = TEAM_REVIEW_ASK if self.team is not None else REVIEW_ASK
+        if not any(w.get("call") == self._review_call_id for w in self._answer_windows):
+            # v1.423.0 (Team notes, Phase 1b): what the model writes from now
+            # on answers THIS review's findings. A report that was withheld
+            # (flagged) or came from a low-trust run opens a window that
+            # answers NOTHING ("" session) — the model was not shown those
+            # findings, and none were stored — so its R numbers can never be
+            # read as answers to an EARLIER review's (a second review's R1 is
+            # another finding).
+            self._answer_windows.append({
+                "call": self._review_call_id,
+                "session": self._review_child if not flagged else "",
+                "mark": int(self._answer_mark), "texts": [], "chars": 0,
+            })
         # v1.421.0 (A4): the lead routes each finding to the member who
         # changed that file — the same list the reviewer was handed.
         listed = who_changed_lines(self._who) if self._who else []
@@ -3663,11 +3729,39 @@ class FinishCheck:
             # work line says "Checked: ..."), not what a person reads. What
             # was NOT met, and the model's closing words, stay (review).
             tail = drop_met_lines(tail, len(self.points))
+        tail = self._with_answer_lines(tail)
         if not head:
             return tail if tail else final
         if not tail or tail == head:
             return head
         return head + SEPARATOR + tail
+
+    def _with_answer_lines(self, tail: str) -> str:
+        """v1.423.0 (Team notes, Phase 1b): the model's answer LINES to the
+        review's findings ("R1 fixed", "R2 does not apply: …") are what the
+        user reads to see what became of each — they are never dropped like
+        the "N. met" lines, and one the model wrote in an EARLIER round
+        after a review note (a team lead answers, then hands the fix out, then
+        a second review runs — only the last round's words are kept) is put
+        back above the closing words, once. ``tail`` unchanged when there is
+        nothing to put back. Pure; never raises."""
+        if not self._answer_windows:
+            return tail
+        try:
+            from ..agents.team_findings import answer_lines
+
+            have = {ln.strip() for ln in str(tail or "").splitlines() if ln.strip()}
+            extra: list[str] = []
+            for window in self._answer_windows:
+                for line in answer_lines("\n".join(window["texts"])):
+                    if line not in have and line not in extra:
+                        extra.append(line)
+            if not extra:
+                return tail
+            block = "\n".join(extra)
+            return f"{block}\n\n{tail}" if tail else block
+        except Exception:  # noqa: BLE001 — the reply as it was
+            return tail
 
     def _credit_team(self, verdict: str) -> int:
         """The check's verdict on the team record of this reply's helpers
@@ -3680,9 +3774,67 @@ class FinishCheck:
         except Exception:  # noqa: BLE001 — a record never breaks a reply
             return 0
 
-    async def record(self) -> dict[str, Any]:
+    def _own_writes(self, mark: int) -> list[str]:
+        """BLOCKING: the files this reply's session (and its helpers) wrote
+        with a file tool above ``mark`` — relative to the session's folder,
+        else as written. [] when unreadable."""
+        try:
+            files = read_turn_files(self.engine, self.session_id, int(mark))
+            try:
+                root = str(self.folder.resolve())
+            except (OSError, ValueError):
+                root = str(self.folder)
+            out: list[str] = []
+            for target in files.changed:
+                try:
+                    rel = os.path.relpath(str(target), root).replace("\\", "/")
+                except (OSError, ValueError):
+                    rel = str(target)
+                out.append(str(target) if rel.startswith("../") or rel == ".." else rel)
+            return out
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _settle_findings(self, low_trust: bool) -> int:
+        """v1.423.0 (Team notes, Phase 1b): BLOCKING. The R answers of each
+        review's window (``agents/team_findings.parse_answers``) settle that
+        review's still-open findings (``team_findings.settle``): "fixed" is
+        CONFIRMED only by a later piece's write of the path — or, for a
+        finding no member made, this session's own journaled write after the
+        review. NOTHING is read from a reply that ended at LOW trust (its
+        words may be an injected instruction's). Never raises."""
+        if low_trust or not self._answer_windows:
+            return 0
+        try:
+            from ..agents import team_findings as TF
+
+            settled = 0
+            for window in self._answer_windows:
+                if not window.get("session"):
+                    continue  # a review whose findings were never shown or kept
+                answers = TF.parse_answers("\n".join(window["texts"]))
+                if not answers:
+                    continue
+                mark = int(window["mark"])
+                settled += TF.settle(
+                    self.engine, review_session=window["session"], answers=answers,
+                    own_writes=lambda m=mark: self._own_writes(m), own_session=self.session_id,
+                )
+            return settled
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            log.warning("finish check: the review's findings could not be settled", exc_info=True)
+            return 0
+
+    async def record(self, *, low_trust: bool = False) -> dict[str, Any]:
         """``finish`` for the done frame / POST answer / reply line. The new
-        files are looked at on disk now: gone = removed, there = kept."""
+        files are looked at on disk now: gone = removed, there = kept.
+
+        v1.423.0 (Team notes, Phase 1b): the reply has ENDED, so the lead's
+        R answers settle the review's findings (:meth:`_settle_findings`,
+        off the loop) — unless the reply ended at LOW trust (``low_trust``,
+        the lanes' trust state: both lanes pass it, lock-step)."""
+        if self._answer_windows:
+            await asyncio.to_thread(self._settle_findings, bool(low_trust))
         self._settle_tests()
 
         def _count() -> tuple[int, int]:
@@ -4045,6 +4197,10 @@ async def start(
 
 
 __all__ = [
+    # v1.423.0 (Team notes, Phase 1b)
+    "ANSWER_FORM_ASK",
+    "MAX_ANSWER_TEXTS",
+    "MAX_ANSWER_WINDOW_CHARS",
     "CALLED_AS",
     "CHECKERS_ASK",
     "CHECKERS_HEAD",

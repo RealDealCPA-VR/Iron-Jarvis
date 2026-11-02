@@ -2,8 +2,11 @@
 
 * ``GET  /team`` → ``{roles: [{id, label}], members: [...]}`` — every custom
   agent with one or more roles, with its model, where it runs, its cost type
-  and its usage from Iron-Proxy's CACHED snapshot (never a vendor call), and
-  (v1.395.0) its RECORD per role in plain words (``records``);
+  and its usage from Iron-Proxy's CACHED snapshot (never a vendor call),
+  (v1.395.0) its RECORD per role in plain words (``records``), and (v1.423.0,
+  Team notes) its reviewers' FINDINGS over the last 30 days (``findings``:
+  ``{confirmed, did_not_apply, said_fixed, open, first_pass: {approved,
+  of}}`` — ``agents/team_findings.findings_for``; zeros when none);
 * ``GET  /team/starter?paid=0|1`` → the **Make a starter team** preview
   (``agents/model_team.starter_preview``) — NOTHING is created;
 * ``POST /team/starter {rows: [{key, name?, roles?}], paid}`` → creates the
@@ -53,13 +56,18 @@ class FromModelBody(BaseModel):
     thread_id: str = ""
 
 
-def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = None) -> dict[str, Any]:
+def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = None,
+               findings: "dict[str, Any] | None" = None) -> dict[str, Any]:
     """One member as Settings › Model team shows it. Never raises.
 
     v1.395.0: ``records`` — the member's RECORD per role it holds
     (``agents/team_record``; read for every member in one query by
     :func:`team_view`): ``{role: {runs, passed, streak, status, words}}``,
-    the words plain ("good (4 of 5 passed)", "no record yet")."""
+    the words plain ("good (4 of 5 passed)", "no record yet").
+
+    v1.423.0 (Team notes, Phase 1b): ``findings`` — ``{member: numbers}``
+    (``agents/team_findings.findings_for``, every member in one read by
+    :func:`team_view`); the row carries its member's, zeros when none."""
     facts = T.member_facts(platform, record) or {}
     provider = str(facts.get("provider") or "")
     available: bool | None = None
@@ -104,7 +112,16 @@ def member_row(platform: Any, record: Any, records: "dict[str, Any] | None" = No
         "available": available,
         "paused": bool(str(getattr(record, "paused_reason", "") or "")),
         "records": _records_view(facts.get("roles") or [], (records or {}).get(record.name) or {}),
+        "findings": _findings_view((findings or {}).get(record.name)),
     }
+
+
+def _findings_view(mine: Any) -> dict[str, Any]:
+    """A member's findings numbers as the row carries them (zeros for none
+    or anything unreadable)."""
+    from ...agents.team_findings import zeros
+
+    return mine if isinstance(mine, dict) else zeros()
 
 
 def _records_view(roles: list[str], mine: dict[str, Any]) -> dict[str, Any]:
@@ -129,10 +146,14 @@ def team_view(platform: Any) -> dict[str, Any]:
     models = {r.name: (str(r.provider).strip(), T.pinned_model(platform, r))
               for r in members if str(getattr(r, "provider", "") or "").strip()}
     records = records_for(getattr(platform, "engine", None), [r.name for r in members], "", models)
+    # v1.423.0 (Team notes, Phase 1b): the reviewers' findings, 30 days.
+    from ...agents.team_findings import findings_for
+
+    findings = findings_for(getattr(platform, "engine", None), [r.name for r in members])
     with cached_verdicts():
         return {
             "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],
-            "members": [member_row(platform, r, records) for r in members],
+            "members": [member_row(platform, r, records, findings) for r in members],
         }
 
 
