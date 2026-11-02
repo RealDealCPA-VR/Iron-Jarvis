@@ -26,6 +26,20 @@ same thing. A restored pane keeps the argv it was saved with
 Each entry carries a ``label`` for the menu; the route also says which shell
 is the ``default``. Not cached: a PowerShell installed after the daemon
 started is found at the next terminal (why this has always been a fresh look).
+
+v1.422.2 (the owner's open question, decided the cautious way): Windows
+PowerShell 5.1's script policy on a client PC is ``Restricted`` when NOBODY
+set one, which refuses every ``.ps1`` — and npm puts ``claude.ps1``,
+``codex.ps1``, ``opencode.ps1`` and ``pi.ps1`` first on ``PATH``, so the
+coding CLIs failed to start in a new terminal on such a PC (the old default,
+PowerShell 7, defaults to ``RemoteSigned`` and ran them). So a NEW Windows
+PowerShell terminal gets ``-ExecutionPolicy RemoteSigned`` — PowerShell 7's
+own default — ONLY when no script policy is set anywhere it could be
+(:func:`script_policy_unset`: group policy for the machine or the user, the
+machine's own, the user's own, or ``PSExecutionPolicyPreference`` in the
+environment). It is the PROCESS scope: that terminal only, nothing on the PC
+changes, and a group policy would still win. A policy anyone DID set (even
+``Restricted``, even ``AllSigned``) is respected and the flag is not added.
 """
 
 from __future__ import annotations
@@ -93,6 +107,62 @@ def _powershell_7() -> tuple[str | None, str | None]:
     return real, store
 
 
+#: v1.422.2: where a Windows PowerShell script policy can be SET (registry
+#: path under its hive, value name). Any of them present = someone chose.
+_POLICY_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("HKLM", r"SOFTWARE\Policies\Microsoft\Windows\PowerShell", "ExecutionPolicy"),
+    ("HKLM", r"SOFTWARE\Policies\Microsoft\Windows\PowerShell", "EnableScripts"),
+    ("HKCU", r"SOFTWARE\Policies\Microsoft\Windows\PowerShell", "ExecutionPolicy"),
+    ("HKCU", r"SOFTWARE\Policies\Microsoft\Windows\PowerShell", "EnableScripts"),
+    ("HKLM", r"SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell", "ExecutionPolicy"),
+    ("HKCU", r"SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell", "ExecutionPolicy"),
+)
+#: PowerShell 7's own default policy, given to a new Windows PowerShell
+#: terminal only when no policy is set (process scope).
+NEW_TERMINAL_POLICY = "RemoteSigned"
+
+
+def _registry_value(hive: str, path: str, name: str) -> object | None:
+    """The value, or None when it is not there. Raises OSError when the
+    registry cannot be read (the caller then changes nothing)."""
+    import winreg
+
+    root = winreg.HKEY_LOCAL_MACHINE if hive == "HKLM" else winreg.HKEY_CURRENT_USER
+    try:
+        with winreg.OpenKey(root, path) as key:
+            value, _kind = winreg.QueryValueEx(key, name)
+    except FileNotFoundError:
+        return None
+    return value
+
+
+def script_policy_unset() -> bool:
+    """True only when NO Windows PowerShell script policy is set on this PC
+    for this user (v1.422.2): no group policy, no machine or user policy, no
+    ``PSExecutionPolicyPreference``. Reads the registry only (never starts
+    PowerShell); any read it cannot do answers False — when unsure, the
+    terminal is started exactly as before. Windows only."""
+    if sys.platform != "win32":
+        return False
+    if (os.environ.get("PSExecutionPolicyPreference") or "").strip():
+        return False
+    try:
+        for hive, path, name in _POLICY_KEYS:
+            value = _registry_value(hive, path, name)
+            if value is not None and str(value).strip() != "":
+                return False
+    except Exception:  # noqa: BLE001 — unsure: change nothing
+        return False
+    return True
+
+
+def _windows_powershell_argv() -> list[str]:
+    argv = ["powershell", "-NoLogo"]
+    if script_policy_unset():
+        argv += ["-ExecutionPolicy", NEW_TERMINAL_POLICY]
+    return argv
+
+
 def available_shells() -> list[dict]:
     """Return the shells available on this machine as ``{name, argv, label}``
     dicts, the default FIRST.
@@ -110,7 +180,7 @@ def available_shells() -> list[dict]:
         real, store = _powershell_7()
         if real:
             shells.append({"name": "pwsh", "argv": [real, "-NoLogo"], "label": LABELS["pwsh"]})
-        shells.append({"name": "powershell", "argv": ["powershell", "-NoLogo"], "label": LABELS["powershell"]})
+        shells.append({"name": "powershell", "argv": _windows_powershell_argv(), "label": LABELS["powershell"]})
         if store and not real:
             shells.append({"name": "pwsh", "argv": [store, "-NoLogo"], "label": STORE_LABEL, "store": True})
         shells.append({"name": "cmd", "argv": ["cmd"], "label": LABELS["cmd"]})

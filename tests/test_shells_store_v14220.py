@@ -38,6 +38,11 @@ def pc(tmp_path, monkeypatch):
     point into ``tmp_path``."""
     pf = tmp_path / "ProgramFiles"
     pf.mkdir()
+    # v1.422.2 (moved on purpose): a script policy is SET on this test PC, so
+    # a new Windows PowerShell terminal is exactly ``powershell -NoLogo`` (the
+    # unset case is pinned in test_shells_policy_v14222.py) — the CI runner's
+    # own registry must not decide these pins.
+    monkeypatch.setattr(SH, "script_policy_unset", lambda: False)
     monkeypatch.setenv("ProgramFiles", str(pf))
     monkeypatch.setenv("ProgramW6432", str(pf))
     monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))
