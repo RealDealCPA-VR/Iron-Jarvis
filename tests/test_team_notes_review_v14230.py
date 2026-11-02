@@ -340,6 +340,62 @@ async def test_a_habit_from_a_local_only_sessions_findings_never_becomes_a_role_
         assert library.view(p.engine, str(tmp_path / f"ws{threads.index(t)}"))["proposals"] == []
 
 
+async def test_with_team_notes_off_an_accept_suggests_no_role_brief(tmp_path):
+    """Off means "no habits are suggested or shown": accepting a habit that
+    was waiting from before keeps it for its member, and suggests NO edit of
+    a role's brief (which every helper of the role would be shown)."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.harness import library
+    from tests.test_team_notes_v14230 import _accepted
+
+    app, p = _app(tmp_path)
+    p.agents_registry.register("kimi", "You are kimi.", [], provider="ollama", model="kimi", roles=["code"])
+    _seed(p, tmp_path)
+    _accepted(p, "kimi", "Run the tests before reporting a piece as done")
+    (row,) = (await TN.distill(p, WORKER)).minted
+    p.config.team_notes = False
+    r = TestClient(app).post(f"/coach/proposals/{row.id}/accept")
+    assert r.status_code == 200, r.text
+    assert TN.OFF_SENTENCE in r.json().get("note", "")
+    assert [n.text for n in TN.active_notes(p.engine, WORKER)] == [HABIT]
+    for i in range(2):
+        assert library.view(p.engine, str(tmp_path / f"ws{i}"))["proposals"] == []
+
+
+def test_a_team_notes_file_larger_than_any_iron_jarvis_writes_is_never_read_whole(plat, monkeypatch):
+    """TEAM-NOTES.md is read on every team piece's start (once a reply), on
+    GET /team and on each render. A file far larger than any Iron Jarvis
+    writes (a helper's shell can write there) is not read whole: it is the
+    user's (kept, never rewritten) and no section is built from it."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    from iron_jarvis.core.models import Session
+    from iron_jarvis.harness.helpers import BUILD_SESSION_OPTION, HELPER_ORIGIN
+    from tests.test_team_notes_v14230 import _accepted
+
+    _accepted(plat)
+    path = TN.notes_path(plat, WORKER)
+    path.write_text(TN.NOTES_TITLE + "\n\n- " + ("work carefully " * 40000) + "\n", encoding="utf-8")
+    biggest: list[int] = []
+    real = _Path.read_bytes
+
+    def spy(self):
+        data = real(self)
+        if self == path:
+            biggest.append(len(data))
+        return data
+
+    monkeypatch.setattr(_Path, "read_bytes", spy)
+    helper = Session(agent_name=f"custom:{WORKER}", origin=HELPER_ORIGIN,
+                     options_json=_json.dumps({BUILD_SESSION_OPTION: "t-big"}))
+    assert TN.habits_for_run(plat, helper) == ""
+    assert TN.hand_edited(plat, WORKER) is True
+    assert TN.render(plat, WORKER).state == "kept"
+    assert biggest == [], f"read the whole file: {biggest}"
+
+
 # --------------------------------------------------------------------------- #
 # 4. the name rule is the WHOLE name
 # --------------------------------------------------------------------------- #

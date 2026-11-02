@@ -1322,12 +1322,24 @@ def render_text(habits: Iterable[str]) -> str:
     return "\n".join(lines + body).rstrip("\n") + "\n"
 
 
+#: v1.423.0 review: TEAM-NOTES.md is read at most this many bytes. Iron
+#: Jarvis writes one line per accepted habit (≤ ~210 bytes each); a file
+#: larger than this is the user's (or a helper's shell wrote it) — read as
+#: unreadable: kept as it is, never rewritten, no section built from it. It
+#: was read WHOLE on every team piece's start, GET /team and each render.
+NOTES_READ_BYTES = 256 * 1024
+
+
 def _read(path: Any) -> "str | None":
     """The file's text (CRLF read as LF, a BOM dropped), or None when there
-    is none or it cannot be read as UTF-8 text."""
+    is none, it cannot be read as UTF-8 text, or it is longer than
+    :data:`NOTES_READ_BYTES` (never read whole)."""
     try:
-        data = path.read_bytes()
+        with path.open("rb") as fh:
+            data = fh.read(NOTES_READ_BYTES + 1)
     except OSError:
+        return None
+    if len(data) > NOTES_READ_BYTES:
         return None
     try:
         text = data.decode("utf-8")
@@ -1486,7 +1498,9 @@ def accept(platform: Any, proposal_id: str) -> Accepted:
         sentences.append(OFF_SENTENCE)
     lib_rows: list[Any] = []
     try:
-        minted = role_edit_for(platform, note)
+        # v1.423.0 review: off means NO habit is suggested — a role brief's
+        # edit (shown to every helper of the role) included.
+        minted = role_edit_for(platform, note) if _on(platform) else None
         if minted is not None:
             lib_rows.append(minted)
     except Exception:  # noqa: BLE001 — a suggestion never breaks the Accept
