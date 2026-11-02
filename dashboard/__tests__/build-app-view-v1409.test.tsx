@@ -515,11 +515,11 @@ describe("an approval, in the composer's place", () => {
     await screen.findByTestId("code-ask");
     (document.activeElement as HTMLElement | null)?.blur();
     // A key in the first moment does nothing.
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
     expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
     await act(() => new Promise((r) => setTimeout(r, ARM_MS)));
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
     await waitFor(() =>
       expect(H.posts.find((p) => p.path.endsWith("/answer"))?.body).toEqual({ request_id: "ask-1", decision: "allow" }),
     );
@@ -546,7 +546,7 @@ describe("an approval, in the composer's place", () => {
     // From the card itself and from the page body.
     fireEvent.keyDown(card, { key: "Enter" });
     (document.activeElement as HTMLElement | null)?.blur();
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
     await act(() => new Promise((r) => setTimeout(r, 30)));
     expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
     fireEvent.keyDown(window, { key: "Escape" });
@@ -1259,7 +1259,7 @@ describe("review: Full access cannot be given by a held or doubled key", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
     await pause(30);
     expect(H.posts.filter((p) => p.path.endsWith("/answer"))).toHaveLength(0);
   });

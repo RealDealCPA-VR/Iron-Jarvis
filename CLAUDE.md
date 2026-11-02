@@ -13387,6 +13387,18 @@ does not need a bump, stop and bump it.
   `test_process_hygiene_v1333.ALLOWED_RAW_SPAWNS` (+ `codehost.py`),
   `test_reliability_v1226_boot` (activity keys),
   `test_update_rehearsal_v1338` (older schema drops `low_trust` too).
+  v1.422.1 (test-only): v1.422.0's master Tests run went red on
+  `build-app-answers-v1417` "Enter allows a once-only card ONCE" (it had
+  failed the same way on 2026-10-31). The Build › Code fixtures' stream ends
+  at once, so the view re-reads every 2 s; a SLOW re-read briefly drops the
+  card, the box takes the caret ("the last question answered"), and the card
+  that comes back takes focus from it — a key sent to `window` then never
+  reaches the card (its window listener answers only when nothing is
+  focused). Every Enter in those tests is now pressed where a real key goes
+  (`document.activeElement ?? document.body`): `build-app-answers-v1417`,
+  `build-app-view-v1409` (4), `build-app-pi-v1411`. Holding the re-reads
+  after the card's first show 400 ms reproduced CI's exact error on the old
+  press; the safety-card and Full-access mutations still go red.
 
 ## Map (where things live)
 

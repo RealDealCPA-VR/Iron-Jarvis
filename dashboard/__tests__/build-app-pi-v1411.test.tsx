@@ -353,7 +353,7 @@ describe("the view", () => {
     // Moved on purpose: Chat › Code's rule — no safety reason, Enter allows once.
     expect(within(card).getByTestId("code-ask-keys").textContent).toBe("Enter to allow once · Esc to deny");
     (document.activeElement as HTMLElement | null)?.blur();
-    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" }); // v1.422.1: where a real key goes
     await waitFor(() =>
       expect(H.posts.find((p) => p.path === "/build/app/sessions/p1/answer")?.body).toEqual({
         request_id: "ask-1",

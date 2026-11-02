@@ -272,8 +272,16 @@ describe("Enter is predictable (C1.7)", () => {
     // the Tests runner (v1.418.1: `expected [] to deeply equal [...]`). Press
     // until the answer is posted — and only while nothing has been posted,
     // so a slow answer is never followed by a second press.
+    // v1.422.1: press where a REAL key goes (the focused element, else the
+    // page). This fixture's stream ends at once, so the view re-reads every
+    // 2 s; a slow re-read briefly drops the card, the message box takes the
+    // caret ("the last question answered"), and the card that comes back
+    // takes focus from it. A key sent to `window` then never reaches the
+    // card (its window listener only answers when nothing is focused) — CI's
+    // same error again on v1.422.0's master run. Holding the later re-reads
+    // 400 ms reproduces it on the old press; a real key reaches the card.
     await waitFor(() => {
-      if (answers().length === 0) fireEvent.keyDown(window, { key: "Enter" });
+      if (answers().length === 0) fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" });
       expect(answers()).toEqual([{ request_id: "ask-9", decision: "allow" }]);
     }, { timeout: 8_000, interval: 100 });
   });
@@ -285,7 +293,9 @@ describe("Enter is predictable (C1.7)", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     await pause(ARM_MS);
     expect(screen.getByTestId("code-ask-keys").textContent).toBe("Click Allow once to allow it · Esc to deny");
-    fireEvent.keyDown(window, { key: "Enter" });
+    // v1.422.1: where a real key goes (see the test above) — a press the card
+    // never heard would pass this test for the wrong reason.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Enter" });
     await pause(30);
     expect(answers()).toEqual([]);
     const plain = decodeCodeEvent({ ...once, once_only: false }) as Extract<CodeEvent, { type: "approval" }>;
