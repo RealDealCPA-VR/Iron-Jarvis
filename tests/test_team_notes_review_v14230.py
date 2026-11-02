@@ -396,6 +396,49 @@ def test_a_team_notes_file_larger_than_any_iron_jarvis_writes_is_never_read_whol
     assert biggest == [], f"read the whole file: {biggest}"
 
 
+def test_a_declined_role_brief_edit_rests_fourteen_days_and_the_open_limit_holds(tmp_path):
+    """The library's own rules hold for a role brief: a declined edit is not
+    suggested again for 14 days (then it may be), one already waiting is not
+    suggested twice, and a folder with its open limit reached gets none."""
+    from datetime import timedelta
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.ids import utcnow
+    from iron_jarvis.harness import library
+    from iron_jarvis.harness.library_models import HarnessLibraryRecord
+
+    app, p = _app(tmp_path)
+    threads = _seed(p, tmp_path)
+
+    def propose():
+        return library.propose_role_brief_edit(p, thread_id=threads[1], role="code", line=HABIT, why="w",
+                                               evidence={})
+
+    row, why = propose()
+    assert row is not None, why
+    assert propose() == (None, library.REASON_SUPPRESSED)  # waiting already
+    library.decline(p.engine, row.id)
+    assert propose() == (None, library.REASON_SUPPRESSED)  # declined: rests
+    with session_scope(p.engine) as db:
+        live = db.get(HarnessLibraryRecord, row.id)
+        live.decided_at = utcnow() - timedelta(days=15)
+        db.add(live)
+        db.commit()
+    again, why = propose()
+    assert again is not None, why  # 14 days later it may be suggested again
+    for i in range(library.OPEN_LIMIT - 1):
+        library._mint(p.engine, HarnessLibraryRecord(
+            folder_key=again.folder_key, folder=again.folder, kind=library.KIND_LESSON, text=f"l{i}",
+            signature=f"s{i}", thread_id=threads[1], turn_id="",
+        ))
+    library.decline(p.engine, again.id)
+    library._mint(p.engine, HarnessLibraryRecord(
+        folder_key=again.folder_key, folder=again.folder, kind=library.KIND_LESSON, text="last",
+        signature="s-last", thread_id=threads[1], turn_id="",
+    ))
+    assert propose() == (None, library.REASON_FULL)
+
+
 # --------------------------------------------------------------------------- #
 # 4. the name rule is the WHOLE name
 # --------------------------------------------------------------------------- #
