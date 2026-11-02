@@ -145,6 +145,8 @@ async def distill_or_excerpt(
             note=(
                 "no real model connected — stored a verbatim excerpt, not a"
                 " distillation"
+                # v1.424.0 review (D1): names a key left out by the money rule.
+                + (getattr(d, "_paid_only_note", None) or (lambda: ""))()
             ),
         )
 

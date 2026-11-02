@@ -2872,6 +2872,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
         cands = _failover_candidates(exclude)
         return cands[0] if cands else (None, None)
 
+    def _paid_only_note(exclude: str = "mock") -> str:
+        """v1.424.0 review (the owner's decision D1): the refusals at the end of
+        a ``_failover_adapter`` hop said "connect a model on the Connections
+        page" / "no real model connected" even when a pay-per-use key WAS
+        connected and was left out by the money rule — the user went to a page
+        that showed it connected. When the hop found nothing BECAUSE of that
+        rule, this is " " + the one D1 sentence naming what it did not use
+        (``providers/billing.not_moved_sentence``), else "" (byte-identical).
+        In memory and cheap (the same walk the hop made). Never raises."""
+        try:
+            from ..providers.billing import not_moved_sentence
+
+            left: list[str] = []
+            if _failover_candidates(exclude, left_out=left):
+                return ""
+            note = not_moved_sentence(left, platform.providers)
+            return f" {note}" if note else ""
+        except Exception:  # noqa: BLE001 — wording only
+            return ""
+
     async def _one_shot_complete(provider: str, adapter, *, system: str, messages):
         """Complete a ONE-SHOT utility call (terminal assist / workflow builder)
         with retry-on-transient, then CROSS-PROVIDER failover when the provider
@@ -3206,7 +3226,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             if adapter is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="connect a model on the Connections page to build workflows",
+                    detail="connect a model on the Connections page to build workflows"
+                    + _paid_only_note(),
                 )
 
         system = (
@@ -3538,6 +3559,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _maybe_autopromote_default=_maybe_autopromote_default,
         _cu_status=_cu_status,
         _failover_adapter=_failover_adapter,
+        _paid_only_note=_paid_only_note,
         _one_shot_complete=_one_shot_complete,
         _skill_distill_complete=_skill_distill_complete,
         _compaction_complete=_compaction_complete,

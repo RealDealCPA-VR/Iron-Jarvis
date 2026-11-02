@@ -137,18 +137,26 @@ def test_share_compact_with_real_adapter(tmp_path):
 
 def test_share_compact_mock_default_fails_over_to_real(tmp_path):
     """Default provider mock + a connected real provider: the digest must come
-    from the REAL adapter (fabricated mock digests destroy trust)."""
+    from the REAL adapter (fabricated mock digests destroy trust).
+
+    v1.424.0 (the owner's decision D1, MOVED ON PURPOSE in review): the real
+    provider it hops to is a SUBSCRIPTION (Claude Code). The demo-model hop
+    (``_failover_adapter("mock")``) never reaches a key that bills per use —
+    nobody chose one — so with only an Anthropic API key connected the digest
+    is refused, and the refusal names the key it did not use (it said only
+    "connect a model" while one was connected)."""
     from iron_jarvis.providers.adapters.mock import MockLLMAdapter
 
     client = _client(tmp_path)
     tid = _seed(client)
     fake = _FakeAdapter()
+    fake.provider = "claude-cli"
     mgr = client.app.state.platform.providers
     real_get, real_avail = mgr.get, mgr.available
-    mgr.available = lambda p: p == "anthropic" or real_avail(p)
+    mgr.available = lambda p: p == "claude-cli" or real_avail(p)
     mgr.get = (
         lambda provider, model=None: fake
-        if provider == "anthropic"
+        if provider == "claude-cli"
         else real_get(provider, model)
     )
     resolved = mgr.get("mock")
@@ -156,8 +164,33 @@ def test_share_compact_mock_default_fails_over_to_real(tmp_path):
     r = client.post(f"/chat/threads/{tid}/share", json={"mode": "compact"})
     assert r.status_code == 200
     out = r.json()
-    assert out["provider"] == "anthropic"
+    assert out["provider"] == "claude-cli"
     assert "Deadline confirmed: March 16." in out["content"]
+
+
+def test_share_compact_mock_default_never_spends_a_key_nobody_chose(tmp_path):
+    """v1.424.0 (decision D1): the old target of the test above, an API key
+    that bills per use, is never used for a demo-model default — and the
+    refusal names it."""
+    client = _client(tmp_path)
+    tid = _seed(client)
+    fake = _FakeAdapter()
+    mgr = client.app.state.platform.providers
+    real_get, real_avail = mgr.get, mgr.available
+    mgr.inherited_from = lambda p: None  # a real key, not a CLI-served name
+    mgr.available = lambda p: p == "anthropic" or real_avail(p)
+    mgr.get = (
+        lambda provider, model=None: fake
+        if provider == "anthropic"
+        else real_get(provider, model)
+    )
+    r = client.post(f"/chat/threads/{tid}/share", json={"mode": "compact"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"].endswith(
+        "Iron Jarvis didn't switch to Anthropic, which bills per use, because you "
+        "didn't choose a pay-per-use model for this."
+    ), r.json()
+    assert fake.calls == []
 
 
 def test_share_compact_empty_digest_is_422(tmp_path):

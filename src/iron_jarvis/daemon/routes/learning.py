@@ -44,7 +44,8 @@ def register(app: FastAPI, d) -> None:
             return out
         adapter, used = d._failover_adapter("mock")
         if adapter is None:
-            out["note"] = "no real model connected — deterministic dedup only"
+            # v1.424.0 review (D1): names a key left out by the money rule.
+            out["note"] = "no real model connected — deterministic dedup only" + (getattr(d, "_paid_only_note", None) or (lambda: ""))()
             return out
 
         from ...providers.adapters.base import LLMMessage
@@ -295,6 +296,8 @@ def register(app: FastAPI, d) -> None:
                             "distilling needs a real model — connect one on the "
                             "Connections page, or paste your model's memory "
                             "LIST instead (that works offline)"
+                            # v1.424.0 review (D1): names a key left out.
+                            + (getattr(d, "_paid_only_note", None) or (lambda: ""))()
                         ),
                     )
             try:

@@ -89,3 +89,73 @@ def test_nothing_left_out_keeps_the_old_words(platform, monkeypatch):
         "the model answering this turn cannot accept images and no connected provider can (ollama)"
     ), reason
     assert "bills per use" not in reason
+
+
+# --------------------------------------------------------------------------- #
+# 2. a refusal never says "connect a model" in silence when one IS connected
+# --------------------------------------------------------------------------- #
+#
+# D1 made ``_failover_adapter("mock")`` (the hop a background utility makes
+# when the default is the demo model) leave every pay-per-use key out — the
+# owner's rule. But the refusals at the end of that hop still said only
+# "connect a model on the Connections page …" / "no real model connected":
+# a user with an OpenAI key connected was told to connect a model, and went
+# to a page that showed it connected. Each now carries the one D1 sentence
+# naming the key it did not use (``d._paid_only_note``); byte-identical when
+# nothing was left out.
+
+SENTENCE_ANTHROPIC = (
+    "Iron Jarvis didn't switch to Anthropic, which bills per use, because you "
+    "didn't choose a pay-per-use model for this."
+)
+
+
+class _Key:
+    provider, model, _endpoint = "anthropic", "claude-x", ""
+
+    def capabilities(self):
+        return {"tool_use": True, "vision": True}
+
+    async def complete(self, **kw):  # pragma: no cover — never reached
+        raise AssertionError("a pay-per-use key the user never chose was called")
+
+
+@pytest.fixture
+def demo_default_with_a_key(tmp_path, monkeypatch):
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    assert platform.config.default_provider == "mock"
+    key = _Key()
+    real_get = platform.providers.get
+    monkeypatch.setattr(platform.providers, "inherited_from", lambda name: None)
+    monkeypatch.setattr(
+        platform.providers, "available", lambda name, *a, **k: name in ("anthropic", "mock")
+    )
+    monkeypatch.setattr(
+        platform.providers, "get",
+        lambda name="", model=None, *a, **k: key if name == "anthropic" else real_get(name, model),
+    )
+    return app
+
+
+def test_the_workflow_builder_names_the_key_it_did_not_use(demo_default_with_a_key):
+    r = TestClient(demo_default_with_a_key).post("/workflows/generate", json={"description": "x"})
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"].endswith(SENTENCE_ANTHROPIC), r.json()
+
+
+def test_the_lesson_distill_note_names_the_key_it_did_not_use(demo_default_with_a_key):
+    r = TestClient(demo_default_with_a_key).post("/lessons/compact", json={"distill": True})
+    if r.status_code == 404:  # pragma: no cover — the route moved
+        pytest.skip("no /lessons/compact route")
+    assert r.status_code == 200, r.text
+    assert r.json().get("note", "").endswith(SENTENCE_ANTHROPIC), r.json()
+
+
+def test_nothing_left_out_keeps_the_old_refusal(tmp_path, monkeypatch):
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    monkeypatch.setattr(platform.providers, "available", lambda name, *a, **k: name == "mock")
+    r = TestClient(app).post("/workflows/generate", json={"description": "x"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "connect a model on the Connections page to build workflows"

@@ -937,7 +937,9 @@ def register(app: FastAPI, d) -> None:
 
         adapter, used = d._failover_adapter("mock")
         if adapter is None:
-            return {"tools": [], "note": "connect a model to auto-detect tool needs"}
+            # v1.424.0 review (D1): names a key left out by the money rule.
+            paid = (getattr(d, "_paid_only_note", None) or (lambda: ""))()
+            return {"tools": [], "note": "connect a model to auto-detect tool needs" + paid}
         catalog = "\n".join(f"- {n}: {v['description'][:120]}" for n, v in askable.items())
         system = (
             "You choose which tools an agent will need for a task. Reply with "

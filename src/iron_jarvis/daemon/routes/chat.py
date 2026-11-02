@@ -2353,7 +2353,9 @@ def register(app: FastAPI, d) -> None:
                     raise HTTPException(
                         status_code=400,
                         detail="connect a model on the Connections page to compact chats"
-                        " — the full transcript works offline",
+                        " — the full transcript works offline"
+                        # v1.424.0 review (D1): names a key left out by the rule.
+                        + (getattr(d, "_paid_only_note", None) or (lambda: ""))(),
                     )
             clipped = transcript
             if len(clipped) > _SHARE_COMPACT_INPUT:
@@ -2557,7 +2559,9 @@ def register(app: FastAPI, d) -> None:
             if adapter is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="connect a model on the Connections page to turn chats into workflows",
+                    detail="connect a model on the Connections page to turn chats into workflows"
+                    # v1.424.0 review (D1): names a key left out by the rule.
+                    + (getattr(d, "_paid_only_note", None) or (lambda: ""))(),
                 )
 
         title = (r.title or "Chat").strip() or "Chat"
