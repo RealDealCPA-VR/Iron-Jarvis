@@ -599,7 +599,7 @@ def _walk(command: str, args: list[str]) -> tuple[str, list[str], bool]:
     revision or a path (not an option's value). Pure."""
     if command not in ALLOWED:
         return (f"git_read runs only read-only git commands ({', '.join(ALLOWED)}); "
-                f"\"{command or '(none)'}\" is not one of them."), [], False
+                f"\"{_shown(command) or '(none)'}\" is not one of them."), [], False
     if len(args) > MAX_ARGS:
         return f"git_read takes at most {MAX_ARGS} words after the command.", [], False
     used_names: list[str] = []

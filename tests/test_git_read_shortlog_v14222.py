@@ -76,6 +76,13 @@ def test_head_is_added_only_when_no_revision_is_named(args, expect):
             assert G._default_revision(command, args) == args
 
 
+def test_a_command_it_does_not_run_is_named_short():
+    """Review: the command word was echoed whole (a 300-character word made a
+    458-character refusal); like an option, it is cut at 40 characters."""
+    said = G.refusal("x" * 300, [])
+    assert said and len(said) < 260 and "x" * 41 not in said, len(said)
+
+
 async def test_a_shortlog_that_still_prints_nothing_says_why(repo):
     # A path before "--" reads as the model's own revision-or-path: git still
     # reads its (empty) input; the answer says so instead of "nothing".
