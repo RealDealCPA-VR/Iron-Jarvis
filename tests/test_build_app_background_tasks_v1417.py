@@ -103,6 +103,9 @@ async def test_a_message_is_still_welcome_while_helpers_run(app, work, tmp_path,
 async def test_the_pool_never_evicts_a_session_whose_helpers_run(app, work, tmp_path, monkeypatch):
     use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
     monkeypatch.setattr(S, "MAX_LIVE", 1)
+    # v1.425.0 (B7, moved on purpose): a message with no place WAITS for one
+    # (POOL_WAIT_S) before it is refused; a short wait here.
+    monkeypatch.setattr(S, "POOL_WAIT_S", 0.5)
     svc = S.service_for(app.state.platform)
     async with client(app) as c:
         a = await new_session(c, work)

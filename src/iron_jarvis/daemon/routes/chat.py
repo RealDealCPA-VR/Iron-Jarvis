@@ -6606,6 +6606,16 @@ async def chat_stream(
                 def _own(i: int) -> dict[str, int]:
                     return {"ms": _own_ms[i]} if _timeline and i in _own_ms else {}
 
+                if _finish is not None:
+                    # v1.425.0 (Wave 5, C1): the finish check's first snapshot
+                    # is read BESIDE the reply's first model call; no tool of
+                    # the reply runs before it is done — still the folder as
+                    # it was before any tool ran. Raced against Stop like
+                    # every slow stage (a stopped reply's calls are then
+                    # never started: `_stall.run_step`). MIRROR NOTE
+                    # (lock-step): chat_turn.run_chat_turn waits at the same
+                    # seam.
+                    await _prep_step(_finish.ready())
                 async with contextlib.aclosing(
                     # v1.324.0: the turn's side queue — a pack's frames are
                     # yielded WHILE its tool runs, drained before it settles.

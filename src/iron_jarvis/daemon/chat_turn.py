@@ -10735,6 +10735,13 @@ async def run_chat_turn(
                     )
                 _slots[i] = {"result": result, "content": content, "ran": ran}
 
+            if _finish is not None:
+                # v1.425.0 (Wave 5, C1): the finish check's first snapshot is
+                # read BESIDE the reply's first model call; no tool runs
+                # before it is done (still the folder before any tool ran).
+                # MIRROR NOTE (lock-step): the stream lane waits at the same
+                # seam.
+                await _finish.ready()
             async with contextlib.aclosing(
                 # v1.372.0: a harness turn's helpers run together (lock-step
                 # with the stream lane's `together=`).

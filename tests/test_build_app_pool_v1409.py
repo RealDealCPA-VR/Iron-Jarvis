@@ -105,11 +105,15 @@ async def test_the_pool_stops_the_oldest_idle_process_and_refuses_when_all_are_b
         await _say(c, cc["id"], "tc")
         assert svc.live[a["id"]].proc is None, "the oldest idle process was not the one stopped"
         assert svc.live[b["id"]].running and svc.live[cc["id"]].running
-        # every live one busy (waiting on the user): a fourth is refused in words
+        # every live one busy (waiting on the user): a fourth WAITS for a
+        # place (v1.425.0, B7 — moved on purpose: it was refused at once),
+        # says so, and is refused in words only when none comes in time.
+        monkeypatch.setattr(S, "POOL_WAIT_S", 0.5)
         for sid in (b["id"], cc["id"]):
             svc.live[sid].asks["x"] = S.Ask("x", "approval", "Write")
         evs = await _say(c, a["id"], "ta2")
         assert evs[-1]["stop"] == "failed"
+        assert any(e["type"] == "notice" and e["text"] == S.W.POOL_WAITING for e in evs)
         assert any(e["type"] == "error" and "Six" in e["title"] for e in evs)
         for sid in (b["id"], cc["id"]):
             svc.live[sid].asks.clear()

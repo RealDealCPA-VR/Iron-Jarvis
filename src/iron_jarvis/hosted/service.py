@@ -36,9 +36,13 @@ refused in words. Stopping a process always ends its running turn
 ("interrupted") and closes its open cards.
 
 THE POOL: at most :data:`MAX_LIVE` harness processes; when a new one is needed
-the oldest IDLE one (no turn, no open ask) is stopped first, else the start is
-refused in words. A process with no turn for :data:`IDLE_S` is stopped by the
-reaper; the next message starts it again RESUMING THE SAME harness session
+the oldest IDLE one (no turn, no open ask) is stopped first, else the start
+WAITS for one to finish (v1.425.0, B7 — said once; refused in words after
+:data:`POOL_WAIT_S`). The pool's lock is held only to decide (a starting
+session holds its place, ``LiveSession.starting``), never while a tool
+starts, so one session's slow start never holds another's message (v1.425.0).
+A process with no turn for :data:`IDLE_S` is stopped by the reaper; the next
+message starts it again RESUMING THE SAME harness session
 (``claude --resume <id>`` / ``thread/resume``). Archive, delete and the
 daemon's shutdown stop it. Every stop is a tree kill, off the loop.
 
@@ -110,6 +114,13 @@ LISTED_MODELS: tuple[str, ...] = (PI, OPENCODE, GROK)
 ONLY_WHEN_INSTALLED: tuple[str, ...] = (GROK,)
 #: At most this many harness processes at once.
 MAX_LIVE = 6
+#: v1.425.0 (Wave 5, B7): with every place taken by a session that is working
+#: (none can be stopped), a new message WAITS this long for one to finish — the
+#: idle reaper's own period — before it is refused in words.
+POOL_WAIT_S = 15 * 60.0
+#: ...and looks again at least this often (a tool's background work ending is
+#: not announced).
+POOL_RECHECK_S = 5.0
 #: A process with no turn for this long is stopped by the reaper.
 IDLE_S = 15 * 60.0
 #: How often the reaper looks.
@@ -192,6 +203,12 @@ def typable_sid(harness: str, hid: str) -> bool:
 
 STOPPED_TITLE = "Iron Jarvis stopped while this was working"
 STOPPED_FIX = "Send the message again — the conversation is kept."
+
+
+class _StoppedWhileWaiting(Exception):
+    """v1.425.0 (B7): the user pressed Stop while the message waited for a
+    place in the pool — the turn already ended ("interrupted"), nothing was
+    started, nothing is said again."""
 
 
 class Refused(Exception):
@@ -618,6 +635,12 @@ class HostedTurn:
         self._chars = 0
         #: True once the turn's end is being written (the done follows).
         self.ending = False
+        #: v1.425.0 (review, B7): True from the moment ``_drive`` takes this
+        #: message until it hands it to the tool (``send_user``) — while it
+        #: waits for a place in the pool or its tool STARTS (the handshake
+        #: included). A Stop then ends the turn itself: the tool has nothing to
+        #: interrupt. False for every turn that did not begin in ``_drive``.
+        self.unsent = False
 
     @property
     def running(self) -> bool:
@@ -684,6 +707,12 @@ class LiveSession:
         #: owned by a reply or not) — the background-work bound reads it.
         self.last_heard = self.last_active
         self.lock = asyncio.Lock()
+        #: v1.425.0 (Wave 5, B7): this session holds a place in the pool while
+        #: its tool STARTS (decided under the pool's lock, which the start no
+        #: longer holds), and the conversation it starts on — never a victim,
+        #: never a second process on the same conversation.
+        self.starting = False
+        self.starting_conv = ""
         #: The process must restart before the next message (an effort change).
         self.restart = False
         self.limit: Any = None
@@ -799,6 +828,15 @@ class LiveSession:
                 or self.working_alone)
 
 
+def _stoppable(lv: "LiveSession", now: float) -> bool:
+    """v1.425.0 (Wave 5, B7): may the pool stop this session to make room?
+    Only an IDLE one — its process up, no start in flight, no reply running,
+    no card open, nothing claimed, no background work (the pool's rules since
+    v1.409.0 / v1.417.0; :func:`programs.evict_pick` then puts one that serves
+    a program, or that the user looks at, last)."""
+    return lv.running and not lv.starting and not lv.busy and not lv.keeps_working(now)
+
+
 # --------------------------------------------------------------------------- #
 # The service
 # --------------------------------------------------------------------------- #
@@ -813,6 +851,8 @@ class HostedService:
         self._reaper: asyncio.Task | None = None
         self._closing = False
         self._pool_lock: asyncio.Lock | None = None
+        #: v1.425.0 (B7): set when a place in the pool may have come free.
+        self._room: asyncio.Event | None = None
         #: The model list a Pi process last said, kept for the next listing.
         self._pi_catalog = self.home / "hosted" / "pi_models.json"
         #: The model list an OpenCode process last said (v1.413.0).
@@ -1712,6 +1752,11 @@ class HostedService:
             await asyncio.to_thread(store.delete, self.engine, sid)
             await asyncio.to_thread(self._drop_own_folder, row)
             moved = await asyncio.to_thread(self._trash_events, sid)
+            # v1.425.0 (C3): the session's kept index (a cache of its folder,
+            # ``panes.kept_index``) goes with it.
+            from . import panes as PN
+
+            await asyncio.to_thread(PN.forget_kept_index, self.home, sid)
         finally:
             live.claim = ""
         return {"ok": True, "deleted": sid, "events_moved_to": moved}
@@ -1764,31 +1809,121 @@ class HostedService:
             # v1.412.0 review: Windows says "The directory name is invalid"
             # (WinError 267) and that read as the tool's fault.
             raise Refused(W.FOLDER_MISSING.format(folder=row.folder))
-        async with self._lock():
-            # Another row's process on this very conversation (a race the
-            # turn's own check could miss): never a second process.
-            for other in self.live.values():
-                if other is not live and other.running and other.driver is not None \
-                        and row.harness_session_id and other.driver.session_id == row.harness_session_id:
-                    raise Refused(W.HELD_BY_ROW)
-            others = [lv for lv in self.live.values() if lv is not live and lv.running]
-            if len(others) >= MAX_LIVE:
-                now = self.clock()
-                # v1.417.0 review: least recently HEARD first, like the reaper
-                # (a reply the tool started by itself owns no turn).
-                idle = [lv for lv in others if not lv.busy and not lv.keeps_working(now)]
-                if not idle:
-                    raise Refused(W.POOL_FULL)
-                # v1.422.0 (B4): a session running a program it started that
-                # serves (a dev server) is picked LAST, one the user looks at
-                # next-to-last — and when one must go, what it ran is SAID.
-                readings = await PG.read_many(idle)
-                victim = PG.evict_pick(idle, readings, now, key=lambda lv: max(lv.last_active, lv.last_heard))
+        # v1.425.0 (Wave 5, B7): the pool's lock is held only to DECIDE — the
+        # slot is reserved for this session (``live.starting``) and, when the
+        # pool is full, its idle victim chosen — never while a tool starts
+        # (up to a minute for a cold Claude Code: every other session's
+        # message used to wait behind it).
+        victim, readings = await self._reserve_slot(live, row)
+        try:
+            if victim is not None:
+                # Right after the decision, with no wait between: the victim
+                # stops counting the moment its stop begins (``live.proc`` is
+                # cleared before the stop's first wait).
                 await self._stop_process(victim)
                 victim.stopped_why = "evicted"  # v1.417.0 (C4.7)
                 self._said_stopped(victim, PG.known_programs(readings.get(victim.sid), victim), why="evicted")
             await self._start_process(live, row, argv0)
+        finally:
+            live.starting, live.starting_conv = False, ""
+            self._room_changed()
         self._ensure_reaper()
+
+    def _holding_places(self, live: LiveSession) -> list[LiveSession]:
+        """v1.425.0 (B7): the OTHER sessions holding a place in the pool — a
+        process, or a start in flight (``starting``)."""
+        return [lv for lv in self.live.values() if lv is not live and (lv.running or lv.starting)]
+
+    def _room_event(self) -> asyncio.Event:
+        """v1.425.0 (B7): the event the NEXT change of the pool sets. A waiter
+        takes it BEFORE it looks, so a change after its look always wakes it
+        (an event is never cleared: each change sets the current one and
+        leaves a fresh one for later waiters)."""
+        if self._room is None:
+            self._room = asyncio.Event()
+        return self._room
+
+    def _room_changed(self) -> None:
+        """v1.425.0 (B7): a slot may have come free (a reply ended, a process
+        stopped, a start finished) — a message waiting for room looks again."""
+        if self._room is not None:
+            self._room.set()
+            self._room = asyncio.Event()
+
+    async def _reserve_slot(self, live: LiveSession, row: Any) -> tuple[Any, dict[str, Any]]:
+        """v1.425.0 (Wave 5, B7): a place in the pool for this session's
+        process — ``(victim, readings)``: an idle session to stop first (the
+        pool's own order, ``programs.evict_pick``), or None. Decided under the
+        pool's lock, which is never held while a tool starts; a session
+        STARTING holds its slot (``live.starting``) and is never a victim.
+
+        THE SEVENTH SESSION MAKES ROOM: with every place taken it stops the
+        least recently used IDLE session, as the pool always did — never one
+        that works, keeps background work, or (since this change) is still
+        starting; one that serves a program or that the user looks at goes
+        last. When NONE can stop (all six are working), the message WAITS for
+        one to finish — said once — instead of being refused at once, and is
+        refused only after :data:`POOL_WAIT_S` (the old words). A Stop ends
+        the wait (the turn's end wakes it) and nothing is started."""
+        waited = False
+        deadline = time.monotonic() + POOL_WAIT_S
+        turn = live.turn  # the message this start is for (``_start_turn_in`` set it)
+        while True:
+            if turn is not None and not turn.running:
+                raise _StoppedWhileWaiting()
+            room = self._room_event()  # taken before the look (never cleared)
+            async with self._lock():
+                # Another row's process on this very conversation (a race the
+                # turn's own check could miss) — running, or still starting:
+                # never a second process.
+                conv = row.harness_session_id or ""
+                for other in self.live.values():
+                    if other is live or not conv:
+                        continue
+                    if (other.running and other.driver is not None and other.driver.session_id == conv) \
+                            or (other.starting and other.starting_conv == conv):
+                        raise Refused(W.HELD_BY_ROW)
+                others = self._holding_places(live)
+                victim, readings = None, {}
+                if len(others) >= MAX_LIVE:
+                    now = self.clock()
+                    # v1.417.0 review: least recently HEARD first, like the
+                    # reaper (a reply the tool started by itself owns no turn).
+                    idle = [lv for lv in others if _stoppable(lv, now)]
+                    if idle:
+                        # v1.422.0 (B4): a session running a program it
+                        # started that serves (a dev server) is picked LAST,
+                        # one the user looks at next-to-last — and when one
+                        # must go, what it ran is SAID.
+                        readings = await PG.read_many(idle)
+                        # v1.425.0: one that got a message (or stopped) while
+                        # its programs were read is no victim any more — and
+                        # a place that came free meanwhile needs none.
+                        others = self._holding_places(live)
+                        idle = [lv for lv in idle if _stoppable(lv, now)]
+                    if idle and len(others) >= MAX_LIVE:
+                        victim = PG.evict_pick(idle, readings, now,
+                                               key=lambda lv: max(lv.last_active, lv.last_heard))
+                if len(others) < MAX_LIVE or victim is not None:
+                    live.starting, live.starting_conv = True, conv
+                    return victim, readings
+            if not waited:
+                waited = True
+                self._emit(live, make("notice", text=W.POOL_WAITING))
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Refused(W.POOL_FULL)
+            # Woken when a reply ends — ANY reply, so THIS one too when Stop
+            # ends it (``interrupt`` ends a turn that has no tool yet) — or a
+            # process stops; looked at again every few seconds anyway (a
+            # tool's background work ending says nothing).
+            try:
+                await asyncio.wait_for(room.wait(), min(left, POOL_RECHECK_S))
+            except asyncio.TimeoutError:
+                pass
+            if turn is not None and not turn.running:
+                # Stopped while it waited: never started afterwards.
+                raise _StoppedWhileWaiting()
 
     async def _start_process(self, live: LiveSession, row: Any, argv0: list[str]) -> None:
         from ..terminals import pane_accounts as PA
@@ -1933,9 +2068,11 @@ class HostedService:
         live.proc, live.driver = None, None
         # v1.414.0 review: our own connection files go with a process that
         # ended BY ITSELF too (a crash, a kill) — off the loop, and under the
-        # pool lock, so a new start writing them again is never undone.
+        # session's own lock (v1.425.0: a start holds it, no longer the
+        # pool's), so a new start writing them again is never undone.
         with contextlib.suppress(RuntimeError):
             asyncio.ensure_future(self._remove_files_if_stopped(live))
+        self._room_changed()  # v1.425.0 (B7): a place in the pool came free
         self._expire_asks(live)
         turn = live.turn
         if turn is not None and turn.running and not turn.ending and not proc.stopped:
@@ -1953,9 +2090,10 @@ class HostedService:
     async def _remove_files_if_stopped(self, live: LiveSession) -> None:
         """v1.414.0 review: remove the connection files of a process that ended
         by itself — only while no new process runs (a start writes them under
-        the same lock). Never raises."""
+        the same lock: v1.425.0, the session's own — ``_drive`` holds it
+        through the start, which no longer holds the pool's). Never raises."""
         try:
-            async with self._lock():
+            async with live.lock:
                 if live.proc is None:
                     await asyncio.to_thread(JT.remove_files, session_dir(self.home, live.sid))
         except Exception:  # noqa: BLE001 — files that hold no credential
@@ -1979,6 +2117,7 @@ class HostedService:
         if drv is not None:
             drv.on_exit()
         self._expire_asks(live)
+        self._room_changed()  # v1.425.0 (B7): a place in the pool came free
         turn = live.turn
         if end_turn and turn is not None and turn.running and not turn.ending:
             self._emit(live, make("notice", text=W.STOPPED_BECAUSE.format(why=why) if why else W.STOPPED_PLAIN))
@@ -2082,6 +2221,7 @@ class HostedService:
         turn.end("done" if done.get("stop") == "completed" else str(done.get("stop")))
         if live.turn is turn:
             live.turn = None
+        self._room_changed()  # v1.425.0 (B7): this session may be stoppable now
         self._after_turn_queue(live, turn, done)  # v1.418.0 (C4.8)
         # v1.414.0: a long reply that ENDED is told to the bell and the tray
         # (never for a Stop or a cut-off, never beside an account's limit
@@ -2386,6 +2526,7 @@ class HostedService:
             user["carry"] = dict(carry)  # v1.422.0: Iron Jarvis carried it on
         self._emit(live, user)
         started = False
+        turn.unsent = True  # v1.425.0 (review, B7): not the tool's yet (``interrupt``)
         try:
             if not carry:
                 # v1.422.0 (B5): the user's own message ends a limit's wait
@@ -2409,12 +2550,19 @@ class HostedService:
             started = True
             if live.driver is None:
                 raise HarnessGone("the coding tool stopped")
+            if not turn.running:
+                # v1.425.0 (B7): Stop ended this turn while its tool started (or
+                # while it waited for a place): the tool never hears it.
+                raise _StoppedWhileWaiting()
+            turn.unsent = False  # from here a Stop is the tool's to act on
             await live.driver.send_user(text, files)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:
             self._emit(live, W.error(r.sentence, "Fix that, then send your message again.", ""))
             await self._end_turn(live, "failed")
+        except _StoppedWhileWaiting:
+            pass  # v1.425.0 (B7): Stop already ended the turn; no tool heard it
         except P.PiStillWorking:
             self._emit(live, W.error(W.PI_STILL_WORKING_TITLE, W.PI_STILL_WORKING_FIX, ""))
             await self._end_turn(live, "failed")
@@ -2549,6 +2697,16 @@ class HostedService:
             await asyncio.to_thread(CO.note_stopped, self.home, sid, live.turn.id)
         except Exception:  # noqa: BLE001
             log.warning("could not keep a Code-view session's Stop", exc_info=True)
+        turn = live.turn
+        if turn is not None and turn.running and turn.unsent:
+            # v1.425.0 (review, B7): the message is not the tool's yet — it
+            # waits for a place, or the tool is still STARTING (its process up,
+            # its handshake not done). Telling the tool to interrupt stopped
+            # nothing (no reply runs there), the turn stayed open and the
+            # message was sent once the start finished. The turn ends here;
+            # ``_drive`` then never hands it over.
+            await self._end_turn(live, "interrupted")
+            return {"ok": True, "running": True}
         driver = live.driver
         if driver is not None and live.running:
             async def tell() -> None:
