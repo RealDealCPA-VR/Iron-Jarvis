@@ -127,6 +127,7 @@ import asyncio
 import os
 import re
 import shlex
+import time
 from typing import Any
 
 from ..tools.base import Reversibility, RiskClass, Tool, ToolContext, ToolResult
@@ -895,26 +896,57 @@ def _place_problem(cwd: Any, worktrees: list[str], filters: list[str],
 #: ``git grep`` / ``diff`` / ``blame`` / ``status`` (git sees a directory),
 #: so outside text came back through all four (measured). Such a folder
 #: makes git_read run nothing.
+#: v1.422.3 review: it names read_file ONLY — the first cut said "read_file
+#: or grep", and the reviewer's own ``grep`` follows the same junction and
+#: printed the outside file's text (measured); read_file resolves the path
+#: and refuses one that leaves the folder.
 LINK_REFUSAL = ("A folder git reads here ({path}) is a link to another place, so git_read ran nothing "
-                "(read the files with read_file or grep instead).")
-#: How long listing the tracked files may take (a huge repository: refused).
+                "(read the files inside this folder with read_file instead).")
+#: How long the WHOLE check may take — finding the top, listing the tracked
+#: files and looking at every folder that holds one (v1.422.3 review: only the
+#: listing was bounded, and one ``lstat`` per tracked folder ran with no limit
+#: on every call: ~35 µs each here, an SMB round trip each on a mapped network
+#: drive). Past it the check is unfinished: git_read runs nothing.
 LINK_CHECK_TIMEOUT_S = 20.0
 LINK_CHECK_UNSURE = "git_read could not check this folder's tracked folders for links, so it ran nothing."
+#: v1.422.3 review: a reparse point is a LINK only when its tag is a NAME
+#: SURROGATE ("represents another named entity": junctions 0xA0000003,
+#: symlinks 0xA000000C, WSL symlinks) — the rule Python's own ``os.stat``
+#: follows. OneDrive's Files On-Demand placeholder folders (0x9000?01A) and
+#: ProjFS (0x9000001C) are reparse points too but hold the folder's OWN files:
+#: the first cut refused every git_read call in a OneDrive repository.
+_NAME_SURROGATE = 0x20000000
+#: v1.422.3 review: Windows' "the filename, directory name, or volume label
+#: syntax is incorrect" (123) and "the specified path is invalid" (161): a
+#: tracked name no Windows folder can hold (``what?``, a ``|``, a control
+#: character — a repository from Linux under ``core.protectNTFS=false``, or a
+#: sparse checkout, keeps such entries in its index). Nothing can be on disk
+#: there (git cannot write or read it either), so it is not a link; the first
+#: cut raised the ``OSError`` out of EVERY git_read call in that repository.
+_NO_SUCH_NAME = frozenset({123, 161})
 
 
 def _is_link(path: str) -> bool:
-    """Is ``path`` ITSELF a link (a junction, a directory symlink, any reparse
-    point)? ``lstat`` never follows the last part. Missing: no."""
+    """Is ``path`` ITSELF a link (a symlink, a junction, any NAME-SURROGATE
+    reparse point)? ``lstat`` never follows the last part. Missing, or a name
+    Windows cannot hold: no. Any other ``OSError`` is raised (the caller
+    treats it as an unfinished check)."""
     import stat as _stat
 
     try:
         st = os.lstat(path)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return False
+    except OSError as exc:
+        if getattr(exc, "winerror", None) in _NO_SUCH_NAME:
+            return False
+        raise
     if _stat.S_ISLNK(st.st_mode):
         return True
     attrs = getattr(st, "st_file_attributes", 0) or 0
-    return bool(attrs & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    if not attrs & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+        return False
+    return bool((getattr(st, "st_reparse_tag", 0) or 0) & _NAME_SURROGATE)
 
 
 def _linked_folder(cwd: Any, filters: list[str], env: dict[str, str]) -> str:
@@ -925,19 +957,27 @@ def _linked_folder(cwd: Any, filters: list[str], env: dict[str, str]) -> str:
     — so a deeper path is never reached THROUGH a link (an ``lstat`` follows
     every part but the last; a junction to a share would be an SMB
     connection). Outside a repository: "" (git then fails by itself). A
-    listing that does not finish: :data:`LINK_CHECK_UNSURE` (fail-closed).
-    BLOCKING."""
+    check that does not finish within :data:`LINK_CHECK_TIMEOUT_S` (all of
+    it), a listing git refused, or a folder ``lstat`` could not read:
+    :data:`LINK_CHECK_UNSURE` (fail-closed). BLOCKING."""
     from ..git.integration import run_git
 
-    got = run_git(safe_argv("rev-parse", ["--show-toplevel"], filters), cwd, timeout=15.0, env=env,
-                  identity=False, encoding="utf-8")
+    deadline = time.monotonic() + LINK_CHECK_TIMEOUT_S
+
+    def left() -> float:
+        return deadline - time.monotonic()
+
+    got = run_git(safe_argv("rev-parse", ["--show-toplevel"], filters), cwd, timeout=min(15.0, left()),
+                  env=env, identity=False, encoding="utf-8")
     if got.timed_out:
         return LINK_CHECK_UNSURE
     top = (str(got.out or "").strip().splitlines() or [""])[0].strip()
     if got.code != 0 or not top or _network_spelling(top):
         return ""
+    if left() <= 0:
+        return LINK_CHECK_UNSURE
     listing = run_git(safe_argv("ls-files", ["-z", "-s", "--full-name", "--", ":/"], filters), cwd,
-                      timeout=LINK_CHECK_TIMEOUT_S, env=env, identity=False, encoding="utf-8")
+                      timeout=left(), env=env, identity=False, encoding="utf-8")
     if listing.timed_out or listing.code != 0:
         return LINK_CHECK_UNSURE
     folders: set[str] = set()
@@ -949,7 +989,13 @@ def _linked_folder(cwd: Any, filters: list[str], env: dict[str, str]) -> str:
         for i in range(1, len(parts) + 1):
             folders.add("/".join(parts[:i]))
     for rel in sorted(folders, key=lambda f: (f.count("/"), f)):
-        if _is_link(os.path.join(top, *rel.split("/"))):
+        if left() <= 0:
+            return LINK_CHECK_UNSURE
+        try:
+            linked = _is_link(os.path.join(top, *rel.split("/")))
+        except OSError:
+            return LINK_CHECK_UNSURE
+        if linked:
             return LINK_REFUSAL.format(path=_shown(rel))
     return ""
 
