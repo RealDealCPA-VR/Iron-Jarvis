@@ -504,18 +504,97 @@ def can_open_in_code(pane: Any) -> bool:
         return False
 
 
+def _pane_since(pane: Any) -> "float | None":
+    """When the pane started (epoch s, 5 s early for a coarse clock), or None."""
+    created = getattr(pane, "created_at", None)
+    if isinstance(created, datetime):
+        return (created if created.tzinfo else created.replace(tzinfo=timezone.utc)).timestamp() - 5
+    return None
+
+
+def claude_pane_home(pane: Any) -> str:
+    """The Claude Code home a Build terminal's ``claude`` reads and writes:
+    its Iron-Proxy account's recorded home, else this PC's default."""
+    acc = (getattr(pane, "accounts", None) or {}).get(W.PROXY[CLAUDE]) or {}
+    return home_of(CLAUDE, dict(acc) if isinstance(acc, dict) else None)
+
+
+def claude_later(pane: Any, home: str, recorded: str, *, taken: "Collection[str]" = ()) -> list[dict[str, Any]]:
+    """v1.426.0 (Wave 6, E3): the conversations a Build terminal's Claude
+    Code moved to AFTER the one Iron Jarvis recorded for it: what a
+    ``/clear`` (a new conversation id) or a ``/resume`` typed inside the
+    terminal leaves behind. BLOCKING; never raises ([] on any failure).
+
+    Empty while the recorded conversation is still the NEWEST in its folder
+    (``terminals/continue_on.newest_recorded``: one glob and one folder's
+    stats, nothing opened; the usual case). Otherwise: the conversations FOR
+    THE PANE'S FOLDER in the same Claude home, written since the pane started
+    and after the recorded one was last written, newest first, minus
+    ``taken`` (the ids another holder owns: a Code-view row's conversation, or
+    another live terminal's recorded one, are THEIRS, never this pane's). Each
+    is :func:`disk_sessions`' summary (``id``, ``title``, ``mtime``)."""
+    from ..terminals import continue_on as CO
+
+    try:
+        if not home or not _SID_RX.match(str(recorded or "")):
+            return []
+        if CO.newest_recorded(home, recorded) is not None:
+            return []
+        since = _pane_since(pane)
+        floor = since if since is not None else 0.0
+        for path in (Path(home) / "projects").glob(f"*/{recorded}.jsonl"):
+            try:
+                floor = max(floor, path.stat().st_mtime)
+            except OSError:
+                continue
+            break
+        skip = {str(t) for t in taken if t} | {str(recorded)}
+        found = disk_sessions(CLAUDE, home, str(getattr(pane, "cwd", "") or ""), since=since)
+        later = [
+            s for s in found
+            if str(s.get("id") or "") not in skip and float(s.get("mtime") or 0) > floor
+        ]
+        later.sort(key=lambda s: float(s.get("mtime") or 0), reverse=True)
+        return later
+    except Exception:  # noqa: BLE001 - a reading never breaks a hand-over
+        log.debug("could not read which conversation a terminal moved to", exc_info=True)
+        return []
+
+
+def other_terminal_ids(terminals: Any, besides: str) -> set[str]:
+    """The Claude session ids every OTHER live Build terminal recorded."""
+    out: set[str] = set()
+    try:
+        for info in terminals.list():
+            if str(info.get("id")) == str(besides) or not info.get("alive", True):
+                continue
+            pane = terminals.get(info["id"])
+            sid = str(getattr(pane, "claude_session_id", None) or "") if pane is not None else ""
+            if sid:
+                out.add(sid)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def terminal_holds(platform: Any, hid: str, *, harness: str = CLAUDE, rows: Any = None) -> bool:
     """Does a live Build terminal hold this conversation, its CLI still
-    running? Claude Code: the session id the pane recorded. Codex and Pi
-    record none (v1.411.0), so a terminal holds one when it runs that CLI and
-    either the Code view opened it there (a row's ``terminal_id``) or its own
-    screen still shows the id it was started with (``pi --session <id>`` /
+    running? Claude Code: the session id the pane recorded, and (v1.426.0,
+    Wave 6, E3) a conversation it moved to since with ``/clear``
+    (:func:`claude_later`): the Code view must never open a SECOND writer on
+    the conversation a running terminal's Claude writes now. A Code-view
+    row's own conversation (``rows``) and another terminal's recorded one are
+    never counted as this pane's: they are theirs. Codex and Pi record none
+    (v1.411.0), so a terminal holds one when it runs that CLI and either the
+    Code view opened it there (a row's ``terminal_id``) or its own screen
+    still shows the id it was started with (``pi --session <id>`` /
     ``codex resume <id>`` typed in it). Never raises."""
     terminals = getattr(platform, "terminals", None)
     if terminals is None or not hid:
         return False
     opened = {str(r.terminal_id) for r in (rows or [])
               if getattr(r, "terminal_id", "") and r.harness == harness and r.harness_session_id == hid}
+    row_ids = {str(getattr(r, "harness_session_id", "") or "") for r in (rows or [])} - {""}
     try:
         infos = terminals.list()
     except Exception:  # noqa: BLE001
@@ -528,8 +607,14 @@ def terminal_holds(platform: Any, hid: str, *, harness: str = CLAUDE, rows: Any 
             if pane is None:
                 continue
             if harness == CLAUDE:
-                if str(getattr(pane, "claude_session_id", None) or "") != hid:
-                    continue
+                recorded = str(getattr(pane, "claude_session_id", None) or "")
+                if recorded != hid:
+                    if not recorded or hid in row_ids or pane_exited(pane):
+                        continue
+                    taken = row_ids | other_terminal_ids(terminals, str(info["id"]))
+                    later = claude_later(pane, claude_pane_home(pane), recorded, taken=taken)
+                    if hid not in {str(s.get("id") or "") for s in later}:
+                        continue
             else:
                 if pane_harness(pane) != harness:
                     continue
@@ -792,6 +877,7 @@ class HostedService:
         self._reaper: asyncio.Task | None = None
         self._closing = False
         self._pool_lock: asyncio.Lock | None = None
+        self._handover_lock: asyncio.Lock | None = None
         #: The model list a Pi process last said, kept for the next listing.
         self._pi_catalog = self.home / "hosted" / "pi_models.json"
         #: The model list an OpenCode process last said (v1.413.0).
@@ -815,6 +901,15 @@ class HostedService:
         if self._pool_lock is None:
             self._pool_lock = asyncio.Lock()
         return self._pool_lock
+
+    def _handover(self) -> asyncio.Lock:
+        """v1.426.0 (Wave 6, E3): ONE hand-over of a conversation at a time
+        (Open in Code view from a terminal, opening a saved conversation):
+        its "who holds it" check and the row it makes are one step. Never
+        held across a process stop or a turn (only short reads and one row)."""
+        if self._handover_lock is None:
+            self._handover_lock = asyncio.Lock()
+        return self._handover_lock
 
     async def _row(self, sid: str) -> Any:
         row = await asyncio.to_thread(store.get, self.engine, sid)
@@ -1086,22 +1181,26 @@ class HostedService:
             if r.status == 400:
                 r.field = r.field or "account"
             raise
-        if resume_id:
-            held = await asyncio.to_thread(self._holder, harness, resume_id)
-            if held:
-                raise Refused(held)
-            found = await asyncio.to_thread(
-                self._disk_session, harness, folder, resume_id, home_of(harness, acc)
+        # v1.426.0 (Wave 6, E3): opening a SAVED conversation is a hand-over:
+        # the "who holds it" check and the new row are one step (two presses
+        # made two rows on one conversation).
+        async with (self._handover() if resume_id else contextlib.AsyncExitStack()):
+            if resume_id:
+                held = await asyncio.to_thread(self._holder, harness, resume_id)
+                if held:
+                    raise Refused(held)
+                found = await asyncio.to_thread(
+                    self._disk_session, harness, folder, resume_id, home_of(harness, acc)
+                )
+                if found is None:
+                    raise Refused(f"{W.label(harness)} has no saved conversation with that id in this folder.", 404)
+                title = title or clip(found.get("title") or "", 120)
+            row = await asyncio.to_thread(
+                store.create, self.engine, harness=harness, folder=folder, title=title,
+                account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
+                model=model, effort=effort, mode=mode, harness_session_id=resume_id,
+                no_folder=no_folder,
             )
-            if found is None:
-                raise Refused(f"{W.label(harness)} has no saved conversation with that id in this folder.", 404)
-            title = title or clip(found.get("title") or "", 120)
-        row = await asyncio.to_thread(
-            store.create, self.engine, harness=harness, folder=folder, title=title,
-            account=str(acc.get("id") or ""), account_json=json.dumps(acc) if acc else "",
-            model=model, effort=effort, mode=mode, harness_session_id=resume_id,
-            no_folder=no_folder,
-        )
         if resume_id:  # v1.418.0 (C4.6): its history is the tool's own transcript
             await asyncio.to_thread(HIST.mark_outside, self.home, row.id, "disk")
         return self._with_root(store.view(row))
@@ -2720,30 +2819,57 @@ class HostedService:
     async def open_terminal(self, sid: str) -> dict[str, Any]:
         row = await self._row(sid)
         live = self.live.get(sid)
-        if live and ((live.turn and live.turn.running) or live.claim):
+        if live and live.turn and live.turn.running:
             raise Refused(W.RUNNING)
+        if live and live.claim:
+            # v1.426.0 (Wave 6, E3): a second press while the first is still
+            # opening the terminal (a double click) is refused in words.
+            raise Refused(W.CLAIMED.format(what=live.claim))
         if live and live.running and live.keeps_working(self.clock()):
             raise Refused(W.BACKGROUND_OPEN_TERMINAL.format(
                 label=W.label(row.harness), tasks=W.background_count(live.background_tasks)))
-        row = await self._row_with_saved_id(sid)  # v1.417.0 review
-        hid = row.harness_session_id
-        if not hid:
-            raise Refused(W.NO_SESSION_YET)
-        if not typable_sid(row.harness, hid):
-            raise Refused("That session's id is not one Iron Jarvis types into a terminal.", 409)
-        if live:
+        # v1.426.0 (Wave 6, E3): the session is HELD while it is handed to a
+        # terminal (no turn, no second press, no move): ONE terminal per
+        # conversation.
+        live = self._live(row)
+        self._claim(live, W.CLAIM_TERMINAL)
+        try:
+            row = await self._row_with_saved_id(sid)  # v1.417.0 review
+            hid = row.harness_session_id
+            if not hid:
+                raise Refused(W.NO_SESSION_YET)
+            if not typable_sid(row.harness, hid):
+                raise Refused("That session's id is not one Iron Jarvis types into a terminal.", 409)
+            # v1.426.0 (Wave 6, E3): pressed again after it opened (or the
+            # conversation runs in another Build terminal): a second terminal
+            # would be a second writer on one conversation.
+            if await asyncio.to_thread(self._in_a_terminal, row):
+                raise Refused(W.ALREADY_IN_TERMINAL.format(
+                    label=W.label(row.harness), exit=W.exit_command(row.harness)))
             # v1.422.0 review (B4): what the tool ran that serves (a dev server)
             # stops with it — read first, said after (never silent).
             ended = PG.known_programs((await PG.read_many([live])).get(live.sid), live) if live.running else []
             await self._stop_process(live)  # two processes on one session corrupt it
             if ended:
                 self._said_stopped(live, ended, why="terminal")
-        session = await asyncio.to_thread(self._launch_terminal, row, hid)
-        # The row is now the terminal's until that terminal's CLI has exited.
-        await asyncio.to_thread(store.update, self.engine, sid, terminal_id=str(session.id))
+            session = await asyncio.to_thread(self._launch_terminal, row, hid)
+            # The row is now the terminal's until that terminal's CLI has exited.
+            await asyncio.to_thread(store.update, self.engine, sid, terminal_id=str(session.id))
+        finally:
+            if live.claim == W.CLAIM_TERMINAL:
+                live.claim = ""
         # v1.418.0 (C4.6): what the user does in that terminal shows here later.
         await asyncio.to_thread(HIST.mark_outside, self.home, sid, "terminal")
         return {"terminal_id": session.id}
+
+    def _in_a_terminal(self, row: Any) -> bool:
+        """BLOCKING: is ``row``'s conversation already running in a Build
+        terminal: the one Open in terminal started for it (its CLI not yet
+        exited), or another one that holds it (:func:`terminal_holds`)?"""
+        if self._opened_terminal_runs(row):
+            return True
+        return terminal_holds(self.platform, row.harness_session_id, harness=row.harness,
+                              rows=store.list_rows(self.engine))
 
     def _launch_terminal(self, row: Any, hid: str) -> Any:
         """BLOCKING: a Build terminal in the session's folder, on the
@@ -2792,18 +2918,31 @@ class HostedService:
         problem = await asyncio.to_thread(root_problem, str(pane.cwd or ""))
         if problem:
             raise Refused(problem, 400)
-        harness, hid, title, acc = await asyncio.to_thread(self._pane_facts, pane)
-        # A repeated press reuses the row that already holds this conversation.
-        for r in await asyncio.to_thread(store.list_rows, self.engine):
-            if r.harness == harness and r.harness_session_id == hid:
-                out = store.view(r)
-                out["reused"] = True
-                return out
-        row = await asyncio.to_thread(
-            store.create, self.engine, harness=harness, folder=str(pane.cwd or ""),
-            title=title or "From a terminal", account=str(acc.get("id") or ""),
-            account_json=json.dumps(acc) if acc else "", mode=default_mode(harness), harness_session_id=hid,
-        )
+        # v1.426.0 (Wave 6, E3): ONE hand-over at a time. Two presses (a
+        # double click, two windows) both read "no row holds it" and each made
+        # a row: two rows on one conversation, each able to start a writer.
+        async with self._handover():
+            harness, hid, title, acc = await asyncio.to_thread(self._pane_facts, pane)
+            recorded = str(getattr(pane, "claude_session_id", None) or "")
+            if harness == CLAUDE and _SID_RX.match(recorded) and recorded != hid:
+                # The terminal moved to this conversation (`/clear`): it is the
+                # one the pane ran last, so it is the one it records now (its
+                # restart Resume, a second press and the hold read it).
+                try:
+                    pane.claude_session_id = hid
+                except Exception:  # noqa: BLE001 - a pane that keeps no record
+                    pass
+            # A repeated press reuses the row that already holds this conversation.
+            for r in await asyncio.to_thread(store.list_rows, self.engine):
+                if r.harness == harness and r.harness_session_id == hid:
+                    out = store.view(r)
+                    out["reused"] = True
+                    return out
+            row = await asyncio.to_thread(
+                store.create, self.engine, harness=harness, folder=str(pane.cwd or ""),
+                title=title or "From a terminal", account=str(acc.get("id") or ""),
+                account_json=json.dumps(acc) if acc else "", mode=default_mode(harness), harness_session_id=hid,
+            )
         await asyncio.to_thread(HIST.mark_outside, self.home, row.id, "terminal")  # v1.418.0 (C4.6)
         return store.view(row)
 
@@ -2827,11 +2966,26 @@ class HostedService:
         acc = {k: v for k, v in dict(acc).items() if k in ("id", "title", "source", "home", "unset", "note")}
         hid = str(getattr(pane, "claude_session_id", None) or "") if harness == CLAUDE else ""
         title = ""
+        if harness == CLAUDE and _SID_RX.match(hid):
+            # v1.426.0 (Wave 6, E3): the RECORDED id is the conversation Iron
+            # Jarvis started there; a `/clear` typed in the terminal moved
+            # Claude Code to a NEW one, and handing over the recorded one
+            # opened the OLDER conversation. The newest the pane wrote since
+            # (``claude_later``: never a Code-view row's own conversation or
+            # another terminal's) is the one it ran last; several of them is
+            # never a guess.
+            terminals = getattr(self.platform, "terminals", None)
+            taken = {str(r.harness_session_id or "") for r in store.list_rows(self.engine)
+                     if r.harness == CLAUDE}
+            if terminals is not None:
+                taken |= other_terminal_ids(terminals, str(getattr(pane, "id", "") or ""))
+            later = claude_later(pane, home_of(harness, acc), hid, taken=taken)
+            if len(later) > 1:
+                raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))
+            if later:
+                hid, title = str(later[0].get("id") or ""), str(later[0].get("title") or "")
         if not hid or not typable_sid(harness, hid):
-            since = None
-            created = getattr(pane, "created_at", None)
-            if isinstance(created, datetime):
-                since = (created if created.tzinfo else created.replace(tzinfo=timezone.utc)).timestamp() - 5
+            since = _pane_since(pane)
             found = disk_sessions(harness, home_of(harness, acc), str(pane.cwd or ""), since=since)
             if len(found) != 1:
                 raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))

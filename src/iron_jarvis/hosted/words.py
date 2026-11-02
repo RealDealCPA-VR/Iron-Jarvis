@@ -235,6 +235,16 @@ CANNOT_TELL = (
     "Iron Jarvis cannot tell which {label} conversation this terminal ran — open it from the "
     "folder's saved sessions instead."
 )
+#: v1.426.0 (Wave 6, E3): Open in terminal pressed while the conversation is
+#: already open in a Build terminal (pressed twice, or another terminal runs
+#: it) — a second terminal would be a second writer on one conversation.
+ALREADY_IN_TERMINAL = (
+    "This conversation is already open in a Build terminal — use that terminal, or exit "
+    "{label} there first (type {exit}) before you open it again."
+)
+#: v1.426.0: what a session is doing while Open in terminal hands it over
+#: (said by :data:`CLAIMED` to a second press meanwhile).
+CLAIM_TERMINAL = "being opened in a terminal"
 STOPPED_BECAUSE = "Stopped because the session is {why}."
 STOPPED_PLAIN = "Stopped: the coding tool was closed."
 CODEX_MODE_NEXT = (
