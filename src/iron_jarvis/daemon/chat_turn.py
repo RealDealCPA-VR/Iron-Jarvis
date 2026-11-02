@@ -7747,8 +7747,20 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
     It mirrors ``_first_capable``'s filter, INCLUDING the circuit breaker: a
     vision provider whose circuit is OPEN is one the router will skip, so
     counting it as "vision is available" left the one case this function exists
-    for — routing lands on a blind adapter — silent again."""
+    for — routing lands on a blind adapter — silent again.
+
+    AND THE MONEY RULE (v1.424.0 review, the owner's decision D1): the router
+    never moves a picture to a pay-per-use model for a pick that is not one
+    (``ModelRouter._spend_ok`` in ``_first_capable``), so such a model is NOT
+    "a provider that can see" for this turn. Counting it left a local or plan
+    pick whose only seeing provider is a key silent — the picture unseen and
+    the local OCR fallback (which keys off this note) never run. Left out
+    here exactly when the router leaves it out (``providers/billing``, the
+    one definition; an Auto or demo-model pick is never filtered: Auto's pick
+    is not known here, and the note must never claim what it cannot know),
+    and named in the one D1 sentence."""
     try:
+        from ..providers import billing as _billing
         from ..providers.router import _capabilities
 
         router = getattr(d.platform, "router", None)
@@ -7772,7 +7784,23 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
 
         pick = (provider or "").strip()
         order = ([pick] if pick and pick != "auto" else []) + sorted(avail)
+        # v1.424.0 review (D1): does the call's OWN pick pay per use? The
+        # pick is the explicit provider, else the default (the router's
+        # ``_pick_pays`` reads the same); Auto and the demo model are never
+        # filtered (see the docstring).
+        chosen = pick or str(getattr(router, "default_provider", "") or "")
+        cfg = getattr(d.platform, "config", None)
+        pick_pays = True
+        if chosen and chosen not in ("auto", "mock"):
+            try:
+                pick_pays = _billing.adapter_pays(
+                    manager.get(chosen, (model or "").strip() or None),
+                    manager, cfg, unsure=False,
+                )
+            except Exception:  # noqa: BLE001 — unreadable pick: no filter (no false note)
+                pick_pays = True
         checked: list[str] = []
+        left_out: list[str] = []
         for name in dict.fromkeys(order):
             if not name or name == "mock" or not _routable(name):
                 continue
@@ -7783,11 +7811,29 @@ def _vision_unavailable_reason(d, provider: str, model: str) -> str:
                 adapter = manager.get(name, want or None)
             except Exception:  # noqa: BLE001 — an unbuildable provider is not a verdict
                 continue
+            # The router never moves the picture to a pay-per-use model for a
+            # pick that is not one: it cannot see FOR this turn (the pick
+            # itself is never filtered — it is what the user chose).
+            if (
+                not pick_pays
+                and name != chosen
+                and _billing.adapter_pays(adapter, manager, cfg, unsure=True)
+            ):
+                if _capabilities(adapter).get("vision", True):
+                    left_out.append(str(getattr(adapter, "provider", "") or name))
+                continue
             if _capabilities(adapter).get("vision", True):
                 return ""
             checked.append(name)
         if not checked:
             return ""
+        if left_out:
+            return (
+                "the model answering this turn cannot accept images and no "
+                "connected model you can use without paying per use can ("
+                + ", ".join(checked) + "), so this image was NOT seen. "
+                + _billing.not_moved_sentence(left_out, manager)
+            )
         return (
             "the model answering this turn cannot accept images and no "
             "connected provider can (" + ", ".join(checked) + "), so this "
