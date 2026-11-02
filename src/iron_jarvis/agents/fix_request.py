@@ -58,6 +58,16 @@ never counted three times):
   review's ONE record — its synthetic ``delegate`` row (``called_as`` "team
   review") and its review-only helper run (``options.review_only``) are not
   read, or one review that failed was two problems.
+* v1.423.0 (Wave 3 lane D): the REVIEWERS' FINDINGS (``agents/
+  team_findings.TeamFinding``, only those the lead was ASKED to answer) —
+  the team's way of working, never the user's code (:func:`_gather_findings`):
+  a finding the lead said did not apply (the reviewer was wrong), one left
+  open after a reply that ended as its answer, one said fixed and never
+  confirmed, and the same kind of finding (:data:`FINDING_KINDS`) against
+  one member in two or more sessions. A finding CONFIRMED fixed is the
+  system working, never a problem. A finding belongs to the reply whose
+  line's time window holds it (its own ``turn`` is the model team's key, not
+  the line's): low trust and fail closed read it exactly as a lead's call.
 
 THE RULE FOR WHAT IS LEFT OUT (the user's choices and ordinary work are not
 defects):
@@ -95,7 +105,9 @@ argument, a path, a title, a member's name) is masked
 (``providers/failure_words.mask_failure_text`` = ``detections.redact.mask`` +
 the shapes it does not know) and then promptguard-scanned
 (``core/promptguard.scan_context`` — the report is pasted into a prompt)
-BEFORE any cut. The whole report is at most :data:`REPORT_CHARS` characters
+BEFORE any cut — and FAILS CLOSED (v1.423.0, lane D): a value that could not
+be masked or scanned is dropped (:data:`LEFT_OUT_UNMASKED`,
+:data:`LEFT_OUT_UNSCANNED`), never shown raw. The whole report is at most :data:`REPORT_CHARS` characters
 and lists at most :data:`MAX_PROBLEMS` problems, most frequent first; what
 did not fit is said.
 

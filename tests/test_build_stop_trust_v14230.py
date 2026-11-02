@@ -16,7 +16,9 @@ error branch writes, read from the reply's LIVE trust (``harness/
 reply_record.ReplyRecord.trust_now`` — the lane hands it the turn's one trust
 record at the start, so a taint the moment before the Stop counts, not only
 one a later save noted), and a low-trust reply stopped before a word still
-keeps its line (the window the report leaves out).
+keeps its line (the window the report leaves out). A reply a CRASH cut off
+after it went low says so too: the boot's reconcile reads the reply's kept
+record (``reply_record.low_trust_of``) when it writes the cut-off line.
 
 Driven through the REAL app factory, the real stream lane, the real tool
 registry; only the model is a scripted double.
@@ -25,11 +27,17 @@ registry; only the model is a scripted double.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from iron_jarvis.agents import fix_request as FR
+from iron_jarvis.core.db import session_scope
+from iron_jarvis.core.models import ChatTurnRecord, RunTranscript
+from iron_jarvis.daemon import durable_turns
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.harness import reply_record as RR
+from iron_jarvis.harness import sessions as S
 from iron_jarvis.harness import stall
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_resume_v1391 import Hold
@@ -168,3 +176,28 @@ async def test_a_full_trust_reply_stopped_before_a_word_still_keeps_no_line(home
     assert _reply_line(app, sid, "st-full") is None
     out = await asyncio.to_thread(FR.build_report, app.state.platform.engine, session=sid)
     assert "A tool call that failed: read_file" in out["text"], out["text"]
+
+
+@pytest.mark.parametrize("low", ["read_file returned text that looked like an instruction", ""])
+def test_a_reply_a_crash_cut_off_after_it_went_low_says_so_on_its_line(tmp_path, low):
+    """No live writer reached the end: the boot's reconcile writes the line,
+    reading the reply's kept record (still there at that step). Full trust
+    keeps the line it always had."""
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    row = S.create(engine, str(tmp_path), "", {})
+    S.append_lines(engine, row.id, [{"role": "user", "content": "go", "turnId": "cr-1"}])
+    with session_scope(engine) as db:
+        db.add(ChatTurnRecord(id="cr-1", thread_id=row.id, status="running",
+                              frames_json=json.dumps([["token", json.dumps({"text": "half"})]])))
+        db.add(RunTranscript(run_id=RR.run_id_for("cr-1"), session_id=S.session_id_for(row.id),
+                             messages_json="[]", low_trust=low or None))
+        db.commit()
+    durable_turns.reconcile_interrupted_turns(engine)
+    S.reconcile_interrupted_turns(engine)
+    line = _reply_line(app, row.id, "cr-1")
+    assert line is not None and line.get("interrupted") is True, line
+    if low:
+        assert line.get("trust") == "low" and line.get("trustReason") == low, line
+    else:
+        assert "trust" not in line and "trustReason" not in line, line

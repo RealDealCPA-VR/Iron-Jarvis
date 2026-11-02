@@ -250,6 +250,32 @@ def test_a_finding_the_lead_said_did_not_apply_is_never_the_members_pattern(tmp_
     assert "Seen 2 times" in text and "A reviewer's finding the lead said did not apply" in text
 
 
+def test_a_repeated_kinds_two_examples_come_from_two_sessions(tmp_path):
+    """Three findings of one kind: two (the NEWEST) in one session, one in an
+    older session — the two examples show the pattern ACROSS sessions."""
+    engine = _engine(tmp_path)
+    with session_scope(engine) as db:
+        b0 = T0 + timedelta(hours=3)
+        _thread(db, THREAD_A, "t", T0, turn="turn-a")
+        _thread(db, THREAD_B, "t", b0, turn="turn-b")
+        _review(db, row="trr_reva0001", session=REVIEW_A, scope=f"build:{THREAD_A}", at=T0)
+        _review(db, row="trr_revb0001", session=REVIEW_B, scope=f"build:{THREAD_B}", at=b0)
+        _finding(db, scope=f"build:{THREAD_A}", review_row="trr_reva0001", review_session=REVIEW_A, number=1,
+                 path="a.py", line=1, what="no test for the old path", change="add one", status=TF.FIXED,
+                 at=T0 + timedelta(minutes=5))
+        for n in (1, 2):
+            _finding(db, scope=f"build:{THREAD_B}", review_row="trr_revb0001", review_session=REVIEW_B,
+                     number=n, path="b.py", line=n, what=f"no test for case {n}", change="add one",
+                     status=TF.FIXED, at=b0 + timedelta(minutes=5 + n))
+        db.commit()
+    text = _report(engine)["text"]
+    block = text.split("## 1. The same kind of finding against one team member")[1]
+    assert "Seen 3 times" in block and "3 findings about tests" in block
+    evidence = [ln for ln in block.splitlines() if ln.startswith("  - ")]
+    assert len(evidence) == 2
+    assert "chat_b7c8d9e0" in evidence[0] and "chat_a1b2c3d4" in evidence[1], evidence
+
+
 def test_only_a_finding_the_lead_was_asked_to_answer_is_read(tmp_path):
     engine = _engine(tmp_path)
     a = T0 + timedelta(minutes=10)
@@ -301,6 +327,10 @@ def test_an_open_finding_of_a_reply_still_running_is_not_judged(tmp_path):
         _review(db, row="trr_reva0001", session=REVIEW_A, scope=f"build:{THREAD_A}", at=late)
         _finding(db, scope=f"build:{THREAD_A}", review_row="trr_reva0001", review_session=REVIEW_A,
                  number=1, path="cart.py", line=3, what="x is wrong", change="fix x", status=TF.OPEN, at=late)
+        # ...nor one settled in a reply no line is left of (rewound away).
+        _finding(db, scope=f"build:{THREAD_A}", review_row="trr_reva0001", review_session=REVIEW_A,
+                 number=2, path="cart.py", line=4, what="y is wrong", change="fix y", status=TF.DID_NOT_APPLY,
+                 at=late, answer="it is right")
         db.commit()
     out = _report(engine)
     assert out["problems"] == 0, out["text"]
