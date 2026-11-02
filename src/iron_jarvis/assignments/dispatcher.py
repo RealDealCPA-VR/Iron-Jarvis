@@ -357,6 +357,14 @@ class AssignmentDispatcher:
                 )
                 if why:
                     return why
+            elif _mt.has_own_account(record):
+                # v1.424.0 (review): a custom agent NOT on the team that names
+                # an account of its own runs on THAT account now (below) —
+                # the account rule's refusal (another account group than the
+                # work's) HOLDS the job in words, as for a member.
+                why = await asyncio.to_thread(_mt.account_refusal, self.p, record)
+                if why:
+                    return why
         live = await asyncio.to_thread(store.live_for, name)
         if live:
             return HELD_BUSY.format(name=name)
@@ -504,6 +512,14 @@ class AssignmentDispatcher:
             run = _mt.run_as_member(
                 self.p, _member, lambda: orch.run_session(session.id, definition=definition),
                 scope=_agent_scope(row),
+            )
+        elif record is not None and _mt.has_own_account(record):
+            # v1.424.0 (review): a custom agent NOT on the team that names an
+            # account of its own runs on THAT account (``member_scope``'s
+            # own-account pin, entered in the run's own task like a member's)
+            # — before, a queued job leased Iron-Proxy's first free account.
+            run = _mt.run_as_member(
+                self.p, record, lambda: orch.run_session(session.id, definition=definition),
             )
         else:
             run = orch.run_session(session.id, definition=definition)
