@@ -1207,6 +1207,13 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
     if route is None:
         out.reason = why
         return out
+    # v1.423.0 review: the switch is read AGAIN once the model has answered —
+    # the owner may have turned "learn from Build sessions" off while it was
+    # writing, and off means NO library suggestion of any kind (the call
+    # already made is billed; nothing is minted from it).
+    if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
+        out.reason = REASON_OFF
+        return out
     if _is_mock(getattr(route, "provider", ""), getattr(route, "reason", "")):
         out.reason = REASON_MOCK
         return out

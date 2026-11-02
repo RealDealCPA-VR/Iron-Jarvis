@@ -1425,12 +1425,22 @@ class _ChangedWhileWriting(OSError):
 def _write_temp(path: Any, text: str) -> Any:
     """Write ``text`` to a fresh temp file beside ``path`` — as
     ``agents/files._atomic_write`` writes (UTF-8, the OS's line ends) — and
-    return it."""
+    return it. v1.423.0 review: a write that fails PART WAY (a full disk)
+    takes its half-written temp file away before it raises — it was left
+    beside the user's TEAM-NOTES.md."""
+    import os
     import uuid
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.ij-{uuid.uuid4().hex[:8]}.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return tmp
 
 
