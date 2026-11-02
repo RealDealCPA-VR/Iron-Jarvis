@@ -159,3 +159,104 @@ def test_nothing_left_out_keeps_the_old_refusal(tmp_path, monkeypatch):
     r = TestClient(app).post("/workflows/generate", json={"description": "x"})
     assert r.status_code == 400
     assert r.json()["detail"] == "connect a model on the Connections page to build workflows"
+
+
+# --------------------------------------------------------------------------- #
+# 3. every branch of an agent run's reason says it (two were unpinned)
+# --------------------------------------------------------------------------- #
+#
+# ``failure_words.run_failure_words`` (a run's "The run failed: …") has three
+# branches — classified words, a sentence already worded for a person, the
+# generic title — and the D1 sentence was appended to all three, but only the
+# first was pinned: dropping it from the other two left every test green.
+
+from iron_jarvis.core.events import EventBus  # noqa: E402
+from iron_jarvis.providers import billing  # noqa: E402
+from iron_jarvis.providers import failure_words as FW  # noqa: E402
+from iron_jarvis.providers.adapters.base import LLMAdapter, ProviderError  # noqa: E402
+from iron_jarvis.providers.router import ModelRouter  # noqa: E402
+
+SENTENCE_OPENAI = (
+    "Iron Jarvis didn't switch to OpenAI, which bills per use, because you "
+    "didn't choose a pay-per-use model for this."
+)
+
+
+class _Fails(LLMAdapter):
+    def __init__(self, provider, exc=None):
+        self.provider, self.model, self.exc, self.calls, self._endpoint = provider, "m", exc, 0, ""
+
+    def capabilities(self):
+        return {"tool_use": True, "vision": True}
+
+    async def complete(self, *, system, messages, tools, **kw):
+        self.calls += 1
+        if self.exc is not None:
+            raise self.exc
+        from iron_jarvis.providers.adapters.base import LLMResponse
+
+        return LLMResponse(text="ok", tool_calls=[], usage={})
+
+
+class _M:
+    def __init__(self, adapters):
+        self.adapters = adapters
+
+    def available(self, p):
+        return p in self.adapters
+
+    def get(self, p, model=None):
+        return self.adapters[p]
+
+    def inherited_from(self, p):
+        return None
+
+    def has_available_api_provider(self):
+        return True
+
+    def has_available_real_endpoint(self):
+        return False
+
+    def runtime_provider_names(self):
+        return []
+
+
+async def test_the_generic_reason_of_a_run_says_it_was_not_moved():
+    """A failure no rule words (no status, no known phrase): the generic
+    title + fix (``_run_generic_words``)."""
+    weird = ProviderError("claude-cli: something odd happened")
+    assert FW.classify(weird, provider="claude-cli", surface=FW.SURFACE_RUN) is None
+    openai = _Fails("openai")
+    router = ModelRouter(_M({"claude-cli": _Fails("claude-cli", weird), "openai": openai}),
+                         "openai", EventBus())
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    with pytest.raises(ProviderError) as info:
+        await router.complete(provider="claude-cli", system="", tools=[],
+                              messages=[LLMMessage(role="user", content="hi")])
+    assert openai.calls == 0 and billing.left_out(info.value) == ("openai",)
+    reason, _tech = FW.run_failure_words(info.value, provider="claude-cli")
+    assert reason.endswith(SENTENCE_OPENAI), reason
+
+
+async def test_a_worded_reason_of_a_run_says_it_was_not_moved():
+    """Auto picked Claude Code and its accounts are parked (a sentence worded
+    for the user, ``no_failover``): Auto may substitute, but never with a key
+    for a plan pick — the run's reason is that sentence plus the D1 one."""
+    parked = ProviderError("claude-cli: Every Claude Code account is resting until 3 PM.")
+    parked.no_failover = True
+    openai = _Fails("openai")
+
+    async def auto_route(system, messages, tools, task_class):
+        return {"provider": "claude-cli", "model": None, "tier": "t"}
+
+    router = ModelRouter(_M({"claude-cli": _Fails("claude-cli", parked), "openai": openai}),
+                         "auto", EventBus(), auto_route=auto_route)
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    with pytest.raises(Exception) as info:
+        await router.complete(system="", tools=[], messages=[LLMMessage(role="user", content="hi")])
+    assert openai.calls == 0
+    reason, _tech = FW.run_failure_words(info.value, provider="claude-cli")
+    assert reason.startswith("Every Claude Code account is resting until 3 PM."), reason
+    assert reason.endswith(SENTENCE_OPENAI), reason
