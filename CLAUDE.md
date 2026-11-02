@@ -13468,6 +13468,15 @@ does not need a bump, stop and bump it.
   and `ls-files -o` / `status -uall` list the NAMES inside an untracked
   junction; a hard link to an outside file is read by everything. Pins:
   `tests/test_git_read_links{,_review}_v14223.py` (16 mutations, all red).
+  v1.422.4 (test-only; v1.422.3 shipped, its MASTER Tests run went red on
+  `memory-profile-v1408` "a 404 … hides both buttons"): the test waited
+  for "no button named Check", but while the check runs that button reads
+  "Checking…", so the wait ended BEFORE the 404 and found "Try a test save"
+  still drawn. It now waits for the whole check area
+  (`brain-check-bp1`) to go. Holding the 404 back 300 ms reproduced CI's
+  exact error on the old shape and passes on the new; a 404 that never
+  comes fails the new wait (not vacuous). Another instance of the waitFor
+  rule: a button whose LABEL changes while it works is not gone.
 
 ## Map (where things live)
 

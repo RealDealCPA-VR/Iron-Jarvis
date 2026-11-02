@@ -472,7 +472,11 @@ describe("3. Check a memory profile, and Try a test save", () => {
     H.answers["POST /brain/profiles/bp1/check"] = new H.FakeApiError("Not Found", 404);
     const row = await renderProfiles();
     fireEvent.click(within(row).getByRole("button", { name: "Check" }));
-    await waitFor(() => expect(within(row).queryByRole("button", { name: "Check" })).toBeNull());
+    // Wait for the 404 itself: while the check runs the button reads
+    // "Checking…", so a wait for "no Check button" ended before the answer
+    // and found Try a test save still there (v1.422.3's master Tests gate).
+    await waitFor(() => expect(within(row).queryByTestId("brain-check-bp1")).toBeNull());
+    expect(within(row).queryByRole("button", { name: /Check/ })).toBeNull();
     expect(within(row).queryByRole("button", { name: "Try a test save" })).toBeNull();
   });
 
