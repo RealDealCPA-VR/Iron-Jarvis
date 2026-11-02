@@ -176,12 +176,16 @@ def test_tonights_two_invocations_end_to_end(tmp_path, monkeypatch, gateway):
     report = night.report()
     head = report.split("\n## ", 1)[0]
     rows = [ln.split(" | ")[0] for ln in head.splitlines() if ln.startswith("| jarvis")]
-    assert sorted(rows) == ["| jarvis", "| jarvis-team", "| jarvis-team (team-first)"]
+    # v1.425.0 (moved on purpose): tonight's commands run each task as a real
+    # coding session (the command line's default path), and the report says so.
+    assert sorted(rows) == ["| jarvis · coding session", "| jarvis-team (team-first) · coding session",
+                            "| jarvis-team · coding session"]
     plain_part, first_part = _section(report, team[0][0]), _section(report, first[0][0])
     alone_key = str(alone[0][0]["key"])[:12]
     for part in (plain_part, first_part):
-        assert f"| {alone_key} | jarvis |" in part
-        assert f"The answer compares with {alone_key} (jarvis, Iron Jarvis {alone[0][0]['version']})." in part
+        assert f"| {alone_key} | jarvis · coding session |" in part
+        assert (f"The answer compares with {alone_key} (jarvis · coding session, Iron Jarvis "
+                f"{alone[0][0]['version']}).") in part
     assert "**The team at work:** The planner handed at least one piece to a team member in 0 of 6 runs." \
         in plain_part
     assert "**The team at work:** The planner handed at least one piece to a team member in 6 of 6 runs." \
@@ -238,6 +242,6 @@ def test_b_first_a_killed_after_its_team_then_a_again(tmp_path, monkeypatch, gat
     alone_key = str(alone[0][0]["key"])[:12]
     for config, handed in ((team[0][0], "0 of 6"), (first[0][0], "6 of 6")):
         part = _section(report, config)
-        assert f"The answer compares with {alone_key} (jarvis, Iron Jarvis" in part
+        assert f"The answer compares with {alone_key} (jarvis · coding session, Iron Jarvis" in part
         assert f"to a team member in {handed} runs." in part
     assert f"**The answer:** {TRP.NO_MEMBER_WORK}" in _section(report, team[0][0])

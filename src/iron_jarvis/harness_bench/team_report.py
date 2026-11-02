@@ -87,13 +87,35 @@ def is_team_mode(config: Mapping[str, Any]) -> bool:
     return config.get("runner") == TEAM_RUNNER and isinstance(team, Mapping) and team.get("team_mode") is True
 
 
+#: v1.425.0 (C2): how a PRODUCT-PATH setup (each task run as a real coding
+#: session, ``harness.path == "product"``) is named beside a lane setup.
+PRODUCT_PATH_TAG = "coding session"
+
+
+def run_path(config: Mapping[str, Any]) -> str:
+    """The path a Jarvis setup's tasks ran on (``harness.path``): "product"
+    or "lane" — a configuration saved before v1.425.0 (no such key) ran on
+    the lane; "" for a CLI runner."""
+    if config.get("runner") not in ("jarvis", TEAM_RUNNER):
+        return ""
+    harness = config.get("harness") if isinstance(config, Mapping) else None
+    path = harness.get("path") if isinstance(harness, Mapping) else None
+    return "product" if path == "product" else "lane"
+
+
+def is_product_path(config: Mapping[str, Any]) -> bool:
+    return run_path(config) == "product"
+
+
 def runner_label(config: Mapping[str, Any]) -> str:
     """The Runner cell: the runner's name, and ``(team-first)`` for a team
     setup with team-first on — so the two team setups read apart. v1.403.0:
-    and ``· lead (locked)`` for a team-mode setup."""
+    and ``· lead (locked)`` for a team-mode setup. v1.425.0: and ``· coding
+    session`` for a product-path setup (a lane setup reads as before)."""
     runner = str(config.get("runner") or "?")
     label = f"{runner} ({TEAM_FIRST_TAG})" if is_team_first(config) else runner
-    return f"{label} · {TEAM_LEAD_TAG}" if is_team_mode(config) else label
+    label = f"{label} · {TEAM_LEAD_TAG}" if is_team_mode(config) else label
+    return f"{label} · {PRODUCT_PATH_TAG}" if is_product_path(config) else label
 
 
 def _live(records: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -390,7 +412,12 @@ def find_alone(team_config: Mapping[str, Any], team_records: list[Mapping[str, A
         # most runs in common, then the newest.
         same_effort = str(config.get("effort") or "") == str(team_config.get("effort") or "")
         same_version = str(config.get("version") or "") == str(team_config.get("version") or "")
-        rank = (same_effort, same_version, shared, str(config.get("created_at") or ""))
+        # v1.425.0 (C2): the same PATH before anything else — a team run as a
+        # coding session is answered against the planner alone as a coding
+        # session, never against the bare lane (another posture, another
+        # step limit, no finish check of its own making).
+        same_path = run_path(config) == run_path(team_config)
+        rank = (same_path, same_effort, same_version, shared, str(config.get("created_at") or ""))
         if best is None or rank > best[0]:
             best = (rank, config, records)
     return (best[1], best[2]) if best else None
@@ -412,6 +439,12 @@ def compares_line(team_config: Mapping[str, Any], alone_config: Mapping[str, Any
     if a_eff != t_eff:
         line += (f", at effort {a_eff or 'none asked'} (this team's planner: "
                  f"{t_eff or 'none asked'})")
+    if run_path(alone_config) != run_path(team_config):
+        # v1.425.0: only when no row on the team's own path was there.
+        line += (", which ran each task " + ("as a coding session" if is_product_path(alone_config)
+                                             else "on the bare chat lane")
+                 + " (this team " + ("as a coding session" if is_product_path(team_config)
+                                     else "on the bare chat lane") + ")")
     return line + "."
 
 

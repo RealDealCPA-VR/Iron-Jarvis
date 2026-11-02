@@ -38,6 +38,34 @@ Every model call it observes is entered in the run's ledger rollout
 Both CLIs run through ``core/procs`` with a time limit (the tree dies with it)
 and without the parent Claude Code session's markers in their environment.
 
+THE PRODUCT PATH (v1.425.0, Wave 5 "Fast and accurate", gap C2 of
+``docs/HARNESS-BUILD-AUDIT-2026-11-01.md``). The ``jarvis`` runner above calls
+the stream lane directly, under "Don't ask" — a bare lane, not what the owner
+uses every day. ``--path product`` (the command line's default for the
+``jarvis`` and ``jarvis-team`` runners since v1.425.0) runs each task as a REAL
+Chat › Code coding session instead: the session is made through the app's ONE
+create path (``routes/build.create_session_row``, working in the task's copy
+directly — a branch would put the work in a worktree beside the copy that the
+grader never reads), its account chosen the way New session chooses it, and
+the task is sent as the user's message through ``routes/build.
+start_build_turn`` — the function the ``/build/sessions/{id}/turn`` route uses,
+so the turn gets everything a coding session's turn gets: the "Ask first"
+posture (:data:`PRODUCT_APPROVAL_MODE`, never "Don't ask"), the account pin
+and the model hold, the session's team, the finish check, the reply record,
+the round's patience, the step limit (the session's OWN — no limit unless
+``--rounds`` is given) and the reply line. Every card it shows is answered
+"Allow once" and every question "Skip" by the benchmark (nobody is there; the
+autonomy metrics name the benchmark as who answered). Emergency stop and
+Local only are left exactly as the benchmark's home has them. The task's time
+limit is the user's Stop (``POST /chat/turns/{id}/stop`` — it ends the running
+step too), then the turn's task is cancelled if it still runs a minute later.
+The record keeps what the coding session added (``extra.coding_session``: its
+saved steps, its finish check, its step limit), the round's patience waits
+(``extra.patience``, both paths) and the session it ran in. ``--path lane``
+keeps the bare lane for comparison; the path is part of the configuration's
+identity, so a lane result is never reused for a product run (a lane
+configuration's identity is unchanged — its stored results stay reusable).
+
 THE EXACT MODEL (v1.383.0, IJ harness part 3 Phase 1). A record used to say
 "default" for a CLI's model, and the user's Claude settings changed between
 two runs, so nobody could say which model ran. Every runner is now given its
@@ -101,6 +129,35 @@ LANE_SESSION_ID = "chat"
 #: "the agent's terminal finds your tools" (``harness/command_env``) never
 #: reached a benchmark turn, and nothing held the model for a helper.
 BENCH_SESSION_PREFIX = "bench-"
+
+#: v1.425.0 (C2): the two ways a Jarvis task can run — as a real coding
+#: session (the product path: what the owner uses) or on the bare stream lane
+#: (how the benchmark ran before v1.425.0, kept for comparison).
+PATH_PRODUCT = "product"
+PATH_LANE = "lane"
+PATHS: tuple[str, ...] = (PATH_PRODUCT, PATH_LANE)
+#: The posture a product-path coding session works under: "Ask first" (the
+#: owner's own, and a fresh install's) — never "Don't ask". Every card it
+#: shows is answered "Allow once" by the benchmark.
+PRODUCT_APPROVAL_MODE = "approve_for_me"
+#: What a product-path session is called (the session list's words; never
+#: sent to the model).
+PRODUCT_SESSION_TITLE = "Benchmark task"
+#: A product-path turn's id: the benchmark's own prefix (``routes/build``
+#: mints ``bt_`` for the screen's turns).
+PRODUCT_TURN_PREFIX = "bt_bench_"
+#: How each kind of question the bench cannot answer is settled — the
+#: model's own question SKIPPED (it is told to decide itself and say what it
+#: assumed), an app's question declined, an app's request to ask the model
+#: denied (``daemon/mcp_turn``'s own outcomes).
+PRODUCT_QUESTION_OUTCOMES: dict[str, str] = {
+    "ask_user": "skipped", "mcp_elicitation": "decline", "mcp_sampling": "denied",
+}
+#: How many of a product run's saved steps its record keeps (the reply line
+#: keeps up to ``routes/build.MAX_COUNTED_STEPS``).
+PRODUCT_STEPS_KEPT = 600
+#: The length a saved step's target keeps in the record.
+STEP_TARGET_CHARS = 120
 
 #: The guardrail every runner is given (Phase 0 review, round 2). A real
 #: run's model ended a server task with ``taskkill /f /im python.exe`` — every
@@ -598,12 +655,291 @@ def layer_tree_hash(layer_dir: Path) -> str:
     return h.hexdigest()
 
 
+def forget_reply_record_when_done(engine: Any, turn_id: str, task: Any) -> dict[str, Any]:
+    """v1.425.0 (review): A BENCHMARK TURN IS NEVER CARRIED ON. Drop a
+    product-path turn's reply record (``harness/reply_record``,
+    ``build-turn:<turn id>``) once the turn's task has ENDED — however it
+    ended. A turn cut off (the time limit's Stop did not end it within the
+    grace, the follow's last bound, the whole run cancelled) keeps that record:
+    it is how a restart carries a reply on, and the boot's resume pass of any
+    daemon started on the benchmark's home would carry a benchmark turn on by
+    itself — a model call nobody asked for, in a task copy already graded. The
+    drop is queued on the record's OWN writer (one thread, in order), so a save
+    still in flight when the task ended lands BEFORE it, never after; and it is
+    registered on the task, so a cancel path that cannot await still drops it.
+    Returns a holder whose ``"future"`` is the queued drop (set once the task
+    has ended). Never raises."""
+    holder: dict[str, Any] = {}
+
+    def _done(_task: Any) -> None:
+        try:
+            from ..harness import reply_record as RR
+
+            holder["future"] = RR._writer().submit(RR.drop, engine, turn_id)
+        except Exception:  # noqa: BLE001 — a record never breaks a run
+            pass
+
+    try:
+        task.add_done_callback(_done)
+    except Exception:  # noqa: BLE001 — no task to wait for: drop it now
+        _done(None)
+    return holder
+
+
+async def reply_record_dropped(holder: dict[str, Any], timeout_s: float = 10.0) -> None:
+    """Wait (bounded) for :func:`forget_reply_record_when_done`'s drop. The
+    task's done callbacks run on the loop's next turn, so one is given first.
+    Never raises."""
+    await asyncio.sleep(0)
+    fut = holder.get("future")
+    if fut is None:
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(asyncio.wrap_future(fut), timeout_s)
+
+
+#: v1.425.0: the fields of one patience wait (a ``provider_wait`` frame,
+#: ``harness/patience.FRAME``) a record keeps — never its words.
+WAIT_KEYS: tuple[str, ...] = ("attempt", "of", "wait_s", "why", "provider")
+
+
+def patience_summary(waits: list[dict[str, Any]]) -> dict[str, Any]:
+    """``{waits, seconds, list}`` — how often a run's rounds WAITED OUT a
+    passing provider failure (``harness/patience``) and for how long in all."""
+    seconds = 0.0
+    for w in waits:
+        try:
+            seconds += float(w.get("wait_s") or 0.0)
+        except (TypeError, ValueError):
+            pass
+    return {"waits": len(waits), "seconds": round(seconds, 1), "list": list(waits)}
+
+
+def _masked(text: Any, limit: int) -> str:
+    """``text`` masked (``detections.redact.mask``) BEFORE it is cut."""
+    try:
+        from ..detections.redact import mask
+
+        out = mask(str(text or ""))
+    except Exception:  # noqa: BLE001 — never kept unmasked
+        return ""
+    return out[:limit]
+
+
+def coding_session_record(line: Any, *, thread_id: str = "") -> dict[str, Any]:
+    """What a product-path run's coding session ADDED, read off its own reply
+    line (``routes/build._ReplyWatch.lines``, the line the session keeps):
+    its saved steps (name, outcome, length, what it was done to — never their
+    input or output, which the trajectory keeps), its finish check, the step
+    limit or cap it met, how many model calls it billed, its length and its
+    first word. ``line_saved`` False: the session kept no reply line for the
+    turn (it stopped before a word). Never raises."""
+    out: dict[str, Any] = {"thread_id": str(thread_id or ""), "line_saved": isinstance(line, dict)}
+    if not isinstance(line, dict):
+        return out
+    try:
+        steps = [s for s in (line.get("steps") or []) if isinstance(s, dict)]
+        kept: list[dict[str, Any]] = []
+        for s in steps[:PRODUCT_STEPS_KEPT]:
+            step: dict[str, Any] = {"name": str(s.get("name") or ""), "ok": s.get("ok")}
+            if isinstance(s.get("ms"), int) and not isinstance(s.get("ms"), bool):
+                step["ms"] = s["ms"]
+            if s.get("target"):
+                step["target"] = _masked(s.get("target"), STEP_TARGET_CHARS)
+            if s.get("check"):
+                # Iron Jarvis's own step (the finish check's test run, a
+                # project check) — never the model's.
+                step["check"] = str(s.get("check"))
+            kept.append(step)
+        out["steps"] = kept
+        out["step_count"] = len(steps)
+        out["failed_steps"] = sum(1 for s in steps if s.get("ok") is False)
+        out["own_steps"] = sum(1 for s in steps if s.get("check"))
+        from ..harness.finish import saved_record
+
+        fin = saved_record(line.get("finish"))
+        if fin is not None:
+            if fin.get("command"):
+                fin["command"] = _masked(fin["command"], 300)
+            out["finish"] = fin
+        for key, dest in (("stepLimit", "step_limit"), ("capMet", "cap"), ("summarized", "summarized"),
+                          ("accountLimit", "account_limit")):
+            if isinstance(line.get(key), dict):
+                out[dest] = dict(line[key])
+        out["model_calls"] = len([c for c in (line.get("calls") or []) if isinstance(c, dict)])
+        timing = line.get("timing") if isinstance(line.get("timing"), dict) else {}
+        if isinstance(timing.get("ms"), int):
+            out["ms"] = timing["ms"]
+        if isinstance(timing.get("firstTokenAt"), int) and isinstance(timing.get("startedAt"), int):
+            out["first_word_ms"] = max(0, timing["firstTokenAt"] - timing["startedAt"])
+        if line.get("error"):
+            out["error"] = _masked(line.get("error"), 300)
+        if line.get("interrupted"):
+            out["interrupted"] = True
+    except Exception:  # noqa: BLE001 — a record never breaks a run
+        pass
+    return out
+
+
+def reply_line(engine: Any, thread_id: str, turn_id: str) -> "dict[str, Any] | None":
+    """The reply line a coding session kept for ``turn_id`` (its NEWEST
+    assistant line of that turn), or None. BLOCKING (reads the session's
+    row); never raises."""
+    try:
+        from ..harness import sessions as S
+
+        row = S.get_row(engine, thread_id)
+        if row is None:
+            return None
+        for m in reversed(S._messages(row)):
+            if m.get("role") == "assistant" and m.get("turnId") == turn_id:
+                return dict(m)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+class _TurnReading:
+    """What ONE Jarvis turn's frames said, read as they pass — the same reading
+    for both paths (v1.425.0: lifted out of the lane runner's loop, so the
+    product path reads a coding session's frames exactly as the lane path
+    reads the lane's): rounds, finished tool calls, the trajectory, the done
+    or error frame, the helpers' rows, the cards and questions the benchmark
+    answered, and the round's patience waits.
+
+    ``answer_questions`` (the product path): a question waits on the user
+    there (``mcp_cards``), so the benchmark settles it
+    (:data:`PRODUCT_QUESTION_OUTCOMES`); on the lane path nothing can ask
+    (the lane's scope is off) and a question frame is only counted."""
+
+    def __init__(self, approvals: Any, *, answer_questions: bool = False) -> None:
+        self.approvals = approvals
+        self.answer_questions = answer_questions
+        #: v1.396.0: the turn's helper rows by call id (``keep_helper``).
+        self.helpers: dict[str, dict[str, Any]] = {}
+        self.rounds = 0
+        self.tools = 0
+        self.done: dict[str, Any] | None = None
+        self.error = ""
+        self.error_fix_kind = ""
+        #: v1.370.0: the run's TRAJECTORY — what the agent did, step by step
+        #: (the refine loop's evidence; never shown to the agent).
+        self.trajectory: list[dict[str, Any]] = []
+        self.words: list[str] = []
+        #: v1.402.0 (the autonomy metrics): every card and question the turn
+        #: put to "the person" — counted where this runner answers it, since
+        #: nobody is there (``facts.asks``).
+        self.asks: dict[str, Any] = {"cards": 0, "questions": 0, "by_tool": {}}
+        self._seen_asks: set[str] = set()
+        #: v1.425.0: every wait the round's patience made (``WAIT_KEYS``).
+        self.waits: list[dict[str, Any]] = []
+        #: v1.425.0: the account's limit card the turn ended on (product path).
+        self.account_limit: dict[str, Any] | None = None
+
+    def count_ask(self, kind: str, tool: Any) -> None:
+        self.asks[kind] += 1
+        name = str(tool or "?")[:80]
+        self.asks["by_tool"][name] = self.asks["by_tool"].get(name, 0) + 1
+
+    def note(self, entry: dict[str, Any]) -> None:
+        if len(self.trajectory) < TRAJECTORY_ENTRIES:
+            self.trajectory.append(entry)
+
+    def flush_words(self) -> None:
+        text = "".join(self.words).strip()
+        self.words.clear()
+        if text:
+            self.note({"kind": "text", "text": text[:4000]})
+
+    def _settle_question(self, event: str, data: dict[str, Any]) -> None:
+        """The product path: settle a question nobody can answer (never
+        raises; an id already settled is left alone)."""
+        if not self.answer_questions:
+            return
+        try:
+            from ..daemon import mcp_turn
+
+            ask = mcp_turn.find(str(data.get("id") or ""))
+            if ask is not None:
+                ask.resolve(PRODUCT_QUESTION_OUTCOMES.get(event, "stopped"), None, actor="bench")
+        except Exception:  # noqa: BLE001 — the turn's own wait still ends it
+            pass
+
+    def see(self, event: str, data: dict[str, Any]) -> None:
+        from ..core.approvals import resolve_as
+
+        if event == "round":
+            self.rounds += 1
+            self.flush_words()
+        elif event == "token":
+            self.words.append(str(data.get("text") or ""))
+        elif event == "reset":
+            self.words.clear()
+        elif event == "tool_call" and data.get("status") == "started":
+            self.flush_words()
+            self.note({"kind": "call", "id": data.get("id"), "tool": data.get("name"),
+                       "args": data.get("args"),
+                       # v1.402.0 review: the round it was asked in (one card
+                       # per round's same-kind calls, as the lane shows).
+                       "round": self.rounds})
+        elif event == "tool_call" and data.get("status") == "finished":
+            self.tools += 1
+            detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+            self.note({"kind": "result", "id": data.get("id"), "tool": data.get("name"),
+                       "ok": data.get("ok"),
+                       "output": str(detail.get("output") or data.get("output") or "")[:2000]})
+        elif event == "approval":
+            # The lane path: yolo grants every card these tools raise, and one
+            # that still shows is answered for this call only. The product
+            # path ("Ask first"): every card the session shows is answered so
+            # — by the benchmark (the autonomy metrics' actor), and counted.
+            self.count_ask("cards", data.get("tool"))
+            resolve_as(self.approvals, str(data.get("id") or ""), "once", actor="bench")
+        elif event in ("ask_user", "mcp_elicitation"):
+            # A question nobody here can answer: counted (and, on the product
+            # path, skipped / declined by the benchmark).
+            self.count_ask("questions", "ask_user" if event == "ask_user" else "mcp_elicitation")
+            self._settle_question(event, data)
+        elif event == "mcp_sampling":
+            self.count_ask("cards", "mcp_sampling")
+            self._settle_question(event, data)
+        elif event == "helper":
+            # v1.396.0: WHO DID WHAT — each helper's row, as the reply line
+            # keeps it (its member, role, the router's reason, its model and
+            # what its run used).
+            keep_helper(self.helpers, data)
+            if isinstance(data.get("ask"), dict):
+                # v1.372.0: a HELPER's own ask (yolo is never handed down — a
+                # helper asks) is answered the same way: this call only.
+                ask = data["ask"]
+                ask_id = str(ask.get("id") or "")
+                if ask_id and ask_id not in self._seen_asks:
+                    self._seen_asks.add(ask_id)
+                    self.count_ask("cards", ask.get("tool"))
+                resolve_as(self.approvals, ask_id, "once", actor="bench")
+        elif event == "provider_wait":
+            # v1.425.0: the round's patience waited out a passing provider
+            # failure (``harness/patience``) — kept, never its words.
+            if data.get("state") == "waiting":
+                self.waits.append({k: data.get(k) for k in WAIT_KEYS if k in data})
+        elif event == "account_limit":
+            # v1.425.0 (product path): the session's account reached its limit.
+            self.account_limit = {k: data.get(k) for k in ("kind", "provider", "resets_at", "resumable")
+                                  if k in data}
+        elif event == "error":
+            self.error = str(data.get("detail") or data.get("title") or "the turn failed")
+            self.error_fix_kind = str(data.get("fix_kind") or "")
+        elif event == "done":
+            self.done = data
+
+
 class JarvisRunner:
     name = "jarvis"
 
     def __init__(self, platform: Any, *, provider: str = "", model: str = "",
                  round_budget: int = DEFAULT_ROUNDS, dialect: str = DEFAULT_DIALECT,
-                 layer_dir: "Path | str | None" = None, effort: str = "") -> None:
+                 layer_dir: "Path | str | None" = None, effort: str = "",
+                 path: str = PATH_LANE, own_step_limit: bool = False) -> None:
         from ..daemon.chat_turn import turn_harness, turn_round_budget
 
         self.platform = platform
@@ -622,6 +958,50 @@ class JarvisRunner:
         #: the task copy's own (``components.LAYER_SOURCE``). None = the
         #: default harness, exactly as before.
         self.layer_dir = Path(layer_dir) if layer_dir else None
+        #: v1.425.0 (C2): the path a task runs on (:data:`PATHS`) — the bare
+        #: lane (this class's default: the refine loop and every older caller)
+        #: or a real coding session (the command line's default).
+        self.path = str(path or PATH_LANE).strip().lower()
+        if self.path not in PATHS:
+            raise ValueError(f"path must be one of {', '.join(PATHS)}")
+        if self.path == PATH_PRODUCT and self.dialect != DEFAULT_DIALECT:
+            # A coding session speaks its model's own dialect
+            # (``start_build_turn`` builds its turn with ``harness="auto"``):
+            # nothing there can force another.
+            raise ValueError(
+                "--dialect applies to --path lane: a coding session speaks its model's own dialect. "
+                "Add --path lane to force one."
+            )
+        if self.path == PATH_PRODUCT and self.layer_dir is not None:
+            raise ValueError("the refine loop's candidate setup runs on the lane path only")
+        #: v1.425.0: on the product path, True = the coding session's OWN step
+        #: limit (the home's ``build_round_budget`` setting — no limit by
+        #: default, the app's), False = ``round_budget`` (``--rounds``), set
+        #: for each task's turn in this process only. (The lane path always
+        #: uses ``round_budget``; a team's members use it on both paths.)
+        self.own_step_limit = bool(own_step_limit) and self.path == PATH_PRODUCT
+
+    @property
+    def approval_mode(self) -> str:
+        """The posture this runner's turns work under: "Don't ask" on the lane
+        path (the copy is disposable), "Ask first" on the product path."""
+        return PRODUCT_APPROVAL_MODE if self.path == PATH_PRODUCT else JARVIS_APPROVAL_MODE
+
+    def path_line(self) -> str:
+        """v1.425.0: the path in one plain line (a dry run says it)."""
+        if self.path == PATH_PRODUCT:
+            rounds, no_limit = self.step_limit()
+            limit = "no step limit (the session's own)" if no_limit else (
+                f"at most {rounds} steps" + (" (the session's own setting)" if self.own_step_limit else ""))
+            return ("Each task runs as a coding session (the product path): \"Ask first\", every card "
+                    f"answered \"Allow once\" by the benchmark, {limit}.")
+        return ("Each task runs on the bare chat lane (the lane path): \"Don't ask\", "
+                f"at most {self.round_budget} rounds.")
+
+    def dry_run_lines(self) -> list[str]:
+        """What a dry run lists for this runner before its tasks (v1.425.0:
+        the path it runs on)."""
+        return [self.path_line()]
 
     def reasoning(self) -> str:
         """The reasoning level the turn SENDS: the asked effort when
@@ -825,7 +1205,8 @@ class JarvisRunner:
         return build(
             registry=self.platform.registry, permissions=self.platform.permissions,
             requested=self.dialect, provider=provider, model=model, stream=True,
-            approval_mode=JARVIS_APPROVAL_MODE, today="", layer=self._layer(),
+            # v1.425.0: the posture this path's turns really run under.
+            approval_mode=self.approval_mode, today="", layer=self._layer(),
             # v1.378.0: the turn runs as a Build session, so its shell is the
             # one a Build session's model is shown (the user's PATH).
             shell_description="" if bash_words else build_shell_description(),
@@ -833,6 +1214,10 @@ class JarvisRunner:
             # v1.403.0: a team LEAD's turn shows the lead's tools (the team
             # runner with ``team = true``); False keeps the build as before.
             **({"lead": True} if self.lead_locked() else {}),
+            # v1.425.0: a coding session's screen draws the question card, so
+            # its turn arms ``ask_user`` (``mcp_cards``) — the lane path's
+            # turn does not (its build is unchanged).
+            **({"ask_user": True} if self.path == PATH_PRODUCT else {}),
         )
 
     def identity(self) -> dict[str, Any]:
@@ -918,6 +1303,52 @@ class JarvisRunner:
             # (its version) or cmd.exe — so a run under one is never reused
             # for the other (absent for a dialect without one).
             **({"command_shell": shell} if (shell := self._command_shell(turn)) else {}),
+            # v1.425.0 (C2): the PRODUCT path is another setup (absent on the
+            # lane path, so every earlier configuration keeps its key).
+            **(self._product_identity() if self.path == PATH_PRODUCT else {}),
+        }
+
+    def step_limit(self, task: "Task | None" = None) -> tuple[int, bool]:
+        """v1.425.0: ``(rounds, no_limit)`` a product-path turn gets — the
+        coding session's own (``routes/build.build_step_limit`` of the home's
+        setting) when :attr:`own_step_limit`, else ``--rounds`` (raised by a
+        task that asks for more, :func:`catalog.rounds_for`)."""
+        if self.own_step_limit:
+            from ..daemon.routes.build import build_step_limit
+
+            return build_step_limit(getattr(self.platform, "config", None))
+        return (rounds_for(task, self.round_budget) if task is not None else self.round_budget), False
+
+    def _product_identity(self) -> dict[str, Any]:
+        """What the product path adds to the identity: the path, its posture,
+        its step limit, and the source of what a coding session's turn does
+        beyond the lane (the build route's start and reply line, the session
+        record, the reply record, the turn log, the posture's rules, the
+        session's grants and team, the stall watch, the cap, the reply's own
+        summary, the history it is given)."""
+        from ..core import auto_approve
+        from ..daemon import durable_turns
+        from ..daemon.routes import build as build_routes
+        from ..harness import compact as harness_compact
+        from ..harness import reply_cap as harness_reply_cap
+        from ..harness import reply_record as harness_reply_record
+        from ..harness import reply_summary as harness_reply_summary
+        from ..harness import session_grants as harness_session_grants
+        from ..harness import sessions as harness_sessions
+        from ..harness import stall as harness_stall
+        from ..harness import team as harness_team
+
+        rounds, no_limit = self.step_limit()
+        modules = (build_routes, durable_turns, harness_sessions, harness_reply_record, harness_compact,
+                   auto_approve, harness_session_grants, harness_stall, harness_reply_cap,
+                   harness_reply_summary, harness_team)
+        return {
+            "path": PATH_PRODUCT,
+            "approval_mode": PRODUCT_APPROVAL_MODE,
+            "round_budget": rounds,
+            **({"no_step_limit": True} if no_limit else {}),
+            "step_limit_from": "session" if self.own_step_limit else "bench",
+            "product_sha256": _sha(b"\0".join(_module_bytes(m) for m in modules)),
         }
 
     @staticmethod
@@ -928,7 +1359,16 @@ class JarvisRunner:
         return bash_identity() if harness_dialects.speaks_bash(turn.plan.dialect) else ""
 
     async def run(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
-        from ..core.approvals import resolve_as
+        """One task's turn, on this runner's path (v1.425.0): a real coding
+        session (:meth:`_run_product`) or the bare stream lane
+        (:meth:`_run_lane`). Both read the turn's frames the same way
+        (:class:`_TurnReading`) and settle the record the same way
+        (:meth:`_settle`)."""
+        if self.path == PATH_PRODUCT:
+            return await self._run_product(task, workspace, rollout, timeout_s=timeout_s)
+        return await self._run_lane(task, workspace, rollout, timeout_s=timeout_s)
+
+    async def _run_lane(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
         from ..core.fs_policy import usable_workspace_root
         from ..daemon.chat_stream import stream_chat_turn
         from ..daemon.routes.chat import _approvals
@@ -952,38 +1392,9 @@ class JarvisRunner:
         # v1.400.2: a task may ask for more rounds than the runner's budget
         # (the team tier: the product's own ceiling); never fewer.
         budget = rounds_for(task, self.round_budget)
-        approvals = _approvals(SimpleNamespace(platform=self.platform))
+        reading = _TurnReading(_approvals(SimpleNamespace(platform=self.platform)))
         observed: dict[str, Any] = {}
-        #: v1.396.0: the turn's helper rows by call id (``keep_helper``).
-        helpers: dict[str, dict[str, Any]] = {}
-        rounds = tools = 0
-        done: dict[str, Any] | None = None
-        error = ""
-        error_fix_kind = ""
         timed_out = False
-        #: v1.370.0: the run's TRAJECTORY — what the agent did, step by step
-        #: (the refine loop's evidence; never shown to the agent).
-        trajectory: list[dict[str, Any]] = []
-        words: list[str] = []
-        #: v1.402.0 (the autonomy metrics): every card and question the turn
-        #: put to "the person" — counted where this runner answers it, since
-        #: nobody is there (``facts.asks``).
-        asks: dict[str, Any] = {"cards": 0, "questions": 0, "by_tool": {}}
-
-        def _count_ask(kind: str, tool: Any) -> None:
-            asks[kind] += 1
-            name = str(tool or "?")[:80]
-            asks["by_tool"][name] = asks["by_tool"].get(name, 0) + 1
-
-        def _note(entry: dict[str, Any]) -> None:
-            if len(trajectory) < TRAJECTORY_ENTRIES:
-                trajectory.append(entry)
-
-        def _flush_words() -> None:
-            text = "".join(words).strip()
-            words.clear()
-            if text:
-                _note({"kind": "text", "text": text[:4000]})
 
         from uuid import uuid4
 
@@ -1016,66 +1427,11 @@ class JarvisRunner:
                     async with contextlib.aclosing(gen) as frames:
                         async for chunk in frames:
                             for event, data in parse_sse(chunk):
-                                if event == "round":
-                                    rounds += 1
-                                    _flush_words()
-                                elif event == "token":
-                                    words.append(str(data.get("text") or ""))
-                                elif event == "reset":
-                                    words.clear()
-                                elif event == "tool_call" and data.get("status") == "started":
-                                    _flush_words()
-                                    _note({"kind": "call", "id": data.get("id"), "tool": data.get("name"),
-                                           "args": data.get("args"),
-                                           # v1.402.0 review: the round it was
-                                           # asked in (one card per round's
-                                           # same-kind calls, as the lane shows).
-                                           "round": rounds})
-                                elif event == "tool_call" and data.get("status") == "finished":
-                                    tools += 1
-                                    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
-                                    _note({"kind": "result", "id": data.get("id"), "tool": data.get("name"),
-                                           "ok": data.get("ok"),
-                                           "output": str(detail.get("output") or data.get("output") or "")[:2000]})
-                                elif event == "approval":
-                                    # Belt and braces: yolo grants every card
-                                    # these tools raise; one that still shows
-                                    # is answered for this call only — by the
-                                    # benchmark (the autonomy metrics' actor),
-                                    # and counted.
-                                    _count_ask("cards", data.get("tool"))
-                                    resolve_as(approvals, str(data.get("id") or ""), "once", actor="bench")
-                                elif event in ("ask_user", "mcp_elicitation"):
-                                    # A question nobody here can answer (the
-                                    # turn's own wait settles it): counted.
-                                    _count_ask("questions", "ask_user" if event == "ask_user" else "mcp_elicitation")
-                                elif event == "mcp_sampling":
-                                    _count_ask("cards", "mcp_sampling")
-                                elif event == "helper":
-                                    # v1.396.0: WHO DID WHAT — each helper's
-                                    # row, as the reply line keeps it (its
-                                    # member, role, the router's reason, its
-                                    # model and what its run used).
-                                    keep_helper(helpers, data)
-                                    if isinstance(data.get("ask"), dict):
-                                        # v1.372.0: a HELPER's own ask (yolo is
-                                        # never handed down — a helper asks) is
-                                        # answered the same way: this call only.
-                                        _ask = data["ask"]
-                                        _ask_id = str(_ask.get("id") or "")
-                                        if _ask_id and _ask_id not in asks.setdefault("_seen", set()):
-                                            asks["_seen"].add(_ask_id)
-                                            _count_ask("cards", _ask.get("tool"))
-                                        resolve_as(approvals, _ask_id, "once", actor="bench")
-                                elif event == "error":
-                                    error = str(data.get("detail") or data.get("title") or "the turn failed")
-                                    error_fix_kind = str(data.get("fix_kind") or "")
-                                elif event == "done":
-                                    done = data
+                                reading.see(event, data)
             except TimeoutError:
                 timed_out = True
             except Exception as exc:  # noqa: BLE001 — recorded, never raised past the run
-                error = f"{type(exc).__name__}: {exc}"
+                reading.error = f"{type(exc).__name__}: {exc}"
             finally:
                 reset_hold(hold_token)
         # What the turn's shell / run_code left running (a server the agent
@@ -1087,26 +1443,268 @@ class JarvisRunner:
         stopped = await asyncio.to_thread(procs.end_session, session)
         if stopped:
             out.notes.append(f"stopped {len(stopped)} program(s) the turn left running")
-        if time.monotonic() > deadline and done is None:
+        if time.monotonic() > deadline and reading.done is None:
             timed_out = True
-        _flush_words()
+        return await self._settle(
+            out, rollout, reading, observed, timeout_s=timeout_s,
+            timed_out=bool(timed_out and reading.done is None),
+            # The agent used every round it was given (the turn then ended in
+            # chat with one tool-less answer).
+            cut_off=reading.rounds >= budget,
+        )
+
+    async def _run_product(self, task: Task, workspace: Path, rollout: Rollout, *, timeout_s: float) -> RunOutcome:
+        """v1.425.0 (C2): the task as a REAL coding session (see the module
+        docstring's "THE PRODUCT PATH"): the session made through the app's
+        ONE create path in the task's copy, the task sent as the user's
+        message through ``routes/build.start_build_turn`` (the turn route's
+        own function), the turn FOLLOWED like the screen follows it — every
+        card answered "Allow once", every question settled by the benchmark —
+        and stopped at the task's time limit with the user's Stop."""
+        from fastapi import HTTPException
+
+        from ..core.turns import TURNS
+        from ..daemon.routes import build as build_routes
+        from ..daemon.routes.chat import _approvals
+        from ..harness import library as _library
+        from ..harness import sessions as S
+        from ..personas.builtins import BUILTIN_PERSONAS
+
+        out = RunOutcome(usage_source="lane")
+        folder = S.resolved_folder(str(workspace))
+        problem = await asyncio.to_thread(S.folder_problem, folder)
+        if problem:
+            # The session would not start in it (the app's own rule).
+            out.error = f"Iron Jarvis would not work in {workspace} ({problem})"
+            return out
+        # The routes' own shim: what ``start_build_turn`` reads off ``d``.
+        d = SimpleNamespace(platform=self.platform, _PERSONAS=BUILTIN_PERSONAS)
+        deadline = time.monotonic() + float(timeout_s)
+        try:
+            setup = await asyncio.to_thread(self.session_setup)
+            row, _branch_note = await build_routes.create_session_row(
+                d, folder, title=PRODUCT_SESSION_TITLE, setup=setup,
+                # The copy itself: a branch's worktree would sit beside it,
+                # where the grader never reads.
+                branch=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — recorded: nothing ran
+            out.error = f"the coding session could not be made ({type(exc).__name__}: {exc})"
+            return out
+        thread_id = str(row.id)
+        session = S.session_id_for(thread_id)
+        from uuid import uuid4
+
+        turn_id = PRODUCT_TURN_PREFIX + uuid4().hex[:16]
+        reading = _TurnReading(_approvals(d), answer_questions=True)
+        observed: dict[str, Any] = {}
+        state: dict[str, bool] = {"stopped": False, "cut": False}
+        lg: Any = None
+        dropped: dict[str, Any] = {}
+        rounds, _no_limit = self.step_limit(task)
+
+        async def _time_limit() -> None:
+            # The task's time limit is the user's Stop (it stops the running
+            # step too, ``harness/stall``); a turn that still runs a minute
+            # later is cut off like a shutdown cuts it. A turn whose last
+            # frame is already out was not stopped (it ended in time).
+            await asyncio.sleep(max(0.0, deadline - time.monotonic()))
+            if getattr(lg, "status", "") != "running" or lg.last_event() in ("done", "error"):
+                return
+            state["stopped"] = True
+            TURNS.stop(turn_id)
+            await asyncio.sleep(_GRACE_S)
+            task_ = getattr(lg, "task", None)
+            if task_ is not None and not task_.done():
+                state["cut"] = True
+                task_.cancel()
+
+        async def _turn_ended() -> None:
+            # The turn's own end runs after its last frame (its reply line is
+            # written BEFORE that frame, the library's note after it).
+            task_ = getattr(lg, "task", None)
+            if task_ is not None and not task_.done():
+                await asyncio.wait({task_}, timeout=_GRACE_S)
+
+        async def _end_turn_now() -> None:
+            # v1.425.0 (review): the turn is its OWN task (``TurnLogs``) — a
+            # follow that ended early (a fault in the benchmark's own reading)
+            # must not leave it running on, unwatched, behind a run that is
+            # already being graded: stopped the way the time limit stops it,
+            # then cut off if it does not end within the grace.
+            task_ = getattr(lg, "task", None)
+            if task_ is None or task_.done():
+                return
+            with contextlib.suppress(Exception):
+                TURNS.stop(turn_id)
+            await asyncio.wait({task_}, timeout=_GRACE_S)
+            if not task_.done():
+                state["cut"] = True
+                task_.cancel()
+                await asyncio.wait({task_}, timeout=_GRACE_S)
+
+        with session_ended_on_escape(session), \
+                counting_router(self.platform, rollout, observed, reasoning_for=self.call_reasoning), \
+                hidden_environ():
+            stopper: "asyncio.Task | None" = None
+            try:
+                try:
+                    with self._step_limit_scope(task):
+                        lg = await build_routes.start_build_turn(
+                            d, thread_id, render_prompt(task, workspace), turn_id,
+                        )
+                except HTTPException as exc:
+                    # Refused in words before anything ran (the app's own
+                    # refusal: the folder, the account, a lane check).
+                    reading.error = str(exc.detail)
+                except build_routes.SessionBusy:
+                    reading.error = "the coding session was busy"
+                if lg is not None:
+                    # v1.425.0 (review): its reply record goes when it ends,
+                    # however it ends (``forget_reply_record_when_done``).
+                    dropped = forget_reply_record_when_done(self.platform.engine, turn_id, lg.task)
+                    stopper = asyncio.ensure_future(_time_limit())
+                    try:
+                        async with asyncio.timeout(float(timeout_s) + 2 * _GRACE_S + 30.0):
+                            async with contextlib.aclosing(lg.follow()) as frames:
+                                async for chunk in frames:
+                                    for event, data in parse_sse(chunk):
+                                        reading.see(event, data)
+                    except TimeoutError:
+                        # (A last bound on the follow itself: the stopper
+                        # cuts the turn off long before this.)
+                        state["stopped"] = state["cut"] = True
+                        if lg.task is not None and not lg.task.done():
+                            lg.task.cancel()
+                    # The turn's frames have ended: its clock stops.
+                    stopper.cancel()
+                    await asyncio.gather(stopper, return_exceptions=True)
+                    await _turn_ended()
+            except Exception as exc:  # noqa: BLE001 — recorded, never raised past the run
+                reading.error = f"{type(exc).__name__}: {exc}"
+                if stopper is not None and not stopper.done():
+                    stopper.cancel()
+                await _end_turn_now()
+            except BaseException:
+                # A cancel (Ctrl+C, the bench's own stop): the turn runs as its
+                # own task, so it is stopped too, never left running.
+                with contextlib.suppress(Exception):
+                    TURNS.stop(turn_id)
+                    if lg is not None and lg.task is not None and not lg.task.done():
+                        lg.task.cancel()
+                raise
+            finally:
+                if stopper is not None and not stopper.done():
+                    stopper.cancel()
+        # v1.425.0 (review): the turn's reply record is gone before the run
+        # returns (nothing a daemon on this home would carry on).
+        await reply_record_dropped(dropped)
+        stopped = await asyncio.to_thread(procs.end_session, session)
+        if stopped:
+            out.notes.append(f"stopped {len(stopped)} program(s) the turn left running")
+        # The library's after-idle reflection (``harness/library``) is the
+        # session's NEXT idle period — never part of this run, and a model call
+        # no run's ledger would hold: taken back, nothing proposed.
+        with contextlib.suppress(Exception):
+            _library.take_stretch(thread_id)
+        line = await asyncio.to_thread(reply_line, self.platform.engine, thread_id, turn_id)
+        done = reading.done
+        out = await self._settle(
+            out, rollout, reading, observed, timeout_s=timeout_s,
+            # The benchmark pressed Stop at the time limit: the agent's time
+            # ran out, whether or not the turn still wrote a reply.
+            timed_out=bool(state["stopped"]),
+            # The coding session's own step limit (the lane's ``step_limit``).
+            cut_off=bool(done is not None and isinstance(done.get("step_limit"), dict)),
+        )
+        record = coding_session_record(line, thread_id=thread_id)
+        record["turn_id"] = turn_id
+        record["step_limit_rounds"] = rounds
+        if reading.account_limit is not None:
+            record["account_limit"] = dict(reading.account_limit)
+        out.extra["coding_session"] = record
+        if state["stopped"]:
+            out.notes.append(f"the benchmark pressed Stop at the {timeout_s:g} s time limit")
+        if state["cut"]:
+            out.notes.append("the turn was still running a minute after Stop and was cut off")
+        return out
+
+    def session_setup(self) -> dict[str, Any]:
+        """v1.425.0: the setup a product-path coding session is made with —
+        exactly what New session sends (``POST /build/sessions``): the
+        provider, model and reasoning level (only where the pair offers it),
+        the "Ask first" posture, the account New session would choose
+        (``routes/build._with_initial_account``: the Default of the model's
+        vendor when Iron-Proxy holds one, else none), and the session's team
+        (:meth:`session_team`). BLOCKING (account and registry reads)."""
+        from ..daemon.routes.build import _with_initial_account
+
+        setup = {
+            k: v for k, v in {
+                "provider": self.provider, "model": self.model, "reasoning": self.reasoning(),
+                "approval_mode": PRODUCT_APPROVAL_MODE,
+            }.items() if v
+        }
+        setup = _with_initial_account(self.platform, setup, "")
+        team = self.session_team()
+        if team:
+            from ..harness import team as harness_team
+
+            setup[harness_team.SETUP_KEY] = team
+        return setup
+
+    def session_team(self) -> "dict[str, Any] | None":
+        """v1.425.0: the coding session's team on the product path (the team
+        runner's ``team = true``); none for a single model."""
+        return None
+
+    @contextlib.contextmanager
+    def _step_limit_scope(self, task: Task):
+        """v1.425.0: ``--rounds`` on the product path — the home's
+        ``build_round_budget`` setting is the turn's step limit for the start
+        of THIS task's turn only (the turn reads it as it starts), in this
+        process only (never written to any config.toml), and put back at
+        once. Nothing changes when the session's own limit is used."""
+        config = getattr(self.platform, "config", None)
+        if self.own_step_limit or config is None:
+            yield
+            return
+        before = getattr(config, "build_round_budget", 0)
+        config.build_round_budget = rounds_for(task, self.round_budget)
+        try:
+            yield
+        finally:
+            config.build_round_budget = before
+
+    async def _settle(self, out: RunOutcome, rollout: Rollout, reading: _TurnReading,
+                      observed: dict[str, Any], *, timeout_s: float, timed_out: bool,
+                      cut_off: bool) -> RunOutcome:
+        """The run's record from what its turn said (both paths): the
+        trajectory, the counts, who did what, the receipt's numbers (or the
+        ledger's when no receipt came), and the facts the failure table
+        reads. ``timed_out``: the time limit ended the turn; ``cut_off``: the
+        agent used every round it was given."""
+        reading.flush_words()
+        done, error = reading.done, reading.error
         if done is not None:
-            _note({"kind": "reply", "text": str(done.get("reply") or "")[:4000]})
+            reading.note({"kind": "reply", "text": str(done.get("reply") or "")[:4000]})
         elif error:
-            _note({"kind": "error", "text": error[:2000]})
-        out.extra["trajectory"] = trajectory
-        asks.pop("_seen", None)
-        out.facts["asks"] = asks
-        out.tool_calls = tools
-        out.model_rounds = rounds
+            reading.note({"kind": "error", "text": error[:2000]})
+        out.extra["trajectory"] = reading.trajectory
+        out.facts["asks"] = reading.asks
+        out.tool_calls = reading.tools
+        out.model_rounds = reading.rounds
         out.extra["model_calls"] = len(rollout.calls)
         out.extra["incomplete_calls"] = sum(1 for c in rollout.calls if not c.complete)
         out.extra["observed"] = observed
-        out.facts["timed_out"] = bool(timed_out and done is None)
+        if reading.waits:
+            # v1.425.0: what the round's patience waited out (both paths).
+            out.extra["patience"] = patience_summary(reading.waits)
+        out.facts["timed_out"] = bool(timed_out)
         # The agent had started work: a tool ran, or the model answered once.
-        out.facts["acted"] = tools > 0 or any(c.complete for c in rollout.calls)
-        if error_fix_kind:
-            out.facts["fix_kind"] = error_fix_kind
+        out.facts["acted"] = reading.tools > 0 or any(c.complete for c in rollout.calls)
+        if reading.error_fix_kind:
+            out.facts["fix_kind"] = reading.error_fix_kind
         # v1.383.0: the model the turn REPORTED — its done receipt, else the
         # last model call that answered (a turn that failed part-way).
         answered = [c for c in rollout.calls if c.complete and c.model]
@@ -1116,7 +1714,7 @@ class JarvisRunner:
         )
         # v1.396.0: who did what, and what each account's usage windows said
         # during the run (from the calls' own answers — never guessed).
-        out.helpers = helper_rows(helpers)
+        out.helpers = helper_rows(reading.helpers)
         out.accounts = _usage.account_summary(rollout.calls)
         out.team_records = await self.team_records_after()
         # v1.396.0 review: a helper (a team member) that could not do its
@@ -1187,9 +1785,7 @@ class JarvisRunner:
         })
         out.ok_run = True
         out.facts["finished"] = True
-        # The agent used every round it was given (the turn then ended in
-        # chat with one tool-less answer).
-        out.facts["cut_off"] = rounds >= budget
+        out.facts["cut_off"] = bool(cut_off)
         if self.provider and out.answered_provider != self.provider:
             out.ok_run = False
             out.facts["answered_by"] = (

@@ -1077,8 +1077,11 @@ def test_the_command_line_takes_the_dialect(tmp_path):
     from iron_jarvis.harness_bench.cli import bench_app
 
     root = tmp_path / "bench-root"
+    # v1.425.0 (moved on purpose): a dialect is forced on the LANE path only
+    # (a coding session — the product path, the default — speaks its model's
+    # own; ``test_harness_bench_product_path_v14250`` pins that refusal).
     base = ["run", "--runner", "jarvis", "--provider", "custom", "--model", "glm-5.3-flash",
-            "--root", str(root), "--dry-run", "--tasks", "bugfix-leap-year"]
+            "--root", str(root), "--dry-run", "--tasks", "bugfix-leap-year", "--path", "lane"]
     auto = CliRunner().invoke(bench_app, base)
     generic = CliRunner().invoke(bench_app, [*base, "--dialect", "generic"])
     assert auto.exit_code == 0 and generic.exit_code == 0, (auto.output, generic.output)

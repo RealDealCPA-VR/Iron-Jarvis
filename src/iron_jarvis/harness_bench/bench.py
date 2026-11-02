@@ -73,6 +73,17 @@ a CLI's environment and a Jarvis turn's Build session lose ``PWD``/``OLDPWD``
 and any value naming it). A run cut off in this process removes its folder; a
 run whose process was killed leaves one, swept at the next start
 (:func:`sweep_agent_roots`: only a folder whose owner process is gone).
+
+v1.425.0 (Wave 5, gap C2): a Jarvis setup runs on a PATH (:func:`check_path`,
+``--path``): ``product`` — the command line's default — runs each task as a
+real Chat › Code coding session through the app's own start
+(``runners.JarvisRunner._run_product``: "Ask first", every card answered
+"Allow once" by the benchmark, the session's own step limit unless
+``--rounds``), and ``lane`` keeps the bare chat lane under "Don't ask". The
+path is part of the configuration's identity (a lane setup's identity is
+unchanged, so its stored results stay reusable; a product setup never reuses
+them), and everything above holds for both: the copy outside the bench root,
+the tripwire, the outside-folder snapshot, the ledger, the marker.
 """
 
 from __future__ import annotations
@@ -825,12 +836,54 @@ def require_model(runner_name: str, provider: str, model: str) -> None:
 RUNNER_NAMES: tuple[str, ...] = ("jarvis", "jarvis-team", "claude", "codex")
 
 
+#: v1.425.0 (C2): the runners that take ``--path`` (Iron Jarvis's own).
+PATH_RUNNERS = frozenset({"jarvis", "jarvis-team"})
+
+
+def check_path(runner: str, path: "str | None", dialect: str = "auto") -> str:
+    """The path a Jarvis runner runs its tasks on (v1.425.0, :data:`runners.
+    PATHS`): ``product`` (a real coding session) when none is named, or
+    :class:`BenchRefused` in one plain sentence — an unknown path, a path for
+    a CLI runner, or a forced ``--dialect`` on the product path (a coding
+    session speaks its model's own dialect)."""
+    from .runners import PATH_LANE, PATH_PRODUCT, PATHS
+
+    named = (path or "").strip().lower()
+    if named and named not in PATHS:
+        raise BenchRefused(f"--path must be one of: {', '.join(PATHS)}")
+    if runner not in PATH_RUNNERS:
+        if named:
+            raise BenchRefused("--path applies to the jarvis and jarvis-team runners only.")
+        return ""
+    chosen = named or PATH_PRODUCT
+    from ..daemon.chat_turn import turn_harness
+
+    try:
+        turn_harness(dialect or "auto")
+    except ValueError as exc:
+        raise BenchRefused(f"--dialect: {exc}") from exc
+    if chosen == PATH_PRODUCT and (dialect or "auto") != "auto":
+        raise BenchRefused(
+            "--dialect applies to --path lane: a coding session speaks its model's own dialect. "
+            f"Add --path {PATH_LANE} to force one."
+        )
+    return chosen
+
+
 def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
-                rounds: int = DEFAULT_ROUNDS, binary: str | None = None,
-                dialect: str = "auto", effort: str = "", team: str = "") -> Any:
+                rounds: "int | None" = None, binary: str | None = None,
+                dialect: str = "auto", effort: str = "", team: str = "", path: "str | None" = None) -> Any:
+    """The runner the command line asked for. v1.425.0: ``path`` — a Jarvis
+    runner's path (:func:`check_path`; ``product`` when none is named) — and
+    ``rounds`` None = no ``--rounds``: the lane path then gets
+    :data:`runners.DEFAULT_ROUNDS`, the product path the coding session's
+    OWN step limit (and a team's members :data:`runners.DEFAULT_ROUNDS`)."""
     if runner not in RUNNER_NAMES:
         raise BenchRefused(f"--runner must be one of: {', '.join(RUNNER_NAMES)}")
     effort = check_effort(effort) if effort else ""
+    chosen = check_path(runner, path, dialect)
+    budget = DEFAULT_ROUNDS if rounds is None else int(rounds)
+    own_limit = rounds is None
     if runner == "jarvis-team":
         # v1.396.0: the team file names the planner and the members.
         from .team import JarvisTeamRunner, load_team_file
@@ -850,8 +903,9 @@ def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
             turn_harness(dialect or "auto")
         except ValueError as exc:
             raise BenchRefused(f"--dialect: {exc}") from exc
-        return JarvisTeamRunner(build_platform(root), team=spec, round_budget=rounds,
-                                dialect=dialect or "auto", effort=effort)
+        return JarvisTeamRunner(build_platform(root), team=spec, round_budget=budget,
+                                dialect=dialect or "auto", effort=effort, path=chosen,
+                                own_step_limit=own_limit)
     if (team or "").strip():
         raise BenchRefused("--team applies to --runner jarvis-team only.")
     if runner == "jarvis":
@@ -864,8 +918,8 @@ def make_runner(runner: str, *, root: str, provider: str = "", model: str = "",
             raise BenchRefused(f"--dialect: {exc}") from exc
         platform = build_platform(root)
         return RUNNERS["jarvis"](
-            platform, provider=provider, model=model, round_budget=rounds, dialect=dialect or "auto",
-            effort=effort,
+            platform, provider=provider, model=model, round_budget=budget, dialect=dialect or "auto",
+            effort=effort, path=chosen, own_step_limit=own_limit,
         )
     if dialect and dialect != "auto":
         raise BenchRefused("--dialect applies to the jarvis runner only (Claude Code and Codex speak their own)")
@@ -912,6 +966,21 @@ def resolve_bench_home(root: str) -> Path:
                 "That is the Iron Jarvis app's own folder. Run the benchmark with --root pointing "
                 "at a scratch folder instead."
             )
+    # v1.425.0 (review): NOR THE FOLDER OF THE SETTINGS EVERY PROCESS READS.
+    # ``--root <your user folder>`` made the bench home ``~/.ironjarvis`` —
+    # the folder whose ``config.toml`` every Iron Jarvis on this PC layers in
+    # (``core/config.global_config_path``: the installed app's too). The
+    # product path makes real coding sessions there and answers every card
+    # "Allow once", so a settings change a task's model asked for would have
+    # landed in the owner's own settings.
+    from ..core.config import global_config_path
+
+    shared = global_config_path().parent.resolve()
+    if home.resolve() == shared:
+        raise BenchRefused(
+            f"That is the folder of the settings every Iron Jarvis on this PC reads ({shared}). "
+            "Run the benchmark with --root pointing at a scratch folder instead."
+        )
     return home
 
 
