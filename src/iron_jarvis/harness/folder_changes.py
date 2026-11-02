@@ -327,8 +327,8 @@ def _git_names(root: Path, deadline: float, started: float,
         return None, ""  # git refused this repository (an unsafe owner…): the walk
     raw = listed.stdout.decode("utf-8", "surrogateescape")
     # A path ending in "/" is a folder git did not go into (an untracked
-    # repository inside this one): never a file.
-    return [p for p in raw.split("\0") if p and not p.endswith("/")], ""
+    # repository inside this one): :func:`_git_take` walks it.
+    return [p for p in raw.split("\0") if p], ""
 
 
 def _git_on_path() -> bool:
@@ -352,20 +352,28 @@ def _git_take(root: Path, limit: int, deadline: float, started: float,
     skip = _skip_dirs()
     pruned: dict[str, bool] = {}
     files_wanted: set[str] = set()
+    #: folders git did not go into — a repository inside this one ("x/") —
+    #: walked, as the walk always did
+    inner: set[str] = set()
     need: set[str] = {""}
     for rel in names:
+        is_dir = rel.endswith("/")
+        rel = rel.rstrip("/")
         cut = rel.rfind("/")
-        folder = rel[:cut] if cut > 0 else ""
+        folder = rel if is_dir else (rel[:cut] if cut > 0 else "")
         out = pruned.get(folder)
         if out is None:
             out = pruned[folder] = _folder_pruned(folder, skip)
-        if out or cache_file(rel[cut + 1:]):
+        if out or (not is_dir and cache_file(rel[cut + 1:])):
             continue
         key = fold(rel)
-        files_wanted.add(key)
-        if len(files_wanted) > limit:
-            return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
-                            seconds=clock() - started, how="git")
+        if is_dir:
+            inner.add(key)
+        else:
+            files_wanted.add(key)
+            if len(files_wanted) > limit:
+                return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
+                                seconds=clock() - started, how="git")
         # Every folder on the way to it is listed (and only those).
         while cut > 0:
             d = key[:cut]
@@ -375,6 +383,10 @@ def _git_take(root: Path, limit: int, deadline: float, started: float,
             cut = key.rfind("/", 0, cut)
     files: dict[str, tuple[int, int]] = {}
     skipped: set[str] = set()
+    #: a submodule (git lists it as one path, a folder on disk) and a
+    #: repository inside this one: their files are WALKED, as before this
+    #: change — a command's change inside one is still seen
+    subtrees: list[tuple[str, str]] = []
     stack: list[tuple[str, str]] = [("", str(root))]
     while stack:
         rel_dir, path = stack.pop()
@@ -393,7 +405,12 @@ def _git_take(root: Path, limit: int, deadline: float, started: float,
                 if entry.is_dir(follow_symlinks=False):
                     # Never through a link or a junction: it can lead
                     # outside the folder (the walk's rule).
-                    if key in need and not _is_junction(entry) and not entry.is_symlink():
+                    if _is_junction(entry) or entry.is_symlink():
+                        continue
+                    if key in files_wanted or key in inner:
+                        if not _folder_pruned(rel, skip):
+                            subtrees.append((rel, entry.path))
+                    elif key in need:
                         stack.append((rel, entry.path))
                     continue
                 if key not in files_wanted:
@@ -405,8 +422,71 @@ def _git_take(root: Path, limit: int, deadline: float, started: float,
         if clock() - started >= deadline:
             return Snapshot(root=str(root), problem=PROBLEM_TOO_SLOW.format(seconds=deadline),
                             seconds=clock() - started, how="git")
+    if subtrees:
+        bad = _walk_from(root, subtrees, files, skipped, ignore_for(root), limit, deadline, started,
+                         clock, how="git")
+        if bad is not None:
+            return bad
     return Snapshot(root=str(root), files=files, skipped=frozenset(skipped),
                     seconds=clock() - started, how="git")
+
+
+def _walk_from(root: Path, stack: list[tuple[str, str]], files: dict[str, tuple[int, int]],
+               skipped: set[str], ignore: Any, limit: int, deadline: float, started: float,
+               clock: Callable[[], float], how: str = "walk") -> "Snapshot | None":
+    """THE WALK (BLOCKING): every folder on ``stack`` (``(rel, path)``) and
+    under it, its files recorded into ``files`` — list_files' pruning, a
+    folder the ``.gitignore`` ignores never entered, a link or a junction
+    never followed. None when it ended; else the :class:`Snapshot` that says
+    why it cannot be compared (more files than ``limit``, past the deadline,
+    the top folder unreadable). v1.425.0 (C1): lifted out of :func:`take`, so
+    git's way walks a submodule or a repository inside the repository the
+    same way (:func:`_git_take`)."""
+    skip = _skip_dirs()
+    while stack:
+        rel_dir, path = stack.pop()
+        try:
+            with os.scandir(path) as it:
+                entries = list(it)
+        except OSError:
+            if not rel_dir:
+                return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE, how=how)
+            skipped.add(rel_dir)
+            continue
+        if not any(e.name == ".gitignore" for e in entries):
+            tell = getattr(ignore, "no_file_in", None)
+            if tell is not None:
+                tell(rel_dir)  # every folder's rules are read: never open a file that is not there
+        for entry in entries:
+            name = entry.name
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if _is_junction(entry):
+                        continue  # never followed: it can lead outside the folder
+                    if name in skip or cache_dir(name) or (
+                            name.startswith(".") and name not in SOURCE_DOT_DIRS):
+                        continue
+                    if ignore is not None and ignore.ignored(rel, is_dir=True):
+                        continue
+                    stack.append((rel, entry.path))
+                    continue
+                if cache_file(name):
+                    continue
+                # A file — or a link (to a file or a folder), recorded as
+                # the link itself: never followed.
+                st = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            files[rel] = (int(st.st_size), int(st.st_mtime_ns))
+            if len(files) > limit:
+                return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
+                                seconds=clock() - started, how=how)
+        # `>=`, as list_files: a deadline of 0 means "no time at all".
+        if clock() - started >= deadline:
+            return Snapshot(root=str(root), problem=PROBLEM_TOO_SLOW.format(seconds=deadline),
+                            seconds=clock() - started, how=how)
+    return None
 
 
 def take(
@@ -451,53 +531,11 @@ def take(
         limit = cap if limit is None else int(limit)
         if ignore is None:
             ignore = ignore_for(root)
-        skip = _skip_dirs()
         files: dict[str, tuple[int, int]] = {}
         skipped: set[str] = set()
-        stack: list[tuple[str, str]] = [("", str(root))]
-        while stack:
-            rel_dir, path = stack.pop()
-            try:
-                with os.scandir(path) as it:
-                    entries = list(it)
-            except OSError:
-                if not rel_dir:
-                    return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE)
-                skipped.add(rel_dir)
-                continue
-            if not any(e.name == ".gitignore" for e in entries):
-                tell = getattr(ignore, "no_file_in", None)
-                if tell is not None:
-                    tell(rel_dir)  # every folder's rules are read: never open a file that is not there
-            for entry in entries:
-                name = entry.name
-                rel = f"{rel_dir}/{name}" if rel_dir else name
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        if _is_junction(entry):
-                            continue  # never followed: it can lead outside the folder
-                        if name in skip or cache_dir(name) or (
-                                name.startswith(".") and name not in SOURCE_DOT_DIRS):
-                            continue
-                        if ignore is not None and ignore.ignored(rel, is_dir=True):
-                            continue
-                        stack.append((rel, entry.path))
-                        continue
-                    if cache_file(name):
-                        continue
-                    # A file — or a link (to a file or a folder), recorded as
-                    # the link itself: never followed.
-                    st = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                files[rel] = (int(st.st_size), int(st.st_mtime_ns))
-                if len(files) > limit:
-                    return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
-                                    seconds=clock() - started)
-            # `>=`, as list_files: a deadline of 0 means "no time at all".
-            if clock() - started >= deadline:
-                return Snapshot(root=str(root), problem=PROBLEM_TOO_SLOW.format(seconds=deadline),
-                                seconds=clock() - started)
+        bad = _walk_from(root, [("", str(root))], files, skipped, ignore, limit, deadline, started, clock)
+        if bad is not None:
+            return bad
         return Snapshot(root=str(root), files=files, skipped=frozenset(skipped), seconds=clock() - started)
     except Exception:  # noqa: BLE001 — a snapshot never breaks a reply
         log.debug("finish check: walking %s failed", folder, exc_info=True)

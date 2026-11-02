@@ -192,6 +192,32 @@ def test_the_end_of_a_reply_reads_the_folder_the_way_its_start_did(tmp_path):
     assert FC.take(repo, how="walk").how == "walk"
 
 
+def test_a_repository_inside_the_repository_and_a_submodule_are_walked(tmp_path):
+    """git lists a repository inside this one as one folder ("inner/") and a
+    submodule as one path; their files are WALKED (as the walk always did),
+    so a command's change inside one is still seen. MUTATION: skip them (red:
+    their files missing)."""
+    repo = _repo(tmp_path / "repo")
+    _put(repo, "a.txt")
+    inner = _repo(repo / "inner")
+    _put(inner, "in.py")
+    _put(inner, "node_modules/x.js")  # the walk's pruning inside it too
+    sub_src = _repo(tmp_path / "sub_src")
+    _put(sub_src, "lib.py")
+    _git(sub_src, "add", "-A")
+    _git(sub_src, "commit", "-qm", "s")
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub_src), "vendor/lib")
+    snap = FC.take(repo)
+    assert snap.how == "git" and snap.usable
+    assert {"a.txt", "inner/in.py", "vendor/lib/lib.py", ".gitmodules"} <= set(snap.files), sorted(snap.files)
+    assert not any("node_modules" in r or "/.git/" in r for r in snap.files), sorted(snap.files)
+    before = snap
+    (repo / "vendor" / "lib" / "lib.py").write_bytes(b"changed by a command")
+    _put(inner, "made.py")
+    got = FC.compare(before, FC.take(repo, how="git"))
+    assert got.changed == ["vendor/lib/lib.py"] and got.created == ["inner/made.py"]
+
+
 def test_the_git_cap_is_its_own(tmp_path, monkeypatch):
     repo = _repo(tmp_path / "repo")
     _many(repo, 6)
