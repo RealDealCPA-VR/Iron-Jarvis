@@ -390,17 +390,51 @@ def _cited_ids(row: Any) -> list[str]:
     return out
 
 
-def _resting(row: Any, now: datetime) -> bool:
+def _resting(row: Any, now: datetime, removed: "dict[str, Any] | None" = None) -> bool:
     """Does this proposal still hold its findings (and its signature)?
     Pending always; accepted, declined or stale within :data:`SUPPRESS_DAYS`
     of the decision. (An ACCEPTED habit's findings never come back: it is in
-    force — :func:`blocked_ids` keeps them while it is.)"""
+    force — :func:`blocked_ids` keeps them while it is.)
+
+    v1.423.0 review: an accepted habit the owner REMOVED rests
+    :data:`SUPPRESS_DAYS` from the removal too (``removed``: proposal id →
+    when its habit was removed) — Remove is "not this", like a decline; a
+    habit accepted weeks ago and removed today was suggested again from the
+    same findings at the next idle period."""
     from ..coach.models import PENDING
 
     if row.status == PENDING:
         return True
+    cutoff = _naive(now - timedelta(days=SUPPRESS_DAYS))
     decided = _naive(getattr(row, "decided_at", None))
-    return decided is not None and decided >= _naive(now - timedelta(days=SUPPRESS_DAYS))
+    if decided is not None and decided >= cutoff:
+        return True
+    gone = _naive((removed or {}).get(str(getattr(row, "id", "") or "")))
+    return gone is not None and gone >= cutoff
+
+
+def _removed_at(engine: Any, member: str) -> dict[str, Any]:
+    """``{proposal id: removed_at}`` of the member's REMOVED habits.
+    BLOCKING; never raises (``{}``)."""
+    from sqlmodel import select
+
+    from ..core.db import session_scope
+
+    try:
+        with session_scope(engine) as db:
+            rows = db.exec(
+                select(TeamNote.proposal_id, TeamNote.removed_at)
+                .where(TeamNote.member == member)
+                .where(TeamNote.removed_at.is_not(None))  # type: ignore[union-attr]
+            ).all()
+        out: dict[str, Any] = {}
+        for pid, at in rows:
+            if pid and (out.get(pid) is None or _naive(at) > _naive(out[pid])):
+                out[str(pid)] = at
+        return out
+    except Exception:  # noqa: BLE001
+        log.debug("removed team notes unreadable", exc_info=True)
+        return {}
 
 
 def blocked_ids(engine: Any, member: str, *, now: "datetime | None" = None) -> set[str]:
@@ -414,8 +448,9 @@ def blocked_ids(engine: Any, member: str, *, now: "datetime | None" = None) -> s
     try:
         rows = _team_note_proposals(engine, member)
         live = {n.proposal_id for n in active_notes(engine, member)}
+        removed = _removed_at(engine, member)
         for row in rows:
-            if _resting(row, now) or (row.status == ACCEPTED and row.id in live):
+            if _resting(row, now, removed) or (row.status == ACCEPTED and row.id in live):
                 out.update(_cited_ids(row))
     except Exception:  # noqa: BLE001
         log.debug("team note proposals unreadable", exc_info=True)
@@ -862,7 +897,10 @@ def _is_mock_provider(platform: Any, provider: str, model: str = "") -> bool:
 def _suppressed(engine: Any, member: str, sig: str, *, now: "datetime | None" = None) -> bool:
     now = now or utcnow()
     try:
-        return any(r.signature == sig and _resting(r, now) for r in _team_note_proposals(engine, member))
+        removed = _removed_at(engine, member)
+        return any(
+            r.signature == sig and _resting(r, now, removed) for r in _team_note_proposals(engine, member)
+        )
     except Exception:  # noqa: BLE001
         return True
 

@@ -439,6 +439,41 @@ def test_a_declined_role_brief_edit_rests_fourteen_days_and_the_open_limit_holds
     assert propose() == (None, library.REASON_FULL)
 
 
+async def test_a_habit_the_owner_removed_is_not_suggested_again_from_the_same_findings(plat, tmp_path):
+    """Remove is the owner saying "not this": its findings rest
+    :data:`SUPPRESS_DAYS` from the REMOVAL, like a decline — not from the
+    old acceptance (a habit accepted three weeks ago and removed today was
+    suggested again from the same findings at the next idle period)."""
+    from datetime import timedelta
+
+    from iron_jarvis.coach.models import CoachProposalRecord
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.ids import utcnow
+
+    _seed(plat, tmp_path)
+    (row,) = (await TN.distill(plat, WORKER)).minted
+    TN.accept(plat, row.id)
+    with session_scope(plat.engine) as db:
+        live = db.get(CoachProposalRecord, row.id)
+        live.decided_at = utcnow() - timedelta(days=21)
+        db.add(live)
+        db.commit()
+    (note,) = TN.active_notes(plat.engine, WORKER)
+    TN.remove(plat, note.id)
+    TN._save_state(plat.engine, WORKER, last_attempt_at=utcnow() - timedelta(days=2))
+    plat.router.calls.clear()
+    out = await TN.distill(plat, WORKER)
+    assert out.minted == [], [r.after for r in out.minted]
+    # Once the rest is over (14 days after the removal), it may come back.
+    with session_scope(plat.engine) as db:
+        gone = db.get(TN.TeamNote, note.id)
+        gone.removed_at = utcnow() - timedelta(days=TN.SUPPRESS_DAYS + 1)
+        db.add(gone)
+        db.commit()
+    TN._save_state(plat.engine, WORKER, last_attempt_at=utcnow() - timedelta(days=2))
+    assert len((await TN.distill(plat, WORKER)).minted) == 1
+
+
 # --------------------------------------------------------------------------- #
 # 4. the name rule is the WHOLE name
 # --------------------------------------------------------------------------- #
