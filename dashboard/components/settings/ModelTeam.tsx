@@ -30,6 +30,8 @@ import {
   decodeStarter,
   decodeTeam,
   findingsWords,
+  HABIT_WORSE_WORDS,
+  measureWords,
   notesWords,
   placeWords,
   recordWords,
@@ -222,8 +224,31 @@ function MemberRow({
                   data-testid={`team-note-${n.id}`}
                   className="flex items-start gap-2 text-[12px] text-zinc-300"
                 >
-                  <span className="min-w-0 flex-1" title={`From ${n.findings} confirmed findings`}>
-                    {n.text}
+                  <span className="min-w-0 flex-1">
+                    <span className="block" title={`From ${n.findings} confirmed findings`}>
+                      {n.text}
+                    </span>
+                    {/* v1.423.0 (Team notes, Phase 3): does the habit help?
+                        ONE quiet line once both sides of its acceptance have
+                        enough work (5 pieces each — never a number under
+                        that), and an AMBER line when the member's work looks
+                        worse since. Only said: the owner decides, with this
+                        habit's own two-press Remove beside it — nothing
+                        removes a habit by itself. */}
+                    {measureWords(n.measure) ? (
+                      <span
+                        data-testid={`team-note-measure-${n.id}`}
+                        className="block text-[12px] text-zinc-500"
+                        title="The member's record over the same span of time before the habit was accepted (at most 30 days) and since. First-pass approval = replies where a reviewer approved its first piece; checks = the finish check's verdict."
+                      >
+                        {measureWords(n.measure)}
+                      </span>
+                    ) : null}
+                    {n.measure?.worse ? (
+                      <span data-testid={`team-note-worse-${n.id}`} className="block text-[12px] text-tone-warn">
+                        {HABIT_WORSE_WORDS}
+                      </span>
+                    ) : null}
                   </span>
                   <ConfirmButton
                     variant="calm"

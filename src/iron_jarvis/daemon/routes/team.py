@@ -9,7 +9,10 @@
   of}}`` — ``agents/team_findings.findings_for``; zeros when none), and
   (v1.423.0, Team notes Phase 2) its WORKING HABITS (``notes``:
   ``{accepted: [{id, text, findings, accepted_at}], suggested, hand_edited}``
-  — ``agents/team_notes.notes_for``);
+  — ``agents/team_notes.notes_for``), each accepted habit (Phase 3) with its
+  ``measure`` — ``{before, after, worse}``, the member's record split at the
+  habit's acceptance (``agents/team_measure``; absent when it cannot be
+  read; ``worse`` is only SHOWN, nothing removes a habit by itself);
 * ``POST /team/notes/{id}/remove`` → takes an accepted working habit back
   (``team_notes.remove``: the member's TEAM-NOTES.md is written again —
   never over a hand edit): ``{note, file, message}``; 404 / 409 in words;
@@ -176,6 +179,13 @@ def team_view(platform: Any) -> dict[str, Any]:
     from ...agents.team_notes import notes_for
 
     notes = notes_for(platform, [r.name for r in members])
+    # v1.423.0 (Team notes, Phase 3): each accepted habit's MEASURE — the
+    # member's record before and after it was accepted (``agents/
+    # team_measure``): SHOWN, never acted on; one that cannot be read is
+    # absent. (This route is a sync ``def``: off the loop.)
+    from ...agents.team_measure import attach
+
+    attach(getattr(platform, "engine", None), notes)
     with cached_verdicts():
         return {
             "roles": [{"id": rid, "label": label} for rid, label in T.ROLES],

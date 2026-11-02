@@ -866,8 +866,16 @@ def propose_role_brief_edit(
     folder before the user's Accept (:func:`accept`, which writes it and
     validates again). ``same(existing_line) -> bool`` (optional): the brief
     already holds this habit. Returns ``(row, "")`` or ``(None, reason)``;
-    the caller publishes the row (:func:`_publish`). BLOCKING; never raises."""
+    the caller publishes the row (:func:`_publish`). BLOCKING; never raises.
+
+    v1.423.0 (lane E, a round-2 review leftover): THE LIBRARY'S OWN SWITCH
+    holds here too — ``build_reflect`` ("learn from Build sessions") off
+    means NO library suggestion of any kind, a role brief's included
+    (:data:`REASON_OFF`, nothing read, nothing minted). Team notes' own
+    switch (``team_notes``) is the caller's; both must be on."""
     try:
+        if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
+            return None, REASON_OFF
         from ..core.promptguard import scan_context
         from .sessions import checkout_of, get_row, is_folderless, layer_folder_of
 
@@ -1198,6 +1206,13 @@ async def _reflect(platform: Any, thread_id: str, turn_ids: list[str], out: Refl
     route, why = await _complete(platform, evidence, reflect_prompt(evidence, layer_files), setup)
     if route is None:
         out.reason = why
+        return out
+    # v1.423.0 review: the switch is read AGAIN once the model has answered —
+    # the owner may have turned "learn from Build sessions" off while it was
+    # writing, and off means NO library suggestion of any kind (the call
+    # already made is billed; nothing is minted from it).
+    if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
+        out.reason = REASON_OFF
         return out
     if _is_mock(getattr(route, "provider", ""), getattr(route, "reason", "")):
         out.reason = REASON_MOCK

@@ -91,9 +91,12 @@ defects):
   its line (``_NOT_FOUND_LINE`` / ``_WRONG_SHELL_LINE``): a failing test whose
   output QUOTES "is not recognized" ran.
 * LOW TRUST: nothing is read from a run that ended at LOW trust (a helper
-  whose row says ``trust = low``, or a lead's reply whose line says so — the
-  lead's calls inside that reply's time window are skipped too, and a
-  low-trust reply with no time window skips that session's lead calls): its
+  whose row says ``trust = low``, an attempt — "Try on several models",
+  ``build:<id>~try<n>`` — whose card row does not say it ended at full trust
+  (v1.423.0, lane E: not known is left out too), or a lead's reply whose line
+  says so — the lead's calls inside that reply's time window are skipped
+  too, and a low-trust reply with no time window skips that session's lead
+  calls): its
   text may be an injected instruction, and this report is pasted into
   another agent's prompt. The count left out is said. FAIL CLOSED (v1.423.0
   review): a lead's call whose session's lines could NOT be read (the replies
@@ -1189,6 +1192,14 @@ class Gathered:
     #: made — nothing they ran is read until they end (their trust is not
     #: settled), and the report says so.
     running_left_out: int = 0
+    #: v1.423.0 (lane E, a round-2 review leftover): "Try on several models"
+    #: ATTEMPTS (``build:<id>~try<n>``) whose calls were left out — those
+    #: whose card row says they ended at LOW trust, and those whose trust is
+    #: NOT KNOWN (no row says "full": an attempt that failed with an error
+    #: frame saying nothing, one stopped or cut off, a card from before the
+    #: row kept its trust, or a call no row's time span holds). Fail closed.
+    attempts_low_left_out: int = 0
+    attempts_unknown_left_out: int = 0
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -1288,6 +1299,11 @@ _HARNESS_MODULES: dict[str, str] = {
 }
 #: The finish check's team review (``harness/finish.REVIEW_CALLED_AS``).
 REVIEW_CALLED_AS = "team review"
+#: v1.423.0 (lane E): an attempt's tool session is ``build:<id>~try<n>``
+#: (``harness/attempts.SID_SEP``); a call is placed in its card row's time
+#: span (``since`` / ``ended``, epoch milliseconds) give or take this much.
+_ATTEMPT_SEP = "~"
+_ATTEMPT_SLACK_MS = 2000
 
 
 def _harness_who(session_id: str, called_as: Any) -> str:
@@ -1436,6 +1452,52 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
             return bool(low_windows.get(thread))
         return any(a <= dt <= b for a, b in low_windows.get(thread, ()))
 
+    # v1.423.0 (lane E, a round-2 review leftover): "TRY ON SEVERAL MODELS".
+    # An attempt runs as its own stream-lane turn (``build:<id>~try<n>``) and
+    # its trust is NOT the session reply's: the attempts reply's line carries
+    # no ``trust`` of its own, so an attempt that a tool result lowered to low
+    # trust was read like any full-trust call. Each attempt's card row now
+    # keeps the trust its turn ENDED at (``harness/attempts.Attempt.trust``);
+    # an attempt's call is read only when the ONE row whose time span holds
+    # it says "full" — low, not known, or no row: left out (fail closed) and
+    # said. (The attempt ids repeat — every attempts turn has its ``try1`` —
+    # so a call is placed by its row's ``since`` / ``ended``.)
+    attempt_rows: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+    for tid, msgs in lines_by_thread.items():
+        for m in msgs:
+            card = m.get("attempts") if m.get("role") == "assistant" else None
+            for item in (card.get("items") if isinstance(card, dict) else None) or []:
+                if not isinstance(item, dict):
+                    continue
+                aid, began, ended = str(item.get("id") or ""), item.get("since"), item.get("ended")
+                if not aid or not isinstance(began, int) or not isinstance(ended, int) or isinstance(
+                        began, bool) or isinstance(ended, bool):
+                    continue
+                trust = str(item.get("trust") or "")
+                attempt_rows.setdefault((tid, aid), []).append(
+                    (began, ended, trust if trust in ("full", "low") else ""))
+    attempts_low: set[str] = set()
+    attempts_unknown: set[str] = set()
+
+    def _attempt_left_out(sid: str, dt: "datetime | None") -> bool:
+        """True (and counted once per attempt) when ``sid`` is an attempt's
+        session whose card row does not say it ended at FULL trust."""
+        if _ATTEMPT_SEP not in sid:
+            return False
+        thread, aid = bare_thread(sid), sid.split(_ATTEMPT_SEP, 1)[1]
+        stamp = dt.timestamp() * 1000.0 if dt is not None else None
+        hits = [
+            (began, trust) for began, ended, trust in attempt_rows.get((thread, aid), ())
+            if stamp is not None and began - _ATTEMPT_SLACK_MS <= stamp <= ended + _ATTEMPT_SLACK_MS
+        ]
+        if hits and all(trust == "full" for _b, trust in hits):
+            return False
+        if any(trust == "low" for _b, trust in hits):
+            attempts_low.add(f"{thread}~{aid}@{min(b for b, t in hits if t == 'low')}")
+        else:
+            attempts_unknown.add(f"{thread}~{aid}@{min(b for b, _t in hits)}" if hits else sid)
+        return True
+
     # ---- the lead's models over time ------------------------------------- #
     runs: dict[str, list[tuple[datetime, datetime, str]]] = {}
     try:
@@ -1488,6 +1550,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 threads_seen.add(thread)
                 if _in_low(thread, at):
                     continue
+                if _attempt_left_out(sid, at):
+                    continue  # an attempt not known to have ended at full trust
                 totals[(_harness_who(sid, called), leads.at(thread, at), str(tool))] += 1
             else:
                 if str(trust or "").strip().lower() == "low":
@@ -1547,6 +1611,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                     continue
                 if _in_low(thread, at):
                     continue
+                if _attempt_left_out(sid, at):
+                    continue  # an attempt not known to have ended at full trust
                 who, mw, surface = _harness_who(sid, called), leads.at(thread, at), "a coding session"
             else:
                 if str(trust or "").strip().lower() == "low":
@@ -1674,6 +1740,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                     continue
                 if _in_low(thread, at):
                     continue
+                if _attempt_left_out(sid, at):
+                    continue  # an attempt not known to have ended at full trust
                 threads_seen.add(thread)
                 who, mw, surface = _lead_who(sid), leads.at(thread, at), "a coding session"
             else:
@@ -1754,6 +1822,8 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
     )
 
     out.sessions = len({t for t in threads_seen if t})
+    out.attempts_low_left_out = len(attempts_low)
+    out.attempts_unknown_left_out = len(attempts_unknown)
     out.problems = _group(occurrences, totals, pieces, reply_totals, finding_totals)
     return out
 
@@ -2090,6 +2160,8 @@ def nothing_line(g: Gathered) -> str:
         extra += f" ({_unknown_findings_words(g.findings_unknown_left_out)} were left out)"
     if g.running_left_out:
         extra += f" ({_running_words(g.running_left_out)})"
+    if g.attempts_unknown_left_out:
+        extra += f" ({_attempts_unknown_words(g.attempts_unknown_left_out)} were left out)"
     return f"Nothing to report: Iron Jarvis ran into no problems {where} in {_window_words(g.days)}{extra}."
 
 
@@ -2108,6 +2180,24 @@ def _unknown_findings_words(n: int) -> str:
     return (
         f"{_plural(n, 'reviewer finding')} from coding sessions whose replies could not be read "
         "(whether they ended at low trust is not known)"
+    )
+
+
+def _attempts_low_words(n: int) -> str:
+    """v1.423.0 (lane E): "Try on several models" attempts that ended at low
+    trust — their calls are never read, and said."""
+    return (
+        f"{_plural(n, 'attempt')} on several models that ended at low trust "
+        "(Iron Jarvis never reads their text)"
+    )
+
+
+def _attempts_unknown_words(n: int) -> str:
+    """v1.423.0 (lane E): attempts whose trust is not known (fail closed)."""
+    return (
+        f"the calls of {_plural(n, 'attempt')} on several models whose trust was not recorded "
+        "(an attempt that failed, was stopped or cut off, or ran before Iron Jarvis kept it: "
+        "whether it ended at low trust is not known)"
     )
 
 
@@ -2210,6 +2300,10 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         facts.append(f"- Left out: {_unknown_findings_words(g.findings_unknown_left_out)}")
     if g.running_left_out:
         facts.append(f"- Left out: {_running_words(g.running_left_out)}")
+    if g.attempts_low_left_out:
+        facts.append(f"- Left out: {_attempts_low_words(g.attempts_low_left_out)}")
+    if g.attempts_unknown_left_out:
+        facts.append(f"- Left out: {_attempts_unknown_words(g.attempts_unknown_left_out)}")
     if g.unreadable:
         facts.append(f"- Could not read: {', '.join(g.unreadable)}")
     head = "\n".join([TITLE, "", INSTRUCTION, "", *facts])
@@ -2262,7 +2356,8 @@ def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", no
         "text": text,
         "problems": len(g.problems),
         "listed": listed,
-        "complete": not g.unreadable and not g.unknown_trust_left_out and not g.findings_unknown_left_out,
+        "complete": (not g.unreadable and not g.unknown_trust_left_out and not g.findings_unknown_left_out
+                     and not g.attempts_unknown_left_out),
         "since": iso_z(g.since),
         "until": iso_z(g.until),
         "sessions": g.sessions,

@@ -791,7 +791,7 @@ def window(*, days: int = WINDOW_DAYS, now: "datetime | None" = None,
 
 def findings_for(engine: Any, members: Iterable[str], *, days: int = WINDOW_DAYS,
                  now: "datetime | None" = None, since: "datetime | None" = None,
-                 until: "datetime | None" = None) -> dict[str, dict[str, Any]]:
+                 until: "datetime | None" = None, strict: bool = False) -> dict[str, dict[str, Any]]:
     """``{member: numbers}`` for ``members`` over one window (two queries):
     how many of the findings attributed to the member are ``confirmed``,
     ``did_not_apply``, ``said_fixed`` and ``open``, and its FIRST-PASS
@@ -799,7 +799,13 @@ def findings_for(engine: Any, members: Iterable[str], *, days: int = WINDOW_DAYS
     a review judged, grouped by (scope, reply): the verdict on its EARLIEST
     judged piece of that reply (``of`` = replies, ``approved`` = those that
     were good). Every member asked for is in the answer (zeros when it has
-    nothing, or when nothing could be read). BLOCKING; never raises."""
+    nothing, or when nothing could be read). BLOCKING; never raises.
+
+    v1.423.0 (Team notes, Phase 3): ``strict`` — a read that FAILED raises
+    instead of reading as zeros. The member card's line may say zeros for an
+    unreadable record ("nothing found"); a MEASURE of a habit
+    (``agents/team_measure``) may not: a before/after that could not be read
+    is absent, never a comparison of zeros."""
     names = [str(m) for m in members if str(m or "").strip()]
     out = {name: zeros() for name in names}
     if engine is None or not names:
@@ -832,6 +838,8 @@ def findings_for(engine: Any, members: Iterable[str], *, days: int = WINDOW_DAYS
                 .order_by(literal_column("teamrolerun.rowid"))  # type: ignore[arg-type]
             ).all()
     except Exception:  # noqa: BLE001
+        if strict:
+            raise
         log.debug("team findings unreadable", exc_info=True)
         return out
     key = {FIXED: "confirmed", DID_NOT_APPLY: "did_not_apply", SAID_FIXED: "said_fixed", OPEN: "open"}
@@ -890,14 +898,16 @@ def confirmed_findings(engine: Any, member: str, *, since: "datetime | None" = N
 
 def member_findings(engine: Any, member: str, *, days: int = WINDOW_DAYS,
                     now: "datetime | None" = None, since: "datetime | None" = None,
-                    until: "datetime | None" = None) -> dict[str, Any]:
+                    until: "datetime | None" = None, strict: bool = False) -> dict[str, Any]:
     """One member's numbers (:func:`findings_for`): ``{"confirmed",
     "did_not_apply", "said_fixed", "open", "first_pass": {"approved",
-    "of"}}``. BLOCKING; never raises (zeros when unreadable)."""
+    "of"}}``. BLOCKING; never raises (zeros when unreadable) — except with
+    ``strict`` (v1.423.0, Phase 3), when a failed read raises."""
     name = str(member or "")
     if not name.strip():
         return zeros()
-    return findings_for(engine, [name], days=days, now=now, since=since, until=until).get(name) or zeros()
+    return findings_for(engine, [name], days=days, now=now, since=since, until=until,
+                        strict=strict).get(name) or zeros()
 
 
 __all__ = [
