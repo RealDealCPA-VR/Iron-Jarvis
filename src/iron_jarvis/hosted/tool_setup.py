@@ -99,9 +99,13 @@ SIGN_IN_WORDS: dict[str, str] = {
         "To sign in, press Open in terminal, type /mcp there, choose {name} and pick "
         "Authenticate; Claude Code uses it from its next start here."
     ),
+    # v1.426.0 review (lane B): `codex mcp login` is a SHELL command, and Open
+    # in terminal opens the conversation in Codex's own screen — typed there it
+    # is a message to the model. Leave Codex first (its own /exit: "exit Codex"
+    # in 0.157.0's command list; its /mcp only lists servers).
     "codex": (
-        "To sign in, press Open in terminal and run `codex mcp login {name}` there; "
-        "Codex uses it from its next start here."
+        "To sign in, press Open in terminal, leave Codex there with /exit, then run "
+        "`codex mcp login {name}` in that terminal; Codex uses it from its next start here."
     ),
 }
 STATE_WORDS: dict[str, str] = {

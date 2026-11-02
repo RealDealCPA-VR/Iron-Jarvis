@@ -125,3 +125,19 @@ async def test_skills_list_is_written_and_never_awaited_by_the_start(monkeypatch
     finally:
         for task in list(d._bg):
             task.cancel()
+
+
+def test_codexs_sign_in_words_leave_codex_before_its_shell_command():
+    """``codex mcp login`` is a SHELL command, and "Open in terminal" opens
+    the conversation in Codex's own screen (``codex resume``): typed there it
+    is a message to the model. The words say to leave Codex first (its own
+    ``/exit``; measured: codex 0.157.0's command list says "exit Codex"; its
+    ``/mcp`` only LISTS servers). Claude Code's ``/mcp`` is typed inside it."""
+    words = T.view("codex", [{"type": "setup", "at": "t",
+                              "mcp_servers": [{"name": "tracker", "state": T.NEEDS_SIGN_IN}]}])
+    said = words["servers"][0]["sign_in"]
+    assert "/exit" in said and "codex mcp login tracker" in said
+    assert said.index("/exit") < said.index("codex mcp login tracker"), said
+    claude = T.view("claude-code", [{"type": "setup", "at": "t",
+                                     "mcp_servers": [{"name": "tracker", "state": T.NEEDS_SIGN_IN}]}])
+    assert "/mcp" in claude["servers"][0]["sign_in"] and "/exit" not in claude["servers"][0]["sign_in"]
