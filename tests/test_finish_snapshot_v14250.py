@@ -375,20 +375,23 @@ async def test_a_reply_with_no_tool_never_waits_for_the_snapshot(env, monkeypatc
     real = FC.take
 
     def held(folder, **kw):
-        release.wait(4.0)
+        release.wait(60.0)
         return real(folder, **kw)
 
     monkeypatch.setattr(FC, "take", held)
+    # Review (v1.425.0): no wall-clock bar (a loaded runner is not the code):
+    # the read is held until AFTER the reply ended, so a reply that waited for
+    # it could only end once the walk's own bound gave up on it — and the read
+    # would then be over. MUTATION (``finish.start`` awaits the read): red.
     wire(["Just an answer."])
-    began = time.monotonic()
     try:
         out = await _stream(platform, _body(ws, text="what does app.py do?"))
-        took = time.monotonic() - began
+        still_reading = [t for t in F._FIRST_READS if not t.done()]
     finally:
         release.set()
     await asyncio.gather(*list(F._FIRST_READS))  # the read the reply never waited for ends
     assert out["done"]["reply"].startswith("Just an answer.") and "finish" not in out["done"]
-    assert took < 3.0, took
+    assert still_reading, "the reply waited for the folder's read"
 
 
 async def test_a_carry_on_still_finds_the_snapshot_read_beside_the_cut_reply(env):  # noqa: F811 — the fixture
