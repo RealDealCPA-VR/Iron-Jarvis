@@ -271,3 +271,147 @@ export const LOCAL_ONLY_LINE = "Local only: nothing in this session leaves this 
 export function helpersWorking(helpers: readonly { state: string }[]): number {
   return helpers.filter((h) => h.state === "starting" || h.state === "queued" || h.state === "running" || h.state === "waiting").length;
 }
+
+/* ------------------------------------------- the instructions (v1.426.0, E1) */
+
+/**
+ * WHAT IRON JARVIS TELLS THE MODEL (v1.426.0, Wave 6, E1 of the 2026-11-01
+ * audit: "the harness's own instructions are invisible; an invalid folder
+ * setup is ignored silently"). Both chat lanes put `route.harness = {family,
+ * dialect, fingerprint, layers, nudged[, note][, mode]}` on every coding
+ * reply (v1.366.0) and the reply line keeps the route whole; this reads it.
+ * `note` is the daemon's own sentence when the folder's own instruction files
+ * (`.ironjarvis/harness`) were NOT used, and why.
+ */
+export interface ReplyInstructions {
+  /** The model family the turn read off its model ("claude", "gpt", "glm"…). */
+  family: string;
+  /** Whose tool names and words the model was shown ("claude", "gpt"…). */
+  dialect: string;
+  /** What the instructions were built from, in order ("default",
+   *  "family:<dialect>", "project", "library"). */
+  layers: string[];
+  /** The folder's own files were not used: the daemon's sentence, or "". */
+  note: string;
+  /** The reply was a planning turn (read-only tools). */
+  plan: boolean;
+}
+
+/** The dialect table's own names (`harness/dialects.DIALECTS[id].label` —
+ *  tests/test_build_harness_view_v14260 holds the two equal). */
+export const HARNESS_DIALECT_LABELS: Record<string, string> = {
+  claude: "Claude Code",
+  gpt: "Codex",
+  qwen: "Qwen Code",
+  generic: "Iron Jarvis",
+};
+
+/** A model family in words (`harness/dialects.family_for`). "generic" (a
+ *  model of no known family) says nothing. */
+const FAMILY_WORDS: Record<string, string> = {
+  claude: "Claude",
+  gpt: "GPT",
+  glm: "GLM",
+  qwen: "Qwen",
+  deepseek: "DeepSeek",
+};
+
+const NOTE_CHARS = 600;
+
+/** A reply route's instructions, or null (not a coding reply, or a line an
+ *  older Iron Jarvis wrote). Only the keys the daemon sends; a junk value is
+ *  dropped, never shown. */
+export function decodeReplyInstructions(route: unknown): ReplyInstructions | null {
+  const h = rec(rec(route)?.harness);
+  const dialect = typeof h?.dialect === "string" ? h.dialect.trim().slice(0, 40) : "";
+  if (!h || !dialect) return null;
+  const layers = Array.isArray(h.layers)
+    ? h.layers.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.slice(0, 60))
+    : [];
+  return {
+    family: typeof h.family === "string" ? h.family.trim().slice(0, 40) : "",
+    dialect,
+    layers,
+    note: typeof h.note === "string" ? h.note.trim().slice(0, NOTE_CHARS) : "",
+    plan: h.mode === "plan",
+  };
+}
+
+/** The NEWEST reply's instructions (the newest coding reply that says). */
+export function newestInstructions(
+  messages: readonly { role: string; route?: unknown }[],
+): ReplyInstructions | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    const got = decodeReplyInstructions(m.route);
+    if (got) return got;
+  }
+  return null;
+}
+
+/** "Claude Code's tool names, for a Claude model" — whose names and words
+ *  the model was shown, and the family it was read off. */
+export function instructionToolWords(h: ReplyInstructions): string {
+  const label = HARNESS_DIALECT_LABELS[h.dialect];
+  const family = FAMILY_WORDS[h.family];
+  const names = label === "Iron Jarvis" ? "Iron Jarvis's own tool names" : label ? `${label}'s tool names` : "";
+  const forModel = family ? `for a ${family} model` : "";
+  const out = [names, forModel].filter(Boolean).join(", ");
+  return out ? out.charAt(0).toUpperCase() + out.slice(1) : "";
+}
+
+/** What the instructions were built from, in words: "Iron Jarvis's
+ *  defaults, Claude Code's tool words, this folder's own instructions,
+ *  lessons kept for this folder". An unknown part is left out. */
+export function instructionLayerWords(layers: readonly string[]): string {
+  const words: string[] = [];
+  for (const layer of layers) {
+    if (layer === "default") words.push("Iron Jarvis's defaults");
+    else if (layer.startsWith("family:")) {
+      const label = HARNESS_DIALECT_LABELS[layer.slice("family:".length)];
+      if (label) words.push(label === "Iron Jarvis" ? "Iron Jarvis's own tool words" : `${label}'s tool words`);
+    } else if (layer === "project") words.push("this folder's own instructions");
+    else if (layer === "library") words.push("lessons kept for this folder");
+  }
+  return words.join(", ");
+}
+
+/** `GET /build/sessions/{id}/harness`: the instructions Iron Jarvis gives
+ *  this session's model NOW, put together as a turn does (read-only, never
+ *  stored, masked and cut by the daemon). */
+export interface SessionInstructions {
+  text: string;
+  /** The daemon cut the text at its limit. */
+  cut: boolean;
+  /** The folder's own files were not used: the daemon's sentence, or "". */
+  note: string;
+  layers: string[];
+  /** Instruction files of the folder the text refers to (AGENTS.md …). */
+  ruleFiles: string[];
+  plan: boolean;
+  /** The daemon could not put them together: its sentence, or "". */
+  error: string;
+}
+
+/** The longest text the view keeps (the daemon cuts at 80,000). */
+const INSTRUCTIONS_CHARS = 120_000;
+
+export function decodeSessionInstructions(raw: unknown): SessionInstructions {
+  const r = rec(raw) ?? {};
+  const strings = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, 20) : [];
+  return {
+    text: typeof r.text === "string" ? r.text.slice(0, INSTRUCTIONS_CHARS) : "",
+    cut: r.cut === true,
+    note: typeof r.note === "string" ? r.note.trim().slice(0, NOTE_CHARS) : "",
+    layers: strings(r.layers),
+    ruleFiles: strings(r.rule_files),
+    plan: r.mode === "plan",
+    error: typeof r.error === "string" ? r.error.trim().slice(0, NOTE_CHARS) : "",
+  };
+}
+
+export async function fetchSessionInstructions(threadId: string): Promise<SessionInstructions> {
+  return decodeSessionInstructions(await get<unknown>(`/build/sessions/${encodeURIComponent(threadId)}/harness`));
+}
