@@ -204,6 +204,12 @@ STOPPED_TITLE = "Iron Jarvis stopped while this was working"
 STOPPED_FIX = "Send the message again — the conversation is kept."
 
 
+class _StoppedWhileWaiting(Exception):
+    """v1.425.0 (B7): the user pressed Stop while the message waited for a
+    place in the pool — the turn already ended ("interrupted"), nothing was
+    started, nothing is said again."""
+
+
 class Refused(Exception):
     """A request the Code view refuses, in one plain sentence."""
 
@@ -1807,7 +1813,10 @@ class HostedService:
         the wait (the turn's task is cancelled)."""
         waited = False
         deadline = time.monotonic() + POOL_WAIT_S
+        turn = live.turn  # the message this start is for (``_start_turn_in`` set it)
         while True:
+            if turn is not None and not turn.running:
+                raise _StoppedWhileWaiting()
             room = self._room_event()
             room.clear()
             async with self._lock():
@@ -1851,13 +1860,17 @@ class HostedService:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise Refused(W.POOL_FULL)
+            # Woken when a reply ends — ANY reply, so THIS one too when Stop
+            # ends it (``interrupt`` ends a turn that has no tool yet) — or a
+            # process stops; looked at again every few seconds anyway (a
+            # tool's background work ending says nothing).
             try:
-                # Woken when a reply ends or a process stops; looked at again
-                # every few seconds anyway (a tool's background work ending
-                # says nothing).
                 await asyncio.wait_for(room.wait(), min(left, POOL_RECHECK_S))
             except asyncio.TimeoutError:
                 pass
+            if turn is not None and not turn.running:
+                # Stopped while it waited: never started afterwards.
+                raise _StoppedWhileWaiting()
 
     async def _start_process(self, live: LiveSession, row: Any, argv0: list[str]) -> None:
         from ..terminals import pane_accounts as PA
@@ -2479,12 +2492,18 @@ class HostedService:
             started = True
             if live.driver is None:
                 raise HarnessGone("the coding tool stopped")
+            if not turn.running:
+                # v1.425.0 (B7): Stop ended this turn while its tool started (or
+                # while it waited for a place): the tool never hears it.
+                raise _StoppedWhileWaiting()
             await live.driver.send_user(text, files)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:
             self._emit(live, W.error(r.sentence, "Fix that, then send your message again.", ""))
             await self._end_turn(live, "failed")
+        except _StoppedWhileWaiting:
+            pass  # v1.425.0 (B7): Stop already ended the turn; no tool heard it
         except P.PiStillWorking:
             self._emit(live, W.error(W.PI_STILL_WORKING_TITLE, W.PI_STILL_WORKING_FIX, ""))
             await self._end_turn(live, "failed")

@@ -213,3 +213,74 @@ async def test_two_rows_on_one_conversation_never_start_two_processes(app, tmp_p
         gate.set()
         assert (await asyncio.wait_for(t1, 30))[-1]["stop"] == "completed"
     await stop_all(app)
+
+
+async def test_a_stop_while_the_message_waits_for_a_place_ends_it_and_nothing_starts(app, tmp_path, monkeypatch):
+    """Stop pressed while the message waits: the turn ends at once
+    ("interrupted"), the wait ends with it, and when a place comes free later
+    the message is NOT started (its tool never hears it). MUTATIONS: a reply's
+    end does not wake a waiter -> the wait runs on after the Stop (red); the
+    wait does not look at its turn at all -> B's tool starts once A finishes
+    (red)."""
+    from tests._build_app_helpers_v1409 import FIX, starts
+
+    log = tmp_path / "fake.log"
+    use_fake(monkeypatch, "claude_deny", log)
+    monkeypatch.setattr(S, "MAX_LIVE", 1)
+    monkeypatch.setattr(S, "POOL_RECHECK_S", 60.0)
+    svc = S.service_for(app.state.platform)
+    fb = _folder(tmp_path, "b")
+    async with client(app) as c:
+        a = await new_session(c, _folder(tmp_path, "a"))
+        b = await new_session(c, fb)
+        ta = asyncio.ensure_future(_say(c, a["id"], "ta"))
+        await until(lambda: svc.live.get(a["id"]) and svc.live[a["id"]].asks)
+        monkeypatch.setenv("IJ_FAKE_SCENARIO", str(FIX / "claude_modes.json"))
+        tb = asyncio.ensure_future(_say(c, b["id"], "tb"))
+        await until(lambda: svc.live.get(b["id"]) and svc.live[b["id"]].turn is not None and any(
+            e.get("type") == "notice" and e.get("text") == S.W.POOL_WAITING
+            for e in svc.live[b["id"]].turn.events))
+        drive = svc.live[b["id"]].turn.task
+        r = await c.post(f"/build/app/sessions/{b['id']}/interrupt")
+        assert r.status_code == 200, r.text
+        evs = await asyncio.wait_for(tb, 10)
+        assert evs[-1] == {**evs[-1], "type": "done", "stop": "interrupted"}
+        # ...and the wait itself ends with it (woken by the turn's end, not
+        # the next look 60 s later).
+        await asyncio.wait_for(asyncio.shield(drive), 5)
+        # A place comes free (A's reply ends): B must not start now.
+        ask = next(iter(svc.live[a["id"]].asks))
+        await c.post(f"/build/app/sessions/{a['id']}/answer", json={"request_id": ask, "decision": "deny"})
+        await asyncio.wait_for(ta, 30)
+        await asyncio.sleep(1.5)
+        assert not any(s.get("cwd") == str(fb) for s in starts(log)), "B's tool was started after its Stop"
+        assert svc.live[b["id"]].proc is None and not svc.live[b["id"]].starting
+    await stop_all(app)
+
+
+async def test_a_stop_while_the_tool_starts_never_sends_it_the_message(app, tmp_path, monkeypatch):
+    """Stop pressed while the session's tool is still STARTING (no process
+    yet, so Stop ends the turn itself): the start finishes, and the message
+    is never sent to the tool — it would answer a reply nobody follows.
+    MUTATION: no look at the turn before sending (red: the tool got it)."""
+    from tests._build_app_helpers_v1409 import sent
+
+    log = tmp_path / "fake.log"
+    use_fake(monkeypatch, "claude_modes", log)
+    work = _folder(tmp_path, "w")
+    gate = _slow_spawn_in(monkeypatch, work)
+    svc = S.service_for(app.state.platform)
+    async with client(app) as c:
+        a = await new_session(c, work)
+        ta = asyncio.ensure_future(_say(c, a["id"], "ta"))
+        await until(lambda: svc.live.get(a["id"]) and svc.live[a["id"]].starting)
+        drive = svc.live[a["id"]].turn.task
+        r = await c.post(f"/build/app/sessions/{a['id']}/interrupt")
+        assert r.status_code == 200, r.text
+        evs = await asyncio.wait_for(ta, 10)
+        assert evs[-1] == {**evs[-1], "type": "done", "stop": "interrupted"}
+        gate.set()
+        await asyncio.wait_for(asyncio.shield(drive), 30)
+        assert svc.live[a["id"]].running, "the tool did not finish starting"
+        assert not [m for m in sent(log) if m.get("type") == "user"], "the tool was sent a stopped message"
+    await stop_all(app)
