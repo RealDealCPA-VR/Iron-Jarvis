@@ -1185,6 +1185,10 @@ class Gathered:
     #: because their session's replies could not be read (fail closed).
     findings: int = 0
     findings_unknown_left_out: int = 0
+    #: v1.423.0 (lane D review): replies still running when the report was
+    #: made — nothing they ran is read until they end (their trust is not
+    #: settled), and the report says so.
+    running_left_out: int = 0
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -1386,9 +1390,46 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 continue
             replies.append((tid, m, at))
 
+    # v1.423.0 (lane D review): a reply STILL RUNNING has no line yet, so no
+    # low window — and its trust is settled only when it ends (a taint can
+    # land at any moment; its kept record is saved once a round). Nothing it
+    # ran is read yet: the lead's calls (and findings) from its start on are
+    # left out, and said. Its ``ChatTurnRecord`` reads "running" from its
+    # first frame until its end is written, AFTER its line — no moment when
+    # neither covers it. FAIL CLOSED: when the records cannot be read, every
+    # call after a session's newest kept line is left out.
+    running_from: dict[str, datetime] = {}
+    try:
+        sql = "SELECT thread_id, started_at FROM chatturnrecord WHERE status = 'running'"
+        rparams: dict[str, Any] = {}
+        if scope:
+            sql, rparams["t"] = sql + " AND thread_id = :t", scope
+        for tid, started in _rows(engine, sql, **rparams):
+            tid = str(tid or "")
+            if tid not in known_threads:
+                continue
+            begun = _utc(started) or since
+            out.running_left_out += 1
+            if tid not in running_from or begun < running_from[tid]:
+                running_from[tid] = begun
+    except Exception:  # noqa: BLE001
+        log.warning("fix request: the running replies unreadable", exc_info=True)
+        out.unreadable.append("which replies are still running")
+        for tid in known_threads:
+            ends = [
+                e for e in (
+                    _utc((m.get("timing") or {}).get("endedAt")) if isinstance(m.get("timing"), dict) else None
+                    for m in lines_by_thread.get(tid, []) if m.get("role") == "assistant"
+                ) if e is not None
+            ]
+            running_from[tid] = max(ends) if ends else since
+
     def _in_low(thread: str, dt: "datetime | None") -> bool:
         if thread not in known_threads:
             return True  # fail closed: its replies (and their trust) were not read
+        begun = running_from.get(thread)
+        if begun is not None and (dt is None or dt >= begun):
+            return True  # a reply still running (or not known): its trust is not settled
         if thread in low_all:
             return True
         if dt is None:
@@ -2047,7 +2088,18 @@ def nothing_line(g: Gathered) -> str:
         extra += f" ({_unknown_words(g.unknown_trust_left_out)} were left out)"
     if g.findings_unknown_left_out:
         extra += f" ({_unknown_findings_words(g.findings_unknown_left_out)} were left out)"
+    if g.running_left_out:
+        extra += f" ({_running_words(g.running_left_out)})"
     return f"Nothing to report: Iron Jarvis ran into no problems {where} in {_window_words(g.days)}{extra}."
+
+
+def _running_words(n: int) -> str:
+    """v1.423.0 (lane D review): replies still running — nothing they ran is
+    read until they end (their trust is settled only then), and said."""
+    return (
+        f"{_plural(n, 'reply', 'replies')} still running: what "
+        f"{'it' if n == 1 else 'they'} ran is read once {'it ends' if n == 1 else 'they end'}"
+    )
 
 
 def _unknown_findings_words(n: int) -> str:
@@ -2156,6 +2208,8 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         facts.append(f"- Left out: {_unknown_words(g.unknown_trust_left_out)}")
     if g.findings_unknown_left_out:
         facts.append(f"- Left out: {_unknown_findings_words(g.findings_unknown_left_out)}")
+    if g.running_left_out:
+        facts.append(f"- Left out: {_running_words(g.running_left_out)}")
     if g.unreadable:
         facts.append(f"- Could not read: {', '.join(g.unreadable)}")
     head = "\n".join([TITLE, "", INSTRUCTION, "", *facts])

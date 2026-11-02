@@ -218,3 +218,108 @@ def test_findings_stored_in_one_tick_are_listed_newest_stored_first(tmp_path):
     evidence = [ln for ln in text.splitlines() if ln.startswith("  - ")]
     assert [e.split("finding: `", 1)[1][:2] for e in evidence] == ["R3", "R2", "R1"], evidence
     assert "What happened: `thing 3 is wrong" in text, text
+
+
+# --------------------------------------------------------------------------- #
+# 5. a reply STILL RUNNING is not read until it ends (its trust is not known)
+# --------------------------------------------------------------------------- #
+# Item 5 closed a STOPPED reply that went low; one state earlier the same hole
+# stood open: a reply still running has no line yet, so no low window, and its
+# failed calls were read — while its kept record already said it ran at LOW
+# trust (a flagged read). Its trust is settled only when it ends, so a running
+# reply's calls are left out (and said) until then; when which replies run
+# cannot be read, every call after a session's newest kept line is left out.
+
+
+def _running_reply(engine, *, low: str = "read_file returned text that looked like an instruction") -> None:
+    from datetime import timedelta
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord, ChatTurnRecord, RunTranscript, ToolInvocation
+    from tests.test_fix_request_v14230 import T0
+
+    tid = "chat_a1b2c3d4e5f6"
+    q = T0 + timedelta(hours=1)
+    with session_scope(engine) as db:
+        msgs = [{"role": "user", "content": "tidy up", "turnId": "run-1", "at": q.isoformat()}]
+        db.add(ChatThreadRecord(id=tid, title="t", surface="build", messages_json=json.dumps(msgs),
+                                setup_json="{}", created_at=q, updated_at=q))
+        db.add(ChatTurnRecord(id="run-1", thread_id=tid, status="running", started_at=q))
+        db.add(RunTranscript(run_id="build-turn:run-1", session_id=f"build:{tid}", messages_json="[]",
+                             low_trust=low or None))
+        db.add(ToolInvocation(session_id=f"build:{tid}", agent_run_id="chat", tool="read_file", ok=False,
+                              output="file not found: secret-plan.md",
+                              args_json=json.dumps({"path": "secret-plan.md"}), created_at=q + timedelta(minutes=1)))
+        db.commit()
+
+
+def test_a_reply_still_running_is_not_read_and_the_report_says_so(tmp_path):
+    engine = _engine(tmp_path)
+    _running_reply(engine)
+    out = _report(engine)
+    assert "secret-plan" not in out["text"], out["text"]
+    assert out["problems"] == 0, out["text"]
+    assert "1 reply still running" in out["text"], out["text"]
+
+
+def test_when_the_running_replies_cannot_be_read_their_calls_are_left_out(tmp_path, monkeypatch):
+    engine = _engine(tmp_path)
+    _running_reply(engine)
+    real = FR._rows
+
+    def flaky(engine_, sql, **params):
+        if "FROM chatturnrecord" in sql:
+            raise RuntimeError("database is locked")
+        return real(engine_, sql, **params)
+
+    monkeypatch.setattr(FR, "_rows", flaky)
+    out = _report(engine)
+    assert "secret-plan" not in out["text"], out["text"]
+    assert out["complete"] is False
+    assert "which replies are still running" in out["text"]
+
+
+def test_a_reply_that_ended_is_read_again(tmp_path):
+    """The control: once it ended (stopped at full trust, no line) its failed
+    call is read, as before."""
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatTurnRecord
+
+    engine = _engine(tmp_path)
+    _running_reply(engine, low="")
+    with session_scope(engine) as db:
+        row = db.get(ChatTurnRecord, "run-1")
+        row.status = "stopped"
+        db.add(row)
+        db.commit()
+    out = _report(engine)
+    assert "A tool call that failed: read_file" in out["text"], out["text"]
+
+
+def test_a_report_with_problems_says_a_reply_was_still_running(tmp_path):
+    """Problems from another session that ended are listed; the running one
+    is left out — and the report's facts say so."""
+    from datetime import timedelta
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord, ToolInvocation
+    from tests.test_fix_request_v14230 import T0
+
+    engine = _engine(tmp_path)
+    _running_reply(engine)
+    other = "chat_b7c8d9e0f1a2"
+    s, e = T0, T0 + timedelta(minutes=30)
+    with session_scope(engine) as db:
+        msgs = [{"role": "user", "content": "go", "turnId": "o-1", "at": s.isoformat()},
+                {"role": "assistant", "content": "Done.", "turnId": "o-1", "at": e.isoformat(),
+                 "timing": {"startedAt": int(s.timestamp() * 1000), "endedAt": int(e.timestamp() * 1000)}}]
+        db.add(ChatThreadRecord(id=other, title="o", surface="build", messages_json=json.dumps(msgs),
+                                setup_json="{}", created_at=s, updated_at=e))
+        db.add(ToolInvocation(session_id=f"build:{other}", agent_run_id="chat", tool="read_file", ok=False,
+                              output="file not found: notes.md", args_json=json.dumps({"path": "notes.md"}),
+                              created_at=s + timedelta(minutes=5)))
+        db.commit()
+    out = _report(engine)
+    assert out["problems"] == 1, out["text"]
+    assert "- Left out: 1 reply still running" in out["text"], out["text"]
+    assert "secret-plan" not in out["text"]

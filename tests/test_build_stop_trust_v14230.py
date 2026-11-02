@@ -172,7 +172,11 @@ async def test_a_full_trust_reply_stopped_before_a_word_still_keeps_no_line(home
     assert await until(lambda: lg.status != "running", 30)
     drop.set()
     await asyncio.wait_for(follower, 30)
-    await asyncio.sleep(0.2)
+    # v1.423.0 (lane D review): the report leaves out a reply whose record
+    # still says it RUNS (its trust is not settled) — wait for the turn's end
+    # to be WRITTEN (its driver task writes it after the status flips), never
+    # a fixed sleep.
+    assert await until(lambda: lg.task is not None and lg.task.done(), 30)
     assert _reply_line(app, sid, "st-full") is None
     out = await asyncio.to_thread(FR.build_report, app.state.platform.engine, session=sid)
     assert "A tool call that failed: read_file" in out["text"], out["text"]
