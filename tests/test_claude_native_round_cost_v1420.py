@@ -398,6 +398,19 @@ def _post(url: str, timeout: float = 10.0) -> int:
         conn.close()
 
 
+def _handled(adm: Admission, bound: float = 10.0) -> None:
+    """v1.423.0: wait until the relay has FINISHED handling the call. The client
+    has the whole body (Content-Length) before the relay's thread reaches its
+    keep-or-drop step; closing the call then marks it cancelled and the kept
+    connection is (rightly) dropped. In the app a call closes only after the
+    coding tool exits, long after that step — on a loaded CI runner the test's
+    immediate close won the race (a 0.5 s hold on the relay's last read
+    reproduced the release gate's ``2 == 1``)."""
+    deadline = time.monotonic() + bound
+    while adm._active and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 def test_one_listener_serves_every_relay_and_each_route_admits_once(monkeypatch, upstream):
     up = upstream()
     made: list = []
@@ -475,6 +488,7 @@ def test_the_upstream_connection_is_kept_across_calls(upstream, keep_alive, expe
         adm = Admission(up.url, 10.0)
         try:
             assert _post(adm.url) == 200 and adm.capture.complete
+            _handled(adm)
         finally:
             adm.close()
     assert up.hits == 4 and up.connections == expected
@@ -503,6 +517,7 @@ def test_a_kept_connection_that_dies_under_the_request_is_replaced_once(monkeypa
     adm = Admission(up.url, 10.0)
     try:
         assert _post(adm.url) == 200
+        _handled(adm)
     finally:
         adm.close()
     time.sleep(0.2)
