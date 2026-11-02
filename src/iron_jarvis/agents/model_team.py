@@ -125,11 +125,15 @@ def role_words(roles: Iterable[str]) -> str:
 #: twin: ``lib/modelTeam.ts`` PLACE_WORDS).
 PLACE_WORDS: dict[str, str] = {"this_pc": "this PC", "network": "your network", "cloud": "cloud"}
 #: The three cost types (dashboard twin: ``lib/modelTeam.ts`` COST_WORDS).
-COST_FREE, COST_PLAN, COST_PAY = "free", "plan", "pay"
-COST_WORDS: dict[str, str] = {COST_FREE: "free", COST_PLAN: "your plan", COST_PAY: "pay per use"}
-
-#: Subscription CLIs: work on them is covered by the user's plan.
-_PLAN_CLIS = frozenset({"claude-cli", "codex-cli", "grok-cli"})
+#: v1.424.0 (decision D1): defined ONCE in ``providers/billing.py`` — the
+#: router's failover filter reads the same answer, so the team's "pay per
+#: use" and the failover's are one rule.
+from ..providers.billing import (  # noqa: E402 — the one definition
+    COST_FREE,
+    COST_PAY,
+    COST_PLAN,
+    COST_WORDS,
+)
 #: A model id that means "the provider's own default".
 _PLACEHOLDER_MODELS = frozenset({"", "subscription", "default", "auto"})
 #: The vendor CLI each Iron-Proxy-backed provider is (for its account).
@@ -146,17 +150,11 @@ def _config(platform: Any) -> Any:
 
 def _served_cli(provider: str, manager: Any) -> str:
     """The CLI a provider is served by: itself, or (a keyless ``anthropic`` /
-    ``openai``) the CLI the manager says serves it; "" otherwise."""
-    p = (provider or "").strip().lower()
-    if p in _PLAN_CLIS:
-        return p
-    if manager is None:
-        return ""
-    try:
-        served = str(manager.inherited_from(p) or "")
-    except Exception:  # noqa: BLE001
-        return ""
-    return served if served in _PLAN_CLIS else ""
+    ``openai``) the CLI the manager says serves it; "" otherwise.
+    v1.424.0: ``providers/billing.served_cli`` (the one definition)."""
+    from ..providers.billing import served_cli
+
+    return served_cli(provider, manager)
 
 
 def place_of(platform: Any, provider: str, model: str = "") -> str:
@@ -176,23 +174,14 @@ def cost_type(platform: Any, provider: str, model: str = "") -> str:
     proxy name that goes to a cloud service, a Claude model that draws
     pay-as-you-go usage credits). Never raises (``pay`` when unsure: the
     honest side for money)."""
-    from ..providers.egress import stays_on_this_network
+    # v1.424.0 (decision D1): the ONE definition — the router's failover
+    # filter reads the same answer (``providers/billing.billing_kind``).
+    from ..providers.billing import billing_kind
 
     try:
-        manager = _manager(platform)
-        if stays_on_this_network(provider, manager, _config(platform), model):
-            return COST_FREE
-        cli = _served_cli(provider, manager)
-        if cli:
-            if cli == "claude-cli":
-                from ..eval.pricing import draws_usage_credits
-
-                if draws_usage_credits(model):
-                    return COST_PAY
-            return COST_PLAN
+        return billing_kind(provider, _manager(platform), _config(platform), model)
     except Exception:  # noqa: BLE001
         return COST_PAY
-    return COST_PAY
 
 
 def _svc(platform: Any) -> Any:

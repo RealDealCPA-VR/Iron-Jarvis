@@ -293,6 +293,11 @@ def one_shot(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "_complete_with_retry", once)
     monkeypatch.setattr(platform.providers, "available", lambda name: name == "ollama")
     monkeypatch.setattr(platform.providers, "get", get)
+    # v1.424.0 (decision D1, MOVED ON PURPOSE): the stand-in is a LOCAL model
+    # BY ITS ADDRESS. A Claude Code pick may fail over only to a subscription
+    # or a model on this network, and an "ollama" with no address at all is
+    # not known to stay on it (so it is never spent on a guess).
+    platform.config.ollama_base_url = "http://127.0.0.1:11434"
     return types.SimpleNamespace(d=app.state.d, primary=primary, stand_in=stand_in)
 
 

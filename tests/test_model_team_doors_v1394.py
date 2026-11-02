@@ -202,8 +202,13 @@ async def test_a_members_failing_model_is_never_swapped_for_another(world, tmp_p
 
 async def test_the_control_a_non_member_pinned_agent_still_fails_over_as_before(world, tmp_path):
     """Nothing changed for an agent that is not on the team: a failing pick
-    falls back to the default model exactly as it did (the user's own
-    strict-pin setting is what holds those)."""
+    still FAILS OVER (no hold — the user's own strict-pin setting is what
+    holds those).
+
+    v1.424.0 (the owner's decision D1, MOVED ON PURPOSE): the agent's pick is
+    Codex, a subscription, so its failover stays among the subscriptions and
+    local models — it lands on Claude Code, never on the default Google API
+    key, which bills per use (the old assertion was "google in the log")."""
     p, log, fail, _events = world
     _member(p, roles=())
     fail.add("codex-cli")
@@ -211,7 +216,9 @@ async def test_the_control_a_non_member_pinned_agent_still_fails_over_as_before(
     res = await p.registry.get("delegate").execute(
         {"agent_type": "custom:codex-coder", "task": "t"}, _ctx(p, sid, tmp_path))
     assert res.ok, res.error
-    assert "google" in {c["provider"] for c in log}
+    used = {c["provider"] for c in log}
+    assert "claude-cli" in used, used
+    assert "google" not in used and "openai" not in used, used
     assert all(c["hold"] is None for c in log)
 
 

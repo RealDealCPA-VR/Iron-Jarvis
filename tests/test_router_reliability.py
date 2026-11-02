@@ -224,8 +224,12 @@ def test_failover_dedups_default_alias_by_identity():
     # provider is "anthropic", which RESOLVES to the SAME claude-cli adapter — the
     # name differs but the identity is the same, so the default fallback must be
     # skipped (not call the same dead adapter again).
+    # v1.424.0 (decision D1, MOVED ON PURPOSE): the candidate it lands on was
+    # the "openai" API key; a Claude Code pick may no longer fail over to a
+    # pay-per-use key, so the candidate is the other SUBSCRIPTION (Codex) —
+    # the identity dedup this test pins is unchanged.
     claude = _Adapter("claude-cli", fail=ProviderError("overloaded", status_code=429))
-    openai = _Adapter("openai", tool_use=True)
+    codex = _Adapter("codex-cli", tool_use=True)
 
     class _AliasMgr(_Manager):
         def get(self, p, model=None):
@@ -235,19 +239,19 @@ def test_failover_dedups_default_alias_by_identity():
             return self.adapters[p]
 
     mgr = _AliasMgr(
-        {"claude-cli": claude, "openai": openai, "mock": _Adapter("mock")},
-        available={"anthropic", "claude-cli", "openai", "mock"},
+        {"claude-cli": claude, "codex-cli": codex, "mock": _Adapter("mock")},
+        available={"anthropic", "claude-cli", "codex-cli", "mock"},
     )
     res = asyncio.run(
         ModelRouter(mgr, "anthropic", EventBus()).complete(
             provider="claude-cli", system="", messages=[LLMMessage("user", "hi")], tools=[]
         )
     )
-    assert res.provider == "openai"  # jumped past the aliased default duplicate
+    assert res.provider == "codex-cli"  # jumped past the aliased default duplicate
     # 3 = initial + 2 same-adapter retries; NO 4th call, i.e. the default-provider
     # fallback ("anthropic" → the same claude-cli identity) was correctly skipped.
     assert claude.calls == 3
-    assert openai.calls == 1
+    assert codex.calls == 1
 
 
 # --------------------------------------------------------------------------- #

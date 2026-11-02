@@ -193,20 +193,29 @@ def _refusal_http(exc: Exception, provider: str = "", manager: Any = None) -> HT
         return None
 
 
-def _provider_error_http(exc: Exception) -> HTTPException:
-    """Map a provider failure to an honest, human-readable HTTP error."""
+def _provider_error_http(exc: Exception, manager: Any = None) -> HTTPException:
+    """Map a provider failure to an honest, human-readable HTTP error.
+
+    v1.424.0 (the owner's decision D1): a one-shot whose failover LEFT OUT
+    pay-per-use models (its own pick was not one) ends with the one sentence
+    that says so (``providers/billing.not_moved_for``) — byte-identical
+    otherwise. ``manager`` names a fleet node by its label."""
     refused = _refusal_http(exc)
     if refused is not None:
         return refused
+    from ..providers.billing import not_moved_for
+
+    note = not_moved_for(exc, manager)
+    tail = f" {note}" if note else ""
     if _is_transient_provider_error(exc):
         return HTTPException(
             status_code=429,
             detail=(
                 "the model is rate-limited right now — wait a minute and try "
-                "again, or pick a different model for this terminal"
+                "again, or pick a different model for this terminal" + tail
             ),
         )
-    return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(status_code=502, detail=str(exc) + tail)
 
 
 def _graceful_stop() -> None:  # pragma: no cover — exercised via monkeypatch
@@ -2769,7 +2778,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- One-shot completion utilities (terminal assist / builders) -------
 
-    def _failover_candidates(exclude: str):
+    def _failover_candidates(
+        exclude: str, *, pick_pays: "bool | None" = None,
+        left_out: "list[str] | None" = None,
+    ):
         """Ordered, identity-deduped list of AVAILABLE real adapters to absorb a
         one-shot call, sharing the router's CLI-first arbitrage order (import
         ``_FAILOVER_ORDER`` — single source of truth) with the DEFAULT provider
@@ -2777,8 +2789,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
         grok-cli — $0 marginal) that the old hardcoded list omitted. Never mock.
 
         Dedup is by RESOLVED provider identity (not the requested name), so the
-        inherited alias (openai→codex-cli) that ``exclude`` maps to is skipped."""
+        inherited alias (openai→codex-cli) that ``exclude`` maps to is skipped.
+
+        MONEY (v1.424.0, the owner's decision D1): a pay-per-use candidate
+        (``providers/billing.py``, the one definition the router reads) is
+        offered ONLY when the call's own pick was itself pay per use.
+        ``pick_pays`` None reads it off ``exclude``: the demo model (every
+        ``_failover_adapter("mock")`` — a background utility whose default is
+        the demo model) is not, so it never reaches a key the user never
+        chose; a reading that fails reads "not pay per use". Candidates left
+        out for that reason are added to ``left_out`` (provider ids), so the
+        failure can say so in one sentence."""
+        from ..providers import billing as _billing
         from ..providers.router import _FAILOVER_ORDER
+
+        if pick_pays is None:
+            pick_pays = exclude != "mock" and _billing.is_pay_per_use(
+                exclude, platform.providers, platform.config, unsure=False,
+            )
 
         order = list(_FAILOVER_ORDER)
         dp = platform.config.default_provider
@@ -2824,6 +2852,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 adapter.provider, platform.providers, platform.config,
                 str(getattr(adapter, "model", "") or ""),
             ):
+                continue
+            # MONEY (v1.424.0, decision D1): never a pay-per-use stand-in for
+            # a pick that was not one. MIRROR NOTE: the router's (A)/(B).
+            if not pick_pays and _billing.adapter_pays(
+                adapter, platform.providers, platform.config, unsure=True,
+            ):
+                if left_out is not None and adapter.provider not in left_out:
+                    left_out.append(adapter.provider)
                 continue
             seen_ids.add(id(adapter))
             seen_providers.add(adapter.provider)
@@ -2910,7 +2946,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # the session did not choose.
             if _pin_armed():
                 raise _provider_error_http(exc)
-            for alt, alt_provider in _failover_candidates(provider):
+            # MONEY (v1.424.0, the owner's decision D1): the pick is the
+            # adapter this one-shot was handed (the default, or the stand-in
+            # ``_failover_adapter`` chose for a demo-model default — itself
+            # never pay per use unless the pick was); pay-per-use candidates
+            # stay out unless it was one, and the failure says which.
+            from ..providers import billing as _billing
+
+            _pick_pays = _billing.adapter_pays(
+                adapter, platform.providers, platform.config, unsure=False,
+            )
+            _left_out: list[str] = []
+            for alt, alt_provider in _failover_candidates(
+                provider, pick_pays=_pick_pays, left_out=_left_out,
+            ):
                 try:
                     resp = await _complete_with_retry(
                         alt, system=system, messages=messages, tools=[]
@@ -2926,8 +2975,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     if declined is not None:
                         raise declined from aexc
                     continue
-            # Every connected provider is rate-limited: surface the ORIGINAL error.
-            raise _provider_error_http(exc)
+            # Every connected provider is rate-limited: surface the ORIGINAL error
+            # — plus, when pay-per-use models were left out (v1.424.0), the
+            # one sentence that says so.
+            _billing.mark_left_out(exc, _left_out)
+            raise _provider_error_http(exc, platform.providers)
 
     # --- Skill learning (v1.135.0): distill glue + proposal event ---------
 

@@ -928,14 +928,19 @@ async def test_an_iron_proxy_sentence_never_fails_over(lane, explicit, transient
 
 @pytest.mark.parametrize("lane", ["complete", "stream"])
 async def test_the_same_error_without_the_flag_still_fails_over(lane):
-    """Control: failover for every OTHER error is unchanged."""
+    """Control: failover for every OTHER error is unchanged.
+
+    v1.424.0 (decision D1, MOVED ON PURPOSE): the target was an Anthropic API
+    key; a Claude Code pick may now fail over only to another subscription or
+    a local model, never to a key that bills per use — so the target is Codex
+    (a subscription). The control it pins (no flag ⇒ failover) is unchanged."""
     parked = _Parked("claude-cli", _sentence(False, no_failover=False))
-    healthy = _Healthy("anthropic")
-    router = ModelRouter(_Mgr({"claude-cli": parked, "anthropic": healthy}),
-                         default_provider="anthropic", event_bus=EventBus())
+    healthy = _Healthy("codex-cli")
+    router = ModelRouter(_Mgr({"claude-cli": parked, "codex-cli": healthy}),
+                         default_provider="codex-cli", event_bus=EventBus())
     if lane == "complete":
         res = await router.complete(provider="claude-cli", system="", messages=[_user()], tools=[])
-        assert res.provider == "anthropic"
+        assert res.provider == "codex-cli"
     else:
         frames = [f async for f in router.stream(provider="claude-cli", system="", messages=[_user()], tools=[])]
         assert any(f.get("type") == "final" for f in frames)
@@ -1331,24 +1336,29 @@ async def test_an_untold_429_never_fails_over_through_the_router(tmp_path, monke
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("lane", ["complete", "stream"])
 async def test_an_auto_turn_may_substitute_and_says_so(lane):
+    # v1.424.0 (decision D1, MOVED ON PURPOSE): Auto picked Claude Code (a
+    # subscription), so its failover follows the rule from there — never to
+    # an API key that bills per use. The substitute was an Anthropic key; it
+    # is Codex (another subscription) now. Auto's one exception (it may move
+    # a parked-accounts sentence) is unchanged.
     exc = _sentence(False, no_failover=True)
     parked = _Parked("claude-cli", exc)
-    healthy = _Healthy("anthropic")
+    healthy = _Healthy("codex-cli")
 
     async def auto_route(system, messages, tools, task_class):
         return {"provider": "claude-cli", "model": None, "tier": "t"}
 
-    router = ModelRouter(_Mgr({"claude-cli": parked, "anthropic": healthy}),
+    router = ModelRouter(_Mgr({"claude-cli": parked, "codex-cli": healthy}),
                          default_provider="auto", event_bus=EventBus(), auto_route=auto_route)
     for _ in range(3):  # the breaker opens after 3 strikes: parked accounts strike nothing
         if lane == "complete":
             res = await router.complete(system="", messages=[_user()], tools=[])
-            assert res.provider == "anthropic" and res.reason == "failover"
+            assert res.provider == "codex-cli" and res.reason == "failover"
             assert res.from_provider == "claude-cli"
         else:
             frames = [f async for f in router.stream(system="", messages=[_user()], tools=[])]
             final = [f for f in frames if f.get("type") == "final"][-1]
-            assert final.get("provider") == "anthropic" and final.get("reason") == "failover"
+            assert final.get("provider") == "codex-cli" and final.get("reason") == "failover"
             assert final.get("from") == "claude-cli"
     assert parked.calls == 3 and healthy.calls == 3
     assert router.health.allow("claude-cli"), "no breaker strike for parked accounts, even on Auto"

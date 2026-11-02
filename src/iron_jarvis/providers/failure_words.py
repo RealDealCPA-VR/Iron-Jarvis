@@ -816,6 +816,29 @@ def undoubled(text: str) -> str:
         return str(text or "")
 
 
+def _not_moved(exc: BaseException | None, manager: Any = None) -> str:
+    """v1.424.0 (the owner's decision D1): the ONE sentence a failure carries
+    when the failover LEFT OUT pay-per-use models because the call's own pick
+    was not one ("Iron Jarvis didn't switch to OpenAI, which bills per use,
+    because you didn't choose a pay-per-use model for this."), read off the
+    router's stamp (``providers/billing.mark_left_out``); ``""`` otherwise.
+    Never raises."""
+    try:
+        from .billing import not_moved_for
+
+        return not_moved_for(exc, manager)
+    except Exception:  # noqa: BLE001 — wording only
+        return ""
+
+
+def _with_not_moved(text: str, exc: BaseException | None, manager: Any = None) -> str:
+    """*text* with :func:`_not_moved`'s sentence after it, when there is one."""
+    note = _not_moved(exc, manager)
+    if not note:
+        return text
+    return f"{text} {note}" if text else note
+
+
 def friendly_error(
     exc: BaseException | None,
     *,
@@ -858,6 +881,9 @@ def friendly_error(
     else:
         title = generic_title(_generic_name(exc, provider, manager))
         fix = GENERIC_FIX_BUILD if this_place(surface) == "this session" else GENERIC_FIX
+    # v1.424.0 (decision D1): a failover that left pay-per-use models out
+    # says so, after the fix, in one sentence. Byte-identical otherwise.
+    fix = _with_not_moved(fix, exc, manager)
     return {"title": title, "fix": fix, "technical": technical_text(exc, technical)}
 
 
@@ -962,13 +988,15 @@ def run_failure_words(
         technical = technical_text(exc)
     except Exception:  # noqa: BLE001
         technical = ""
+    # v1.424.0 (decision D1): every reason below ends with the one sentence
+    # saying the run was not moved to a pay-per-use model, when it was not.
     if words is not None:
-        return f"{words[0]}. {words[1]}", technical
+        return _with_not_moved(f"{words[0]}. {words[1]}", exc, manager), technical
     worded = worded_message(exc)
     if worded:
-        return worded, ""
+        return _with_not_moved(worded, exc, manager), ""
     title, fix = _run_generic_words(exc, hint, manager, started=started)
-    return f"{title}. {fix}", technical
+    return _with_not_moved(f"{title}. {fix}", exc, manager), technical
 
 
 def plain_reason(

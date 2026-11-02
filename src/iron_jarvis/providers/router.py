@@ -62,6 +62,7 @@ from .adapters.base import (
 from .adapters.prompted_tools import PromptedToolsAdapter
 from .reasoning import normalize_level, supports
 from .guided import GuidedToolsAdapter, profile_supports_guided
+from . import billing as _billing
 from . import egress as _egress
 from . import failure_words as _failure_words
 from . import retry_round as _retry_round
@@ -123,6 +124,13 @@ _TRANSIENT_PHRASE_RE = re.compile(
 #: check failed) when a request carries tools. Since IJ harness phase 2
 #: codex-cli calls tools natively, so a tool request's failover may land on
 #: it — disclosed as reason=failover, never under local only.)
+#: v1.424.0 (the owner's decision D1): the ORDER is unchanged, but a metered
+#: API on it is reached ONLY when the call's own pick was itself pay per use
+#: (``providers/billing.py``, the one definition): "Failover should remain
+#: within the same models provided. No pay-per-use unless a pay-per-use model
+#: was chosen at the onset." A subscription or local pick fails over among the
+#: subscriptions and the user's own models, never to a key that bills per
+#: token (``ModelRouter._spend_ok``).
 _FAILOVER_ORDER = (
     "claude-cli", "codex-cli", "grok-cli",
     "anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom",
@@ -1189,6 +1197,71 @@ class ModelRouter:
         candidate: it covers the provider the user named, nothing else."""
         return (not _egress.current_scope().on) or self._stays(provider, model)
 
+    # -- money (v1.424.0, the owner's decision D1) ----------------------------
+    def _pick_pays(
+        self, chosen: str, model: "str | None", adapter: LLMAdapter, reason: str,
+        auto_selected: bool,
+    ) -> bool:
+        """Is the call's OWN pick pay per use (``providers/billing.py``)?
+        *chosen* is the provider the user chose for this call (the explicit
+        one, else the default) — never ``_resolve``'s ``wanted``, which names
+        the oracle's local model after a swap.
+
+        The pick is what the user chose for this call: the explicit provider,
+        else the default it went to — read off the adapter that serves it, so
+        a keyless ``anthropic`` (served by Claude Code) is the plan. Two cases
+        read otherwise: an AUTO call's pick is the model Auto chose (the user
+        delegated the choice; Auto's failover follows the rule from there),
+        and a call the local oracle moved to a local model is still the
+        user's DEFAULT pick (the router chose the local model, the user did
+        not). A reading that FAILS answers "not pay per use": a guess never
+        widens a failover to paid keys. Captured BEFORE the capability
+        reroute, which is itself a failover. Never raises."""
+        try:
+            if not auto_selected and reason == "local-oracle":
+                return _billing.is_pay_per_use(
+                    chosen, self.manager, None, str(model or ""), unsure=False
+                )
+            return _billing.adapter_pays(adapter, self.manager, unsure=False)
+        except Exception:  # noqa: BLE001 — never widen on a fault
+            return False
+
+    def _spend_ok(
+        self, pick_pays: bool, alt: LLMAdapter, left_out: "list[str] | None" = None
+    ) -> bool:
+        """May the call be MOVED to *alt*? Always when the user's own pick was
+        pay per use; else only when *alt* is not (a subscription, a local
+        model, a keyless API a CLI serves). A candidate refused here is added
+        to *left_out* (its provider id), so the failure can say in one
+        sentence that it was not moved to a pay-per-use key
+        (``billing.not_moved_sentence``). A reading that FAILS refuses (a
+        candidate is never spent on a guess). Never raises.
+        MIRROR NOTE (lock-step): complete() and stream() call it at the
+        capability reroute, fallback (A) and sideways failover (B)."""
+        if pick_pays:
+            return True
+        try:
+            pays = _billing.adapter_pays(alt, self.manager, unsure=True)
+        except Exception:  # noqa: BLE001
+            pays = True
+        if pays and left_out is not None:
+            name = str(getattr(alt, "provider", "") or "")
+            if name and name not in left_out:
+                left_out.append(name)
+        return not pays
+
+    @staticmethod
+    def _busy_words(left_out: "list[str]") -> str:
+        """The lead of the transient tail's error: "every connected model is
+        rate-limited or unavailable" — or, when pay-per-use models were LEFT
+        OUT (decision D1), the honest version, since those were never tried."""
+        if left_out:
+            return (
+                "every connected model you can use without paying per use is "
+                "rate-limited or unavailable right now"
+            )
+        return "every connected model is rate-limited or unavailable right now"
+
     def _local_only_gate(
         self, adapter: LLMAdapter, wanted: str, downgraded: bool,
         *, auto_selected: bool = False,
@@ -1722,12 +1795,16 @@ class ModelRouter:
     def _first_capable(
         self, *, need_tools: bool, need_vision: bool, exclude: LLMAdapter, avail: set[str],
         allow: "Callable[[str], bool] | None" = None,
+        pay_ok: bool = True,
     ) -> LLMAdapter | None:
         """First AVAILABLE, circuit-CLOSED, capability-satisfying REAL adapter to
         REPLACE a primary that can't serve the request. Prefers the default
         provider, then CLI-first failover order; when images are present a
         vision-capable adapter wins but a merely tool-capable one is kept as a
-        fallback (better a text answer about the image than a stalled loop)."""
+        fallback (better a text answer about the image than a stalled loop).
+        ``pay_ok`` False (v1.424.0, decision D1): the call's own pick is not
+        pay per use, so no pay-per-use candidate replaces it — not even as
+        the vision fallback."""
         order: list[str] = []
         dp = self.default_provider
         if dp and dp != "mock":
@@ -1747,6 +1824,8 @@ class ModelRouter:
             # replacement, not even as the vision fallback.
             if allow is not None and not allow(alt.provider):
                 continue
+            if not pay_ok and not self._spend_ok(False, alt):
+                continue
             if need_tools and not _supports_tools(alt):
                 continue
             if need_vision and not _supports_vision(alt):
@@ -1757,7 +1836,8 @@ class ModelRouter:
         return vision_fallback
 
     def _enforce_capabilities(
-        self, adapter: LLMAdapter, need_tools: bool, need_vision: bool, avail: set[str]
+        self, adapter: LLMAdapter, need_tools: bool, need_vision: bool, avail: set[str],
+        pay_ok: bool = True,
     ) -> LLMAdapter | None:
         """Return a replacement adapter when the primary can't satisfy the
         request's hard capability (tools), else ``None`` to keep it. A tool-using
@@ -1769,16 +1849,25 @@ class ModelRouter:
         the request needs and a cloud one could, the swap is REFUSED by name
         (:class:`~.egress.LocalOnlyRefused` naming the provider it WOULD have
         used) so the user can allow that one for this message, never a
-        silent swap to the cloud. MIRROR NOTE (lock-step): both lanes."""
+        silent swap to the cloud. MIRROR NOTE (lock-step): both lanes.
+
+        MONEY (v1.424.0, decision D1): ``pay_ok`` False — the call's own
+        pick is not pay per use — keeps every pay-per-use candidate out of
+        the swap; with no other capable model the primary keeps the request
+        (it answers as it can, and a failure then says it was not moved to a
+        pay-per-use key). Under the local-only scope every candidate already
+        stays on this network, which is never pay per use."""
         if _egress.current_scope().on:
             return self._enforce_capabilities_local(adapter, need_tools, need_vision, avail)
         if need_tools and not _supports_tools(adapter):
             return self._first_capable(
-                need_tools=True, need_vision=need_vision, exclude=adapter, avail=avail
+                need_tools=True, need_vision=need_vision, exclude=adapter, avail=avail,
+                pay_ok=pay_ok,
             )
         if need_vision and not _supports_vision(adapter):
             return self._first_capable(
-                need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail
+                need_tools=need_tools, need_vision=True, exclude=adapter, avail=avail,
+                pay_ok=pay_ok,
             )
         return None
 
@@ -1976,6 +2065,15 @@ class ModelRouter:
         need_tools = bool(tools)
         need_vision = _wants_images(messages)
         avail = self._snapshot()
+        # MONEY (v1.424.0, the owner's decision D1): was the call's OWN pick
+        # pay per use? Read once, before the capability reroute (itself a
+        # failover). When it was not, nothing below moves the call to a
+        # pay-per-use model; ``left_out`` collects the ones skipped so the
+        # failure can say so. MIRROR NOTE (lock-step): complete() and stream().
+        pick_pays = self._pick_pays(
+            provider or self.default_provider, model, adapter, reason, auto_selected
+        )
+        left_out: list[str] = []
 
         # AN UNAVAILABLE REAL PROVIDER IS AN ERROR, NEVER A MOCK ANSWER
         # (v1.162.0). This used to fire only for an EXPLICIT pick under the
@@ -2033,7 +2131,9 @@ class ModelRouter:
                 reason = "prompted-tools"
             repl = (
                 None if session_held
-                else self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+                else self._enforce_capabilities(
+                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays
+                )
             )
             if repl is not None:
                 adapter = repl
@@ -2220,6 +2320,10 @@ class ModelRouter:
                     # LOCAL ONLY (v1.332.0): the default never stands in from
                     # off this network. MIRROR NOTE (lock-step): stream() (A).
                     and self._egress_ok(alt.provider, str(getattr(alt, "model", "") or ""))
+                    # MONEY (v1.424.0, decision D1): the default never stands
+                    # in as a pay-per-use model for a pick that was not one.
+                    # MIRROR NOTE (lock-step): stream() (A).
+                    and self._spend_ok(pick_pays, alt, left_out)
                 ):
                     try:
                         response = await self._timed_complete(
@@ -2283,6 +2387,11 @@ class ModelRouter:
                     # MIRROR NOTE (lock-step): stream() (B).
                     if not self._egress_ok(alt.provider, str(getattr(alt, "model", "") or "")):
                         continue
+                    # MONEY (v1.424.0, decision D1): never sideways to a
+                    # pay-per-use model for a pick that was not one.
+                    # MIRROR NOTE (lock-step): stream() (B).
+                    if not self._spend_ok(pick_pays, alt, left_out):
+                        continue
                     try:
                         response = await self._timed_complete(
                             alt, system=system, messages=messages, tools=tools
@@ -2320,10 +2429,18 @@ class ModelRouter:
             # — that fabrication reads as "the app is lying to me". The mock
             # fallback remains only for the offline/mock-default path.
             if wanted != "mock":
+                # MONEY (v1.424.0, decision D1): the failure says, in one
+                # sentence, the pay-per-use models it was NOT moved to
+                # (``failure_words`` reads the stamp). MIRROR NOTE
+                # (lock-step): stream()'s tail.
+                _billing.mark_left_out(exc, left_out)
                 if transient:
+                    # v1.424.0: "every connected model is rate-limited or
+                    # unavailable" was not true once a paid key was left out
+                    # untried — the lead says which models it means.
                     raise RuntimeError(
-                        "every connected model is rate-limited or unavailable "
-                        f"right now. Wait a minute and try again ({_named_failure(adapter.provider, exc)})"
+                        f"{self._busy_words(left_out)}. Wait a minute and try again "
+                        f"({_named_failure(adapter.provider, exc)})"
                     ) from exc
                 raise
             fallback = self.manager.get("mock")
@@ -2493,6 +2610,15 @@ class ModelRouter:
         need_tools = bool(tools)
         need_vision = _wants_images(messages)
         avail = self._snapshot()
+        # MONEY (v1.424.0, the owner's decision D1): was the call's OWN pick
+        # pay per use? Read once, before the capability reroute (itself a
+        # failover). When it was not, nothing below moves the call to a
+        # pay-per-use model; ``left_out`` collects the ones skipped so the
+        # failure can say so. MIRROR NOTE (lock-step): complete() and stream().
+        pick_pays = self._pick_pays(
+            provider or self.default_provider, model, adapter, reason, auto_selected
+        )
+        left_out: list[str] = []
 
         # STRICT MODEL PIN — the STREAM path must honor the same guarantees as
         # complete(): an explicitly named provider answers or fails honestly.
@@ -2543,7 +2669,9 @@ class ModelRouter:
                 reason = "prompted-tools"
             repl = (
                 None if session_held
-                else self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+                else self._enforce_capabilities(
+                    adapter, need_tools, need_vision, avail, pay_ok=pick_pays
+                )
             )
             if repl is not None:
                 adapter = repl
@@ -2721,6 +2849,9 @@ class ModelRouter:
                 and (not need_tools or _supports_tools(alt))
                 # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (A).
                 and self._egress_ok(alt.provider, str(getattr(alt, "model", "") or ""))
+                # MONEY (v1.424.0, decision D1) — MIRROR NOTE (lock-step):
+                # complete() (A).
+                and self._spend_ok(pick_pays, alt, left_out)
             ):
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)
@@ -2786,6 +2917,10 @@ class ModelRouter:
                 # LOCAL ONLY (v1.332.0) — MIRROR NOTE (lock-step): complete() (B).
                 if not self._egress_ok(alt.provider, str(getattr(alt, "model", "") or "")):
                     continue
+                # MONEY (v1.424.0, decision D1) — MIRROR NOTE (lock-step):
+                # complete() (B).
+                if not self._spend_ok(pick_pays, alt, left_out):
+                    continue
                 t0 = self._clock()
                 moved = False  # v1.323.0: announced ≠ committed (thinking)
                 try:
@@ -2828,10 +2963,13 @@ class ModelRouter:
         # frame surfaces its honest error (identical wording to complete()); only
         # the offline/mock-default path may fall through to mock's scripted stream.
         if wanted != "mock":
+            # MONEY (v1.424.0, decision D1) — MIRROR NOTE (lock-step):
+            # complete()'s tail.
+            _billing.mark_left_out(primary_exc, left_out)
             if transient:
                 raise RuntimeError(
-                    "every connected model is rate-limited or unavailable "
-                    f"right now. Wait a minute and try again ({_named_failure(adapter.provider, primary_exc)})"
+                    f"{self._busy_words(left_out)}. Wait a minute and try again "
+                    f"({_named_failure(adapter.provider, primary_exc)})"
                 ) from primary_exc
             raise primary_exc
         fallback = self.manager.get("mock")
