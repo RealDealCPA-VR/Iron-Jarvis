@@ -47,6 +47,7 @@ import {
   GROUP_NAME_MAX,
   GROUP_PROVIDERS,
   adoptable,
+  claudeSetupLine,
   createdId,
   decodeGroups,
   groupAccounts,
@@ -301,6 +302,7 @@ function IronProxyBody({
   const groups = groupAccounts(accounts);
   const toAdopt = adoptable(snap.discovered ?? [], accounts);
   const usedBy = { ...DEFAULT_USED_BY, ...(snap.providers_used_by_jarvis ?? {}) };
+  const setupLine = claudeSetupLine(snap);
   // v1.393.0 review: the groups this card SAVED, held until a newer answer
   // arrives (`over` = the answer they were saved over). A second pick made
   // before the re-read landed was computed from the old answer and saved
@@ -570,6 +572,17 @@ function IronProxyBody({
                         : "Not used by Iron Jarvis"}
                     </span>
                   </div>
+                  {g.provider === "anthropic" && setupLine ? (
+                    // v1.424.0 (audit D4): whether Claude Code on these accounts
+                    // starts with your MCP servers, skills and commands.
+                    <p
+                      data-testid="iron-proxy-claude-setup"
+                      data-on={setupLine.on ? "true" : "false"}
+                      className="mb-1.5 text-[11px] leading-relaxed text-zinc-500"
+                    >
+                      {setupLine.words}
+                    </p>
+                  ) : null}
                   <div className="divide-y divide-white/[0.06] rounded-xl border border-white/[0.06] bg-white/[0.02]">
                     {g.accounts.map((a, i) => (
                       <AccountRow

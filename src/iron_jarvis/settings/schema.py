@@ -361,6 +361,23 @@ SETTINGS: tuple[SettingDef, ...] = (
       ACCOUNT_GROUPS_HELP,
       tier="ask-floor", section="Several accounts", advanced=True, check=_account_groups_shape,
       aliases=("account group", "account groups", "work accounts", "take over at a limit")),
+    # v1.424.0 (audit D4): a second Claude account starts with the owner's
+    # Claude Code setup (iron_proxy/claude_setup.py). Read live at every start.
+    # v1.424.0 review: ON from chat asks EVERY time (``floor_when=(True,)``, the
+    # team_first / account_groups rule): what the owner's MCP servers can read
+    # (a QuickBooks server opens a client's books) then reaches a Claude account
+    # that may be another organization's — a privacy decision, never a grant.
+    # OFF applies at once. Default on (the owner's wish for this wave).
+    S("accounts_share_claude_setup", "Use my Claude Code setup on my other accounts", "connections", "bool",
+      "Claude Code on an account other than this PC's own login starts with your MCP servers, "
+      "skills, commands, agents, hooks and installed plugins. They show with “my:” in front "
+      "(/my:<name>). What your MCP servers can read (a QuickBooks server's books, say), your "
+      "skills and commands, and what your hooks print then reach the Claude account that session "
+      "is signed in to, which may belong to another organization. Your keys stay in the "
+      "program's environment, never in a new file; nothing is written in the other account's "
+      "folder. Off: those accounts start with only their own.",
+      tier="allow", floor_when=(True,), section="Several accounts",
+      aliases=("other accounts", "my setup", "mcp servers on other accounts", "skills on other accounts")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),

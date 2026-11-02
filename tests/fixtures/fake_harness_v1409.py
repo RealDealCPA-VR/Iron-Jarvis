@@ -57,7 +57,9 @@ LOG = os.environ.get("IJ_FAKE_LOG", "")
 ENV_KEYS = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID",
             "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "IRONJARVIS_TOKEN", "IRONJARVIS_MCP_TOKEN",
             "PI_SESSION_ID", "PI_SESSION_FILE", "PI_CODING_AGENT", "OPENCODE_PERMISSION",
-            "IRONJARVIS_MCP_URL", "GROK_HOME")
+            "IRONJARVIS_MCP_URL", "GROK_HOME", "CLAUDE_CODE_PLUGIN_DIRS")
+#: v1.424.0 (D4): the owner's MCP values ride variables with this prefix.
+ENV_PREFIXES = ("IJ_MY_SETUP_",)
 
 
 def log(obj):
@@ -68,7 +70,7 @@ def log(obj):
 
 
 log({"argv": sys.argv[1:], "cwd": os.getcwd(), "pid": os.getpid(),
-     "env": {k: os.environ.get(k) for k in ENV_KEYS if k in os.environ}})
+     "env": {k: v for k, v in os.environ.items() if k in ENV_KEYS or k.startswith(ENV_PREFIXES)}})
 
 with open(SCENARIO, encoding="utf-8") as fh:
     steps = json.load(fh)["steps"]

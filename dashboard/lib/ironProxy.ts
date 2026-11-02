@@ -75,6 +75,26 @@ export interface IronProxySnapshot {
   /** v1.393.0: the user's account groups (Iron Jarvis's own setting
    *  `account_groups`, never Iron-Proxy's): `{group name: [account ids]}`. */
   account_groups?: Record<string, string[]>;
+  /** v1.424.0 (audit D4): the Claude group's one line — whether Claude Code on
+   *  an account other than this PC's own login starts with the owner's MCP
+   *  servers, skills and commands. Present only when such an account is
+   *  listed; the words are the daemon's. */
+  claude_setup?: ClaudeSetupLine;
+}
+
+export interface ClaudeSetupLine {
+  on: boolean;
+  words: string;
+}
+
+/** v1.424.0: the line, or null when the answer has none (an older daemon, no
+ *  Claude account other than this PC's own login, or empty words). */
+export function claudeSetupLine(snap: Pick<IronProxySnapshot, "claude_setup"> | null | undefined): ClaudeSetupLine | null {
+  const raw = snap?.claude_setup as unknown;
+  if (!raw || typeof raw !== "object") return null;
+  const words = (raw as { words?: unknown }).words;
+  if (typeof words !== "string" || !words.trim()) return null;
+  return { on: (raw as { on?: unknown }).on !== false, words: words.trim() };
 }
 
 // ------------------------------------------------ account groups (v1.393.0)

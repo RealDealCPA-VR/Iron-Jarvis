@@ -9,6 +9,9 @@ Shapes:
 
 * ``GET /iron-proxy`` → ``{status, accounts, discovered, providers_used_by_jarvis,
   account_groups}`` (v1.393.0: the user's account groups, from Iron Jarvis's config)
+  (v1.424.0: plus ``claude_setup: {on, words}`` — the Claude group's line about
+  the owner's setup on the other accounts — only when a Claude account other
+  than this PC's own login is listed)
   (``status`` = ``service.status()``; accounts/discovered ``[]`` and the reason
   in ``status.error`` when Iron-Proxy is off or not running). ``discover_error``
   is added only when the login scan itself failed. ``?discover=0`` (v1.302.0,
@@ -430,6 +433,19 @@ def register(app: FastAPI, d) -> None:
                 if isinstance(p, dict)
             ]
         )
+        # v1.424.0 (audit D4): one plain line for the Claude group — whether a
+        # Claude account other than this PC's own login starts with the owner's
+        # MCP servers, skills and commands. Only when there is such an account
+        # (off the loop: it reads the owner's files; read-only).
+        from ...iron_proxy import claude_setup as _cs
+        from ...iron_proxy.accounts import is_default_home as _is_default
+
+        if any(
+            a.get("provider") == _cs.PROVIDER and a.get("home")
+            and not _is_default(_cs.HOME_VAR, str(a.get("home")))
+            for a in body["accounts"]
+        ):
+            body["claude_setup"] = await asyncio.to_thread(_cs.card_line, getattr(svc, "config", None))
         if isinstance(discovered, BaseException):
             body["discover_error"] = (
                 _said(discovered) if isinstance(discovered, IronProxyError)
