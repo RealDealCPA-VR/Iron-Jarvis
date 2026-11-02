@@ -84,6 +84,33 @@ export interface TeamNoteRow {
   /** How many confirmed findings it generalizes. */
   findings: number;
   acceptedAt: string | null;
+  /** v1.423.0 (Team notes, Phase 3): the member's record before and after
+   *  the habit was accepted (the daemon's agents/team_measure) — ABSENT when
+   *  it could not be read or an older daemon sends none (never zeros). */
+  measure?: HabitMeasure;
+}
+
+/** v1.423.0 (Team notes, Phase 3): one side of a habit's acceptance. Under
+ *  5 pieces (`enough` false) there are NO numbers — "not enough work yet". */
+export interface HabitSide {
+  enough: boolean;
+  pieces: number;
+  /** Replies whose first judged piece a reviewer approved, of those judged. */
+  firstPass: { approved: number; of: number } | null;
+  confirmed: number;
+  /** Confirmed findings per piece (rounded by the daemon). */
+  confirmedPerPiece: number | null;
+  /** Pieces the finish check judged, and how many passed. */
+  checks: { passed: number; of: number } | null;
+}
+
+/** A habit's MEASURE: before and after its acceptance, and whether things
+ *  look WORSE since (the daemon's rule — only SHOWN, nothing removes a habit
+ *  by itself). */
+export interface HabitMeasure {
+  before: HabitSide;
+  after: HabitSide;
+  worse: boolean;
 }
 
 /** A member's working habits (the daemon's `notes` on a GET /team row). */
@@ -221,10 +248,84 @@ export function decodeNotes(raw: unknown): TeamNotes | null {
     const id = str(x?.id, 120);
     const text = str(x?.text, 400);
     if (!x || !id || !text) continue;
-    accepted.push({ id, text, findings: count(x.findings), acceptedAt: str(x.accepted_at, 60) || null });
+    const measure = decodeMeasure(x.measure);
+    accepted.push({
+      id,
+      text,
+      findings: count(x.findings),
+      acceptedAt: str(x.accepted_at, 60) || null,
+      ...(measure ? { measure } : {}),
+    });
   }
   return { accepted, suggested: count(r.suggested), handEdited: r.hand_edited === true };
 }
+
+/** `{<key>, of}` read defensively: null when absent or `of` is 0. */
+function pair(raw: unknown, key: string): { x: number; of: number } | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const of = count(r.of);
+  return of ? { x: Math.min(count(r[key]), of), of } : null;
+}
+
+function decodeSide(raw: unknown): HabitSide | null {
+  const r = rec(raw);
+  if (!r || typeof r.enough !== "boolean") return null;
+  if (!r.enough) {
+    // No numbers under 5 pieces — whatever else came with it is ignored.
+    return { enough: false, pieces: count(r.pieces), firstPass: null, confirmed: 0, confirmedPerPiece: null, checks: null };
+  }
+  const fp = pair(r.first_pass, "approved");
+  const ck = pair(r.checks, "passed");
+  const per = num(r.confirmed_per_piece);
+  return {
+    enough: true,
+    pieces: count(r.pieces),
+    firstPass: fp ? { approved: fp.x, of: fp.of } : null,
+    confirmed: count(r.confirmed),
+    confirmedPerPiece: per === null ? null : Math.max(0, per),
+    checks: ck ? { passed: ck.x, of: ck.of } : null,
+  };
+}
+
+/** v1.423.0 (Team notes, Phase 3): a habit's `measure`, defensively — null
+ *  when it is missing (unreadable on the daemon's side, or an older daemon)
+ *  or either side is junk. `worse` only when the daemon says exactly true. */
+export function decodeMeasure(raw: unknown): HabitMeasure | null {
+  const r = rec(raw);
+  if (!r) return null;
+  const before = decodeSide(r.before);
+  const after = decodeSide(r.after);
+  if (!before || !after) return null;
+  return { before, after, worse: r.worse === true && before.enough && after.enough };
+}
+
+const perPiece = (n: number): string => String(Math.round(n * 100) / 100);
+
+/** The habit's ONE quiet line when BOTH sides have enough work: "Since this
+ *  habit: first-pass approval 2 of 6 → 5 of 7 · confirmed findings per piece
+ *  0.5 → 0.2 · checks passed 3 of 5 → 6 of 6" — each part only when both
+ *  sides have it; "" (no line) when either side has under 5 pieces. */
+export function measureWords(m: HabitMeasure | null | undefined): string {
+  if (!m || !m.before.enough || !m.after.enough) return "";
+  const { before: b, after: a } = m;
+  const parts = [
+    b.firstPass && a.firstPass
+      ? `first-pass approval ${b.firstPass.approved} of ${b.firstPass.of} → ${a.firstPass.approved} of ${a.firstPass.of}`
+      : "",
+    b.confirmedPerPiece !== null && a.confirmedPerPiece !== null
+      ? `confirmed findings per piece ${perPiece(b.confirmedPerPiece)} → ${perPiece(a.confirmedPerPiece)}`
+      : "",
+    b.checks && a.checks
+      ? `checks passed ${b.checks.passed} of ${b.checks.of} → ${a.checks.passed} of ${a.checks.of}`
+      : "",
+  ].filter(Boolean);
+  return parts.length ? `Since this habit: ${parts.join(" · ")}` : "";
+}
+
+/** The amber line for a habit the daemon flagged (never acted on: the
+ *  owner decides, with the habit's own two-press Remove). */
+export const HABIT_WORSE_WORDS = "This habit may be making things worse — consider removing it";
 
 /** The member card's ONE quiet line: "Working habits: 2 · 1 suggested" —
  *  a part that is zero is left out ("Working habits: 1 suggested"), and ""

@@ -1,0 +1,77 @@
+{
+  "better": {
+    "after": {
+      "checks": {
+        "of": 6,
+        "passed": 6
+      },
+      "confirmed": 1,
+      "confirmed_per_piece": 0.14,
+      "enough": true,
+      "first_pass": {
+        "approved": 5,
+        "of": 7
+      },
+      "pieces": 7
+    },
+    "before": {
+      "checks": {
+        "of": 5,
+        "passed": 3
+      },
+      "confirmed": 3,
+      "confirmed_per_piece": 0.5,
+      "enough": true,
+      "first_pass": {
+        "approved": 2,
+        "of": 6
+      },
+      "pieces": 6
+    },
+    "worse": false
+  },
+  "not_enough": {
+    "after": {
+      "enough": false,
+      "pieces": 3,
+      "words": "not enough work yet"
+    },
+    "before": {
+      "checks": null,
+      "confirmed": 0,
+      "confirmed_per_piece": 0.0,
+      "enough": true,
+      "first_pass": {
+        "approved": 7,
+        "of": 8
+      },
+      "pieces": 8
+    },
+    "worse": false
+  },
+  "worse": {
+    "after": {
+      "checks": null,
+      "confirmed": 1,
+      "confirmed_per_piece": 0.17,
+      "enough": true,
+      "first_pass": {
+        "approved": 2,
+        "of": 6
+      },
+      "pieces": 6
+    },
+    "before": {
+      "checks": null,
+      "confirmed": 1,
+      "confirmed_per_piece": 0.17,
+      "enough": true,
+      "first_pass": {
+        "approved": 5,
+        "of": 6
+      },
+      "pieces": 6
+    },
+    "worse": true
+  }
+}
