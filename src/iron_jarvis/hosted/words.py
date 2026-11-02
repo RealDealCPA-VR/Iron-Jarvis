@@ -15,18 +15,20 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..providers import subscription_clis as _SUBS
 from .events import clip, make
 
 #: harness id -> how a person names it.
 LABELS: dict[str, str] = {"claude-code": "Claude Code", "codex": "Codex", "pi": "Pi", "opencode": "OpenCode",
                           "grok": "Grok"}
 #: harness id -> the Iron Jarvis provider whose CLI it is.
-PROVIDERS: dict[str, str] = {"claude-code": "claude-cli", "codex": "codex-cli", "grok": "grok-cli"}
+#: v1.426.0 (E5): read from THE table (``providers/subscription_clis``).
+PROVIDERS: dict[str, str] = dict(_SUBS.HARNESS_TO_PROVIDER)
 #: harness id -> the Iron-Proxy provider of its accounts. Pi has none: it
 #: signs in by itself, per model provider (its own `/login`); OpenCode too
 #: (`opencode auth login`). v1.416.0: a Grok account is its home
 #: (``GROK_HOME``, Iron-Proxy's ``xai`` provider), as for a Build terminal.
-PROXY: dict[str, str] = {"claude-code": "anthropic", "codex": "openai", "grok": "xai"}
+PROXY: dict[str, str] = dict(_SUBS.HARNESS_TO_PROXY)
 #: harness id -> the Build terminal Launch id (``terminals/ai_clis``).
 CLI: dict[str, str] = {"claude-code": "claude", "codex": "codex", "pi": "pi", "opencode": "opencode",
                        "grok": "grok"}

@@ -72,6 +72,7 @@ import {
   type ChangesScope,
   type CodeChange,
   type CodeChanges,
+  type CodeMcp,
   type CodeOverview,
   type CodeUsage,
   type UsageWindow,
@@ -639,6 +640,8 @@ function SessionPaneTab({
         ) : null}
       </Section>
 
+      {o?.mcp ? <ToolMcpSection mcp={o.mcp} toolName={toolName} /> : null}
+
       <CodeContextSection
         cctx={cctx.data}
         seen={ctx}
@@ -758,6 +761,59 @@ function SessionPaneTab({
         )}
       </Section>
     </div>
+  );
+}
+
+/** v1.426.0 (E4): the tool's OWN MCP servers, as it reported them when it
+ *  last started (Claude Code's init frame, Codex's startup statuses): each
+ *  one's state in words, and for one waiting for a sign-in, the tool's own
+ *  way to sign in. A tool that never said (or never reports) says so. */
+function ToolMcpSection({ mcp, toolName }: { mcp: CodeMcp; toolName: string }) {
+  const at = mcp.at ? agoWords(mcp.at) : "";
+  return (
+    <Section id="mcp" title="Its own MCP servers">
+      {!mcp.known || mcp.servers.length === 0 ? (
+        <p data-testid="code-session-mcp-note" className={QUIET}>
+          {mcp.note}
+        </p>
+      ) : (
+        <>
+          <ul data-testid="code-session-mcp" className="space-y-1.5">
+            {mcp.servers.map((s) => (
+              <li key={s.name} data-testid={`code-session-mcp-${s.name}`} data-state={s.state} className="min-w-0">
+                <p className="flex min-w-0 items-baseline gap-2 text-[13px] text-zinc-300">
+                  <span className="min-w-0 truncate">{s.name}</span>
+                  <span
+                    className={`shrink-0 text-[12px] ${
+                      s.state === "connected"
+                        ? "text-tone-success"
+                        : s.state === "failed" || s.state === "needs_sign_in"
+                          ? "text-tone-warn"
+                          : "text-zinc-500"
+                    }`}
+                  >
+                    {s.words}
+                  </span>
+                </p>
+                {s.error ? (
+                  <p className="truncate font-mono text-[11px] text-zinc-500" title={s.error}>
+                    {s.error}
+                  </p>
+                ) : null}
+                {s.signIn ? (
+                  <p data-testid={`code-session-mcp-sign-in-${s.name}`} className={QUIET}>
+                    {s.signIn}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <p className={QUIET}>
+            As {toolName} reported them{at ? ` ${at}` : ""}, when it started.
+          </p>
+        </>
+      )}
+    </Section>
   );
 }
 

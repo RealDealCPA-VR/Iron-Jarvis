@@ -71,6 +71,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from ..providers import subscription_clis as _SUBS
 from . import pin as _pin
 from .service import PINNED_PICK_FEATURE, PLAN_USAGE_FEATURE
 
@@ -91,10 +92,10 @@ class ProviderAccounts:
 
 
 #: Iron Jarvis provider id -> Iron-Proxy provider + the vendor CLI's home var.
+#: v1.426.0 (E5): read from THE table (``providers/subscription_clis``).
 PROVIDERS: dict[str, ProviderAccounts] = {
-    "claude-cli": ProviderAccounts("claude-cli", "anthropic", "CLAUDE_CONFIG_DIR", "Claude"),
-    "codex-cli": ProviderAccounts("codex-cli", "openai", "CODEX_HOME", "ChatGPT (Codex)"),
-    "grok-cli": ProviderAccounts("grok-cli", "xai", "GROK_HOME", "Grok"),
+    c.provider: ProviderAccounts(c.provider, c.proxy, c.home_var, c.account_label)
+    for c in _SUBS.SUBSCRIPTION_CLIS
 }
 
 #: Variables an account's ``unset`` list may never remove (the child could not
@@ -108,7 +109,7 @@ _PROTECTED = frozenset({
 #: The vendor CLI's OWN default home under the user's profile (Iron-Proxy's
 #: specs: ``claude`` -> ``~/.claude``, ``codex`` -> ``~/.codex``, ``grok`` ->
 #: ``~/.grok``). v1.302.0 (review F1).
-_DEFAULT_HOME_DIRS = {"CLAUDE_CONFIG_DIR": ".claude", "CODEX_HOME": ".codex", "GROK_HOME": ".grok"}
+_DEFAULT_HOME_DIRS = dict(_SUBS.HOME_DIRS)  # v1.426.0 (E5): THE table
 
 
 def _dir_key(path: str) -> str:
@@ -513,7 +514,7 @@ def _unavailable_error(spec: ProviderAccounts, exc: BaseException) -> Exception:
 # --------------------------------------------------------------------------- #
 #: Iron Jarvis provider -> the vendor word a Build session's account list
 #: groups by (``claude`` / ``codex``).
-VENDOR_OF = {"claude-cli": "claude", "codex-cli": "codex", "grok-cli": "grok"}
+VENDOR_OF = dict(_SUBS.VENDOR_OF)  # v1.426.0 (E5): THE table (providers/subscription_clis)
 
 #: The pinned pick needs ``pick-pinned``; an older Iron-Proxy IGNORES
 #: ``pinned`` (it would answer the next ready account), so it is never asked.

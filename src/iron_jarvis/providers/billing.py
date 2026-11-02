@@ -45,12 +45,15 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from . import subscription_clis as _SUBS
+
 #: The three answers (dashboard twin: ``lib/modelTeam.ts`` COST_WORDS).
 COST_FREE, COST_PLAN, COST_PAY = "free", "plan", "pay"
 COST_WORDS: dict[str, str] = {COST_FREE: "free", COST_PLAN: "your plan", COST_PAY: "pay per use"}
 
 #: Subscription CLIs: work on them is covered by the user's plan.
-PLAN_CLIS = frozenset({"claude-cli", "codex-cli", "grok-cli"})
+#: v1.426.0 (E5, integrated): THE table (``providers/subscription_clis``).
+PLAN_CLIS = _SUBS.PROVIDER_SET
 
 
 def served_cli(provider: str, manager: Any) -> str:

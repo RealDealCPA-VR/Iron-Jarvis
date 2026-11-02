@@ -26,6 +26,18 @@ import { fetchFolderGit, folderGitLine, type FolderGit } from "@/lib/buildGit";
 import { useModels } from "@/lib/useModels";
 import { modelRowName } from "@/lib/onboarding";
 import type { PermissionMode } from "@/lib/permissionLevels";
+import { friendlyModelName } from "@/lib/friendlyModelName";
+import { staysOnThisNetwork } from "@/lib/localOnly";
+import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
+import {
+  SAVE_DEFAULTS_LABEL,
+  codeDefaultsWords,
+  folderBaseName,
+  saveFolderDefaults,
+  sameCodeDefaults,
+  usingDefaultsLine,
+  type CodeDefaults,
+} from "@/lib/folderDefaults";
 import { HARNESS_COLUMN, HARNESS_COMPOSER_BOX } from "@/components/harness/harnessLook";
 import { PANE_COMPOSER_CARD, paneSendClass } from "@/components/terminal/paneChatLook";
 import {
@@ -44,6 +56,9 @@ export interface StartRequest {
   branch?: boolean;
   provider?: string;
   model?: string;
+  /** v1.426.0 (E5): the folder's reasoning level, carried while the model
+   *  chip still shows the folder's own model (this box has no level chip). */
+  reasoning?: string;
   approval_mode?: PermissionMode;
   local_only?: boolean;
   text: string;
@@ -58,6 +73,7 @@ export function startCreateBody(req: StartRequest): Record<string, unknown> {
   if (typeof req.branch === "boolean") out.branch = req.branch;
   if (req.provider) out.provider = req.provider;
   if (req.model) out.model = req.model;
+  if (req.reasoning) out.reasoning = req.reasoning;
   if (req.approval_mode) out.approval_mode = req.approval_mode;
   if (req.local_only) out.local_only = true;
   return out;
@@ -137,6 +153,14 @@ export function HarnessStartComposer({
   const att = useHarnessAttachments();
   const catalog = useModels();
   const usable = catalog.usable;
+  // v1.426.0 (E5): the folder's defaults for new sessions. A chip the user
+  // touched (or a refused first message's own choice) wins; an untouched one
+  // shows the folder's value.
+  const folderDefaults = useFolderDefaults(folder);
+  const codeDefaults = folderDefaults?.code ?? null;
+  const pickTouchedRef = useRef(!!seeded?.provider);
+  const postureTouchedRef = useRef(!!seeded?.approval_mode);
+  const [defaultsNote, setDefaultsNote] = useState<string | null>(null);
 
   // The caret is in the box the moment the composer shows.
   useEffect(() => {
@@ -185,6 +209,55 @@ export function HarnessStartComposer({
     [usable, catalog.models],
   );
 
+  // v1.426.0 (E5): an untouched model / approval chip follows the folder —
+  // its defaults when it has them (a model only while it can answer), the
+  // app's own when it has none (a folder chosen after another one).
+  // v1.426.0 review: the hook's value only — it hears every save in this
+  // window (the folder heading's panel too); a copy of this box's own last
+  // save would keep defaults the panel just cleared.
+  const shownDefaults = codeDefaults;
+  const defaultPick = shownDefaults?.provider ? `${shownDefaults.provider}::${shownDefaults.model ?? ""}` : "";
+  // v1.426.0 review (lane B): under Local only an untouched chip never takes a
+  // folder model that leaves this PC and your own network — the session's
+  // first message would only be refused (this view has no "send once"); the
+  // words say why. The user can still pick it, as before.
+  const defaultRow = defaultPick ? usable.find((m) => `${m.provider}::${m.model}` === defaultPick) : undefined;
+  const defaultLeaves = localOnly && !!defaultRow && !staysOnThisNetwork(defaultRow);
+  const defaultPickUsable = !!defaultPick && options.some((o) => o.value === defaultPick) && !defaultLeaves;
+  useEffect(() => {
+    if (!pickTouchedRef.current) setPick(defaultPickUsable ? defaultPick : "");
+    if (!postureTouchedRef.current) setPosture(shownDefaults?.approval_mode ?? null);
+  }, [defaultPick, defaultPickUsable, shownDefaults?.approval_mode]);
+  useEffect(() => {
+    setDefaultsNote(null);
+  }, [folder]);
+  // The folder's reasoning level rides the create only while the model chip
+  // shows the folder's own model (a level is a model's).
+  const reasoning = shownDefaults?.reasoning && pick && pick === defaultPick ? shownDefaults.reasoning : "";
+  const modelName = (provider: string, model: string) =>
+    options.find((o) => o.value === `${provider}::${model}`)?.label ?? friendlyModelName(model || provider);
+  const defaultsWords = codeDefaultsWords(shownDefaults, modelName);
+  const chosen: CodeDefaults | null = (() => {
+    const [p, m] = pick ? pick.split("::") : ["", ""];
+    const out: CodeDefaults = {
+      ...(p ? { provider: p, ...(m ? { model: m } : {}) } : {}),
+      ...(reasoning ? { reasoning } : {}),
+      ...(posture ? { approval_mode: posture } : {}),
+    };
+    return Object.keys(out).length ? out : null;
+  })();
+  const offerSave = !!folder && !!chosen && posture !== "yolo" && !sameCodeDefaults(chosen, shownDefaults ?? null);
+
+  async function saveDefaults() {
+    if (!folder || !chosen) return;
+    setDefaultsNote(null);
+    try {
+      await saveFolderDefaults(folder, "code", chosen);
+    } catch (e) {
+      setDefaultsNote(e instanceof Error && e.message ? e.message : "The defaults were not saved.");
+    }
+  }
+
   async function send() {
     if (busyRef.current) return;
     if (att.busyRef.current) {
@@ -202,6 +275,7 @@ export function HarnessStartComposer({
       folder: folder ?? "",
       ...(canBranch ? { branch: onBranch } : {}),
       ...(provider ? { provider, model } : {}),
+      ...(reasoning ? { reasoning } : {}),
       ...(posture ? { approval_mode: posture } : {}),
       ...(localOnly ? { local_only: true } : {}),
       text: words,
@@ -290,7 +364,10 @@ export function HarnessStartComposer({
         <PermissionChip
           id="harness-new-posture"
           value={posture ?? START_DEFAULT_POSTURE}
-          onChange={(m) => setPosture(m)}
+          onChange={(m) => {
+            postureTouchedRef.current = true;
+            setPosture(m);
+          }}
           disabled={busy}
           iconOnlyOnPhone
         />
@@ -301,7 +378,10 @@ export function HarnessStartComposer({
             aria-label="Model"
             value={pick}
             disabled={busy}
-            onChange={(e) => setPick(e.target.value)}
+            onChange={(e) => {
+              pickTouchedRef.current = true;
+              setPick(e.target.value);
+            }}
             className="min-w-0 max-w-[14rem] cursor-pointer truncate bg-transparent text-[12px] text-zinc-300 focus:outline-none"
           >
             <option value="">Default model</option>
@@ -353,6 +433,38 @@ export function HarnessStartComposer({
         ) : gitNote ? (
           <span data-testid="harness-new-folder-note" className="self-center px-1 text-[11px] text-zinc-500">
             {gitNote}
+          </span>
+        ) : null}
+        {/* v1.426.0 (E5): this folder's defaults for new sessions, in words,
+            and the press that makes the chips above them. */}
+        {folder && (defaultsWords || offerSave || defaultsNote) ? (
+          <span data-testid="harness-new-folder-defaults" className="flex w-full min-w-0 flex-wrap items-center gap-x-2 px-2 text-[11px] text-zinc-500">
+            {defaultsWords ? (
+              <span data-testid="harness-new-folder-defaults-words">
+                {usingDefaultsLine(folderBaseName(folder), defaultsWords)}
+                {defaultLeaves
+                  ? ` ${modelName(shownDefaults?.provider ?? "", shownDefaults?.model ?? "")} leaves this PC, so it is not used while Local only is on.`
+                  : defaultPick && !defaultPickUsable
+                    ? ` ${modelName(shownDefaults?.provider ?? "", shownDefaults?.model ?? "")} cannot answer right now, so the default model does.`
+                    : ""}
+              </span>
+            ) : null}
+            {offerSave ? (
+              <button
+                type="button"
+                data-testid="harness-new-save-defaults"
+                disabled={busy}
+                onClick={() => void saveDefaults()}
+                className="rounded-md px-1 text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+              >
+                {SAVE_DEFAULTS_LABEL}
+              </button>
+            ) : null}
+            {defaultsNote ? (
+              <span role="alert" className="text-tone-danger">
+                {defaultsNote}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </div>

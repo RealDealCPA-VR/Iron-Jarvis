@@ -1415,4 +1415,16 @@ def session_view(row: Any, events: list[dict[str, Any]], pid: int | None, runnin
         "programs": listing["programs"],
         "programs_known": listing["known"],
         "programs_more": listing["more"],
+        # v1.426.0 (E4): the tool's OWN MCP servers, as it reported them.
+        "mcp": _tool_setup_view(row, events, running),
     }
+
+
+def _tool_setup_view(row: Any, events: list[dict[str, Any]], running: bool) -> dict[str, Any]:
+    """v1.426.0 (E4): ``hosted/tool_setup.view`` (never raises)."""
+    from . import tool_setup
+
+    try:
+        return tool_setup.view(str(getattr(row, "harness", "") or ""), events, running)
+    except Exception:  # noqa: BLE001 — a reading never breaks the tab
+        return {"known": False, "servers": [], "note": ""}

@@ -162,10 +162,16 @@ export function slashAt(text: string, caret: number = text.length): { start: num
   return { start: m.index + m[1].length, query: m[2] };
 }
 
-/** The text with the `/word` at `start` replaced by the picked command. */
-export function pickCommand(text: string, at: { start: number; query: string }, name: string): { text: string; caret: number } {
+/** The text with the `/word` at `start` replaced by the picked command —
+ *  v1.426.0 (E4): typed with its own prefix (a Codex skill is `$<name>`). */
+export function pickCommand(
+  text: string,
+  at: { start: number; query: string },
+  name: string,
+  prefix: string = "/",
+): { text: string; caret: number } {
   const end = at.start + 1 + at.query.length;
-  const inserted = `/${name} `;
+  const inserted = `${prefix}${name} `;
   return { text: text.slice(0, at.start) + inserted + text.slice(end), caret: at.start + inserted.length };
 }
 

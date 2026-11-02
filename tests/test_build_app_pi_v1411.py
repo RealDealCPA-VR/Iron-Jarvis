@@ -422,7 +422,9 @@ async def test_the_slash_list_and_the_models_are_what_pi_said(app, work, tmp_pat
     await stop_all(app)
     ids = [m["id"] for m in rows["pi"]["models"]]
     assert ids[0] == "" and "openai-codex/gpt-6-luna" in ids and "local-models/fleet" in ids
-    assert rows["pi"]["commands"] and rows["codex"]["commands"] == []
+    # v1.426.0 (E4, moved on purpose): Codex's own compact is listed before
+    # its first start (its skills come when it starts).
+    assert rows["pi"]["commands"] and [c["name"] for c in rows["codex"]["commands"]] == ["compact"]
     # Kept for after a restart: a NEW service reads the list from disk.
     monkeypatch.setattr(P, "LAST_MODELS", [])
     saved = json.loads((Path(app.state.platform.config.home) / "hosted" / "pi_models.json").read_text(encoding="utf-8"))

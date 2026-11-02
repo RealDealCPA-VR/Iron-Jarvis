@@ -616,7 +616,10 @@ async def test_the_slash_list_is_the_harnesses_own_never_a_start_to_ask(app, wor
         assert (await c.get(f"/build/app/sessions/{s['id']}/commands")).json() == {"commands": want}
         assert (await c.get(f"/build/app/sessions/{s['id']}")).json()["commands"] == want
         after = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}
-        assert after["claude-code"]["commands"] == want and after["codex"]["commands"] == []
+        # v1.426.0 (E4, moved on purpose): Codex's own compact is listed
+        # before its first start (never a start to ask).
+        assert after["claude-code"]["commands"] == want
+        assert [c["name"] for c in after["codex"]["commands"]] == ["compact"]
         assert (await c.get("/build/app/sessions/nope/commands")).status_code == 404
     await stop_all(app)
 

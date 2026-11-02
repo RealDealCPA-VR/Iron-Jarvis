@@ -317,8 +317,12 @@ def rename_folder(engine: Any, path: str, name: str) -> dict[str, Any]:
             # A display name stored before the folder became a project would
             # be a second name waiting to come back: it goes. v1.403.0: the
             # row also keeps the folder's default TEAM (``team_json``) — then
-            # only the name goes.
-            if stale is not None and str(getattr(stale, "team_json", "") or ""):
+            # only the name goes. v1.426.0 review (lane B): and its defaults
+            # for new coding sessions (``defaults_json``, harness/
+            # folder_defaults) — deleting the row lost them silently.
+            if stale is not None and (
+                str(getattr(stale, "team_json", "") or "") or str(getattr(stale, "defaults_json", "") or "")
+            ):
                 stale.name = ""
                 stale.updated_at = utcnow()
                 db.add(stale)

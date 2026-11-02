@@ -11,6 +11,7 @@
  * Claude/Codex/Grok call AS the first usable account of THAT provider — a
  * limit moves to the next account of the same provider, never to another one.
  */
+import { PROXY_TO_PROVIDER } from "@/lib/subscriptionClis";
 import { normalizeIso } from "./format";
 
 /** `service.status()` — never carries the Iron-Proxy token. */
@@ -177,12 +178,10 @@ export function providerLabel(provider: string): string {
 export const ADDABLE_PROVIDERS = ["anthropic", "openai", "xai"] as const;
 
 /** Iron Jarvis's own provider id for each Iron-Proxy provider (the daemon's
- *  `providers_used_by_jarvis` wins; this is the fallback). */
-export const DEFAULT_USED_BY: Record<string, string> = {
-  anthropic: "claude-cli",
-  openai: "codex-cli",
-  xai: "grok-cli",
-};
+ *  `providers_used_by_jarvis` wins; this is the fallback). v1.426.0 (E5):
+ *  read from the GENERATED twin of the daemon's one table
+ *  (lib/subscriptionClis, providers/subscription_clis). */
+export const DEFAULT_USED_BY: Record<string, string> = { ...PROXY_TO_PROVIDER };
 
 export interface AccountGroup {
   provider: string;

@@ -42,8 +42,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Callable, Iterator
 
+from . import subscription_clis as _SUBS
+
 #: Provider id -> the CLI binary it runs through.
-CLI_BINARIES: dict[str, str] = {"claude-cli": "claude", "codex-cli": "codex"}
+#: v1.426.0 (E5): read from THE table (``providers/subscription_clis``) —
+#: the CLIs whose sign-in is PROBED.
+CLI_BINARIES: dict[str, str] = dict(_SUBS.PROBED_BINARIES)
 
 #: The remedy, per CLI, in the words the user needs (the Handbook and the
 #: Connections row say the same thing — one source).
@@ -79,7 +83,7 @@ SIGN_IN_FIX: dict[str, str] = {
 #: :data:`SIGN_IN_FIX` sentence — :data:`CLI_BINARIES` (probed) plus Grok
 #: (read off its session file, never probed). ``failure_words`` reads a
 #: refusal's CLI off this.
-SIGN_IN_BINARIES: dict[str, str] = {**CLI_BINARIES, "grok-cli": "grok"}
+SIGN_IN_BINARIES: dict[str, str] = dict(_SUBS.SIGN_IN_BINARIES)
 
 #: Phrases a CLI uses to say "you are not signed in". Matched case-insensitively
 #: against the CLI's own words. Deliberately narrow: a token count or an id

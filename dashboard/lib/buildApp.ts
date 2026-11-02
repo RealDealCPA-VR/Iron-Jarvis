@@ -214,6 +214,14 @@ export interface ToolAccount {
 export interface ToolCommand {
   name: string;
   description: string;
+  /** v1.426.0 (E4): how the tool takes it — "$" for a Codex skill (typed
+   *  `$<name>` in the message, Codex's own way); absent = a `/` command. */
+  prefix?: "$";
+}
+
+/** v1.426.0 (E4): a command row's prefix as the daemon said it ("$" only). */
+export function commandPrefix(raw: unknown): { prefix?: "$" } {
+  return raw === "$" ? { prefix: "$" } : {};
 }
 
 export interface CodingTool {
@@ -335,7 +343,7 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       const co = obj(c);
       const name = co ? str(co.name, 80).trim().replace(/^\//, "") : "";
       if (!co || !name) continue;
-      commands.push({ name, description: str(co.description, 300) });
+      commands.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix) });
     }
     out.push({
       id,
@@ -1160,7 +1168,7 @@ export function decodeCommands(raw: unknown): ToolCommand[] | null {
     const co = obj(c);
     const name = co ? str(co.name, 80).trim().replace(/^\//, "") : "";
     if (!co || !name || out.some((x) => x.name === name)) continue;
-    out.push({ name, description: str(co.description, 300) });
+    out.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix) });
   }
   return out;
 }

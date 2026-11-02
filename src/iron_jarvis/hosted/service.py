@@ -1205,9 +1205,17 @@ class HostedService:
         from .claude import LAST_COMMANDS
 
         rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        if not rows and harness == CODEX:
+            # v1.426.0 (E4): Codex's own compact is there before its first
+            # start (its skills are read when it starts).
+            from .tool_setup import CODEX_COMPACT_ROW
+
+            rows = [dict(CODEX_COMPACT_ROW)]
         # v1.418.0 (C4.8): the `/` menu shows each command's argument hint.
+        # v1.426.0 (E4): a Codex skill is typed ``$<name>`` (``prefix``).
         return [{"name": c["name"], "description": c.get("description", ""),
-                 **({"argument_hint": c["argument_hint"]} if c.get("argument_hint") else {})} for c in rows]
+                 **({"argument_hint": c["argument_hint"]} if c.get("argument_hint") else {}),
+                 **({"prefix": c["prefix"]} if c.get("prefix") else {})} for c in rows]
 
     async def commands(self, sid: str) -> list[dict[str, str]]:
         row = await self._row(sid)
@@ -1267,7 +1275,9 @@ class HostedService:
             out["note"] = f"{label} says only how full the conversation is, not what fills it."
         if waiting:
             out["waiting_note"] = f"{label} is asked again when this reply ends."
-        if harness == CLAUDE:
+        if harness in (CLAUDE, CODEX):
+            # v1.426.0 (E4): Codex's own compact too — "/compact" as a message,
+            # which its driver turns into ``thread/compact/start`` (measured).
             out["compact"] = {"how": "message", "text": "/compact"}
         else:
             out["compact"] = {"how": "", "why": f"{label} compacts by itself when the conversation is full."}

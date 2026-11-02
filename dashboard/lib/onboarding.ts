@@ -28,6 +28,7 @@
  * module wholesale (the lib/etag.ts lesson).
  */
 
+import { SUBSCRIPTION_CLI_NAMES } from "@/lib/subscriptionClis";
 import { post } from "@/lib/api";
 import type { Health, ProviderHealth } from "@/lib/types";
 import { DEMO_MODEL_LABEL } from "@/lib/demoWords";
@@ -216,9 +217,9 @@ export function needsConnect(health: Health | null | undefined): boolean {
 }
 
 const FRIENDLY: Record<string, string> = {
-  "claude-cli": "Claude Code",
-  "codex-cli": "Codex",
-  "grok-cli": "Grok CLI",
+  // v1.426.0 (E5): the subscription CLIs' names come from the GENERATED twin
+  // of the daemon's one table (lib/subscriptionClis).
+  ...SUBSCRIPTION_CLI_NAMES,
   // v1.353.0 (G57): the model menu named it by its raw id.
   "opencode-cli": "OpenCode",
   anthropic: "Anthropic",

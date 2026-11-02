@@ -3762,6 +3762,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import build_app_panes as _build_app_panes_routes
 
     _build_app_panes_routes.register(app, d)
+    # v1.426.0 (Wave 6 lane B, E5): a folder's defaults for NEW coding
+    # sessions in it (harness/folder_defaults), for both coding views.
+    from .routes import build_folder_defaults as _build_folder_defaults_routes
+
+    _build_folder_defaults_routes.register(app, d)
     # v1.422.0 (Wave 2): Build › Code's Continue on a reply a restart cut off,
     # and Cancel on a limit's wait (hosted/carry_on).
     from .routes import build_app_carry as _build_app_carry_routes

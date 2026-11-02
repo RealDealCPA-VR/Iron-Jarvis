@@ -1,0 +1,331 @@
+{
+ "harness": "codex",
+ "source": "v1.426.0: codex_allow.json's recorded initialize + thread/start (codex 0.157.0), then frames in the shapes MEASURED live on codex 0.157.0 with a scratch CODEX_HOME: the mcpServer/startupStatus/updated notifications for a working stdio server, one that exits and an HTTP server needing a sign-in (Codex's own words kept, names renamed); the skills/list answer ({data: [{cwd, skills: [{name, description, path, scope, enabled}]}]}, paths and names rewritten); and thread/compact/start's whole run (answer {}, turn/started, a contextCompaction item, a warning, turn/completed) measured against a local stand-in Responses server.",
+ "steps": [
+  {
+   "await": "request",
+   "method": "initialize"
+  },
+  {
+   "out": {
+    "id": 1,
+    "result": {
+     "userAgent": "iron-jarvis-rec/0.157.0 (Windows 10.0.26200; x86_64) xterm-256color (iron-jarvis-rec; 0)",
+     "codexHome": "C:\\Users\\me\\.codex",
+     "platformFamily": "windows",
+     "platformOs": "windows"
+    }
+   },
+   "reply_to": "initialize"
+  },
+  {
+   "await": "request",
+   "method": "thread/start"
+  },
+  {
+   "out": {
+    "id": 2,
+    "result": {
+     "thread": {
+      "id": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "environments": [
+       {
+        "environmentId": "local",
+        "cwd": "C:\\work\\demo",
+        "runtimeWorkspaceRoots": [
+         "C:\\work\\demo"
+        ]
+       }
+      ],
+      "extra": null,
+      "sessionId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+      "forkedFromId": null,
+      "parentThreadId": null,
+      "preview": "",
+      "ephemeral": false,
+      "section": null,
+      "sectionEnteredAt": null,
+      "projectId": null,
+      "historyMode": "paginated",
+      "modelProvider": "openai",
+      "model": "gpt-5.6-terra",
+      "reasoningEffort": "medium",
+      "createdAt": 1793312807,
+      "updatedAt": 1793312807,
+      "recencyAt": 1793312807,
+      "status": {
+       "type": "idle"
+      },
+      "path": "C:\\Users\\me\\.codex\\sessions\\2026\\10\\29\\rollout-2026-10-29T18-26-47-01a189c5-dbad-7463-b568-0b39fd57450e.jsonl",
+      "cwd": "C:\\work\\demo",
+      "cliVersion": "0.157.0",
+      "originator": "iron-jarvis-rec",
+      "source": "vscode",
+      "canAcceptDirectInput": true,
+      "threadSource": null,
+      "agentNickname": null,
+      "agentRole": null,
+      "gitInfo": null,
+      "name": null,
+      "daybreakEnabled": null,
+      "turns": []
+     },
+     "model": "gpt-5.6-terra",
+     "modelProvider": "openai",
+     "serviceTier": null,
+     "disabledPluginIds": [],
+     "cwd": "C:\\work\\demo",
+     "runtimeWorkspaceRoots": [
+      "C:\\work\\demo"
+     ],
+     "instructionSources": [],
+     "approvalPolicy": "untrusted",
+     "approvalsReviewer": "user",
+     "sandbox": {
+      "type": "dangerFullAccess"
+     },
+     "activePermissionProfile": null,
+     "reasoningEffort": "medium",
+     "multiAgentMode": "explicitRequestOnly"
+    }
+   },
+   "reply_to": "thread/start"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "broken-tool",
+     "status": "starting",
+     "error": null,
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "tracker",
+     "status": "starting",
+     "error": null,
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "notes",
+     "status": "starting",
+     "error": null,
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "tracker",
+     "status": "failed",
+     "error": "The tracker MCP server is not logged in. Run `codex mcp login tracker`.",
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "broken-tool",
+     "status": "failed",
+     "error": "MCP client for `broken-tool` failed to start: MCP startup failed: handshaking with MCP server failed: connection closed: initialize response: connection closed: initialize response",
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "mcpServer/startupStatus/updated",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "name": "notes",
+     "status": "ready",
+     "error": null,
+     "failureReason": null
+    }
+   }
+  },
+  {
+   "await": "request",
+   "method": "skills/list"
+  },
+  {
+   "out": {
+    "id": 0,
+    "result": {
+     "data": [
+      {
+       "cwd": "C:\\work\\demo",
+       "skills": [
+        {
+         "name": "release-notes",
+         "description": "Write the release notes for a version",
+         "path": "C:\\Users\\me\\.codex\\skills\\release-notes\\SKILL.md",
+         "scope": "user",
+         "enabled": true,
+         "pluginId": null
+        },
+        {
+         "name": "old-helper",
+         "description": "A skill turned off in Codex",
+         "path": "C:\\Users\\me\\.codex\\skills\\old-helper\\SKILL.md",
+         "scope": "user",
+         "enabled": false,
+         "pluginId": null
+        },
+        {
+         "name": "imagegen",
+         "description": "Generate or edit raster images when the task benefits from AI-created bitmap visuals.",
+         "path": "C:\\Users\\me\\.codex\\skills\\.system\\imagegen\\SKILL.md",
+         "scope": "system",
+         "enabled": true,
+         "pluginId": null
+        }
+       ],
+       "errors": []
+      }
+     ]
+    }
+   },
+   "reply_to": "skills/list"
+  },
+  {
+   "await": "request",
+   "method": "thread/compact/start"
+  },
+  {
+   "out": {
+    "id": 0,
+    "result": {}
+   },
+   "reply_to": "thread/compact/start"
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "active",
+      "activeFlags": []
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "turn/started",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turn": {
+      "id": "01a19d86-b513-7420-a30f-ecc3101a4d20",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": 1793644213,
+      "completedAt": null,
+      "durationMs": null
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "item/started",
+    "params": {
+     "item": {
+      "type": "contextCompaction",
+      "id": "01a19d86-b518-7841-bb2a-32db9e9de135"
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a19d86-b513-7420-a30f-ecc3101a4d20",
+     "startedAtMs": 1793644213528
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "item/completed",
+    "params": {
+     "item": {
+      "type": "contextCompaction",
+      "id": "01a19d86-b518-7841-bb2a-32db9e9de135"
+     },
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turnId": "01a19d86-b513-7420-a30f-ecc3101a4d20",
+     "completedAtMs": 1793644213544
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "warning",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "message": "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "status": {
+      "type": "idle"
+     }
+    }
+   }
+  },
+  {
+   "out": {
+    "jsonrpc": "2.0",
+    "method": "turn/completed",
+    "params": {
+     "threadId": "01a189c5-dbad-7463-b568-0b39fd57450e",
+     "turn": {
+      "id": "01a19d86-b513-7420-a30f-ecc3101a4d20",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "completed",
+      "error": null,
+      "startedAt": 1793644213,
+      "completedAt": 1793644213,
+      "durationMs": 22
+     }
+    }
+   }
+  }
+ ]
+}

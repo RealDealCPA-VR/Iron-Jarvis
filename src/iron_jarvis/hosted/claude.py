@@ -1120,6 +1120,12 @@ class ClaudeDriver(Driver):
                 model=clip(obj.get("model") or self.model, 120), cwd=clip(obj.get("cwd") or self.cwd, 500),
                 mode=mode,
             ))
+            # v1.426.0 (E4): its own MCP servers, as it reported them (measured
+            # on 2.1.316: ``mcp_servers: [{name, status, source}]``); a frame
+            # without the key says nothing (never "no servers").
+            from .tool_setup import claude_servers, note_servers
+
+            note_servers(self, claude_servers(obj.get("mcp_servers")))
         elif sub == "task_started":
             tid = str(obj.get("task_id") or "")
             if tid:

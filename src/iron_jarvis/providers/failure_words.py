@@ -47,6 +47,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from . import subscription_clis as _SUBS
+
 #: WHERE the words are read (v1.359.0, wave 9). A chat's fix says what to do
 #: in the chat ("Press Retry, or pick another model for this chat."); a RUN —
 #: a schedule's fire, a background job, a helper agent — is read on its
@@ -136,9 +138,9 @@ ACCOUNTS_PLACE = "Settings › Connections"
 #: ``lib/onboarding`` FRIENDLY table (``providerDisplay``), so a headline and
 #: the model menu say the same word ("claude-cli" → "Claude Code").
 PLAIN_NAMES: dict[str, str] = {
-    "claude-cli": "Claude Code",
-    "codex-cli": "Codex",
-    "grok-cli": "Grok CLI",
+    # v1.426.0 (E5): the subscription CLIs' names come from THE table
+    # (``providers/subscription_clis``); the rest are the API providers'.
+    **_SUBS.NAMES,
     "opencode-cli": "OpenCode",
     "anthropic": "Anthropic",
     "openai": "OpenAI",
@@ -161,7 +163,8 @@ _LOWER_CASE_BRANDS: frozenset[str] = frozenset({"llama.cpp"})
 
 #: The subscription CLIs a user SIGNS IN to (Accounts has a Sign in button
 #: for each, v1.353.0 G33) — a refusal from one is about the sign-in, not a key.
-SIGN_IN_CLIS: frozenset[str] = frozenset({"claude-cli", "codex-cli", "grok-cli"})
+#: v1.426.0 (E5): read from THE table (``providers/subscription_clis``).
+SIGN_IN_CLIS: frozenset[str] = _SUBS.PROVIDER_SET
 
 #: The words when the provider is unknown.
 _SOMEONE = "the AI service"

@@ -23,6 +23,7 @@ from .adapters.google import GoogleAdapter
 from .adapters.mock import MockLLMAdapter
 from .adapters.openai import OpenAIAdapter
 from .local import is_local_provider
+from . import subscription_clis as _SUBS
 from .vault import BrowserVault
 
 CredentialResolver = Callable[[str], "str | None"]
@@ -1151,7 +1152,7 @@ class ProviderManager:
                     # Subscription CLIs are their own thing — labelling them
                     # "mock" read like they weren't real (v1.124.0).
                     else "cli"
-                    if name in ("claude-cli", "codex-cli", "grok-cli")
+                    if name in _SUBS.PROVIDER_SET  # v1.426.0 (E5): THE table
                     else "mock"
                 ),
                 # v1.230.0 (U5): the CLI a keyless API provider is served
