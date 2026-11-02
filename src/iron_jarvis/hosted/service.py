@@ -513,26 +513,94 @@ def _pane_since(pane: Any) -> "float | None":
 
 
 def claude_pane_home(pane: Any) -> str:
-    """The Claude Code home a Build terminal's ``claude`` reads and writes:
-    its Iron-Proxy account's recorded home, else this PC's default."""
-    acc = (getattr(pane, "accounts", None) or {}).get(W.PROXY[CLAUDE]) or {}
-    return home_of(CLAUDE, dict(acc) if isinstance(acc, dict) else None)
+    """The Claude Code home a Build terminal's ``claude`` reads and writes.
+    v1.426.0 review: THE pane rule (``terminals/continue_on.claude_home``,
+    which the restart Resume and Continue on the next account already read):
+    its Iron-Proxy account's recorded home; ``~/.claude`` for "this PC's
+    login" (``source: "default"`` — the pane REMOVED an inherited
+    ``CLAUDE_CONFIG_DIR``, so the daemon's own is ANOTHER account's home);
+    else the daemon's environment. ``home_of`` read the daemon's
+    ``CLAUDE_CONFIG_DIR`` for a "this PC" pane and handed over a conversation
+    from another account's home."""
+    from ..terminals import continue_on as CO
+
+    return CO.claude_home(pane)
+
+
+#: v1.426.0 review (E3): the command Claude Code records as the FIRST thing a
+#: conversation a ``/clear`` started says. MEASURED on this PC's own
+#: transcripts (claude 2.1.280 and 2.1.296): the new conversation's file
+#: begins with a ``mode`` / ``file-history-snapshot`` line, a meta caveat
+#: record (``isMeta``), then a ``user`` record whose content is
+#: ``<command-name>/clear</command-name>…`` — both carrying the NEW session's
+#: id. An ordinary conversation never begins that way. ``/reset`` and ``/new``
+#: are Claude Code's own aliases of ``/clear``.
+_CLEAR_COMMANDS = frozenset({"/clear", "/reset", "/new"})
+_CLEAR_RECORD_RX = re.compile(r"\s*<command-name>\s*(/[A-Za-z-]+)\s*</command-name>")
+#: How much of a conversation's head is read to find it (bounded: a file
+#: can be tens of MB; the record measured sits within the first 8 lines).
+CLEAR_HEAD_BYTES = 65_536
+CLEAR_HEAD_LINES = 40
+
+
+def started_by_clear(path: Any) -> bool:
+    """v1.426.0 review (E3): does the Claude Code conversation in ``path``
+    BEGIN with a ``/clear`` (its first non-meta user record is Claude Code's
+    own command record)? BLOCKING (one bounded read of the file's head);
+    never raises (False on any failure — never a guess)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(CLEAR_HEAD_BYTES)
+    except OSError:
+        return False
+    try:
+        for i, raw in enumerate(head.split(b"\n")):
+            if i >= CLEAR_HEAD_LINES:
+                return False
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or rec.get("type") != "user" or rec.get("isMeta"):
+                continue
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(content, list):
+                content = " ".join(str(b.get("text") or "") for b in content if isinstance(b, dict))
+            m = _CLEAR_RECORD_RX.match(content) if isinstance(content, str) else None
+            # The FIRST thing the user's side of the conversation says decides.
+            return bool(m) and m.group(1).lower() in _CLEAR_COMMANDS
+    except Exception:  # noqa: BLE001 — a reading never breaks a hand-over
+        return False
+    return False
 
 
 def claude_later(pane: Any, home: str, recorded: str, *, taken: "Collection[str]" = ()) -> list[dict[str, Any]]:
     """v1.426.0 (Wave 6, E3): the conversations a Build terminal's Claude
     Code moved to AFTER the one Iron Jarvis recorded for it: what a
-    ``/clear`` (a new conversation id) or a ``/resume`` typed inside the
-    terminal leaves behind. BLOCKING; never raises ([] on any failure).
+    ``/clear`` (a new conversation id) typed inside the terminal leaves
+    behind. BLOCKING; never raises ([] on any failure).
 
     Empty while the recorded conversation is still the NEWEST in its folder
     (``terminals/continue_on.newest_recorded``: one glob and one folder's
     stats, nothing opened; the usual case). Otherwise: the conversations FOR
     THE PANE'S FOLDER in the same Claude home, written since the pane started
-    and after the recorded one was last written, newest first, minus
-    ``taken`` (the ids another holder owns: a Code-view row's conversation, or
-    another live terminal's recorded one, are THEIRS, never this pane's). Each
-    is :func:`disk_sessions`' summary (``id``, ``title``, ``mtime``)."""
+    and after the recorded one was last written, that a ``/clear`` STARTED
+    (:func:`started_by_clear`), newest first, minus ``taken`` (the ids another
+    holder owns: a Code-view row's conversation, or another live terminal's
+    recorded one, are THEIRS, never this pane's). Each is the history
+    reader's summary (``id``, ``title``, ``mtime``).
+
+    v1.426.0 review: "newer in the same folder" alone is NOT the pane's — the
+    user's own Claude Code running OUTSIDE Iron Jarvis in the same folder (the
+    Claude app, an editor's panel) writes such files all the time, and its
+    conversation was handed over (and could be resumed while that Claude still
+    wrote it). Only a conversation a ``/clear`` began counts. A ``/resume``
+    typed in the terminal (an EXISTING conversation appended) is not read: the
+    recorded one is handed over, as before v1.426.0. Known: the user's own
+    outside Claude ``/clear``-ing in the same folder while the terminal did not
+    still reads as the terminal's."""
+    from ..history import index as HI
     from ..terminals import continue_on as CO
 
     try:
@@ -549,11 +617,21 @@ def claude_later(pane: Any, home: str, recorded: str, *, taken: "Collection[str]
                 continue
             break
         skip = {str(t) for t in taken if t} | {str(recorded)}
-        found = disk_sessions(CLAUDE, home, str(getattr(pane, "cwd", "") or ""), since=since)
-        later = [
-            s for s in found
-            if str(s.get("id") or "") not in skip and float(s.get("mtime") or 0) > floor
-        ]
+        folder = str(getattr(pane, "cwd", "") or "")
+        later: list[dict[str, Any]] = []
+        # Cheapest first: a stat, then the bounded head read, and only then
+        # the history reader's summary (it reads the whole file).
+        for path in _conversation_files(CLAUDE, home):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime <= floor or path.stem in skip or not started_by_clear(path):
+                continue
+            s = HI.summarize(CLAUDE, path)
+            if s and same_folder(s.get("project"), folder) and str(s.get("id") or "") not in skip:
+                s["mtime"] = mtime
+                later.append(s)
         later.sort(key=lambda s: float(s.get("mtime") or 0), reverse=True)
         return later
     except Exception:  # noqa: BLE001 - a reading never breaks a hand-over
@@ -2966,6 +3044,10 @@ class HostedService:
         acc = {k: v for k, v in dict(acc).items() if k in ("id", "title", "source", "home", "unset", "note")}
         hid = str(getattr(pane, "claude_session_id", None) or "") if harness == CLAUDE else ""
         title = ""
+        # v1.426.0 review: the home the PANE's Claude writes — a "this PC"
+        # pane removed an inherited CLAUDE_CONFIG_DIR, so the daemon's own
+        # (``home_of``) is ANOTHER account's home.
+        home = claude_pane_home(pane) if harness == CLAUDE else home_of(harness, acc)
         if harness == CLAUDE and _SID_RX.match(hid):
             # v1.426.0 (Wave 6, E3): the RECORDED id is the conversation Iron
             # Jarvis started there; a `/clear` typed in the terminal moved
@@ -2979,14 +3061,14 @@ class HostedService:
                      if r.harness == CLAUDE}
             if terminals is not None:
                 taken |= other_terminal_ids(terminals, str(getattr(pane, "id", "") or ""))
-            later = claude_later(pane, home_of(harness, acc), hid, taken=taken)
+            later = claude_later(pane, home, hid, taken=taken)
             if len(later) > 1:
                 raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))
             if later:
                 hid, title = str(later[0].get("id") or ""), str(later[0].get("title") or "")
         if not hid or not typable_sid(harness, hid):
             since = _pane_since(pane)
-            found = disk_sessions(harness, home_of(harness, acc), str(pane.cwd or ""), since=since)
+            found = disk_sessions(harness, home, str(pane.cwd or ""), since=since)
             if len(found) != 1:
                 raise Refused(W.CANNOT_TELL.format(label=W.label(harness)))
             hid, title = str(found[0].get("id") or ""), str(found[0].get("title") or "")

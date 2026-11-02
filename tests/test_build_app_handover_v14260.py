@@ -41,6 +41,9 @@ from tests.test_build_app_review_v1409 import (  # noqa: F401 — fixtures by na
     app,
     work,
 )
+# v1.426.0 review: a conversation a `/clear` started, as Claude Code writes it
+# (the only kind ever read as the terminal's — the review file's pins).
+from tests.test_build_app_handover_review_v14260 import write_cleared
 
 OLD = "0a0a0a0a-1111-4222-8333-444444444444"
 NEW = "0b0b0b0b-1111-4222-8333-444444444444"
@@ -66,7 +69,7 @@ async def test_after_clear_the_newest_conversation_is_handed_over_not_the_older_
         app, work, tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
     _aged(_write_claude(home, work, OLD, "the first question"), 120)
-    _aged(_write_claude(home, work, NEW, "after clear"), 20)  # the user typed /clear
+    _aged(write_cleared(home, work, NEW, "after clear"), 20)  # the user typed /clear
     pane = _Pane(work, EXITED, sid=OLD, pane_id="p")
     _panes(app, monkeypatch, {"p": pane})
     async with client(app) as c:
@@ -97,7 +100,7 @@ async def test_a_code_view_rows_own_newer_conversation_is_never_taken_for_the_pa
     the pane: that conversation is the ROW's, and the pane still ran its own."""
     home = _home(tmp_path, monkeypatch)
     _aged(_write_claude(home, work, OLD), 120)
-    _aged(_write_claude(home, work, ROWS), 10)
+    _aged(write_cleared(home, work, ROWS), 10)
     store.create(app.state.platform.engine, harness="claude-code", folder=str(work), harness_session_id=ROWS)
     pane = _Pane(work, EXITED, sid=OLD, pane_id="p")
     _panes(app, monkeypatch, {"p": pane})
@@ -110,8 +113,8 @@ async def test_a_code_view_rows_own_newer_conversation_is_never_taken_for_the_pa
 async def test_several_new_conversations_is_never_a_guess(app, work, tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
     _aged(_write_claude(home, work, OLD), 120)
-    _aged(_write_claude(home, work, NEW), 60)
-    _aged(_write_claude(home, work, NEWER), 10)
+    _aged(write_cleared(home, work, NEW), 60)
+    _aged(write_cleared(home, work, NEWER), 10)
     pane = _Pane(work, EXITED, sid=OLD, pane_id="p")
     _panes(app, monkeypatch, {"p": pane})
     async with client(app) as c:
@@ -126,7 +129,7 @@ async def test_several_new_conversations_is_never_a_guess(app, work, tmp_path, m
 async def test_a_running_terminal_holds_the_conversation_it_cleared_into(app, work, tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch)
     _aged(_write_claude(home, work, OLD), 120)
-    _aged(_write_claude(home, work, NEW, "after clear"), 10)
+    _aged(write_cleared(home, work, NEW, "after clear"), 10)
     pane = _Pane(work, RUNNING, sid=OLD, pane_id="p")  # its Claude still runs, writing NEW
     _panes(app, monkeypatch, {"p": pane})
     async with client(app) as c:
@@ -148,7 +151,7 @@ async def test_a_running_terminal_never_holds_a_code_view_rows_own_conversation(
     use_fake(monkeypatch, "claude_modes", tmp_path / "fake.log")
     home = _home(tmp_path, monkeypatch)
     _aged(_write_claude(home, work, OLD), 120)
-    _aged(_write_claude(home, work, ROWS), 10)
+    _aged(write_cleared(home, work, ROWS), 10)
     row = store.create(app.state.platform.engine, harness="claude-code", folder=str(work),
                        harness_session_id=ROWS)
     _panes(app, monkeypatch, {"p": _Pane(work, RUNNING, sid=OLD, pane_id="p")})
