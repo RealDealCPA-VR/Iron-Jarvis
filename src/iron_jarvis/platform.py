@@ -2224,6 +2224,15 @@ def build_platform(
                         fire_member = rec
                         provider = str(rec.provider or "").strip() or None
                         model = _mt.pinned_model(platform, rec) or None
+                    elif _mt.has_own_account(rec):
+                        # v1.424.0 (D6): a custom agent that is not on the
+                        # team but names an account of its own runs on THAT
+                        # account (``member_scope``'s pin), refused in words
+                        # first when the user's account groups forbid it.
+                        _why = _mt.account_refusal(platform, rec)
+                        if _why:
+                            raise _ScheduleRefused(_why)
+                        fire_member = rec
                     # The job card's posture and step budget (v1.295.0).
                     fire_max_steps = (rec.max_steps or None) if rec else None
                     fire_approval = (rec.approval_mode or None) if rec else None
@@ -2247,6 +2256,22 @@ def build_platform(
 
             knob = _knobs.decode_knobs(payload)
             knob_notes: list[str] = []
+            # v1.424.0 (D6): the ACCOUNT the schedule names (``payload.account``
+            # — checked at add/patch, checked again here: an account removed
+            # or turned off since, Iron-Proxy off, another vendor than the run's
+            # model) is refused in words BEFORE any session row; admitted, every
+            # lease the run makes is pinned to it (``fire_pin`` below). None
+            # named: exactly as before.
+            fire_pin = None
+            _acct = payload.get("account")
+            if isinstance(_acct, str) and _acct.strip():
+                from .iron_proxy import choice as _choice
+
+                fire_pin, _why = _choice.pin_for(
+                    platform, _acct, str(provider or ""), str(model or ""), who="schedule"
+                )
+                if fire_pin is None:
+                    raise _ScheduleRefused(_why)
             if knob["skills"]:
                 # Per-job skills ride a COPY of the definition — the builtin
                 # singletons and a dynamic agent's composed definition are
@@ -2323,6 +2348,10 @@ def build_platform(
                     session.id,
                     prompt + "\n\n" + "\n\n".join(extras),
                 )
+            from .iron_proxy.pin import reset_pin as _reset_pin
+            from .iron_proxy.pin import set_pin as _set_pin
+
+            _pin_token = _set_pin(fire_pin) if fire_pin is not None else None
             try:
                 # The definition kwarg is passed ONLY when a dynamic agent
                 # resolved one: the absent-agent path stays call-signature
@@ -2355,6 +2384,9 @@ def build_platform(
                     review, session.id, False, f"{type(exc).__name__}: {exc}"
                 )
                 raise
+            finally:
+                if _pin_token is not None:
+                    _reset_pin(_pin_token)
             status = getattr(done.status, "value", str(done.status))
             # v1.360.0 (lane 10A): a run that ENDED published its
             # ``session.completed`` (the bell's row); one woken without a

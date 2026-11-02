@@ -111,9 +111,18 @@ def _isolate_codex_home():
     prev = os.environ.get("CODEX_HOME")
     tmp = tempfile.mkdtemp(prefix="ij-test-codexhome-")
     os.environ["CODEX_HOME"] = tmp
+    # v1.424.0 (D2): Codex's model list is read on every GET /models now, and
+    # several suites DELETE CODEX_HOME (to isolate Iron-Proxy leases) — so
+    # with it unset the reader falls back to this empty folder too, never the
+    # developer's real ~/.codex.
+    from iron_jarvis.providers import codex_models
+
+    prev_fallback = codex_models.TEST_HOME_FALLBACK
+    codex_models.TEST_HOME_FALLBACK = tmp
     try:
         yield
     finally:
+        codex_models.TEST_HOME_FALLBACK = prev_fallback
         if prev is None:
             os.environ.pop("CODEX_HOME", None)
         else:

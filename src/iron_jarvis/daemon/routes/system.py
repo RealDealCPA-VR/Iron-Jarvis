@@ -707,6 +707,31 @@ def register(app: FastAPI, d) -> None:
                         "type or an existing custom agent's name (Agents page)"
                     ),
                 )
+        # v1.424.0 (D6): a task schedule may name the Iron-Proxy ACCOUNT its
+        # runs use (``payload.account``) — checked NOW by the one rule
+        # (``iron_proxy.choice``): one Iron-Proxy lists, turned on, of the
+        # vendor the run's model is on (the payload's model, else the
+        # schedule's custom agent's, else the default). The fire checks it
+        # again and pins every lease to it.
+        raw_account = payload.get("account") if kind == "task" else None
+        if raw_account not in (None, ""):
+            if not isinstance(raw_account, str):
+                raise HTTPException(status_code=422, detail="account must be an account's id (text)")
+            from ...iron_proxy import choice as _choice
+
+            provider = str(payload.get("provider") or "")
+            model = str(payload.get("model") or "")
+            if not provider and isinstance(raw_agent, str) and raw_agent.strip():
+                try:
+                    rec = d.platform.agents_registry.get(raw_agent.strip())
+                except Exception:  # noqa: BLE001 — a builtin, or none: the default
+                    rec = None
+                if rec is not None and str(getattr(rec, "provider", "") or "").strip():
+                    provider = str(rec.provider)
+                    model = model or str(getattr(rec, "model", "") or "")
+            _row, why = _choice.check(d.platform, raw_account, provider, model, who="schedule")
+            if why:
+                raise HTTPException(status_code=409, detail=why)
         wanted = payload.get("notify_channels")
         if wanted:
             known = set(d.platform.notifier.channels())

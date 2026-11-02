@@ -42,9 +42,15 @@ from ..iron_proxy import accounts as _acc
 log = logging.getLogger(__name__)
 
 #: vendor -> (Iron Jarvis provider, Iron-Proxy provider, the group's name).
+#: v1.424.0 (D6): Grok joins — a Chat › Code session on the Grok CLI is
+#: pinned to one of Iron-Proxy's ``xai`` accounts like Claude Code and Codex
+#: (Build › Code's Grok already ran on them: ``hosted/words.W.PROXY``; the
+#: lease has always known ``grok-cli`` -> ``xai`` / ``GROK_HOME``). Grok has
+#: no keyless API twin (``xai`` is a key), so ``_API_OF`` is unchanged.
 VENDORS: dict[str, dict[str, str]] = {
     "claude": {"provider": "claude-cli", "proxy": "anthropic", "label": "Claude Code"},
     "codex": {"provider": "codex-cli", "proxy": "openai", "label": "Codex"},
+    "grok": {"provider": "grok-cli", "proxy": "xai", "label": "Grok"},
 }
 #: Iron Jarvis provider -> vendor.
 VENDOR_OF_PROVIDER = {v["provider"]: k for k, v in VENDORS.items()}
@@ -316,10 +322,11 @@ def default_for(svc: Any, vendor: str) -> dict[str, Any] | None:
 
 
 def vendor_of(platform: Any, provider: str) -> str:
-    """``claude`` / ``codex`` when ``provider`` (or, empty, the default
-    provider) runs on a subscription CLI — ``claude-cli`` / ``codex-cli``, or a
-    keyless ``anthropic`` / ``openai`` the CLI serves — else "" (a local model
-    or an API key: no account). Never raises."""
+    """``claude`` / ``codex`` / ``grok`` when ``provider`` (or, empty, the
+    default provider) runs on a subscription CLI — ``claude-cli`` /
+    ``codex-cli`` / ``grok-cli``, or a keyless ``anthropic`` / ``openai`` the
+    CLI serves — else "" (a local model or an API key: no account). Never
+    raises."""
     try:
         name = str(provider or "").strip()
         if not name:
@@ -364,10 +371,11 @@ def _proxy_state(svc: Any) -> dict[str, Any]:
 
 
 def accounts_view(svc: Any) -> dict[str, Any]:
-    """``GET /build/accounts``: ``{claude: [...], codex: [...], iron_proxy:
-    {enabled, running, needs_update, note}}`` from the CACHED snapshot."""
+    """``GET /build/accounts``: ``{claude: [...], codex: [...], grok: [...],
+    iron_proxy: {enabled, running, needs_update, note}}`` from the CACHED
+    snapshot (``grok`` since v1.424.0)."""
     state = _proxy_state(svc)
-    out: dict[str, Any] = {"claude": [], "codex": [], "iron_proxy": state}
+    out: dict[str, Any] = {"claude": [], "codex": [], "grok": [], "iron_proxy": state}
     if not state["enabled"]:
         return out
     snap = snapshot(svc)

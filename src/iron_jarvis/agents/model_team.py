@@ -572,12 +572,21 @@ def member_account(platform: Any, record: Any, caller: Any = None, *,
         return None, ""
 
 
+def has_own_account(record: Any) -> bool:
+    """v1.424.0 (D6): does this custom agent name an Iron-Proxy account of
+    its own (``DynamicAgentRecord.account``) — a team member or not?"""
+    return record is not None and bool(str(getattr(record, "account", "") or "").strip())
+
+
 def account_refusal(platform: Any, record: Any) -> str:
     """The sentence a door refuses a member with, BEFORE any session exists,
     when the account it would run on (:func:`member_account`, from the pin of
     the context it is called in) cannot be one the user's groups allow; ""
-    otherwise. Never raises."""
-    if not runs_elsewhere(record):
+    otherwise. Never raises.
+
+    v1.424.0 (D6): a custom agent that is NOT a team member but names an
+    account of its own is checked too — its runs use that account now."""
+    if not (runs_elsewhere(record) or has_own_account(record)):
         return ""
     try:
         from ..iron_proxy.pin import current
@@ -644,10 +653,28 @@ class member_scope:  # noqa: N801 — a context manager read like a function
         self.pin = None
         self.lift = False
         self.drop_pin = False
+        #: v1.424.0 (D6): a custom agent that is NOT on the model team but
+        #: names an account of its own runs on THAT account (the pin only —
+        #: no model hold: a pin on the agent's explicit provider already keeps
+        #: the router from moving it, ``router._account_held``). Before, the
+        #: account a non-member stored was never read: its runs took
+        #: Iron-Proxy's first free account.
+        self.own = False
         if self.on:
             # v1.395.0: the account the TEAM ROUTER chose for a role's piece
             # (``RolePick.pin``) when it chose one; else ``member_account``'s.
             self.pin = pin if pin is not _UNSET else member_account(platform, record, current(), coding=False)[0]
+        elif has_own_account(record) and (
+            member_account(platform, record, current(), coding=False)[0] or member_pin(platform, record)
+        ) is not None:
+            self.own = True
+            # Its own account (``member_account`` step 1, the group rule
+            # included — the doors refused a conflict before any session); a
+            # pin the group rule withheld is still its OWN account, never
+            # none: nothing may run on an account the user did not choose.
+            self.pin = member_account(platform, record, current(), coding=False)[0] or member_pin(platform, record)
+            # Inside a member's run: out of that member's hold too.
+            self.lift = MEMBER_RUN.get()
         elif MEMBER_RUN.get():
             self.lift = True
             pin = current()
@@ -665,7 +692,7 @@ class member_scope:  # noqa: N801 — a context manager read like a function
         self._flag = None
 
     def __enter__(self) -> "member_scope":
-        if not (self.on or self.lift):
+        if not (self.on or self.lift or self.own):
             return self
         from ..iron_proxy.pin import set_pin
         from ..providers.hold import set_hold
@@ -674,8 +701,12 @@ class member_scope:  # noqa: N801 — a context manager read like a function
             self._pin = set_pin(self.pin)
             self._hold = set_hold(self.provider, self.model, self.who)
             self._flag = MEMBER_RUN.set(True)
+        elif self.own and not self.lift:
+            self._pin = set_pin(self.pin)
         else:
-            if self.drop_pin:
+            if self.own:
+                self._pin = set_pin(self.pin)
+            elif self.drop_pin:
                 self._pin = set_pin(None)
             from ..providers.hold import PROVIDER_HOLD
 
@@ -684,7 +715,7 @@ class member_scope:  # noqa: N801 — a context manager read like a function
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        if not (self.on or self.lift):
+        if not (self.on or self.lift or self.own):
             return
         from ..iron_proxy.pin import reset_pin
         from ..providers.hold import reset_hold

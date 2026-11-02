@@ -324,6 +324,12 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
             known = None
         if known is not None:
             return tuple(x for x in EFFORTS[CLAUDE] if x in known)
+    if harness == CODEX:
+        # v1.424.0 (D2): the levels Codex's OWN model list names for that
+        # model (its models_cache.json, the cached reading — never a start).
+        known_codex = _codex_efforts(model)
+        if known_codex is not None:
+            return known_codex
     if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK)):
         # (OpenCode, Grok: the default row "" carries its default model's levels.)
         for r in pi_rows:
@@ -332,6 +338,21 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
                     return tuple(str(x) for x in r["efforts"])  # OpenCode's own names, its order
                 return tuple(x for x in EFFORTS[harness] if x in r["efforts"])
     return EFFORTS[harness]
+
+
+def _codex_efforts(model: Any) -> "tuple[str, ...] | None":
+    """v1.424.0 (D2): Codex's effort levels for ``model`` as its own list
+    names them (``providers.codex_models``), in this view's order — None
+    when the list is not read or names none for it. Never blocks."""
+    try:
+        from ..providers import codex_models
+
+        row = codex_models.lookup(model)
+    except Exception:  # noqa: BLE001 — unknown: the tool's own list
+        return None
+    if row is None or not row.get("efforts"):
+        return None
+    return tuple(x for x in EFFORTS[CODEX] if x in row["efforts"])
 
 
 def check_effort(harness: str, effort: Any, model: Any = "", pi_rows: list[dict[str, Any]] | None = None) -> str:
@@ -913,6 +934,14 @@ class HostedService:
                     known = None
                 if known is not None:
                     r["efforts"] = [x for x in EFFORTS[CLAUDE] if x in known]
+        elif harness == CODEX:
+            # v1.424.0 (D2): each Codex model's own levels (Codex's list).
+            for r in rows:
+                known_codex = _codex_efforts(r.get("id") or "")
+                if known_codex is not None:
+                    r["efforts"] = list(known_codex)
+                else:
+                    r.pop("efforts", None)
         elif harness not in LISTED_MODELS:
             for r in rows:
                 r.pop("efforts", None)
@@ -932,6 +961,19 @@ class HostedService:
             known = next((r for r in listed if r.get("id") == default), None)
             if known is not None and isinstance(known.get("efforts"), list):
                 rows[0]["efforts"] = list(known["efforts"])
+        if harness == CODEX:
+            # v1.424.0 (D2): the models Codex ITSELF offers the signed-in
+            # account (its models_cache.json, the one cached reading every
+            # model menu reads — never a start just to ask), with Codex's own
+            # names, in its order. Nothing read: the default row alone, as
+            # before.
+            try:
+                from ..providers import codex_models
+
+                for m in codex_models.offered():
+                    rows.append({"id": m["id"], "label": m["label"]})
+            except Exception:  # noqa: BLE001 — the default row still works
+                log.debug("codex model list unreadable", exc_info=True)
         if harness == CLAUDE:
             try:
                 from ..providers import claude_models

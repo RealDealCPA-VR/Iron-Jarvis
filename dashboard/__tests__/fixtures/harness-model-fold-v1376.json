@@ -468,6 +468,7 @@
         "status": "ready"
       }
     ],
+    "grok": [],
     "iron_proxy": {
       "enabled": true,
       "running": true,
@@ -478,6 +479,7 @@
   "accounts_off": {
     "claude": [],
     "codex": [],
+    "grok": [],
     "iron_proxy": {
       "enabled": false,
       "running": false,

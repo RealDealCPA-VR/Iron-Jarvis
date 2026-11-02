@@ -148,6 +148,11 @@ class NightTaskRecord(SQLModel, table=True):
     #: "The team": the session's model may hand pieces to the user's model
     #: team by role (v1.395.0).
     team: bool = False
+    #: v1.424.0 (D6): the Iron-Proxy account the task's session runs on (""
+    #: = its vendor's Default, as before). Checked when queued and again when
+    #: it starts (``iron_proxy.choice``); additive — NULL on an older table
+    #: reads as "".
+    account: str = ""
     #: "Try on" (v1.397.0 attempts): ``[{provider, model}]``, 2 or 3.
     try_on_json: str = ""
     #: The order queued tasks start in (smallest first).
@@ -236,6 +241,8 @@ def view(row: Any) -> dict[str, Any]:
         "provider": row.provider,
         "model": row.model,
         "team": bool(row.team),
+        # v1.424.0 (D6): the account it runs on ("" = its vendor's Default).
+        "account": str(getattr(row, "account", "") or ""),
         "try_on": try_on_of(row),
         "position": int(row.position or 0),
         "state": row.state if row.state in STATES else QUEUED,
@@ -282,7 +289,8 @@ def _queued_rows(db: Any) -> list[NightTaskRecord]:
 
 
 def add_task(engine: Any, *, folder: str, words: str, provider: str = "", model: str = "",
-             team: bool = False, try_on: "list[dict[str, str]] | None" = None) -> dict[str, Any]:
+             team: bool = False, try_on: "list[dict[str, str]] | None" = None,
+             account: str = "") -> dict[str, Any]:
     """Queue one task LAST. The caller checked the folder and the models
     (the route). BLOCKING."""
     text = str(words or "").strip()
@@ -302,7 +310,7 @@ def add_task(engine: Any, *, folder: str, words: str, provider: str = "", model:
         row = NightTaskRecord(
             folder=str(folder), words=text, provider=str(provider or ""), model=str(model or ""),
             team=bool(team), try_on_json=json.dumps(list(try_on or [])) if try_on else "",
-            position=position,
+            position=position, account=str(account or ""),
         )
         db.add(row)
         db.commit()
@@ -359,7 +367,7 @@ def rows_in(engine: Any, state: str) -> list[dict[str, Any]]:
 
 def edit_task(engine: Any, task_id: str, changes: dict[str, Any]) -> dict[str, Any]:
     """PARTIAL edit of a QUEUED task (``folder``, ``words``, ``provider``,
-    ``model``, ``team``, ``try_on``). BLOCKING."""
+    ``model``, ``team``, ``try_on``, ``account``). BLOCKING."""
     with session_scope(engine) as db:
         row = db.get(NightTaskRecord, str(task_id or ""))
         if row is None:
@@ -383,6 +391,8 @@ def edit_task(engine: Any, task_id: str, changes: dict[str, Any]) -> dict[str, A
             row.model = str(changes["model"] or "")
         if "team" in changes:
             row.team = bool(changes["team"])
+        if "account" in changes:
+            row.account = str(changes["account"] or "")
         if "try_on" in changes:
             picks = list(changes["try_on"] or [])
             row.try_on_json = json.dumps(picks) if picks else ""

@@ -157,7 +157,7 @@ class ModelCatalog:
 
     @staticmethod
     def _gens(d) -> tuple:
-        from ...providers import claude_models, discovery
+        from ...providers import claude_models, codex_models, discovery
         from ...providers import manager as _manager
 
         cfg = d.platform.config
@@ -167,6 +167,8 @@ class ModelCatalog:
             getattr(fleet, "revision", None),
             _manager._CLI_PRESENCE_GEN,  # noqa: SLF001
             getattr(claude_models, "_mem_at", None),
+            # v1.424.0 (D2): Codex's own model list moved (read behind).
+            codex_models.generation(),
             discovery.generation(),
             getattr(cfg, "ollama_base_url", None),
             getattr(cfg, "ollama_model", None),
@@ -460,6 +462,18 @@ def build_selectable_models(d, *, providers: Any = None) -> list[dict[str, Any]]
         models = _with_claude_catalog(d, models, providers=providers)
     except Exception:  # noqa: BLE001 — the picker never breaks on the catalog
         pass
+    # CODEX'S OWN LIST (v1.424.0, D2): the codex-cli subscription lists the
+    # models Codex itself offers the signed-in account (``codex_models``: its
+    # models_cache.json, read off the loop and cached) after its
+    # "subscription" row, with Codex's own names and the plan's default
+    # marked; a keyless `openai` SERVED by codex-cli lists exactly those
+    # models (the curated API ids — gpt-4o & co. — are not ones a ChatGPT
+    # plan runs, and a pick of one failed inside Codex). Nothing read (no
+    # Codex, no list yet): today's rows exactly.
+    try:
+        models = _with_codex_catalog(models, providers=providers)
+    except Exception:  # noqa: BLE001 — the picker never breaks on the catalog
+        pass
     # Honesty flag: which entries the user can ACTUALLY run right now
     # (provider connected/configured). Pickers show available ones first
     # and grey/hide the rest — no more dead options that silently fail.
@@ -669,6 +683,65 @@ def _with_claude_catalog(
     # the LATER slot first, so the earlier index is still right afterwards
     for prov in sorted(at, key=lambda p: at[p], reverse=True):
         out[at[prov]:at[prov]] = _claude_block(prov, cat, curated[prov])
+    return out
+
+
+def _codex_rows(provider: str, offered: list[dict[str, Any]], default: str) -> list[dict[str, Any]]:
+    """Codex's offered models as picker rows for ``provider`` (v1.424.0):
+    Codex's own name (``label``), its description and window, and
+    ``cli_default`` on the model Codex starts on with no model named (the
+    dashboard folds the "subscription" row onto it, as for Claude Code)."""
+    return [
+        {
+            "provider": provider,
+            "model": r["id"],
+            "id": r["id"],
+            "label": r["label"],
+            "description": r.get("description") or "",
+            "context_window": r.get("window"),
+            "cli_default": bool(default) and r["id"] == default,
+        }
+        for r in offered
+    ]
+
+
+def _with_codex_catalog(models: list[dict[str, Any]], *, providers: Any) -> list[dict[str, Any]]:
+    """``models`` with Codex's own list in place (v1.424.0, D2; see the call
+    site). Never blocks: ``codex_models`` answers its last reading and
+    refreshes it behind. Unchanged when nothing is read or nothing serves."""
+    from ...providers import codex_models
+
+    inherited = providers.inherited_from("openai") == "codex-cli"
+    if not (providers.available("codex-cli") or inherited):
+        return models  # nothing to serve them: keep today's rows untouched
+    offered = codex_models.offered()
+    if not offered:
+        return models
+    default = codex_models.default_model()
+    out: list[dict[str, Any]] = []
+    openai_at: "int | None" = None
+    for m in models:
+        prov = m.get("provider")
+        if prov == "codex-cli" and m.get("model") not in ("subscription", "default"):
+            continue  # a curated codex-cli id: Codex's own list replaces it
+        if inherited and prov == "openai":
+            # A keyless `openai` IS Codex: only what Codex runs is offered.
+            if openai_at is None:
+                openai_at = len(out)
+            continue
+        out.append(m)
+    # codex-cli's block goes right after its "subscription" row (else at the
+    # end); a served `openai`'s where its curated rows stood. The later slot
+    # first, so the earlier index is still right afterwards.
+    at = {
+        "codex-cli": next(
+            (i + 1 for i, m in enumerate(out) if m.get("provider") == "codex-cli"), len(out)
+        )
+    }
+    if inherited:
+        at["openai"] = openai_at if openai_at is not None else len(out)
+    for prov in sorted(at, key=lambda p: at[p], reverse=True):
+        out[at[prov]:at[prov]] = _codex_rows(prov, offered, default)
     return out
 
 

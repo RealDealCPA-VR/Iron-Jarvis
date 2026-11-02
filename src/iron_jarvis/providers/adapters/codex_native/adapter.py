@@ -69,6 +69,49 @@ log = logging.getLogger("ironjarvis.codex_native")
 #: Model ids that mean "Codex's own default" (no ``model`` on thread/start).
 PLACEHOLDER_MODELS = ("", "subscription", "default", "auto")
 
+#: v1.424.0 (D2): the effort words Codex takes from Iron Jarvis. ``xhigh``
+#: ("Extra") joins low/medium/high — offered only for a model whose own entry
+#: in Codex's list names it (``providers.reasoning`` / ``codex_models``); the
+#: router never sends a level the serving model was not offered.
+WIRE_EFFORTS = ("low", "medium", "high", "xhigh")
+
+
+def _effort_on_the_wire(reasoning: str) -> str:
+    return reasoning if reasoning in WIRE_EFFORTS else ""
+
+
+class CodexModelNotOffered(ProviderError):
+    """v1.424.0 (D2): the model asked for is not one Codex's own list holds.
+    Never transient, never failed over from (``no_failover``): a model the
+    user picked is never silently swapped for another."""
+
+    no_failover = True
+
+    def __init__(self, model: str, words: str) -> None:
+        super().__init__(f"{P.PROVIDER}: {words}", transient=False)
+        self.model = model
+        self.no_failover = True
+        self.failed_provider = P.PROVIDER
+
+
+def not_offered_error(model: Any) -> "CodexModelNotOffered | None":
+    """The refusal for ``model`` when Codex's own list is known and does not
+    hold it; None otherwise (nothing read, a placeholder, a model it holds).
+    Never blocks (the cached reading); never raises."""
+    try:
+        from ... import codex_models
+
+        name = str(model or "").strip()
+        if codex_models.runs(name) is not False:
+            return None
+        offered = codex_models.offered_words()
+        words = (f"Codex doesn't offer {name} on this ChatGPT plan, so nothing was sent."
+                 + (f" Choose one of its models: {offered}." if offered else " Choose one of Codex's own models."))
+        return CodexModelNotOffered(name, words)
+    except Exception:  # noqa: BLE001 — unsure: sent as before
+        return None
+
+
 #: Codex's own sign-in environment variables (named once in the log, never valued).
 _AUTH_ENV = ("CODEX_API_KEY", "CODEX_ACCESS_TOKEN")
 _ENV_NOTED = False
@@ -368,6 +411,14 @@ class CodexNativeAdapter(LLMAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         from ....iron_proxy import accounts
 
+        # v1.424.0 (D2): a model Codex's OWN list does not hold (a stored pick
+        # of a curated API id such as gpt-4o, which a ChatGPT plan does not
+        # run) is refused in words BEFORE anything starts — never sent to fail
+        # inside Codex, and never moved to another model or provider
+        # (``no_failover``). Nothing read (no list): sent as before.
+        refused = not_offered_error(self.model)
+        if refused is not None:
+            raise refused
         exe = await asyncio.to_thread(self._which, P.BINARY)
         if not exe:
             raise RuntimeError(f"{P.PROVIDER}: the 'codex' CLI is not installed/on PATH")
@@ -643,7 +694,7 @@ class CodexNativeAdapter(LLMAdapter):
         if problem:
             raise _Unsupported(problem, cache=False)
         S.set_verdict(key, True)
-        effort = reasoning if reasoning in ("low", "medium", "high") else ""
+        effort = _effort_on_the_wire(reasoning)
         try:
             turn = await s.request("turn/start", P.turn_start_params(s.thread_id, items, effort), timeout)
         except S.SessionGone:
@@ -688,7 +739,7 @@ class CodexNativeAdapter(LLMAdapter):
         (the finish note), no process start, nothing replayed."""
         seg = _Segment()
         timeout = float(S.START_TIMEOUT_S)
-        effort = reasoning if reasoning in ("low", "medium", "high") else ""
+        effort = _effort_on_the_wire(reasoning)
         try:
             try:
                 turn = await s.request("turn/start", P.turn_start_params(s.thread_id, items, effort), timeout)

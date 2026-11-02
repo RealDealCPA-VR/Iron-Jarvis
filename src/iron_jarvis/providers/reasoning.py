@@ -86,6 +86,22 @@ def _claude_cli_levels(model: str) -> tuple[str, ...]:
     return LEVELS
 
 
+def _codex_cli_levels(model: str) -> tuple[str, ...]:
+    """v1.424.0 (D2): Codex's levels for ``model`` — the ones Codex's OWN
+    model list (``codex_models``, its ``models_cache.json``) says that model
+    takes, in this module's order (``xhigh`` included when it does; Codex's
+    ``max`` / ``ultra`` are never offered). The cached reading only (never a
+    file read on the caller's thread, never a start). Nothing known (no list,
+    a model it does not hold): ``LEVELS``, exactly as before."""
+    try:
+        from .codex_models import effort_levels
+
+        offered = effort_levels(model)
+    except Exception:  # noqa: BLE001 — an unreadable list offers the base levels
+        offered = None
+    return tuple(offered) if offered else LEVELS
+
+
 def reasoning_levels(provider: str, model: str) -> tuple[str, ...]:
     """The levels a (provider, model) pair offers; ``()`` when it offers none."""
     prov = (provider or "").strip().lower()
@@ -98,7 +114,7 @@ def reasoning_levels(provider: str, model: str) -> tuple[str, ...]:
     if prov == "claude-cli":
         return _claude_cli_levels(mid)
     if prov == "codex-cli":
-        return LEVELS
+        return _codex_cli_levels(mid)
     if prov == "openai":
         return LEVELS if _OPENAI_REASONING.match(low) else ()
     if prov == "google":

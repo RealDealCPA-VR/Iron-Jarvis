@@ -3334,6 +3334,13 @@ async def stream_chat_turn(
     # and every tool round the lane creates copy it. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn runs under the same scope.
     _lo_scope = await _chat_turn.local_only_scope_for(platform, body)
+    # v1.424.0 (D6): the account the user chose for this chat — checked HERE,
+    # before the response opens (a refusal is the 409 the POST lane answers),
+    # and armed around the WHOLE stream by `account_pinned_frames`, in the
+    # task that iterates it. None (no account chosen): nothing armed, the
+    # stream exactly as before. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn (`_account_pinned_turn`).
+    _acct_pin = await _chat_turn.account_pin_for(platform, body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -3368,6 +3375,8 @@ async def stream_chat_turn(
         # sees the call it always saw).
         **({"reply_cap": reply_cap} if reply_cap is not None else {}),
     ), _prep), _lo_scope))
+    if _acct_pin is not None:
+        inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
         # "Stop and archive" can stop exactly the turns running for the chat.

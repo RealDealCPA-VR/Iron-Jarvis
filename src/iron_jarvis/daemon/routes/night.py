@@ -834,7 +834,21 @@ async def start_task(d: Any, task: dict[str, Any]) -> bool:
                 if why:
                     raise CreateRefused(why)
             setup = {k: v for k, v in {"provider": task["provider"], "model": task["model"]}.items() if v}
-            setup = await asyncio.to_thread(_with_initial_account, platform, setup, "")
+            # v1.424.0 (D6): the account the user chose for this task — checked
+            # again now (removed or turned off since, Iron-Proxy off, another
+            # vendor's account): refused in words, the task FAILED with the
+            # reason, never started on another account. None chosen: its
+            # vendor's Default, exactly as before.
+            account = str(task.get("account") or "")
+            if account:
+                from ...iron_proxy import choice as _choice
+
+                _row, why = await asyncio.to_thread(
+                    _choice.check, platform, account, *_night_pair(platform, task), who="night task",
+                )
+                if why:
+                    raise CreateRefused(why)
+            setup = await asyncio.to_thread(_with_initial_account, platform, setup, account)
             row, _note = await create_session_row(
                 d, folder, title=title_of(task["words"]), setup=setup, branch=True,
             )
@@ -997,6 +1011,9 @@ class NightTaskBody(BaseModel):
     model: str = Field(default="", max_length=300)
     team: bool = False
     try_on: list[TryOnBody] = Field(default_factory=list, max_length=10)
+    #: v1.424.0 (D6): the Iron-Proxy account its session runs on ("" = its
+    #: vendor's Default).
+    account: str = Field(default="", max_length=120)
 
 
 class NightTaskPatch(BaseModel):
@@ -1006,10 +1023,36 @@ class NightTaskPatch(BaseModel):
     model: str | None = Field(default=None, max_length=300)
     team: bool | None = None
     try_on: list[TryOnBody] | None = Field(default=None, max_length=10)
+    account: str | None = Field(default=None, max_length=120)
 
 
 class MoveBody(BaseModel):
     direction: str = Field(min_length=1, max_length=10)
+
+
+async def _check_account(d: Any, account: Any, provider: str, model: str,
+                         picks: list[dict[str, str]]) -> str:
+    """v1.424.0 (D6): the account a night task's session runs on, checked by
+    the one rule (``iron_proxy.choice``: listed, turned on, of the vendor the
+    task's model runs on — its own pick, else the app's default). "" = none
+    (its vendor's Default, as before). "Try on" runs each model on its own
+    account (the attempts' rule), so an account there is refused in words.
+    Cached reads, off the loop; ``NightRefused`` in words."""
+    from ...iron_proxy import choice as _choice
+
+    acct = _choice.clean(account)
+    if not acct:
+        return ""
+    if picks:
+        raise N.NightRefused(
+            "A task tried on several models runs each one on its own account — remove the "
+            "account, or the models to try it on."
+        )
+    _row, why = await asyncio.to_thread(_choice.check, d.platform, acct, provider, model,
+                                        who="night task")
+    if why:
+        raise N.NightRefused(why, 409)
+    return acct
 
 
 async def _check_folder(folder: str) -> str:
@@ -1108,9 +1151,11 @@ def register(app: FastAPI, d: Any) -> None:
             folder = await _check_folder(body.folder)
             picks = _picks(body.try_on)
             await _check_models(d, body.provider.strip(), body.model.strip(), body.team, picks)
+            account = await _check_account(d, body.account, body.provider.strip(), body.model.strip(), picks)
             task = await asyncio.to_thread(
                 N.add_task, d.platform.engine, folder=folder, words=body.words,
                 provider=body.provider.strip(), model=body.model.strip(), team=body.team, try_on=picks,
+                account=account,
             )
         except N.NightRefused as exc:
             raise _refused(exc) from None
@@ -1144,6 +1189,11 @@ def register(app: FastAPI, d: Any) -> None:
             picks = changes.get("try_on", current["try_on"])
             if any(k in changes for k in ("provider", "model", "team", "try_on")):
                 await _check_models(d, provider, model, bool(team), list(picks or []))
+            if "account" in fields and body.account is not None:
+                changes["account"] = body.account
+            account = changes.get("account", current.get("account", ""))
+            if account and any(k in changes for k in ("provider", "model", "try_on", "account")):
+                changes["account"] = await _check_account(d, account, provider, model, list(picks or []))
             task = await asyncio.to_thread(N.edit_task, engine, task_id, changes)
         except N.NightRefused as exc:
             raise _refused(exc) from None
