@@ -27,6 +27,7 @@ import { useModels } from "@/lib/useModels";
 import { modelRowName } from "@/lib/onboarding";
 import type { PermissionMode } from "@/lib/permissionLevels";
 import { friendlyModelName } from "@/lib/friendlyModelName";
+import { staysOnThisNetwork } from "@/lib/localOnly";
 import { useFolderDefaults } from "@/components/folders/FolderDefaultsPanel";
 import {
   SAVE_DEFAULTS_LABEL,
@@ -216,7 +217,13 @@ export function HarnessStartComposer({
   // save would keep defaults the panel just cleared.
   const shownDefaults = codeDefaults;
   const defaultPick = shownDefaults?.provider ? `${shownDefaults.provider}::${shownDefaults.model ?? ""}` : "";
-  const defaultPickUsable = !!defaultPick && options.some((o) => o.value === defaultPick);
+  // v1.426.0 review (lane B): under Local only an untouched chip never takes a
+  // folder model that leaves this PC and your own network — the session's
+  // first message would only be refused (this view has no "send once"); the
+  // words say why. The user can still pick it, as before.
+  const defaultRow = defaultPick ? usable.find((m) => `${m.provider}::${m.model}` === defaultPick) : undefined;
+  const defaultLeaves = localOnly && !!defaultRow && !staysOnThisNetwork(defaultRow);
+  const defaultPickUsable = !!defaultPick && options.some((o) => o.value === defaultPick) && !defaultLeaves;
   useEffect(() => {
     if (!pickTouchedRef.current) setPick(defaultPickUsable ? defaultPick : "");
     if (!postureTouchedRef.current) setPosture(shownDefaults?.approval_mode ?? null);
@@ -435,7 +442,11 @@ export function HarnessStartComposer({
             {defaultsWords ? (
               <span data-testid="harness-new-folder-defaults-words">
                 {usingDefaultsLine(folderBaseName(folder), defaultsWords)}
-                {defaultPick && !defaultPickUsable ? ` ${modelName(shownDefaults?.provider ?? "", shownDefaults?.model ?? "")} cannot answer right now, so the default model does.` : ""}
+                {defaultLeaves
+                  ? ` ${modelName(shownDefaults?.provider ?? "", shownDefaults?.model ?? "")} leaves this PC, so it is not used while Local only is on.`
+                  : defaultPick && !defaultPickUsable
+                    ? ` ${modelName(shownDefaults?.provider ?? "", shownDefaults?.model ?? "")} cannot answer right now, so the default model does.`
+                    : ""}
               </span>
             ) : null}
             {offerSave ? (

@@ -332,3 +332,42 @@ describe("the one cache", () => {
     expect(cachedFolderDefaults(FOLDER)).toEqual({ code: { approval_mode: "always_ask" }, tool: null });
   });
 });
+
+describe("Chat › Code: Local only and a folder's model that leaves this PC", () => {
+  it("an untouched chip does not take a cloud folder model while Local only is on, and the words say why", async () => {
+    // The catalog's own answer to "does this model stay on your network".
+    Object.assign(MODELS.usable[0], { on_this_network: false }); // claude-cli · Opus 5.5
+    Object.assign(MODELS.usable[1], { on_this_network: true }); // ollama · Qwen3 8B
+    try {
+      api.gets[DEFAULTS_PATH] = {
+        folder: FOLDER,
+        defaults: { code: { provider: "claude-cli", model: "opus", reasoning: "high", approval_mode: "accept_edits" } },
+      };
+      const got: StartRequest[] = [];
+      render(<HarnessStartComposer initialFolder={FOLDER} onStart={async (req) => (got.push(req), null)} />);
+      const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
+      await waitFor(() => expect(select.value).toBe("claude-cli::opus"));
+      fireEvent.click(screen.getByTestId("harness-new-local-only"));
+      await waitFor(() => expect(select.value).toBe(""));
+      expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toContain(
+        "Opus 5.5 leaves this PC, so it is not used while Local only is on.",
+      );
+      fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
+      fireEvent.click(screen.getByTestId("harness-new-send"));
+      await waitFor(() => expect(got).toHaveLength(1));
+      expect(got[0]).toMatchObject({ local_only: true, approval_mode: "accept_edits" });
+      expect(got[0].provider).toBeUndefined();
+      expect(got[0].reasoning).toBeUndefined();
+      // A folder model that stays on the network is used under Local only.
+      cleanup();
+      resetFolderDefaultsCache();
+      api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: { code: { provider: "ollama", model: "qwen3:8b" } } };
+      render(<HarnessStartComposer initialFolder={FOLDER} onStart={async () => null} />);
+      fireEvent.click(screen.getByTestId("harness-new-local-only"));
+      await waitFor(() => expect((screen.getByTestId("harness-new-model") as HTMLSelectElement).value).toBe("ollama::qwen3:8b"));
+    } finally {
+      delete (MODELS.usable[0] as { on_this_network?: boolean }).on_this_network;
+      delete (MODELS.usable[1] as { on_this_network?: boolean }).on_this_network;
+    }
+  });
+});
