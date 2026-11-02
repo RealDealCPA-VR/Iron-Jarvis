@@ -39,9 +39,10 @@ THE POOL: at most :data:`MAX_LIVE` harness processes; when a new one is needed
 the oldest IDLE one (no turn, no open ask) is stopped first, else the start
 WAITS for one to finish (v1.425.0, B7 — said once; refused in words after
 :data:`POOL_WAIT_S`). The pool's lock is held only to decide (a starting
-session holds its place, ``LiveSession.starting``), never while a tool starts,
-so one session's slow start never holds another's message (v1.425.0). A process with no turn for :data:`IDLE_S` is stopped by the
-reaper; the next message starts it again RESUMING THE SAME harness session
+session holds its place, ``LiveSession.starting``), never while a tool
+starts, so one session's slow start never holds another's message (v1.425.0).
+A process with no turn for :data:`IDLE_S` is stopped by the reaper; the next
+message starts it again RESUMING THE SAME harness session
 (``claude --resume <id>`` / ``thread/resume``). Archive, delete and the
 daemon's shutdown stop it. Every stop is a tree kill, off the loop.
 
@@ -1786,6 +1787,10 @@ class HostedService:
         return [lv for lv in self.live.values() if lv is not live and (lv.running or lv.starting)]
 
     def _room_event(self) -> asyncio.Event:
+        """v1.425.0 (B7): the event the NEXT change of the pool sets. A waiter
+        takes it BEFORE it looks, so a change after its look always wakes it
+        (an event is never cleared: each change sets the current one and
+        leaves a fresh one for later waiters)."""
         if self._room is None:
             self._room = asyncio.Event()
         return self._room
@@ -1795,6 +1800,7 @@ class HostedService:
         stopped, a start finished) — a message waiting for room looks again."""
         if self._room is not None:
             self._room.set()
+            self._room = asyncio.Event()
 
     async def _reserve_slot(self, live: LiveSession, row: Any) -> tuple[Any, dict[str, Any]]:
         """v1.425.0 (Wave 5, B7): a place in the pool for this session's
@@ -1810,15 +1816,14 @@ class HostedService:
         last. When NONE can stop (all six are working), the message WAITS for
         one to finish — said once — instead of being refused at once, and is
         refused only after :data:`POOL_WAIT_S` (the old words). A Stop ends
-        the wait (the turn's task is cancelled)."""
+        the wait (the turn's end wakes it) and nothing is started."""
         waited = False
         deadline = time.monotonic() + POOL_WAIT_S
         turn = live.turn  # the message this start is for (``_start_turn_in`` set it)
         while True:
             if turn is not None and not turn.running:
                 raise _StoppedWhileWaiting()
-            room = self._room_event()
-            room.clear()
+            room = self._room_event()  # taken before the look (never cleared)
             async with self._lock():
                 # Another row's process on this very conversation (a race the
                 # turn's own check could miss) — running, or still starting:
