@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -132,15 +133,19 @@ def _ours(dirs: dict[str, Path], case: dict[str, Any], monkeypatch) -> dict[str,
 # --------------------------------------------------------------------------- #
 # Regeneration: the REAL OpenCode resolves each case (this PC only)
 # --------------------------------------------------------------------------- #
-def _resolve(dirs: dict[str, Path], extra_env: dict[str, str], agent: str) -> dict[str, Any]:
-    exe = shutil.which("opencode")
-    assert exe, "opencode is not installed"
+def _scratch_env(dirs: dict[str, Path], extra_env: dict[str, str]) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("OPENCODE_")}
     env.update({"XDG_CONFIG_HOME": str(dirs["cfg"]), "XDG_DATA_HOME": str(dirs["data"]),
                 "XDG_CACHE_HOME": str(dirs["cache"]), "XDG_STATE_HOME": str(dirs["state"]),
                 "OPENCODE_TEST_MANAGED_CONFIG_DIR": str(dirs["managed"])})
     env.update(extra_env)
-    done = subprocess.run([exe, "debug", "agent", agent], cwd=str(dirs["work"]), env=env,
+    return env
+
+
+def _resolve(dirs: dict[str, Path], extra_env: dict[str, str], agent: str) -> dict[str, Any]:
+    exe = shutil.which("opencode")
+    assert exe, "opencode is not installed"
+    done = subprocess.run([exe, "debug", "agent", agent], cwd=str(dirs["work"]), env=_scratch_env(dirs, extra_env),
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     data = json.loads(done.stdout)
     rules = [[r["permission"], r["pattern"], r["action"]] for r in data["permission"]
@@ -169,7 +174,24 @@ def _regenerate(tmp_path: Path, monkeypatch) -> dict[str, Any]:
             # The audit's first idea alone: ``"*": "deny"`` in OPENCODE_PERMISSION.
             runs["star-only"] = _resolve(dirs, {"OPENCODE_PERMISSION": json.dumps({"*": "deny"})}, "build")
         out["cases"][name] = {"env": ours, "runs": runs}
+    # ``opencode run`` itself (a model that does not exist: no model call):
+    # does it take Iron Jarvis's agent, and what does it say when it cannot?
+    dirs = _layout(tmp_path / "run-check", CASES["permissive"])
+    ours = _ours(dirs, CASES["permissive"], monkeypatch)
+    out["run"] = {"ours": _run_check(dirs, ours), "undefined": _run_check(dirs, {})}
     return out
+
+
+def _run_check(dirs: dict[str, Path], extra_env: dict[str, str]) -> dict[str, Any]:
+    """``opencode run --agent <ours> -m nonexistent/none``: the lines it said
+    about the agent (colour codes dropped)."""
+    exe = shutil.which("opencode")
+    assert exe, "opencode is not installed"
+    done = subprocess.run([exe, "run", "--format", "json", "--agent", FIXED_AGENT, "-m", "nonexistent/none"],
+                          input="hi", cwd=str(dirs["work"]), env=_scratch_env(dirs, extra_env),
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", done.stderr + "\n" + done.stdout)
+    return {"agent_lines": [ln.strip() for ln in plain.splitlines() if 'agent "' in ln]}
 
 
 @pytest.fixture(scope="module")
@@ -290,6 +312,17 @@ def test_before_the_users_own_opencode_offered_tools(recorded, name):
     ``opencode run`` (the user's default agent, nothing added)."""
     tools = recorded["cases"][name]["runs"]["before"]["tools"]
     assert any(tools.values()), (name, tools)
+
+
+def test_opencode_run_takes_iron_jarviss_agent_and_says_when_it_cannot(recorded):
+    """``opencode run`` with the agent defined says nothing about it; with it
+    undefined it says it fell back — in exactly the words :func:`fell_back`
+    looks for."""
+    assert recorded["run"]["ours"]["agent_lines"] == []
+    said = recorded["run"]["undefined"]["agent_lines"]
+    assert said and "Falling back to default agent" in said[0]
+    assert oc.fell_back("", "\n".join(said), FIXED_AGENT)
+    assert not oc.fell_back("", "\n".join(said), oc.AGENT_PREFIX + "other")
 
 
 def test_star_alone_lost_to_a_users_later_allow(recorded):

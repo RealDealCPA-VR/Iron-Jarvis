@@ -3619,5 +3619,15 @@
    }
   }
  },
- "opencode": "1.18.18"
+ "opencode": "1.18.18",
+ "run": {
+  "ours": {
+   "agent_lines": []
+  },
+  "undefined": {
+   "agent_lines": [
+    "!  agent \"iron-jarvis-text-fixture\" not found. Falling back to default agent"
+   ]
+  }
+ }
 }
