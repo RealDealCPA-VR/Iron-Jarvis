@@ -36,6 +36,7 @@ from .models import (
     DECLINE_SUPPRESS_DAYS,
     DECLINED,
     KIND_INSTRUCTIONS,
+    KIND_TEAM_NOTE,
     PENDING,
     RATIONALE_CHARS,
     STALE,
@@ -151,7 +152,12 @@ def proposal_view(p: CoachProposalRecord) -> dict[str, Any]:
         "after": p.after,
         "rationale": p.rationale,
         "evidence": evidence,
-        "categories": [c.get("category") for c in evidence if isinstance(c, dict)],
+        # v1.423.0: a working habit's evidence is the FINDINGS it cites (no
+        # cluster categories); an instructions proposal's view is unchanged.
+        "categories": (
+            [] if p.kind == KIND_TEAM_NOTE
+            else [c.get("category") for c in evidence if isinstance(c, dict)]
+        ),
         "signature": p.signature,
         "status": p.status,
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -463,14 +469,35 @@ class CoachEngine:
     def decline(self, proposal_id: str) -> CoachProposalRecord:
         return self._decide(proposal_id, DECLINED)
 
+    def accept_with_note(self, proposal_id: str) -> tuple[CoachProposalRecord, str, list]:
+        """``(row, note, library_rows)`` — :meth:`accept`, by KIND (v1.423.0):
+        a ``team_note`` (a model team member's working habit) is kept by
+        ``agents/team_notes.accept`` (a ``TeamNote`` + the member's
+        TEAM-NOTES.md) and ``note`` says what became of the file (a hand edit
+        kept, the setting off); ``library_rows`` are role-brief edits it
+        proposed (the route publishes them). An ``instructions`` proposal is
+        exactly :meth:`accept` — ``("", [])`` beside it."""
+        row = self.get(proposal_id)
+        if row is not None and row.kind == KIND_TEAM_NOTE:
+            from ..agents import team_notes
+
+            done = team_notes.accept(self.p, proposal_id)
+            return done.row, done.note, list(done.library_rows)
+        return self.accept(proposal_id), "", []
+
     def accept(self, proposal_id: str) -> CoachProposalRecord:
         """Write ``after`` as the agent's instructions through the registry
         door (``prompt_reason="coach"`` when the registry takes it). A record
         whose instructions moved since mint is marked ``stale`` and
-        :class:`StaleProposal` carries the 409 sentence."""
+        :class:`StaleProposal` carries the 409 sentence.
+
+        v1.423.0: a ``team_note`` proposal never touches the instructions —
+        it is accepted by ``agents/team_notes.accept`` (:meth:`accept_with_note`)."""
         row = self.get(proposal_id)
         if row is None:
             raise KeyError(f"no such proposal {proposal_id!r}")
+        if row.kind == KIND_TEAM_NOTE:
+            return self.accept_with_note(proposal_id)[0]
         if row.status != PENDING:
             raise ValueError(f"this proposal was already {row.status}")
         registry = self.p.agents_registry

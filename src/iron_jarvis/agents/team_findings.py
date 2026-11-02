@@ -850,6 +850,44 @@ def findings_for(engine: Any, members: Iterable[str], *, days: int = WINDOW_DAYS
     return out
 
 
+def confirmed_findings(engine: Any, member: str, *, since: "datetime | None" = None,
+                       limit: int = 200) -> list[TeamFinding]:
+    """v1.423.0 (Team notes, Phase 2): the member's CONFIRMED findings —
+    status :data:`FIXED` (the lead said fixed AND a later piece changed that
+    file) — that the lead was ASKED to answer (``asked``: the one rule every
+    reader of these rows keeps, :func:`findings_for`), newest first, at most
+    ``limit``, created at or after ``since`` when given. Detached rows (what
+    ``agents/team_notes`` distills working habits from). BLOCKING; never
+    raises (``[]``)."""
+    name = str(member or "")
+    if engine is None or not name.strip():
+        return []
+    try:
+        from sqlalchemy import literal_column
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+
+        stmt = (
+            select(TeamFinding)
+            .where(TeamFinding.member == name)
+            .where(TeamFinding.asked == True)  # noqa: E712 — SQL, not Python
+            .where(TeamFinding.status == FIXED)
+        )
+        if since is not None:
+            stmt = stmt.where(TeamFinding.created_at >= _naive_utc(since))
+        stmt = stmt.order_by(literal_column("teamfinding.rowid").desc()).limit(  # type: ignore[arg-type]
+            max(1, int(limit)))
+        with session_scope(engine) as db:
+            rows = list(db.exec(stmt))
+            for row in rows:
+                db.expunge(row)
+        return rows
+    except Exception:  # noqa: BLE001
+        log.debug("confirmed team findings unreadable", exc_info=True)
+        return []
+
+
 def member_findings(engine: Any, member: str, *, days: int = WINDOW_DAYS,
                     now: "datetime | None" = None, since: "datetime | None" = None,
                     until: "datetime | None" = None) -> dict[str, Any]:
@@ -866,7 +904,8 @@ __all__ = [
     "ANSWER_DOES_NOT_APPLY", "ANSWER_FIXED", "DID_NOT_APPLY", "FINDING_SOURCE", "FIXED", "Finding",
     "MAX_ANSWER_CHARS", "MAX_CHANGE_CHARS", "MAX_PATH_CHARS", "MAX_WHAT_CHARS", "OPEN", "SAID_FIXED",
     "ANSWER_LINE_CHARS", "FINDING_LINE_CHARS",
-    "STATUSES", "TeamFinding", "WINDOW_DAYS", "answer_lines", "findings_for", "mark_asked",
+    "STATUSES", "TeamFinding", "WINDOW_DAYS", "answer_lines", "confirmed_findings", "findings_for",
+    "mark_asked",
     "member_findings", "parse_answers", "parse_findings", "record_findings", "resolve_path", "same_path",
     "settle", "window", "zeros",
 ]

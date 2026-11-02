@@ -1541,6 +1541,17 @@ def reconcile_interrupted_turns(engine: Any) -> int:
             moved = question.get("accountMove")
             if isinstance(moved, dict) and moved:
                 lines[-1]["accountMove"] = moved
+            # v1.423.0 (Wave 3 lane D, item 5): a reply a CRASH cut off after
+            # it went to LOW trust says so too — its kept record (written with
+            # its rounds) is still here at this boot step, before the resume
+            # pass takes it — in the keys the live writer uses, so "Copy as a
+            # fix request" reads nothing from it.
+            from .reply_record import low_trust_of
+
+            low = low_trust_of(engine, turn_id)
+            if low:
+                lines[-1]["trust"] = "low"
+                lines[-1]["trustReason"] = low
             if append_lines(engine, thread_id, lines, title_from_first=False).get("ok"):
                 written += 1
     except Exception:  # noqa: BLE001 — a boot step never blocks the boot

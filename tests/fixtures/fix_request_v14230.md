@@ -5,7 +5,7 @@ These are problems Iron Jarvis's coding sessions and model team ran into. Fix th
 - Iron Jarvis version: 1.423.0
 - Operating system: Windows 11 (10.0.26200)
 - Window: the last 7 days (2026-10-26 12:00 UTC to 2026-11-02 12:00 UTC)
-- Covers: 1 coding session, 1 piece handed to helpers or teammates
+- Covers: 1 coding session, 1 piece handed to helpers or teammates, 0 reviewer findings the lead was asked to answer
 
 ## 1. A command the shell could not find
 

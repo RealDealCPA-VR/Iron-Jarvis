@@ -895,6 +895,14 @@ class Config(BaseModel):
     #: told — never the team router, its floors, account groups or pay limit.
     #: Read live; saved only through the settings writer.
     team_first: bool = False
+    #: v1.423.0 (Team notes, Phase 2): a model team member's CONFIRMED review
+    #: findings are distilled into working habits the owner accepts or
+    #: declines on its coach card (``agents/team_notes``); accepted habits
+    #: ride ONLY that member's team pieces (a coding session's helper, a
+    #: mission's teammate). ON by default (the owner's decision). Off: no
+    #: distilling and no injection — the accepted habits are kept, not shown
+    #: to a model. Read live; saved only through the settings writer.
+    team_notes: bool = True
     #: v1.398.0 (night shift N1, ``harness/night``): the NIGHT WINDOW, local
     #: time "HH:MM" — queued coding tasks start only inside it (it may cross
     #: midnight); a task not started by its end waits for the next night.

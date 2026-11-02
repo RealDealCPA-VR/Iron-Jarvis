@@ -112,6 +112,31 @@ MIN_GROWTH_CHARS = 400
 SAFETY_WORDS = ("never", "always")
 #: The files an edit may change (the Phase 3 text components).
 EDIT_FILES = ("system_prompt.md", "guardrails.md", "memory.md", "tool_guidance.md")
+#: v1.423.0 (Team notes, Phase 2): a ROLE's helper brief,
+#: ``sub_agents/<name>.md`` — the one other file a layer edit may change. The
+#: reflector never proposes one (it is shown the four text files only);
+#: ``agents/team_notes`` does, when two members holding one role were given
+#: the same working habit (:func:`propose_role_brief_edit`). It goes through
+#: this module's own validators and Accept path like any edit.
+SUB_AGENTS_DIR = "sub_agents"
+
+
+def editable_file(name: Any) -> bool:
+    """May a layer edit change the harness file ``name``? One of
+    :data:`EDIT_FILES`, or (v1.423.0) ``sub_agents/<name>.md`` with the
+    validator's own lower-case name rule (``components._NAME_RX``) — never a
+    path that walks anywhere else."""
+    text = str(name or "")
+    if text in EDIT_FILES:
+        return True
+    parts = text.split("/")
+    if len(parts) != 2 or parts[0] != SUB_AGENTS_DIR or not parts[1].endswith(".md"):
+        return False
+    from .components import _NAME_RX
+
+    # v1.423.0 review: the WHOLE name (``fullmatch``) — ``match`` with ``$``
+    # took a trailing newline (``sub_agents/code\n.md``).
+    return bool(_NAME_RX.fullmatch(parts[1][: -len(".md")]))
 #: Evidence handed to the reflector, at most.
 PROMPT_STEPS = 30
 STEP_OUTPUT_CHARS = 600
@@ -674,6 +699,9 @@ def layer_with_edit_problem(home: Any, folder: str, name: str, after: str, known
             shutil.copytree(src, target, symlinks=True)
         else:
             target.mkdir(parents=True, exist_ok=True)
+        # v1.423.0: a role brief lives one folder down (``sub_agents/``),
+        # which a layer that has no brief yet does not have.
+        (target / name).parent.mkdir(parents=True, exist_ok=True)
         (target / name).write_bytes(after.encode("utf-8"))
         layer = read_project_layer(scratch, known_tools=known_tools, session_id=None)
         if layer.used:
@@ -784,6 +812,123 @@ def forget_turns(engine: Any, thread_id: str, turn_ids: Any) -> int:
             db.delete(r)
         db.commit()
     return len(rows)
+
+
+#: v1.423.0: a NEW role brief starts with the header the validator requires
+#: (``components._trigger_of``: a ``description:`` field).
+ROLE_BRIEF_HEADER = (
+    "---\n"
+    "description: Working habits for the {role} role, from your reviewers' confirmed findings.\n"
+    "---\n"
+)
+#: v1.423.0: why a role-brief edit was not proposed (plain words).
+REASON_NO_FOLDER = "the coding session has no folder of its own"
+REASON_BRIEF_UNREADABLE = "the role's brief could not be read as text"
+REASON_BRIEF_HAS_IT = "the role's brief already says this"
+REASON_FLAGGED = "the edit reads like an instruction to the model, so it is not suggested"
+REASON_SUPPRESSED = "the same edit was already suggested"
+
+
+def role_brief_file(layer_folder: str, role: str) -> str:
+    """The brief file a ROLE's habit goes into: ``sub_agents/<role>.md`` when
+    the folder has it, else the role's NOUN's brief when THAT exists
+    (``standard.ROLE_NOUNS``: a folder that named it ``coder.md`` keeps one
+    brief, never two), else a new ``sub_agents/<role>.md``. BLOCKING."""
+    from .standard import ROLE_NOUNS
+
+    role = str(role or "").strip().lower()
+    for stem in (role, ROLE_NOUNS.get(role, "")):
+        name = f"{SUB_AGENTS_DIR}/{stem}.md"
+        if not stem or not editable_file(name):
+            continue
+        # v1.423.0 review: never READ through a link (a junction to a network
+        # share is a sign-in sent to that host): a candidate with a link on
+        # its way is the answer, and the caller's own link check refuses it.
+        if _link_problem(layer_folder, name):
+            return name
+        if read_layer_file(layer_folder, name):
+            return name
+    return f"{SUB_AGENTS_DIR}/{role}.md"
+
+
+def propose_role_brief_edit(
+    platform: Any, *, thread_id: str, role: str, line: str, why: str,
+    evidence: dict[str, Any], same: Any = None,
+) -> tuple["HarnessLibraryRecord | None", str]:
+    """v1.423.0 (Team notes, Phase 2): PROPOSE adding the working habit
+    ``line`` to the ROLE's helper brief (:func:`role_brief_file`) in the
+    folder of the coding session ``thread_id`` — the library's own
+    ``layer_edit``, minted ``proposed`` and checked by this module's own
+    rules: the open limit per folder, the coach's revision rules
+    (:func:`validate_edit`), promptguard, the folder's harness layer still
+    VALID with the edit (:func:`layer_with_edit_problem`), no link out of
+    the folder, and the 14-day signature rule. Nothing is written into the
+    folder before the user's Accept (:func:`accept`, which writes it and
+    validates again). ``same(existing_line) -> bool`` (optional): the brief
+    already holds this habit. Returns ``(row, "")`` or ``(None, reason)``;
+    the caller publishes the row (:func:`_publish`). BLOCKING; never raises."""
+    try:
+        from ..core.promptguard import scan_context
+        from .sessions import checkout_of, get_row, is_folderless, layer_folder_of
+
+        engine = platform.engine
+        row = get_row(engine, str(thread_id or ""))
+        if row is None or is_folderless(row):
+            return None, REASON_NO_FOLDER
+        folder = checkout_of(row)
+        layer_at = layer_folder_of(row) or folder
+        if not folder or not layer_at:
+            return None, REASON_NO_FOLDER
+        key = folder_key(folder)
+        if _open_count(engine, key) >= OPEN_LIMIT:
+            return None, REASON_FULL
+        # v1.423.0 review: :func:`role_brief_file` checks each candidate for
+        # a link BEFORE it reads it, and answers the first one with a link on
+        # its way — refused just below, never read through.
+        name = role_brief_file(layer_at, role)
+        if not editable_file(name):
+            return None, REASON_NOTHING
+        link = _link_problem(layer_at, name)
+        if link:
+            return None, link
+        before = read_layer_file(layer_at, name)
+        if before is None:
+            return None, REASON_BRIEF_UNREADABLE
+        habit = _one_line(line)
+        if not habit:
+            return None, REASON_NOTHING
+        if callable(same) and any(same(ln.lstrip("-*• ").strip()) for ln in before.splitlines() if ln.strip()):
+            return None, REASON_BRIEF_HAS_IT
+        if before:
+            after = before if before.endswith("\n") else before + "\n"
+        else:
+            after = ROLE_BRIEF_HEADER.format(role=str(role or "").strip().lower()) + "\n"
+        after += f"- {habit}\n"
+        problem = validate_edit(before, after)
+        if problem:
+            return None, problem
+        if scan_context(after, source=f"Build library edit {name}", cap=None).blocked:
+            return None, REASON_FLAGGED
+        try:
+            known = set(platform.registry.names())
+        except Exception:  # noqa: BLE001
+            known = None
+        invalid = layer_with_edit_problem(platform.config.home, layer_at, name, after, known)
+        if invalid is not None:
+            return None, invalid
+        sig = signature(key, KIND_LAYER_EDIT, name, after)
+        if _suppressed(engine, sig):
+            return None, REASON_SUPPRESSED
+        minted = _mint(engine, HarnessLibraryRecord(
+            folder_key=key, folder=layer_at, kind=KIND_LAYER_EDIT,
+            text=_one_line(why)[:200], file=name, before=before, after=after,
+            evidence_json=json.dumps({"paths": [], "quotes": [], **(evidence or {})}),
+            signature=sig, thread_id=str(thread_id or ""), turn_id="",
+        ))
+        return minted, ""
+    except Exception:  # noqa: BLE001 — a suggestion never breaks the Accept that made it
+        log.warning("a role-brief edit could not be proposed", exc_info=True)
+        return None, REASON_NOTHING
 
 
 # --------------------------------------------------------------------------- #
@@ -1220,6 +1365,11 @@ def note_turn_finished(platform: Any, thread_id: str, turn_id: str) -> "asyncio.
     called on the loop. Never raises; returns the idle timer."""
     if not AUTO_REFLECT:
         return None
+    # v1.423.0 (Team notes, Phase 2): the model team's working habits ride
+    # the SAME idle pacing (their own switch, ``team_notes``, decides — not
+    # ``build_reflect``): the session's members are distilled once it has been
+    # idle (``agents/team_notes``). Never raises into the turn's end.
+    _team_notes_hook("note_turn_finished", platform, thread_id, turn_id)
     try:
         if not bool(getattr(getattr(platform, "config", None), "build_reflect", True)):
             return None
@@ -1237,12 +1387,28 @@ def note_turn_finished(platform: Any, thread_id: str, turn_id: str) -> "asyncio.
 schedule = note_turn_finished
 
 
+def _team_notes_hook(name: str, *args: Any) -> Any:
+    """v1.423.0: call ``agents/team_notes.<name>`` (the working habits'
+    pacing rides this module's) — never raises, never imports more than that
+    module."""
+    try:
+        from ..agents import team_notes as _team_notes
+
+        return getattr(_team_notes, name)(*args)
+    except Exception:  # noqa: BLE001 — the library's own pacing never fails on it
+        log.debug("team notes %s failed", name, exc_info=True)
+        return None
+
+
 def note_turn_started(thread_id: str) -> None:
     """A turn of the session STARTED: it is not idle — the wait stops (the
     turn's end starts it again). A reflection already running is left to
     finish (its call was already made). Never raises."""
     with contextlib.suppress(Exception):
         _cancel_timer(thread_id)
+    # v1.423.0: the team's working habits wait too, and the new reply reads
+    # each member's habits afresh (``team_notes.note_turn_started``).
+    _team_notes_hook("note_turn_started", thread_id)
 
 
 def _keep_for_later(thread_id: str, turns: list[str]) -> None:
@@ -1258,7 +1424,12 @@ def flush(platform: Any, thread_id: str) -> "asyncio.Task | None":
     Nothing when nothing is noted; when a turn of the session is running the
     stretch waits (that turn's end restarts the wait); when a reflection of
     the session still runs, the stretch waits one more idle period. Must be
-    called on the loop. Never raises."""
+    called on the loop. Never raises.
+
+    v1.423.0: the model team's working habits are distilled at the same
+    moment (``team_notes.flush`` — its own noted stretch; nothing when none),
+    the archive's call included."""
+    _team_notes_hook("flush", platform, thread_id)
     try:
         _cancel_timer(thread_id)
         turns = _STRETCH.pop(thread_id, None)
@@ -1360,6 +1531,12 @@ def shutdown() -> None:
     _TIMERS.clear()
     _DUE.clear()
     _REFLECTING.clear()
+    # v1.423.0: the team's working-habit waits and distills stop with it
+    # (only when that module was ever imported: a shutdown imports nothing).
+    import sys
+
+    if "iron_jarvis.agents.team_notes" in sys.modules:
+        _team_notes_hook("shutdown")
 
 
 async def drain(timeout: float = 30.0) -> None:
@@ -1407,10 +1584,39 @@ LINK_SENTENCE = (
 )
 
 
+def _is_link(path: Path) -> bool:
+    """v1.423.0 review: is ``path`` ITSELF a link — a symlink, a junction,
+    any NAME-SURROGATE reparse point (``git_read``'s rule: OneDrive and
+    ProjFS placeholders are reparse points that hold the folder's OWN files,
+    never links)? ``lstat`` never follows the last part. Missing: no. Any
+    other ``OSError`` is raised (the caller refuses)."""
+    import stat as _stat
+
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    if _stat.S_ISLNK(st.st_mode):
+        return True
+    attrs = getattr(st, "st_file_attributes", 0) or 0
+    if not attrs & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+        return False
+    return bool((getattr(st, "st_reparse_tag", 0) or 0) & 0x20000000)
+
+
 def _link_problem(folder: str, name: str) -> str:
     """Why writing ``<folder>/.ironjarvis/harness/<name>`` would land
     OUTSIDE the folder ("" = it would not): the harness folder must resolve
-    inside the folder, and the file must not be a link."""
+    inside the folder, and the file must not be a link.
+
+    v1.423.0 review: NO LINK ON THE WAY AT ALL — ``.ironjarvis``,
+    ``harness``, a role brief's ``sub_agents`` and the file are each looked at
+    with ``lstat``, SHALLOWEST FIRST, and the first link (a symlink, a
+    junction — even one that leads back INSIDE the folder: a ``sub_agents``
+    junction to ``<project>/src`` put the brief into ``src``) is refused
+    before anything below it is touched; nothing is resolved or read through
+    a link (``lstat`` of a deeper part would follow it, and a junction to a
+    network share is a sign-in sent to that host)."""
     from .components import _inside
 
     try:
@@ -1419,11 +1625,18 @@ def _link_problem(folder: str, name: str) -> str:
         return LINK_SENTENCE.format(name=name)
     hdir = _harness_dir(folder)
     path = hdir / name
-    for part in (hdir.parent, hdir):
-        if part.is_symlink() or (part.exists() and not _inside(part, root)):
+    # v1.423.0: a role brief's own folder (``sub_agents``) is checked too —
+    # a junction there would carry the write elsewhere just the same.
+    parts = [hdir.parent, hdir]
+    if path.parent != hdir:
+        parts.append(path.parent)
+    parts.append(path)
+    for part in parts:
+        try:
+            if _is_link(part) or (part.exists() and not _inside(part, root)):
+                return LINK_SENTENCE.format(name=name)
+        except OSError:
             return LINK_SENTENCE.format(name=name)
-    if path.is_symlink() or (path.exists() and not _inside(path, root)):
-        return LINK_SENTENCE.format(name=name)
     return ""
 
 
@@ -1451,7 +1664,7 @@ def accept(engine: Any, item_id: str, *, known_tools: Any = None) -> HarnessLibr
         raise LibraryRefused(f"This suggestion was already {row.status}.", 409)
     if row.kind == KIND_LESSON:
         return _decide(engine, item_id, ACCEPTED)
-    if row.file not in EDIT_FILES:
+    if not editable_file(row.file):
         raise LibraryRefused("This suggestion names a file Iron Jarvis does not edit.", 409)
     problem = folder_problem(row.folder)
     if problem:
@@ -1515,6 +1728,9 @@ __all__ = [
     "check_lines",
     "decline",
     "drain",
+    "editable_file",
+    "propose_role_brief_edit",
+    "role_brief_file",
     "forget",
     "library_lines",
     "flush",

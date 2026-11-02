@@ -296,14 +296,21 @@ def _scan(text: Any, source: str, cap: int | None) -> ScanResult:
     return ScanResult(text="".join(out), blocked=blocked, truncated=truncated, source=source)
 
 
-def scan_context(text: Any, *, source: str, cap: int | None = CONTEXT_CAP) -> ScanResult:
+def scan_context(text: Any, *, source: str, cap: int | None = CONTEXT_CAP, strict: bool = False) -> ScanResult:
     """Cap, defang and scan one piece of context text. NEVER raises: on an
     internal failure the text comes back unchanged and unflagged (logged) —
     a scanner must not be the thing that takes the lane down. ``cap=None``
-    means no cap (a seam whose own budget already bounds the text)."""
+    means no cap (a seam whose own budget already bounds the text).
+
+    v1.423.0 (Wave 3 lane D review): ``strict`` — an internal failure RAISES
+    instead, so a caller that would rather DROP a value than show it unscanned
+    can fail closed ("Copy as a fix request" pastes its text into another
+    agent's prompt: ``agents/fix_request.clean``). The default is unchanged."""
     try:
         return _scan(text, source, cap)
     except Exception:  # noqa: BLE001 — see the docstring
+        if strict:
+            raise
         log.warning("promptguard scan failed for %s; text passed unscanned", source, exc_info=True)
         try:
             return ScanResult(text=_coerce(text), source=source)

@@ -16,6 +16,7 @@ THE TEAM FILE (TOML)::
     provider = "claude-cli"
     model = "claude-opus-4-8"  # a model, never "default"
     # team_first = true        # optional (default false): see TEAM-FIRST below
+    # team_notes = false       # optional (default: the home's): see TEAM NOTES below
 
     [[members]]                # one per member (at most 10)
     name = "glm"
@@ -57,6 +58,16 @@ back when the invocation ends (:meth:`JarvisTeamRunner.prepare` /
 a file without the key, or with ``team_first = false``, is the team exactly as
 before (the same identity, the same folder), and ``true`` is a new folder. The
 report shows such a setup as ``jarvis-team (team-first)``.
+
+TEAM NOTES (v1.423.0, Phase 2). ``team_notes = true|false`` under
+``[planner]`` runs the team with the user's "Learn working habits from
+reviews" setting (``Config.team_notes``, ON by default: a member's accepted
+working habits ride its team pieces — ``agents/team_notes``) set to the
+file's value, in the process only, for that invocation's runs, put back when
+it ends — the ``team_first`` way. It is in the identity ONLY when the file
+GIVES the key (either value: the setting's default is on, so "off" is a new
+setup and so is "on" said out loud); a file without it is exactly the team as
+before.
 
 TEAM MODE (v1.403.0). ``team = true`` under ``[planner]`` runs the planner as
 a CODING SESSION's team LEAD (``harness/team``): it holds no tool that changes
@@ -112,7 +123,7 @@ TEAM_RUNNER = "jarvis-team"
 MAX_MEMBERS = 10
 #: A member's name: what the planner calls it and the registry keys it by.
 _NAME_RX = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
-_PLANNER_KEYS = frozenset({"provider", "model", "team_first", "team"})
+_PLANNER_KEYS = frozenset({"provider", "model", "team_first", "team", "team_notes"})
 _MEMBER_KEYS = frozenset({"name", "provider", "model", "roles", "description", "account", "effort", "max_steps"})
 #: v1.396.0 review: a member's step limit when the file names none is the
 #: planner's own round budget (``--rounds``, 60 by default). A member handed a
@@ -182,6 +193,9 @@ class TeamSpec:
     #: changes a file or runs something), the members holding ``code`` as its
     #: WORKERS and the member holding only ``review`` as its REVIEWER.
     team_mode: bool = False
+    #: v1.423.0: the file's ``team_notes`` under ``[planner]`` — None when
+    #: the file does not give it (the home's setting stands, untouched).
+    team_notes: "bool | None" = None
 
     def identity(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -196,6 +210,9 @@ class TeamSpec:
         # exactly its identity; ``team = true`` is a new setup.
         if self.team_mode:
             out["team_mode"] = True
+        # v1.423.0: only when the file GIVES it (either value).
+        if self.team_notes is not None:
+            out["team_notes"] = bool(self.team_notes)
         return out
 
     def session_team(self) -> Any:
@@ -252,6 +269,9 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
     team_first = planner.get("team_first", False)
     if not isinstance(team_first, bool):
         raise _refused("The team file's [planner] team_first is true or false (without quotes).")
+    team_notes = planner.get("team_notes")
+    if team_notes is not None and not isinstance(team_notes, bool):
+        raise _refused("The team file's [planner] team_notes is true or false (without quotes).")
     raw = data.get("members")
     if not isinstance(raw, list) or not raw:
         raise _refused("The team file needs at least one [[members]] table.")
@@ -327,7 +347,7 @@ def parse_team(data: Any, *, source: str = "") -> TeamSpec:
             raise _refused("With team = true every member is a worker (code) or the reviewer (review); "
                            + ", ".join(others) + " is neither.")
     return TeamSpec(planner_provider=p_provider, planner_model=p_model, members=tuple(members), source=source,
-                    team_first=team_first, team_mode=team_mode)
+                    team_first=team_first, team_mode=team_mode, team_notes=team_notes)
 
 
 def load_team_file(path: str | Path) -> TeamSpec:
@@ -353,6 +373,12 @@ TEAM_FIRST_OFF_LINE = "Team-first: off (the planner is shown the team and decide
 
 def team_first_line(on: bool) -> str:
     return TEAM_FIRST_ON_LINE if on else TEAM_FIRST_OFF_LINE
+
+
+#: v1.423.0: a dry run's line for a file that gives ``team_notes``.
+TEAM_NOTES_ON_LINE = ("Team notes: on (each member's accepted working habits are shown to it on its "
+                      "team pieces).")
+TEAM_NOTES_OFF_LINE = "Team notes: off (no member is shown working habits)."
 
 
 #: v1.403.0: a dry run's line for a ``team = true`` file.
@@ -408,6 +434,9 @@ class JarvisTeamRunner(JarvisRunner):
         #: v1.400.0: the home's ``team_first`` value before :meth:`prepare`
         #: set the file's (put back by :meth:`close`); None = not set by us.
         self._team_first_before: bool | None = None
+        #: v1.423.0: the home's ``team_notes`` value before :meth:`prepare`
+        #: set the file's (put back by :meth:`close`); None = not set by us.
+        self._team_notes_before: bool | None = None
 
     # -- identity ---------------------------------------------------------- #
 
@@ -467,6 +496,9 @@ class JarvisTeamRunner(JarvisRunner):
         # v1.403.0: whether the planner runs as the coding session's team lead.
         if self.team.team_mode:
             lines.append("  " + TEAM_MODE_LINE)
+        # v1.423.0: the file's team notes, when it gives them.
+        if self.team.team_notes is not None:
+            lines.append("  " + (TEAM_NOTES_ON_LINE if self.team.team_notes else TEAM_NOTES_OFF_LINE))
         for m in sorted(self.team.members, key=lambda m: m.name):
             effort = self.member_effort(m)
             lines.append(f"  {m.words()}")
@@ -570,6 +602,10 @@ class JarvisTeamRunner(JarvisRunner):
         if config is not None and self._team_first_before is None:
             self._team_first_before = getattr(config, "team_first", False) is True
             config.team_first = bool(self.team.team_first)
+        # v1.423.0: the file's team notes, only when it gives them.
+        if config is not None and self.team.team_notes is not None and self._team_notes_before is None:
+            self._team_notes_before = getattr(config, "team_notes", True) is not False
+            config.team_notes = bool(self.team.team_notes)
         mine = {m.name for m in self.team.members}
         registry = self.platform.agents_registry
         for record in _members(self.platform):
@@ -598,6 +634,9 @@ class JarvisTeamRunner(JarvisRunner):
             config = getattr(self.platform, "config", None)
             if before is not None and config is not None:
                 config.team_first = before
+            notes_before, self._team_notes_before = self._team_notes_before, None
+            if notes_before is not None and config is not None:
+                config.team_notes = notes_before
 
     async def team_records_after(self) -> dict[str, Any] | None:
         """The router's record for every member and role after a run — the

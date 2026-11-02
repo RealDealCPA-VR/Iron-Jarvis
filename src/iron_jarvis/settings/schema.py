@@ -335,6 +335,23 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", floor_when=(True,), section="Model team",
       aliases=("team first", "team-first", "hand work to my team", "use my team first",
                "model team first")),
+    # v1.423.0 (Team notes, Phase 2): a member with confirmed findings from
+    # its reviewers gets WORKING HABITS suggested (agents/team_notes) — each
+    # one waits for your Accept on the agent's coach card, and the accepted
+    # ones are shown only to that member's team pieces. ON by default (the
+    # owner's decision); off = no distilling and no habit shown to a model
+    # (the accepted ones are kept). Read live.
+    S("team_notes", "Learn working habits from reviews", "models", "bool",
+      "When this is on, a team member whose reviewers' findings were confirmed fixed at least "
+      "4 times across 2 coding sessions gets up to 3 working habits suggested, each citing the "
+      "findings it comes from. The suggestion is written once a session has been idle, at most "
+      "once a day per member, by the model of the reviewer that made most of those findings. "
+      "Nothing is used until you accept it on the agent's card; accepted habits are shown only "
+      "to that member when it works on a piece for a coding session or an objective. Off, no "
+      "habits are suggested or shown (the accepted ones are kept).",
+      tier="allow", section="Model team",
+      aliases=("team notes", "working habits", "habits from reviews", "learn from reviewers",
+               "member habits")),
     S("voice_transcribe_base_url", "Voice: speech-to-text endpoint", "models", "string",
       "Optional dedicated whisper server for dictation. Its key is set under Connections.",
       tier="ask", section="Voice", advanced=True),

@@ -19,6 +19,11 @@
  *
  * An OLDER DAEMON has no coach route: the GET 404s and the panel renders
  * nothing.
+ *
+ * v1.423.0 (Team notes, Phase 2): a model team member's suggested WORKING
+ * HABIT is a proposal of kind `team_note` on the same list — drawn as the
+ * habit and the confirmed findings it cites in plain words (no diff: it
+ * never touches the instructions), with the same Accept / Decline.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -27,6 +32,7 @@ import { ApiError, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { diffTexts } from "@/lib/diff";
+import { findingWords } from "@/lib/modelTeam";
 import type { AgentCoachView, CoachAskResult, CoachCluster, CoachProposal, CoachRun } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import { DiffBlock } from "./AgentFiles";
@@ -156,6 +162,100 @@ function ProposalCard({
   );
 }
 
+/* --------------------------------------------------------- working habit --- */
+
+/** v1.423.0 (Team notes, Phase 2): the kind a model team member's working
+ *  habit is proposed as (the daemon's coach.models.KIND_TEAM_NOTE). */
+export const TEAM_NOTE_KIND = "team_note";
+
+/** The findings a working habit cites, in plain words (its `evidence`). */
+export function citedFindings(evidence: unknown[] | undefined | null): string[] {
+  return (Array.isArray(evidence) ? evidence : []).map(findingWords).filter(Boolean);
+}
+
+/**
+ * A WORKING HABIT the coach suggests for a model team member, from its
+ * reviewers' confirmed findings: the habit, the findings it generalizes in
+ * plain words, Accept / Decline. Accepting keeps it in the member's
+ * TEAM-NOTES.md (shown only to that member's team pieces); the daemon's
+ * sentence (its TEAM-NOTES.md was kept as you edited it, team notes are off)
+ * is handed up (`onNote`), because the card leaves once it is decided.
+ */
+function TeamNoteCard({
+  proposal: p,
+  onChanged,
+  onNote,
+}: {
+  proposal: CoachProposal;
+  onChanged: () => void;
+  onNote: (text: string | null) => void;
+}) {
+  const [busy, setBusy] = useState<"accept" | "decline" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const findings = citedFindings(p.evidence);
+
+  async function decide(kind: "accept" | "decline") {
+    if (busy) return;
+    setBusy(kind);
+    setError(null);
+    try {
+      const res = await post<{ proposal: CoachProposal; note?: string }>(
+        `/coach/proposals/${encodeURIComponent(p.id)}/${kind}`,
+      );
+      onNote(typeof res?.note === "string" && res.note.trim() ? res.note : null);
+      onChanged();
+    } catch (err) {
+      setError(errText(err));
+      if (err instanceof ApiError && err.status === 409) onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <li data-testid={`coach-proposal-${p.id}`} className="space-y-2 px-1 py-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-zinc-500">
+        <span className="text-[12px] font-medium text-accent-soft">Working habit</span>
+        <span>{p.rationale}</span>
+      </div>
+      <p data-testid={`coach-habit-${p.id}`} className="text-[13px] leading-relaxed text-zinc-100">
+        {p.after}
+      </p>
+      {findings.length ? (
+        <div className="space-y-1">
+          <p className="text-[12px] text-zinc-500">From these findings your reviewers confirmed fixed:</p>
+          <ul data-testid={`coach-habit-findings-${p.id}`} className="list-disc space-y-0.5 pl-5 text-[12px] text-zinc-400">
+            {findings.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          data-testid={`coach-decline-${p.id}`}
+          onClick={() => void decide("decline")}
+          disabled={busy !== null}
+          className={`${GHOST_BASE} hover:text-tone-danger`}
+        >
+          {busy === "decline" ? "Declining…" : "Decline"}
+        </button>
+        <button
+          type="button"
+          data-testid={`coach-accept-${p.id}`}
+          onClick={() => void decide("accept")}
+          disabled={busy !== null}
+          className={primaryBtn(busy === null)}
+        >
+          {busy === "accept" ? "Accepting…" : "Accept"}
+        </button>
+      </div>
+      {error && <p className="text-[12px] text-tone-danger">{error}</p>}
+    </li>
+  );
+}
+
 /* ----------------------------------------------------------------- panel --- */
 
 const COACH_EVENTS = { types: ["coach.proposal"] };
@@ -167,6 +267,8 @@ export function AgentCoach({ name }: { name: string }) {
   const [askBusy, setAskBusy] = useState(false);
   const [askReason, setAskReason] = useState<string | null>(null);
   const [askError, setAskError] = useState<string | null>(null);
+  // v1.423.0: what the daemon said about an accepted working habit.
+  const [habitNote, setHabitNote] = useState<string | null>(null);
 
   // Refetch on the first unseen coach.proposal event for this agent (the
   // payload names the bare slug; a roster-shaped "custom:<slug>" counts too).
@@ -254,11 +356,21 @@ export function AgentCoach({ name }: { name: string }) {
       )}
       {askError && <ErrorNote>{askError}</ErrorNote>}
 
+      {habitNote && (
+        <p data-testid={`coach-habit-note-${name}`} className="px-1 text-[12px] leading-relaxed text-zinc-400">
+          {habitNote}
+        </p>
+      )}
+
       {pending.length > 0 ? (
         <ul className="divide-y divide-white/[0.06] border-t hairline">
-          {pending.map((p) => (
-            <ProposalCard key={p.id} proposal={p} onChanged={reload} />
-          ))}
+          {pending.map((p) =>
+            p.kind === TEAM_NOTE_KIND ? (
+              <TeamNoteCard key={p.id} proposal={p} onChanged={reload} onNote={setHabitNote} />
+            ) : (
+              <ProposalCard key={p.id} proposal={p} onChanged={reload} />
+            ),
+          )}
         </ul>
       ) : (
         !askReason && (

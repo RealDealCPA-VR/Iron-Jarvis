@@ -58,6 +58,16 @@ never counted three times):
   review's ONE record — its synthetic ``delegate`` row (``called_as`` "team
   review") and its review-only helper run (``options.review_only``) are not
   read, or one review that failed was two problems.
+* v1.423.0 (Wave 3 lane D): the REVIEWERS' FINDINGS (``agents/
+  team_findings.TeamFinding``, only those the lead was ASKED to answer) —
+  the team's way of working, never the user's code (:func:`_gather_findings`):
+  a finding the lead said did not apply (the reviewer was wrong), one left
+  open after a reply that ended as its answer, one said fixed and never
+  confirmed, and the same kind of finding (:data:`FINDING_KINDS`) against
+  one member in two or more sessions. A finding CONFIRMED fixed is the
+  system working, never a problem. A finding belongs to the reply whose
+  line's time window holds it (its own ``turn`` is the model team's key, not
+  the line's): low trust and fail closed read it exactly as a lead's call.
 
 THE RULE FOR WHAT IS LEFT OUT (the user's choices and ordinary work are not
 defects):
@@ -95,7 +105,9 @@ argument, a path, a title, a member's name) is masked
 (``providers/failure_words.mask_failure_text`` = ``detections.redact.mask`` +
 the shapes it does not know) and then promptguard-scanned
 (``core/promptguard.scan_context`` — the report is pasted into a prompt)
-BEFORE any cut. The whole report is at most :data:`REPORT_CHARS` characters
+BEFORE any cut — and FAILS CLOSED (v1.423.0, lane D): a value that could not
+be masked or scanned is dropped (:data:`LEFT_OUT_UNMASKED`,
+:data:`LEFT_OUT_UNSCANNED`), never shown raw. The whole report is at most :data:`REPORT_CHARS` characters
 and lists at most :data:`MAX_PROBLEMS` problems, most frequent first; what
 did not fit is said.
 
@@ -377,6 +389,60 @@ KIND_TABLE: dict[str, dict[str, Any]] = {
             "src/iron_jarvis/agents/model_team.py",
         ),
     },
+    # v1.423.0 (Wave 3 lane D): THE TEAM'S WAY OF WORKING, read off the
+    # reviewers' findings (``agents/team_findings``) — what the developer can
+    # improve in Iron Jarvis (the briefs, the standard, the router), never a
+    # bug in the user's code. A finding CONFIRMED fixed is the system
+    # working: it is never a problem.
+    "finding_did_not_apply": {
+        "title": "A reviewer's finding the lead said did not apply",
+        "expected": (
+            "The reviewer checks each finding against the code and the request before it lists it, "
+            "so the lead never spends a fix round on a false alarm."
+        ),
+        "owners": (
+            "src/iron_jarvis/harness/finish.py",
+            "src/iron_jarvis/harness/standard.py",
+            "src/iron_jarvis/agents/model_team.py",
+        ),
+    },
+    "finding_unanswered": {
+        "title": "A reviewer's finding the lead never answered",
+        "expected": (
+            "After a team review the lead answers every finding by its number on its own line "
+            "(\"R1 fixed\" or \"R2 does not apply: why\"), as the finish check's note asks, and "
+            "Iron Jarvis reads each answer."
+        ),
+        "owners": (
+            "src/iron_jarvis/harness/finish.py",
+            "src/iron_jarvis/agents/team_findings.py",
+            "src/iron_jarvis/harness/team.py",
+        ),
+    },
+    "finding_said_fixed": {
+        "title": "A finding the lead called fixed that no later piece changed",
+        "expected": (
+            "A finding the lead calls fixed is fixed by a later piece of the same reply (handed "
+            "back to the worker who changed that file), so the fix is on the record."
+        ),
+        "owners": (
+            "src/iron_jarvis/harness/finish.py",
+            "src/iron_jarvis/agents/team_findings.py",
+            "src/iron_jarvis/harness/team.py",
+        ),
+    },
+    "finding_repeated": {
+        "title": "The same kind of finding against one team member",
+        "expected": (
+            "A kind of mistake a reviewer finds in a member's work in two sessions is caught by "
+            "that member's team notes or its role's brief, so it stops coming back."
+        ),
+        "owners": (
+            "src/iron_jarvis/harness/standard.py",
+            "src/iron_jarvis/agents/team_findings.py",
+            "src/iron_jarvis/agents/model_team.py",
+        ),
+    },
 }
 
 #: The tool → module table a ``tool_failed`` problem adds to its owners.
@@ -590,6 +656,94 @@ def users_to_fix(text: Any) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# the kind of a reviewer's finding (v1.423.0, Wave 3 lane D)
+# --------------------------------------------------------------------------- #
+
+#: The FIXED kinds of a reviewer's finding, in the order they are tried (the
+#: first that names the finding wins; its "what is wrong" is read first, then
+#: its "what to change"). Fixed on purpose, like the coach's taxonomy
+#: (``coach/taxonomy``): the same findings always give the same kinds, so "the
+#: same kind of finding against one member" is countable across sessions. A
+#: finding none of them names has NO kind and is never counted as a repeat.
+#: LINEAR on model text: each is one alternation of literal words between
+#: word boundaries — no nested or adjacent repetition — read over at most
+#: :data:`FINDING_KIND_CHARS` (pinned with a pathological input in a child
+#: process with a deadline).
+FINDING_KINDS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("security", re.compile(
+        r"\b(?:secrets?|passwords?|api[ _-]?keys?|credentials?|injections?|sanitiz\w*|unsanitized"
+        r"|unescaped|xss|csrf|path traversal|insecure|unsafe|vulnerab\w*)\b", re.IGNORECASE)),
+    ("concurrency", re.compile(
+        r"\b(?:race conditions?|races?|deadlocks?|locking|thread[ -]?safe(?:ty)?|threads?"
+        r"|concurren\w*|async\w*|awaits?)\b", re.IGNORECASE)),
+    ("tests", re.compile(
+        r"\b(?:tests?|testing|tested|untested|test cases?|coverage|assertions?|asserts?|pytest"
+        r"|vitest|jest)\b", re.IGNORECASE)),
+    ("error handling", re.compile(
+        r"\b(?:exceptions?|error handling|unhandled|uncaught|try/except|try-except|catch(?:es)?"
+        r"|raises?|traceback|crash(?:es|ed)?|swallow\w*)\b", re.IGNORECASE)),
+    ("types", re.compile(
+        r"\b(?:type hints?|typing|type annotations?|annotations?|mypy|typeerror|type errors?"
+        r"|wrong type)\b", re.IGNORECASE)),
+    ("edge cases", re.compile(
+        r"\b(?:edge cases?|corner cases?|empty|null|nil|undefined|boundar(?:y|ies)|off[ -]by[ -]one"
+        r"|out of bounds|overflow|negative|division by zero|validat\w*|unchecked|missing checks?"
+        r"|guards?)\b", re.IGNORECASE)),
+    ("the request", re.compile(
+        r"\b(?:the request|requirements?|not implemented|unimplemented|asked for|missing feature"
+        r"|spec)\b", re.IGNORECASE)),
+    ("leftovers", re.compile(
+        r"\b(?:unused|dead code|leftover|left over|duplicat\w*|redundant|unreachable|scratch files?"
+        r"|debug prints?|commented[ -]out|stray)\b", re.IGNORECASE)),
+    ("performance", re.compile(
+        r"\b(?:slow(?:er|ly)?|performance|quadratic|inefficien\w*|n\+1)\b", re.IGNORECASE)),
+    ("docs", re.compile(
+        r"\b(?:docs?|docstrings?|documentation|readme|changelog|comments?)\b", re.IGNORECASE)),
+    ("style", re.compile(
+        r"\b(?:renam\w*|naming|misnamed|names?|style|formatt\w*|lint\w*|typos?|spelling"
+        r"|indent\w*|pep ?8)\b", re.IGNORECASE)),
+)
+#: Each kind as the report says it ("4 findings about tests (missing, …)").
+FINDING_KIND_WORDS: dict[str, str] = {
+    "security": "security (secrets, injection, unsafe input)",
+    "concurrency": "races and concurrency",
+    "tests": "tests (missing, broken or too weak)",
+    "error handling": "error handling",
+    "types": "types",
+    "edge cases": "edge cases and missing checks",
+    "the request": "parts of the request that were missed",
+    "leftovers": "unused, duplicate or leftover code",
+    "performance": "performance",
+    "docs": "documentation and comments",
+    "style": "names and style",
+}
+#: The most of a finding's part the kinds read (a stored part is at most
+#: ``team_findings.MAX_WHAT_CHARS`` / ``MAX_CHANGE_CHARS`` already).
+FINDING_KIND_CHARS = 2000
+#: A kind counts as REPEATED against one member from this many sessions.
+REPEAT_MIN_SESSIONS = 2
+#: Examples shown for a repeated kind (the brief: two).
+REPEAT_EXAMPLES = 2
+
+
+def finding_kind(what: Any, change: Any = "") -> str:
+    """The FIXED kind of a reviewer's finding (:data:`FINDING_KINDS`) — its
+    "what is wrong" first, then its "what to change" — or "" when none names
+    it. Pure; never raises."""
+    for part in (what, change):
+        try:
+            text = " ".join(str(part or "").split())[:FINDING_KIND_CHARS]
+        except Exception:  # noqa: BLE001
+            continue
+        if not text:
+            continue
+        for key, rx in FINDING_KINDS:
+            if rx.search(text):
+                return key
+    return ""
+
+
+# --------------------------------------------------------------------------- #
 # small helpers (pure)
 # --------------------------------------------------------------------------- #
 
@@ -631,26 +785,46 @@ def _cut(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
 
 
+#: v1.423.0 (Wave 3 lane D, item 6): what a value is shown as when it could
+#: not be masked, or not be scanned — never the value itself (FAIL CLOSED:
+#: this report is pasted into another agent's prompt).
+LEFT_OUT_UNMASKED = "[left out: could not be masked]"
+LEFT_OUT_UNSCANNED = "[left out: could not be checked]"
+
+
 def clean(value: Any, limit: int) -> str:
     """ONE line of text that came from a model, a tool, a file or the user:
     masked, then promptguard-scanned (the report is pasted into a prompt),
-    then folded to one line and cut — never cut before it is masked."""
+    then folded to one line and cut — never cut before it is masked.
+
+    v1.423.0 (Wave 3 lane D, item 6): FAIL CLOSED. ``mask_failure_text``
+    swallows its own fault and hands the text back UNMASKED, so the old
+    "a mask fault never lets a value through" branch here was dead: the mask
+    is asked to RAISE on a fault (``strict``) and the value is dropped
+    (:data:`LEFT_OUT_UNMASKED`); a scan that cannot run drops it too
+    (:data:`LEFT_OUT_UNSCANNED` — the review: the scan is asked to RAISE on
+    its own fault too, ``scan_context(strict=True)``, which by default hands
+    the text back unscanned)."""
     text = str(value or "")
     if not text:
         return ""
     try:
         from ..providers.failure_words import mask_failure_text
 
-        text = mask_failure_text(text)
+        text = mask_failure_text(text, strict=True)
     except Exception:  # noqa: BLE001 — a mask fault must never let a value through
-        return "(left out: it could not be masked)"
+        return LEFT_OUT_UNMASKED
     try:
         from ..core.promptguard import scan_context
 
-        text = scan_context(text, source="Iron Jarvis's records", cap=None).text
-    except Exception:  # noqa: BLE001 — scan_context never raises; belt and braces
-        pass
-    text = " ".join(text.split()).replace("`", "'")
+        # v1.423.0 (lane D review): ``strict`` — by default ``scan_context``
+        # swallows its own fault and hands the text back UNSCANNED, so the
+        # branch below was as dead as the mask's was: asked to RAISE, a scan
+        # that cannot run drops the value.
+        text = scan_context(text, source="Iron Jarvis's records", cap=None, strict=True).text
+    except Exception:  # noqa: BLE001 — an unscanned value is never shown
+        return LEFT_OUT_UNSCANNED
+    text = " ".join(str(text).split()).replace("`", "'")
     return _cut(text, limit)
 
 
@@ -675,7 +849,9 @@ def shape(text: Any) -> str:
     try:
         from ..providers.failure_words import mask_failure_text
 
-        raw = mask_failure_text(raw)
+        # v1.423.0 (lane D, item 6): a mask fault RAISES here (``strict``) —
+        # the key is then empty, never the unmasked text.
+        raw = mask_failure_text(raw, strict=True)
     except Exception:  # noqa: BLE001
         raw = ""
     s = _QUOTED.sub("'…'", raw)
@@ -956,6 +1132,14 @@ class Occurrence:
     #: The name the MODEL called the tool by (its dialect: "Bash", "Agent"),
     #: when it differs from Iron Jarvis's own (``ToolInvocation.called_as``).
     called_as: str = ""
+    #: v1.423.0 (lane D): a reviewer's finding — the reply it belongs to
+    #: (the line's ``turnId``), the place it names, the finding itself
+    #: ("R<n>: what is wrong — what to change") and the lead's reason when
+    #: it said the finding did not apply.
+    reply: str = ""
+    place: str = ""
+    finding: str = ""
+    answer: str = ""
 
 
 @dataclass
@@ -975,6 +1159,9 @@ class Problem:
     programs: list[tuple[str, int]] = field(default_factory=list)
     #: ``(total, noun)`` — "N of M <noun>"; None when there is no total.
     out_of: "tuple[int, str] | None" = None
+    #: v1.423.0 (lane D): how "N of M <noun> …" ends ("" = "failed this way"
+    #: for a tool, "went this way" otherwise — the older kinds' words).
+    verb: str = ""
 
 
 @dataclass
@@ -993,6 +1180,15 @@ class Gathered:
     #: not be read (unreadable, or the session is gone) — whether they ran in
     #: a low-trust reply is not known, so they are left out (fail closed).
     unknown_trust_left_out: int = 0
+    #: v1.423.0 (lane D): the reviewers' findings read (asked, in the window,
+    #: from a reply whose trust is known to be full) — and those left out
+    #: because their session's replies could not be read (fail closed).
+    findings: int = 0
+    findings_unknown_left_out: int = 0
+    #: v1.423.0 (lane D review): replies still running when the report was
+    #: made — nothing they ran is read until they end (their trust is not
+    #: settled), and the report says so.
+    running_left_out: int = 0
     unreadable: list[str] = field(default_factory=list)
     problems: list[Problem] = field(default_factory=list)
 
@@ -1194,9 +1390,46 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                 continue
             replies.append((tid, m, at))
 
+    # v1.423.0 (lane D review): a reply STILL RUNNING has no line yet, so no
+    # low window — and its trust is settled only when it ends (a taint can
+    # land at any moment; its kept record is saved once a round). Nothing it
+    # ran is read yet: the lead's calls (and findings) from its start on are
+    # left out, and said. Its ``ChatTurnRecord`` reads "running" from its
+    # first frame until its end is written, AFTER its line — no moment when
+    # neither covers it. FAIL CLOSED: when the records cannot be read, every
+    # call after a session's newest kept line is left out.
+    running_from: dict[str, datetime] = {}
+    try:
+        sql = "SELECT thread_id, started_at FROM chatturnrecord WHERE status = 'running'"
+        rparams: dict[str, Any] = {}
+        if scope:
+            sql, rparams["t"] = sql + " AND thread_id = :t", scope
+        for tid, started in _rows(engine, sql, **rparams):
+            tid = str(tid or "")
+            if tid not in known_threads:
+                continue
+            begun = _utc(started) or since
+            out.running_left_out += 1
+            if tid not in running_from or begun < running_from[tid]:
+                running_from[tid] = begun
+    except Exception:  # noqa: BLE001
+        log.warning("fix request: the running replies unreadable", exc_info=True)
+        out.unreadable.append("which replies are still running")
+        for tid in known_threads:
+            ends = [
+                e for e in (
+                    _utc((m.get("timing") or {}).get("endedAt")) if isinstance(m.get("timing"), dict) else None
+                    for m in lines_by_thread.get(tid, []) if m.get("role") == "assistant"
+                ) if e is not None
+            ]
+            running_from[tid] = max(ends) if ends else since
+
     def _in_low(thread: str, dt: "datetime | None") -> bool:
         if thread not in known_threads:
             return True  # fail closed: its replies (and their trust) were not read
+        begun = running_from.get(thread)
+        if begun is not None and (dt is None or dt >= begun):
+            return True  # a reply still running (or not known): its trust is not settled
         if thread in low_all:
             return True
         if dt is None:
@@ -1514,18 +1747,256 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
                     example=f"{words}: {why}" if why else words, error=why or words,
                 ))
 
+    # ---- the reviewers' findings (v1.423.0, Wave 3 lane D) ---------------- #
+    finding_totals = _gather_findings(
+        engine, out, occurrences, scope=scope, lo=s_lo, hi=s_hi, lines_by_thread=lines_by_thread,
+        known_threads=known_threads, in_low=_in_low, leads=leads, threads_seen=threads_seen,
+    )
+
     out.sessions = len({t for t in threads_seen if t})
-    out.problems = _group(occurrences, totals, pieces, reply_totals)
+    out.problems = _group(occurrences, totals, pieces, reply_totals, finding_totals)
     return out
 
 
+#: Where a reviewer's finding happened (the "Where:" line).
+FINDING_SURFACE = "a coding session's team review"
+#: The most findings read (the newest first).
+MAX_FINDINGS = 5_000
+
+
+def _reply_at(lines: "list[dict[str, Any]]", dt: "datetime | None") -> "dict[str, Any] | None":
+    """The reply line of a coding session whose time window (``timing``)
+    holds ``dt`` — the reply a review's findings belong to (a finding's own
+    ``turn`` is the model team's reply key, never the line's ``turnId``).
+    None when no line's window holds it: the reply still runs, has no line,
+    or was rewound away."""
+    if dt is None:
+        return None
+    for m in lines:
+        if m.get("role") != "assistant":
+            continue
+        timing = m.get("timing") if isinstance(m.get("timing"), dict) else {}
+        start, end = _utc(timing.get("startedAt")), _utc(timing.get("endedAt"))
+        if start is not None and end is not None and start <= dt <= end:
+            return m
+    return None
+
+
+def _ended_answering(m: "dict[str, Any]") -> bool:
+    """Did the reply END as the lead's own answer — the finish check's record
+    on it (the lead's R answers were read: ``harness/finish.FinishCheck.
+    record`` settles them), and NOT ended by an error, a Stop or a restart,
+    cut off at its output limit, or stopped by its step limit or its cap?
+    Only then is a finding still open the lead's (it never answered); any
+    other end is its own problem or the user's choice."""
+    if m.get("error") or m.get("interrupted") or m.get("truncated") is True:
+        return False
+    if m.get("stepLimit") or m.get("capMet") or m.get("accountLimit"):
+        return False
+    route = m.get("route") if isinstance(m.get("route"), dict) else {}
+    cut = route.get("cut_off") if isinstance(route.get("cut_off"), dict) else None
+    if cut and int(cut.get("times") or 0) > 0 and not cut.get("recovered"):
+        return False
+    return isinstance(m.get("finish"), dict)
+
+
+def _place_words(path: Any, line: Any) -> str:
+    p = str(path or "").strip()
+    if not p:
+        return "(general)"
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+        return f"{p}:{line}"
+    return p
+
+
+def _gather_findings(engine: Any, out: Gathered, occurrences: list[Occurrence], *, scope: str, lo: str,
+                     hi: str, lines_by_thread: "dict[str, list[dict[str, Any]]]", known_threads: set[str],
+                     in_low: Any, leads: "_LeadModels", threads_seen: set[str]) -> "dict[tuple[str, str, str], int]":
+    """v1.423.0 (Wave 3 lane D): the TEAM PROCESS problems the reviewers'
+    findings (``agents/team_findings.TeamFinding``) reveal — about the
+    team's way of working, which the developer can improve in Iron Jarvis
+    (the briefs, the standard, the router), never about the user's code:
+
+    * ``finding_did_not_apply`` — a finding the LEAD said does not apply: the
+      reviewer was wrong, and a false alarm costs a fix round. Grouped by the
+      reviewer member and its model, with the lead's reason (masked).
+    * ``finding_unanswered`` — a finding still OPEN after a reply that was
+      asked to answer it and ENDED as its own answer (:func:`_ended_answering`):
+      the answer form was not followed (or not read). Grouped by the lead's
+      model.
+    * ``finding_said_fixed`` — a finding the lead SAID was fixed that no later
+      piece of the reply changed (never confirmed). Grouped by the lead's
+      model. A "(general)" finding names no file, so it can never be
+      confirmed: it is left out.
+    * ``finding_repeated`` — the same KIND of finding (:func:`finding_kind`)
+      against one member in :data:`REPEAT_MIN_SESSIONS` or more sessions: a
+      pattern the team notes should catch. The member, the count and two
+      examples. A finding the lead said did not apply is the REVIEWER's
+      error, never the member's, so it is not counted.
+
+    A finding CONFIRMED fixed (``fixed``) is the system working: it is never a
+    problem (it counts toward a repeated kind only).
+
+    THE RULES (the module's): only findings the lead was ASKED to answer
+    (``TeamFinding.asked``; ``team_findings.findings_for`` gives counts only,
+    so the rows are read here — under the same filter), in the window, of a
+    coding session (a mission's review is never asked); NOTHING from a reply
+    that ended at LOW trust (its time window, as for the lead's calls); and
+    FAIL CLOSED — a finding of a session whose replies could not be read is
+    left out and counted. Every value is cleaned when it is shown
+    (:func:`clean`: mask → scan → cut). Returns the "N of M" totals, keyed
+    ``(kind, who, model)``. BLOCKING; never raises (an unreadable table is
+    named)."""
+    from . import team_findings as TF
+
+    totals: dict[tuple[str, str, str], int] = {}
+    try:
+        params: dict[str, Any] = {"lo": lo, "hi": hi, "n": MAX_FINDINGS}
+        where = ""
+        if scope:
+            where, params["sc"] = " AND f.scope = :sc", f"build:{scope}"
+        got = _rows(
+            engine,
+            "SELECT f.scope, f.number, f.path, f.line, f.what, f.change, f.status, f.answer, "
+            "f.reviewer, f.member, f.created_at, r.provider, r.model, rs.provider, rs.model, "
+            "ws.provider, ws.model "
+            "FROM teamfinding AS f "
+            "LEFT JOIN teamrolerun AS r ON r.id = f.review_row "
+            "LEFT JOIN session AS rs ON rs.id = f.review_session "
+            "LEFT JOIN session AS ws ON ws.id = f.worker_session "
+            # Only a finding the lead was ASKED to answer (team_findings'
+            # own rule: ``mark_asked``) is ever counted.
+            "WHERE f.asked = 1 AND f.created_at >= :lo AND f.created_at <= :hi"
+            # v1.423.0 review: a review's findings are stored in one go and
+            # their ``created_at`` TIE (``utcnow`` ticks every 15.6 ms on 3.12
+            # Windows) — the v1.286.0 rule: ties break on the rowid, newest
+            # stored first (SQLite's own tie order is the scan's, oldest
+            # first, and "What happened" named the first finding stored).
+            f"{where} ORDER BY f.created_at DESC, f.rowid DESC LIMIT :n",
+            **params,
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("fix request: the reviewers' findings unreadable", exc_info=True)
+        out.unreadable.append("the reviewers' findings")
+        return totals
+
+    def _add(key: tuple[str, str, str]) -> None:
+        totals[key] = totals.get(key, 0) + 1
+
+    repeats: dict[tuple[str, str], list[tuple[Any, ...]]] = {}
+    for (fscope, number, path, line, what, change, status, answer, reviewer, member, created,
+         r_prov, r_model, rs_prov, rs_model, w_prov, w_model) in got:
+        fscope = str(fscope or "")
+        if not fscope.startswith("build:"):
+            continue  # a mission's review is never asked (and has no reply line to judge trust by)
+        thread = bare_thread(fscope)
+        at = _utc(created)
+        if thread not in known_threads:
+            out.findings_unknown_left_out += 1  # fail closed: its replies (and their trust) unread
+            continue
+        if in_low(thread, at):
+            continue  # a reply at low trust: nothing is read from it (counted once, as a reply)
+        reply = _reply_at(lines_by_thread.get(thread, []), at)
+        if reply is None:
+            continue  # the reply still runs, kept no line, or was rewound: not judged
+        out.findings += 1
+        threads_seen.add(thread)
+        status = str(status or "")
+        n = int(number or 0)
+        place = _place_words(path, line)
+        what_change = " — ".join(p for p in (str(what or "").strip(), str(change or "").strip()) if p)
+        common = dict(
+            tool="", surface=FINDING_SURFACE, session=fscope, at=at,
+            reply=str(reply.get("turnId") or ""), place=place,
+            finding=f"R{n}: {what_change}" if n else what_change,
+        )
+        # The reviewer's way of working: was it right?
+        rev_who = str(reviewer or "").strip() or "the team reviewer"
+        rev_model = model_words(r_prov, r_model) or model_words(rs_prov, rs_model)
+        _add(("finding_did_not_apply", rev_who, rev_model))
+        if status == TF.DID_NOT_APPLY:
+            why = str(answer or "").strip()
+            occurrences.append(Occurrence(
+                kind="finding_did_not_apply", who=rev_who, model=rev_model, shape="did not apply",
+                example=(f"{what or ''} — the lead said it does not apply: {why}" if why
+                         else f"{what or ''} — the lead said it does not apply"),
+                answer=why, **common,
+            ))
+        # The lead's way of working: did it answer, and was "fixed" fixed?
+        lead_model = leads.at(thread, at)
+        if _ended_answering(reply):
+            _add(("finding_unanswered", "the lead", lead_model))
+            if status == TF.OPEN:
+                occurrences.append(Occurrence(
+                    kind="finding_unanswered", who="the lead", model=lead_model, shape="open",
+                    example=f"{what or ''} — the lead was asked to answer it and did not", **common,
+                ))
+        if str(path or "").strip() and status in (TF.SAID_FIXED, TF.FIXED):
+            _add(("finding_said_fixed", "the lead", lead_model))
+            if status == TF.SAID_FIXED:
+                occurrences.append(Occurrence(
+                    kind="finding_said_fixed", who="the lead", model=lead_model, shape="said fixed",
+                    example=f"{what or ''} — the lead said it was fixed; no later piece changed {place}",
+                    **common,
+                ))
+        # A member's pattern: the same kind of finding, again and again.
+        who = str(member or "").strip()
+        if who and status != TF.DID_NOT_APPLY:
+            kind = finding_kind(what, change)
+            if kind:
+                repeats.setdefault((who, kind), []).append(
+                    (fscope, at, model_words(w_prov, w_model), common),
+                )
+
+    for (who, kind), rows in repeats.items():
+        sessions = {r[0] for r in rows}
+        if len(sessions) < REPEAT_MIN_SESSIONS:
+            continue
+        never = datetime.min.replace(tzinfo=timezone.utc)
+        newest_model = max(rows, key=lambda r: r[1] or never)[2]
+        words = FINDING_KIND_WORDS.get(kind, kind)
+        for _scope, _at, _model, common in rows:
+            occurrences.append(Occurrence(
+                kind="finding_repeated", who=who, model=newest_model, shape=kind,
+                example=(f"{_plural(len(rows), 'finding')} about {words} in "
+                         f"{_plural(len(sessions), 'session')}"),
+                **common,
+            ))
+    return totals
+
+
 _PIECE_KINDS = frozenset({"helper_failed", "helper_step_limit", "context_too_small"})
+#: v1.423.0 (lane D): the finding kinds' "N of M <noun> <verb>".
+_FINDING_OUT_OF: dict[str, tuple[str, str]] = {
+    "finding_did_not_apply": ("findings by this reviewer", "were wrong (the lead said they did not apply)"),
+    "finding_unanswered": ("findings the lead was asked to answer", "were never answered"),
+    "finding_said_fixed": ("findings the lead said were fixed", "were never confirmed"),
+}
+
+
+def _evidence_items(kind: str, items: "list[Occurrence]") -> "list[Occurrence]":
+    """The occurrences a problem's evidence shows (newest first): at most
+    :data:`MAX_EVIDENCE`; for a REPEATED kind of finding :data:`REPEAT_EXAMPLES`,
+    the newest of each session first — the examples show the pattern ACROSS
+    sessions, never two from one."""
+    if kind != "finding_repeated":
+        return items[:MAX_EVIDENCE]
+    first: list[Occurrence] = []
+    seen: set[str] = set()
+    for o in items:
+        if o.session not in seen:
+            seen.add(o.session)
+            first.append(o)
+    taken = {id(o) for o in first}
+    rest = [o for o in items if id(o) not in taken]
+    return (first + rest)[:REPEAT_EXAMPLES]
 #: Kinds whose heading names the tool ("A tool call that failed: edit_file").
 _TITLED_BY_TOOL = frozenset({"tool_failed", "tool_not_given", "repeated_call", "ask_not_carried"})
 _REPLY_KINDS = frozenset({"reply_failed", "patience_gave_up", "cut_off"})
 
 
-def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_totals: Counter) -> list[Problem]:
+def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_totals: Counter,
+           finding_totals: "dict[tuple[str, str, str], int] | None" = None) -> list[Problem]:
     groups: dict[tuple[str, str, str, str, str], list[Occurrence]] = {}
     for o in occ:
         groups.setdefault((o.kind, o.who, o.model, o.tool, o.shape), []).append(o)
@@ -1540,6 +2011,7 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
             if ref not in sessions:
                 sessions.append(ref)
         newest = items[0]
+        shown = _evidence_items(kind, items)
         evidence = [{
             "at": when(o.at),
             "session": short_id(o.session),
@@ -1551,7 +2023,14 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
             "args": clean(o.args, ARGS_CHARS),
             "error": clean(o.error, ERROR_CHARS),
             "note": clean(o.note, ERROR_CHARS),
-        } for o in items[:MAX_EVIDENCE]]
+            # v1.423.0 (lane D): a reviewer's finding — its reply, the place
+            # it names, the finding ("R<n>: what — change", at most 300) and
+            # the lead's reason when it said the finding did not apply.
+            "reply": clean(short_id(o.reply), NAME_CHARS) if o.reply else "",
+            "place": clean(o.place, ARGS_CHARS),
+            "finding": clean(o.finding, ERROR_CHARS),
+            "answer": clean(o.answer, ERROR_CHARS),
+        } for o in shown]
         programs: Counter[str] = Counter()
         for o in items:
             if o.program:
@@ -1563,6 +2042,8 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
         elif tool:
             noun = "member" if who != "the lead" else "lead"
             out_of = (totals.get((who, mw, tool), 0), f"{clean(tool, NAME_CHARS)} calls by this {noun}")
+        elif kind in _FINDING_OUT_OF:
+            out_of = ((finding_totals or {}).get((kind, who, mw), 0), _FINDING_OUT_OF[kind][0])
         else:
             out_of = None
         if out_of is not None and out_of[0] < len(items):
@@ -1576,7 +2057,7 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
             last=max(stamps) if stamps else None, sessions=sessions[:MAX_SESSIONS_SHOWN],
             example=clean(newest.example, EXAMPLE_CHARS), evidence=evidence,
             programs=sorted(programs.items(), key=lambda kv: (-kv[1], kv[0]))[:MAX_PROGRAMS_SHOWN],
-            out_of=out_of,
+            out_of=out_of, verb=_FINDING_OUT_OF[kind][1] if kind in _FINDING_OUT_OF else "",
         ))
     problems.sort(key=lambda p: (-p.count, -(p.last or never).timestamp(), _KIND_ORDER.get(p.kind, 99),
                                  p.who, p.model, p.tool, p.shape))
@@ -1605,7 +2086,29 @@ def nothing_line(g: Gathered) -> str:
     extra = f" (could not read: {', '.join(g.unreadable)})" if g.unreadable else ""
     if g.unknown_trust_left_out:
         extra += f" ({_unknown_words(g.unknown_trust_left_out)} were left out)"
+    if g.findings_unknown_left_out:
+        extra += f" ({_unknown_findings_words(g.findings_unknown_left_out)} were left out)"
+    if g.running_left_out:
+        extra += f" ({_running_words(g.running_left_out)})"
     return f"Nothing to report: Iron Jarvis ran into no problems {where} in {_window_words(g.days)}{extra}."
+
+
+def _running_words(n: int) -> str:
+    """v1.423.0 (lane D review): replies still running — nothing they ran is
+    read until they end (their trust is settled only then), and said."""
+    return (
+        f"{_plural(n, 'reply', 'replies')} still running: what "
+        f"{'it' if n == 1 else 'they'} ran is read once {'it ends' if n == 1 else 'they end'}"
+    )
+
+
+def _unknown_findings_words(n: int) -> str:
+    """v1.423.0 (lane D): reviewer findings of coding sessions whose replies
+    could not be read — left out (fail closed), and said."""
+    return (
+        f"{_plural(n, 'reviewer finding')} from coding sessions whose replies could not be read "
+        "(whether they ended at low trust is not known)"
+    )
 
 
 def _unknown_words(n: int) -> str:
@@ -1623,7 +2126,8 @@ def _problem_block(n: int, p: Problem) -> str:
     lines = [f"## {n}. {title}", ""]
     seen = f"- Seen {_plural(p.count, 'time')} (first {when(p.first)}, last {when(p.last)})"
     if p.out_of is not None:
-        seen += f"; {p.count} of {p.out_of[0]} {p.out_of[1]} {'failed' if p.tool else 'went'} this way"
+        verb = p.verb or f"{'failed' if p.tool else 'went'} this way"
+        seen += f"; {p.count} of {p.out_of[0]} {p.out_of[1]} {verb}"
     lines.append(seen + ".")
     who = p.who + (f" ({p.model})" if p.model else "")
     where = f"- Where: {p.surface}; who: {who}"
@@ -1648,10 +2152,20 @@ def _problem_block(n: int, p: Problem) -> str:
     lines.append("- Evidence:")
     for ev in p.evidence:
         parts = [ev["at"], ev["session"]]
+        if ev.get("reply"):
+            parts.append(f"reply {ev['reply']}")
         if ev["tool"]:
             parts.append(ev["tool"])
         if ev["args"]:
             parts.append(f"args: `{ev['args']}`")
+        # v1.423.0 (lane D): a reviewer's finding — where, what, and the
+        # lead's reason when it said the finding did not apply.
+        if ev.get("place"):
+            parts.append(f"file: `{ev['place']}`")
+        if ev.get("finding"):
+            parts.append(f"finding: `{ev['finding']}`")
+        if ev.get("answer"):
+            parts.append(f"the lead's reason: `{ev['answer']}`")
         if ev["error"]:
             parts.append(f"error: `{ev['error']}`")
         elif ev.get("note"):
@@ -1681,7 +2195,9 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         facts.append(f"- Coding session: {named}")
     facts.append(
         f"- Covers: {_plural(g.sessions, 'coding session')}, "
-        f"{_plural(g.pieces, 'piece')} handed to helpers or teammates"
+        f"{_plural(g.pieces, 'piece')} handed to helpers or teammates, "
+        # v1.423.0 (lane D): the reviewers' findings the problems below read.
+        f"{_plural(g.findings, 'reviewer finding')} the lead was asked to answer"
     )
     if g.low_trust_left_out:
         facts.append(
@@ -1690,6 +2206,10 @@ def render_listed(g: Gathered, *, max_problems: int = MAX_PROBLEMS,
         )
     if g.unknown_trust_left_out:
         facts.append(f"- Left out: {_unknown_words(g.unknown_trust_left_out)}")
+    if g.findings_unknown_left_out:
+        facts.append(f"- Left out: {_unknown_findings_words(g.findings_unknown_left_out)}")
+    if g.running_left_out:
+        facts.append(f"- Left out: {_running_words(g.running_left_out)}")
     if g.unreadable:
         facts.append(f"- Could not read: {', '.join(g.unreadable)}")
     head = "\n".join([TITLE, "", INSTRUCTION, "", *facts])
@@ -1742,7 +2262,7 @@ def build_report(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", no
         "text": text,
         "problems": len(g.problems),
         "listed": listed,
-        "complete": not g.unreadable and not g.unknown_trust_left_out,
+        "complete": not g.unreadable and not g.unknown_trust_left_out and not g.findings_unknown_left_out,
         "since": iso_z(g.since),
         "until": iso_z(g.until),
         "sessions": g.sessions,
@@ -1755,4 +2275,7 @@ __all__ = [
     "TOOL_MODULES", "UnknownSession", "args_words", "bare_thread", "build_report", "clamp_days",
     "classify_call", "clean", "command_failure_words", "users_to_fix", "failure_example", "gather", "render_listed", "group_shape", "member_name", "nothing_line", "os_words",
     "program_of", "render", "shape", "short_id", "split_failure",
+    # v1.423.0 (lane D)
+    "FINDING_KINDS", "FINDING_KIND_WORDS", "LEFT_OUT_UNMASKED", "LEFT_OUT_UNSCANNED", "REPEAT_MIN_SESSIONS",
+    "finding_kind",
 ]

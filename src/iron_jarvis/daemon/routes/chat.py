@@ -4209,6 +4209,13 @@ async def chat_stream(
         ),
         "kept": [],
     }
+    if reply_record is not None and hasattr(reply_record, "watch_trust"):
+        # v1.423.0 (Wave 3 lane D, item 5): a coding session's reply record
+        # reads THIS record live, so a reply the user stops right after a
+        # flagged read keeps its low trust on its saved line (a stop has no
+        # done or error frame to carry it). Stream lane only: the POST lane
+        # has no coding session.
+        reply_record.watch_trust(_trust_state)
     # v1.353.0 (G40): set by the arming pass when this turn wanted media and
     # no media service is connected; read by the Tools line. MIRROR NOTE
     # (lock-step): chat_turn.run_chat_turn keeps the same flag.
