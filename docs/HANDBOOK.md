@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.421.0 (2026-11-01).*
+holds itself to. Current as of v1.422.0 (2026-11-01).*
 
 ---
 
@@ -2445,6 +2445,98 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## Never lose work (v1.422.0)
+
+A long job should never be lost, cut off or stuck with nobody told and no
+way to carry on. This release closes the ways it could happen.
+
+**Chat › Code (Iron Jarvis's own coding sessions)**
+
+- **A brief outage no longer ends a long reply.** If the model's service
+  fails for a moment (busy, overloaded, a server error, a timeout, a dropped
+  connection), the reply waits and asks the same model on the same account
+  again: after 5, 15, 30 and then 60 seconds, honouring a "try again in"
+  from the service. It never moves to another provider. While it waits, the
+  reply says so, for example "Claude Code is busy (overloaded). Trying again
+  in 30 s, attempt 2 of 5", and you get one notice, not one per try. Sign-in
+  problems, your account's own usage limit and safety refusals are never
+  retried. A reply that starts on a local model server that is off still
+  says so at once; one whose server goes away partway through waits for it.
+- **A reply that still fails keeps its work.** Its line offers **Continue
+  from where it stopped**: the reply carries on from its last finished step,
+  without asking your question again or redoing finished steps. **Retry**
+  still asks the question again from the start. Sending a new message ends
+  the offer, and kept work expires after a week. A reply that had read
+  something suspicious stays at low trust when you continue it, and when
+  Iron Jarvis carries it on after a restart.
+- **Stop and Esc stop a running command.** Before, Stop ended the answer but
+  a command that was running carried on for up to 10 minutes. Now, after a
+  few seconds, the command and everything it started is ended and its step
+  says you stopped it, and no later step of that reply starts. A program the
+  session started in the background on purpose keeps running, and a
+  question waiting for your answer simply closes.
+
+**Build › Code (Claude Code, Codex, Pi, OpenCode, Grok)**
+
+- **A restart of Iron Jarvis no longer stops your coding tools.** Your
+  coding tool now runs in a small helper process of its own, not inside Iron
+  Jarvis. When Iron Jarvis restarts (the watchdog, Restart in the tray, a
+  crash), that helper and its tools keep running, and when Iron Jarvis is
+  back it reconnects: a session that was idle answers your next message on
+  the same running tool, a reply that was being written carries on and you
+  see the rest as it comes, a card that was waiting for your answer is shown
+  again, and helper agents and dev servers the tool started keep running.
+  Quitting Iron Jarvis, or installing an update, ends the helper and every
+  tool in it (each tool saves its conversation first). If Iron Jarvis does
+  not come back, the helper stops its tools on its own after 10 minutes when
+  nothing is working, and always within 3 hours. If Iron Jarvis cannot pick a
+  session back up, or the helper cannot be used, the reply says so and
+  carries on as described next.
+- **When the tool did stop, the reply carries on.** After an update, a PC
+  restart or a crash, a Build › Code reply that was working carries on by
+  itself once, through the coding tool's own resume, told to check what was
+  already done first. You see one line: "Carried on by itself after Iron
+  Jarvis restarted." This happens only for a reply cut within the last week,
+  and never for a reply you stopped, one that was waiting for your answer,
+  one you followed with a newer message, or while Emergency stop is on; then
+  the reply shows **Continue** and says why. On the first start after you
+  update to this version, a reply the update itself cut off is only offered
+  (it was cut before this version could carry replies on). If a reply Iron
+  Jarvis carried on by itself fails, **Retry** runs that carry-on again.
+- **Account limits are waited out, or moved past.** When an account reaches
+  its limit and the reset time is known, the reply waits and carries on at
+  the reset ("Waiting for Work to reset at 3:45 PM — it carries on by itself
+  then", with **Cancel**). If the account is in one of your account groups,
+  it moves to another free account of the same kind in that group instead.
+  Claude Code and Codex conversations can move; Grok only waits. It never
+  moves while the tool still runs background work, and after four tries in a
+  row that the account refuses it stops and waits for you. Turning off
+  "Carry on by itself after an account's limit" stops any wait; Emergency
+  stop stops a reply carrying on by itself.
+- **Your dev server survives the idle stop.** A coding session with nothing
+  to do is still closed after 15 minutes to free memory (your next message
+  opens it again where it left off), but the session you are looking at now
+  waits 60 minutes, and a session whose tool started a program that is
+  serving, like a dev server on a port, stays open while that program runs,
+  up to 8 hours with nothing new. It says so ("Keeping Claude Code open: it
+  runs a program on port 3000…") and offers **Close Claude Code**, which
+  stops the tool and the program now (not while the tool is still working on
+  its own). Whenever Iron Jarvis does close a tool that was running programs
+  (to make room, for new settings, Open in terminal, moving accounts), the
+  conversation names them, and your next message reminds you to start them
+  again. The update warning now names a coding session running a program, so
+  installing an update never ends a dev server without saying so.
+
+**Terminals**
+
+- **New terminals use your installed PowerShell 7, or Windows PowerShell.**
+  The Microsoft Store copy of PowerShell 7 is still in the shell menu,
+  labelled as such, but is no longer the default: starting it is what froze
+  Iron Jarvis when it reopened terminals. Terminals you already have keep the
+  shell they had. Windows PowerShell does not have some PowerShell 7
+  shortcuts (`&&`, `??`); pick PowerShell 7 from the menu, or install it
+  normally, if you want them.
 
 ## A team that works (v1.421.0)
 

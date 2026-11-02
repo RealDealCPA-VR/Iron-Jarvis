@@ -13216,6 +13216,178 @@ does not need a bump, stop and bump it.
   v1201 envelope files, `test_agent_context_v1152` (a 3k window → FAILED),
   `test_compaction_agents_v1153`, `test_update_rehearsal_v1338`.
 
+- **Never lose work: a coding reply waits out a passing outage and keeps its
+  rounds when it fails; Stop stops the running step; Build › Code's tools live
+  in a CODE HOST that outlives a restart; a cut or limited reply carries on by
+  itself; a dev server survives the idle stop; a new terminal is never the
+  Store pwsh** (v1.422.0, Wave 2 of `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`:
+  B1-B6 and C4.7; the owner's decision B3 = the large option; four builders +
+  four reviewers + the coordinator's integration).
+  B1 PATIENCE (Chat › Code, harness turns only; `harness/patience.py`): the
+  stream lane's round call is `round_frames(_harness is not None, ...)`, the
+  POST lane `patient_call` (lock-step); plain chat gets the generator itself,
+  byte for byte. `why_waited` waits on overloaded, a 429 that is not the
+  account's own limit, 5xx, timeout, interrupted, unreachable (never a `-cli`)
+  and a breaker cooldown; never on a refusal, 401/403, an account limit
+  (`_ACCOUNT_LIMIT_RX`: usage limit, session/weekly limit, "you've hit your",
+  out of credits, `insufficient_quota`; never a bare "quota exceeded" —
+  Gemini's per-minute quota is waited out), overflow, `no_failover`, other
+  4xx, Stop. `WAITS_S` 5/15/30/60, Retry-After capped at 120 s, 240 s a round,
+  same provider/model/account (the hold and pin ride the pump). A reply's
+  FIRST model call (`first_call=completions == 0`, both lanes) is never waited
+  out on the router's local not-answering refusal
+  (`patience.local_not_answering`: unreachable/timeout/cooldown for a local
+  provider) — v1.228.0's "refuses at once" holds; a later round waits a box
+  that went away. Between tries: `reset {reason: "retry", drop: N}` (CODE
+  POINTS; the page takes it back with `lib/buildPatience.dropCodePoints`, hook
+  and session tap) then `provider_wait {state, words, attempt, of}`; no retry
+  after the `final` frame (tools only run after it). Tries after the first are
+  marked by `providers/retry_round`; the router puts `retry: n` on their
+  `provider.failed` and the notifier says only the first. `tried_words` rides
+  `error_payload`'s fix. THE SUITE TURNS PATIENCE OFF
+  (`conftest._round_patience_off_for_bare_tests`, `WAITS_S = ()`); a pin opts
+  in with `DEFAULT_WAITS_S`. A failed reply KEEPS ITS ROUNDS
+  (`ReplyRecord.keep_failed` → key `build-failed:<turn>`, never read by the
+  boot resume; not for a refusal, a limit card, attempts, or nothing past the
+  question); the line gets `canContinue`; `BuildTurnBody.continue_turn` →
+  `start_build_turn(resume_turn=, resume_failed=True, continuation=True,
+  pressed=True)` (`FAILED_RESUME_NOTE`, `continuedFrom`); kept rounds belong to
+  the session that kept them (`reply_record.load/claim(session_id=)`); Branch
+  from here drops `canContinue`; every started turn and a session delete
+  `drop_failed`. TRUST: a low-trust reply writes `RunTranscript.low_trust`
+  with its rounds (`ReplyRecord.note_trust` before every save; additive
+  nullable column) and both the restart's carry-on (`RESTART_LOW_TRUST`) and
+  Continue (`CONTINUE_LOW_TRUST`, `chat_turn.failed_trust_keys` on both lanes'
+  errors) start low. B2 STOP: `stall.run_step` races the turn's
+  `TurnHandle.wait_stopped`; after `STOP_GRACE_S` (3 s) the step is cancelled
+  (`_STOPPED[task] = STOP_TURN`; Stop the step's own reason wins), the
+  registry writes `stop_note()`, the model gets `turn_stopped_result`; a step
+  of a reply already stopped is never started (`run_step(not_started=)`,
+  `not_started_result`, no ledger row); `race=False` for `deadline_exempt`
+  tools (ask_user, delegate, spawn_agent); `process_start(until_exit)` kills
+  its program on cancel, a background program survives. Plain chat's Stop
+  still does not kill a tool (only harness steps run through `run_step`).
+  B3 CODE HOST (`src/iron_jarvis/codehost.py`, reached only through
+  `hosted/hostlink.py` — `RemoteProcess` has `HarnessProcess`'s shape;
+  `hosted/adopt.py`: `state_blob` / `adopt_all` / `at_boot` /
+  `close_unadopted` / `shutdown(keep=)`; `Driver.state()/restore()/
+  after_restore()` re-arm what cannot be kept: ACP prompts, Pi's prompt,
+  Codex's turn id, Claude's held end). A launcher runs `codehost --launch` so
+  the host is never in the daemon's tree; the host holds the launcher's
+  handle (`held_pid` via GetProcessId, logged "holding its launcher (pid N)")
+  so its pid is never reused. NEVER `DETACHED_PROCESS`: `HOST_FLAGS =
+  CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` (a console-less host gave its
+  child a visible Windows Terminal window, and closing it killed the host,
+  0xC000013A). Tools start through `core.procs.spawn(breakaway_ok=False)` in
+  a kill-on-close Job the host owns. One host per home (a named mutex, never
+  a file lock in the home); `<home>/hosted/codehost.json` {pid, port, token,
+  version, protocol}, loopback only, token checked, the hello's payload at
+  most `MAX_HELLO_PAYLOAD` (4 KB) BEFORE the token is read; a host of another
+  version is told to quit. Replay without duplicates: lines numbered, the
+  event log's copy stamped `htool`/`hseq` (stripped from every view, page and
+  stream); on re-attach lines ≤ shown are silent and writes ≤ written are
+  dropped; card ids seeded per line (`ASK_SEED`); a user-caused write carries
+  the state in the same frame. BOOT: `keep_ids` → `reconcile_cut_turns(home,
+  keep)` → `adopt.at_boot(platform, keep)` (bounded by `BOOT_ADOPT_WAIT_S`
+  60 s); `close_unadopted` stops the tool and closes in words every kept
+  session not carried on, and (integration) `adopt.note_cut` records it as a
+  restart's cut so the carry-on pass below takes it (the overflow fallback
+  `_give_up` too). A link that BREAKS (`HostLink.deliberate` false) records
+  its tools in `_LOST` and a fresh background link stops them; a start the
+  host answered too late is told to stop. QUIT vs RESTART: the lifespan's end
+  is a QUIT unless `POST /shutdown {"restart": true}` set
+  `platform.code_host_keep` (nothing in production sends it; a watchdog or
+  tray Restart KILLS the daemon, which keeps the host by itself); Quit and
+  every update path end with the unspared `sweepOrphanDaemons()` +
+  `installer.nsh`'s `taskkill /IM ironjarvis.exe`, so the installer is never
+  blocked; the desktop's `quitCodeHost` asks first; only the watchdog's
+  adopted-daemon sweep spares the host's pid. Orphan bounds: 60 s empty /
+  10 min idle / 2 h busy-quiet / 3 h hard; 64 MiB per tool, then overflow →
+  graceful stop + the CLI's resume. TESTS: `IRONJARVIS_CODE_HOST=off` is the
+  suite default (`IJ_TEST_CODE_HOST=on` for parity; the session fixture quits
+  every host at teardown); the host-only paths (RemoteProcess I/O, line-seeded
+  card ids, snapshots, stamps, launcher/mutex/orphan rules, boot keep/adopt,
+  MCP token restore) are covered ONLY by `tests/test_code_host_*_v14220.py`
+  (`tests/_code_host_helpers_v14220.host_session`, pid-checked). KNOWN: the
+  host handles start/attach on its one connection thread (a hung process
+  creation would stall writes for every session); ~0.25 s of events can be
+  missing at a crash and a card answered just before it can reappear.
+  RELEASE CHECK: `"<install>\resources\daemon\ironjarvis.exe" codehost
+  --launch <scratch home>` writes `<scratch>\hosted\codehost.json` naming a
+  live `ironjarvis.exe` pid, `codehost.log` says "holding its launcher (pid
+  N)", no window appears; end it with `taskkill /PID <pid> /T /F`.
+  B3 FALLBACK + B5 (`hosted/carry_on.py`, `hosted/codex_move.py`,
+  `routes/build_app_carry.py`): the boot `reconcile_cut_turns(home, keep=())`
+  writes `cut.json` beside the log (turn, `waiting`, `carried`, `limit`,
+  `cut_at` = the newest time on the turn's OWN events) and clears a kept
+  session's undecided record (`forget_undecided`). `carry_on_after_restart`
+  (first pass of `bg_tasks["build_app_carry"]`) carries each cut on ONCE
+  through the tool's own resume (`CONTINUE_AFTER_RESTART`, `carry=`), only
+  when `cut_at` is within `CUT_KEEP_DAYS` (7 == `reply_record.KEEP_DAYS`) AND
+  at or after `<home>/hosted/carry_on_since.json` (written at the loop's first
+  start; every cut v1.421.0 and earlier left, the update to v1.422.0
+  included, is only offered: `WHY_BEFORE`); never a turn the USER stopped
+  (`note_stopped`, written by `service.interrupt` before the tool is told),
+  one that ended, a card/question open, a newer message, archived, unsaved,
+  beside a limit, a session alive at pass time, Emergency stop (re-read at
+  every start; `Orchestrator.stop_unattended` → `stop_unattended_turns` stops
+  a running carry-on Iron Jarvis started), past the pool (every busy session
+  counts); otherwise offered with `WHY_*` via `POST …/continue`; Retry of a
+  carry-on that failed re-runs it hidden (`failed_carry`). LIMITS:
+  `limits.json` {card, wait, chain}; a wait is armed only while
+  `build_auto_resume` is on (off ends armed waits); at the reset it carries on
+  (`CONTINUE_AFTER_RESET`) or moves within the account group (same vendor,
+  signed in, not parked, below 95%; never while background work runs; a
+  refused move is not retried) through `continue_on(..., note=)`;
+  `MAX_AUTO_IN_A_ROW` 4 counted before each start; `MAX_TRIES` refused starts
+  → `GAVE_UP_NOTE`; Cancel `POST …/wait/cancel`; the page re-reads every
+  `CODE_WAIT_REREAD_MS` (15 s) while a wait shows. Codex moves by copying its
+  rollout file into the other `CODEX_HOME` (measured on codex 0.157.0 scratch
+  homes; another ChatGPT account accepting the reasoning items is UNPROVEN);
+  Grok's limit is the card and it only waits; Pi/OpenCode limits stay plain
+  errors. B4 + C4.7 (`hosted/programs.py`): a program counts when it is in the
+  tool's OWN tree (Job members ∪ `process.descendants`, minus the root; never
+  by name), holds a TCP LISTEN socket and was born ≥ the CURRENT process's
+  FIRST `tool` event − 2 s ("MCP servers never listen" is FALSE: the
+  QuickBooks pack listens on 8765; the birth rule keeps such servers out).
+  Every read on its own daemon thread (`_read_on_own_thread`, never the
+  loop's shared pool), one at a time (reaper 5 s; the activity read 1.5 s,
+  inside the desktop's 3 s). The reaper reads only sessions past 15 min and
+  looks again after the read; a serving program keeps the session until 8 h
+  with no turn and no word; the session looked at (a view read or the Code
+  view's `POST …/seen` beat within 3 min; `CODE_SEEN_BEAT_MS` == `BEAT_S`)
+  gets 60 min; the pool picks serving sessions last, looked-at next.
+  `_said_stopped` names the programs a stop ended (masked; `short_argv` quotes
+  a spaced word and hides a secret-named key's value whole) in the
+  conversation, the row's `stopped_note` and the next start — at the idle
+  stop, the pool, a restart, Open in terminal and Continue on another account
+  (not archive, delete or Grok's Stop). `POST …/close` stops the tool and its
+  programs, refused while it works on its own. `GET /system/activity` adds
+  `code_serving`/`code_serving_tools`: `busy` only, never `working`; main.js
+  `describeBusyWork` names them. B6 SHELLS: `terminals/shells.available_shells`
+  puts a real (non-packaged, `app_alias.is_packaged`) PowerShell 7 from
+  absolute local PATH folders or Program Files first — never `shutil.which`,
+  which reads shares and the current folder — else `powershell`; the Store
+  copy is listed after it, labelled "PowerShell 7 (Microsoft Store copy)";
+  names unchanged, so restored panes keep their argv; `/terminals/shells`
+  answers `default` and `label`. RISK: Windows PowerShell 5.1's default
+  execution policy on client PCs is Restricted (npm `.ps1` shims would fail);
+  this PC's LocalMachine policy is RemoteSigned — a decision for the owner.
+  Pins: `tests/test_build_{patience,patience_review,patience_local,
+  continue_failed,continue_review,stop_kills_steps,stop_between_steps,
+  resume_low_trust}_v14220.py`, `tests/test_harness_bench_patience_identity_v14220.py`,
+  `tests/test_code_host_{v14220,adopt_v14220,tools_v14220,desktop_v14220,
+  rehearsal_v14220,review_v14220}.py`, `tests/test_build_app_{carry_on,limits,
+  carry_review,carry_followups,programs,programs_review}_v14220.py`,
+  `tests/test_shells_store_v14220.py`, dashboard `build-continue-patience`,
+  `harness-continue-session`, `harness-retry-drop-review`,
+  `build-code-carry{,-view,-review,-wait-reread,-retry}`, `build-code-programs`,
+  `build-new-terminal-shell` (all `-v1422-0`); moved on purpose:
+  `test_build_app_pool_v1409`, `test_build_app_review_v1409`,
+  `test_process_hygiene_v1333.ALLOWED_RAW_SPAWNS` (+ `codehost.py`),
+  `test_reliability_v1226_boot` (activity keys),
+  `test_update_rehearsal_v1338` (older schema drops `low_trust` too).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
