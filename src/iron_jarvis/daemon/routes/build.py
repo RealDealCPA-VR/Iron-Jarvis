@@ -862,6 +862,22 @@ class _ReplyWatch:
         #: the card a turn that never reached its ``done`` keeps (a Stop
         #: before the card, a crash).
         self.attempts: dict[str, dict[str, Any]] = {}
+        #: v1.423.0 (Wave 3 lane D, item 5): the reply's LIVE trust ("" =
+        #: full, else why it is low) — ``ReplyRecord.trust_now``, set by
+        #: :func:`recorded_turn`. A reply that ended on a Stop (or a
+        #: shutdown) has no ``done`` / ``error`` frame to say its trust, so
+        #: :meth:`lines` reads it from here. None: not known (a replay).
+        self.trust_now: Any = None  # () -> str, or None
+
+    def stopped_trust(self) -> str:
+        """Why a reply that ended WITHOUT its done / error frame ran at LOW
+        trust ("" = full or not known). Never raises."""
+        if self.trust_now is None:
+            return ""
+        try:
+            return str(self.trust_now() or "").strip()
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            return ""
 
     def see(self, event: str, raw: str) -> "dict[str, Any] | None":
         """Fold one frame. Answers the frame's data with its Timeline offsets
@@ -1257,13 +1273,33 @@ class _ReplyWatch:
                 line["trust"] = "low"
                 line["trustReason"] = str(err.get("trust_reason") or "")
         else:
-            if not partial.strip() and not self.helpers and not self.attempts and not keep_empty:
+            # v1.423.0 (Wave 3 lane D, item 5): a reply that ended on a STOP
+            # (or a shutdown) has no done / error frame to say its trust: read
+            # live (``ReplyRecord.trust_now``) and written in the same keys
+            # the error branch writes — "Copy as a fix request" reads nothing
+            # from a reply at low trust, and finds that reply by this line.
+            low_reason = self.stopped_trust()
+            # v1.423.0 review: ...but only when a CALL is on the record (a
+            # finished step, or one still running when the Stop landed) — the
+            # calls are what the report must leave out. A reply that STARTED
+            # low (a carry-on of a low reply, a flagged CI fix, a night task)
+            # and was stopped before it ran anything has nothing in its
+            # window, and its line would read "Answered in 0.4 s · cut off"
+            # over nothing — so it keeps no line, as at full trust.
+            low_window = bool(low_reason) and bool(self.steps or self._started)
+            if not partial.strip() and not self.helpers and not self.attempts and not keep_empty \
+                    and not low_window:
                 return out  # stopped before a word: nothing to keep
             # (v1.372.0: a turn stopped while its helpers worked keeps a line
-            # for them — what they did is part of the session.)
+            # for them — what they did is part of the session. v1.423.0: so
+            # does one that went to LOW trust after it ran a call, even with
+            # no words — its line is the window the fix request leaves out.)
             line.update({"content": partial, "interrupted": True})
             if status == "interrupted":
                 line["error"] = _durable.INTERRUPTED_DETAIL
+            if low_reason:
+                line["trust"] = "low"
+                line["trustReason"] = low_reason
         if self.resumed_from:
             # v1.391.0: this reply carried on a reply a restart cut off.
             # v1.422.0 (B1): ...or one that FAILED, at the user's press.
@@ -2024,6 +2060,9 @@ async def recorded_turn(engine: Any, thread_id: str, turn_id: str, frames: Any, 
     watch.no_limit = bool(no_limit)
     watch.resumed_from = str(getattr(record, "resumed_from", "") or "")
     watch.resume_kind = str(getattr(record, "resume_kind", "") or "restart")
+    # v1.423.0 (Wave 3 lane D, item 5): the reply's LIVE trust — a reply the
+    # user stops after it went to low trust says so on its line.
+    watch.trust_now = getattr(record, "trust_now", None)
     # v1.393.0: a turn that carries the reply on with another account of the
     # group names both accounts on its line.
     watch.account_move = dict(account_move) if isinstance(account_move, dict) and account_move else None
