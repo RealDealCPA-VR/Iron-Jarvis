@@ -55,6 +55,15 @@ that event and a ``max_output_tokens`` stop class — and it used to raise
 tool call whose arguments never closed is reported by name in ``cut_calls``
 and NEVER run (the lanes' cut-off recovery, v1.387.0) — the same reading as
 the ChatGPT backend's (``openai._incomplete_for_tokens``).
+
+A WHOLE REPLY'S ARGUMENTS GO THROUGH THE ONE RECOVERY LADDER (v1.424.0
+review): a tool call's arguments are read by ``core/jsonish.loads_object`` and
+peeled of the ``{"arguments": "<json>"}`` envelope (:func:`_call_arguments`),
+as the OpenAI adapter reads them. Arguments nothing can read used to become
+``{}`` — a call with invented empty arguments that a tool whose every
+argument is optional would simply run. Such a reply now ends in one plain
+sentence ("…whose details could not be read, so nothing was run") and runs
+NOTHING (:func:`_unreadable_call_error`).
 """
 
 from __future__ import annotations
@@ -71,6 +80,7 @@ from .base import (
     LLMAdapter,
     LLMMessage,
     LLMResponse,
+    ProviderError,
     ToolCall,
     complete_arguments,
     provider_error_from_response,
@@ -128,6 +138,54 @@ def output_cap(model: str, home: str | Path | None = None) -> int | None:
         return _positive(every.get("max_completion_tokens"))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _call_arguments(raw: Any) -> dict[str, Any] | None:
+    """A WHOLE reply's tool-call arguments through the ONE recovery ladder
+    (``core/jsonish.loads_object``: fences, prose around the object, trailing
+    commas, single quotes — v1.225.0) and the ``{"arguments": "<json>"}``
+    envelope peel (v1.228.0), as the OpenAI adapter reads them. ``{}`` for a
+    call that sent no arguments at all; None when nothing readable is there
+    (v1.424.0 review). Never raises."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        args: Any = raw
+    elif not isinstance(raw, str):
+        return None
+    elif not raw.strip():
+        return {}
+    else:
+        try:
+            args = json.loads(raw)
+        except ValueError:
+            args = None
+        if not isinstance(args, dict):
+            from ...core.jsonish import loads_object
+
+            args = loads_object(raw)
+    if not isinstance(args, dict):
+        return None
+    from ...core.jsonish import unwrap_arguments
+
+    args = unwrap_arguments(args)
+    return args if isinstance(args, dict) else None
+
+
+def _unreadable_call_error() -> ProviderError:
+    """The refusal for a whole reply holding a tool call whose arguments
+    could not be read (v1.424.0 review): nothing was run, said in plain words
+    (``plain_words``), and never moved to another model (``no_failover`` —
+    the owner's decision D1; it is not Grok being down)."""
+    err = ProviderError(
+        "grok-cli: Grok wrote a tool call whose details could not be read, "
+        "so nothing was run.",
+        transient=False,
+    )
+    err.plain_words = True  # type: ignore[attr-defined]
+    err.no_failover = True  # type: ignore[attr-defined]
+    err.failed_provider = "grok-cli"  # type: ignore[attr-defined]
+    return err
 
 
 def _cut_for_tokens(response: Any) -> bool:
@@ -303,6 +361,9 @@ class GrokCliAdapter(LLMAdapter):
         tool_calls: list[ToolCall] = []
         #: v1.424.0 (D7): the calls the limit cut mid-arguments — never run.
         cut_calls: list[str] = []
+        #: v1.424.0 review: calls in a WHOLE reply whose arguments could not
+        #: be read at all — never run, said in words below.
+        unreadable: list[str] = []
         for item in completed.get("output") or []:
             kind = item.get("type")
             if kind == "message":
@@ -321,10 +382,14 @@ class GrokCliAdapter(LLMAdapter):
                     # write half a file. Named, so the lanes continue the turn.
                     cut_calls.append(str(item.get("name") or ""))
                     continue
-                try:
-                    args = json.loads(args_str) if args_str else {}
-                except json.JSONDecodeError:
-                    args = {}
+                args = _call_arguments(args_str)
+                if args is None:
+                    # v1.424.0 review: arguments no rung of the recovery
+                    # ladder can read. They used to become ``{}`` — a call
+                    # with INVENTED empty arguments (a tool whose every
+                    # argument is optional would just run). Never run.
+                    unreadable.append(str(item.get("name") or ""))
+                    continue
                 tool_calls.append(
                     ToolCall(
                         id=item.get("call_id") or item.get("id") or "",
@@ -332,6 +397,8 @@ class GrokCliAdapter(LLMAdapter):
                         arguments=args,
                     )
                 )
+        if unreadable:
+            raise _unreadable_call_error()
         usage = completed.get("usage") or {}
         if cut:
             finish = "max_tokens"
