@@ -321,7 +321,10 @@ describe("the view", () => {
     H.postReply["/build/app/sessions"] = sess("n1");
     H.gets["/build/app/sessions/n1"] = { session: sess("n1"), events: [], running: false, pending: [] };
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-start-tool"));
+    // v1.423.0: the chip is disabled until the tool list loads; a click on a
+    // disabled button dispatches nothing — wait for it to be enabled first.
+    await waitFor(() => expect(screen.getByTestId("code-start-tool")).not.toBeDisabled(), { timeout: 10_000 });
+    fireEvent.click(screen.getByTestId("code-start-tool"));
     const row = await screen.findByTestId("code-start-tool-pi");
     expect(row.dataset.available).toBe("true");
     fireEvent.click(row);

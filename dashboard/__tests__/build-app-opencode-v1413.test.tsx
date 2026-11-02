@@ -307,7 +307,14 @@ describe("the view", () => {
     H.postReply["/build/app/sessions"] = sess("n1");
     H.gets["/build/app/sessions/n1"] = { session: sess("n1"), events: [], running: false, pending: [] };
     render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
-    fireEvent.click(await screen.findByTestId("code-start-tool"));
+    // v1.423.0: the tool chip is DISABLED until the tool list has loaded, and
+    // a click on a disabled button dispatches nothing — on the Release gate's
+    // smaller machine the click landed first and the menu never opened (a
+    // 1.5 s hold on the list reproduced its exact error). Wait for the chip
+    // to be ENABLED, the precondition the click needs.
+    const toolChip = await screen.findByTestId("code-start-tool");
+    await waitFor(() => expect(toolChip).not.toBeDisabled(), { timeout: 10_000 });
+    fireEvent.click(toolChip);
     fireEvent.click(await screen.findByTestId("code-start-tool-opencode"));
     await waitFor(() => expect(screen.getByTestId("code-start-account-own").textContent).toBe("OpenCode's own sign-in"));
     expect(screen.getByTestId("code-start-account-own").getAttribute("title")).toBe(OC_HINT);
