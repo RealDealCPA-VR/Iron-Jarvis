@@ -4,6 +4,7 @@
 // threads stay the star. Two columns on lg: your (dynamic) agents and remote
 // agents. Collapsed by default; the open state persists in localStorage.
 
+import { AccountChoice } from "@/components/AccountChoice";
 import {
   type ReactNode,
   useCallback,
@@ -974,6 +975,11 @@ function DynamicRow({
   // user touched them, like the deny list and the skills.
   const [roles, setRoles] = useState<string[]>([]);
   const [rolesDirty, setRolesDirty] = useState(false);
+  // v1.424.0 (D6): the Iron-Proxy account its runs use ("" = Iron-Proxy's
+  // pick) — any custom agent's now, not only a team member's; sent only
+  // when the user touched it.
+  const [accountPick, setAccountPick] = useState("");
+  const [accountDirty, setAccountDirty] = useState(false);
   // The day off: Pause opens a one-line reason box; Resume needs no words.
   const [pausing, setPausing] = useState(false);
   const [pauseReason, setPauseReason] = useState("");
@@ -1096,6 +1102,8 @@ function DynamicRow({
     setSkillsDirty(false);
     setRoles([...(agent.roles ?? [])]);
     setRolesDirty(false);
+    setAccountPick(agent.account ?? "");
+    setAccountDirty(false);
     setEditing(true);
     if (storedTools.length > 0) void loadCatalog();
   }
@@ -1168,6 +1176,7 @@ function DynamicRow({
       if (denyDirty) body.deny_tools = [...deny];
       if (skillsDirty) body.skills = [...skills];
       if (rolesDirty) body.roles = [...roles];
+      if (accountDirty) body.account = accountPick;
       await patch(`/agents/${encodeURIComponent(agent.name)}`, body);
       setEditing(false);
       onChanged();
@@ -1437,6 +1446,19 @@ function DynamicRow({
                 ))}
               </select>
             </label>
+            {/* v1.424.0 (D6): the account its runs use, for a model on
+                Claude Code, Codex or Grok (drawn only then). */}
+            <AccountChoice
+              provider={modelPick ? modelPick.split("|")[0] : ""}
+              models={models}
+              value={accountPick}
+              onChange={(next) => {
+                setAccountPick(next);
+                setAccountDirty(true);
+              }}
+              testId={`agent-account-${agent.name}`}
+              ariaLabel={`Account for ${agent.name}`}
+            />
             <EmployeeFields
               draft={draft}
               onChange={setDraft}

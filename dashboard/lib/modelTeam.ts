@@ -59,7 +59,7 @@ export interface TeamMember {
   roles: string[];
   account: string;
   accountName: string;
-  /** "claude" / "codex" when its model runs on that subscription (its
+  /** "claude" / "codex" / "grok" when its model runs on that subscription (its
    *  account picker lists that vendor's accounts); "" otherwise. */
   vendor: string;
   usage: TeamUsage | null;
@@ -158,7 +158,8 @@ export function decodeMember(raw: unknown): TeamMember | null {
     roles: cleanRoles(r.roles),
     account: str(r.account, 120),
     accountName: str(r.account_name, 120),
-    vendor: r.vendor === "claude" || r.vendor === "codex" ? r.vendor : "",
+    // v1.424.0 (D6): a Grok member has accounts too.
+    vendor: r.vendor === "claude" || r.vendor === "codex" || r.vendor === "grok" ? r.vendor : "",
     usage: decodeUsage(r.usage),
     available: typeof r.available === "boolean" ? r.available : null,
     paused: r.paused === true,

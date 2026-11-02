@@ -301,7 +301,7 @@ async def test_groups_are_saved_through_the_writer_and_shown_on_the_card(app, fa
     ({"Work": ["c-work"], "Home": ["c-work"]}, "in one group only"),
     ({"x" * 41: ["c-work"]}, "at most 40 characters"),
     ({"": ["c-work"]}, "give every group a name"),
-    ({"Work": ["nobody"]}, "no Claude Code or Codex account “nobody”"),
+    ({"Work": ["nobody"]}, "no Claude Code, Codex or Grok account “nobody”"),
     ({"Work": "c-work"}, "list the accounts"),
 ])
 async def test_a_bad_group_is_refused_in_words(app, fake, groups, words):

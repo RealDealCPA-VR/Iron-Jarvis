@@ -34,6 +34,9 @@ export interface NightTask {
   model: string;
   team: boolean;
   tryOn: NightPick[];
+  /** v1.424.0 (D6): the account its session runs on ("" = its vendor's
+   *  Default; an older Iron Jarvis sends none). */
+  account: string;
   state: NightState;
   threadId: string;
   branch: string;
@@ -107,6 +110,7 @@ export function decodeTask(raw: unknown): NightTask | null {
     model: str(r.model, 300),
     team: r.team === true,
     tryOn: (Array.isArray(r.try_on) ? (r.try_on as unknown[]) : []).map(decodePick).filter((p): p is NightPick => p !== null),
+    account: str(r.account, 120),
     state,
     threadId: str(r.thread_id, 120),
     branch: str(r.branch, 300),
@@ -150,9 +154,12 @@ export interface NightDraft {
   model?: string;
   team?: boolean;
   tryOn?: NightPick[];
+  /** v1.424.0 (D6): the Iron-Proxy account its session runs on ("" / absent
+   *  = its vendor's Default). */
+  account?: string;
 }
 
-function draftBody(d: NightDraft): Record<string, unknown> {
+function draftBody(d: NightDraft, edit = false): Record<string, unknown> {
   return {
     folder: d.folder,
     words: d.words,
@@ -160,6 +167,10 @@ function draftBody(d: NightDraft): Record<string, unknown> {
     model: d.model ?? "",
     team: !!d.team,
     try_on: (d.tryOn ?? []).map((p) => ({ provider: p.provider, model: p.model })),
+    // v1.424.0 (D6): an account rides when one is chosen; an edit also sends
+    // "" (a cleared choice), a new task none at all (the body an older Iron
+    // Jarvis already took).
+    ...(d.account || (edit && d.account !== undefined) ? { account: d.account } : {}),
   };
 }
 
@@ -168,7 +179,7 @@ export async function addNight(d: NightDraft): Promise<NightTask | null> {
 }
 
 export async function editNight(id: string, d: NightDraft): Promise<NightTask | null> {
-  return decodeTask(await patch<unknown>(`/build/night/${encodeURIComponent(id)}`, draftBody(d)));
+  return decodeTask(await patch<unknown>(`/build/night/${encodeURIComponent(id)}`, draftBody(d, true)));
 }
 
 export function removeNight(id: string): Promise<unknown> {

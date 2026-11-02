@@ -554,7 +554,11 @@ export function decodeSessionView(raw: unknown): BuildSessionView | null {
       .filter((q): q is QueuedItem => q !== null),
     turnId: str(r.turn_id, 80),
     account: r.account ?? null,
-    accountVendor: r.account_vendor === "claude" || r.account_vendor === "codex" ? r.account_vendor : "",
+    // v1.424.0 (D6): a Grok session has an account too.
+    accountVendor:
+      r.account_vendor === "claude" || r.account_vendor === "codex" || r.account_vendor === "grok"
+        ? r.account_vendor
+        : "",
     accountLimit: r.account_limit ?? null,
     accountWait: r.account_wait ?? null,
     knowsAccounts: "account_limit" in r || "account_wait" in r || "account" in r,

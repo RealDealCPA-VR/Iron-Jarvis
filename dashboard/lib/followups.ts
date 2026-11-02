@@ -34,6 +34,10 @@ export interface FollowupBody {
   model?: string;
   local_only?: boolean;
   thread_id?: string;
+  /** v1.424.0 (review): the Iron-Proxy account the reply RAN on (its
+   *  route's `account.id`): the suggestions are asked of that same account,
+   *  never Iron-Proxy's first free one. Absent = none. */
+  account?: string;
 }
 
 /** The request body: the last six usable messages, each cut to 4000 chars.
@@ -42,7 +46,7 @@ export function followupBody(
   messages: readonly FollowupMessage[],
   provider?: string,
   model?: string,
-  chat: { localOnly?: boolean; threadId?: string } = {},
+  chat: { localOnly?: boolean; threadId?: string; account?: string } = {},
 ): FollowupBody {
   const usable = (Array.isArray(messages) ? messages : []).filter(
     (m): m is FollowupMessage =>
@@ -61,6 +65,7 @@ export function followupBody(
   if (model) body.model = model;
   if (chat.localOnly) body.local_only = true;
   if (chat.threadId) body.thread_id = chat.threadId;
+  if (chat.account) body.account = chat.account;
   return body;
 }
 
@@ -89,12 +94,13 @@ export async function fetchFollowups(
   messages: readonly FollowupMessage[],
   provider?: string,
   model?: string,
-  opts: { signal?: AbortSignal; localOnly?: boolean; threadId?: string } = {},
+  opts: { signal?: AbortSignal; localOnly?: boolean; threadId?: string; account?: string } = {},
 ): Promise<string[]> {
   try {
     const body = followupBody(messages, provider, model, {
       localOnly: opts.localOnly,
       threadId: opts.threadId,
+      account: opts.account,
     });
     if (!body.messages.length) return [];
     const res = await post<unknown>("/chat/followups", body, {

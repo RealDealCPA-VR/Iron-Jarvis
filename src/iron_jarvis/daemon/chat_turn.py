@@ -41,7 +41,6 @@ import contextlib
 import contextvars
 import json as _json
 import logging
-import os as _os
 import re as _re
 import threading as _threading
 import time as _time
@@ -7635,8 +7634,10 @@ _CODEX_CATALOG_LOCK = _threading.Lock()
 
 
 def _codex_home() -> Path:
-    override = (_os.environ.get("CODEX_HOME") or "").strip()
-    return Path(override) if override else Path.home() / ".codex"
+    # v1.424.0: ONE rule for where Codex keeps its files (codex_models).
+    from ..providers.codex_models import codex_home
+
+    return codex_home()
 
 
 def refresh_codex_windows() -> "dict[str, int] | None":
@@ -7644,28 +7645,26 @@ def refresh_codex_windows() -> "dict[str, int] | None":
     keep ``{model id: effective window}`` (``context_window`` x
     ``effective_context_window_percent``). BLOCKING (a ~300 KB file): called
     on a background thread by :func:`codex_context_window`, or directly by a
-    test. Never raises; None when the file is missing or unreadable."""
+    test. Never raises; None when the file is missing or unreadable.
+
+    v1.424.0 (D2): the file is parsed by ``providers.codex_models`` — the ONE
+    reader the model menus and Build › Code's Codex list read too — and this
+    one reading also refreshes theirs."""
     rows: "dict[str, int] | None" = None
     try:
-        path = _codex_home() / "models_cache.json"
-        if path.is_file() and path.stat().st_size <= 8_000_000:
-            data = _json.loads(path.read_text(encoding="utf-8"))
-            models = data.get("models") if isinstance(data, dict) else data
+        from ..providers import codex_models as _codex_models
+
+        data = _codex_models.read_catalog(_codex_home())
+        if data is not None:
             rows = {}
-            for m in models if isinstance(models, list) else []:
-                if not isinstance(m, dict):
+            for m in data["models"]:
+                win = m.get("window")
+                if not isinstance(win, int) or win <= 0:
                     continue
-                slug = str(m.get("slug") or m.get("id") or "").strip()
-                win = m.get("context_window")
-                if not slug or not isinstance(win, int) or isinstance(win, bool) or win <= 0:
-                    continue
-                pct = m.get("effective_context_window_percent")
-                if isinstance(pct, (int, float)) and not isinstance(pct, bool) and 0 < pct <= 100:
-                    win = int(win * pct / 100)
-                if m.get("visibility") in (None, "list"):
-                    rows[slug] = win
+                if m.get("listed"):
+                    rows[m["id"]] = win
                 else:
-                    rows.setdefault("\x00hidden:" + slug, win)
+                    rows.setdefault("\x00hidden:" + m["id"], win)
     except Exception:  # noqa: BLE001 — an unreadable catalog is "use the table"
         log.debug("reading Codex's model catalog failed", exc_info=True)
         rows = None
@@ -9121,19 +9120,116 @@ async def local_only_scope_for(platform, body) -> "_egress.LocalOnlyScope":
         return _egress.make_scope(False)
     once = str(getattr(body, "allow_cloud_once", "") or "").strip()
     if once:
-        chosen = (getattr(body, "provider", "") or "").strip()
-        if not chosen:
-            pid = (getattr(body, "project_id", "") or "").strip()
-            try:
-                proj = await asyncio.to_thread(_load_project, platform, pid) if pid else None
-            except Exception:  # noqa: BLE001 — no project: the default decides
-                proj = None
-            chosen = (getattr(proj, "default_provider", "") or "").strip() if proj else ""
-        if not chosen:
-            chosen = str(getattr(platform.config, "default_provider", "") or "").strip()
+        chosen = await chosen_provider_for(platform, body)
         if once.lower() != chosen.lower():
             once = ""
     return _egress.make_scope(True, once)
+
+
+async def chosen_provider_for(platform, body) -> str:
+    """The provider one chat turn is CHOSEN to run on: the body's pick, else
+    the project's default, else the configured default — the ladder the
+    lanes route by (lifted out of :func:`local_only_scope_for` in v1.424.0,
+    which reads it too). A project read off the loop; never raises."""
+    chosen = (getattr(body, "provider", "") or "").strip()
+    if not chosen:
+        pid = (getattr(body, "project_id", "") or "").strip()
+        try:
+            proj = await asyncio.to_thread(_load_project, platform, pid) if pid else None
+        except Exception:  # noqa: BLE001 — no project: the default decides
+            proj = None
+        chosen = (getattr(proj, "default_provider", "") or "").strip() if proj else ""
+    if not chosen:
+        chosen = str(getattr(getattr(platform, "config", None), "default_provider", "") or "").strip()
+    return chosen
+
+
+async def account_pin_for(platform, body):
+    """v1.424.0 (D6): the :class:`~iron_jarvis.iron_proxy.pin.AccountPin` of
+    the account the user chose for this chat (``body.account``), or None when
+    none was chosen — the turn then leases exactly as before. A choice
+    ``iron_proxy.choice.check`` refuses (Iron-Proxy off, an account it no
+    longer lists or has turned off, another vendor's account than the turn's
+    model) is a 409 in words BEFORE anything runs: nothing ever runs on
+    another login than the one chosen. Cached reads, off the loop. Both
+    lanes call this (MIRROR NOTE, lock-step)."""
+    from ..iron_proxy import choice as _choice
+
+    account = _choice.clean(getattr(body, "account", ""))
+    if not account:
+        return None
+    provider = await chosen_provider_for(platform, body)
+    model = (getattr(body, "model", "") or "").strip() if (getattr(body, "provider", "") or "").strip() else ""
+    pin, refusal = await asyncio.to_thread(_choice.pin_for, platform, account, provider, model, who="chat")
+    if pin is None:
+        raise HTTPException(status_code=409, detail=refusal)
+    return pin
+
+
+def _account_pinned_turn(turn):
+    """Run the POST lane's WHOLE turn on the account the user chose
+    (v1.424.0, D6): :func:`account_pin_for` decides, the pin is armed for the
+    turn (every lease it makes — the model pump, a tool's own model call,
+    the final-answer nudge — copies the context), and the response's route
+    ends with ``account: {id, name}``. No account chosen: the turn runs
+    exactly as before (nothing armed, nothing added). A decorator for the
+    reason :func:`_local_only_turn` is one. MIRROR NOTE (lock-step):
+    ``routes/chat.stream_chat_turn`` arms the same pin around the stream."""
+    import functools
+
+    @functools.wraps(turn)
+    async def pinned(platform, personas, body, *args, **kwargs):
+        pin = await account_pin_for(platform, body)
+        if pin is None:
+            return await turn(platform, personas, body, *args, **kwargs)
+        from ..iron_proxy import choice as _choice
+        from ..iron_proxy.pin import reset_pin, set_pin
+
+        token = set_pin(pin)
+        try:
+            out = await turn(platform, personas, body, *args, **kwargs)
+        finally:
+            reset_pin(token)
+        if isinstance(out, dict) and isinstance(out.get("route"), dict):
+            out["route"] = {**out["route"], "account": _choice.receipt(pin)}
+        return out
+
+    return pinned
+
+
+async def account_pinned_frames(frames, pin):
+    """*frames* (a stream lane's SSE chunks) iterated with the chosen
+    account's ``pin`` armed in the iterating task's context (the model pump
+    and the tool rounds the turn creates copy it), and the ``done`` frame's
+    route ending with ``account: {id, name}`` (v1.424.0, D6). Closing this
+    closes *frames*. MIRROR NOTE (lock-step): :func:`_account_pinned_turn`."""
+    from ..iron_proxy import choice as _choice
+    from ..iron_proxy.pin import reset_pin, set_pin
+    from . import durable_turns as _durable
+
+    token = set_pin(pin)
+    try:
+        async for chunk in frames:
+            if isinstance(chunk, str) and "done" in chunk:
+                parsed = _durable.parse_chunk(chunk)
+                if len(parsed) == 1 and parsed[0][0] == "done":
+                    try:
+                        data = _json.loads(parsed[0][1] or "{}")
+                    except ValueError:
+                        data = None
+                    if isinstance(data, dict):
+                        route = data.get("route") if isinstance(data.get("route"), dict) else None
+                        if route is not None:
+                            data["route"] = {**route, "account": _choice.receipt(pin)}
+                            chunk = _durable.sse("done", data)
+            yield chunk
+    finally:
+        try:
+            close = getattr(frames, "aclose", None)
+            if close is not None:
+                await close()
+        finally:
+            reset_pin(token)
 
 
 def _local_only_turn(turn):
@@ -9159,6 +9255,7 @@ def _local_only_turn(turn):
 
 
 @_counts_for_its_chat
+@_account_pinned_turn
 @_local_only_turn
 @_settles_its_prep
 async def run_chat_turn(

@@ -59,7 +59,7 @@ import type { ModelOption } from "@/lib/types";
 
 /** One company and the two ways a Build session reaches it. */
 export interface Company {
-  id: "claude" | "openai";
+  id: "claude" | "openai" | "grok";
   /** The group's name ("Claude (Anthropic)", "OpenAI") — from the provider
    *  words table (lib/onboarding FRIENDLY), never typed twice. */
   label: string;
@@ -74,6 +74,11 @@ export interface Company {
 export const COMPANIES: readonly Company[] = [
   { id: "claude", label: `Claude (${friendlyProvider("anthropic")})`, cli: "claude-cli", api: "anthropic", vendor: "claude" },
   { id: "openai", label: friendlyProvider("openai"), cli: "codex-cli", api: "openai", vendor: "codex" },
+  // v1.424.0 (D6): Grok's CLI accounts (Iron-Proxy's `xai`) can carry a
+  // session too, so Grok is a company: the Grok CLI (on your plan, one entry
+  // per account) and the xAI API (pay per use). No keyless fold: an `xai`
+  // name is always a key, never served by the CLI.
+  { id: "grok", label: `Grok (${friendlyProvider("xai")})`, cli: "grok-cli", api: "xai", vendor: "grok" },
 ];
 
 /** provider → its company (both ways). */
@@ -190,6 +195,25 @@ function accountsFor(
   return rows;
 }
 
+/**
+ * v1.424.0 (D6): every subscription CLI's account entries for this account
+ * list — the ONE rule both menus read (the harness's `companyMenu` below and
+ * the CHAT page's model menu, `components/chat/ModelMenu` `chatAccounts`):
+ * the vendor's accounts in Iron-Proxy's order, plus `current` (the
+ * session's / the chat's own) when the list leaves it out. A CLI with no
+ * account (Iron-Proxy off, nothing listed, an older Iron Jarvis) maps to
+ * null: its row is the one row it was.
+ */
+export function cliAccounts(
+  view: AccountsView | null | undefined,
+  current: BuildAccount | null,
+  now: Date = new Date(),
+): Map<string, MenuAccount[] | null> {
+  const out = new Map<string, MenuAccount[] | null>();
+  for (const co of COMPANIES) out.set(co.cli, accountsFor(co.vendor, view ?? null, current, now));
+  return out;
+}
+
 /** The catalog with a keyless API folded into the CLI that serves it. */
 export interface FoldedModels {
   /** The rows listed: a keyless API's model the CLI already lists is gone, one
@@ -301,8 +325,7 @@ export function companyMenu(
   // Iron-Proxy is on again, so the menu says why.
   const ip = vw?.ironProxy;
   const note = ip && (ip.needsUpdate || !ip.enabled) ? ip.note : "";
-  const accountsOf = new Map<string, MenuAccount[] | null>();
-  for (const co of COMPANIES) accountsOf.set(co.cli, accountsFor(co.vendor, vw, current, now));
+  const accountsOf = cliAccounts(vw, current, now);
 
   // ---- the entries, in the chat's order (local first, offline last): a
   // company takes the place of its best-ranked way.

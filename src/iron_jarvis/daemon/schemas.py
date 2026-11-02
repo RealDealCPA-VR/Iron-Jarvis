@@ -228,6 +228,18 @@ class SessionCreate(BaseModel):
     # to that chat through ``daemon.chat_append`` so the answer comes home
     # even when the user has left for another chat. "" = today's body.
     chat_thread_id: str = ""
+    #: v1.424.0 (review): the Iron-Proxy account the chat that hands this
+    #: work over runs on (``ChatBody.account``; "" = none). Checked by the
+    #: one rule (``iron_proxy.choice``: a 409 in words before any session),
+    #: kept in the run's options (``options["account"]``: a continue or rerun
+    #: keeps it) and armed for the WHOLE run by the runtime — every lease on
+    #: that account or a plain refusal, never another login.
+    account: str = ""
+
+    @field_validator("account", mode="before")
+    @classmethod
+    def _account_text(cls, v: Any) -> Any:
+        return "" if v is None else " ".join(str(v).split())[:120]
 
     @field_validator("origin")
     @classmethod
@@ -621,6 +633,20 @@ class ChatBody(BaseModel):
     #: ("" = none). Honoured only when it equals the turn's chosen provider
     #: and only for this turn; never remembered.
     allow_cloud_once: str = ""
+    #: v1.424.0 (D6): the Iron-Proxy account the user chose for this chat in
+    #: the model menu ("" = none: Iron-Proxy's normal pick, exactly as
+    #: before). BOTH lanes pin every lease of the turn to it
+    #: (``iron_proxy.pin.AccountPin`` — that account or a plain refusal,
+    #: never the next one) after ``iron_proxy.choice.check`` admits it: one
+    #: Iron-Proxy lists, turned on, of the vendor the turn's model runs on —
+    #: anything else is a 409 in words before the turn starts. The route
+    #: object then ends with ``account: {id, name}``.
+    account: str = ""
+
+    @field_validator("account", mode="before")
+    @classmethod
+    def _account_text(cls, v: Any) -> Any:
+        return "" if v is None else " ".join(str(v).split())[:120]
 
     @field_validator("allow_cloud_once", mode="before")
     @classmethod
@@ -670,6 +696,15 @@ class ChatCompactBody(BaseModel):
     #: local_only``'s rule: this OR the saved chat ``thread_id`` says so).
     local_only: bool = False
     thread_id: str = ""
+    #: v1.424.0 (review): the Iron-Proxy account the chat runs on
+    #: (``ChatBody.account``; "" = none): the summary is written on that
+    #: account, or refused in words (409) — never on another login.
+    account: str = ""
+
+    @field_validator("account", mode="before")
+    @classmethod
+    def _account_text(cls, v: Any) -> Any:
+        return "" if v is None else " ".join(str(v).split())[:120]
 
 
 class ChatRememberBody(BaseModel):

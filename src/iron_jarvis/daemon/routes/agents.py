@@ -1921,7 +1921,7 @@ def register(app: FastAPI, d) -> None:
         if not served:
             return (
                 f"'{row['name']}' is a {row['vendor_label']} account, and an account only "
-                "applies to an agent that runs on Claude Code or Codex — pick its model first"
+                "applies to an agent that runs on Claude Code, Codex or Grok — pick its model first"
             )
         if served != row["provider"]:
             return (
@@ -4684,6 +4684,12 @@ def register(app: FastAPI, d) -> None:
             reason = await asyncio.to_thread(refusal_for, rec, d.platform.engine)
             if reason:
                 raise HTTPException(status_code=409, detail=reason)
+            # v1.424.0 (D6): the agent's OWN account (a team member's, or —
+            # new — any custom agent's) must be one the user's account groups
+            # allow, refused in words before a session row exists.
+            reason = await asyncio.to_thread(_team.account_refusal, d.platform, rec)
+            if reason:
+                raise HTTPException(status_code=409, detail=reason)
         # Parity with POST /sessions (v1.166.0): an explicit body.provider/model
         # wins; the dynamic record's pinned pair is the fallback.
         provider = body.provider or (rec.provider if (rec and rec.provider) else None)
@@ -4736,16 +4742,28 @@ def register(app: FastAPI, d) -> None:
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and
         # post-run learning + git review fire for spawned agents too — the old
         # hand-rolled inline runner here had none of that (v1.166.0).
+        def _run():
+            # v1.424.0 (D6): a custom agent that runs on its own model or names
+            # an account of its own runs INSIDE `member_scope` — its account
+            # pinned for every lease (the Agents page's Run button used to
+            # lease Iron-Proxy's first free account), a member's model held —
+            # entered in the run's own task (`run_as_member`), so a run the
+            # governor parks keeps it. Anyone else: exactly as before.
+            if rec is not None and (_team.runs_elsewhere(rec) or _team.has_own_account(rec)):
+                return _team.run_as_member(
+                    d.platform, rec,
+                    lambda: d.orchestrator.run_session(session.id, definition=definition),
+                )
+            return d.orchestrator.run_session(session.id, definition=definition)
+
         if body.wait:
-            session = await d.orchestrator.run_session(session.id, definition=definition)
+            session = await _run()
         else:
             # Non-blocking spawn: the UI jumps straight to the live session view
             # (parity with POST /sessions wait:false). A parked spawn returns
             # None (v1.167.0) — re-read the row so the response says QUEUED,
             # not a stale "active" for work that never started.
-            parked = d._spawn_bg(
-                session.id, d.orchestrator.run_session(session.id, definition=definition)
-            )
+            parked = d._spawn_bg(session.id, _run())
             if parked is None:
                 session = d.orchestrator.get_session(session.id) or session
         return _session_view(session, d)

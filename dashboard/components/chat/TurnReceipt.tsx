@@ -226,8 +226,10 @@ export interface TurnRoute {
   on_this_network?: boolean;
   /** v1.369.0 (IJ harness): the subscription ACCOUNT a Build session's turn
    *  ran on (Iron-Proxy's name for it, never an e-mail), and the daemon's
-   *  note when the call was sent again without earlier thinking. Absent on
-   *  every chat reply. */
+   *  note when the call was sent again without earlier thinking. v1.424.0
+   *  (D6): a plain chat's turn on the account the user chose carries it too
+   *  (`chat_turn.account_pinned_frames`); absent on a chat reply that ran on
+   *  no chosen account. */
   account?: { id?: string; name?: string; note?: string } | null;
   /** v1.387.0 (the reply budget): a reply this turn was cut off at the
    *  model's OUTPUT limit before a tool call was complete — how many, and

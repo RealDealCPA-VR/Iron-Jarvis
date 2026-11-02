@@ -2695,8 +2695,23 @@ def register(app: FastAPI, d) -> None:
             d.platform.engine, getattr(body, "local_only", False),
             getattr(body, "thread_id", ""),
         )
-        with _egress.local_only_scope(on):
-            return await _chat_compact(body)
+        # THE CHAT'S ACCOUNT (v1.424.0 review): a chat put on one Iron-Proxy
+        # account is summarized on THAT account (the turn's rule,
+        # ``chat_turn.account_pin_for``: the pin, or a 409 in words before
+        # any call) — never on Iron-Proxy's first free account. No account
+        # named: exactly as before (nothing armed).
+        pin = await _chat_turn.account_pin_for(d.platform, body)
+        if pin is None:
+            with _egress.local_only_scope(on):
+                return await _chat_compact(body)
+        from ...iron_proxy.pin import reset_pin, set_pin
+
+        token = set_pin(pin)
+        try:
+            with _egress.local_only_scope(on):
+                return await _chat_compact(body)
+        finally:
+            reset_pin(token)
 
     async def _chat_compact(body: ChatCompactBody) -> dict[str, Any]:
         """The compaction itself (see :func:`chat_compact`).
@@ -3338,6 +3353,13 @@ async def stream_chat_turn(
     # and every tool round the lane creates copy it. MIRROR NOTE (lock-step):
     # chat_turn.run_chat_turn runs under the same scope.
     _lo_scope = await _chat_turn.local_only_scope_for(platform, body)
+    # v1.424.0 (D6): the account the user chose for this chat — checked HERE,
+    # before the response opens (a refusal is the 409 the POST lane answers),
+    # and armed around the WHOLE stream by `account_pinned_frames`, in the
+    # task that iterates it. None (no account chosen): nothing armed, the
+    # stream exactly as before. MIRROR NOTE (lock-step):
+    # chat_turn.run_chat_turn (`_account_pinned_turn`).
+    _acct_pin = await _chat_turn.account_pin_for(platform, body)
     turn_id = str(getattr(body, "turn_id", "") or "").strip()
     handle = TURNS.register(turn_id) if turn_id else None
     if handle is not None and steer_source is None:
@@ -3372,6 +3394,8 @@ async def stream_chat_turn(
         # sees the call it always saw).
         **({"reply_cap": reply_cap} if reply_cap is not None else {}),
     ), _prep), _lo_scope))
+    if _acct_pin is not None:
+        inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
         # v1.328.0: the named turn's handle rides with the per-chat entry so
         # "Stop and archive" can stop exactly the turns running for the chat.

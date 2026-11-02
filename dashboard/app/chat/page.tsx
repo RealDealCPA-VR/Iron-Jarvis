@@ -403,6 +403,14 @@ import {
   modelTriggerOf,
   splitChoice,
 } from "@/components/chat/ModelMenu";
+import {
+  accountAfterPick,
+  accountForTurn,
+  chatAccountsFor,
+  readChatAccounts,
+  type ChatAccountPick,
+} from "@/lib/chatAccount";
+import type { AccountsView } from "@/lib/buildAccounts";
 // v1.356.0 (G75): the chat's controls in plain words, one place.
 import {
   COMPACTION_NOT_NOW_TITLE,
@@ -881,6 +889,7 @@ type ChatRequestBody = {
   page_context?: { title: string; path: string; text: string }; // v1.325.0: "Ask Jarvis about this page"
   thread_refs?: string[]; // v1.328.0: "@" → saved chats read as reference material (≤ 3 ids)
   local_only?: boolean; // v1.332.0: this chat is "local only" (sent every turn)
+  account?: string; // v1.424.0 (D6): the Iron-Proxy account this chat runs on
   allow_cloud_once?: string; // v1.332.0: the ONE provider the user let this turn reach
 };
 interface ChatResponse {
@@ -1310,6 +1319,10 @@ interface ThreadSetup {
    *  user's OK for that one message. The daemon stores `true` only (absent =
    *  off) and enforces it for every later turn of a saved chat. */
   local_only?: boolean;
+  /** v1.424.0 (D6): the Iron-Proxy account this chat runs on (absent = none:
+   *  Iron-Proxy's normal pick) and its name for the chip. */
+  account?: string;
+  account_name?: string;
 }
 
 /** The three approval postures (v1.188.0). Since v1.327.0 the words and the
@@ -4665,19 +4678,46 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       setDefaultNote((err as { message?: string })?.message || "Couldn't save the default.");
     }
   }
+  // v1.424.0 (D6): the Iron-Proxy ACCOUNT this chat runs on (null = none:
+  // Iron-Proxy's normal pick, exactly as before) — chosen in the model menu
+  // under Claude Code / Codex / Grok (lib/chatAccount), kept in the setup,
+  // sent on every turn for the provider it serves. The ref: sends fire from
+  // stale closures. The list is read when the menu OPENS (never polled).
+  const [chatAccount, setChatAccount] = useState<ChatAccountPick | null>(null);
+  const chatAccountRef = useRef<ChatAccountPick | null>(null);
+  const setChatAccountNow = (pick: ChatAccountPick | null) => {
+    chatAccountRef.current = pick;
+    setChatAccount(pick);
+  };
+  const [accountsView, setAccountsView] = useState<AccountsView | null>(null);
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    let live = true;
+    void readChatAccounts().then((view) => {
+      if (live) setAccountsView(view);
+    });
+    return () => {
+      live = false;
+    };
+  }, [modelMenuOpen]);
+  const chatAccounts = useMemo(() => chatAccountsFor(accountsView, chatAccount), [accountsView, chatAccount]);
   /** The ONE way a menu row picks: the choice and the thread setup (the
-   *  menu closes itself and remembers the pick — components/chat/ModelMenu). */
-  function pickModel(v: string) {
+   *  menu closes itself and remembers the pick — components/chat/ModelMenu).
+   *  v1.424.0: and the account it was picked under (lib/chatAccount). */
+  function pickModel(v: string, account?: string) {
     setDefaultNote("");
     setChoice(v);
+    setChatAccountNow(accountAfterPick(chatAccountRef.current, v, account, accountsView));
     markSetupChanged();
   }
   // The chip's words: the picker's label, the default named as itself, the
   // raw id in the inner title (components/chat/ModelMenu modelTriggerOf).
-  const modelTrigger = useMemo(
-    () => modelTriggerOf(choice, models, defaultProviderId, defaultModelName),
-    [choice, models, defaultProviderId, defaultModelName],
-  );
+  // v1.424.0: and the chat's account after the model ("Opus 4.8 · Work").
+  const modelTrigger = useMemo(() => {
+    const t = modelTriggerOf(choice, models, defaultProviderId, defaultModelName);
+    const acct = chatAccount && accountForTurn(chatAccount, choice) ? chatAccount : null;
+    return acct ? { ...t, account: acct.name || acct.id } : t;
+  }, [choice, models, defaultProviderId, defaultModelName, chatAccount]);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -5304,6 +5344,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       }
       if (choice === "" && p.default_provider && p.default_model) {
         setChoice(`${p.default_provider}::${p.default_model}`);
+        setChatAccountNow(null); // v1.424.0: an account rides only its own pick
       }
     }
   }
@@ -5673,6 +5714,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       local_only: localOnlyRef.current,
       approval_mode: approvalMode,
       reasoning,
+      // v1.424.0 (D6): the chat's account (absent = none), via the ref.
+      ...(chatAccountRef.current
+        ? { account: chatAccountRef.current.id, account_name: chatAccountRef.current.name }
+        : {}),
     };
   }
 
@@ -6052,6 +6097,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
       setChoice(
         setup.provider && setup.model ? `${setup.provider}::${setup.model}` : "",
+      );
+      // v1.424.0 (D6): the chat comes back on the account it was left on.
+      setChatAccountNow(
+        typeof setup.account === "string" && setup.account && setup.provider
+          ? { id: setup.account, name: typeof setup.account_name === "string" ? setup.account_name : "", provider: setup.provider }
+          : null,
       );
       setReasoning(REASONING_LEVELS.includes(setup.reasoning ?? "") ? (setup.reasoning as string) : "");
       sendSetupRef.current = true;
@@ -7877,6 +7928,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // the daemon refuses (409) and the sentence shows below.
         ...(localOnlyRef.current ? { local_only: true } : {}),
         ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
+        // v1.424.0 review: a chat kept on one account is summarized on THAT
+        // account (the turn's rule: only while the chat's model is on the
+        // CLI it serves) — never on Iron-Proxy's first free one.
+        ...(accountForTurn(chatAccountRef.current, choice)
+          ? { account: accountForTurn(chatAccountRef.current, choice) }
+          : {}),
       });
       setContextUsage((u) =>
         u ? { ...u, level: "ok", compacted: true, covers: res.covers } : u,
@@ -7993,6 +8050,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // stale closures). The daemon enforces it; it also reads the saved
       // chat's own setup, so a stale window cannot turn it off.
       local_only: localOnlyRef.current,
+      // v1.424.0 (D6): the chat's account, only for a turn on the provider it
+      // serves (lib/chatAccount accountForTurn). Absent otherwise — a body an
+      // older daemon already understands.
+      ...(accountForTurn(chatAccountRef.current, turnChoice)
+        ? { account: accountForTurn(chatAccountRef.current, turnChoice) }
+        : {}),
     };
   }
 
@@ -8385,7 +8448,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       route?.provider || undefined,
       route?.model || undefined,
       // v1.332.0: a "local only" chat gets no suggestions from a cloud reply.
-      { localOnly: localOnlyRef.current, threadId: saveTargetRef.current.id ?? undefined },
+      // v1.424.0 review: and they are asked of the account the reply RAN on
+      // (the daemon's route.account), never Iron-Proxy's first free one.
+      {
+        localOnly: localOnlyRef.current,
+        threadId: saveTargetRef.current.id ?? undefined,
+        account: typeof route?.account?.id === "string" && route.account.id ? route.account.id : undefined,
+      },
     ).then((items) => {
       if (chatGenRef.current !== gen || !items.length) return;
       setFollowups({ forLen: len, items });
@@ -9651,6 +9720,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               wait: false,
               ...(provider ? { provider } : {}),
               ...(model ? { model } : {}),
+              // v1.424.0 review: THE CHAT'S ACCOUNT RIDES THE HAND-OFF — the
+              // agent continues this chat's work on the account the chat runs
+              // on (the daemon checks it, keeps it for a continue, and pins
+              // every lease of the run), never Iron-Proxy's first free one.
+              // Only while the chat's model is on the CLI it serves.
+              ...(accountForTurn(chatAccountRef.current, choice)
+                ? { account: accountForTurn(chatAccountRef.current, choice) }
+                : {}),
               // Context spine: the run lands in the selected project (continues
               // inherit it server-side, so only the opener needs the tag).
               ...(projectIdRef.current
@@ -14112,6 +14189,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           localOnlyLine={localOnly ? LOCAL_ONLY_MODEL_MENU_LINE : null}
                           onMakeDefault={() => void makeDefault()}
                           defaultNote={defaultNote}
+                          chatAccounts={chatAccounts}
                         />
                         {/* Mic — dictate into the composer (daemon-transcribed in the
                             desktop app, Web Speech in a browser). */}

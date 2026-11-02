@@ -69,6 +69,92 @@ log = logging.getLogger("ironjarvis.codex_native")
 #: Model ids that mean "Codex's own default" (no ``model`` on thread/start).
 PLACEHOLDER_MODELS = ("", "subscription", "default", "auto")
 
+#: v1.424.0 (D2): the effort words Codex takes from Iron Jarvis. ``xhigh``
+#: ("Extra") joins low/medium/high — offered only for a model whose own entry
+#: in Codex's list names it (``providers.reasoning`` / ``codex_models``); the
+#: router never sends a level the serving model was not offered.
+WIRE_EFFORTS = ("low", "medium", "high", "xhigh")
+
+
+def _effort_on_the_wire(reasoning: str) -> str:
+    return reasoning if reasoning in WIRE_EFFORTS else ""
+
+
+class CodexModelNotOffered(ProviderError):
+    """v1.424.0 (D2): the model asked for is not one Codex's own list holds.
+    Never transient, never failed over from (``no_failover``): a model the
+    user picked is never silently swapped for another."""
+
+    no_failover = True
+
+    def __init__(self, model: str, words: str) -> None:
+        super().__init__(f"{P.PROVIDER}: {words}", transient=False)
+        self.model = model
+        self.no_failover = True
+        self.failed_provider = P.PROVIDER
+
+
+def not_offered_error(model: Any, home: Any = None) -> "CodexModelNotOffered | None":
+    """The refusal for ``model`` when the list of the Codex home the call RUNS
+    IN (``home``; None = this app's own) is EVIDENCE and does not hold it;
+    None otherwise (nothing read, a stale list, a placeholder, a model it
+    holds — hidden rows included). v1.424.0 review: ONLY on positive
+    evidence (``codex_models.refuses``) — the first cut read this app's own
+    home for a call that runs on an Iron-Proxy account's home (another plan's
+    list), and believed a list of any age. Never raises; BLOCKING (another
+    home's list is read, and a refusal is confirmed on the file as it is
+    now) — call it off the loop."""
+    try:
+        from ... import codex_models
+
+        name = str(model or "").strip()
+        data = codex_models.refuses(name, home)
+        if data is None:
+            return None
+        offered = codex_models.offered_words(data=data)
+        words = (f"Codex doesn't offer {name} on this ChatGPT plan, so nothing was sent."
+                 + (f" Choose one of its models: {offered}." if offered else " Choose one of Codex's own models."))
+        return CodexModelNotOffered(name, words)
+    except Exception:  # noqa: BLE001 — unsure: sent as before
+        return None
+
+
+def _lease_home(lease: Any) -> "str | None":
+    """The Codex home a call on ``lease`` runs in: the account's own folder
+    (``CODEX_HOME`` set), the CLI's own default (an adopted account: the
+    variable UNSET — ``~/.codex``), or None for no lease (this app's own
+    environment: ``codex_models.codex_home``). v1.424.0 (review)."""
+    if lease is None:
+        return None
+    env_set = getattr(lease, "env_set", None) or {}
+    for key, value in env_set.items():
+        if str(key).upper() == "CODEX_HOME" and str(value or "").strip():
+            return str(value)
+    if any(str(k).upper() == "CODEX_HOME" for k in (getattr(lease, "env_unset", ()) or ())):
+        from ... import codex_models
+
+        return str(codex_models.cli_default_home())
+    return None
+
+
+def _surely_this_apps_home() -> bool:
+    """Will a call made now run in this app's own Codex home WITHOUT an
+    Iron-Proxy account (no pin, Iron-Proxy off)? Only then may the text-only
+    path (which leases inside ``codex exec``'s adapter) be refused up front.
+    Cached facts only; never raises (unsure = False)."""
+    try:
+        from ....iron_proxy import accounts as _accounts
+        from ....iron_proxy import pin as _pin
+        from ....iron_proxy import service as _svc
+
+        if _pin.current() is not None or getattr(_accounts, "_client_source", None) is not None:
+            return False
+        svc = _svc.current()
+        return svc is None or not bool(getattr(svc, "enabled", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 #: Codex's own sign-in environment variables (named once in the log, never valued).
 _AUTH_ENV = ("CODEX_API_KEY", "CODEX_ACCESS_TOKEN")
 _ENV_NOTED = False
@@ -368,6 +454,21 @@ class CodexNativeAdapter(LLMAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         from ....iron_proxy import accounts
 
+        # v1.424.0 (D2): a model Codex's OWN list does not hold (a stored pick
+        # of a curated API id such as gpt-4o, which a ChatGPT plan does not
+        # run) is refused in words BEFORE Codex starts — never sent to fail
+        # inside Codex, and never moved to another model or provider
+        # (``no_failover``). Nothing read (no list): sent as before.
+        # v1.424.0 review: ONLY on positive evidence — the list of the home
+        # the call RUNS IN, and only a recent one (``not_offered_error``). Up
+        # front only when that home is surely this app's own (no account pin,
+        # Iron-Proxy off); a call that leases an account is checked against
+        # THAT account's own list once the lease names it (below).
+        if _surely_this_apps_home():
+            # Off the loop: a refusal is confirmed on the file as it is now.
+            refused = await asyncio.to_thread(not_offered_error, self.model)
+            if refused is not None:
+                raise refused
         exe = await asyncio.to_thread(self._which, P.BINARY)
         if not exe:
             raise RuntimeError(f"{P.PROVIDER}: the 'codex' CLI is not installed/on PATH")
@@ -454,6 +555,15 @@ class CodexNativeAdapter(LLMAdapter):
             # login). Blocking HTTP: off the loop.
             lease = await asyncio.to_thread(accounts.lease, P.PROVIDER)
         while True:
+            # v1.424.0 review: the model is checked against the list of the
+            # home THIS lease runs in (an Iron-Proxy account's own folder holds
+            # its own plan's list — read off the loop), before Codex starts on
+            # it; outside the try, so a refusal is never sorted as an account
+            # limit. A model that account's recent list holds, or no evidence:
+            # sent as before.
+            refused = await asyncio.to_thread(not_offered_error, self.model, _lease_home(lease))
+            if refused is not None:
+                raise refused
             attempt = _Attempt()
             try:
                 async for frame in self._run_new(exe, key, lease, system, messages, tools, reasoning,
@@ -643,7 +753,7 @@ class CodexNativeAdapter(LLMAdapter):
         if problem:
             raise _Unsupported(problem, cache=False)
         S.set_verdict(key, True)
-        effort = reasoning if reasoning in ("low", "medium", "high") else ""
+        effort = _effort_on_the_wire(reasoning)
         try:
             turn = await s.request("turn/start", P.turn_start_params(s.thread_id, items, effort), timeout)
         except S.SessionGone:
@@ -688,7 +798,7 @@ class CodexNativeAdapter(LLMAdapter):
         (the finish note), no process start, nothing replayed."""
         seg = _Segment()
         timeout = float(S.START_TIMEOUT_S)
-        effort = reasoning if reasoning in ("low", "medium", "high") else ""
+        effort = _effort_on_the_wire(reasoning)
         try:
             try:
                 turn = await s.request("turn/start", P.turn_start_params(s.thread_id, items, effort), timeout)
