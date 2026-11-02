@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.422.4 (2026-11-01).*
+holds itself to. Current as of v1.423.0 (2026-11-01).*
 
 ---
 
@@ -2445,6 +2445,51 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## Your team's reviews are kept, and a report for fixing Iron Jarvis (v1.423.0)
+
+- **What your reviewers found is kept.** When a coding session's reviewer
+  checks a change, each problem it lists ("R1. app.py:12 — what is wrong —
+  what to change") is now kept and credited to the team member whose work
+  changed that file. The lead answers each one on its own line — "R1 fixed"
+  or "R2 does not apply: why" — and those lines stay in the reply you read.
+  When the reply ends, every problem is settled: "fixed" counts as confirmed
+  only when a later piece of work really changed that file (otherwise it is
+  kept as "said fixed"), and a problem nobody answered stays "not answered".
+- **Settings › Models › Model team** shows each member's last 30 days in one
+  quiet line, for example "Reviewers' findings (30 days): 6 confirmed, 1 did
+  not apply · first-pass approval 3 of 7". First-pass approval counts the
+  replies where the reviewer approved that member's first piece. There is no
+  line when there is nothing to say. Only problems Jarvis asked the lead to
+  answer at the reply's finish check are counted; a review the lead hands out
+  itself is kept but not counted.
+- **Nothing is kept from what reads like an instruction.** A reviewer's report
+  that reads like an instruction gives no verdict and no finding; nothing is
+  kept from a low-trust reviewer or reply; a single problem whose words read
+  like an instruction is left out; keys and passwords are hidden in every line
+  that is kept. A finding names one file of the reply: an exact name always
+  wins, and a name that two of the reply's files end with is credited to no
+  one and confirmed by nothing.
+- **Copy as a fix request.** Settings › Models › Model team, and a coding
+  session's Session tab, have a quiet "Copy as a fix request" button. It
+  copies a report of the problems Iron Jarvis's own coding sessions and model
+  team ran into in the last 7 days (or in that one session): a command the
+  shell could not run, a tool a worker kept calling wrong, a helper that could
+  not start or failed, the team router finding no one, a reply cut off at its
+  output limit, a team review that did not run. Each problem says where it
+  happened, what was seen, what was expected, which part of Iron Jarvis owns
+  it, and up to three examples. Paste it to the coding agent that works on
+  Iron Jarvis.
+  - It says how many it copied ("Copied: 15 of 60 problems …" when the report
+    could not hold them all), and says when something could not be read
+    instead of "Nothing to report".
+  - Your own choices (a card you declined, a Stop, your own rules) and your
+    own code's failures (a test that ran and failed) are left out, and so is
+    anything a low-trust run read. A failed command shows only the shell's own
+    error, never what else it printed, and a write or edit shows a file's size,
+    never its text.
+  - Secrets are masked, but the report still holds your commands, file paths
+    and errors: read it before you paste it anywhere.
 
 ## Never lose work (v1.422.0)
 

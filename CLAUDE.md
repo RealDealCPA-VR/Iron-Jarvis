@@ -13478,6 +13478,89 @@ does not need a bump, stop and bump it.
   comes fails the new wait (not vacuous). Another instance of the waitFor
   rule: a button whose LABEL changes while it works is not gone.
 
+- **A reviewer's findings are RECORDS; only a LATER write confirms a fix;
+  "Copy as a fix request" reads the records, never a model** (v1.423.0, Wave 3
+  round 1 of `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`, Team notes Phase 1b +
+  the owner's fix-request report; two builders + two reviewers that found 17
+  more defects, each pinned red first and mutation-checked).
+  FINDINGS (`agents/team_findings.py`, late model `TeamFinding`, table
+  `teamfinding`): `parse_findings` reads `finish.FINDING_RX` lines (never the
+  last line, duplicates keep the first, at most `MAX_REVIEW_FINDINGS`, split at
+  "—", "–" or " - ", a drive letter's colon is not a line number);
+  `parse_answers` reads the lead's `R1 fixed` / `R2 does not apply: <why>`
+  (the answer is the FIRST word, "R3 not fixed" answers nothing, a number said
+  both ways stays open, `>` quotes / fences / a quoted finding line are not
+  answers). THE PARSERS ARE LINEAR (atomic groups, `(?<!\s)` runs, lines bounded
+  by `FINDING_LINE_CHARS` / `ANSWER_LINE_CHARS`, masked before the cut): the
+  first answer pattern backtracked EXPONENTIALLY and `combine()` runs it ON THE
+  EVENT LOOP — any new regex over model text gets a pathological-input pin in a
+  child process with a deadline. `model_team.note_piece` stores findings under
+  EXACTLY the verdict's conditions (finished, not `_runtime_wrote`, not
+  `_low_trust`) and reads NOTHING from a report `detect_injection` flags as a
+  whole (`_report_flagged`; unscannable = flagged — it used to credit such a
+  report's verdict); each finding is masked before the cut and
+  promptguard-scanned (flagged = dropped). `team_findings.resolve_path` is the
+  ONE path rule (an exact name wins; a suffix only when it is the only candidate
+  file of the reply) for attribution (the newest non-review piece of the same
+  scope AND turn before the review row whose `files_json` holds the path) and
+  confirmation. `FinishCheck` keeps one ANSWER WINDOW per review note that
+  showed a report (a flagged or low-trust review opens a dead window, so its R
+  numbers never answer an earlier review), `heard` appends later model text
+  (bounded), `record(low_trust=)` settles by `review_session` (both lanes pass
+  `finish_low_trust(_trust_state)`, lock-step): FIXED only when a later piece
+  (same scope + turn, after the review row, not a review) wrote that path — or,
+  for a finding with no member, the session's own journaled write after the
+  review — else SAID_FIXED; nothing is read at low trust. `ANSWER_FORM_ASK` ends
+  `REVIEW_ASK` / `TEAM_REVIEW_ASK`; `combine` puts earlier-round answer lines
+  back above the closing words. `TeamFinding.asked` (set by `mark_asked` when
+  the finish note SHOWS the report) gates every count — a review the lead hands
+  out itself, or a mission's, is kept but never counted; A NEW READER MUST
+  FILTER IT (go through `findings_for` / `member_findings`, 30-day default or an
+  explicit `since`/`until`). `GET /team` rows carry `findings`; the card line is
+  `team-findings-<name>` (`lib/modelTeam.findingsWords`: zeros = no line, an
+  older daemon = null). OPEN: answer windows live in memory (a restart, a
+  low-trust end or a Stop leaves findings asked and open — never wrongly fixed);
+  the lead's own writes are not attribution candidates; the CI-fix reviewer is
+  not recorded.
+  FIX REQUEST (`agents/fix_request.py`; route `daemon/routes/fix_request.py`
+  `GET /team/fix-request?days=1..30&session=`, a sync def, 404 in words for an
+  unknown session, an unreadable source named in the report and never a 500,
+  answer `{text, problems, listed, complete, since, until, sessions}`):
+  `gather` is BLOCKING, bounded, never raises except `UnknownSession`; `render`
+  is PURE, pinned by `tests/fixtures/fix_request_v14230.md`
+  (`IJ_REGEN_FIX_REQUEST=1`). ONE source per incident: failed `ToolInvocation`
+  rows of coding sessions, `job:build-helper` and `job:mission-member` (a
+  `delegate` row only when no run started), failed helper Session rows,
+  `autonomy.nudged` `text_tool_call` events, Build reply lines (error,
+  `route.cut_off` / `truncated`, `finish.review`); `provider.failed` is never
+  read; the finish check's team review has ONE record (the reply line's
+  `finish.review`; its `called_as "team review"` delegate row and review-only
+  helper run are skipped). LEFT OUT (the user's choices and work, not Iron
+  Jarvis's defects): `tool.denied` kinds of the user's or a policy's decision,
+  the registry's stop/cancel/restart notes, a command that RAN and exited
+  non-zero, a helper's sign-in / refused key / account limit / safety refusal
+  (`users_to_fix`); a command counts only when it could NOT run (not recognized,
+  wrong shell incl. Iron Jarvis's own bash hint, a guard, a timeout), the marker
+  read only where it IS the shell's message at the start of an output line
+  (checked against all 542 failed command rows of the owner's ledger), grouped
+  by marker, shown by its header and the shell's own message only
+  (`command_failure_words`) — never what else it printed. "Needs approval and
+  nothing here could ask" IS a problem (`ask_not_carried`). LOW TRUST FAILS
+  CLOSED: a lead's call whose session's lines cannot be read is left out and
+  counted. Args: where the call acted leads and is whole, other values over 80
+  chars become `<N characters>`, heredoc bodies stripped. Every value
+  `mask_failure_text` -> `promptguard.scan_context` -> cut, in that order. A new
+  kind needs a `KIND_TABLE` row (owner paths checked to exist). Dashboard
+  `components/team/FixRequestButton.tsx` (Settings › Models › Model team and a
+  coding session's Session tab) reads on press only, copies through
+  `MaintenanceTools.copyPlain`, says "Copied: 15 of 60 problems …", shows the
+  daemon's own line when `complete` is false, hides only on FastAPI's own "Not
+  Found"; its status line is never `sr-only`. OPEN: a low-trust reply the user
+  STOPPED has no `trust` on its line; `clean()`'s mask-fault branch is dead
+  (both go to Wave 3 round 2). Pins: `tests/test_team_findings{,_review}_v14230.py`,
+  `tests/test_fix_request{,_review}_v14230.py`,
+  `dashboard/__tests__/{team-findings,fix-request,fix-request-review}-v1423-0.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
