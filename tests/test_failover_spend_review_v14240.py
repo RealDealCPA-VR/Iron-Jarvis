@@ -260,3 +260,35 @@ async def test_a_worded_reason_of_a_run_says_it_was_not_moved():
     reason, _tech = FW.run_failure_words(info.value, provider="claude-cli")
     assert reason.startswith("Every Claude Code account is resting until 3 PM."), reason
     assert reason.endswith(SENTENCE_OPENAI), reason
+
+
+def test_a_fleet_node_on_this_network_is_free_and_one_outside_it_pays():
+    """The brief's list of "not pay per use", checked for the one kind the
+    builder's definition test did not drive: a fleet node, judged by its
+    ADDRESS (``egress.stays_on_this_network`` reads the node's base_url)."""
+
+    class _Node:
+        def __init__(self, url):
+            self.base_url = url
+
+    class _FleetAd:
+        def __init__(self, provider, url):
+            self.provider, self.model, self.node = provider, "glm", _Node(url)
+
+    adapters = {
+        "fleet-dgx": _FleetAd("fleet-dgx", "http://192.168.1.40:4000/v1"),
+        "fleet-cloud": _FleetAd("fleet-cloud", "https://api.example.com/v1"),
+    }
+
+    class _Mgr:
+        def get(self, p, model=None):
+            return adapters[p]
+
+        def inherited_from(self, p):
+            return None
+
+    mgr = _Mgr()
+    assert billing.billing_kind("fleet-dgx", mgr, None, "glm") == "free"
+    assert billing.billing_kind("fleet-cloud", mgr, None, "glm") == "pay"
+    assert billing.adapter_pays(adapters["fleet-dgx"], mgr) is False
+    assert billing.adapter_pays(adapters["fleet-cloud"], mgr) is True
