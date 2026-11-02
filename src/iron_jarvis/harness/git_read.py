@@ -890,6 +890,70 @@ def _place_problem(cwd: Any, worktrees: list[str], filters: list[str],
     return ""
 
 
+#: v1.422.3 (the v1.422.2 review's open item): a JUNCTION (or a directory
+#: symlink) that replaces a folder git TRACKS is followed by a plain
+#: ``git grep`` / ``diff`` / ``blame`` / ``status`` (git sees a directory),
+#: so outside text came back through all four (measured). Such a folder
+#: makes git_read run nothing.
+LINK_REFUSAL = ("A folder git reads here ({path}) is a link to another place, so git_read ran nothing "
+                "(read the files with read_file or grep instead).")
+#: How long listing the tracked files may take (a huge repository: refused).
+LINK_CHECK_TIMEOUT_S = 20.0
+LINK_CHECK_UNSURE = "git_read could not check this folder's tracked folders for links, so it ran nothing."
+
+
+def _is_link(path: str) -> bool:
+    """Is ``path`` ITSELF a link (a junction, a directory symlink, any reparse
+    point)? ``lstat`` never follows the last part. Missing: no."""
+    import stat as _stat
+
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if _stat.S_ISLNK(st.st_mode):
+        return True
+    attrs = getattr(st, "st_file_attributes", 0) or 0
+    return bool(attrs & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _linked_folder(cwd: Any, filters: list[str], env: dict[str, str]) -> str:
+    """The sentence when a folder git tracks is a link (:data:`LINK_REFUSAL`),
+    else "". The folders are every parent of every tracked path (entries git
+    tracks AS a symlink, mode 120000, are not followed by git and are
+    skipped), checked SHALLOWEST FIRST, and the check stops at the first link
+    — so a deeper path is never reached THROUGH a link (an ``lstat`` follows
+    every part but the last; a junction to a share would be an SMB
+    connection). Outside a repository: "" (git then fails by itself). A
+    listing that does not finish: :data:`LINK_CHECK_UNSURE` (fail-closed).
+    BLOCKING."""
+    from ..git.integration import run_git
+
+    got = run_git(safe_argv("rev-parse", ["--show-toplevel"], filters), cwd, timeout=15.0, env=env,
+                  identity=False, encoding="utf-8")
+    if got.timed_out:
+        return LINK_CHECK_UNSURE
+    top = (str(got.out or "").strip().splitlines() or [""])[0].strip()
+    if got.code != 0 or not top or _network_spelling(top):
+        return ""
+    listing = run_git(safe_argv("ls-files", ["-z", "-s", "--full-name", "--", ":/"], filters), cwd,
+                      timeout=LINK_CHECK_TIMEOUT_S, env=env, identity=False, encoding="utf-8")
+    if listing.timed_out or listing.code != 0:
+        return LINK_CHECK_UNSURE
+    folders: set[str] = set()
+    for entry in str(listing.out or "").split("\0"):
+        head, _tab, rel = entry.partition("\t")
+        if not rel or head.startswith("120000"):
+            continue
+        parts = rel.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            folders.add("/".join(parts[:i]))
+    for rel in sorted(folders, key=lambda f: (f.count("/"), f)):
+        if _is_link(os.path.join(top, *rel.split("/"))):
+            return LINK_REFUSAL.format(path=_shown(rel))
+    return ""
+
+
 def safe_argv(command: str, args: list[str], filters: list[str],
               files: "list[str] | tuple[str, ...]" = ()) -> list[str]:
     """The whole argv after ``git`` (:func:`run` passes it to ``run_git``):
@@ -974,7 +1038,8 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     if any("=" in name for name in filters):
         return ToolResult(ok=False, error=FILTER_NAME_REFUSAL, data={"command": command})
     problem = (_skip_file_problem(skip_files) if command == "blame" else "") \
-        or _place_problem(cwd, worktrees, filters, env)
+        or _place_problem(cwd, worktrees, filters, env) \
+        or _linked_folder(cwd, filters, env)
     if problem:
         return ToolResult(ok=False, error=problem, data={"command": command})
     got = run_git(safe_argv(command, args, filters, files), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
