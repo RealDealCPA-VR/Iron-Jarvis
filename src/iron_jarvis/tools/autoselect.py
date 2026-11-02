@@ -3586,11 +3586,18 @@ def tools_named_in_playbook(
 # --------------------------------------------------------------------------- #
 # v1.420.0 (C6.1): the CODING OFFER — a door, never a hand-off.
 # --------------------------------------------------------------------------- #
-#: Where a coding task is best done: Build › Code, the real Claude Code /
-#: Codex / Pi / OpenCode working in a folder the user picks (the address
-#: ``routes/build_app.py`` and the dashboard's ``/terminals?view=code`` use).
-CODING_OFFER_HREF = "/terminals?view=code"
-CODING_OFFER_LABEL = "Work on this in a coding session (Build › Code)"
+#: Where a coding task is best done. v1.426.0 (Wave 6, E2): Chat › Code — the
+#: coding session the owner uses, Iron Jarvis's own harness with the user's
+#: chosen model working in a folder (the chat page's Code view,
+#: ``/chat?view=code``; it was Build › Code, ``/terminals?view=code``, which
+#: opened EMPTY: the request was retyped). The dashboard carries the user's
+#: request into the Code view's start composer when the door is pressed
+#: (``dashboard/lib/codingStart`` — this tab's sessionStorage, never the
+#: address), with the chat's project folder chosen; nothing is sent until the
+#: user presses Send. ``dashboard/lib/codingStart.CODING_OFFER_HREF`` is this
+#: address (tests/test_coding_offer_start_v14260 holds the two equal).
+CODING_OFFER_HREF = "/chat?view=code"
+CODING_OFFER_LABEL = "Work on this in a coding session (Chat › Code)"
 #: The software things a "build me a …" asks for. A word that is also a
 #: physical or office thing is guarded by what follows it ("a tool shed",
 #: "a game plan", "a website logo"); "script" counts only with a language
@@ -3647,7 +3654,7 @@ _REPO_TASK_RX = re.compile(
 
 def coding_offer(text: str) -> "dict[str, str] | None":
     """The door a chat reply may carry for a CODING task (v1.420.0, C6.1):
-    ``{"href", "label"}`` into Build › Code when *text* asks to build a piece
+    ``{"href", "label"}`` into Chat › Code when *text* asks to build a piece
     of software ("build me a todo app", "write me an app", "can you make me a
     website") or names a task on a repository ("fix the failing test in my
     repo", "add a README to github.com/acme/site"); ``None`` otherwise — a

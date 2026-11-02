@@ -48,6 +48,7 @@ import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { BUILD_SESSION_EVENT, sessionOfEvent } from "@/lib/buildLinks";
 import type { BranchDraft } from "@/lib/buildNext";
 import { useHarnessKeys } from "@/lib/harnessKeys";
+import { clearCodingStart, peekCodingStart } from "@/lib/codingStart";
 import { cachedFolders, dropEndedTurns, keepFolders, keepView, viewFor } from "@/lib/turnCache";
 import {
   ONE,
@@ -231,8 +232,17 @@ export function IjHarnessView({
   // or Last night — opened by its row, or by a link to it.
   // v1.418.0 (fix plan C2.6): or "new" — the start composer (New session,
   // a folder's "+", "/clear"): nothing is made on the daemon until Send.
-  const [middle, setMiddle] = useState<"session" | "tonight" | "night" | "new">(nightLink ? "night" : "session");
-  const [newFolder, setNewFolder] = useState<string | null>(null);
+  // v1.426.0 (Wave 6, E2): a request the chat's coding offer carried here
+  // (lib/codingStart — this tab's sessionStorage, never an address): the
+  // start composer opens with it in the box and the chat's project folder
+  // chosen. Nothing is made or sent until the user presses Send. Read once,
+  // here; removed once shown (the effect below), so it never fills a later
+  // composer. A Last night link wins (it names what the user asked to see).
+  const [handed] = useState(() => (nightLink ? null : peekCodingStart()));
+  const [middle, setMiddle] = useState<"session" | "tonight" | "night" | "new">(
+    nightLink ? "night" : handed ? "new" : "session",
+  );
+  const [newFolder, setNewFolder] = useState<string | null>(handed?.folder ?? null);
   const [newKey, setNewKey] = useState(0);
   // The session Send just made, its create answer and its first message —
   // handed to that session ONCE (it sends the words; no second read).
@@ -240,7 +250,12 @@ export function IjHarnessView({
   // v1.418.0 review: New session pressed again while the composer is open
   // (it keeps its words), and what a refused first message hands back to it.
   const [newAgain, setNewAgain] = useState<StartAgain | null>(null);
-  const [newSeed, setNewSeed] = useState<StartSeed | null>(null);
+  const [newSeed, setNewSeed] = useState<StartSeed | null>(
+    handed ? { request: { folder: handed.folder ?? "", text: handed.text, files: [] }, problem: "" } : null,
+  );
+  useEffect(() => {
+    if (handed) clearCodingStart();
+  }, [handed]);
   // The request each session the start made was made with (until its first
   // message's turn started or was refused): handed back on a refusal.
   const startedRef = useRef<Map<string, StartRequest>>(new Map());

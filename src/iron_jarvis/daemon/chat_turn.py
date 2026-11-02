@@ -3650,9 +3650,10 @@ def with_coding_offer(
 ) -> list[Any]:
     """The turn's door entries with the CODING OFFER (v1.420.0, C6.1): when
     the user's last message asks to build a piece of software or names a task
-    on a repository (``tools.autoselect.coding_offer``), one door into Build ›
-    Code. ONLY A LINK — the chat still answers; nothing is armed or handed
-    off. A PLAIN CHAT turn only: never a coding session's own turn
+    on a repository (``tools.autoselect.coding_offer``), one door into a
+    coding session (v1.426.0: Chat › Code, whose start composer the dashboard
+    opens with the request already typed — ``dashboard/lib/codingStart``).
+    ONLY A LINK — the chat still answers; nothing is armed or handed off. A PLAIN CHAT turn only: never a coding session's own turn
     (``harness``), a turn that escalated to an agent, the browser sidebar, a
     Build pane's chat, the phone or a run (``failure_words.current_surface``
     names the last three). Added BEFORE ``with_connect_door`` so the Connect
@@ -11081,7 +11082,9 @@ async def run_chat_turn(
     # trust and local only too (a door only links). MIRROR NOTE (lock-step):
     # routes/chat.py does the same before its done frame.
     # CODING OFFER (v1.420.0, C6.1): a request to build software gets a door
-    # into Build › Code (a link only). MIRROR NOTE (lock-step): routes/chat.py.
+    # into a coding session (v1.426.0: Chat › Code, the request carried into
+    # its box by the dashboard; a link only). MIRROR NOTE (lock-step):
+    # routes/chat.py.
     door_entries = with_coding_offer(door_entries, body, harness=harness, escalate=escalate)
     door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
     out: dict[str, Any] = {
