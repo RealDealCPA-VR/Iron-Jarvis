@@ -15,15 +15,40 @@ WHAT IT RUNS: an argv, never a shell — ``git`` with one of :data:`ALLOWED`
 grep; branch and tag in LIST form only) and the model's own words after it,
 each checked:
 
-* REFUSED, in plain words: any other git command, any ``-c``, ``--output`` /
-  ``-o`` (a file written), ``--ext-diff`` / ``--textconv`` (a program the
-  folder names), ``-O`` / ``--open-files-in-pager`` (an order file / a pager
-  program), ``--no-index`` (reads outside the repository), a signature
-  shown (``--show-signature``, a ``%G`` / ``%(signature`` format: gpg is a
-  program the folder's config can name), ``--exec`` / ``--upload-pack`` /
-  ``--recurse-submodules``, a path that leaves the working folder (absolute,
-  a drive, a network share, ``..``), and for ``branch`` / ``tag`` anything
-  that is not a listing (a name with no list option CREATES one);
+* v1.422.2, the owner's "safer option": the OPTIONS are an ALLOWLIST per
+  command (:data:`OPTIONS`, built from ``_ROWS``) — the v1.421.0 review found
+  nine holes in a blocklist over git's huge option and config surface, so a
+  word that starts with "-" must now be one of its command's own options a
+  reviewer needs, else it is refused in ONE plain sentence naming it and the
+  common options that command does take (:data:`_COMMON`). Each option was
+  checked against git 2.50's own docs for its effect: none can run a
+  program, write a file, read a file the model names, reach a remote or
+  change state (``--untracked`` / ``--contents`` / ``-f`` / ``-X`` read files
+  of their own and are refused too: read_file and grep cover those). The
+  rules, each pinned in ``tests/test_git_read_allowlist_v14222.py``:
+  options are SPELLED IN FULL (git takes an unambiguous shortening —
+  ``--bra`` is status's ``--branch``, ``--open-files`` was
+  ``--open-files-in-pager`` — so a shortening is refused, naming the full
+  spelling when one matches); a CLUSTER (``-sb``, ``-nA3``) is read LETTER
+  BY LETTER as git reads it and every letter must be allowed, a letter that
+  takes a value taking the rest of the word; a value is checked by its kind
+  (a number, a choice, a line range, a format with no signature, a commit
+  with no path out of the folder; a pattern or date is text git reads no
+  file by); ``--opt=v`` and ``--opt v`` both work where git takes both, a
+  glued-only option (``--stat=80``, ``-U5``) leaves a separate word to be
+  read as a revision or path the way git reads it, and a separate value
+  that starts with "-" is refused (the glued form says it plainly); ``--``
+  ends the options and every word after it is a path;
+* REFUSED, in plain words, besides any option not on the list: any other git
+  command, a signature shown (a ``%G`` / ``%(signature`` format: gpg is a
+  program the folder's config can name), a path that leaves the working
+  folder (absolute, a drive, a network share, ``..``), and for ``branch`` /
+  ``tag`` anything that is not a listing (a name with no list option CREATES
+  one). The options KNOWN to be dangerous (``--output``, ``--ext-diff``,
+  ``--textconv``, ``-O``, ``--no-index``, ``--show-signature``,
+  ``--remerge-diff``, ``--submodule``, status ``-v``, describe ``--dirty``…)
+  keep their own sentence saying why (:data:`_DANGER_ALL`, ``_DANGER_FOR``),
+  their shortenings too;
 * A WORKER MAY HAVE WRITTEN ``.git/config`` — so nothing it says may run a
   program: ``--no-pager``, ``-c core.fsmonitor=false``, ``-c
   core.hooksPath=<the null device>``, ``-c log.showSignature=false``, ``-c
@@ -45,13 +70,14 @@ each checked:
   :data:`OUTPUT_CHARS`, saying so.
 
 v1.421.0 REVIEW (each measured against real git 2.50 with a trapped
-repository, each pinned in ``tests/test_git_read_review_v14210.py``): the
-first cut still ran a program the folder named, or read past it, through ONE
-allowed call —
+repository, each pinned in ``tests/test_git_read_review_v14210.py``; since
+v1.422.2 the option ones are refused EARLIER, as options not on the list —
+the trapped harness still runs every pin): the first cut still ran a program
+the folder named, or read past it, through ONE allowed call —
 
 * ``status -v`` showed the staged diff through the folder's TEXTCONV (status
   takes no ``--no-textconv``): ``--verbose`` and its shortenings, and a ``v``
-  in a cluster, are refused for status (:data:`_REFUSED_FOR`);
+  in a cluster, are refused for status (``_DANGER_FOR``);
 * a filter whose NAME holds ``=`` could not be emptied (``git -c`` splits a
   key at its first ``=``): such a folder is refused
   (:data:`FILTER_NAME_REFUSAL`); the settings are read NUL-separated;
@@ -60,8 +86,9 @@ allowed call —
   commit with a fake signature: every signature program is set EMPTY (git
   says "cannot spawn" and runs nothing);
 * ``grep -nO<program>``: a ``-O`` INSIDE a cluster ran the pager — any
-  cluster holding ``O`` is refused, and a file glued to grep ``-f`` / blame
-  ``-S`` / ls-files ``-X`` is checked as a path;
+  cluster holding ``O`` is refused, and grep ``-f`` / blame ``-S`` /
+  ls-files ``-X`` (a file glued to a cluster read past the path check) are
+  refused outright since v1.422.2;
 * ``diff.submodule = diff`` (the repo's own) or the model's
   ``--submodule=diff`` ran ``git diff`` INSIDE a submodule, whose own
   ``diff.external`` ran; the model's ``--ignore-submodules=none`` beat the
@@ -122,167 +149,488 @@ MAX_ARG_CHARS = 1_000
 #: refused: something is off).
 MAX_FILTERS = 20
 
-#: Options refused for EVERY command: a file written, a program the folder
-#: can name, a read outside the repository.
-_REFUSED_EXACT = frozenset({
-    "-c", "-o", "--output", "--ext-diff", "--textconv", "--no-index", "--show-signature",
-    "--open-files-in-pager", "--exec", "--upload-pack", "--recurse-submodules",
-    # v1.421.0 review: ``--submodule=diff`` runs ``git diff`` INSIDE a
-    # submodule, whose own config (another repository a worker can write)
-    # names its external diff; ``--ignore-submodules=none`` came after the
-    # guard's ``=all`` and beat it (measured: both ran the submodule's
-    # ``diff.external``).
-    "--submodule", "--ignore-submodules",
-    # v1.421.0 review: a REMERGE re-runs a merge in memory, which runs the
-    # merge driver ``.gitattributes`` + ``merge.<x>.driver`` name (measured;
-    # ``--diff-merges=remerge`` too — :data:`_REMERGE`).
-    "--remerge-diff",
-})
-#: ``--diff-merges``'s values that re-merge (``remerge`` and its letter).
-_REMERGE = frozenset({"remerge", "r"})
-_REFUSED_PREFIX = (
-    "--output=", "--open-files-in-pager=", "--exec=", "--upload-pack=", "--recurse-submodules=",
-    "--exec-path",
-)
-#: ``branch`` / ``tag``: the only options a LISTING takes (anything else
-#: makes, moves, deletes, copies or verifies one).
-_LIST_FLAGS: dict[str, frozenset[str]] = {
-    "branch": frozenset({
-        "-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose",
-        "--show-current", "--contains", "--no-contains", "--merged", "--no-merged",
-        "--points-at", "--sort", "--format", "--color", "--no-color", "--abbrev",
-        "--no-abbrev", "--column", "--no-column", "-i", "--ignore-case", "--omit-empty",
-    }),
-    "tag": frozenset({
-        "-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged",
-        "--points-at", "--sort", "--format", "--color", "--no-color", "--column",
-        "--no-column", "-i", "--ignore-case", "--omit-empty",
-    }),
+# --------------------------------------------------------------------------- #
+# v1.422.2 — the OPTIONS are an ALLOWLIST, per command (the owner's "safer
+# option"): the v1.421.0 review found nine holes in a blocklist over git's
+# huge option and config surface. Every word that starts with "-" must be one
+# of its command's options below, SPELLED IN FULL (git takes an unambiguous
+# shortening of a long option, so ``--name-on`` would be ``--name-only`` — and
+# ``--open-files`` was ``--open-files-in-pager``; an exact spelling is never
+# read as a shortening of something else, because every spelling here is a
+# real option of that command: ``test_every_allowed_long_option_is_one_git_
+# knows``). A cluster of short options (``-sb``) is read LETTER BY LETTER, as
+# git reads it, and every letter must be allowed; a letter that takes a value
+# takes the rest of the word (``-U5``, ``-pSfoo``).
+# --------------------------------------------------------------------------- #
+
+#: How an option takes its value (each one measured against git 2.50).
+FLAG = "flag"          # none: ``--stat`` (``--name-only=x`` is refused)
+REQUIRED = "required"  # ``--opt=v`` or ``--opt v``; a letter: ``-A3`` or ``-A 3``
+OPTIONAL = "optional"  # glued only — ``--stat=80``, ``-U5``: git reads ``--stat 80``'s
+#                        "80" as a word of its own (a revision), so this does too
+EQUALS = "equals"      # ``--opt=v`` only (log's ``--format``: ``--format %h`` is refused)
+LASTARG = "lastarg"    # ``--contains [<commit>]``: the next word when there is one
+
+#: The value kinds: each a full-match pattern, or a word the checker reads
+#: (``text`` — a pattern, a date, a sort key: never a path git reads;
+#: ``format`` — checked for a signature; ``rev`` — a commit, path-checked;
+#: ``diff_merges`` — ``remerge`` refused).
+_KIND_PATTERNS: dict[str, "re.Pattern[str]"] = {
+    "int": re.compile(r"\d{1,6}"),
+    "score": re.compile(r"\d{1,3}(?:\.\d{1,3})?%?"),
+    "stat": re.compile(r"\d{1,4}(?:,\d{1,4}){0,2}"),
+    "line_range": re.compile(r"\d{1,9}(?:,[+-]?\d{1,9})?|,[+-]?\d{1,9}"),
+    "diff_filter": re.compile(r"[ACDMRTUXB*]{1,20}", re.IGNORECASE),
+    "column": re.compile(r"[a-z]{1,10}(?:,[a-z]{1,10}){0,5}"),
 }
-#: The options that make a ``branch`` / ``tag`` call a listing (its other
+_KIND_CHOICES: dict[str, tuple[str, ...]] = {
+    "porcelain": ("v1", "v2"),
+    "untracked": ("no", "normal", "all"),
+    "ignored": ("traditional", "matching", "no"),
+    "word_diff": ("color", "plain", "porcelain", "none"),
+    "color": ("never", "auto", "always"),
+    "decorate": ("short", "full", "auto", "no"),
+    "algorithm": ("myers", "default", "minimal", "patience", "histogram"),
+    "abbrev_ref": ("strict", "loose"),
+    "diff_merges": ("off", "none", "on", "m", "first-parent", "1", "separate", "combined", "c",
+                    "dense-combined", "cc"),
+}
+#: What each patterned kind is, in words (for the sentence a bad value gets).
+_KIND_WORDS = {
+    "int": "a whole number", "score": "a similarity like 50 or 50%",
+    "stat": "a width like 80 or 80,40", "line_range": "a line range like 10,20 or 10,+5",
+    "diff_filter": "letters from ACDMRTUXB", "column": "words like always,row",
+}
+
+Row = tuple[str, str, str]  # (the spellings, its arity, its value kind)
+
+#: The diff options (diff, log, show).
+_DIFF_ROWS: tuple[Row, ...] = (
+    ("-p -u --patch", FLAG, ""), ("-s --no-patch", FLAG, ""), ("-U --unified", OPTIONAL, "int"),
+    ("--stat", OPTIONAL, "stat"), ("--numstat", FLAG, ""), ("--shortstat", FLAG, ""),
+    ("--name-only", FLAG, ""), ("--name-status", FLAG, ""), ("--raw", FLAG, ""),
+    ("--summary", FLAG, ""), ("--compact-summary", FLAG, ""), ("--check", FLAG, ""),
+    ("-w --ignore-all-space", FLAG, ""), ("-b --ignore-space-change", FLAG, ""),
+    ("--ignore-space-at-eol", FLAG, ""), ("--ignore-cr-at-eol", FLAG, ""),
+    ("--ignore-blank-lines", FLAG, ""), ("-W --function-context", FLAG, ""),
+    ("--word-diff", OPTIONAL, "word_diff"), ("--minimal", FLAG, ""), ("--patience", FLAG, ""),
+    ("--histogram", FLAG, ""), ("--diff-algorithm", REQUIRED, "algorithm"),
+    ("-M --find-renames", OPTIONAL, "score"), ("-C --find-copies", OPTIONAL, "score"),
+    ("--find-copies-harder", FLAG, ""), ("--no-renames", FLAG, ""),
+    ("--diff-filter", REQUIRED, "diff_filter"), ("-S", REQUIRED, "text"), ("-G", REQUIRED, "text"),
+    ("--pickaxe-regex", FLAG, ""), ("--pickaxe-all", FLAG, ""), ("-R", FLAG, ""),
+    ("-a --text", FLAG, ""), ("--abbrev", OPTIONAL, "int"), ("--full-index", FLAG, ""),
+    ("--color", OPTIONAL, "color"), ("--no-color", FLAG, ""),
+    ("--no-ext-diff", FLAG, ""), ("--no-textconv", FLAG, ""),
+    ("--output-indicator-new --output-indicator-old --output-indicator-context", REQUIRED, "text"),
+)
+#: How a commit is shown (log, show).
+_SHOW_ROWS: tuple[Row, ...] = (
+    ("--oneline", FLAG, ""), ("--format", EQUALS, "format"), ("--pretty", OPTIONAL, "format"),
+    ("--abbrev-commit", FLAG, ""), ("--no-abbrev-commit", FLAG, ""), ("--date", REQUIRED, "text"),
+    ("--relative-date", FLAG, ""), ("--decorate", OPTIONAL, "decorate"), ("--no-decorate", FLAG, ""),
+    ("-m", FLAG, ""), ("--cc", FLAG, ""), ("--diff-merges", REQUIRED, "diff_merges"),
+    ("--no-diff-merges", FLAG, ""), ("--first-parent", FLAG, ""),
+)
+#: Which commits (log; shortlog takes most of them).
+_LIMIT_ROWS: tuple[Row, ...] = (
+    ("--max-count", REQUIRED, "int"),
+    ("--since --after --until --before", REQUIRED, "text"), ("--author", REQUIRED, "text"),
+    ("--grep", REQUIRED, "text"), ("--all-match", FLAG, ""), ("--invert-grep", FLAG, ""),
+    ("--all", FLAG, ""), ("--merges", FLAG, ""), ("--no-merges", FLAG, ""),
+    ("--reverse", FLAG, ""), ("--date-order", FLAG, ""), ("--topo-order", FLAG, ""),
+)
+
+_ROWS: dict[str, tuple[Row, ...]] = {
+    "status": (
+        ("-s --short", FLAG, ""), ("-b --branch", FLAG, ""), ("--porcelain", OPTIONAL, "porcelain"),
+        ("--long", FLAG, ""), ("-u --untracked-files", OPTIONAL, "untracked"),
+        ("--ignored", OPTIONAL, "ignored"), ("--show-stash", FLAG, ""), ("--ahead-behind", FLAG, ""),
+        ("--no-ahead-behind", FLAG, ""), ("-z --null", FLAG, ""), ("--renames", FLAG, ""),
+        ("--no-renames", FLAG, ""), ("--find-renames", OPTIONAL, "score"),
+    ),
+    "diff": (
+        ("--cached --staged", FLAG, ""), ("--merge-base", FLAG, ""), *_DIFF_ROWS,
+    ),
+    "log": (
+        ("-n", REQUIRED, "int"), *_SHOW_ROWS[:1], ("--graph", FLAG, ""), *_SHOW_ROWS[1:], *_LIMIT_ROWS,
+        ("-i --regexp-ignore-case", FLAG, ""), ("-E --extended-regexp", FLAG, ""),
+        ("-F --fixed-strings", FLAG, ""), ("--follow", FLAG, ""), ("--parents", FLAG, ""),
+        *_DIFF_ROWS,
+    ),
+    "show": (*_SHOW_ROWS, *_DIFF_ROWS),
+    "blame": (
+        ("-L", REQUIRED, "line_range"), ("-w", FLAG, ""), ("-M", OPTIONAL, "int"),
+        ("-C", OPTIONAL, "int"), ("-e --show-email", FLAG, ""), ("--date", REQUIRED, "text"),
+        ("-s", FLAG, ""), ("-l", FLAG, ""), ("-t", FLAG, ""), ("-f --show-name", FLAG, ""),
+        ("-n --show-number", FLAG, ""), ("-p --porcelain", FLAG, ""), ("--line-porcelain", FLAG, ""),
+        ("--root", FLAG, ""), ("--minimal", FLAG, ""), ("-b", FLAG, ""), ("--abbrev", OPTIONAL, "int"),
+        ("--show-stats", FLAG, ""), ("--first-parent", FLAG, ""), ("--ignore-rev", REQUIRED, "rev"),
+    ),
+    "ls-files": (
+        ("-c --cached", FLAG, ""), ("-m --modified", FLAG, ""), ("-o --others", FLAG, ""),
+        ("-d --deleted", FLAG, ""), ("-s --stage", FLAG, ""), ("-u --unmerged", FLAG, ""),
+        ("-i --ignored", FLAG, ""), ("--exclude-standard", FLAG, ""), ("-x --exclude", REQUIRED, "text"),
+        ("-z", FLAG, ""), ("--directory", FLAG, ""), ("--no-empty-directory", FLAG, ""),
+        ("--eol", FLAG, ""), ("--full-name", FLAG, ""), ("--error-unmatch", FLAG, ""),
+        ("--deduplicate", FLAG, ""), ("--abbrev", OPTIONAL, "int"), ("--format", REQUIRED, "format"),
+    ),
+    "rev-parse": (
+        ("--abbrev-ref", OPTIONAL, "abbrev_ref"), ("--short", OPTIONAL, "int"), ("--verify", FLAG, ""),
+        ("-q --quiet", FLAG, ""), ("--symbolic", FLAG, ""), ("--symbolic-full-name", FLAG, ""),
+        ("--show-toplevel", FLAG, ""), ("--show-prefix", FLAG, ""), ("--show-cdup", FLAG, ""),
+        ("--git-dir", FLAG, ""), ("--absolute-git-dir", FLAG, ""), ("--git-common-dir", FLAG, ""),
+        ("--is-inside-work-tree", FLAG, ""), ("--is-inside-git-dir", FLAG, ""),
+        ("--is-bare-repository", FLAG, ""), ("--is-shallow-repository", FLAG, ""),
+    ),
+    "describe": (
+        ("--tags", FLAG, ""), ("--always", FLAG, ""), ("--all", FLAG, ""), ("--long", FLAG, ""),
+        ("--abbrev", OPTIONAL, "int"), ("--first-parent", FLAG, ""), ("--exact-match", FLAG, ""),
+        ("--contains", FLAG, ""), ("--candidates", REQUIRED, "int"), ("--match", REQUIRED, "text"),
+        ("--exclude", REQUIRED, "text"),
+    ),
+    "shortlog": (
+        # shortlog's own -n is "numbered" and -c "committer" (never log's).
+        ("-s --summary", FLAG, ""), ("-n --numbered", FLAG, ""), ("-e --email", FLAG, ""),
+        ("--max-count", REQUIRED, "int"), ("--since --after --until --before", REQUIRED, "text"),
+        ("--author", REQUIRED, "text"), ("--grep", REQUIRED, "text"), ("--all", FLAG, ""),
+        ("--merges", FLAG, ""), ("--no-merges", FLAG, ""), ("--first-parent", FLAG, ""),
+    ),
+    "grep": (
+        ("-n --line-number", FLAG, ""), ("-i --ignore-case", FLAG, ""), ("-w --word-regexp", FLAG, ""),
+        ("-l --files-with-matches --name-only", FLAG, ""), ("-L --files-without-match", FLAG, ""),
+        ("-c --count", FLAG, ""), ("-e", REQUIRED, "text"), ("-E --extended-regexp", FLAG, ""),
+        ("-F --fixed-strings", FLAG, ""), ("-P --perl-regexp", FLAG, ""), ("-G --basic-regexp", FLAG, ""),
+        ("--cached", FLAG, ""), ("-v --invert-match", FLAG, ""), ("-o --only-matching", FLAG, ""),
+        ("-I", FLAG, ""), ("-h", FLAG, ""), ("-H", FLAG, ""), ("--break", FLAG, ""),
+        ("--heading", FLAG, ""), ("-A --after-context", REQUIRED, "int"),
+        ("-B --before-context", REQUIRED, "int"), ("-C --context", REQUIRED, "int"),
+        ("-m --max-count", REQUIRED, "int"), ("--max-depth", REQUIRED, "int"),
+        ("--and --or --not --all-match", FLAG, ""), ("-p --show-function", FLAG, ""),
+        ("-W --function-context", FLAG, ""), ("--column", FLAG, ""), ("--full-name", FLAG, ""),
+        ("-a --text", FLAG, ""), ("-z --null", FLAG, ""), ("--no-color", FLAG, ""),
+    ),
+    "branch": (
+        ("-l --list", FLAG, ""), ("-a --all", FLAG, ""), ("-r --remotes", FLAG, ""),
+        ("-v --verbose", FLAG, ""), ("--show-current", FLAG, ""),
+        ("--contains --no-contains --merged --no-merged", LASTARG, "rev"),
+        ("--points-at", REQUIRED, "rev"), ("--sort", REQUIRED, "text"), ("--format", REQUIRED, "format"),
+        ("-i --ignore-case", FLAG, ""), ("--omit-empty", FLAG, ""), ("--color", OPTIONAL, "color"),
+        ("--no-color", FLAG, ""), ("--abbrev", OPTIONAL, "int"), ("--no-abbrev", FLAG, ""),
+        ("--column", OPTIONAL, "column"), ("--no-column", FLAG, ""),
+    ),
+    "tag": (
+        ("-l --list", FLAG, ""), ("-n", OPTIONAL, "int"),
+        ("--contains --no-contains --merged --no-merged --points-at", LASTARG, "rev"),
+        ("--sort", REQUIRED, "text"), ("--format", REQUIRED, "format"), ("-i --ignore-case", FLAG, ""),
+        ("--omit-empty", FLAG, ""), ("--color", OPTIONAL, "color"), ("--no-color", FLAG, ""),
+        ("--column", OPTIONAL, "column"), ("--no-column", FLAG, ""),
+    ),
+}
+
+
+def _build(rows: tuple[Row, ...]) -> dict[str, tuple[str, str]]:
+    table: dict[str, tuple[str, str]] = {}
+    for spellings, arity, kind in rows:
+        for spelling in spellings.split():
+            table.setdefault(spelling, (arity, kind))
+    return table
+
+
+#: Every command's options: spelling (``-n``, ``--max-count``) → (arity, kind).
+OPTIONS: dict[str, dict[str, tuple[str, str]]] = {cmd: _build(rows) for cmd, rows in _ROWS.items()}
+#: Commands that take a COUNT as a word (``-3``: log's last three commits,
+#: grep's three lines of context).
+_COUNTS = frozenset({"log", "shortlog", "grep"})
+#: rev-parse reads its options by hand: it takes no cluster (``-qq`` would be
+#: passed through as a word of its own).
+_NO_CLUSTERS = frozenset({"rev-parse"})
+#: ``branch`` / ``tag``: the options that make a call a LISTING (its other
 #: words are then patterns, never a new name).
-_LISTING = frozenset({
-    "-l", "--list", "-a", "--all", "-r", "--remotes", "--contains", "--no-contains",
-    "--merged", "--no-merged", "--points-at", "-n",
-})
-#: A format that SHOWS a signature runs gpg (a program the config names).
-_SIGNATURE_FORMAT = re.compile(r"%G|%\(signature", re.IGNORECASE)
-#: A drive ("C:\x", and a drive-relative "C:x") at the start of a word or of
-#: an option's value.
-_DRIVE = re.compile(r"(?:^|[=,])[A-Za-z]:")
-#: Git takes an unambiguous SHORTENED long option (measured on 2.50: ``git
-#: grep --open-files`` is ``--open-files-in-pager``), so a word that is the
-#: start of a refused option is refused too.
-_REFUSED_LONG = tuple(sorted(
-    {o for o in _REFUSED_EXACT if o.startswith("--")} | {p.rstrip("=") for p in _REFUSED_PREFIX}
-))
+_LISTING: dict[str, frozenset[str]] = {
+    "branch": frozenset({"-l", "--list", "-a", "--all", "-r", "--remotes", "--contains", "--no-contains",
+                         "--merged", "--no-merged", "--points-at"}),
+    "tag": frozenset({"-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged",
+                      "--points-at"}),
+}
 
-
-#: Real options that happen to start a refused one (an exact name wins over a
-#: shortening: ``--text`` is diff's own "treat as text").
-_REAL_SHORT = frozenset({"--text"})
-
-#: v1.421.0 review: options refused for ONE command (their shortenings too),
-#: each with its own sentence. ``git status -v`` shows the staged diff
-#: through the folder's own TEXTCONV driver (status takes no
+#: The sentences an option KNOWN to be dangerous gets (it would be refused
+#: anyway — the allowlist does not hold it — but the model is told why).
+_WRITES_OR_RUNS = "git_read does not take {opt}: it can write a file, run a program or read outside this folder."
+_PAGER = "git_read does not take -O: it can run a program or read a file outside this folder."
+SIGNATURE_REFUSAL = "git_read does not show signatures: checking one runs a program the folder can name."
+REMERGE_REFUSAL = ("git_read does not re-merge a merge: re-merging runs the folder's own merge program. "
+                   "Use --diff-merges=separate or --cc.")
+_READS_A_FILE = ("git_read does not take {opt} for {command}: it reads a file of its own. Read files "
+                 "with read_file or grep.")
+_DANGER_ALL: dict[str, str] = {
+    **{o: _WRITES_OR_RUNS for o in (
+        "--output", "--ext-diff", "--textconv", "--no-index", "--open-files-in-pager", "--exec",
+        "--exec-path", "--upload-pack", "--recurse-submodules",
+        # v1.421.0 review: ``--submodule=diff`` runs ``git diff`` INSIDE a
+        # submodule, whose own config names its external diff;
+        # ``--ignore-submodules=none`` beat the guard's ``=all`` (measured).
+        "--submodule", "--ignore-submodules",
+    )},
+    "-O": _PAGER,
+    "--show-signature": SIGNATURE_REFUSAL,
+    # v1.421.0 review: a REMERGE re-runs a merge in memory, which runs the
+    # merge driver ``.gitattributes`` + ``merge.<x>.driver`` name (measured).
+    "--remerge-diff": REMERGE_REFUSAL,
+}
+#: v1.421.0 review, kept as their own sentences: ``git status -v`` shows the
+#: staged diff through the folder's own TEXTCONV driver (status takes no
 #: ``--no-textconv``; measured: the program ran); ``git describe --dirty`` /
 #: ``--broken`` save the refreshed index (git takes the index lock whatever
-#: ``GIT_OPTIONAL_LOCKS`` says; measured: ``.git/index`` rewritten).
-_REFUSED_FOR: dict[str, tuple[tuple[str, ...], str]] = {
-    "status": (("--verbose",), "git_read does not take {opt} for status: it shows the change through "
-                               "the folder's own converters, which can run a program. Use git diff "
-                               "--cached to see the staged change."),
-    "describe": (("--dirty", "--broken"), "git_read does not take {opt} for describe: it rewrites "
-                                          "git's index. Use git status to see whether the folder "
-                                          "has changes."),
+#: ``GIT_OPTIONAL_LOCKS`` says; measured: ``.git/index`` rewritten). And the
+#: options that read a FILE the model names (the old cut checked the path;
+#: none is needed to review a change).
+_STATUS_VERBOSE = ("git_read does not take {opt} for status: it shows the change through the folder's "
+                   "own converters, which can run a program. Use git diff --cached to see the staged "
+                   "change.")
+_DESCRIBE_DIRTY = ("git_read does not take {opt} for describe: it rewrites git's index. Use git status "
+                   "to see whether the folder has changes.")
+_DANGER_FOR: dict[str, dict[str, str]] = {
+    "status": {"--verbose": _STATUS_VERBOSE, "-v": _STATUS_VERBOSE},
+    "describe": {"--dirty": _DESCRIBE_DIRTY, "--broken": _DESCRIBE_DIRTY},
+    "blame": {o: _READS_A_FILE for o in ("--contents", "--ignore-revs-file", "-S")},
+    "grep": {
+        "-f": _READS_A_FILE,
+        # v1.422.2: files git does not track are searched with the grep tool,
+        # which follows the file rules (a junction inside the folder that
+        # leads out was followed by ``git grep --untracked``).
+        "--untracked": ("git_read does not take --untracked: search files git does not track with the "
+                        "grep tool."),
+    },
+    "ls-files": {o: _READS_A_FILE for o in ("-X", "--exclude-from", "--exclude-per-directory")},
 }
-#: ... and their SHORT letters, inside any cluster (``-bv`` is ``-b -v``).
-_REFUSED_LETTER_FOR = {"status": ("v", "-v")}
-#: Short options that take a FILE glued to them (grep ``-f``, blame ``-S``,
-#: ls-files ``-X``): the rest of the word after one is checked as a path —
-#: ``-nf../x`` read a file outside the folder past the word's own check.
-#: Per command: log's ``-S`` is a STRING (``-S/api/v1`` is a search).
-_FILE_LETTERS: dict[str, str] = {"grep": "f", "blame": "S", "ls-files": "X"}
+
+#: A format that SHOWS a signature runs gpg (a program the config names).
+_SIGNATURE_FORMAT = re.compile(r"%G|%\(signature", re.IGNORECASE)
+#: A drive ("C:\x", and a drive-relative "C:x") at the start of a word.
+_DRIVE = re.compile(r"(?:^|[=,])[A-Za-z]:")
+#: ``--diff-merges``'s values that re-merge (``remerge`` and its letter).
+_REMERGE = frozenset({"remerge", "r"})
 
 
-def _shortened_refused(head: str) -> bool:
-    return (head.startswith("--") and len(head) > 2 and head not in _REAL_SHORT
-            and any(o.startswith(head) for o in _REFUSED_LONG))
+def allowed_options(command: str) -> str:
+    """Every option ``command`` takes (``-n/--max-count``), in the table's
+    order. Pure."""
+    return ", ".join("/".join(spellings.split()) for spellings, _a, _k in _ROWS.get(command, ()))
+
+
+#: The options a refusal NAMES (the most useful ones a reviewer reaches for —
+#: the full lists run to 1,000 characters; the sentence stays short). Each is
+#: in :data:`OPTIONS` (pinned).
+_COMMON: dict[str, str] = {
+    "status": "-s/--short, -b/--branch, --porcelain, -u/--untracked-files, --ignored",
+    "diff": "--stat, --name-only, --name-status, --cached, -U/--unified, -w, --word-diff, --diff-filter",
+    "log": "--oneline, -n, --format, --stat, -p, --since, --author, --grep, --name-only, -S, --follow",
+    "show": "--stat, --name-only, -s/--no-patch, --format, --oneline, -U/--unified",
+    "blame": "-L, -w, -M, -C, -e, --date, -s, --porcelain",
+    "ls-files": "-c, -m, -o, -d, -s, --exclude-standard, -z",
+    "rev-parse": "--abbrev-ref, --short, --verify, -q, --show-toplevel, --is-inside-work-tree",
+    "describe": "--tags, --always, --abbrev, --long, --match, --contains",
+    "shortlog": "-s, -n, -e, --since, --author",
+    "grep": "-n, -i, -w, -l, -c, -e, -E, -F, --cached, -A, -B, -C",
+    "branch": "--list, -a, -r, -v, --contains, --merged, --sort, --format",
+    "tag": "--list, -n, --contains, --points-at, --sort, --format",
+}
+
+
+def _danger(command: str, name: str) -> str:
+    said = _DANGER_FOR.get(command, {}).get(name) or _DANGER_ALL.get(name)
+    return said.format(opt=name, command=command) if said else ""
+
+
+def _unknown(command: str, name: str) -> str:
+    """The sentence for an option ``command`` does not take (its exact
+    spelling, a dangerous one's shortening, or a shortening of one it does
+    take). Pure."""
+    if len(name) > 40:
+        return f"git_read does not take {_shown(name)} for git {command}: no option is that long."
+    said = _danger(command, name)
+    if said:
+        return said
+    table = OPTIONS[command]
+    if name.startswith("--") and len(name) > 2:
+        # A shortening of a dangerous option says why it is dangerous (git
+        # would have read ``--open-files`` as ``--open-files-in-pager``).
+        for full in (*_DANGER_FOR.get(command, {}), *_DANGER_ALL):
+            if full.startswith("--") and full.startswith(name):
+                return _danger(command, full).replace(full, name, 1)
+        matches = [s for s in table if s.startswith(name)]
+        if len(matches) == 1:
+            return (f"git_read takes git's options spelled in full: write {matches[0]} for {name} "
+                    f"(git {command}).")
+    if command in _LISTING:
+        return (f"git_read runs git {command} only to LIST, and does not take {name} (a listing takes "
+                f"options such as {_COMMON[command]}).")
+    return (f"git_read does not take {name} for git {command}; it takes common read-only options "
+            f"spelled in full, such as {_COMMON[command]}.")
+
+
+def _shown(word: str) -> str:
+    """A word as a refusal quotes it: at most 40 characters."""
+    return word if len(word) <= 40 else word[:40] + "…"
+
+
+def _value_problem(command: str, name: str, kind: str, value: str) -> str:
+    """The sentence a value of ``name`` is refused with, or "". Pure."""
+    if value == "":
+        return f"git_read needs a value after {name}."
+    if kind == "text":
+        return ""  # a pattern, a date, a sort key: git reads no file by it
+    if kind == "format":
+        return SIGNATURE_REFUSAL if _SIGNATURE_FORMAT.search(value) else ""
+    if kind == "rev":
+        return _path_problem(value)
+    if kind == "diff_merges" and value.strip().lower() in _REMERGE:
+        return REMERGE_REFUSAL
+    choices = _KIND_CHOICES.get(kind)
+    if choices is not None:
+        if value in choices:
+            return ""
+        return f"git_read takes {name} with one of {', '.join(choices)}; not \"{_shown(value)}\"."
+    pattern = _KIND_PATTERNS.get(kind)
+    if pattern is not None and pattern.fullmatch(value):
+        return ""
+    return f"git_read takes {name} with {_KIND_WORDS.get(kind, 'a plain value')}; not \"{_shown(value)}\"."
+
+
+def _word_problem(word: Any) -> str:
+    if not isinstance(word, str):
+        return "git_read takes its words as text."
+    if "\x00" in word or len(word) > MAX_ARG_CHARS:
+        return "git_read cannot use that word: it is too long or holds a NUL."
+    return ""
+
+
+def _next_value(command: str, name: str, kind: str, args: list[str], i: int,
+                glue: str) -> tuple[str, int]:
+    """The value in the NEXT word (``--author x``, ``-A 3``): ``(problem,
+    words used)``. A next word that starts with "-" is refused — git would
+    take it as the value, and reading it as an option here is the one place
+    the two could disagree; the glued form says it plainly (``glue``)."""
+    if i + 1 >= len(args):
+        return f"git_read needs a value after {name}.", 0
+    nxt = args[i + 1]
+    problem = _word_problem(nxt)
+    if problem:
+        return problem, 1
+    if nxt.startswith("-"):
+        return (f"git_read cannot tell \"{_shown(nxt)}\" from an option: write it as {glue}{_shown(nxt)}.", 1)
+    return _value_problem(command, name, kind, nxt), 1
+
+
+def _long_problem(command: str, arg: str, args: list[str], i: int) -> tuple[str, int, str]:
+    """A ``--word``: ``(problem, extra words used, its name)``."""
+    name, eq, value = arg.partition("=")
+    spec = OPTIONS[command].get(name)
+    if spec is None:
+        return _unknown(command, name), 0, name
+    arity, kind = spec
+    if arity == FLAG:
+        return (f"git_read takes {name} with no value." if eq else ""), 0, name
+    if eq:
+        return _value_problem(command, name, kind, value), 0, name
+    if arity == OPTIONAL:
+        return "", 0, name
+    if arity == EQUALS:
+        return f"git_read takes {name} as {name}=<value>.", 0, name
+    if arity == LASTARG and i + 1 >= len(args):
+        return "", 0, name
+    problem, used = _next_value(command, name, kind, args, i, f"{name}=")
+    return problem, used, name
+
+
+def _cluster_problem(command: str, arg: str, args: list[str], i: int) -> tuple[str, int, list[str]]:
+    """A ``-abc`` word, LETTER BY LETTER as git reads it: ``(problem, extra
+    words used, the letters' spellings)``. A letter that takes a value takes
+    the rest of the word, else (when it needs one) the next word."""
+    table = OPTIONS[command]
+    if command in _NO_CLUSTERS and len(arg) > 2:
+        return _unknown(command, arg), 0, []
+    seen: list[str] = []
+    letters = arg[1:]
+    for k, ch in enumerate(letters):
+        name = "-" + ch
+        spec = table.get(name)
+        if spec is None:
+            return _unknown(command, name), 0, seen
+        seen.append(name)
+        arity, kind = spec
+        if arity == FLAG:
+            continue
+        rest = letters[k + 1:]
+        if rest:
+            return _value_problem(command, name, kind, rest), 0, seen
+        if arity == OPTIONAL:
+            return "", 0, seen
+        problem, used = _next_value(command, name, kind, args, i, name)
+        return problem, used, seen
+    return "", 0, seen
 
 
 def refusal(command: str, args: list[str]) -> str:
-    """The sentence a call is refused with, or "". Pure."""
+    """The sentence a call is refused with, or "". Pure.
+
+    Every word before ``--`` that starts with "-" is one of the command's
+    :data:`OPTIONS` (or a count, for :data:`_COUNTS`), its value checked by
+    its kind; every other word — and every word after ``--`` — is a revision
+    or a path, read for a place outside the folder (:func:`_path_problem`)."""
+    return _check(command, args)[0]
+
+
+def _check(command: str, args: list[str]) -> tuple[str, list[str]]:
+    """:func:`refusal`'s work: ``(the sentence or "", the option spellings
+    the words used, in order)``. Pure."""
     if command not in ALLOWED:
         return (f"git_read runs only read-only git commands ({', '.join(ALLOWED)}); "
-                f"\"{command or '(none)'}\" is not one of them.")
+                f"\"{command or '(none)'}\" is not one of them."), []
     if len(args) > MAX_ARGS:
-        return f"git_read takes at most {MAX_ARGS} words after the command."
-    list_flags = _LIST_FLAGS.get(command)
+        return f"git_read takes at most {MAX_ARGS} words after the command.", []
+    used_names: list[str] = []
     listing = False
     positional = False
-    for i, arg in enumerate(args):
-        if not isinstance(arg, str):
-            return "git_read takes its words as text."
-        if "\x00" in arg or len(arg) > MAX_ARG_CHARS:
-            return "git_read cannot use that word: it is too long or holds a NUL."
-        head = arg.split("=", 1)[0]
-        if (arg in _REFUSED_EXACT or head in _REFUSED_EXACT or arg.startswith(_REFUSED_PREFIX)
-                or _shortened_refused(head)):
-            return f"git_read does not take {head}: it can write a file, run a program or read outside this folder."
-        if arg.startswith("-O") or (arg.startswith("-o") and not arg.startswith("--")):
-            return f"git_read does not take {arg[:2]}: it can write a file or run a program."
-        merges = (arg.split("=", 1)[1] if head == "--diff-merges" and "=" in arg
-                  else arg if (args[i - 1] if i else "") == "--diff-merges" else "")
-        if merges.strip().lower() in _REMERGE:
-            return ("git_read does not re-merge a merge: re-merging runs the folder's own merge "
-                    "program. Use --diff-merges=separate or --cc.")
-        cluster = arg.startswith("-") and not arg.startswith("--") and len(arg) > 2
-        # v1.421.0 review: git reads a CLUSTER of short options letter by
-        # letter (measured: ``git grep -nO<program>`` ran the program as its
-        # pager) — a word that only STARTS with ``-O`` was all the first cut
-        # refused.
-        if cluster and "O" in arg[1:]:
-            return "git_read does not take -O: it can run a program or read a file outside this folder."
-        own = _REFUSED_FOR.get(command)
-        if own is not None:
-            opts, said = own
-            if head in opts or (head.startswith("--") and len(head) > 2
-                                and any(o.startswith(head) for o in opts)):
-                return said.format(opt=head)
-            letter = _REFUSED_LETTER_FOR.get(command)
-            if letter is not None and cluster and letter[0] in arg[1:]:
-                return said.format(opt=letter[1])
-            if letter is not None and arg == letter[1]:
-                return said.format(opt=arg)
-        if cluster and command in _FILE_LETTERS:
-            for k in range(2, len(arg)):
-                if arg[k - 1] in _FILE_LETTERS[command]:
-                    problem = _path_problem(arg[k:])
-                    if problem:
-                        return problem
-        if arg.startswith("-c") and not arg.startswith("--"):
-            return "git_read does not take -c: a setting can run a program."
-        prev = args[i - 1] if i else ""
-        is_format = head in ("--format", "--pretty") or prev in ("--format", "--pretty")
-        if is_format and _SIGNATURE_FORMAT.search(arg):
-            return "git_read does not show signatures: checking one runs a program the folder can name."
-        if list_flags is not None and arg.startswith("-"):
-            if head not in list_flags and not re.fullmatch(r"-n\d+", arg):
-                return (f"git_read runs git {command} only to LIST (with --list and the filters a "
-                        f"listing takes); {head} would change something.")
-            if head in _LISTING or re.fullmatch(r"-n\d+", arg):
-                listing = True
-        elif list_flags is not None and prev not in ("--sort", "--format", "--contains", "--no-contains",
-                                                     "--merged", "--no-merged", "--points-at",
-                                                     "--abbrev", "--column", "--color"):
-            positional = True
-        problem = _path_problem(arg)
+    ended = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        problem = _word_problem(arg)
         if problem:
-            return problem
-    if list_flags is not None and positional and not listing:
+            return problem, used_names
+        if ended or not arg.startswith("-"):
+            problem = _path_problem(arg)
+            if problem:
+                return problem, used_names
+            positional = True
+            i += 1
+            continue
+        if arg == "--":
+            ended = True
+            i += 1
+            continue
+        names: list[str]
+        if arg == "-":
+            return _unknown(command, arg), used_names
+        if command in _COUNTS and re.fullmatch(r"-\d{1,6}", arg):
+            problem, used, names = "", 0, []
+        elif arg.startswith("--"):
+            problem, used, name = _long_problem(command, arg, args, i)
+            names = [name]
+        else:
+            problem, used, names = _cluster_problem(command, arg, args, i)
+        if problem:
+            return problem, used_names
+        used_names += names
+        if any(n in _LISTING.get(command, ()) for n in names):
+            listing = True
+        i += 1 + used
+    if command in _LISTING and positional and not listing:
         return (f"git {command} with a name makes a new {command}; git_read only lists them — add "
-                "--list (the names are then patterns).")
-    return ""
+                "--list (the names are then patterns)."), used_names
+    return "", used_names
 
 
 def _path_problem(arg: str) -> str:
@@ -592,9 +940,10 @@ class GitReadTool(Tool):
     description = (
         "Ask git about this folder, read-only: status, diff, log, show, blame, ls-files, "
         "rev-parse, describe, shortlog, grep, and branch / tag listings. `command` is the git "
-        "command (\"diff\"), `args` its words ([\"--stat\", \"HEAD~1\"]). It never changes the "
-        "repository, never writes a file and never runs a program; paths stay inside this folder. "
-        "It does not run tests."
+        "command (\"diff\"), `args` its words ([\"--stat\", \"HEAD~1\"]). It takes each "
+        "command's common read-only options spelled in full (no shortenings; a refusal names the "
+        "ones it takes). It never changes the repository, never writes a file and never runs a "
+        "program; paths stay inside this folder. It does not run tests."
     )
     reversibility = Reversibility.READONLY
     risk_class = RiskClass.READ
@@ -644,6 +993,6 @@ def git_read_tools() -> list[Tool]:
 
 
 __all__ = [
-    "ALLOWED", "GIT_READ_TIMEOUT_S", "GitReadTool", "NAME", "OUTPUT_CHARS", "git_read_env",
-    "git_read_tools", "refusal", "run", "safe_argv",
+    "ALLOWED", "GIT_READ_TIMEOUT_S", "GitReadTool", "NAME", "OPTIONS", "OUTPUT_CHARS",
+    "allowed_options", "git_read_env", "git_read_tools", "refusal", "run", "safe_argv",
 ]
