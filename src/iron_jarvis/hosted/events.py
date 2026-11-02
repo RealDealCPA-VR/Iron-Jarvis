@@ -35,6 +35,10 @@ turn id). The types (``docs/BUILD-APP-VIEW-PLAN.md`` "Normalized events"):
 * ``notice`` {text}
 * ``error`` {title, fix, technical, fix_kind?, account?}
 * ``done`` {stop: completed|interrupted|failed|max_turns, result?}
+* v1.426.0 (E4): ``setup`` {mcp_servers: [{name, state, error?, source?}]} — the
+  tool's OWN MCP servers as it reported them (``hosted/tool_setup``), emitted
+  only when the list changes; drawn in the Session tab, never in the
+  conversation
 
 Every free text field is MASKED (``detections.redact.mask``) BEFORE it is cut
 (:func:`clip`): a cut that ran first could leave half a key the mask no longer
@@ -68,6 +72,8 @@ log = logging.getLogger(__name__)
 TYPES: tuple[str, ...] = (
     "session", "user", "text", "text_done", "thinking", "tool", "plan", "approval",
     "question", "resolved", "usage", "notice", "error", "done", "steer",
+    # v1.426.0 (E4): the tool's own setup (its MCP servers), for the Session tab.
+    "setup",
 )
 TOOL_KINDS: tuple[str, ...] = (
     "read", "edit", "write", "command", "search", "web", "mcp", "task", "todo", "other",

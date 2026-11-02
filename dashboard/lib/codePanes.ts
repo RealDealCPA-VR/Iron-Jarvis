@@ -286,6 +286,52 @@ export interface CodeOverview {
   programsKnown: boolean;
   /** The listing was cut at its bound: more run than are listed. */
   programsMore: boolean;
+  /** v1.426.0 (E4): the tool's OWN MCP servers as it reported them; null =
+   *  an older Iron Jarvis that does not say. */
+  mcp: CodeMcp | null;
+}
+
+/** v1.426.0 (E4): one of the tool's own MCP servers, in the daemon's words
+ *  (`hosted/tool_setup.view`). */
+export interface CodeMcpServer {
+  name: string;
+  /** connected | starting | failed | needs_sign_in | off */
+  state: string;
+  words: string;
+  error: string;
+  /** The tool's OWN way to sign in ("" = none needed). */
+  signIn: string;
+}
+
+export interface CodeMcp {
+  /** false = the tool never said (a note says why). */
+  known: boolean;
+  servers: CodeMcpServer[];
+  at: string;
+  note: string;
+}
+
+export const MCP_STATES: readonly string[] = ["connected", "starting", "failed", "needs_sign_in", "off"];
+
+export function decodeCodeMcp(raw: unknown): CodeMcp | null {
+  const r = obj(raw);
+  if (!r) return null;
+  const servers: CodeMcpServer[] = [];
+  for (const item of Array.isArray(r.servers) ? r.servers : []) {
+    const s = obj(item);
+    const name = s ? str(s.name, 120).trim() : "";
+    if (!s || !name) continue;
+    const state = str(s.state, 40);
+    servers.push({
+      name,
+      state: MCP_STATES.includes(state) ? state : "failed",
+      words: str(s.words, 80) || "Did not start",
+      error: str(s.error, 300),
+      signIn: str(s.sign_in, 400),
+    });
+    if (servers.length >= 50) break;
+  }
+  return { known: r.known === true, servers, at: str(r.at, 64), note: str(r.note, 300) };
 }
 
 export function decodeCodeOverview(raw: unknown): CodeOverview | null {
@@ -310,6 +356,7 @@ export function decodeCodeOverview(raw: unknown): CodeOverview | null {
     programs,
     programsKnown: r.programs_known !== false,
     programsMore: r.programs_more === true,
+    mcp: decodeCodeMcp(r.mcp),
   };
 }
 

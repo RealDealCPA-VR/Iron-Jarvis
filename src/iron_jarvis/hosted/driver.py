@@ -166,6 +166,9 @@ class Driver:
         #: True while a turn the user started has not ended.
         self.turn_open = False
         self.commands: list[dict[str, str]] = []
+        #: v1.426.0 (E4): the tool's OWN MCP servers as it last reported them
+        #: (``hosted/tool_setup``); None = it has not said.
+        self.mcp_servers: list[dict[str, str]] | None = None
         #: v1.412.0: the service's way to say a note sent while the tool works
         #: (a STEER) reached it — called with the note's ref.
         self.steer_read: Callable[[str], None] | None = None

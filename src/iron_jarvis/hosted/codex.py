@@ -176,6 +176,10 @@ _SANDBOX_POLICY = {
 }
 
 REQUEST_TIMEOUT_S = 60.0
+#: v1.426.0 (E4): how long the background ``skills/list`` (Codex's own `/`
+#: menu: its skills, ``$<name>``) may take. It is asked once per process,
+#: never awaited by the session's start: the conversation never waits on it.
+SKILLS_WAIT_S = 15.0
 
 _DECISION_V2 = {"allow": "accept", "allow_session": "acceptForSession", "deny": "decline"}
 _DECISION_LEGACY = {"allow": "approved", "allow_session": "approved_for_session", "deny": "denied"}
@@ -350,6 +354,9 @@ class CodexDriver(Driver):
         #: v1.418.0 (C4.2): item id -> {"tail", "n", "sent", "dirty"} of a
         #: running command's output.
         self._out: dict[str, dict[str, Any]] = {}
+        #: v1.426.0 (E4): the background reads this driver started (a task
+        #: is kept here until it ends, never dropped by the garbage collector).
+        self._bg: set[asyncio.Task] = set()
 
     def after_restore(self) -> None:
         """v1.422.0 (kept across a restart): ``turn/start``'s answer names
@@ -423,9 +430,62 @@ class CodexDriver(Driver):
             model=clip((res or {}).get("model") or (thread or {}).get("model") or self.model, 120),
             cwd=clip(self.cwd, 500), mode=self.mode,
         ))
+        await self._read_skills()
+
+    # -- v1.426.0 (E4): Codex's own `/` menu ------------------------------------
+    async def _read_skills(self) -> None:
+        """Codex's own invocable items: its compact, and its SKILLS
+        (``skills/list`` for this folder — what codex 0.157.0 really reads;
+        its old ``prompts/*.md`` are not read any more, measured). The request
+        is WRITTEN here, before any turn's (so the newest request id stays a
+        turn's, which a restart relies on), and its answer is taken in the
+        background: the session never waits on it, and no answer leaves the
+        compact row alone. Never raises."""
+        from .claude import LAST_COMMANDS
+        from .tool_setup import CODEX_COMPACT_ROW
+
+        self.commands = [dict(CODEX_COMPACT_ROW)]
+        self._n += 1
+        rid = self._n
+        fut = self._replies.make(rid)
+        try:
+            await self.write({"jsonrpc": "2.0", "id": rid, "method": "skills/list",
+                              "params": {"cwds": [self.cwd]} if self.cwd else {}})
+        except Exception:  # noqa: BLE001 — a gone process: no menu beyond compact
+            self._replies.settle(rid)
+            return
+
+        async def take() -> None:
+            from .tool_setup import codex_skill_rows
+
+            try:
+                res = await asyncio.wait_for(fut, timeout=SKILLS_WAIT_S)
+            except BaseException:  # noqa: BLE001 — no answer: the compact row stays
+                self._replies.settle(rid)  # drop the waiter (a late answer finds none)
+                return
+            self.commands = [dict(CODEX_COMPACT_ROW), *codex_skill_rows(res)]
+            LAST_COMMANDS[HARNESS] = list(self.commands)
+
+        task = asyncio.get_running_loop().create_task(take())
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
 
     # -- the user's side --------------------------------------------------------
     async def send_user(self, text: str, files: list[str]) -> None:
+        from .tool_setup import CODEX_COMPACT_TEXT
+
+        if text.strip() == CODEX_COMPACT_TEXT and not files:
+            # v1.426.0 (E4): Codex's OWN compact (measured on 0.157.0:
+            # ``thread/compact/start`` answers ``{}`` and runs as a turn of its
+            # own — turn/started, a contextCompaction item, turn/completed).
+            # The turn's id comes from ``turn/started`` (below).
+            self.turn_open = True
+            self._errored = False
+            self._interrupting = False
+            self._retry_said = False
+            self._usage = {"input": 0, "output": 0, "cache_read": 0}
+            await self.request("thread/compact/start", {"threadId": self.session_id})
+            return
         items = user_input(text, files)
         approval, sandbox = self._policy()
         params: dict[str, Any] = {
@@ -703,6 +763,17 @@ class CodexDriver(Driver):
             self._on_error(p)
         elif method == "turn/completed":
             self._turn_completed(p.get("turn") or {})
+        elif method == "turn/started":
+            # v1.426.0 (E4): a compaction's turn has no ``turn/start`` answer to
+            # name it (Stop needs its id); for any other turn it is the same id.
+            turn = p.get("turn")
+            if self.turn_open and isinstance(turn, dict) and turn.get("id"):
+                self.turn_id = str(turn["id"])
+        elif method == "mcpServer/startupStatus/updated":
+            # v1.426.0 (E4): its own MCP servers starting, as it says them.
+            from .tool_setup import codex_update, note_servers
+
+            note_servers(self, codex_update(self.mcp_servers, p))
         elif method == "thread/compacted":
             self.emit(make("notice", text="Codex compacted the conversation to make room."))
         elif method == "model/rerouted":

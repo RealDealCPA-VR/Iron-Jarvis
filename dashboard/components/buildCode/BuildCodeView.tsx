@@ -128,6 +128,7 @@ import {
   backgroundRereadMs,
   backgroundWorkWords,
   CODE_SEEN_BEAT_MS,
+  commandPrefix,
   closeToolWords,
   signsInItself,
   sessionTitle,
@@ -1193,7 +1194,12 @@ function SessionPane({
         for (const c of Array.isArray(list) ? list : []) {
           const o = c as { name?: unknown; description?: unknown };
           if (typeof o?.name === "string" && o.name.trim())
-            out.push({ name: o.name.trim().replace(/^\//, ""), description: typeof o.description === "string" ? o.description : "" });
+            out.push({
+              name: o.name.trim().replace(/^\//, ""),
+              description: typeof o.description === "string" ? o.description : "",
+              // v1.426.0 (E4): a Codex skill is typed `$<name>`.
+              ...commandPrefix((c as { prefix?: unknown })?.prefix),
+            });
         }
         setFetchedCommands(out);
         setHints((cur) => ({ ...commandHints(raw), ...cur }));
@@ -1222,12 +1228,12 @@ function SessionPane({
     if (row.kind === "command") {
       if (slash) {
         // v1.418.0 (C4.8): only the `/word` is replaced (a line of its own).
-        const done = pickCommand(text, slash, row.cmd.name);
+        const done = pickCommand(text, slash, row.cmd.name, row.cmd.prefix ?? "/");
         setText(done.text);
         setCaret(done.caret);
         nextFrame(() => boxRef.current?.setSelectionRange?.(done.caret, done.caret));
       } else {
-        setText(`/${row.cmd.name} `);
+        setText(`${row.cmd.prefix ?? "/"}${row.cmd.name} `);
       }
     } else if (at) {
       const next = text.slice(0, text.length - at[2].length) + `${row.entry.rel} `;
@@ -1606,7 +1612,10 @@ function SessionPane({
                     >
                       {row.kind === "command" ? (
                         <>
-                          <span className="shrink-0 font-mono">/{row.cmd.name}</span>
+                          <span className="shrink-0 font-mono">
+                            {row.cmd.prefix ?? "/"}
+                            {row.cmd.name}
+                          </span>
                           {hints[row.cmd.name] ? (
                             <span data-testid="code-command-hint" className="shrink-0 font-mono text-[12px] text-zinc-500">
                               {hints[row.cmd.name]}
