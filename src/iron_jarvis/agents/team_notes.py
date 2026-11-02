@@ -931,8 +931,8 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
     if not rev.provider:
         out.reason = REASON_NO_REVIEWER
         return out
-    # HONEST MOCK, before the call.
-    if _is_mock_provider(platform, rev.provider, rev.model):
+    # HONEST MOCK, before the call (the adapter is looked up off the loop).
+    if await asyncio.to_thread(_is_mock_provider, platform, rev.provider, rev.model):
         out.reason = REASON_MOCK
         return out
     local = await asyncio.to_thread(any_local_only, engine, findings)
@@ -969,8 +969,10 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
         if refusal:
             out.reason = refusal
             return out
-    prompt, index = distill_prompt(member, MT.roles_of(record), findings)
-    shown = {str(f.scope or "") for f in findings if str(f.id) in set(index.values())} - {""}
+    # (Each finding is scanned again as the prompt is built: CPU work, so off
+    # the loop — the v1.153.1 rule.)
+    prompt, index = await asyncio.to_thread(distill_prompt, member, MT.roles_of(record), findings)
+    shown ={str(f.scope or "") for f in findings if str(f.id) in set(index.values())} - {""}
     if len(index) < MIN_FINDINGS or len(shown) < MIN_SESSIONS:
         # (A finding the scan left out of the prompt no longer counts.)
         out.reason = REASON_FEW
@@ -983,7 +985,7 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
         out.reason = REASON_MODEL_FAILED
         await asyncio.to_thread(_save_state, engine, member, last_reason=out.reason)
         return out
-    _library._bill(platform, route, thread_id)
+    await asyncio.to_thread(_library._bill, platform, route, thread_id)
     # HONEST MOCK, after the call (a fallback that landed on the demo model).
     if _library._is_mock(getattr(route, "provider", ""), getattr(route, "reason", "")):
         out.reason = REASON_MOCK
@@ -992,7 +994,10 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
     text = str(getattr(getattr(route, "response", None), "text", "") or "")
     accepted = [n.text for n in await asyncio.to_thread(active_notes, engine, member)]
     waiting = await asyncio.to_thread(_waiting_texts, engine, member)
-    habits, out.dropped = check_habits(parse_habits(text), index, accepted=accepted, waiting=waiting)
+    # The answer is read (masked, bounded) and each habit scanned off the loop.
+    habits, out.dropped = await asyncio.to_thread(
+        lambda: check_habits(parse_habits(text), index, accepted=accepted, waiting=waiting)
+    )
     by_id = {str(f.id): f for f in findings}
     room = MAX_HABITS - len(waiting)
     for habit in habits[: max(0, room)]:

@@ -360,6 +360,30 @@ async def test_one_proposal_with_citations_on_the_reviewers_own_model_pinned_and
     assert runs, "the distill's usage is on the session's total"
 
 
+async def test_the_scans_run_off_the_loop(plat, tmp_path, monkeypatch):
+    """Building the prompt (each finding scanned) and reading the answer
+    (each habit masked and scanned) are CPU work: never on the loop."""
+    import threading
+
+    _seed(plat, tmp_path)
+    loop_thread = threading.current_thread()
+    seen: dict[str, bool] = {}
+    real_prompt, real_check = TN.distill_prompt, TN.check_habits
+
+    def prompt(*a, **kw):
+        seen["prompt"] = threading.current_thread() is loop_thread
+        return real_prompt(*a, **kw)
+
+    def check(*a, **kw):
+        seen["check"] = threading.current_thread() is loop_thread
+        return real_check(*a, **kw)
+
+    monkeypatch.setattr(TN, "distill_prompt", prompt)
+    monkeypatch.setattr(TN, "check_habits", check)
+    assert len((await TN.distill(plat, WORKER)).minted) == 1
+    assert seen == {"prompt": False, "check": False}
+
+
 async def test_the_demo_model_distills_nothing_before_or_after_the_call(plat, tmp_path):
     _seed(plat, tmp_path)
     plat.agents_registry.register(REVIEWER, "You are rev.", [], provider="mock", model="mock-1", roles=["review"])
