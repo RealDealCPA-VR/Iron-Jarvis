@@ -59,7 +59,12 @@ each checked:
   worktree scope — a ``.gitattributes`` + ``filter.<x>.clean`` runs a program
   on ``git diff`` and ``git status``; measured) emptied with ``-c
   filter.<x>.clean= … required=false``. The user's own global filters (Git
-  LFS) are left as they are;
+  LFS) are left as they are. v1.422.2 review: nor may it make git READ a file
+  and show it — a ``mailmap.file`` or ``core.attributesFile`` the
+  repository's own config sets is pointed at the null device
+  (:data:`_FILE_SETTINGS`: a mailmap line ``<text> <a@b.c>`` of ANY file came
+  back as an author's name, an attributes file's bad names on stderr;
+  measured);
 * the environment is a Build session's git environment
   (``git.integration.git_env``: no terminal prompt, never another repository
   through ``GIT_DIR`` & co.) with ``GIT_OPTIONAL_LOCKS=0`` (a status never
@@ -665,16 +670,34 @@ def _split_command(raw: Any, args: list[str]) -> tuple[str, list[str]]:
     return words[0].lower(), [*words[1:], *args]
 
 
-def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str], list[str]] | None":
-    """``(filters, worktrees, skip_files)``: the filter drivers the
-    REPOSITORY's own config defines (local or worktree scope — what a worker
-    can write), every ``core.worktree`` it names (any scope), and the
-    ``blame.ignoreRevsFile`` files it names (local or worktree scope); None
-    when the config could not be read. Read NUL-separated (``-z``): a
-    driver's name may hold a space. BLOCKING."""
+#: v1.422.2 REVIEW: settings that make git READ a file the config names and
+#: show what it read, so the folder's own (a worker can write it) is pointed
+#: at the null device (:func:`safe_argv`; ``tests/test_git_read_file_
+#: settings_v14222.py``): ``mailmap.file`` — log, show, blame and shortlog
+#: map every author through it (``log.mailmap`` is on by default), so a line
+#: ``<text> <a@b.c>`` of ANY file came back as an author's name (measured: an
+#: outside file's text in ``git log``, ``blame`` and ``shortlog``);
+#: ``core.attributesFile`` — a word that is not a valid attribute name is
+#: warned about BY NAME on stderr, which a failing call shows (measured). The
+#: in-tree ``.mailmap`` / ``.gitattributes`` still count, and the user's own
+#: global setting is left as it is (as for filters). Lowercase key → the
+#: spelling ``-c`` sets.
+_FILE_SETTINGS: dict[str, str] = {"mailmap.file": "mailmap.file",
+                                  "core.attributesfile": "core.attributesFile"}
+
+
+def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str], list[str], list[str]] | None":
+    """``(filters, worktrees, skip_files, file_settings)``: the filter
+    drivers the REPOSITORY's own config defines (local or worktree scope —
+    what a worker can write; an included file counts as the scope that
+    includes it), every ``core.worktree`` it names (any scope), the
+    ``blame.ignoreRevsFile`` files it names (local or worktree scope), and
+    which of :data:`_FILE_SETTINGS` it sets (local or worktree scope; any
+    scope when git cannot say); None when the config could not be read. Read
+    NUL-separated (``-z``): a driver's name may hold a space. BLOCKING."""
     from ..git.integration import run_git
 
-    pattern = r"^(filter\.|core\.worktree$|blame\.ignorerevsfile$)"
+    pattern = r"^(filter\.|core\.worktree$|blame\.ignorerevsfile$|mailmap\.file$|core\.attributesfile$)"
     got = run_git(["--no-pager", "config", "-z", "--show-scope", "--get-regexp", pattern], cwd,
                   timeout=15.0, env=env, identity=False, encoding="utf-8")
     scoped = True
@@ -689,6 +712,7 @@ def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]
     names: list[str] = []
     worktrees: list[str] = []
     skip_files: list[str] = []
+    file_settings: list[str] = []
     i = 0
     while i < len(tokens):
         scope = ""
@@ -709,12 +733,16 @@ def _repo_settings(cwd: Any, env: dict[str, str]) -> "tuple[list[str], list[str]
         if low == "blame.ignorerevsfile":
             skip_files.append(value)
             continue
+        if low in _FILE_SETTINGS:
+            if low not in file_settings:
+                file_settings.append(low)
+            continue
         if not low.startswith("filter.") or key.count(".") < 2:
             continue
         name = key[len("filter."):].rsplit(".", 1)[0]
         if name and name not in names:
             names.append(name)
-    return names, worktrees, skip_files
+    return names, worktrees, skip_files, file_settings
 
 
 def _repo_filters(cwd: Any, env: dict[str, str]) -> "list[str] | None":
@@ -829,9 +857,11 @@ def _place_problem(cwd: Any, worktrees: list[str], filters: list[str],
     return ""
 
 
-def safe_argv(command: str, args: list[str], filters: list[str]) -> list[str]:
-    """The whole argv after ``git`` (:func:`run` passes it to ``run_git``).
-    Pure."""
+def safe_argv(command: str, args: list[str], filters: list[str],
+              files: "list[str] | tuple[str, ...]" = ()) -> list[str]:
+    """The whole argv after ``git`` (:func:`run` passes it to ``run_git``):
+    ``files`` are the :data:`_FILE_SETTINGS` keys the repository's own config
+    sets, each pointed at the null device. Pure."""
     pre = [
         "--no-pager",
         "-c", "core.fsmonitor=false",
@@ -863,6 +893,10 @@ def safe_argv(command: str, args: list[str], filters: list[str]) -> list[str]:
     for name in filters:
         pre += ["-c", f"filter.{name}.clean=", "-c", f"filter.{name}.smudge=",
                 "-c", f"filter.{name}.process=", "-c", f"filter.{name}.required=false"]
+    for key in files:
+        spelled = _FILE_SETTINGS.get(str(key).lower())
+        if spelled:
+            pre += ["-c", f"{spelled}={os.devnull}"]
     safe: list[str] = []
     if command in NO_EXT_DIFF:
         safe.append("--no-ext-diff")
@@ -900,7 +934,7 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
     settings = _repo_settings(cwd, env)
     if settings is None:
         return ToolResult(ok=False, error="git_read could not read this folder's git settings, so it ran nothing.")
-    filters, worktrees, skip_files = settings
+    filters, worktrees, skip_files, files = settings
     if len(filters) > MAX_FILTERS:
         return ToolResult(ok=False, error="This folder's git settings name too many file filters; git_read ran nothing.")
     if any("=" in name for name in filters):
@@ -909,7 +943,7 @@ def run(cwd: Any, command: str, args: list[str]) -> ToolResult:
         or _place_problem(cwd, worktrees, filters, env)
     if problem:
         return ToolResult(ok=False, error=problem, data={"command": command})
-    got = run_git(safe_argv(command, args, filters), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
+    got = run_git(safe_argv(command, args, filters, files), cwd, timeout=GIT_READ_TIMEOUT_S, env=env,
                   identity=False, encoding="utf-8")
     label = f"git {command}"
     if got.timed_out:
