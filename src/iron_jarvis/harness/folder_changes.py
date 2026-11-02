@@ -43,6 +43,35 @@ cap, a walk past the deadline, an unreadable folder, a carried-on reply whose
 first snapshot this process no longer has — is never half compared: the
 check falls back to the journal alone, and says why (:attr:`Snapshot.problem`).
 
+v1.425.0 (Wave 5, C1 — IN A GIT REPOSITORY, GIT SAYS WHICH FILES): the walk's
+cap is list_files' 5,000 files, so in any bigger repository a reply that
+changed files by command was never checked (the snapshot "had more than 5000
+files"). In a git repository the snapshot now asks git which files there are
+— ``git ls-files --cached --others --exclude-standard`` (tracked, plus
+untracked that nothing ignores: git's OWN ignore rules, every nested
+``.gitignore``, ``.git/info/exclude`` and the user's global excludes) — and
+reads each one's size and time from a listing of ONLY the folders that hold
+them (``os.scandir``: on Windows the size and time come with the listing, no
+call per file; never through a link or a junction, exactly as the walk). The
+same pruning as the walk's (``_SKIP_DIRS``, dot-folders but
+:data:`SOURCE_DOT_DIRS`, caches) and the same deadline; the cap is
+:data:`GIT_MAX_FILES` (200,000 — a bound on memory, not on any normal
+project). Measured on this PC on a 50,000-file repository (2,500 folders, an
+ignored ``node_modules``): the walk took 0.27-0.34 s and stopped at its cap;
+git's listing + the guided listing 0.41-0.44 s for every file (a ``stat`` per
+file instead: 1.7-2.7 s). A folder that is not a repository (or git is not
+installed, or did not answer, or the repository is the user's whole home
+folder or a drive — a dotfiles repository whose ``.gitignore`` ignores
+everything would hide every file) keeps the walk, cap and all. Both
+snapshots of one reply are taken the SAME way (:attr:`Snapshot.how`): a
+reply that ran ``git init`` is compared walk to walk.
+
+v1.425.0 (C1, part 2): the first snapshot no longer holds the reply's first
+model call — ``finish.start`` starts it beside that call and the reply's FIRST
+TOOL waits for it (``FinishCheck.ready``): the folder as it was before any
+tool of the reply ran, exactly as before, without the wait in front of the
+first word.
+
 MIRROR NOTE (lock-step): the two chat lanes reach this module only through
 ``finish.start`` / ``FinishCheck.prepare`` (``daemon/chat_turn.finish_for_turn``
 is the one seam both call).
@@ -95,6 +124,11 @@ SOURCE_DOT_DIRS = frozenset({
 #: Build reply, before its first model call, and again at its end (review: on
 #: slow storage the user waited up to 10 s before each reply's first word).
 WALK_DEADLINE_S = 3.0
+#: v1.425.0 (Wave 5, C1): the cap in a git repository (:func:`_git_take`) —
+#: 40 times the walk's. Not a project bound (git's own listing is what the
+#: repository holds): a memory bound on one snapshot, which a carry-on may
+#: keep (:data:`MAX_KEPT_REPLIES`).
+GIT_MAX_FILES = 200_000
 #: How long past its deadline a walk is waited for. The deadline is read
 #: between folders, so ONE listing that never returns (a network folder gone
 #: away) cannot be cut short inside the walk: the reply stops waiting, the
@@ -120,6 +154,9 @@ _CACHE_FILE_PREFIXES = (".coverage.",)
 PROBLEM_TOO_MANY = "this folder has more than {limit} files to compare"
 PROBLEM_TOO_SLOW = "reading this folder took longer than {seconds:g} s"
 PROBLEM_UNREADABLE = "this folder could not be read"
+#: v1.425.0 (C1): the reply began in a git repository and the folder is no
+#: longer one (a command removed its ``.git``) — never compared with a walk.
+PROBLEM_NOT_A_REPO = "this folder stopped being a git repository during the reply"
 #: (Review: it said "(Iron Jarvis restarted after the reply was cut off)" as
 #: fact; a snapshot is also let go when newer replies of other sessions push
 #: it out — a carry-on can come hours later.)
@@ -192,6 +229,10 @@ class Snapshot:
     skipped: frozenset[str] = frozenset()
     problem: str = ""
     seconds: float = 0.0
+    #: v1.425.0 (C1): how it was read — ``"walk"`` (every folder walked) or
+    #: ``"git"`` (git's listing of the repository, :func:`_git_take`). The
+    #: end of a reply reads the folder the way its start did.
+    how: str = "walk"
 
     @property
     def usable(self) -> bool:
@@ -206,6 +247,168 @@ def _is_junction(entry: Any) -> bool:
         return True
 
 
+def _git_cap() -> int:
+    """The file cap in a git repository (:data:`GIT_MAX_FILES`)."""
+    return int(GIT_MAX_FILES)
+
+
+def _folder_pruned(folder: str, skip: frozenset[str]) -> bool:
+    """Would the walk leave out a repository path inside this folder ("/"
+    separated, "" = the top)? Each of its folders is judged as the walk judges
+    one (one rule for both ways of reading the folder)."""
+    for name in folder.split("/") if folder else ():
+        if name in skip or cache_dir(name) or (name.startswith(".") and name not in SOURCE_DOT_DIRS):
+            return True
+    return False
+
+
+#: How many folders up a repository is looked for (a ``.git`` beside the
+#: folder or above it).
+_REPO_LOOKUP_DEPTH = 64
+
+
+def _repo_top(root: Path) -> "Path | None":
+    """The nearest folder at or above ``root`` that holds a ``.git`` (a
+    folder, or a worktree's file) — where git itself would find the
+    repository — or None. Read here, so a folder that is not in a
+    repository never starts git at all. BLOCKING."""
+    cur = root
+    for _ in range(_REPO_LOOKUP_DEPTH):
+        try:
+            if (cur / ".git").exists():
+                return cur
+        except OSError:
+            return None
+        parent = cur.parent
+        if parent == cur:
+            return None
+        cur = parent
+    return None
+
+
+def _not_a_project_repo(top: Path) -> bool:
+    """A repository found ABOVE every project: the user's whole home folder
+    or a drive. A dotfiles repository in the home folder often ignores
+    everything (``*``) — git's listing would hide every file in every
+    project under it — so such a folder is walked, as before."""
+    try:
+        t = os.path.normcase(os.path.abspath(str(top)))
+        home = os.path.normcase(os.path.abspath(str(Path.home())))
+    except (OSError, RuntimeError, ValueError):
+        return True
+    return t == home or os.path.dirname(t) == t
+
+
+def _git_names(root: Path, deadline: float, started: float,
+               clock: Callable[[], float]) -> "tuple[list[str] | None, str]":
+    """``(paths, problem)`` — the repository paths under ``root`` git lists
+    (tracked, and untracked that nothing ignores; relative to ``root``, "/"
+    separated), or ``(None, "")`` when this is not a usable repository (the
+    walk takes over), or ``(None, problem)`` when git ran past the deadline.
+    BLOCKING. ``core.fsmonitor`` is switched off for this read: a
+    repository's own config must not start a program here (git only lists)."""
+    top = _repo_top(root)
+    if top is None or _not_a_project_repo(top) or not _git_on_path():
+        return None, ""
+    from ..git.integration import git_env, run_git
+
+    left = deadline - (clock() - started)
+    if left <= 0:
+        return None, PROBLEM_TOO_SLOW.format(seconds=deadline)
+    listed = run_git(
+        ["-c", "core.fsmonitor=false", "-c", "core.quotepath=off",
+         "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        root, env=git_env({"GIT_OPTIONAL_LOCKS": "0"}), identity=False,
+        timeout=max(0.1, left), keep_bytes=True,
+    )
+    if listed.timed_out:
+        return None, PROBLEM_TOO_SLOW.format(seconds=deadline)
+    if not listed.ok:
+        return None, ""  # git refused this repository (an unsafe owner…): the walk
+    raw = listed.stdout.decode("utf-8", "surrogateescape")
+    # A path ending in "/" is a folder git did not go into (an untracked
+    # repository inside this one): never a file.
+    return [p for p in raw.split("\0") if p and not p.endswith("/")], ""
+
+
+def _git_on_path() -> bool:
+    from . import branches as B
+
+    return B.git_path() is not None
+
+
+def _git_take(root: Path, limit: int, deadline: float, started: float,
+              clock: Callable[[], float]) -> "Snapshot | None":
+    """v1.425.0 (Wave 5, C1): the snapshot of a folder in a git repository —
+    git's listing, each file's size and time read from a listing of the
+    folders that hold them. None: not a usable repository (the caller
+    walks). BLOCKING; the caller's ``try`` keeps it from raising."""
+    names, problem = _git_names(root, deadline, started, clock)
+    if names is None:
+        if problem:
+            return Snapshot(root=str(root), problem=problem, seconds=clock() - started, how="git")
+        return None
+    fold = (lambda s: s.lower()) if os.name == "nt" else (lambda s: s)
+    skip = _skip_dirs()
+    pruned: dict[str, bool] = {}
+    files_wanted: set[str] = set()
+    need: set[str] = {""}
+    for rel in names:
+        cut = rel.rfind("/")
+        folder = rel[:cut] if cut > 0 else ""
+        out = pruned.get(folder)
+        if out is None:
+            out = pruned[folder] = _folder_pruned(folder, skip)
+        if out or cache_file(rel[cut + 1:]):
+            continue
+        key = fold(rel)
+        files_wanted.add(key)
+        if len(files_wanted) > limit:
+            return Snapshot(root=str(root), problem=PROBLEM_TOO_MANY.format(limit=limit),
+                            seconds=clock() - started, how="git")
+        # Every folder on the way to it is listed (and only those).
+        while cut > 0:
+            d = key[:cut]
+            if d in need:
+                break
+            need.add(d)
+            cut = key.rfind("/", 0, cut)
+    files: dict[str, tuple[int, int]] = {}
+    skipped: set[str] = set()
+    stack: list[tuple[str, str]] = [("", str(root))]
+    while stack:
+        rel_dir, path = stack.pop()
+        try:
+            with os.scandir(path) as it:
+                entries = list(it)
+        except OSError:
+            if not rel_dir:
+                return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE, how="git")
+            skipped.add(rel_dir)
+            continue
+        for entry in entries:
+            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
+            key = fold(rel)
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    # Never through a link or a junction: it can lead
+                    # outside the folder (the walk's rule).
+                    if key in need and not _is_junction(entry) and not entry.is_symlink():
+                        stack.append((rel, entry.path))
+                    continue
+                if key not in files_wanted:
+                    continue
+                st = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            files[rel] = (int(st.st_size), int(st.st_mtime_ns))
+        if clock() - started >= deadline:
+            return Snapshot(root=str(root), problem=PROBLEM_TOO_SLOW.format(seconds=deadline),
+                            seconds=clock() - started, how="git")
+    return Snapshot(root=str(root), files=files, skipped=frozenset(skipped),
+                    seconds=clock() - started, how="git")
+
+
 def take(
     folder: Any,
     *,
@@ -213,12 +416,17 @@ def take(
     deadline_s: "float | None" = None,
     ignore: Any = None,
     clock: Callable[[], float] = time.monotonic,
+    how: str = "",
 ) -> Snapshot:
-    """Walk ``folder`` (BLOCKING; never raises). Bounded by ``list_files``'
-    caps unless given: more files than ``limit`` or a walk past
-    ``deadline_s`` is a :class:`Snapshot` with a ``problem`` and no files."""
+    """Read ``folder`` (BLOCKING; never raises): from git's listing in a git
+    repository, else by walking it (v1.425.0, C1 — :func:`_git_take`).
+    ``how`` ``"walk"`` / ``"git"`` reads it that way only (the end of a reply
+    reads the folder the way its start did; a folder that stopped being a
+    repository is :data:`PROBLEM_NOT_A_REPO`). Bounded by ``list_files``'
+    caps unless given (:data:`GIT_MAX_FILES` from git's listing): more files
+    than ``limit`` or a read past ``deadline_s`` is a :class:`Snapshot` with
+    a ``problem`` and no files."""
     cap, deadline = _caps()
-    limit = cap if limit is None else int(limit)
     deadline = deadline if deadline_s is None else float(deadline_s)
     started = clock()
     try:
@@ -230,6 +438,17 @@ def take(
 
         if not fs_read_ok(str(root))[0] or not root.is_dir():
             return Snapshot(root=str(root), problem=PROBLEM_UNREADABLE)
+        if how != "walk":
+            try:
+                got = _git_take(root, _git_cap() if limit is None else int(limit), deadline, started, clock)
+            except Exception:  # noqa: BLE001 — git's way failed: the walk, as before
+                log.debug("finish check: reading %s through git failed", folder, exc_info=True)
+                got = None
+            if got is not None:
+                return got
+            if how == "git":
+                return Snapshot(root=str(root), problem=PROBLEM_NOT_A_REPO, how="git")
+        limit = cap if limit is None else int(limit)
         if ignore is None:
             ignore = ignore_for(root)
         skip = _skip_dirs()

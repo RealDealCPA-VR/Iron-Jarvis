@@ -96,6 +96,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -2372,6 +2373,10 @@ class FinishCheck:
         self._custom = frozenset(str(n) for n in unjournaled or ())
         self._may_write = False
         self._before: Any = None
+        #: v1.425.0 (Wave 5, C1): the first readings while they are read
+        #: (:func:`_start_first_readings`) — None once known or never started
+        #: (a carry-on reuses the cut reply's). :meth:`ready` waits for them.
+        self._first: "asyncio.Future | None" = None
         #: key(path) -> the file's bytes when the reply began (None: it did
         #: not exist then) — the description a point points to
         self._spec_before: dict[str, "bytes | None"] = {}
@@ -2416,6 +2421,35 @@ class FinishCheck:
         self.project_checks: Any = None
 
     # -- what the lane tells it -------------------------------------------- #
+
+    async def ready(self) -> None:
+        """v1.425.0 (Wave 5, C1): wait for the reply's first readings — the
+        folder as it was before any tool of the reply ran. BOTH lanes await
+        it before a round's tools run (MIRROR NOTE, lock-step: the stream lane
+        in ``routes/chat.py``, the POST lane in ``chat_turn.run_chat_turn``),
+        so no tool can change the folder before it was read; the model's call
+        before that round never waits for it. Done (or never started): at
+        once. A cancel of the WAITER (Stop) leaves the read to finish on its
+        own (it is still kept for a carry-on); never raises otherwise."""
+        first = self._first
+        if first is None:
+            return
+        if not first.done():
+            try:
+                await asyncio.shield(first)
+            except asyncio.CancelledError:
+                if not first.cancelled():
+                    raise  # this waiter was cancelled: the read goes on
+            except Exception:  # noqa: BLE001 — the task never raises; belt and braces
+                pass
+        if first.done():
+            self._first = None
+        if self._before is None:
+            # The read itself was cancelled (the loop is closing): never a
+            # half picture.
+            from . import folder_changes as FC
+
+            self._before = FC.unavailable(self.folder, FC.PROBLEM_UNREADABLE)
 
     def owns(self, call: Any) -> bool:
         """Is ``call`` one of the check's own calls (a test run, or the team's
@@ -2684,6 +2718,10 @@ class FinishCheck:
         seen = await self._folder_changes()
         if not files.changed and not (seen is not None and seen.any):
             return None
+        # v1.425.0 (C1): the description as it was before the reply (read
+        # beside its first model call). A tool ran, so this is already known
+        # — the lanes waited for it before that tool.
+        await self.ready()
         self.ran = True
         self.draft = str(reply or "")
         # v1.401.0: decided BEFORE the gathering, which builds its brief.
@@ -2884,13 +2922,18 @@ class FinishCheck:
         says why; the journal alone decides). OFF THE LOOP."""
         from . import folder_changes as FC
 
-        if not self._may_write or self._before is None:
+        if not self._may_write:
+            return None
+        await self.ready()  # v1.425.0 (C1): the first snapshot, read beside the first model call
+        if self._before is None:
             return None
         if not self._before.usable:
             self.folder_problem = self._before.problem
             log.info("finish check: %s, so only files made with file tools are known", self.folder_problem)
             return None
-        after = await FC.walk_bounded(self.folder, FC.take, self.folder)
+        # v1.425.0 (C1): read the way the reply's start was (git's listing or
+        # the walk): a reply that ran `git init` is compared walk to walk.
+        after = await FC.walk_bounded(self.folder, functools.partial(FC.take, self.folder, how=self._before.how))
         if after is None:
             after = FC.too_slow(self.folder)
         if not after.usable:
@@ -3008,8 +3051,9 @@ class FinishCheck:
                 yield docstring, name, target
 
     def first_readings(self) -> "tuple[Any, dict[str, bytes | None]]":
-        """BLOCKING, before any tool of the reply runs (:func:`start`): the
-        folder's snapshot (``folder_changes.take``) and — when the request
+        """BLOCKING, before any tool of the reply runs (started by
+        :func:`start` beside the first model call; the first tool waits for
+        it, :meth:`ready`): the folder's snapshot (``folder_changes.take``) and — when the request
         points to a written description — that file as it is NOW, so the
         check reads it as it was BEFORE the reply even when a command (which
         writes no journal row) changed it. Never raises."""
@@ -3942,9 +3986,11 @@ async def start(
     made, and its test command. MIRROR NOTE (lock-step): both chat lanes call
     this at the same seam.
 
-    WHAT COMMANDS CHANGED (``harness/folder_changes``): before it returns —
-    before any tool of the reply runs — it snapshots the folder, off the
-    loop. ``turn_id`` names this reply, so a carry-on of it can compare with
+    WHAT COMMANDS CHANGED (``harness/folder_changes``): it STARTS the
+    folder's snapshot, off the loop (v1.425.0, Wave 5 C1: no longer waited
+    for here — the reply's first model call goes out beside it, and the
+    lanes await :meth:`FinishCheck.ready` before a round's tools run, so it
+    is still the folder before any tool of the reply ran). ``turn_id`` names this reply, so a carry-on of it can compare with
     the same first snapshot (kept in this process: the newest reply of each
     session); a carry-on (``since``) names the reply it continues
     (``continues``) and uses that reply's snapshot — or, when the cut part
@@ -4036,12 +4082,41 @@ async def start(
             check._before, spec = got
             check._spec_before = dict(spec or {})
     else:
-        # Bounded (review): a listing that never returns (a network folder
-        # gone away) must not hold the reply's first model call.
-        got = await FC.walk_bounded(base, check.first_readings)
+        # v1.425.0 (Wave 5, C1): STARTED here, not waited for — the reply's
+        # first model call goes out while the folder is read, and the reply's
+        # FIRST TOOL waits for it (``FinishCheck.ready``, which both lanes
+        # await before a round's tools run): still the folder as it was
+        # before any tool of the reply ran. Bounded as before (review: a
+        # listing that never returns — a network folder gone away — must not
+        # hold the reply).
+        check._first = _start_first_readings(check, base, sid, reply_id)
+    return check
+
+
+#: v1.425.0 (C1): first snapshots still being read (strong references: a
+#: reply that ended before its first tool must not leave its read to be
+#: collected half done — its snapshot is still KEPT for a carry-on).
+_FIRST_READS: "set[asyncio.Future]" = set()
+
+
+def _start_first_readings(check: "FinishCheck", base: Path, sid: str, reply_id: str) -> "asyncio.Future":
+    """Start the reply's first readings (the folder's snapshot, the written
+    description) beside the first model call; a task that never raises."""
+    from . import folder_changes as FC
+
+    async def read() -> None:
+        try:
+            got = await FC.walk_bounded(base, check.first_readings)
+        except Exception:  # noqa: BLE001 — a snapshot never breaks a reply
+            log.debug("finish check: the first snapshot failed", exc_info=True)
+            got = (FC.unavailable(base, FC.PROBLEM_UNREADABLE), {})
         check._before, check._spec_before = got if got is not None else (FC.too_slow(base), {})
         FC.keep(sid, reply_id, check._before, dict(check._spec_before))
-    return check
+
+    task = asyncio.ensure_future(read())
+    _FIRST_READS.add(task)
+    task.add_done_callback(_FIRST_READS.discard)
+    return task
 
 
 __all__ = [
