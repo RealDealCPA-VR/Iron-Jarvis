@@ -324,6 +324,27 @@ def test_a_hook_or_server_field_with_a_key_the_mask_misses_is_left_out(owner, ac
     assert setup.hook_count == 1
 
 
+def test_a_reference_that_also_carries_a_key_is_held_in_the_environment(owner, account, current):
+    """A value holding a ``${VAR}`` reference was written to ``.mcp.json`` as it
+    is whenever ``mask`` left it alone — even with a literal key beside the
+    reference.
+
+    MUTATION: keep a reference whenever ``mask`` leaves it unchanged -> the key
+    is on disk -> red."""
+    data = json.loads((owner / ".claude.json").read_text(encoding="utf-8"))
+    data["mcpServers"]["mixed"] = {"type": "stdio", "command": "C:\t\m.exe",
+                                   "env": {"OPTS": "${HOME} --key " + GOOGLE_KEY, "PLAIN": "${GITHUB_TOKEN}"}}
+    _w(owner / ".claude.json", json.dumps(data))
+    os.utime(owner / ".claude.json", ns=(4, 4))
+    env = _with_pane_env({}, {}, _accounts_for(account))
+    plugin = CS.folder_for(current.home) / CS.PLUGIN_DIR
+    mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert GOOGLE_KEY not in json.dumps(mcp)
+    ref = mcp["mixed"]["env"]["OPTS"]
+    assert ref.startswith("${" + CS.PLACEHOLDER_PREFIX) and env[ref[2:-1]] == "${HOME} --key " + GOOGLE_KEY
+    assert mcp["mixed"]["env"]["PLAIN"] == "${GITHUB_TOKEN}", "a plain reference stays one"
+
+
 def test_a_policy_folder_named_by_the_override_forbids(owner, account, current, tmp_path):
     """``CLAUDE_CODE_MANAGED_SETTINGS_PATH`` names the policy FOLDER (read from
     the binary: "this machine's policy folder (or the one

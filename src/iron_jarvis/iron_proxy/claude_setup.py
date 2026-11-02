@@ -376,8 +376,11 @@ def _server(name: str, spec: Mapping[str, Any]) -> tuple[dict[str, Any] | None, 
     def hold(where: str, value: Any) -> Any:
         if not isinstance(value, str):
             return value
-        if "${" in value and _mask(value) == value:
-            return value  # the owner's own reference: Claude Code expands it as before
+        if "${" in value and not _secretish(value):
+            # The owner's own reference: Claude Code expands it as before.
+            # v1.424.0 review: a reference with a key BESIDE it (one ``mask``
+            # misses) was written to disk as it was; both screens now.
+            return value
         var = _placeholder(key, where)
         values[var] = value
         return "${" + var + "}"
