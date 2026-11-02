@@ -830,8 +830,15 @@ def reviewer_model(platform: Any, findings: list[Any]) -> ReviewerModel:
             from ..core.db import session_scope
             from .team_record import TeamRoleRun
 
+            from sqlalchemy import literal_column
+
+            # v1.423.0 review: newest first by rowid (a ``created_at`` tie
+            # keeps it through the stable sort below — the v1.286.0 rule).
             with session_scope(platform.engine) as db:
-                runs = list(db.exec(select(TeamRoleRun).where(TeamRoleRun.id.in_(rows))))  # type: ignore[attr-defined]
+                runs = list(db.exec(
+                    select(TeamRoleRun).where(TeamRoleRun.id.in_(rows))  # type: ignore[attr-defined]
+                    .order_by(literal_column("teamrolerun.rowid").desc())  # type: ignore[arg-type]
+                ))
             runs = sorted((r for r in runs if str(getattr(r, "provider", "") or "")),
                           key=lambda r: _naive(r.created_at) or datetime.min, reverse=True)
         except Exception:  # noqa: BLE001
@@ -1742,11 +1749,19 @@ def _findings_by_id(engine: Any, ids: Iterable[str]) -> list[Any]:
     from ..core.db import session_scope
     from .team_findings import TeamFinding
 
+    from sqlalchemy import literal_column
+
     want = [str(i) for i in ids if str(i or "")]
     if not want:
         return []
+    # v1.423.0 review: NEWEST FIRST by rowid — ``created_at`` ties are
+    # routine (Windows' 15.6 ms clock; the v1.286.0 rule), and the caller's
+    # stable sort by time keeps this order inside a tie.
     with session_scope(engine) as db:
-        rows = list(db.exec(select(TeamFinding).where(TeamFinding.id.in_(want))))  # type: ignore[attr-defined]
+        rows = list(db.exec(
+            select(TeamFinding).where(TeamFinding.id.in_(want))  # type: ignore[attr-defined]
+            .order_by(literal_column("teamfinding.rowid").desc())  # type: ignore[arg-type]
+        ))
         for r in rows:
             db.expunge(r)
     return rows

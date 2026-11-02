@@ -474,6 +474,59 @@ async def test_a_habit_the_owner_removed_is_not_suggested_again_from_the_same_fi
     assert len((await TN.distill(plat, WORKER)).minted) == 1
 
 
+async def test_the_newest_folder_is_chosen_when_findings_share_a_clock_tick(tmp_path):
+    """On Windows ``utcnow`` ticks every 15.6 ms, so findings recorded
+    together share ``created_at`` (the v1.286.0 rule: break a tie on the
+    rowid). The role brief goes to the folder of the NEWEST finding — the
+    second session's here — never the first one's because the tie fell the
+    database's way (the builder's own pin failed so under a loaded run)."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.agents.team_findings import TeamFinding
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.harness import library
+    from tests.test_team_notes_v14230 import _accepted
+
+    app, p = _app(tmp_path)
+    p.agents_registry.register("kimi", "You are kimi.", [], provider="ollama", model="kimi", roles=["code"])
+    threads = _seed(p, tmp_path)
+    with session_scope(p.engine) as db:
+        rows = list(db.exec(__import__("sqlmodel").select(TeamFinding)))
+        tick = rows[0].created_at
+        for r in rows:
+            r.created_at = tick
+            db.add(r)
+        db.commit()
+    _accepted(p, "kimi", "Run the tests before reporting a piece as done")
+    (row,) = (await TN.distill(p, WORKER)).minted
+    r = TestClient(app).post(f"/coach/proposals/{row.id}/accept")
+    assert r.status_code == 200, r.text
+    assert library.view(p.engine, str(tmp_path / "ws0"))["proposals"] == []
+    (edit,) = library.view(p.engine, str(tmp_path / "ws1"))["proposals"]
+    assert edit["thread_id"] == threads[1]
+
+
+def test_a_reviewer_with_no_model_of_its_own_uses_its_newest_review_on_a_clock_tick(plat, tmp_path):
+    """The model a reviewer's newest cited review ran on — the newest by
+    rowid when two reviews share a ``created_at`` tick."""
+    from iron_jarvis.agents.team_record import TeamRoleRun
+    from iron_jarvis.core.db import session_scope
+
+    _seed(plat, tmp_path)
+    plat.agents_registry.register("rev", "You are rev.", [], roles=["review"])  # no provider
+    with session_scope(plat.engine) as db:
+        runs = list(db.exec(__import__("sqlmodel").select(TeamRoleRun).where(TeamRoleRun.role == "review")))
+        tick = runs[0].created_at
+        for i, r in enumerate(sorted(runs, key=lambda r: r.session_id)):
+            r.created_at = tick
+            r.model = f"qwen3:{i}"
+            db.add(r)
+        db.commit()
+    found = TN.eligibility(plat.engine, WORKER).findings
+    rev = TN.reviewer_model(plat, found)
+    assert (rev.provider, rev.model, rev.own) == ("ollama", "qwen3:1", False)
+
+
 # --------------------------------------------------------------------------- #
 # 4. the name rule is the WHOLE name
 # --------------------------------------------------------------------------- #
