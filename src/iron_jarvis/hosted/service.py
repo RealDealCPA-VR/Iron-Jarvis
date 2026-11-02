@@ -1670,6 +1670,11 @@ class HostedService:
             await asyncio.to_thread(store.delete, self.engine, sid)
             await asyncio.to_thread(self._drop_own_folder, row)
             moved = await asyncio.to_thread(self._trash_events, sid)
+            # v1.425.0 (C3): the session's kept index (a cache of its folder,
+            # ``panes.kept_index``) goes with it.
+            from . import panes as PN
+
+            await asyncio.to_thread(PN.forget_kept_index, self.home, sid)
         finally:
             live.claim = ""
         return {"ok": True, "deleted": sid, "events_moved_to": moved}

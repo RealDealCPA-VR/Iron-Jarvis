@@ -522,7 +522,70 @@ def _add_tree(home: Any, sid: str, entry: dict[str, Any]) -> None:
         os.replace(tmp, path)
 
 
-def snapshot_tree(folder: str) -> str:
+#: v1.425.0 (Wave 5, C3): where a session's KEPT index lives
+#: (:func:`kept_index`) — under ``workspaces/``, which a backup leaves out (a
+#: cache, rebuilt from the user's own index whenever it is missing).
+KEPT_INDEX_DIR = ("workspaces", "code-index")
+_KEPT_LOCKS: dict[str, threading.Lock] = {}
+_KEPT_LOCKS_LOCK = threading.Lock()
+
+
+def kept_index(home: Any, sid: str) -> Path | None:
+    """v1.425.0 (Wave 5, C3): the private index file :func:`snapshot_tree`
+    KEEPS for one session between its messages, or None without a home or
+    a session id."""
+    import re
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(sid or ""))[:120].strip(".")
+    if home is None or not safe:
+        return None
+    return Path(str(home)).joinpath(*KEPT_INDEX_DIR, f"{safe}.index")
+
+
+def forget_kept_index(home: Any, sid: str) -> None:
+    """A deleted session's kept index goes with it (a cache: never moved to
+    the trash). Never raises."""
+    path = kept_index(home, sid)
+    if path is None:
+        return
+    try:
+        with _kept_lock(path):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _kept_lock(path: Path) -> threading.Lock:
+    key = os.path.normcase(str(path))
+    with _KEPT_LOCKS_LOCK:
+        lock = _KEPT_LOCKS.get(key)
+        if lock is None:
+            lock = _KEPT_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _write_tree(folder: str, idx: str) -> str:
+    """``git add -A .`` into the index file *idx*, then ``git write-tree``.
+    Raises :class:`GitUnreadable`. BLOCKING."""
+    from ..git.integration import git_env, run_git
+    from ..harness import branches as B
+
+    env = git_env({"GIT_INDEX_FILE": idx, "GIT_OPTIONAL_LOCKS": "0"})
+
+    def run(args: list[str]) -> Any:
+        return run_git(["-c", "core.quotepath=off", *args], Path(folder), env=env,
+                       identity=False, encoding="utf-8", timeout=B.QUICK_S)
+
+    added = run(["add", "-A", "--", "."])
+    if not added.ok:
+        raise GitUnreadable(added)
+    tree = run(["write-tree"])
+    if not tree.ok or not tree.out.strip():
+        raise GitUnreadable(tree)
+    return tree.out.strip()
+
+
+def snapshot_tree(folder: str, *, keep: "Path | str | None" = None) -> str:
     """The folder as it is NOW, as a git tree: the user's index copied into a
     throwaway file, ``git add -A .`` into THAT copy (the session's folder
     only — new files included, ``.gitignore`` honoured), ``git write-tree``.
@@ -537,37 +600,69 @@ def snapshot_tree(folder: str) -> str:
     a fresh time made a same-size edit in that second read as unchanged, so
     the turn's list missed it and Revert put back the older content. And
     ``.``, not ``:/``: a session in a subfolder of a large repository must
-    not hash every file outside it on each message."""
+    not hash every file outside it on each message.
+
+    v1.425.0 (Wave 5, C3 — THE MESSAGE WAITS LESS): *keep* (a session's
+    :func:`kept_index`) is a private index KEPT between the session's
+    messages instead of a fresh copy each time — copied from the user's
+    index once (``copy2``, the rule above), then git's own: the files it
+    already read keep their recorded size and time, so ``git add -A`` reads
+    only what changed (a fresh copy re-read every file the user had not
+    staged and every untracked one, on every message). The tree is the same
+    one (the folder's content); only outside the session's folder can the
+    kept index differ from the user's current one, and every reader of these
+    trees diffs inside the folder (``--relative``). Measured on this PC on a
+    50,000-file repository (200 untracked files): 525-565 ms per message
+    with a fresh copy, 306-416 ms with the kept one. A kept index git cannot
+    use (another repository's after the folder moved, a damaged file) is
+    copied again from the user's. One read at a time per kept index (a lock;
+    git would refuse a second writer)."""
     import shutil
     import tempfile
-
-    from ..git.integration import git_env, run_git
-    from ..harness import branches as B
 
     where = _git(["rev-parse", "--git-path", "index"], folder)
     if not where.ok or not where.out.strip():
         raise GitUnreadable(where)
     src = os.path.join(folder, where.out.strip())
+    if keep is not None:
+        path = Path(str(keep))
+        with _kept_lock(path):
+            fresh = not path.is_file()
+            if fresh:
+                _copy_index(src, path)
+            try:
+                return _write_tree(folder, str(path))
+            except GitUnreadable:
+                if fresh:
+                    raise
+            # A kept index git refused: start again from the user's.
+            _copy_index(src, path)
+            return _write_tree(folder, str(path))
     tmp = tempfile.mkdtemp(prefix="ij-turn-tree-")
     try:
         idx = os.path.join(tmp, "index")
         if os.path.isfile(src):
             shutil.copy2(src, idx)
-        env = git_env({"GIT_INDEX_FILE": idx, "GIT_OPTIONAL_LOCKS": "0"})
-
-        def run(args: list[str]) -> Any:
-            return run_git(["-c", "core.quotepath=off", *args], Path(folder), env=env,
-                           identity=False, encoding="utf-8", timeout=B.QUICK_S)
-
-        added = run(["add", "-A", "--", "."])
-        if not added.ok:
-            raise GitUnreadable(added)
-        tree = run(["write-tree"])
-        if not tree.ok or not tree.out.strip():
-            raise GitUnreadable(tree)
-        return tree.out.strip()
+        return _write_tree(folder, idx)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _copy_index(src: str, dest: Path) -> None:
+    """The user's index copied to *dest* (its time KEPT — ``copy2``, the
+    v1.420.0 rule), or *dest* removed when the repository has none yet
+    (git then starts the private index empty)."""
+    import shutil
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if os.path.isfile(src):
+        tmp = dest.with_name(dest.name + ".tmp")
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dest)
 
 
 def record_turn_start(home: Any, sid: str, folder: str, turn_id: str, *,
@@ -582,7 +677,7 @@ def record_turn_start(home: Any, sid: str, folder: str, turn_id: str, *,
     try:
         if not folder or _network(folder) or not os.path.isdir(folder):
             return None
-        tree = snapshot_tree(folder)
+        tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
         if abandon is not None and abandon.is_set():
             return None
         _add_tree(home, sid, {"how": "start", "turn": str(turn_id), "tree": tree, "at": _iso(_now_utc())})
@@ -678,7 +773,7 @@ def note_seen(home: Any, sid: str, folder: str, events: list[dict[str, Any]]) ->
         inside = _git(["rev-parse", "--is-inside-work-tree"], folder)
         if not inside.ok or inside.out.strip() != "true":
             return
-        tree = snapshot_tree(folder)
+        tree = snapshot_tree(folder, keep=kept_index(home, sid))  # v1.425.0 (C3)
         _add_tree(home, sid, {"how": "seen", "tree": tree, "at": _iso(_now_utc())})
     except Exception:  # noqa: BLE001 — a record never fails a read
         return
@@ -796,7 +891,7 @@ def changes_view(row: Any, events: list[dict[str, Any]], tool: str, *, scope: st
         if scope == SCOPE_TURN and home is not None and sid:
             turn_id, how, tree, at = turn_base(home, sid, events, turn)
             if how in ("start", "seen"):
-                got = git_changes(folder, since, base=tree, target=snapshot_tree(folder))
+                got = git_changes(folder, since, base=tree, target=snapshot_tree(folder, keep=kept_index(home, sid)))
                 if got is not None:
                     out.update(scope=SCOPE_TURN, turn=turn_id, turn_how=how)
                     scope_note = TURN_WORDS_START if how == "start" else TURN_WORDS_SEEN.format(

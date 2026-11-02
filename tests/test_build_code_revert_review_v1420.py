@@ -155,11 +155,11 @@ def test_a_late_record_is_never_kept(tmp_path, repo, monkeypatch):
     home = tmp_path / "home"
     real = PN.snapshot_tree
 
-    def slow(folder):
+    def slow(folder, **kw):  # v1.425.0 (C3, moved on purpose): the session's kept index rides as `keep`
         import time
 
         time.sleep(0.6)
-        return real(folder)
+        return real(folder, **kw)
 
     monkeypatch.setattr(PN, "snapshot_tree", slow)
 
