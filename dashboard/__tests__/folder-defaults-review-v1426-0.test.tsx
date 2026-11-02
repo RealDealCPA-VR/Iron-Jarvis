@@ -225,8 +225,12 @@ describe("a save made elsewhere in the window reaches the open start composer", 
     await waitFor(() => expect(select.value).toBe("ollama::qwen3:8b"));
     api.putReply = { folder: FOLDER, defaults: {} };
     fireEvent.click(await screen.findByTestId("p-clear"));
-    await waitFor(() => expect(screen.queryByTestId("harness-new-folder-defaults-words")).toBeNull());
-    expect(select.value).toBe("");
+    // The words go in one render and the untouched chip follows in the next
+    // (its effect): wait for the thing asserted, never a proxy that lands first.
+    await waitFor(() => {
+      expect(screen.queryByTestId("harness-new-folder-defaults-words")).toBeNull();
+      expect(select.value).toBe("");
+    });
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(got).toHaveLength(1));
@@ -276,23 +280,25 @@ describe("Build › Code: the words never claim a default the chips do not use",
     window.localStorage.setItem("ij.code.lastTool", "claude-code");
     api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: { tool: { harness: "codex", mode: "ask" } } };
     render(<StartComposer tools={TOOLS_CODEX_OUT} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
-    const words = await screen.findByTestId("code-start-folder-defaults-words");
+    await waitFor(() =>
+      expect(screen.getByTestId("code-start-folder-defaults-words").textContent).toBe(
+        "New sessions in shop start with: Codex · Ask first. Codex cannot start right now, so Claude Code does.",
+      ),
+    );
     await act(() => new Promise((r) => setTimeout(r, 30)));
     expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code");
-    expect(words.textContent).toBe(
-      "New sessions in shop start with: Codex · Ask first. Codex cannot start right now, so Claude Code does.",
-    );
   });
 
   it("a folder's model the tool no longer offers is not used, and the words say so", async () => {
     window.localStorage.setItem("ij.code.lastTool", "claude-code");
     api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: { tool: { harness: "claude-code", model: "claude-gone-1" } } };
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
-    const words = await screen.findByTestId("code-start-folder-defaults-words");
-    expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("");
-    expect(words.textContent).toBe(
-      "New sessions in shop start with: Claude Code · claude-gone-1. claude-gone-1 is not offered by Claude Code right now, so its default model does.",
+    await waitFor(() =>
+      expect(screen.getByTestId("code-start-folder-defaults-words").textContent).toBe(
+        "New sessions in shop start with: Claude Code · claude-gone-1. claude-gone-1 is not offered by Claude Code right now, so its default model does.",
+      ),
     );
+    expect((screen.getByTestId("code-start-model") as HTMLSelectElement).value).toBe("");
   });
 });
 
@@ -304,8 +310,11 @@ describe("Chat › Code: a folder's model that cannot answer is never picked", (
     };
     const got: StartRequest[] = [];
     render(<HarnessStartComposer initialFolder={FOLDER} onStart={async (req) => (got.push(req), null)} />);
-    const words = await screen.findByTestId("harness-new-folder-defaults-words");
-    expect(words.textContent).toContain("cannot answer right now, so the default model does.");
+    await waitFor(() =>
+      expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toContain(
+        "cannot answer right now, so the default model does.",
+      ),
+    );
     expect((screen.getByTestId("harness-new-model") as HTMLSelectElement).value).toBe("");
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
@@ -348,10 +357,12 @@ describe("Chat › Code: Local only and a folder's model that leaves this PC", (
       const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
       await waitFor(() => expect(select.value).toBe("claude-cli::opus"));
       fireEvent.click(screen.getByTestId("harness-new-local-only"));
-      await waitFor(() => expect(select.value).toBe(""));
-      expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toContain(
-        "Opus 5.5 leaves this PC, so it is not used while Local only is on.",
-      );
+      await waitFor(() => {
+        expect(select.value).toBe("");
+        expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toContain(
+          "Opus 5.5 leaves this PC, so it is not used while Local only is on.",
+        );
+      });
       fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
       fireEvent.click(screen.getByTestId("harness-new-send"));
       await waitFor(() => expect(got).toHaveLength(1));
