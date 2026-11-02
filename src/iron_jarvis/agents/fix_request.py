@@ -218,6 +218,19 @@ KIND_TABLE: dict[str, dict[str, Any]] = {
             "src/iron_jarvis/tools/registry.py",
         ),
     },
+    "ask_not_carried": {
+        "title": "A call that needed approval where nothing could ask",
+        "expected": (
+            "A call that needs the user's approval shows a card, or runs under a grant the user "
+            "already gave; it is never refused because nothing could ask."
+        ),
+        "owners": (
+            "src/iron_jarvis/daemon/routes/chat.py",
+            "src/iron_jarvis/daemon/chat_turn.py",
+            "src/iron_jarvis/agents/runtime.py",
+            "src/iron_jarvis/tools/permissions.py",
+        ),
+    },
     "repeated_call": {
         "title": "The same failing call sent again",
         "expected": (
@@ -400,6 +413,16 @@ _STOP_MARKERS = (
     "declined this call when asked",
     "left for the user:",
     "low trust needs the sandbox",
+    # the permission engine: the user's own rule, the user's own answer
+    "denied by policy",
+    "rejected by user",
+)
+#: The permission engine refusing an ask nothing could put to the user
+#: (``tools/permissions.authorize``) — no one was asked, so it is no choice of
+#: the user's: a lane or a run that should have carried a card or a grant.
+_NOTHING_ASKED = re.compile(
+    r"requires approval; no resolver in headless mode|needs approval and nothing here could ask",
+    re.IGNORECASE,
 )
 
 #: A command that could NOT RUN (the marker line names it).
@@ -587,9 +610,11 @@ def classify_call(tool: str, output: Any, denied_kind: str = "") -> "tuple[str, 
     tool = str(tool or "")
     text = str(output or "")
     kind_word = str(denied_kind or "").strip().lower()
+    head, body = split_failure(text)
+    if _NOTHING_ASKED.search(head):
+        return "ask_not_carried", head
     if kind_word in _USER_DENIED_KINDS:
         return None
-    head, body = split_failure(text)
     if any(m in head.lower() for m in _STOP_MARKERS):
         return None
     if kind_word in _REPEAT_KINDS or _REPEAT.search(head):
@@ -1262,7 +1287,7 @@ def gather(engine: Any, *, days: Any = DEFAULT_DAYS, session: Any = "", now: "da
 
 _PIECE_KINDS = frozenset({"helper_failed", "helper_step_limit", "context_too_small"})
 #: Kinds whose heading names the tool ("A tool call that failed: edit_file").
-_TITLED_BY_TOOL = frozenset({"tool_failed", "tool_not_given", "repeated_call"})
+_TITLED_BY_TOOL = frozenset({"tool_failed", "tool_not_given", "repeated_call", "ask_not_carried"})
 _REPLY_KINDS = frozenset({"reply_failed", "patience_gave_up", "cut_off"})
 
 
@@ -1284,7 +1309,7 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
         evidence = [{
             "at": when(o.at),
             "session": short_id(o.session),
-            "tool": o.tool,
+            "tool": clean(o.tool, NAME_CHARS),
             "args": clean(o.args, ARGS_CHARS),
             "error": clean(o.error, ERROR_CHARS),
             "note": clean(o.note, ERROR_CHARS),
@@ -1298,13 +1323,17 @@ def _group(occ: Iterable[Occurrence], totals: Counter, pieces: Counter, reply_to
         elif kind in _REPLY_KINDS:
             out_of = (reply_totals.get((who, mw), 0), "replies")
         elif tool:
-            out_of = (totals.get((who, mw, tool), 0), f"{tool} calls by this {'member' if who != 'the lead' else 'lead'}")
+            noun = "member" if who != "the lead" else "lead"
+            out_of = (totals.get((who, mw, tool), 0), f"{clean(tool, NAME_CHARS)} calls by this {noun}")
         else:
             out_of = None
         if out_of is not None and out_of[0] < len(items):
             out_of = (len(items), out_of[1])
         problems.append(Problem(
-            kind=kind, who=clean(who, NAME_CHARS), model=clean(mw, NAME_CHARS), tool=tool, shape=shp,
+            # A tool's name can come from an extension (an MCP server): shown
+            # cleaned like any other value that did not come from Iron Jarvis.
+            kind=kind, who=clean(who, NAME_CHARS), model=clean(mw, NAME_CHARS),
+            tool=clean(tool, NAME_CHARS), shape=shp,
             surface=newest.surface, count=len(items), first=min(stamps) if stamps else None,
             last=max(stamps) if stamps else None, sessions=sessions[:MAX_SESSIONS_SHOWN],
             example=clean(newest.example, EXAMPLE_CHARS), evidence=evidence,

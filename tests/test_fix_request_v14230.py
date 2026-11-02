@@ -264,6 +264,13 @@ def test_only_the_users_choices_and_ordinary_work_is_nothing_to_report(tmp_path)
         ("read_file", "Iron Jarvis stopped while this was running (a restart or a crash), so it", "", None),
         ("delegate", "Emergency stop is on, so work that starts on its own … cannot start.", "", None),
         ("shell", "left for the user: run a command — nobody answered in 15 minutes", "", None),
+        ("shell", "denied by policy", "permission denied", None),
+        ("shell", "rejected by user", "", None),
+        # Nothing could ask the user (a lane that should have carried a card or
+        # a grant — the v1.270.1 shape): no choice of the user's.
+        ("browser_create_tab", "browser_create_tab needs approval and nothing here could ask — grant it",
+         "permission denied", "ask_not_carried"),
+        ("shell", "requires approval; no resolver in headless mode", "permission denied", "ask_not_carried"),
         # Iron Jarvis refusing a malformed call.
         ("write_file", "`write_file` is not one of this agent's tools — it was not run", "not armed",
          "tool_not_given"),
@@ -326,13 +333,14 @@ def test_every_value_is_masked_before_it_is_cut(tmp_path):
               output="no such file: C:\\keys\\token=PATHSECRET4567\\notes.txt",
               at=T0 + timedelta(minutes=4))
         # A key that straddles the error cap (300): masked FIRST, or its head
-        # survives the cut ("sk-ant-Z…" is too short for the mask's shape).
+        # survives the cut ("sk-QQ" / "sk-Q…" is too short for the mask's
+        # shape, which wants six characters after "sk-").
         _call(db, iid="tool_k4", sid=HELPER, tool="grep", ok=False, verdict=PermissionMode.ALLOW,
-              args={"pattern": "x"}, output=("x" * 290) + " sk-ant-" + ("Z" * 40),
+              args={"pattern": "x"}, output=("x" * 294) + " sk-" + ("Q" * 40),
               at=T0 + timedelta(minutes=5))
         db.commit()
     text = _report(engine)["text"]
-    for secret in ("ERRSECRETVALUE1234", "ARGSECRET987654", "PATHSECRET4567", "sk-ant-Z"):
+    for secret in ("ERRSECRETVALUE1234", "ARGSECRET987654", "PATHSECRET4567", "sk-Q"):
         assert secret not in text, secret
     assert "sk-ant-***" in text and "Bearer ***" in text and "token=***" in text
 
