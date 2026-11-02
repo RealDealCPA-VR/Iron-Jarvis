@@ -13399,6 +13399,54 @@ does not need a bump, stop and bump it.
   `build-app-view-v1409` (4), `build-app-pi-v1411`. Holding the re-reads
   after the card's first show 400 ms reproduced CI's exact error on the old
   press; the safety-card and Full-access mutations still go red.
+  v1.422.2 (the owner's open items, decided the cautious way; one builder +
+  one reviewer each): (1) POWERSHELL: `terminals/shells.script_policy_unset`
+  reads `_POLICY_KEYS` (group policy `ExecutionPolicy`/`EnableScripts` for
+  HKLM and HKCU, then each hive's
+  `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell`
+  `ExecutionPolicy`) and `PSExecutionPolicyPreference`; ONLY when none is set
+  does a new Windows PowerShell terminal get `-ExecutionPolicy RemoteSigned`
+  (`NEW_TERMINAL_POLICY`, process scope; a group policy still wins); a policy
+  anyone set is respected; an unreadable registry changes nothing; restore
+  goes through `shells.restored_argv` (the two argvs Iron Jarvis gives
+  Windows PowerShell follow TODAY's rule — a saved flag beat a policy set
+  since; any other saved argv is kept). NEVER WRITE A WINDOWS PATH THROUGH A
+  NON-RAW STRING IN A GENERATOR SCRIPT: the first cut wrote
+  `PowerShell\1\ShellIds` with `\1` = U+0001 and this PC (LocalMachine
+  RemoteSigned) read as "no policy"; the paths are pinned character for
+  character. (2) GIT_READ OPTIONS are an ALLOWLIST per command (`OPTIONS`
+  from `_ROWS`: spelling → arity, value kind), exact spellings only (git
+  takes shortenings; refused here, naming the full one), clusters read
+  letter by letter, values checked by kind, `--` ends options, counts only
+  for log/shortlog/grep; `grep --untracked` and `blame --contents` are
+  refused (the file tools do those); a NEW option needs a row AND a call in
+  `RUN_TABLE` (`tests/test_git_read_allowlist_v14222.py`, checked against
+  `--git-completion-helper-all`). REVIEW: the repo's own (local/worktree; an
+  include counts as local) `mailmap.file` and `core.attributesFile` are
+  pointed at the null device (`_FILE_SETTINGS`, `safe_argv(files=)`) — a
+  mailmap line of ANY file came back as an author name; `shortlog` with no
+  revision gets HEAD (`_default_revision`; it read empty stdin); an unknown
+  command is echoed at most 40 chars. OPEN: a junction that REPLACES a
+  tracked folder is still followed by grep/diff/blame/status (measured;
+  creating it needs a worker's shell, which could read the file anyway).
+  (3) PACKAGED VERIFICATION of B3, done: `packaging/build_daemon.ps1` on
+  master, `ironjarvis.exe codehost --launch <scratch>` wrote the record,
+  logged "holding its launcher (pid N)", no window, no Windows Terminal;
+  then the frozen `serve` on a scratch root + port 8797 with the REAL Claude
+  Code (haiku): a hard kill of the daemon only kept the host and claude
+  alive, the restarted daemon's next message was answered by the SAME claude
+  pid with no "Starting" notice; a hard kill after 6 text events of a long
+  reply: one `completed` done, the full text, no `htool`/`hseq` leaked;
+  `POST /shutdown` (Quit) left nothing running. (4) NOT DONE: the team-tier
+  bench baseline (A8) — this session's permission classifier refused to
+  start the benchmark (it runs agents that act without asking); it needs
+  the owner's own permission rule or the owner running
+  `ironjarvis bench-harness run --runner jarvis-team --team C:\ijb\team-locked.toml
+  --tier team --repeats 1 --effort medium --root C:\ijb --with-alone`.
+  Moving a Codex conversation between two REAL ChatGPT accounts is
+  untestable on this PC (one ChatGPT account connected). Pins:
+  `tests/test_shells_policy_v14222.py`,
+  `tests/test_git_read_{allowlist,file_settings,shortlog}_v14222.py`.
 
 ## Map (where things live)
 

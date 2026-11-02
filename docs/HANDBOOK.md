@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.422.1 (2026-11-01).*
+holds itself to. Current as of v1.422.2 (2026-11-01).*
 
 ---
 
@@ -2537,6 +2537,35 @@ way to carry on. This release closes the ways it could happen.
   shell they had. Windows PowerShell does not have some PowerShell 7
   shortcuts (`&&`, `??`); pick PowerShell 7 from the menu, or install it
   normally, if you want them.
+
+### Also in v1.422.2
+
+- **Coding tools start in a new Windows PowerShell terminal.** When no
+  PowerShell script policy is set on the PC (the Windows default), Windows
+  PowerShell refuses every script, including the ones npm installs to start
+  Claude Code, Codex, OpenCode and Pi. A new or restored Windows PowerShell
+  terminal now allows local scripts for that terminal only (PowerShell 7's
+  own default). A policy you, your organisation or a group policy set is
+  always respected, and nothing on the PC itself changes.
+- **The team's reviewer reads git more strictly.** Each git command it may
+  run now takes only a fixed list of read-only options (summaries, file
+  names, a number of commits, dates, authors, searches), written in full;
+  anything else is refused in one sentence naming the options it takes. The
+  folder's own git settings can no longer point it at a file elsewhere on the
+  PC (a name map or attributes file the folder names is ignored; your own
+  global ones still apply). Searching files git does not track, or blaming a
+  file's working copy, goes through the reviewer's ordinary file tools.
+- **What was checked in the installed form of the app.** The background
+  program that keeps your Build › Code tools running across a restart was
+  built and run the way the installer ships it, with the real Claude Code:
+  it starts with no window; after Iron Jarvis was killed outright, the same
+  Claude Code answered the next message, and a long reply that was being
+  written finished and was recorded once; quitting left nothing running.
+- **Not tried yet:** moving a Codex conversation between two real ChatGPT
+  accounts (only one is connected on the PC this was built on; it was tried
+  between two copies). If the other account refuses the conversation, the
+  reply fails in Codex's own words, the first account's copy is untouched,
+  and nothing repeats by itself.
 
 ## A team that works (v1.421.0)
 
