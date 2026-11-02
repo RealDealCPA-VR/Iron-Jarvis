@@ -169,6 +169,7 @@ ANSWERS_REFUSED = [
     "R3: not fixed",
     "R1 fixes it later",
     "R1. app.py:1 — X should be 3 — fixed",  # a finding line the lead quotes
+    "R1. Fixed size buffers overflow — on long input — clamp them",  # …whose problem starts "Fixed"
     "> R1 fixed",
     "`R1 fixed`",
     '"R1 fixed"',
@@ -336,12 +337,13 @@ async def test_a_flagged_finding_is_dropped_and_its_neighbours_kept(plat):
 
 async def test_a_long_finding_is_masked_before_it_is_cut(plat):
     # The key straddles the cut: cut first, and its head would survive
-    # unmasked (a cut key is no longer a shape the mask knows).
-    what = "x" * (TF.MAX_WHAT_CHARS - 20) + " " + KEY
+    # unmasked (an AWS key cut short is no longer a shape the mask knows).
+    aws = "AKIA" + "ABCDEFGHIJKLMNOP"
+    what = "x" * (TF.MAX_WHAT_CHARS - 12) + " " + aws
     await _review(plat, _session(plat, "rv-long"), report=f"R1. app.py:1 — {what} — fix\nVERDICT: changes needed")
     (f,) = _findings(plat)
-    assert len(f.what) <= TF.MAX_WHAT_CHARS and f.what.endswith("***")
-    assert "QQQQ" not in f.what
+    assert len(f.what) <= TF.MAX_WHAT_CHARS and f.what.endswith("AKIA***")
+    assert "ABCDEFG" not in f.what
 
 
 def test_storing_never_raises():
@@ -389,7 +391,7 @@ async def test_a_finding_no_member_made_may_be_confirmed_by_the_sessions_own_wri
 
     def own():
         calls.append(1)
-        return ["other.py"]
+        return ["other.py", "app.py"]
 
     TF.settle(plat.engine, review_session="rv-1", answers={5: ("fixed", ""), 1: ("fixed", "")},
               own_writes=own, own_session=SCOPE)
@@ -642,18 +644,21 @@ def test_member_findings_counts_each_status_and_first_pass_approval(plat):
     _finding(plat, "qwen", TF.FIXED, at=now - 40 * day)  # outside the window
     _finding(plat, "glm", TF.FIXED, at=now - day)          # another member
     # First pass: the reviewer's verdict on the member's EARLIEST judged piece
-    # of each reply — r1 good then bad (good), r2 bad then good (bad), r3 good.
+    # of each reply — r1 good then bad (good), r2 bad then good (bad), r3 good,
+    # r7 good then bad (good): 3 of 4 (the LATEST pieces would say 2 of 4).
     _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r1", at=now - day)
     _judged(plat, "qwen", TR.REVIEW_BAD, turn="r1", at=now - day)
     _judged(plat, "qwen", TR.REVIEW_BAD, turn="r2", at=now - day)
     _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r2", at=now - day)
     _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r3", role="test", at=now - day)
+    _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r7", at=now - day)
+    _judged(plat, "qwen", TR.REVIEW_BAD, turn="r7", at=now - day)
     _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r4", at=now - 40 * day)  # outside
     _judged(plat, "qwen", "", turn="r5", at=now - day)                    # never judged
     _judged(plat, "qwen", TR.REVIEW_GOOD, turn="r6", role="read", at=now - day)  # not code/test
     got = TF.member_findings(plat.engine, "qwen", now=now)
     assert got == {"confirmed": 6, "did_not_apply": 1, "said_fixed": 2, "open": 1,
-                   "first_pass": {"approved": 2, "of": 3}}
+                   "first_pass": {"approved": 3, "of": 4}}
     assert TF.member_findings(plat.engine, "glm", now=now)["confirmed"] == 1
     assert TF.member_findings(plat.engine, "nobody", now=now) == TF.zeros()
     # An explicit since/until pair (a later phase splits a record at a note).
