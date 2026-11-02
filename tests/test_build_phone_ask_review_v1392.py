@@ -137,6 +137,13 @@ async def test_an_in_app_answer_closes_the_phone_prompt_and_the_phone_answers_on
         # phone's approve answers exactly it, once.
         clock.advance(301)
         assert await until(lambda: sum("waiting for your OK" in s for s in ch.sent) == 2, 30)
+        # v1.423.0: wait for the ANSWERABLE prompt itself, not the alert text:
+        # the two are written by separate handlers, and on a loaded runner the
+        # alert can land first — "approve" then reads as an ordinary chat
+        # message (the v1.397.2 lesson; a 1 s hold on the second register
+        # reproduced CI's exact error).
+        assert await until(lambda: pstore.newest_open("tg", "777") is not None, 30), \
+            "the second card's phone prompt never opened"
         res = await app.state.inbound_poller._handle("tg", ch, _msg("approve", update_id=3))
         assert res["status"] == "approval_answered" and res["approval_id"] == second["id"], res
         assert res["decision"] == "once"
