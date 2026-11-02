@@ -121,6 +121,18 @@ async def _looks(ticks, n: int = 5) -> None:
     assert await until(lambda: ticks["n"] >= start + n, 30), "the card's wait never looked"
 
 
+async def _armed(ticks) -> None:
+    """v1.426.1: wait until the card's PHONE WATCHER has looked once
+    (``stall.PhoneAsk`` exists and ticks). The lane yields the card BEFORE it
+    makes the watcher, and the watcher's five minutes start when it is made
+    (``asked_at = now()``): a test that moved the clock as soon as the card
+    was on the record could move it before the watcher existed, so the
+    watcher started after the jump and never became due (a loaded CI runner,
+    "the first card never reached the phone"; reproduced by pulling the
+    frame after the card 0.5 s late)."""
+    await _looks(ticks, 1)
+
+
 def _msg(text: str, update_id: int = 1) -> InboundMessage:
     return InboundMessage(sender_id="777", text=text, update_id=update_id, reply_to="777")
 
@@ -141,6 +153,7 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-ph"}, drop=drop))
     try:
         card = await _card(app, "bt-ph")
+        await _armed(ticks)
         # Four minutes 59: nothing on the phone.
         clock.advance(299)
         await _looks(ticks)
@@ -184,6 +197,7 @@ async def test_a_card_answered_within_five_minutes_sends_nothing(app, work, cloc
     task = asyncio.create_task(open_turn(app, sid, {"text": "run it", "turn_id": "bt-quick"}, drop=drop))
     try:
         card = await _card(app, "bt-quick")
+        await _armed(ticks)
         clock.advance(240)
         await _looks(ticks)
         assert (await asgi(app, "POST", f"/chat/approvals/{card['id']}", {"decision": "once"}))[0] == 200

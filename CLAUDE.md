@@ -13945,6 +13945,19 @@ does not need a bump, stop and bump it.
   (the door's address), `test_build_app_routes_v1409`,
   `test_build_app_pi_v1411` (Codex's compact listed),
   `test_integrate_wave4_v13540` (FRIENDLY reads the twin).
+  v1.426.1 (test-only; v1.426.0's master Tests went red on
+  `test_build_phone_ask_review_v1392`, "the first card never reached the
+  phone"): the stream lane YIELDS a coding session's card before it makes
+  the card's phone watcher (`stall.PhoneAsk`, whose five minutes start at
+  `asked_at = now()`), so a test that moved its fake clock as soon as the
+  card was on the record could move it before the watcher existed — the
+  watcher then started after the jump and never became due. Every such
+  test now waits for the watcher's first look (`_armed(ticks)` in
+  `tests/test_build_phone_ask_v1392.py`) before it moves the clock.
+  Reproduced by pulling the frame after the card 0.5 s late (a scratch
+  plugin wrapping `routes/build.recorded_turn`): old shape CI's exact error
+  plus two siblings, new shape green. In the product the window starts a
+  moment after the card shows, which changes nothing a person can see.
 
 ## Map (where things live)
 

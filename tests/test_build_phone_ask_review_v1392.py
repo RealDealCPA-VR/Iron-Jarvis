@@ -30,6 +30,7 @@ from tests.test_build_phone_ask_v1392 import (
     CHAT_CFG,
     ChatMockChannel,
     FakeClock,
+    _armed,
     _card,
     _looks,
     _msg,
@@ -116,6 +117,7 @@ async def test_an_in_app_answer_closes_the_phone_prompt_and_the_phone_answers_on
     task = asyncio.create_task(open_turn(app, sid, {"text": "run both", "turn_id": "bt-two-cards"}, drop=drop))
     try:
         first = await _card(app, "bt-two-cards")
+        await _armed(ticks)
         clock.advance(301)
         assert await until(lambda: len(ch.sent) == 1, 30), "the first card never reached the phone"
         assert await until(lambda: pstore.newest_open("tg", "777") is not None, 30)
@@ -173,6 +175,7 @@ async def test_a_batch_card_on_the_phone_says_how_many_calls_ride_on_it(app, wor
     try:
         card = await _card(app, "bt-batch")
         assert card.get("count") == 2
+        await _armed(ticks)
         clock.advance(301)
         assert await until(lambda: ch.sent, 30)
         assert "(2 calls)" in ch.sent[0] and "echo" not in ch.sent[0]
