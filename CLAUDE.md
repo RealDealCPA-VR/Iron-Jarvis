@@ -13687,6 +13687,165 @@ does not need a bump, stop and bump it.
   `dashboard/__tests__/{model-capability,model-capability-review,chat-account,
   chat-account-extras,account-choice,claude-setup-line}-v1424-0.test.tsx`.
 
+- **A member's CONFIRMED findings become working habits the owner accepts;
+  a habit is MEASURED, never removed by a measure; the fix request reads the
+  team's findings; a coding session's words to its model are true; the bench
+  runs the product path; the finish snapshot is read BESIDE the first model
+  call** (v1.425.0, Wave 3 rounds 2-3 + Wave 5 of
+  `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`; builders + independent reviewers
+  per lane; test files keep their lane tags v14230 / v14250).
+  TEAM NOTES PHASE 2 (`agents/team_notes.py`, read its docstring): a member
+  with ≥ `MIN_FINDINGS` 4 confirmed (`asked` and `fixed`) findings across ≥
+  `MIN_SESSIONS` 2 sessions, none cited by a pending/accepted/recently
+  declined proposal (`SUPPRESS_DAYS` 14, from the REMOVAL for a removed
+  habit), none from a low-trust review, at most one distill per
+  `DISTILL_EVERY_S` (the attempt is CLAIMED in one step before the call and
+  holds when the save fails), on the library's idle pacing (never near an
+  account's limit, never on the loop; `library.AUTO_REFLECT` off in bare
+  tests). ONE `router.complete(pin=True)` on the reviewer's own model, held,
+  on its account, inside `local_only_scope` when a cited finding was Local
+  only (a reviewer model off the network SKIPS); the demo model distills
+  nothing. The answer is read LINEARLY (rfind/split, each line masked and
+  bounded first): a habit citing unknown/too few (`MIN_CITED` 2) `F<n>` is
+  dropped, scanned, masked, ≤ `MAX_HABIT_CHARS`, de-duplicated by
+  `word_overlap` ≥ 0.5; at most `MAX_HABITS` 3. The proposal is the COACH's
+  row (kind `team_note`, `coach.proposal` with `kind` → a quiet bell row).
+  Accept renders the member's `TEAM-NOTES.md` (agent folder, atomic, a
+  revision copy) only while it is exactly what Iron Jarvis last wrote
+  (`TeamNoteState.written_sha`), read bounded (256 KiB), never through a
+  link, and RE-READ right before `os.replace` (`_replace_unless_changed`): a
+  save that landed mid-render is kept, no temp left. `habits_for_run`
+  injects only into that member's TEAM pieces (`HELPER_ORIGIN`,
+  `MISSION_MEMBER_ORIGIN`), ≤ `INJECT_CHARS`, scanned, once per reply; off or
+  none = byte-identical prompt. `role_edit_for`: one habit on two members of
+  a role → `library.propose_role_brief_edit` (refused when `team_notes` off,
+  when `build_reflect` off — `REASON_OFF` —, for a Local only habit, through
+  a link); `library._reflect` and `team_notes.distill` re-read their switch
+  AFTER the model call (billed, nothing minted); `_write_temp` removes a
+  half-written temp file. Setting `team_notes` (Models › Model team, on). PHASE 3
+  (`agents/team_measure.measure(engine, member, accepted_at, removed_at)`):
+  AFTER = acceptance → removal/now; BEFORE = the same span capped at
+  `BEFORE_CAP_DAYS` 30, ending 1 µs before acceptance; per side code/test
+  pieces a check or review judged, first-pass via `team_findings.
+  member_findings(..., strict=True)`, confirmed ASKED findings per piece,
+  check pass rate; a whole REPLY (scope, turn) sits on the side where its
+  member's first piece STARTED (the helper Session's `created_at`, else the
+  record's) — Accept does not clear `habits_for_run`'s per-reply cache,
+  Remove does (`forget_member`), so a piece or finding that started after a
+  removal is left out of AFTER; findings go with their reply;
+  `windows(not_before=)` / `not_before_for` stop BEFORE at the end of an
+  earlier copy of the same habit (`same_habit`; history unreadable =
+  nothing measured); `attach` counts habits TRIED (`MAX_MEASURED`), 2
+  queries each; with no reply across the boundary the numbers equal
+  `member_findings` (pinned); < `MIN_PIECES` 5 = no numbers; `worse()` on exact
+  `Fraction`s (`FIRST_PASS_FALL`/`CHECK_FALL` 1/5, `FINDINGS_RISE_RATIO`
+  3/2 and `FINDINGS_RISE_MIN` 1/2 — Phase 7's to tune). `routes/team.
+  team_view` attaches `measure {before, after, worse}` (sync route); an
+  unreadable measure has NO key (`findings_for(strict=)` raises, never
+  zeros). The card shows `measureWords` / the amber `HABIT_WORSE_WORDS`;
+  nothing calls `team_notes.remove` on a measure (pinned both sides). FIX
+  REQUEST (`agents/fix_request._gather_findings`): `TeamFinding` rows with
+  `asked = 1` (ORDER BY created_at DESC, rowid DESC); a finding belongs to
+  the reply line whose timing window holds it (no line = not judged); kinds
+  `finding_did_not_apply`, `finding_unanswered` (only when the reply ended
+  as its answer), `finding_said_fixed`, `finding_repeated` (≥ 2 sessions);
+  FIXED is never a problem. `clean()` fails closed
+  (`mask_failure_text(strict=True)`, `scan_context(strict=True)` raise;
+  every other caller keeps the never-raises default). A reply whose
+  `ChatTurnRecord` still says running is not read (`running_left_out`,
+  said). A `build:<id>~try<n>` attempt is read only when its card row (the
+  span `since`/`ended` holds the call) says trust "full"
+  (`harness/attempts.Attempt.trust` from the done frame; an error frame only
+  when it says low); low/unknown are left out and counted
+  (`attempts_low_left_out` / `attempts_unknown_left_out`). STOP LINES:
+  `_ReplyWatch`'s stop branch writes `trust`/`trustReason` from
+  `ReplyRecord.trust_now()` (the lane hands its trust over via
+  `watch_trust`), and keeps the line when a call is on the record (steps or
+  one still running) at ANY trust — a full-trust line has no trust key, so
+  the report reads its calls (the integrator moved both controls on
+  purpose); a reply stopped before a word or a call keeps none.
+  `sessions.reconcile_interrupted_turns` adds trust from
+  `reply_record.low_trust_of`. HARNESS TRUTH (Wave 5 lane B, C4-C6):
+  `HarnessTurn.translate_calls(serving=)` (both lanes) gives a dialect's
+  picture read `ToolContext.picture_read`; `view_image._picture_read`
+  returns `ToolResult.images` when `carries_tool_pictures` (Anthropic,
+  claude-cli, Codex native), fitted by `fit_picture` (non PNG/JPEG/GIF/WebP
+  re-encoded, unreadable refused), after `tools/images.
+  scan_picture_text_bounded` (the local OCR worker, off the loop,
+  `PICTURE_SCAN_WAIT_S` 6, fails open, `local_enabled` honoured; a flagged
+  excerpt lowers trust through `_fence_tool_output`, the picture still
+  sent); else a description + `PICTURE_DESCRIBED_NOTE`. `mode.ask_sentence`
+  is one TRUE sentence per posture (Auto "may run without asking" + the
+  never-routine list; Auto + low trust = Ask-first wording; Local only names
+  gate ∩ `egress.reaches_outside`; `_yolo_still_asks(gate)`).
+  `dialects.DIALECT_COMMAND_TIMEOUT_S` 120 (the finish check re-runs a Bash
+  test with its own 120 s); a windowed `read_file` gets `max_chars =
+  tool_message_chars - READ_NOTE_ROOM`; `mode.unreachable_cut` trims words
+  naming a tool outside the gate (never the first sentence, never after
+  e.g./i.e.); `Dialect.hints` only for shown tools; `NO_BACKGROUND_NOTE`
+  when `process_start` is not armed; `history_of(last_work=True)` attaches
+  to the newest shown reply whose note is non-empty. Golden
+  `team_first_off_golden_v1400.json` regenerated; harness_off untouched.
+  BENCH PRODUCT PATH (Wave 5 lane C, C2): `bench-harness run --path
+  product` (the CLI default) makes a real coding session per task
+  (`routes/build.create_session_row` + `start_build_turn`), "Ask first",
+  every card "Allow once" (actor bench), questions skipped, the session's
+  own step limit unless `--rounds`, the time limit as the user's Stop;
+  `extra.coding_session` records steps, finish and step limit; `--path lane`
+  keeps the bare lane (`--dialect` is lane-only). The path is in the
+  identity; the setup key includes `__version__`, so results are reusable
+  within one version only. `resolve_bench_home` refuses
+  `global_config_path().parent` (`~/.ironjarvis`); a cut or cancelled
+  product turn's reply record is dropped
+  (`runners.forget_reply_record_when_done`, a done callback queued on
+  `reply_record._writer()`); a fault in the bench's own reading stops the
+  turn (`_end_turn_now`). FINISH SNAPSHOT BESIDE THE FIRST CALL (Wave 5 lane A, C1;
+  the reviewer found 6 more): in a git repository `harness/folder_changes.
+  take` lists the folder with `git -c core.fsmonitor=false ls-files -z
+  --cached --others --exclude-standard` (`_git_names`, `GIT_OPTIONAL_LOCKS=0`;
+  ls-files runs no hooks or filters, fsmonitor is the one program it would
+  start) and stats only the listed folders with `os.scandir` (the walk's
+  pruning, no link followed; folders cut at the FOLDED key's "/" — "İ"
+  lower-cases longer); submodules and inner repositories are walked;
+  `GIT_MAX_FILES` 200,000. The WALK is kept (old cap) with no `.git`, a repo
+  top that is the home folder or a drive, git missing or refusing, a folder
+  the enclosing repository IGNORES (`check-ignore -q -- ./`, exit 0 or any
+  refusal), or a `.git` FILE whose `gitdir:` is spelled as a share while the
+  folder is local (`_git_folder_on_a_share`, git never started).
+  `Snapshot.how` makes the end read the same way (`take(how=)`).
+  `finish.start` STARTS the first read as a task (`_FIRST_READS`); BOTH lanes
+  await `FinishCheck.ready()` right before `_run_tool_round` (lock-step; the
+  stream lane races it against Stop with `_prep_step`); `prepare` and
+  `_folder_changes` await it too; a reply with no tool never waits. KEPT
+  INDEX (C3): `hosted/panes.snapshot_tree(keep=kept_index(home, sid))` →
+  `workspaces/code-index/<sid>.index` (out of backups, deleted with the
+  session by `forget_kept_index`, `.rules` too): the user's index copied
+  once, then `git add -A -v -- .`; copied AGAIN when git refuses it, the add
+  reports a `.gitignore` (`_rules_touched`), or the size/mtime fingerprint of
+  `info/exclude` and every `.gitignore` from the folder's parent up to the
+  repo top changed (`_rules_print`, `<index>.rules`) — `add -A` alone keeps a
+  file that later became ignored forever; a stale `<index>.lock` (git killed
+  at `QUICK_S`) is removed under `_kept_lock`. Not followed: global excludes,
+  the user's own `rm --cached`/`add -f`. POOL (B7): `HostedService.
+  _reserve_slot` holds the pool lock only to decide; `LiveSession.starting`
+  holds a place and is never a victim (`_stoppable` = running, not starting,
+  not busy, no background work); with every place unstoppable a message
+  WAITS (`W.POOL_WAITING` once, woken by `_room_changed`, re-checked every
+  `POOL_RECHECK_S` 5, refused `W.POOL_FULL` after `POOL_WAIT_S` 15 min);
+  `HostedTurn.unsent` (from `_drive`'s start to `send_user`) makes
+  `interrupt` end the turn itself, so a Stop during the wait, the tree read
+  or the tool's handshake never reaches the tool. Moved on purpose:
+  `test_build_app_pool_v1409`, `test_build_app_background_tasks_v1417`
+  (`POOL_WAIT_S` short), `test_build_code_revert_review_v1420`. Pins:
+  `tests/test_team_notes{,_review,_leftovers}_v14230.py`,
+  `tests/test_team_measure_v14230.py`, `tests/test_lane_e_review_v14230.py`, `tests/test_fix_request_findings{,
+  _review}_v14230.py`, `tests/test_fix_request_attempts_v14230.py`,
+  `tests/test_build_stop_trust_v14230.py`, `tests/test_harness_truth{,
+  _review}_v14250.py`, `tests/test_harness_bench_product_path{,_review}
+  _v14250.py`, `tests/test_finish_snapshot_v14250.py`, `tests/test_build_code_turn_tree_v14250.py`,
+  `tests/test_build_app_start_lock_v14250.py`, `tests/test_wave5_lane_a_review_v14250.py`,
+  `dashboard/__tests__/{team-notes,habit-measure}-v1423-0.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
