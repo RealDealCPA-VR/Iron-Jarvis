@@ -1091,6 +1091,14 @@ async def _distill(platform: Any, out: Distilled, *, thread_id: str,
         out.reason = REASON_MOCK
         await asyncio.to_thread(_save_state, engine, member, last_reason=out.reason)
         return out
+    # v1.423.0 review: the switch is read AGAIN once the model has answered —
+    # the owner may have turned team notes off while it was writing, and off
+    # means no habit is suggested (the call already made is billed; nothing
+    # is minted from it).
+    if not _on(platform):
+        out.reason = REASON_OFF
+        await asyncio.to_thread(_save_state, engine, member, last_reason=out.reason)
+        return out
     text = str(getattr(getattr(route, "response", None), "text", "") or "")
     accepted = [n.text for n in await asyncio.to_thread(active_notes, engine, member)]
     waiting = await asyncio.to_thread(_waiting_texts, engine, member)

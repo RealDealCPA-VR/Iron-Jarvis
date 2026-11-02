@@ -31,6 +31,9 @@ THE LEFTOVERS:
    model when the owner turned "learn from Build sessions" off minted its
    suggestion anyway once the model answered — a library suggestion made
    with the switch off.
+7. TEAM NOTES' OWN SWITCH, the same race: a distill already asking the
+   reviewer's model when the owner turned team notes off minted the habits
+   it answered.
 """
 
 from __future__ import annotations
@@ -309,3 +312,33 @@ async def test_a_reflection_answered_after_the_switch_went_off_suggests_nothing(
         assert _rows(app) == []
     finally:
         L.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# 7. the same for team notes' own switch: a distill answered after "off"
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_distill_answered_after_team_notes_went_off_suggests_nothing(tmp_path):
+    """Team notes' own switch, the same race: the reviewer's model was
+    already writing the habits when the owner turned team notes off — off
+    means no habit is suggested, so nothing is minted from that answer."""
+    from iron_jarvis.platform import build_platform
+    from tests.test_team_notes_v14230 import FakeRouter, _local_ollama, _members, _seed
+
+    p = build_platform(str(tmp_path / "home"))
+    _local_ollama(p)
+    _members(p)
+
+    class TurnedOffMeanwhile(FakeRouter):
+        async def complete(self, **kw):
+            out = await super().complete(**kw)
+            p.config.team_notes = False
+            return out
+
+    p.router = TurnedOffMeanwhile()
+    _seed(p, tmp_path)
+    out = await TN.distill(p, WORKER)
+    assert len(p.router.calls) == 1
+    assert out.minted == [] and out.reason == TN.REASON_OFF
+    assert TN.notes_for(p, [WORKER])[WORKER]["suggested"] == 0
