@@ -177,7 +177,16 @@ async def test_an_approved_plan_runs_by_itself_once(app, work):
     # The screen-facing view: running, with the act turn's id (what the Build
     # page follows), nothing still "due".
     act_lg = await until(lambda: turn_log(app, act_id))
-    status, view = await asgi(app, "GET", f"/build/sessions/{sid}")
+    # v1.423.0: the plan-run entry is let go only after the act turn started
+    # AND its nudge was published; on a loaded runner the view was read in
+    # that gap (a 0.5 s hold on the nudge reproduced the gate's "True is
+    # False"). Wait for the state asserted, not for the turn's log (the act
+    # turn is held by `gate`, so it is still running throughout).
+    for _ in range(300):
+        status, view = await asgi(app, "GET", f"/build/sessions/{sid}")
+        if status != 200 or view.get("plan_run") is False:
+            break
+        await asyncio.sleep(0.05)
     assert status == 200
     assert view["running"] is True and view["turn_id"] == act_id
     assert view["plan_run"] is False
