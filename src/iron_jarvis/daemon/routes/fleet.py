@@ -374,6 +374,16 @@ def register(app: FastAPI, d) -> None:
             record(node_id, model, at=time.time(), default=default, **flags)
         else:
             d.fleet.update(node_id, verified_at=time.time(), **flags)
+        # v1.424.0 review: the check must reach the ROUTER. Every ``fleet-*``
+        # factory closes over the node object it was registered with, so the
+        # adapter a turn builds kept reading the node as it was BEFORE this
+        # check (until a restart) — the page said "tools ✓" and turns still
+        # ran text-only. Re-registering (idempotent, in memory, what an edit
+        # of the node already does) hands the router the node as saved.
+        try:
+            d.fleet.register_providers(d.platform.providers)
+        except Exception:  # noqa: BLE001 — the check is saved; routing catches up on the next edit
+            pass
 
     def _target_tool_use(provider: str, model: str, node: Any) -> "bool | None":
         """The coding-route TARGET model's own tool answer (v1.424.0, D8);

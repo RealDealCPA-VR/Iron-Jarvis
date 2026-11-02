@@ -33,8 +33,11 @@ CapsReader = Callable[[str], dict]
 #: Where a model's capability answer came from (v1.424.0, D8): ``checked`` —
 #: Iron Jarvis asked THIS model (a live check, or the node's own record for
 #: its default model); ``stated`` — the model's server says so in its own
-#: ``/model/info``; ``""`` — not known.
-CAP_CHECKED, CAP_STATED, CAP_UNKNOWN = "checked", "stated", ""
+#: ``/model/info``; ``node`` (v1.424.0 review) — nothing speaks for THIS
+#: model, so the node's own record (the server's check of its DEFAULT model,
+#: named in the view's ``checked_model``) answers for it, as every model
+#: behind a gateway was answered before D8; ``""`` — not known.
+CAP_CHECKED, CAP_STATED, CAP_NODE, CAP_UNKNOWN = "checked", "stated", "node", ""
 
 #: The capability keys a model row carries.
 CAP_FLAGS = ("tool_use", "vision")
@@ -70,9 +73,16 @@ def model_capability(node: FleetNode, model: str, caps: CapsReader | None) -> di
     2. the model's server SAYS it can (``supports_vision`` /
        ``supports_function_calling`` true in its ``/model/info``);
     3. the node's own record (``tool_use`` / ``vision``) — for its DEFAULT
-       model only, which is the model every check before v1.424.0 asked;
+       model, which is the model every check before v1.424.0 asked;
     4. the server says it CANNOT (a false in ``/model/info``);
-    5. not known.
+    5. (v1.424.0 review) ANOTHER model nothing above speaks for: the node's
+       own record still, said as ``node`` (``checked_model`` names the model
+       that check asked). Reading it as not known turned every alias the
+       owner picks by name behind their gateway into a text-only turn (the
+       router reads not known as unable) — a capability regression. The
+       screen says where the answer came from, and the Fleet page's Check
+       press asks the model itself;
+    6. not known.
 
     A live check outranks the server's table (it asked the model itself);
     a stated "yes" outranks the node record as before. Never raises."""
@@ -102,8 +112,18 @@ def model_capability(node: FleetNode, model: str, caps: CapsReader | None) -> di
             value, source = record, CAP_CHECKED
         elif said is False:
             value, source = False, CAP_STATED
+        elif isinstance(record, bool):
+            # v1.424.0 review: nothing speaks for THIS model — the gateway's
+            # own answer, said as such (never "checked" for a model nobody
+            # asked).
+            value, source = record, CAP_NODE
         out[key] = value
         out[f"{key}_from"] = source
+    if CAP_NODE in (out.get(f"{k}_from") for k in CAP_FLAGS):
+        try:
+            out["checked_model"] = (getattr(node, "default_model", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            out["checked_model"] = ""
     return out
 
 
@@ -113,9 +133,10 @@ def node_capabilities(node: FleetNode, model: str, caps: CapsReader | None) -> d
     capability we have not confirmed is what produces the silent stall
     described above. The gateway-key fix's rule stands: a model proxy that
     STATES a capability for this model in its own ``/model/info`` is
-    believed. v1.424.0 (D8): per MODEL — the node's record speaks for its
-    default model only, a live check of this model wins, and a stated "no"
-    counts when nothing else speaks for it."""
+    believed. v1.424.0 (D8): per MODEL — a live check of this model wins,
+    then its server's "yes", the node's record for its default model, its
+    server's "no"; for any OTHER model nothing speaks for, the node's record
+    still (v1.424.0 review: the gateway's answer, as before D8)."""
     view = model_capability(node, model, caps)
     return {key: bool(view.get(key)) for key in CAP_FLAGS}
 

@@ -9,9 +9,11 @@ model that cannot call tools and stalled, a picture went to a model that cannot
 see. Pinned here:
 
 * ``fleet/adapter.model_capability``'s order: a live check of THIS model, the
-  server's "yes", the node's record for its DEFAULT model only, the server's
-  "no", else not known — and ``node_capabilities`` (what the router reads)
-  reads not known as False;
+  server's "yes", the node's record for its DEFAULT model, the server's
+  "no", then (v1.424.0 review) the node's record for any OTHER model nothing
+  speaks for (source ``node``, the gateway's answer as before D8), else not
+  known — and ``node_capabilities`` (what the router reads) reads not known
+  as False;
 * the check saves per model (``FleetRegistry.record_check``) and touches the
   node's own flags only for its default model; an empty map is never written
   and an older stored row loads unchanged;
@@ -87,9 +89,18 @@ def test_each_model_says_its_own_answer_in_the_documented_order():
     assert model_capability(gw, "quiet", caps) == {
         "tool_use": True, "tool_use_from": "checked", "vision": True, "vision_from": "checked",
     }
-    # …never for another model behind the same gateway (the D8 bug).
+    # …and, for another model nothing else speaks for, it is the GATEWAY'S
+    # answer, said as such ("node"), never "checked" for a model nobody asked.
+    # v1.424.0 review (MOVED ON PURPOSE): this read "not known" in the first
+    # cut, which the router reads as unable — every alias picked by name
+    # behind the owner's gateway lost its tools.
     other = FleetNode(**{**gw.model_dump(), "default_model": "something-else"})
     assert model_capability(other, "quiet", caps) == {
+        "tool_use": True, "tool_use_from": "node", "vision": True, "vision_from": "node",
+        "checked_model": "something-else",
+    }
+    bare = FleetNode(**{**other.model_dump(), "tool_use": None, "vision": None})
+    assert model_capability(bare, "quiet", caps) == {
         "tool_use": None, "tool_use_from": "", "vision": None, "vision_from": "",
     }
     # 4. the server's "no" counts for a model nothing else speaks for.
@@ -106,17 +117,22 @@ def test_each_model_says_its_own_answer_in_the_documented_order():
     # The default model's own record outranks the server's "no".
     blind_default = FleetNode(**{**gw.model_dump(), "default_model": "blind"})
     assert model_capability(blind_default, "blind", caps)["vision"] is True
-    # A table that faults states nothing.
-    assert model_capability(other, "seer", lambda m: 1 / 0)["tool_use"] is None
+    # A table that faults states nothing (the gateway's own answer stands).
+    assert model_capability(bare, "seer", lambda m: 1 / 0)["tool_use"] is None
+    assert model_capability(other, "seer", lambda m: 1 / 0)["tool_use_from"] == "node"
 
 
 def test_the_router_reads_not_known_as_not_able():
     caps = _table(STATED).caps
     gw = FleetNode(id="gw", base_url="http://10.0.0.2:4000/v1", default_model="quiet",
                    tool_use=True, vision=True)
-    assert node_capabilities(gw, "unlisted", caps) == {"tool_use": False, "vision": False}
+    # v1.424.0 review (MOVED ON PURPOSE): a never-checked gateway is the
+    # not-known case; a checked one answers an unlisted name (the old rule).
+    never = FleetNode(**{**gw.model_dump(), "tool_use": None, "vision": None})
+    assert node_capabilities(never, "unlisted", caps) == {"tool_use": False, "vision": False}
+    assert node_capabilities(gw, "unlisted", caps) == {"tool_use": True, "vision": True}
     assert node_capabilities(gw, "quiet", caps) == {"tool_use": True, "vision": True}
-    assert FleetAdapter(node=gw, model="unlisted", caps=caps).capabilities()["tool_use"] is False
+    assert FleetAdapter(node=never, model="unlisted", caps=caps).capabilities()["tool_use"] is False
     assert FleetAdapter(node=gw, model="quiet", caps=caps).capabilities()["tool_use"] is True
 
 
@@ -181,7 +197,9 @@ def test_the_registry_answers_per_provider_and_model(tmp_path):
     reg.set_routes("gw", _table(STATED))
     assert reg.model_capability("fleet-gw", "quiet")["tool_use"] is True
     assert reg.model_capability("fleet-gw", "blind")["tool_use"] is False
-    assert reg.model_capability("fleet-gw", "unlisted")["tool_use"] is None
+    # v1.424.0 review (MOVED ON PURPOSE): the gateway's own answer, said so.
+    assert reg.model_capability("fleet-gw", "unlisted")["tool_use"] is True
+    assert reg.model_capability("fleet-gw", "unlisted")["tool_use_from"] == "node"
     assert reg.model_capability("openai", "gpt")["tool_use"] is None
 
 
@@ -246,9 +264,12 @@ def test_the_fleet_rows_say_each_models_own_answer(app_with_gateway, monkeypatch
     caps = row["model_capabilities"]
     assert caps["glm"]["tool_use"] is True and caps["glm"]["tool_use_from"] == "checked"
     assert caps["qwen"]["tool_use"] is False
-    assert caps["new"]["tool_use"] is None and caps["new"]["tool_use_from"] == ""
+    # v1.424.0 review (MOVED ON PURPOSE): "new" was never checked — glm's
+    # check answers for it, and the row says so.
+    assert caps["new"]["tool_use"] is True and caps["new"]["tool_use_from"] == "node"
+    assert caps["new"]["checked_model"] == "glm"
     by_id = {m["id"]: m for m in row["models"]}
-    assert by_id["qwen"]["tool_use"] is False and by_id["new"]["tool_use"] is None
+    assert by_id["qwen"]["tool_use"] is False and by_id["new"]["tool_use"] is True
     assert by_id["glm"]["vision"] is True
 
 
@@ -264,7 +285,10 @@ def test_a_node_with_no_model_named_answers_its_default_by_the_empty_name(tmp_pa
     row = F._with_capabilities(snap.model_dump(), snap, reg)
     assert row["model_capabilities"][""]["tool_use"] is True
     assert row["model_capabilities"][""]["tool_use_from"] == "checked"
-    assert row["model_capabilities"]["llama3"]["tool_use"] is None  # another name: not known
+    # v1.424.0 review (MOVED ON PURPOSE): another name — the node's answer,
+    # said as the gateway's (not known only for a never-checked node).
+    assert row["model_capabilities"]["llama3"]["tool_use"] is True
+    assert row["model_capabilities"]["llama3"]["tool_use_from"] == "node"
 
 
 def test_a_proxys_model_is_answered_by_its_proxy(tmp_path):
@@ -293,7 +317,7 @@ def test_the_models_rows_carry_each_models_answer_before_reasoning_default(app_w
     by = {m["model"]: m for m in rows}
     assert by["glm"]["tool_use"] is True and by["glm"]["vision"] is None
     assert by["qwen"]["tool_use"] is False and by["qwen"]["vision"] is False
-    assert by["new"]["tool_use"] is None
+    assert by["new"]["tool_use"] is True  # v1.424.0 review: glm's check answers for it
     assert all(list(m)[-1] == "reasoning_default" for m in rows)
     # A cloud API row is not an endpoint: no per-model keys are invented.
     others = [m for m in C.build_selectable_models(d) if m["provider"] == "openai"]

@@ -11,13 +11,22 @@
  * states in its own `/model/info`, else the endpoint's record for its default
  * model, else NOT KNOWN — never a guess.
  *
+ * v1.424.0 review: for ANOTHER model nothing speaks for, the endpoint's own
+ * record (a check of its default model) still answers — routing uses it, as
+ * before D8, so a model picked by name keeps its tools — and the words say
+ * so ("not checked for this model: from the server's check of glm"), never
+ * that this model was checked. The Fleet page's Check press asks it.
+ *
  * This module turns one model's answer into the words the Connections and
  * Fleet pages show. It is pure (no React, no fetch).
  */
 
-/** Where an answer came from: a live check, the server's own statement, or
- *  nothing ("" — not known). The daemon's `fleet/adapter.CAP_*` words. */
-export type CapSource = "checked" | "stated" | "";
+/** Where an answer came from: a live check, the server's own statement, the
+ *  node's own record standing in for a model nothing else speaks for
+ *  ("node", v1.424.0 review: the server's check of its DEFAULT model,
+ *  `checked_model`), or nothing ("" — not known). The daemon's
+ *  `fleet/adapter.CAP_*` words. */
+export type CapSource = "checked" | "stated" | "node" | "";
 
 /** One model's capability view, as the daemon sends it. */
 export interface CapView {
@@ -25,6 +34,9 @@ export interface CapView {
   vision?: boolean | null;
   tool_use_from?: CapSource | string | null;
   vision_from?: CapSource | string | null;
+  /** v1.424.0 review: the model the node's own record was checked with, when
+   *  an answer is that record standing in for this model (`"node"`). */
+  checked_model?: string | null;
 }
 
 /** A chip a page draws for one capability. `known` false = not known. */
@@ -34,6 +46,10 @@ export interface CapChip {
   /** True when the answer is a yes (the green tick). */
   yes: boolean;
   known: boolean;
+  /** v1.424.0 review: the answer is the server's check of ANOTHER model
+   *  (`"node"`): the page says so in words ("from the server's check of
+   *  glm"), never as if this model was checked. */
+  borrowed?: boolean;
 }
 
 /** The model a node's own record speaks for when nothing else names one. */
@@ -43,7 +59,22 @@ function shown(model: string): string {
 }
 
 function source(value: unknown): CapSource {
-  return value === "checked" || value === "stated" ? value : "";
+  return value === "checked" || value === "stated" || value === "node" ? value : "";
+}
+
+/** Where a borrowed answer came from, in words (v1.424.0 review). */
+export function borrowedFrom(view: CapView | null | undefined): string {
+  const checked = (view?.checked_model || "").trim();
+  return checked && checked !== "default"
+    ? `the server's check of ${checked}`
+    : "the server's check of its default model";
+}
+
+/** The visible note a model row shows when any of its answers is borrowed
+ *  from the server's check of another model (v1.424.0 review), else "". */
+export function borrowedNote(view: CapView | null | undefined): string {
+  if (source(view?.tool_use_from) !== "node" && source(view?.vision_from) !== "node") return "";
+  return `not checked for this model: from ${borrowedFrom(view)}`;
 }
 
 /**
@@ -84,6 +115,26 @@ const NO_VISION_MEANS =
 export function toolsChip(view: CapView | null | undefined, model: string): CapChip {
   const name = shown(model);
   const from = source(view?.tool_use_from);
+  if (from === "node" && typeof view?.tool_use === "boolean") {
+    // v1.424.0 review: nothing speaks for THIS model; the gateway's own
+    // answer stands in (what routing uses), said as such.
+    const lead = `Not checked for ${name} itself: ${borrowedFrom(view)} says it`;
+    return view.tool_use
+      ? {
+          text: "tools",
+          yes: true,
+          known: true,
+          borrowed: true,
+          title: `${lead} calls tools, so turns that use the web or files run on it. Press Check to ask ${name}.`,
+        }
+      : {
+          text: "no tools",
+          yes: false,
+          known: true,
+          borrowed: true,
+          title: `${lead} doesn't call tools. ${NO_TOOLS_MEANS} Press Check to ask ${name}.`,
+        };
+  }
   if (view?.tool_use === true) {
     return {
       text: "tools",
@@ -118,6 +169,25 @@ export function toolsChip(view: CapView | null | undefined, model: string): CapC
 export function visionChip(view: CapView | null | undefined, model: string): CapChip {
   const name = shown(model);
   const from = source(view?.vision_from);
+  if (from === "node" && typeof view?.vision === "boolean") {
+    // v1.424.0 review: the gateway's own answer standing in, said as such.
+    const lead = `Not checked for ${name} itself: ${borrowedFrom(view)} says it`;
+    return view.vision
+      ? {
+          text: "vision",
+          yes: true,
+          known: true,
+          borrowed: true,
+          title: `${lead} can see pictures, so pictures and scanned PDFs can go to it. Press Check to ask ${name}.`,
+        }
+      : {
+          text: "no vision",
+          yes: false,
+          known: true,
+          borrowed: true,
+          title: `${lead} can't see pictures. ${NO_VISION_MEANS} Press Check to ask ${name}.`,
+        };
+  }
   if (view?.vision === true) {
     return {
       text: "vision",

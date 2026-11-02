@@ -22,7 +22,13 @@ import { useApi, usePolledApi } from "@/lib/useApi";
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import { providerDisplay } from "@/lib/onboarding";
 // v1.424.0 (D8): each model's own tools / vision, in words.
-import { capabilityOf, toolsChip, visionChip, type CapView } from "@/lib/modelCapability";
+import {
+  borrowedNote,
+  capabilityOf,
+  toolsChip,
+  visionChip,
+  type CapView,
+} from "@/lib/modelCapability";
 import {
   Badge,
   Card,
@@ -163,6 +169,10 @@ function Commands({ commands }: { commands: string[] }) {
 function CapChips({ view, model }: { view: CapView | null; model: string }) {
   if (!view) return null;
   const chips = [toolsChip(view, model), visionChip(view, model)];
+  // v1.424.0 review: an answer borrowed from the server's check of ANOTHER
+  // model (what routing uses when nothing speaks for this one) says so, in
+  // words on the row — never as if this model had been checked.
+  const borrowed = borrowedNote(view);
   return (
     <span data-testid="fleet-model-caps" className="inline-flex flex-wrap items-center gap-x-2">
       {chips.map((c) => (
@@ -170,8 +180,9 @@ function CapChips({ view, model }: { view: CapView | null; model: string }) {
           key={c.text}
           data-testid="fleet-model-cap"
           data-known={c.known ? "yes" : "no"}
+          data-borrowed={c.borrowed ? "yes" : undefined}
           title={c.title}
-          className={c.known ? "text-zinc-400" : "text-zinc-600"}
+          className={c.known && !c.borrowed ? "text-zinc-400" : "text-zinc-600"}
         >
           {c.text}
           {c.yes && (
@@ -182,6 +193,70 @@ function CapChips({ view, model }: { view: CapView | null; model: string }) {
           )}
         </span>
       ))}
+      {borrowed && (
+        <span data-testid="fleet-model-cap-borrowed" className="text-zinc-600">
+          ({borrowed})
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * v1.424.0 review (D8): the per-model Check press — the live check
+ * (`POST /fleet/nodes/{id}/verify` with this model's name) asks THIS model
+ * whether it calls tools and sees pictures; its answer then speaks for it,
+ * on this page and in routing. `nodeId` is the node that serves the name (a
+ * proxy's model is asked through its proxy, by the name the proxy serves).
+ */
+function CheckModel({
+  nodeId,
+  model,
+  onChecked,
+}: {
+  nodeId: string;
+  model: string;
+  onChecked?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const check = async () => {
+    setBusy(true);
+    setNote("");
+    try {
+      const r = await post<{ tool_use?: boolean | null; error?: string }>(
+        `/fleet/nodes/${encodeURIComponent(nodeId)}/verify`,
+        { model },
+      );
+      if (r?.tool_use === true || r?.tool_use === false) {
+        setNote("Checked.");
+      } else {
+        setNote(r?.error ? `Couldn't check ${model}: ${r.error}` : `Couldn't check ${model}.`);
+      }
+      onChecked?.();
+    } catch (e) {
+      setNote(`Couldn't check ${model}: ${e instanceof ApiError ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2">
+      <button
+        type="button"
+        data-testid="fleet-model-check"
+        onClick={() => void check()}
+        disabled={busy}
+        className={CALM_ACTION}
+        title={`Ask ${model} itself whether it calls tools and sees pictures.`}
+      >
+        {busy ? "Checking…" : "Check"}
+      </button>
+      {note && (
+        <span data-testid="fleet-model-check-note" role="status" className="text-zinc-500">
+          {note}
+        </span>
+      )}
     </span>
   );
 }
@@ -191,7 +266,17 @@ function entryCaps(model: FleetModel): CapView | null {
   return "tool_use" in model || "vision" in model ? (model as CapView) : null;
 }
 
-function ModelRow({ model }: { model: FleetModel }) {
+function ModelRow({
+  model,
+  nodeId,
+  onChecked,
+}: {
+  model: FleetModel;
+  /** v1.424.0 review: the node serving it (the Check press asks through it). */
+  nodeId?: string;
+  onChecked?: () => void;
+}) {
+  const caps = entryCaps(model);
   const ctx = fmtCtx(model.context_length ?? model.max_model_len);
   const vram = num(model.size_vram);
   const unload = unloadIn(model.expires_at);
@@ -229,7 +314,9 @@ function ModelRow({ model }: { model: FleetModel }) {
           </span>
         )}
         {unload?.kind === "expired" && <span className="text-zinc-600">unloading</span>}
-        <CapChips view={entryCaps(model)} model={model.id} />
+        <CapChips view={caps} model={model.id} />
+        {/* Only a daemon that answers per model records a per-model check. */}
+        {caps && nodeId && <CheckModel nodeId={nodeId} model={model.id} onChecked={onChecked} />}
       </div>
     </div>
   );
@@ -244,7 +331,7 @@ function ModelRow({ model }: { model: FleetModel }) {
  * about it — so an unreachable child says "not probeable" with the bind hint
  * rather than pretending to be an idle server.
  */
-function ChildRow({ snap }: { snap: NodeSnapshot }) {
+function ChildRow({ snap, onChecked }: { snap: NodeSnapshot; onChecked?: () => void }) {
   const { text, commands } = normHint(snap.hint, snap.commands);
   const model = snap.models?.[0]?.id ?? null;
   return (
@@ -258,11 +345,20 @@ function ChildRow({ snap }: { snap: NodeSnapshot }) {
               of it, or the proxy's own statement) — never the endpoint's
               one flag. An older daemon: the child's own flag, as before. */}
           {snap.model_capabilities ? (
-            <span className="text-[11px] leading-none text-zinc-500">
+            <span className="inline-flex flex-wrap items-center gap-x-2 text-[11px] leading-none text-zinc-500">
               <CapChips
                 view={capabilityOf(snap, snap.node.alias || model || "")}
                 model={snap.node.alias || model || ""}
               />
+              {/* v1.424.0 review: asked through its PROXY, by the name the
+                  proxy serves (a proxy's model is never verified alone). */}
+              {snap.node.parent_id && (snap.node.alias || model) && (
+                <CheckModel
+                  nodeId={snap.node.parent_id}
+                  model={snap.node.alias || model || ""}
+                  onChecked={onChecked}
+                />
+              )}
             </span>
           ) : (
             snap.node.tool_use && (
@@ -612,7 +708,7 @@ function NodeCard({
           </div>
           <div>
             {models.map((mod) => (
-              <ModelRow key={mod.id} model={mod} />
+              <ModelRow key={mod.id} model={mod} nodeId={snap.node.id} onChecked={onChanged} />
             ))}
           </div>
         </div>
@@ -631,7 +727,7 @@ function NodeCard({
           </div>
           <div className="space-y-2">
             {children.map((child) => (
-              <ChildRow key={child.node.id} snap={child} />
+              <ChildRow key={child.node.id} snap={child} onChecked={onChanged} />
             ))}
           </div>
           {snap.proxy_health && (
