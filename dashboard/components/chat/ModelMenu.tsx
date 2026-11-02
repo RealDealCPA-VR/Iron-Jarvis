@@ -452,6 +452,22 @@ const MODEL_PANEL =
  *  belongs to. */
 const MODEL_PANEL_PHONE_INLINE = "max-sm:static max-sm:mr-0 max-sm:mt-0.5 max-sm:w-full";
 
+/** v1.424.0 (D6): the CHAT's Iron-Proxy accounts, per subscription CLI
+ *  (lib/harnessModelMenu `cliAccounts` — the harness menu's own rule). */
+export interface ChatAccounts {
+  /** cli provider -> its account entries (null / absent = none: its row is
+   *  the one row it was). */
+  byProvider: ReadonlyMap<string, MenuAccount[] | null>;
+  /** The account this chat runs on ("" = none: Iron-Proxy's normal pick). */
+  current: string;
+  /** Iron-Proxy's own note (off, needs an update), "" when none. */
+  note: string;
+}
+
+/** v1.424.0 (D6): the chat's "no account of its own" entry under a CLI. */
+export const ANY_ACCOUNT_WORDS = "Any free account";
+export const ANY_ACCOUNT_STATE = "Iron-Proxy picks the first free one";
+
 /** Why a harness filter / Recent row cannot be picked ("" = it can). */
 function matchBlocked(m: MenuMatch): string {
   if (m.row.available === false) return `${m.group} isn't connected`;
@@ -473,6 +489,7 @@ export function ModelMenu({
   onMakeDefault,
   defaultNote = "",
   companies,
+  chatAccounts,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -497,6 +514,13 @@ export function ModelMenu({
    *  it, and the Iron-Proxy accounts (lib/harnessModelMenu). Absent = the
    *  chat's menu, one row per provider, exactly as before. */
   companies?: CompanyMenu;
+  /** v1.424.0 (D6, the CHAT page only): the Iron-Proxy accounts of each
+   *  subscription CLI. A Claude Code / Codex / Grok row with accounts lists
+   *  "Any free account" and then one entry per account (the harness menu's
+   *  entries, `cliAccounts`), each opening that CLI's models; a pick under an
+   *  account names it (`onPick(value, account)`). Absent, or a CLI with none
+   *  (Iron-Proxy off): the row exactly as before. */
+  chatAccounts?: ChatAccounts;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
   const [sub, setSub] = useState<string | null>(null);
@@ -714,7 +738,8 @@ export function ModelMenu({
   /** The ONE way a menu row picks: the caller's choice, the menu, the memory.
    *  v1.376.0: a row under an Iron-Proxy account names it (harness only). */
   function pick(v: string, account?: string) {
-    if (account) onPick(v, account);
+    // v1.424.0: "" = the chat's "Any free account" (no account, said).
+    if (account !== undefined) onPick(v, account);
     else onPick(v);
     onOpenChange(false);
     setSub(null);
@@ -740,17 +765,19 @@ export function ModelMenu({
   /** A provider's models in its side panel. `account` (harness only): the
    *  Iron-Proxy account they are listed under — a pick switches to it, and a
    *  row is marked only under the account the session runs on. */
-  const modelRows = (provider: string, account?: MenuAccount) =>
+  const modelRows = (provider: string, account?: MenuAccount, anyAccount = false) =>
     listed
       .filter((m) => m.provider === provider)
       .map((m) => {
         const v = `${m.provider}::${m.model}`;
-        const on = chosen === v && (!account || account.current);
+        // v1.424.0: under the chat's "Any free account", a row is the pick
+        // only while the chat has no account of its own.
+        const on = chosen === v && (anyAccount ? !chatAccounts?.current : !account || account.current);
         return (
           <button
             key={v}
             type="button"
-            onClick={() => pick(v, account?.id)}
+            onClick={() => pick(v, anyAccount ? "" : account?.id)}
             className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[12px] transition-colors hover:bg-white/[0.06] ${
               on ? "text-accent-soft" : "text-zinc-300"
             }`}
@@ -767,7 +794,7 @@ export function ModelMenu({
       });
 
   /** A model's side panel, beside the row that opened it. */
-  const modelPanel = (provider: string, account?: MenuAccount) => (
+  const modelPanel = (provider: string, account?: MenuAccount, anyAccount = false) => (
     /* Anchored to the BOTTOM so a long catalog (OpenRouter)
        grows UPWARD over the chat area instead of being
        clipped at the card edge — and v1.350.1: never past
@@ -783,7 +810,7 @@ export function ModelMenu({
       inlineQuery={PHONE_QUERY}
       refitKey={place}
     >
-      {modelRows(provider, account)}
+      {modelRows(provider, account, anyAccount)}
     </FitPanel>
   );
 
@@ -869,13 +896,38 @@ export function ModelMenu({
   /** v1.376.0: a way reached through Iron-Proxy accounts — its name and how
    *  it is paid for, then ONE entry per account: name, plan, state in words,
    *  the session's own marked; one that cannot serve is shown, not picked. */
-  const accountWay = (w: MenuWay, accounts: MenuAccount[]) => (
+  const accountWay = (w: MenuWay, accounts: MenuAccount[], chat = false) => (
     <div key={w.provider} data-testid={`model-way-${w.provider}`}>
       <p className="flex items-center gap-2 py-1 pl-5 pr-2.5 text-[12px] text-zinc-400">
         <span className="min-w-0 truncate">{w.label}</span>
         {kindBadge(w.kind, w.available)}
       </p>
       {w.note ? <p className="pb-1 pl-5 pr-2.5 text-[11px] text-tone-warn">{w.note}</p> : null}
+      {/* v1.424.0 (D6): the chat may also run on no account of its own —
+          Iron-Proxy then picks, exactly as before accounts could be chosen. */}
+      {chat ? (
+        <div className="relative">
+          <button
+            type="button"
+            data-testid={`model-account-any-${w.provider}`}
+            data-current={!chatAccounts?.current ? "true" : undefined}
+            onClick={() => setSub(sub === `${w.provider}@` ? null : `${w.provider}@`)}
+            disabled={!w.available}
+            title={w.available ? undefined : `${w.label} isn't connected. Set it up on Connections.`}
+            aria-expanded={sub === `${w.provider}@`}
+            className={`flex w-full items-center gap-2 rounded-lg py-1.5 pl-7 pr-2.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent ${
+              !chatAccounts?.current && splitChoice(chosen).provider === w.provider ? "text-accent-soft" : "text-zinc-300"
+            }`}
+          >
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="min-w-0 truncate">{ANY_ACCOUNT_WORDS}</span>
+              <span className="text-[11px] text-zinc-500">{ANY_ACCOUNT_STATE}</span>
+            </span>
+            <ChevronRight size={12} className="ml-auto shrink-0 text-zinc-500" />
+          </button>
+          {sub === `${w.provider}@` && modelPanel(w.provider, undefined, true)}
+        </div>
+      ) : null}
       {accounts.map((a) => {
         const key = `${w.provider}@${a.id}`;
         const blocked = !w.available
@@ -906,7 +958,7 @@ export function ModelMenu({
                   {a.current ? (
                     <>
                       <Check size={11} aria-hidden data-testid="model-account-current" className="shrink-0" />
-                      <span className="sr-only"> (this session&apos;s account)</span>
+                      <span className="sr-only">{chat ? " (this chat's account)" : " (this session's account)"}</span>
                     </>
                   ) : null}
                 </span>
@@ -1142,7 +1194,25 @@ export function ModelMenu({
                   >
                     default model
                   </button>
-                  {providers.map((p) => providerRow(p))}
+                  {providers.map((p) => {
+                    // v1.424.0 (D6): a subscription CLI with Iron-Proxy
+                    // accounts lists them (the harness menu's entries).
+                    const accts = chatAccounts?.byProvider.get(p.id) ?? null;
+                    return accts
+                      ? accountWay(
+                          {
+                            provider: p.id,
+                            label: p.label,
+                            kind: p.kind,
+                            available: p.available,
+                            accounts: accts,
+                            note: chatAccounts?.note ?? "",
+                          },
+                          accts,
+                          true,
+                        )
+                      : providerRow(p);
+                  })}
                 </>
               )}
             </div>

@@ -45,20 +45,24 @@
 import { ApiError, del, get, patch, post } from "@/lib/api";
 import { localTime } from "@/lib/ironProxy";
 
-/** The two vendors whose CLI accounts a Build session can run on. */
-export type AccountVendor = "claude" | "codex";
-export const ACCOUNT_VENDORS: readonly AccountVendor[] = ["claude", "codex"];
+/** The vendors whose CLI accounts a Build session can run on. v1.424.0
+ *  (D6): Grok joins (Iron-Proxy's ``xai`` CLI accounts; the daemon's
+ *  ``build_accounts.VENDORS``). */
+export type AccountVendor = "claude" | "codex" | "grok";
+export const ACCOUNT_VENDORS: readonly AccountVendor[] = ["claude", "codex", "grok"];
 
 /** The account list's group headings (the mockup's words). */
 export const GROUP_TITLES: Record<AccountVendor, string> = {
   claude: "Claude Code accounts",
   codex: "Codex accounts",
+  grok: "Grok accounts",
 };
 
 /** The vendor's product name, when a row does not carry its own label. */
 export const VENDOR_NAMES: Record<AccountVendor, string> = {
   claude: "Claude Code",
   codex: "Codex",
+  grok: "Grok",
 };
 
 /** A row's status: Phase 5's four, plus what a SESSION's account may be
@@ -150,10 +154,10 @@ function isoOrNull(v: unknown): string | null {
   return s && !Number.isNaN(Date.parse(s)) ? s : null;
 }
 
-/** A vendor from the daemon's word ("claude" / "codex"), else null. */
+/** A vendor from the daemon's word ("claude" / "codex" / "grok"), else null. */
 export function vendorOf(raw: unknown): AccountVendor | null {
   const v = str(raw, 40).toLowerCase();
-  return v === "claude" || v === "codex" ? v : null;
+  return v === "claude" || v === "codex" || v === "grok" ? v : null;
 }
 
 /** "7 days" from words, or from minutes when only a number came. */
@@ -221,7 +225,8 @@ export function decodeAccounts(raw: unknown): AccountsView | null {
   const r = rec(raw);
   if (!r) return null;
   if (!Array.isArray(r.claude) && !Array.isArray(r.codex)) return null;
-  const groups: AccountGroups = { claude: [], codex: [] };
+  // v1.424.0: an older Iron Jarvis sends no "grok" group — it reads empty.
+  const groups: AccountGroups = { claude: [], codex: [], grok: [] };
   for (const v of ACCOUNT_VENDORS) {
     for (const row of Array.isArray(r[v]) ? (r[v] as unknown[]) : []) {
       const a = decodeAccount(row, v);
@@ -422,7 +427,7 @@ export function sessionAccount(
 ): BuildAccount | null {
   const own = decodeAccount(viewAccount, vendor);
   if (!own) return null;
-  const listed = view ? [...view.groups.claude, ...view.groups.codex].find((a) => a.id === own.id) : undefined;
+  const listed = view ? ACCOUNT_VENDORS.flatMap((v) => view.groups[v]).find((a) => a.id === own.id) : undefined;
   return listed ?? own;
 }
 

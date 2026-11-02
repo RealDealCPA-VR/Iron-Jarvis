@@ -22,6 +22,7 @@
  * flat checkbox per GET /models row.
  */
 
+import { AccountChoice } from "@/components/AccountChoice";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Loader2, Moon, Plus } from "lucide-react";
 import { Badge, ConfirmButton } from "@/components/ui";
@@ -94,6 +95,8 @@ function TaskForm({
   const [words, setWords] = useState(initial.words);
   const [how, setHow] = useState<How>(howOf(initial));
   const [tryOn, setTryOn] = useState<NightPick[]>(initial.tryOn ?? []);
+  // v1.424.0 (D6): the account its session runs on ("" = its vendor's Default).
+  const [account, setAccount] = useState(initial.account ?? "");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // A night task never runs on Local only (it has no such switch); the demo
@@ -115,6 +118,7 @@ function TaskForm({
       const [provider, model] = how.slice("model:".length).split("::");
       draft.provider = provider;
       draft.model = model ?? "";
+      draft.account = account;
     }
     setBusy(true);
     setProblem(null);
@@ -183,6 +187,16 @@ function TaskForm({
           <option value="try">Try it on several models</option>
         </select>
       </label>
+      {how.startsWith("model:") ? (
+        <AccountChoice
+          provider={how.slice("model:".length).split("::")[0]}
+          models={models}
+          value={account}
+          onChange={setAccount}
+          testId="tonight-account"
+          ariaLabel="Account this task runs on"
+        />
+      ) : null}
       {how === "try" ? (
         <fieldset data-testid="tonight-try-on" className="space-y-1">
           <legend className="text-[12px] text-zinc-400">
@@ -265,6 +279,7 @@ function TaskRow({
             model: task.model,
             team: task.team,
             tryOn: task.tryOn,
+            account: task.account,
           }}
           folders={folders}
           models={models}

@@ -47,9 +47,10 @@ interface AccountRow {
 }
 
 function decodeAccounts(raw: unknown): Record<string, AccountRow[]> {
-  const out: Record<string, AccountRow[]> = { claude: [], codex: [] };
+  const out: Record<string, AccountRow[]> = { claude: [], codex: [], grok: [] };
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  for (const vendor of ["claude", "codex"]) {
+  // v1.424.0 (D6): Grok's accounts too.
+  for (const vendor of ["claude", "codex", "grok"]) {
     const rows = Array.isArray(r[vendor]) ? (r[vendor] as unknown[]) : [];
     for (const row of rows) {
       const x = row && typeof row === "object" ? (row as Record<string, unknown>) : null;
