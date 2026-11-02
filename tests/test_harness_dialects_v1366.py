@@ -263,7 +263,8 @@ def test_todowrite_webfetch_websearch_notebook_and_resources():
 
 
 def test_a_weak_models_lower_case_name_still_finds_the_tool():
-    assert _t(D.CLAUDE, "bash", {"command": "dir"}) == ("shell", {"command": "dir"})
+    # v1.425.0 (C5): with no timeout, Claude Code's own 2 minutes (moved on purpose).
+    assert _t(D.CLAUDE, "bash", {"command": "dir"}) == ("shell", {"command": "dir", "timeout_s": 120})
 
 
 def test_an_unknown_name_passes_through_for_the_registry_to_refuse():
@@ -289,7 +290,9 @@ def test_exec_command_is_a_session_with_codexs_wait_and_falls_back_to_the_shell(
     assert _t(D.GPT, "exec_command", {"cmd": "ls"})[1]["wait_ms"] == 10000
     assert _t(D.GPT, "exec_command", {"cmd": "ls", "yield_time_ms": 999_999})[1]["wait_ms"] == 30000
     # process_start not armed (low trust keeps it away): the shell runs it.
-    assert _t(D.GPT, "exec_command", {"cmd": "ls"}, ALL - {"process_start"}) == ("shell", {"command": "ls"})
+    # v1.425.0 (C5): held to the 2 minutes its words then say (moved on purpose).
+    assert _t(D.GPT, "exec_command", {"cmd": "ls"}, ALL - {"process_start"}) == (
+        "shell", {"command": "ls", "timeout_s": 120})
     tool = D.GPT.lookup("exec_command")
     assert tool.reach(ALL) == {"process_start"}
     assert tool.reach(ALL - {"process_start"}) == {"shell"}

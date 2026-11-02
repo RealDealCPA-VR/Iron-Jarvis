@@ -366,6 +366,14 @@ def unterminated_arguments(raw: Any) -> bool:
 class LLMAdapter(ABC):
     provider: str = ""
     model: str = ""
+    #: v1.425.0 (Wave 5, C4): this adapter hands a PICTURE inside a tool
+    #: result to its model (``LLMMessage.images`` on a ``role="tool"``
+    #: message, v1.371.0) — the Anthropic API and claude-cli as image blocks
+    #: in the ``tool_result``, Codex's app-server as ``inputImage`` items.
+    #: Every other adapter sends the tool's text alone and drops the picture,
+    #: so the default is False; :func:`carries_tool_pictures` is the one
+    #: reader (it also asks ``capabilities()`` for native tools and vision).
+    takes_tool_pictures: bool = False
 
     @abstractmethod
     async def complete(
@@ -472,3 +480,27 @@ class LLMAdapter(ABC):
             "tool_use": True,
             "vision": True,
         }
+
+
+def carries_tool_pictures(adapter: Any) -> bool:
+    """Does ``adapter`` show its model a picture a TOOL handed back (v1.425.0,
+    Wave 5 C4)? True only when its class says it carries one inside a tool
+    result (:attr:`LLMAdapter.takes_tool_pictures`) AND it reports, right
+    now, native tool calls and vision — a codex-cli that fell back to the
+    text-only ``codex exec`` reports neither, and the router's prompted-tools
+    wrap (for a model without native tools) flattens every result to text.
+    Never raises (False on any doubt): a wrong True would tell a model a
+    picture is attached that it never receives."""
+    try:
+        if not bool(getattr(adapter, "takes_tool_pictures", False)):
+            return False
+        fn = getattr(adapter, "capabilities", None)
+        caps = fn() if callable(fn) else {}
+        caps = caps if isinstance(caps, dict) else {}
+        return (
+            bool(caps.get("vision", False))
+            and bool(caps.get("tool_use", False))
+            and caps.get("tool_use_mode") != "prompted"
+        )
+    except Exception:  # noqa: BLE001
+        return False

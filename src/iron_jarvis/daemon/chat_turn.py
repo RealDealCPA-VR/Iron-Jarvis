@@ -4996,9 +4996,11 @@ def tool_result_images(result: Any, ran: bool) -> list[dict[str, str]]:
 
 #: Tool results that keep their pictures within one turn (the newest).
 KEEP_TOOL_IMAGE_RESULTS = 2
+#: v1.425.0 (Wave 5, C4): a picture an IMAGE READ handed back is trimmed the
+#: same way, so the note no longer speaks of a screenshot only.
 DROPPED_PICTURE_NOTE = (
-    "\n[The picture from this result was dropped to save room; take a new "
-    "screenshot to see the page again.]"
+    "\n[The picture from this result was dropped to save room; read the image "
+    "again, or take a new screenshot, to see it again.]"
 )
 
 
@@ -10299,7 +10301,12 @@ async def run_chat_turn(
             # (lock-step): routes/chat.py's stream loop does the same.
             _model_calls = calls
             if _harness is not None:
-                calls = _harness.translate_calls(calls)
+                # v1.425.0 (Wave 5, C4): with the round's serving model, so an
+                # image read hands the PICTURE back when that model takes one.
+                # MIRROR NOTE (lock-step): routes/chat.py's stream loop.
+                calls = _harness.translate_calls(
+                    calls, serving=(str(getattr(route, "provider", "") or ""), str(getattr(route, "model", "") or "")),
+                )
             # A REPLY CUT OFF AT THE OUTPUT LIMIT (v1.387.0): never the
             # no-tools final answer. ONE note and the turn goes on (a reply
             # with complete calls too: they run, the note follows their

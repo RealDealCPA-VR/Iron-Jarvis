@@ -352,6 +352,32 @@ _READ_COUNT_DEADLINE_S = 10.0
 
 _WINDOW_KEYS = ("offset", "limit", "numbered")
 
+#: v1.425.0 (Wave 5, C5): a windowed read may be given ``max_chars`` — the
+#: most characters its WHOLE answer may hold (the numbers in front of the
+#: lines and the note included). The IJ harness passes its limit for one tool
+#: result (``harness/mode.HarnessTurn.translate_calls``): before, a 2,000-line
+#: window stopped at 100,000 characters and the lane then cut ITS middle out
+#: (``chat_turn.tool_message_text``), so the model read a note claiming lines
+#: it never saw. Not in the schema a model is shown; a model that sends it
+#: anyway is held to the same bounds. Room kept for the window's note:
+READ_NOTE_CHARS = 200
+#: The smallest ``max_chars`` honoured (a smaller one reads as this).
+READ_MIN_MAX_CHARS = 2_000
+
+
+def _max_chars_arg(args: dict[str, Any]) -> "int | None":
+    """``max_chars`` as a whole number within [:data:`READ_MIN_MAX_CHARS`,
+    :data:`READ_WINDOW_MAX_CHARS`], or None (absent, or not a number —
+    ignored, never an error: it is the harness's argument, not the model's)."""
+    raw = args.get("max_chars")
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        number = _int_arg(raw, "max_chars", minimum=1)
+    except ValueError:
+        return None
+    return max(READ_MIN_MAX_CHARS, min(READ_WINDOW_MAX_CHARS, number))
+
 
 def _int_arg(value: Any, name: str, *, minimum: int) -> int:
     """An integer argument (a model may send "10"); ValueError in words."""
@@ -408,10 +434,12 @@ def _render_window(
     *,
     counted_all: bool,
     cut_by_chars: bool,
+    cut_at: int = READ_WINDOW_MAX_CHARS,
 ) -> "tuple[str, dict[str, Any]]":
     """The window's text and its ``data``: the lines (cat -n style when
     numbered: number right-aligned in 6, then a tab) and ONE note whenever
-    the window is not the whole file."""
+    the window is not the whole file. ``cut_at`` (v1.425.0): the size the
+    window was held to, said when it stopped early."""
     if total == 0:
         return "[the file is empty]", {"first_line": 0, "last_line": 0, "total_lines": 0, "truncated": False}
     if not picked:
@@ -426,18 +454,22 @@ def _render_window(
     out = "\n".join(lines)
     if not whole:
         of = f"{total:,}" if counted_all else f"at least {total:,} (counting stopped)"
-        cut = f" — cut at {READ_WINDOW_MAX_CHARS:,} characters" if cut_by_chars else ""
+        cut = f" — cut at {cut_at:,} characters" if cut_by_chars else ""
         out += f"\n\n[showing lines {a:,}–{b:,} of {of}{cut}; use offset to read more]"
     return out, {"first_line": a, "last_line": b, "total_lines": total, "truncated": not whole}
 
 
-def _window_of_file(path: Path, first: int, limit: int) -> "tuple[list[tuple[int, str]], int, bool, bool]":
+def _window_of_file(
+    path: Path, first: int, limit: int, *, cap: int = READ_WINDOW_MAX_CHARS, line_extra: int = 0,
+) -> "tuple[list[tuple[int, str]], int, bool, bool]":
     """Stream a UTF-8 text file and keep lines ``first``..``first+limit-1``.
 
     BLOCKING (a worker thread runs it) and BOUNDED: memory holds only the
     window, and counting the rest of a huge file stops after
     :data:`_READ_COUNT_DEADLINE_S`. Raises ``UnicodeDecodeError`` for a file
-    that is not UTF-8 (the caller then extracts it like the plain read)."""
+    that is not UTF-8 (the caller then extracts it like the plain read).
+    ``cap`` / ``line_extra`` (v1.425.0): the window's size, each line
+    counted with ``line_extra`` more characters (its number in front)."""
     import time as _time
 
     started = _time.monotonic()
@@ -451,18 +483,20 @@ def _window_of_file(path: Path, first: int, limit: int) -> "tuple[list[tuple[int
         for total, line in enumerate(fh, 1):
             if first <= total < stop and not cut_by_chars:
                 body = _window_line(line.rstrip("\n"))
-                if picked and chars + len(body) > READ_WINDOW_MAX_CHARS:
+                if picked and chars + len(body) + line_extra > cap:
                     cut_by_chars = True
                 else:
                     picked.append((total, body))
-                    chars += len(body) + 1
+                    chars += len(body) + line_extra + 1
             elif total >= stop and _time.monotonic() - started >= _READ_COUNT_DEADLINE_S:
                 counted_all = False
                 break
     return picked, total, counted_all, cut_by_chars
 
 
-def _window_of_text(text: str, first: int, limit: int) -> "tuple[list[tuple[int, str]], int, bool, bool]":
+def _window_of_text(
+    text: str, first: int, limit: int, *, cap: int = READ_WINDOW_MAX_CHARS, line_extra: int = 0,
+) -> "tuple[list[tuple[int, str]], int, bool, bool]":
     """The same window over text already in memory (an extracted document)."""
     lines = text.splitlines()
     picked: list[tuple[int, str]] = []
@@ -470,20 +504,38 @@ def _window_of_text(text: str, first: int, limit: int) -> "tuple[list[tuple[int,
     cut_by_chars = False
     for no in range(first, min(first + limit, len(lines) + 1)):
         body = _window_line(lines[no - 1])
-        if picked and chars + len(body) > READ_WINDOW_MAX_CHARS:
+        if picked and chars + len(body) + line_extra > cap:
             cut_by_chars = True
             break
         picked.append((no, body))
-        chars += len(body) + 1
+        chars += len(body) + line_extra + 1
     return picked, len(lines), True, cut_by_chars
 
 
-def _windowed(result: ToolResult, first: int, limit: int, numbered: bool) -> ToolResult:
+def _window_budget(numbered: bool, max_chars: "int | None") -> "tuple[int, int, int]":
+    """``(cap, line_extra, cut_at)`` for a window (v1.425.0). No
+    ``max_chars``: the old bound, line bodies only, exactly as before. With
+    one: the whole answer is held to it — each line's number counted, room
+    left for the note — and the note says it."""
+    if max_chars is None:
+        return READ_WINDOW_MAX_CHARS, 0, READ_WINDOW_MAX_CHARS
+    extra = 7 if numbered else 0  # the "{no:>6}" + tab in front of a line
+    return max(1, max_chars - READ_NOTE_CHARS), extra, max_chars
+
+
+def _windowed(
+    result: ToolResult, first: int, limit: int, numbered: bool, max_chars: "int | None" = None,
+) -> ToolResult:
     """An extracted document's result, windowed like a text file."""
     if not result.ok:
         return result
-    picked, total, counted_all, cut = _window_of_text(result.output or "", first, limit)
-    out, extra = _render_window(picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut)
+    cap, line_extra, cut_at = _window_budget(numbered, max_chars)
+    picked, total, counted_all, cut = _window_of_text(
+        result.output or "", first, limit, cap=cap, line_extra=line_extra,
+    )
+    out, extra = _render_window(
+        picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut, cut_at=cut_at,
+    )
     data = dict(result.data or {})
     data.update(extra)
     data["bytes"] = len(out)
@@ -613,11 +665,13 @@ class ReadFileTool(Tool):
         # A known office format goes straight to the extractor — the extension
         # is certain knowledge, so there is nothing to try and fail at first.
         kind = _DOC_EXTENSIONS.get(path.suffix.lower())
+        # v1.425.0 (C5): the most the whole windowed answer may hold.
+        max_chars = _max_chars_arg(args) if window is not None else None
         if kind:
             result = await _extract_document(path, kind, ctx, self._router_resolver)
-            return result if window is None else _windowed(result, *window)
+            return result if window is None else _windowed(result, *window, max_chars)
         if window is not None:
-            return await self._read_window(path, ctx, *window)
+            return await self._read_window(path, ctx, *window, max_chars=max_chars)
         try:
             # Offloaded for the same reason the walk below is: a large file on a
             # slow or unhydrated path blocks every other request in the daemon.
@@ -632,22 +686,25 @@ class ReadFileTool(Tool):
         return ToolResult(ok=True, output=text, data={"bytes": len(text)})
 
     async def _read_window(
-        self, path: Path, ctx: ToolContext, first: int, limit: int, numbered: bool
+        self, path: Path, ctx: ToolContext, first: int, limit: int, numbered: bool,
+        *, max_chars: "int | None" = None,
     ) -> ToolResult:
         """The windowed read (v1.364.0): streamed off the loop, only the
         window kept in memory. A file that is not UTF-8 is extracted exactly
-        as the plain read does, then windowed."""
+        as the plain read does, then windowed. ``max_chars`` (v1.425.0): the
+        most the whole answer may hold (:func:`_window_budget`)."""
+        cap, line_extra, cut_at = _window_budget(numbered, max_chars)
         try:
             picked, total, counted_all, cut = await asyncio.to_thread(
-                _window_of_file, path, first, limit
+                lambda: _window_of_file(path, first, limit, cap=cap, line_extra=line_extra)
             )
         except UnicodeDecodeError:
             result = await _extract_document(path, "binary", ctx, self._router_resolver)
-            return _windowed(result, first, limit, numbered)
+            return _windowed(result, first, limit, numbered, max_chars)
         except OSError as exc:
             return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
         out, data = _render_window(
-            picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut
+            picked, total, first, numbered, counted_all=counted_all, cut_by_chars=cut, cut_at=cut_at,
         )
         data["bytes"] = len(out)
         return ToolResult(ok=True, output=out, data=data)

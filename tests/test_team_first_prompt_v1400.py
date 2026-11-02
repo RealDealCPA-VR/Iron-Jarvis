@@ -46,6 +46,23 @@ chart fence (``CHART_BLOCK``). Checked before it was written: every key
 differs from the v1.417.0 capture by exactly those two blocks removed, and
 the tool specs are identical (``tests/test_prompt_order_v1420.py``).
 
+REGENERATED AGAIN, v1.425.0 (Wave 5 C4/C5, the tool words tell the truth —
+``tests/test_harness_truth_v14250.py``). Checked before it was written: the
+system prompt differs only in (a) the dialect's advice, now one sentence per
+hint and only for tools the turn shows (Claude's three clauses became three
+sentences, same words), and (b) the approval sentence, which now names what
+may run without asking under Ask first (a read-only command, a look at the
+Browser pane's page, a tool allowed for this session) and adds the
+guarded-edit sentence. The specs differ only in: Claude's Read (the image and
+the long-read words), Bash (the 2-minute default and what happens at it),
+Glob / Grep / LS (the folders they skip; LS lists subfolders); Codex's
+view_image (the picture) and exec_command's ``max_output_tokens`` ("not used
+here"); Qwen Code's read_file, glob, grep_search, list_directory and
+run_shell_command (the same truths); every dialect's pass-through
+descriptions losing what names a tool the turn cannot reach (read_document,
+image_resize, rename_file, message_agent); and process_start's words on when
+a program stops.
+
 The capture is machine-independent: the temporary folder and the home folder
 become placeholders, today's date becomes ``<TODAY>``, and a command tool's
 "How commands run here" note (it names the shell this PC has) becomes

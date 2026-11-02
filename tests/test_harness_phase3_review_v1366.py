@@ -427,7 +427,8 @@ _SEAMS = (
     "system += _harness_rules + _harness.block()", "tool_specs = _harness.specs(d.platform.registry)",
     "armed, auto_armed = list(_harness.plan.armed), []",
     "_harness.narrow(overrides, d.platform.registry, d.platform.permissions)",
-    "calls = _harness.translate_calls(calls)", "tool_calls=_model_calls",
+    # v1.425.0 (C4): with the round's serving model (moved on purpose).
+    "calls = _harness.translate_calls(calls, serving=(", "tool_calls=_model_calls",
     "_harness.wants_nudge(", "LLMMessage(role=\"user\", content=TEXT_TOOL_CALL_NUDGE)",
     "_harness.ctx_for(ctx, tc) if _harness is not None else ctx",
     "await _harness.after_edit(", "harness_check_runner( d, ctx, overrides, lambda: armed_grant,",

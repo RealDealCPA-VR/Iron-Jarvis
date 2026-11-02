@@ -367,6 +367,11 @@ class CodexNativeAdapter(LLMAdapter):
     Iron Jarvis executes every tool."""
 
     provider = P.PROVIDER
+    #: v1.425.0 (C4): a tool's picture goes back as ``inputImage`` items
+    #: (``protocol.tool_response``, v1.371.0) — only while the app-server
+    #: answers natively (``capabilities``; the ``codex exec`` fallback has
+    #: no pictures, and ``carries_tool_pictures`` reads that too).
+    takes_tool_pictures = True
 
     def __init__(
         self,

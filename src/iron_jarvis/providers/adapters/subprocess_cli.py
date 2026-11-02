@@ -640,6 +640,9 @@ class ClaudeCliAdapter(LLMAdapter):
     accounting. Iron Jarvis still executes every tool."""
 
     provider = "claude-cli"
+    #: v1.425.0 (C4): a tool's picture rides inside its ``tool_result``
+    #: (``claude_native/frames._tool_result_images``, v1.371.0).
+    takes_tool_pictures = True
 
     def capabilities(self) -> dict[str, Any]:
         # Native tool_use (many per step) AND inline images on the user frame.

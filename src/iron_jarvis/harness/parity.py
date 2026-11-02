@@ -77,14 +77,17 @@ _NO_TOOL_SEARCH = (
 CLAUDE_CODE: dict[str, Parity] = {
     "Read": _served(
         "read_file", "view_image", "read_document",
-        reason="read_file takes offset/limit/numbered (cat -n style, 2000-line window, cut reported); "
-        "images through view_image; PDFs and office files through read_file/read_document",
+        reason="read_file takes offset/limit/numbered (cat -n style, 2000-line window, cut reported "
+        "at a whole line inside one tool result, v1.425.0); images through view_image (the picture "
+        "itself when the serving model takes one in a tool result, v1.425.0); PDFs and office files "
+        "through read_file/read_document",
     ),
     "Write": _served("write_file"),
     "Edit": _served("edit_file", reason="strict: unique match or refuse, replace_all"),
     "Glob": _served("glob"),
     "Grep": _served("grep", reason="output_mode, context lines, case_insensitive, glob/type, head_limit + offset, multiline"),
-    "Bash": _served("shell", "process_start", reason="shell takes timeout_s (max 600) and cwd; a background program is process_start"),
+    "Bash": _served("shell", "process_start", reason="shell takes timeout_s (max 600, 120 when the model gives none, "
+                    "as Claude Code's own default — v1.425.0) and cwd; a background program is process_start"),
     "PowerShell": _served(
         "shell",
         reason="the shell tool runs cmd.exe on Windows (sh elsewhere), not PowerShell; a PowerShell "

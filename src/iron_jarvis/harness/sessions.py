@@ -965,11 +965,27 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
     ran, from its saved steps — so the next turn's model knows its own tool
     work without a native carrier (the account mobility of v1.368.0 is
     kept). Only a turn's own history asks for it (``compact.history_for_turn``
-    and the resume path); every other reader keeps the plain rule."""
+    and the resume path); every other reader keeps the plain rule.
+
+    v1.425.0 (Wave 5, C6): it rides the newest reply THAT RAN TOOLS (and is
+    shown — a reply that failed with nothing written is left out of the
+    history, and a note on it would vanish with it). The newest reply used to
+    be picked whatever it did: one that only answered in words ("Sure — that
+    is done.") after the reply that edited and tested made the note empty,
+    and the next turn lost what the work reply did. When no reply ran a
+    tool, nothing is attached, as before."""
     out: list[dict[str, str]] = []
     newest = -1
+    newest_note = ""
     if last_work:
-        newest = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
+        for i in range(len(messages) - 1, -1, -1):
+            m = messages[i]
+            if m.get("role") != "assistant" or not str(m.get("content") or "").strip():
+                continue
+            note = last_work_note(m.get("steps"))
+            if note:
+                newest, newest_note = i, note
+                break
     for idx, m in enumerate(messages):
         role = m.get("role")
         content = str(m.get("content") or "")
@@ -993,7 +1009,7 @@ def history_of(messages: list[dict[str, Any]], *, last_work: bool = False) -> li
         if role not in ("user", "assistant") or not content.strip():
             continue
         if idx == newest:
-            content += last_work_note(m.get("steps"))
+            content += newest_note
         out.append({"role": role, "content": content})
     return out
 

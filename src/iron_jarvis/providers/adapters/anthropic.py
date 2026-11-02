@@ -171,6 +171,9 @@ def _own_blocks(m: LLMMessage) -> list[dict[str, Any]]:
 
 class AnthropicAdapter(LLMAdapter):
     provider = "anthropic"
+    #: v1.425.0 (C4): a tool's picture rides inside its ``tool_result``
+    #: (``_to_anthropic_messages``, v1.371.0).
+    takes_tool_pictures = True
 
     def __init__(
         self,

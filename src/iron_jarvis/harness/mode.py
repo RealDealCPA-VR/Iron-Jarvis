@@ -172,6 +172,12 @@ _NO_SUCH_TOOL_RX = re.compile(r"^(?:unknown tool '|not armed:)")
 #: Real tools whose successful call changed a file (plugin checks follow them).
 EDIT_TOOLS = frozenset({"write_file", "edit_file", "multi_edit", "apply_patch", "notebook_edit"})
 
+#: v1.425.0 (Wave 5, C5): what a windowed ``read_file`` leaves free of the
+#: turn's limit for one tool result (``HarnessTurn.tool_message_chars``):
+#: room for the window's own note and anything the lane appends, so the
+#: lane never cuts a window again (``chat_turn.tool_message_text``).
+READ_NOTE_ROOM = 400
+
 
 def turn_harness(value: Any) -> str | None:
     """The validated ``harness=`` value: ``None`` (off) for None / False;
@@ -364,6 +370,90 @@ def runtime_note(registry: Any, name: str, *, shell_description: str = "") -> st
 #: helper tool (Claude Code's ``Agent``, Codex's ``spawn_agent``).
 HELPER_TARGETS = frozenset({"delegate", "spawn_agent"})
 
+#: v1.425.0 (Wave 5, C5): a tool name as a registered description writes one
+#: (``read_document``, ``image_resize``) — the shape :func:`unreachable_cut`
+#: looks for.
+_TOOL_WORD_RX = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+#: v1.425.0 review: never after "e.g." / "i.e." — page_open's "use it for
+#: the user's dev server, e.g. http://localhost:5173/cart, then page_click
+#: ..." was split there and lost its second half mid-sentence.
+_SENTENCE_SPLIT_RX = re.compile(r"((?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)\s+)")
+#: Tools a description names only as WHERE something came from ("a dynamic
+#: agent created with ``create_agent``"), never as one to call — the sentence
+#: stays (it carries the tool's own arguments).
+_NAMED_AS_ORIGIN = frozenset({"create_agent"})
+#: The parts a sentence may lose before the sentence itself does: a
+#: parenthesis (``(usable with message_agent)``) and a trailing ", which …"
+#: clause (``, which you can use with message_agent``).
+_PAREN_RX = re.compile(r"\s*\([^()]*\)")
+_WHICH_RX = re.compile(r",\s*which\b[^.;!?]*")
+
+
+def unreachable_cut(text: str, reachable: "Iterable[str]", registered: "Iterable[str]") -> str:
+    """``text`` without what names a REGISTERED tool this turn cannot reach
+    (v1.425.0, Wave 5 C5). A pass-through tool is shown with its registered
+    description, written for every lane: ``read_file``'s pointed at
+    ``read_document``, ``view_image``'s at ``image_resize``, the shell's at
+    ``rename_file`` / ``read_document`` / ``write_document``, ``delegate``'s
+    and ``spawn_agent``'s at ``message_agent`` — none of them in a coding
+    session, so the model was steered to tools it could not call (a call
+    then met "not armed"). The smallest part goes: a parenthesis or a
+    ", which …" clause that names one, else the whole sentence; a sentence
+    naming only tools the turn has (or none) is kept as written.
+
+    v1.425.0 review: the FIRST sentence — what the tool IS — is never
+    dropped (only its parenthesis / "which" clause may go): a low-trust
+    ``process_read`` ("Read what a program started with process_start
+    printed ...") and ``process_stop`` were left as "``wait_ms`` ..." and
+    "Returns its last unread output", and plan mode's ``page_open`` lost
+    its purpose. Never raises."""
+    try:
+        body = str(text or "")
+        known = {str(n) for n in registered}
+        have = {str(n) for n in reachable} | _NAMED_AS_ORIGIN
+
+        def _cant(part: str) -> bool:
+            return any(w in known and w not in have for w in _TOOL_WORD_RX.findall(part))
+
+        if not body or not known or not _cant(body):
+            return body
+        parts = _SENTENCE_SPLIT_RX.split(body)
+        out: list[str] = []
+        for i in range(0, len(parts), 2):
+            sentence = parts[i]
+            gap = parts[i + 1] if i + 1 < len(parts) else ""
+            if _cant(sentence):
+                sentence = _PAREN_RX.sub(lambda m: "" if _cant(m.group(0)) else m.group(0), sentence)
+                sentence = _WHICH_RX.sub(lambda m: "" if _cant(m.group(0)) else m.group(0), sentence)
+                if _cant(sentence) and i > 0:
+                    continue
+            out.append(sentence + gap)
+        return "".join(out).strip()
+    except Exception:  # noqa: BLE001 — a description is never worth a turn
+        return str(text or "")
+
+
+#: v1.425.0 (Wave 5, C5): the dialect command tools whose words promise a
+#: program that keeps running (``run_in_background``, ``is_background``,
+#: Codex's session ids) — :func:`model_specs` says so when this turn cannot
+#: start one (``process_start`` is not armed: low trust keeps it away).
+_KEEPS_RUNNING_WORDS = {
+    "Bash": (
+        "run_in_background is not available: a command runs until it ends or its timeout "
+        "(2 minutes when you give none)"
+    ),
+    "run_shell_command": (
+        "is_background is not available: a command runs until it ends or its timeout "
+        "(2 minutes when you give none)"
+    ),
+    "exec_command": (
+        "a command runs until it ends, for at most 2 minutes, and no session id is returned"
+    ),
+}
+NO_BACKGROUND_NOTE = (
+    "\n\nIn this reply {what}; this reply cannot start a program that keeps running."
+)
+
 
 def _team_first_lead(spec: dict[str, Any], roles: tuple[str, ...]) -> dict[str, Any]:
     """``spec`` with the team-first sentence in front of its description
@@ -407,10 +497,21 @@ def model_specs(
     when team-first is on and the team is shown — every helper tool's
     description then LEADS with one sentence naming them in that tool's own
     argument words; () (off, or no team) = every description exactly as
-    before."""
+    before.
+
+    v1.425.0 (Wave 5, C5): a command tool whose words promise a program that
+    keeps running says it cannot in a reply where ``process_start`` is not
+    armed (:data:`NO_BACKGROUND_NOTE`); and a pass-through tool's registered
+    description loses every sentence that names a tool this turn cannot
+    reach (:func:`unreachable_cut`)."""
     out = []
+    gate = set(plan.gate)
     for tool in plan.dialect_tools:
         spec = tool.spec()
+        if tool.name in _KEEPS_RUNNING_WORDS and "process_start" not in gate:
+            spec = {**spec, "description": spec["description"] + NO_BACKGROUND_NOTE.format(
+                what=_KEEPS_RUNNING_WORDS[tool.name],
+            )}
         words = shell_description
         if bash_description and tool.shell_syntax == "bash":
             words = bash_description
@@ -427,9 +528,16 @@ def model_specs(
     if plan.passthrough:
         from ..tools.builtins import multi_read_spec
 
+        try:
+            registered = list(registry.names())
+        except Exception:  # noqa: BLE001 — a registry double without names()
+            registered = []
+        reachable = gate | set(plan.offered_names)
         for s in registry.specs(list(plan.passthrough)):
             if shell_description and s.get("name") == "shell":
                 s = {**s, "description": shell_description}
+            if isinstance(s.get("description"), str):
+                s = {**s, "description": unreachable_cut(s["description"], reachable, registered)}
             # Part 3, Phase 3: Jarvis's OWN read_file, wherever a harness turn
             # shows it under its own name (the generic dialect, and Codex's,
             # which has no read tool of its own), reads several files in one
@@ -452,6 +560,11 @@ def dialect_section(plan: ToolPlan, *, ask_words: str = "") -> str:
     if not names:
         return "You have no tools in this turn: answer in text."
     text = plan.dialect.prompt.format(tools=", ".join(names))
+    # v1.425.0 (C5): the dialect's advice, only the sentences this turn's
+    # tools make true (``dialects.dialect_hints``).
+    hints = _dialects.dialect_hints(plan.dialect, names, plan.gate)
+    if hints:
+        text = text + " " + hints
     return (text + ("\n" + ask_words if ask_words else "")).strip()
 
 
@@ -494,23 +607,164 @@ def _night_sentence(plan: ToolPlan, local_only: bool) -> str:
     return " ".join(parts)
 
 
-def ask_sentence(plan: ToolPlan, *, approval_mode: str, local_only: bool, registry: Any) -> str:
+#: v1.425.0 (Wave 5, C5): THE APPROVAL SENTENCE, true for each posture. The
+#: old one said "Calls to Bash pause while the user approves them" in every
+#: posture but "Don't ask" — while a command that only reads (ls, git status)
+#: has run without a card under Ask first, Accept edits and Auto since
+#: v1.417.0, a session grant ("Allow for this session") ends the cards for
+#: that tool, Auto lets routine calls through, "Ask before every action"
+#: also cards file edits and the web, and "Don't ask" still cards a few
+#: calls every time (it said they all "run without pausing"). Each piece
+#: below names what the stream lane's card rules really do
+#: (``routes/chat.py``'s posture branch, ``core/auto_approve``).
+_DECLINE_WORDS = "if they decline, do not repeat the same call."
+#: What may run without a card although its tool asks (:func:`_unasked`):
+#: a command on the read-only list (``core/auto_approve.read_only_command``,
+#: v1.417.0 — never under low trust, never in a Local only chat), a look at
+#: the page the user's Browser pane shows (``page_shot`` / ``page_open``'s
+#: own spend check), a call of a tool the user allowed for this session.
+_READ_ONLY_COMMAND_WORDS = "a command that only reads (ls, git status, cat, grep ...)"
+_PREVIEW_PAGE_WORDS = "a look at the page the user's Browser pane shows"
+_SESSION_GRANT_WORDS = "a call of a tool the user already allowed for this session"
+_COMMAND_REAL = frozenset({"shell", "process_start"})
+_PAGE_REAL = frozenset({"page_screenshot", "page_open"})
+
+
+def _unasked(asking: "set[str]", *, commands: bool) -> str:
+    """``"X, Y and Z may run without asking"`` for the ask-tier tools in
+    ``asking``; ``commands`` False drops the read-only command exception
+    (low trust, "Ask before every action")."""
+    parts: list[str] = []
+    if commands and asking & _COMMAND_REAL:
+        parts.append(_READ_ONLY_COMMAND_WORDS)
+    if asking & _PAGE_REAL:
+        parts.append(_PREVIEW_PAGE_WORDS)
+    parts.append(_SESSION_GRANT_WORDS)
+    joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    return joined + " may run without asking"
+#: v1.425.0 review: the tools that run a command (the git guard and a
+#: project's command file read every one of them — ``harness/git_guard``,
+#: ``harness/command_shell``).
+_COMMAND_RUNNERS = frozenset({"shell", "process_start", "process_write"})
+
+
+def _yolo_still_asks(gate: "set[str]") -> str:
+    """"Don't ask": the calls that still card, every time, in every posture
+    — only the ones this turn's tools can make (v1.425.0 review: the list
+    said "a git commit or push" while the git guard also cards a change on
+    GitHub, git that throws away work not committed yet and a write to git's
+    settings (``harness/git_guard``), and left out a click on a button that
+    reads as deleting, sending or paying (``page_act``'s once-only check))."""
+    parts: list[str] = []
+    if gate & _COMMAND_RUNNERS:
+        parts.append(
+            "git on this session's own branch that commits, pushes or changes something on "
+            "GitHub, throws away work not committed yet or changes git's settings"
+        )
+        parts.append("a command a project's own command file asked for")
+    if gate & _PAGE_REAL:
+        parts.append(
+            "opening a local page that is neither the page the user's Browser pane shows nor one "
+            "already allowed"
+        )
+    if "page_click" in gate:
+        parts.append("a click on a button that reads as deleting, sending or paying for something")
+    parts.append("anything that costs money")
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + ", or " + parts[-1]
+
+
+def _reaches_past_pc(registry: Any, name: str) -> bool:
+    """A Local only chat asks about this tool's every call
+    (``egress.asks_first`` with the scope on: the tool reaches past this PC).
+    Never raises (a lookup that fails: does not)."""
+    try:
+        from ..providers import egress
+
+        tool = registry.get(name)
+        return tool is not None and bool(egress.reaches_outside(tool, registry))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+#: Every posture but "Don't ask": an edit of a file that steers git, the
+#: editor, CI or Iron Jarvis itself cards once, every time
+#: (``core/auto_approve.guarded_edit``, v1.407.2) — named only when the turn
+#: offers a file editor.
+_GUARDED_EDITS_WORDS = (
+    "An edit of a file that steers git, the editor, CI or Iron Jarvis itself (.git, "
+    ".gitattributes, .github/workflows, .vscode/settings.json and tasks.json, .ironjarvis, "
+    ".claude, AGENTS.md, CLAUDE.md) waits for the user's approval every time."
+)
+
+
+def _shown_for(plan: ToolPlan, real: "set[str]") -> list[str]:
+    """The names the model is shown for the real tools ``real`` (a dialect
+    tool once, by its own name; a pass-through tool by its name)."""
+    shown = [t.name for t in plan.dialect_tools if t.targets and set(t.targets) & real]
+    shown += [n for n in plan.passthrough if n in real]
+    return list(dict.fromkeys(shown))
+
+
+def ask_sentence(
+    plan: ToolPlan, *, approval_mode: str, local_only: bool, registry: Any, low_trust: bool = False,
+) -> str:
     """Which shown tools pause for the user (stream lane only).
 
     v1.398.0 review: a NIGHT task's turn (``night.current()``) is told the
-    night's own rule (:func:`_night_sentence`), whatever the posture."""
+    night's own rule (:func:`_night_sentence`), whatever the posture.
+
+    v1.425.0 (Wave 5, C5): one sentence per posture, each true of the
+    stream lane's card rules — see :data:`_DECLINE_WORDS` and the pieces
+    beside it. ``low_trust`` (the turn starts low): the read-only exception
+    is not offered (``auto_approve`` keeps every card then).
+
+    v1.425.0 review: (a) Auto in a LOW-TRUST turn passes nothing by rule or
+    check (``auto_approve.classify`` answers ASK "low_trust" first), so it
+    reads as Ask first without the read-only list; (b) Auto's "never
+    routine" list names what its rules READ — deleting, overwriting, sending
+    or paying, and an EDIT outside the folder (a command reading outside it
+    is judged, and a session grant lets even a deleting command through, so
+    nothing "always pauses" by rule); (c) a Local only chat names EVERY tool
+    of the turn that reaches past this PC as asking every time (the agent's
+    browser clicks and typing too, allow-tier elsewhere), and the rest of the
+    asking tools — an edit under "Ask before every action" — read as their
+    posture says (a session grant covers them); (d) "Don't ask"'s list is
+    :func:`_yolo_still_asks`."""
     from . import night as _night
 
     if _night.current() is not None:
         return _night_sentence(plan, local_only)
-    if not plan.ask:
-        return ""
+    mode = str(approval_mode or "")
+    gate = set(plan.gate)
     asking = set(plan.ask)
-    shown = [t.name for t in plan.dialect_tools if t.targets and set(t.targets) & asking]
-    shown += [n for n in plan.passthrough if n in asking]
+    if mode == "always_ask":
+        # "Ask before every action" cards file edits and the web too
+        # (``chat_turn.STRICT_ASK_TOOLS``), allow-tier as they are.
+        from ..daemon.chat_turn import STRICT_ASK_TOOLS
+
+        asking |= gate & set(STRICT_ASK_TOOLS)
+    guarded = "" if mode == "yolo" or not (gate & EDIT_TOOLS) else _GUARDED_EDITS_WORDS
+    lead = ""
+    if local_only:
+        # A Local only chat cards every call that reaches outside this PC —
+        # a command, a page, a click or typed entry in the agent's browser —
+        # every time, past every grant and the read-only list
+        # (``egress.asks_first``, v1.332.0 / v1.371.0 / v1.376.0), whatever
+        # the tool's tier.
+        every = {n for n in gate | asking if _reaches_past_pc(registry, n)}
+        every_shown = _shown_for(plan, every)
+        if every_shown:
+            lead = (
+                f"Calls to {', '.join(every_shown)} pause while the user approves them every time: "
+                "this chat is kept on this PC and each of these reaches past it, so no earlier OK "
+                "covers one"
+            )
+        asking -= every
+    shown = _shown_for(plan, asking)
+    rest = ""
     if not shown:
-        return ""
-    if approval_mode == "yolo" and not local_only:
+        rest = ""
+    elif mode == "yolo":
         # v1.367.0: a once-only tool (the plan door) waits for the user even
         # under auto-approve — the sentence must not promise otherwise.
         once = set(ONCE_ONLY_TOOLS)
@@ -519,14 +773,42 @@ def ask_sentence(plan: ToolPlan, *, approval_mode: str, local_only: bool, regist
         free = [n for n in shown if n not in always]
         parts = []
         if free:
-            parts.append("The user chose auto-approve, so " + ", ".join(free) + " run without pausing.")
+            parts.append(
+                "The user chose not to be asked, so " + ", ".join(free) + " run without pausing, "
+                "except a few calls that still wait for the user's answer every time ("
+                + _yolo_still_asks(gate) + "); " + _DECLINE_WORDS
+            )
         if always:
             parts.append(", ".join(always) + " always waits for the user's approval.")
-        return " ".join(parts)
-    return (
-        "Calls to " + ", ".join(shown) + " pause while the user approves them; if they "
-        "decline, do not repeat the same call."
-    )
+        rest = " ".join(parts)
+    elif mode == "auto" and not low_trust:
+        # "may", as under Ask first: a page's own check decides a page call
+        # whatever a session grant says (``page_open`` / ``page_screenshot``:
+        # the Browser pane's page runs unasked, another local page always
+        # asks), so "unless the user allowed that tool" was a promise the
+        # lane does not keep either way.
+        page = _PREVIEW_PAGE_WORDS + ", " if asking & _PAGE_REAL else ""
+        rest = (
+            f"Calls to {', '.join(shown)} pause while the user approves them; {page}a call of a "
+            "tool the user already allowed for this session, or one Iron Jarvis's rules or a quick "
+            "check find routine for what the user asked, may run without asking (a call its rules "
+            "read as deleting, overwriting, sending or paying for something, or one that edits a "
+            f"file outside this folder, is never found routine); {_DECLINE_WORDS}"
+        )
+    else:
+        # Ask first (the default) and Accept edits (which adds only file
+        # edits inside the folder — allow-tier already, or a folder rule's);
+        # "Ask before every action" and a low-trust turn keep every command's
+        # card (no read-only list). A Local only chat's commands and pages
+        # were taken out above (no read-only list, no page exception there).
+        exceptions = _unasked(asking, commands=not low_trust and mode != "always_ask")
+        rest = (
+            f"Calls to {', '.join(shown)} pause while the user approves them; {exceptions}; "
+            f"{_DECLINE_WORDS}"
+        )
+    if lead:
+        lead += (". " if rest else "; " + _DECLINE_WORDS)
+    return " ".join(p for p in (lead.strip(), rest, guarded) if p).strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -712,6 +994,12 @@ class HarnessTurn:
         #: that re-runs a bash-written command (v1.386.0 review: the finish
         #: check's re-run of a ``Bash`` command)
         self._marked_syntax: dict[str, str] = {}
+        #: v1.425.0 (Wave 5, C4): call id -> the ``(provider, model)`` that
+        #: served the round, for each IMAGE READ (a dialect's reader on a
+        #: picture, Codex's ``view_image``) — :meth:`ctx_for` puts it on the
+        #: call's context so ``view_image`` hands the picture back when that
+        #: model takes one (:meth:`translate_calls`).
+        self._picture_reads: dict[str, tuple[str, str]] = {}
         #: v1.377.0: a Build session's shell facts (the user's own PATH and
         #: the tools found on it — ``harness/command_env``); "" elsewhere.
         self.shell_description = ""
@@ -845,10 +1133,28 @@ class HarnessTurn:
             session_team=getattr(self.team, "team", None) if self.team is not None else None,
         )
 
-    def translate_calls(self, calls: list[Any]) -> list[Any]:
+    def translate_calls(
+        self, calls: list[Any], *, serving: "tuple[str, str] | None" = None,
+    ) -> list[Any]:
         """The model's calls mapped to the real tools (same ids). A name the
         dialect does not know passes through untouched — the registry decides
-        it (``unknown tool`` / ``not armed``, ledgered)."""
+        it (``unknown tool`` / ``not armed``, ledgered).
+
+        ``serving`` (v1.425.0, Wave 5 C4): the ``(provider, model)`` that
+        served the round these calls came from — both lanes pass it (MIRROR
+        NOTE, lock-step). Each IMAGE READ (a dialect reader on a picture —
+        Claude Code's ``Read``, Qwen Code's ``read_file`` — or Codex's
+        ``view_image``) is remembered with it, and :meth:`ctx_for` hands it
+        to ``view_image``, which then returns the PICTURE when that model
+        takes one in a tool result. Omitted: no call is an image read (a
+        caller that does not know the round's model keeps the description).
+
+        v1.425.0 (C5): a WINDOWED ``read_file`` (a line range, or Claude
+        Code's numbered ``Read``) is given this turn's limit for one tool
+        result (:data:`READ_NOTE_ROOM` under :attr:`tool_message_chars`), so
+        the window stops at a WHOLE line and its own note says exactly which
+        lines came back — instead of the lane cutting the middle out of a
+        window whose note then claimed lines the model never saw."""
         from ..providers.adapters.base import ToolCall
 
         out: list[Any] = []
@@ -863,6 +1169,14 @@ class HarnessTurn:
                 # loader knows only the user's skill library.
                 t = _dialects.Translated(real="read_file", args={"path": folder_skill},
                                          called_as=call.name)
+            if (
+                serving is not None and t.real == "view_image"
+                and self.plan.dialect.lookup(call.name) is not None
+            ):
+                self._picture_reads[call.id] = (str(serving[0] or ""), str(serving[1] or ""))
+            capped = self._read_window_capped(t)
+            if capped is not None:
+                t = _dialects.Translated(real=t.real, args=capped, called_as=t.called_as)
             if t.real != call.name or t.args is not call.arguments:
                 self._called_as[call.id] = call.name
                 tool = self.plan.dialect.lookup(call.name)
@@ -872,6 +1186,29 @@ class HarnessTurn:
             else:
                 out.append(call)
         return out
+
+    def _read_window_capped(self, t: "_dialects.Translated") -> "dict[str, Any] | None":
+        """v1.425.0 (C5): a copy of a windowed ``read_file`` call's arguments
+        with ``max_chars`` = this turn's limit for one tool result less
+        :data:`READ_NOTE_ROOM`; None for any other call (unchanged) — a plain
+        whole-file read, a read of several files (``paths``: its own
+        bound, ``READ_MANY_MAX_CHARS``), a turn with no limit set, or a
+        model that sent its own ``max_chars`` (it keeps it, never more than
+        the limit)."""
+        if t.real != "read_file" or not isinstance(t.args, dict):
+            return None
+        cap = self.tool_message_chars
+        if not isinstance(cap, int) or cap <= 0 or t.args.get("paths") is not None:
+            return None
+        from ..tools.builtins import _WINDOW_KEYS
+
+        if not any(t.args.get(k) is not None for k in _WINDOW_KEYS):
+            return None
+        room = max(1, cap - READ_NOTE_ROOM)
+        own = t.args.get("max_chars")
+        if isinstance(own, int) and not isinstance(own, bool) and 0 < own <= room:
+            return None
+        return {**t.args, "max_chars": room}
 
     def _folder_skill(self, t: "_dialects.Translated") -> "str | None":
         """The SKILL.md path of the folder skill a ``skill_load`` call names,
@@ -936,20 +1273,33 @@ class HarnessTurn:
         that became ``shell`` / ``process_start``, the language its command
         is in (``ToolContext.shell_syntax`` = "bash"), so it runs in Git for
         Windows' bash on Windows — decided by the dialect tool the model
-        called, never by an argument it sent."""
+        called, never by an argument it sent.
+
+        v1.425.0 (Wave 5, C4): and, for an IMAGE READ, the round's serving
+        ``(provider, model)`` (``ToolContext.picture_read`` — see
+        :meth:`translate_calls`); Codex's ``view_image`` keeps its own name,
+        so this applies whether or not the name changed."""
         cid = getattr(call, "id", "")
+        if ctx is None:
+            return ctx
+        out = ctx
         name = self._called_as.get(cid)
-        if not name or name == getattr(call, "name", "") or ctx is None:
-            return ctx
-        try:
-            out = dataclasses.replace(ctx, called_as=name)
-        except Exception:  # noqa: BLE001 — a test double that is no dataclass
-            return ctx
-        syntax = self.shell_syntax_of(call)
-        if syntax:
+        if name and name != getattr(call, "name", ""):
             try:
-                out = dataclasses.replace(out, shell_syntax=syntax)
-            except Exception:  # noqa: BLE001 — an older context: its own shell
+                out = dataclasses.replace(ctx, called_as=name)
+            except Exception:  # noqa: BLE001 — a test double that is no dataclass
+                return ctx
+            syntax = self.shell_syntax_of(call)
+            if syntax:
+                try:
+                    out = dataclasses.replace(out, shell_syntax=syntax)
+                except Exception:  # noqa: BLE001 — an older context: its own shell
+                    pass
+        serving = self._picture_reads.get(cid)
+        if serving is not None and getattr(call, "name", "") == "view_image":
+            try:
+                out = dataclasses.replace(out, picture_read=serving)
+            except Exception:  # noqa: BLE001 — an older context: the description
                 pass
         return out
 
@@ -1158,6 +1508,7 @@ def build(
         )
     section = dialect_section(plan, ask_words=ask_sentence(
         plan, approval_mode=approval_mode, local_only=local_only, registry=registry,
+        low_trust=low_trust,
     ) if stream else "")
     mode_text = ""
     if plan_mode:

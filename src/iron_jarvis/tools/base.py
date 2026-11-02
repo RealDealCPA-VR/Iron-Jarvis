@@ -61,6 +61,16 @@ class ToolContext:
     #: (``sandbox/git_bash``). "" = the platform's own shell, as always
     #: (cmd.exe on Windows, POSIX sh elsewhere).
     shell_syntax: str = ""
+    #: v1.425.0 (Wave 5, C4): an IJ harness turn's IMAGE READ — Claude
+    #: Code's ``Read`` (or Qwen Code's ``read_file``) of a picture, Codex's
+    #: ``view_image`` — carries the ``(provider, model)`` that SERVED the
+    #: round asking for it (set by ``HarnessTurn.ctx_for``, never from a
+    #: model argument). ``view_image`` then hands the PICTURE back as the
+    #: native tools do when that model takes one in a tool result
+    #: (``providers.adapters.base.carries_tool_pictures``), and describes it
+    #: otherwise, saying so. None = every other call: ``view_image`` answers
+    #: a question about the picture with a vision model, exactly as before.
+    picture_read: "tuple[str, str] | None" = None
 
 
 @dataclass

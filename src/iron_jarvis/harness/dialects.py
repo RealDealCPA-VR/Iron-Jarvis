@@ -74,7 +74,42 @@ from typing import Any, Callable, Iterable
 
 #: Images ``Read`` / qwen ``read_file`` hand to ``view_image`` instead of
 #: ``read_file`` (Claude Code's Read shows images; Jarvis's reader is text).
+#: v1.425.0 (Wave 5, C4): in a harness turn such a read is an IMAGE READ —
+#: ``view_image`` hands the PICTURE back when the round's model takes one in
+#: a tool result, and describes it (saying so) otherwise
+#: (``mode.HarnessTurn.translate_calls`` / ``tools/images._picture_read``).
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+#: v1.425.0 (Wave 5, C5): the timeout of a command the model runs with
+#: Claude Code's ``Bash`` or Qwen Code's ``run_shell_command`` when it gives
+#: none: 120 seconds, Claude Code's own default (``BASH_DEFAULT_TIMEOUT_MS``
+#: = 120000 — ``tests/fixtures/harness_tool_inventory_v1364.json``). The
+#: registered shell's default is the sandbox setting (60 s), which a model
+#: trained in Claude Code does not expect: a build or a test run was stopped
+#: at a minute. Both descriptions SAY it (:data:`COMMAND_TIMEOUT_WORDS`),
+#: and that a command still running then is stopped — Claude Code moves one
+#: to the background instead, which this harness does not do.
+DIALECT_COMMAND_TIMEOUT_S = 120
+COMMAND_TIMEOUT_WORDS = (
+    "timeout is in milliseconds: 120000 (2 minutes) when you give none, at most 600000; a "
+    "command still running at its timeout is stopped (it is not moved to the background)."
+)
+
+#: v1.425.0 (Wave 5, C4): what a dialect reader says of an image.
+IMAGE_READ_WORDS = (
+    "An image (PNG, JPG, GIF, WebP) comes back as the picture itself when you can be shown "
+    "pictures here (a large one shrunk to fit); otherwise a model that can see describes it, "
+    "and the result says so."
+)
+
+#: v1.425.0 (Wave 5, C5): the folders the search and listing tools never
+#: walk (``tools/builtins._SKIP_DIRS`` and every folder whose name starts
+#: with a dot) — Claude Code's Glob does not skip them, so the model was
+#: never told a ``.github/**`` glob finds nothing here.
+SKIPPED_FOLDERS_WORDS = (
+    "It skips .git, node_modules, hidden folders (a name starting with a dot) and build output "
+    "(dist, build, target, venv, __pycache__ ...)."
+)
 
 #: v1.402.0 (part 4): the ONE line every question tool's description ends
 #: with — Claude Code's ``AskUserQuestion``, Codex's ``request_user_input``
@@ -276,6 +311,14 @@ class Dialect:
     prompt: str
     native_calls: bool = True
     source: str = ""
+    #: v1.425.0 (Wave 5, C5): the dialect's working advice, one sentence per
+    #: entry ``(shown names, real tools, sentence)`` — said only when this
+    #: turn SHOWS every name and its gate holds every real tool
+    #: (:func:`dialect_hints`). It used to be one fixed paragraph, so a plan
+    #: turn (no editor), a team lead (no editor, no command) and a low-trust
+    #: turn (no ``process_start``) were told to "Edit files with apply_patch"
+    #: or that "exec_command returns a session id".
+    hints: tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...] = ()
     by_name: dict[str, DialectTool] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -494,7 +537,10 @@ def _shell_or_background(background_key: str, cwd_key: str) -> Translate:
             return "process_start", out
         out = {}
         _put(out, "command", command)
-        _put(out, "timeout_s", _ms_to_s(args.get("timeout")))
+        # v1.425.0 (C5): no timeout = 120 s (DIALECT_COMMAND_TIMEOUT_S), the
+        # number the description gives — never the sandbox's 60 s default.
+        timeout_s = _ms_to_s(args.get("timeout"))
+        _put(out, "timeout_s", DIALECT_COMMAND_TIMEOUT_S if timeout_s is None else timeout_s)
         _put(out, "cwd", cwd)
         return "shell", out
 
@@ -576,6 +622,9 @@ def _exec_command(args: dict[str, Any], armed: frozenset) -> tuple[str, dict[str
     out = {}
     _put(out, "command", command)
     _put(out, "cwd", workdir)
+    # v1.425.0 (C5): the shell fallback (no process_start in this reply)
+    # holds a command to 2 minutes, the bound ``mode.NO_BACKGROUND_NOTE`` says.
+    out["timeout_s"] = DIALECT_COMMAND_TIMEOUT_S
     return "shell", out
 
 
@@ -779,8 +828,9 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         "Reads a file from the session folder. file_path may be absolute or relative to the "
         "folder. By default it reads up to 2000 lines from the start; pass offset (the line to "
         "start at, 1 = first) and limit for a range of a long file. Lines come back cat -n style, "
-        "numbered from 1. PDFs and office documents come back as their text; an image (PNG, JPG, "
-        "GIF, WebP) is described by a vision model. Read a file before you Edit it.",
+        "numbered from 1. A read longer than one tool result may hold stops early, at a whole "
+        "line, and says which lines it showed: read on with offset. PDFs and office documents "
+        "come back as their text. " + IMAGE_READ_WORDS + " Read a file before you Edit it.",
         _obj({
             "file_path": _d("The path to the file to read", _S),
             "offset": _d("The line number to start reading from (1 = the first line)", _I),
@@ -832,7 +882,8 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
     DialectTool(
         "Glob",
         "Fast file pattern matching ('**/*.py', 'src/**/*.ts'). Returns matching paths, newest "
-        "first, at most 100. Use it to find files by name instead of a shell command.",
+        "first, at most 100. " + SKIPPED_FOLDERS_WORDS + " Use it to find files by name instead "
+        "of a shell command.",
         _obj({
             "pattern": _d("The glob pattern to match files against", _S),
             "path": _d("The folder to search in (default: the session folder)", _S),
@@ -844,7 +895,8 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
         "Searches file contents with a regular expression. output_mode: files_with_matches "
         "(default, paths), content (matching lines; -A/-B/-C context, -n line numbers) or count. "
         "Filter files with glob ('*.js') or type ('py'). -i ignores case; head_limit and offset "
-        "page the results; multiline lets a pattern span lines. Use Grep, not grep or rg in Bash.",
+        "page the results; multiline lets a pattern span lines. " + SKIPPED_FOLDERS_WORDS + " Use "
+        "Grep, not grep or rg in Bash.",
         _obj({
             "pattern": _d("The regular expression pattern to search for in file contents", _S),
             "path": _d("File or folder to search in (default: the session folder)", _S),
@@ -867,19 +919,21 @@ _CLAUDE_TOOLS: tuple[DialectTool, ...] = (
     ),
     DialectTool(
         "LS",
-        "Lists the files in a folder of the session (default: the session folder itself).",
+        "Lists every file under a folder of the session, its subfolders included (default: the "
+        "session folder itself). " + SKIPPED_FOLDERS_WORDS + " A very long listing stops early "
+        "and says so.",
         _obj({"path": _d("The folder to list", _S)}, []),
         ("list_files",), _list,
     ),
     DialectTool(
         "Bash",
         "Runs a command in the session folder and returns its output. Every call starts in the "
-        "session folder again: a cd lasts for that command only ('cd sub && pytest'). timeout is in "
-        "milliseconds (max 600000). For a program that keeps running (a dev server, a watcher) "
+        "session folder again: a cd lasts for that command only ('cd sub && pytest'). "
+        + COMMAND_TIMEOUT_WORDS + " For a program that keeps running (a dev server, a watcher) "
         "set run_in_background: true; read its output with BashOutput and stop it with TaskStop.",
         _obj({
             "command": _d("The command to execute", _S),
-            "timeout": _d("Optional timeout in milliseconds (max 600000)", _N),
+            "timeout": _d("Optional timeout in milliseconds (default 120000, max 600000)", _N),
             "description": _d("What this command does, in a few words", _S),
             "run_in_background": _d("Run as a background task", _B),
         }, ["command"]),
@@ -1040,10 +1094,11 @@ CLAUDE = Dialect(
         # v1.372.0: Agent / Task and Skill cover these.
         "delegate", "spawn_agent", "skill_load",
     }),
-    prompt=(
-        "Your tools use Claude Code's names and shapes: {tools}. Read a file before you Edit "
-        "it, and copy old_string exactly; use Glob and Grep to find code rather than shell "
-        "commands; on multi-step work keep TodoWrite current."
+    prompt="Your tools use Claude Code's names and shapes: {tools}.",
+    hints=(
+        (("Read", "Edit"), (), "Read a file before you Edit it, and copy old_string exactly."),
+        (("Glob", "Grep"), (), "Use Glob and Grep to find code rather than shell commands."),
+        (("TodoWrite",), (), "On multi-step work keep TodoWrite current."),
     ),
     source="Claude Code 2.1.306 (tests/fixtures/harness_tool_inventory_v1364.json)",
 )
@@ -1077,7 +1132,11 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
             "cmd": _d("Shell command to execute.", _S),
             "workdir": _d("Working directory, inside the session folder (default: the folder).", _S),
             "yield_time_ms": _d("How long to wait before returning (default 10000).", _N),
-            "max_output_tokens": _d("Output token budget (advisory).", _N),
+            # v1.425.0 (C5): it was "(advisory)" — nothing reads it.
+            "max_output_tokens": _d(
+                "Not used here; the result says when output was left out and how to read the rest.",
+                _N,
+            ),
         }, ["cmd"]),
         ("process_start", "shell"), _exec_command, offered_when="any", runtime_from="shell",
         reaches=lambda armed: (
@@ -1113,7 +1172,9 @@ _GPT_TOOLS: tuple[DialectTool, ...] = (
     ),
     DialectTool(
         "view_image",
-        "Looks at a local image file with a vision model and describes it.",
+        "Shows you a local image file (PNG, JPG, GIF, WebP): the picture itself comes back when "
+        "you can be shown pictures here (a large one shrunk to fit); otherwise a model that can "
+        "see describes it, and the result says so.",
         _obj({"path": _d("Local filesystem path to an image file.", _S)}, ["path"]),
         ("view_image",), _view_image,
     ),
@@ -1187,11 +1248,16 @@ GPT = Dialect(
         # spawn_agent's name, so the real tool is not shown under it).
         "delegate", "spawn_agent",
     }),
-    prompt=(
-        "Your tools use Codex's names and shapes: {tools}. Edit files with apply_patch. Read and "
-        "search the folder with read_file, glob and grep rather than shell commands. "
-        "exec_command returns a session id for a command that is still running; poll it, type "
-        "into it or stop it with write_stdin."
+    prompt="Your tools use Codex's names and shapes: {tools}.",
+    hints=(
+        (("apply_patch",), (), "Edit files with apply_patch."),
+        (("read_file", "glob", "grep"), (),
+         "Read and search the folder with read_file, glob and grep rather than shell commands."),
+        # Only when exec_command really starts a session (process_start armed):
+        # its shell fallback returns no session id.
+        (("exec_command", "write_stdin"), ("process_start",),
+         "exec_command returns a session id for a command that is still running; poll it, type "
+         "into it or stop it with write_stdin."),
     ),
     source="Codex 0.157.0 (tests/fixtures/harness_tool_inventory_v1364.json)",
 )
@@ -1204,9 +1270,11 @@ _QWEN_TOOLS: tuple[DialectTool, ...] = (
     DialectTool(
         "read_file",
         "Reads a file from the session folder. file_path may be absolute or relative to the "
-        "folder. For a long text file pass offset (the 0-based line to start at) and limit. "
-        "PDFs and office documents come back as their text; an image is described by a vision "
-        "model.",
+        "folder. For a long text file pass offset (the 0-based line to start at) and limit: a "
+        "range longer than one tool result may hold stops early, at a whole line, and says which "
+        "lines it showed; without them a file too long for one result is cut in the middle, and "
+        "the result says where. PDFs and office documents come back as their text. "
+        + IMAGE_READ_WORDS,
         _obj({
             "file_path": _d("The path to the file to read.", _S),
             "offset": _d("Optional: the 0-based line number to start reading from.", _I),
@@ -1232,14 +1300,16 @@ _QWEN_TOOLS: tuple[DialectTool, ...] = (
     ),
     DialectTool(
         "glob",
-        "Finds files matching a glob pattern ('**/*.py'), newest first.",
+        "Finds files matching a glob pattern ('**/*.py'), newest first, at most 100. "
+        + SKIPPED_FOLDERS_WORDS,
         _obj({"pattern": _S, "path": _d("The folder to search in (optional).", _S)}, ["pattern"]),
         ("glob",), _glob,
     ),
     DialectTool(
         "grep_search",
         "Searches file contents for a regular expression (case-insensitive). Filter files with "
-        "glob ('*.js'); limit caps the matching lines returned.",
+        "glob ('*.js'); limit caps the matching lines returned (250 when you give none). "
+        + SKIPPED_FOLDERS_WORDS,
         _obj({
             "pattern": _S,
             "glob": _d('Glob pattern to filter files (e.g. "*.js").', _S),
@@ -1250,19 +1320,20 @@ _QWEN_TOOLS: tuple[DialectTool, ...] = (
     ),
     DialectTool(
         "list_directory",
-        "Lists the files in a folder of the session.",
+        "Lists every file under a folder of the session, its subfolders included. "
+        + SKIPPED_FOLDERS_WORDS + " A very long listing stops early and says so.",
         _obj({"path": _S}, ["path"]),
         ("list_files",), _list,
     ),
     DialectTool(
         "run_shell_command",
-        "Runs a shell command in the session folder (or `directory` inside it). timeout is in "
-        "milliseconds (max 600000). Set is_background: true for a program that keeps running (a "
+        "Runs a shell command in the session folder (or `directory` inside it). "
+        + COMMAND_TIMEOUT_WORDS + " Set is_background: true for a program that keeps running (a "
         "dev server, a watcher); read its output with process_read and stop it with task_stop.",
         _obj({
             "command": _S,
             "is_background": _d("Run in the background (a server, a watcher).", _B),
-            "timeout": _d("Optional timeout in milliseconds (max 600000).", _I),
+            "timeout": _d("Optional timeout in milliseconds (default 120000, max 600000).", _I),
             "description": _d("Brief description of the command.", _S),
             "directory": _d("Folder to run in, inside the session folder.", _S),
         }, ["command"]),
@@ -1320,10 +1391,10 @@ QWEN = Dialect(
         "process_start", "process_stop", "plan_update", "notebook_edit", "web_fetch",
         "mcp_read_resource", "view_image",
     }),
-    prompt=(
-        "Your tools use Qwen Code's names and shapes: {tools}. Read a file before you edit it "
-        "and copy old_string exactly; find code with glob and grep_search rather than shell "
-        "commands."
+    prompt="Your tools use Qwen Code's names and shapes: {tools}.",
+    hints=(
+        (("read_file", "edit"), (), "Read a file before you edit it and copy old_string exactly."),
+        (("glob", "grep_search"), (), "Find code with glob and grep_search rather than shell commands."),
     ),
     source="QwenLM/qwen-code @ 13a4fea5 (packages/core/src/tools, read 2026-10-21)",
 )
@@ -1344,6 +1415,17 @@ GENERIC = Dialect(
 
 #: THE TABLE — every dialect by id.
 DIALECTS: dict[str, Dialect] = {d.id: d for d in (CLAUDE, GPT, QWEN, GENERIC)}
+
+
+def dialect_hints(dialect: Dialect, shown: Iterable[str], gate: Iterable[str]) -> str:
+    """The dialect's working advice for a turn that shows ``shown`` and may
+    run ``gate`` (v1.425.0, Wave 5 C5): each sentence whose names it shows
+    and whose real tools it holds, in order, joined by spaces; "" for none."""
+    names, real = set(shown), set(gate)
+    return " ".join(
+        text for need, need_real, text in dialect.hints
+        if set(need) <= names and set(need_real) <= real
+    )
 
 
 def dialect_for_family(family: str) -> Dialect:
