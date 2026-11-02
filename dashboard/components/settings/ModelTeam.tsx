@@ -29,6 +29,7 @@ import {
   costWords,
   decodeStarter,
   decodeTeam,
+  findingsWords,
   placeWords,
   recordWords,
   usageWords,
@@ -39,6 +40,7 @@ import {
 import type { ModelOption } from "@/lib/types";
 import { Button, Card, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { TeamRoleChecks } from "@/components/agents/TeamRoleChecks";
+import { FixRequestButton } from "@/components/team/FixRequestButton";
 
 interface AccountRow {
   id: string;
@@ -160,6 +162,18 @@ function MemberRow({
           title="Passed = finished, and the reply's checks and any reviewer did not say no"
         >
           Record: {recordWords(m)}
+        </p>
+      ) : null}
+      {/* v1.423.0 (Team notes): what became of the problems its reviewers
+          named — nothing at all when every number is zero (or the daemon is
+          older and sends none). */}
+      {findingsWords(m.findings) ? (
+        <p
+          data-testid={`team-findings-${m.name}`}
+          className="text-[12px] text-zinc-400"
+          title="Confirmed = the lead said it was fixed and a later piece changed that file. First-pass approval = the replies where a reviewer approved this member's first piece."
+        >
+          {findingsWords(m.findings)}
         </p>
       ) : null}
       <RoleChecks
@@ -410,6 +424,7 @@ export function ModelTeam() {
           planner sees each member&apos;s model, where it runs, what it costs and how much of its plan it has used.
           The model you talk to stays the one you picked.
         </p>
+        <FixRequestButton />
         {team.loading && !team.data ? <LoaderInline /> : null}
         {team.error ? <ErrorNote>{team.error.message}</ErrorNote> : null}
         {team.data && view.members.length === 0 ? (

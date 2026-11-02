@@ -255,6 +255,7 @@ _LATE_MODEL_MODULES = (
     "..brain.models",         # BrainProfileRecord + BrainPendingWrite — the durable brain (v1.406.0)
     "..harness.ci_fix",       # CiWatchRecord — a pull request's checks watched and fixed (v1.406.0)
     "..hosted.models",        # HostedSessionRecord — a Code-view session (Build, v1.409.0)
+    "..agents.team_findings",  # TeamFinding — a reviewer's finding and what became of it (v1.423.0)
 )
 
 

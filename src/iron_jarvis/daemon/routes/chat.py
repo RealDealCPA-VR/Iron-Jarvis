@@ -7472,7 +7472,10 @@ async def chat_stream(
         # Build reply line keeps it (`finish`). MIRROR NOTE (lock-step):
         # chat_turn.py's response carries the same conditional key.
         if _finish is not None and _finish.ran:
-            done_frame["finish"] = await _finish.record()
+            # v1.423.0 (Team notes): the reply's trust as it ENDED (from the
+            # door, or lowered by a flagged result) — the lead's R answers
+            # are never read from a low-trust reply (lock-step: chat_turn).
+            done_frame["finish"] = await _finish.record(low_trust=_chat_turn.finish_low_trust(_trust_state))
         # THE CODING-SESSION TEAM (v1.403.0): {lead, workers, reviewer, pieces,
         # lead_did} — LAST, and present ONLY for a turn of a session with a
         # team (every other frame is byte-identical). The Build reply line
