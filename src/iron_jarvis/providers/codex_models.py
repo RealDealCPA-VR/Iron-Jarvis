@@ -29,11 +29,18 @@ RULES:
   own ``priority`` order; a ``hide`` row is not offered but is still a model
   Codex KNOWS (it runs one asked for by name — never refused).
 * **The plan's default** — the model Codex starts on with no ``-m``: the
-  ``model`` named in Codex's own ``config.toml`` (a selected ``profile``'s
-  first), else the first offered row by priority. That second half follows
-  codex-rs's model manager (it sorts the presets by ``priority`` and marks
-  the first visible one default when none is marked); it was NOT watched on a
-  live ``model/list`` call, which needs a signed-in Codex.
+  top-level ``model`` named in Codex's own ``config.toml``, else the first
+  offered row by priority; NOT KNOWN ("") for a config Codex refuses (a
+  top-level ``profile`` key, a file that is not TOML — :data:`CONFIG_REFUSED`).
+  v1.424.0 review, measured on codex-cli 0.157.0 with a SCRATCH CODEX_HOME
+  and no sign-in (``model/list`` + ``thread/start`` over ``codex
+  app-server``; Codex then answers its BUNDLED catalog, not an account's):
+  with no config ``thread/start`` started on the ``isDefault`` model, the
+  lowest ``priority`` visible one; with ``model = "x"`` it started on ``x``
+  (even one its list does not hold — the backend decides at the turn), while
+  ``model/list``'s ``isDefault`` still named the catalog's. That a SIGNED-IN
+  account's fetched list follows the same priority rule could not be watched
+  (a scratch home without a login never reads ``models_cache.json``).
 """
 
 from __future__ import annotations
@@ -166,27 +173,42 @@ def parse(data: Any) -> list[dict[str, Any]]:
     return rows
 
 
+#: v1.424.0 (review): what :func:`configured_model` answers for a
+#: ``config.toml`` Codex REFUSES to load (measured on codex-cli 0.157.0 with a
+#: scratch CODEX_HOME: a top-level ``profile = "x"`` — "legacy `profile`
+#: config is no longer supported" — and a file that is not valid TOML both
+#: fail ``thread/start``). Not a model id, so the plan's default reads "not
+#: known" (Codex starts on nothing with that file).
+CONFIG_REFUSED = "\x00config-refused"
+
+
 def configured_model(home: "Path | None" = None) -> str:
-    """The model Codex's own ``config.toml`` names (a selected profile's
-    first, then the top-level ``model``), "" when it names none or cannot be
-    read. BLOCKING; never raises."""
+    """The model Codex's own ``config.toml`` names (its top-level ``model``),
+    "" when it names none or there is no file, :data:`CONFIG_REFUSED` when
+    Codex refuses the file. BLOCKING; never raises.
+
+    v1.424.0 review: the first cut read a selected ``profile``'s model first
+    (codex-rs from memory); Codex 0.157.0 refuses a top-level ``profile`` key
+    outright (``--profile name`` with ``name.config.toml`` replaced it), and a
+    ``[profiles.x]`` table with no ``profile`` key is not read for the
+    default (measured: ``thread/start`` started on the first offered model)."""
     try:
         import tomllib
 
         path = (home or codex_home()) / CONFIG_FILE
         if not path.is_file() or path.stat().st_size > MAX_CONFIG_BYTES:
             return ""
-        cfg = tomllib.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001 — no setting
         return ""
+    try:
+        cfg = tomllib.loads(text)
+    except Exception:  # noqa: BLE001 — Codex refuses a file it cannot parse
+        return CONFIG_REFUSED
     if not isinstance(cfg, dict):
         return ""
-    profile = cfg.get("profile")
-    profiles = cfg.get("profiles")
-    if isinstance(profile, str) and isinstance(profiles, dict):
-        chosen = profiles.get(profile)
-        if isinstance(chosen, dict) and isinstance(chosen.get("model"), str) and chosen["model"].strip():
-            return chosen["model"].strip()
+    if "profile" in cfg:
+        return CONFIG_REFUSED
     model = cfg.get("model")
     return model.strip() if isinstance(model, str) else ""
 

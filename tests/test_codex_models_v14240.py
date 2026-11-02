@@ -105,12 +105,28 @@ def test_the_reader_keeps_codexs_names_order_levels_and_the_plans_default(codex_
 def test_codexs_own_config_names_the_default_and_a_profile_wins(codex_home):
     _with_list(codex_home, 'model = "gpt-5.6-terra"\n')
     assert CM.default_model() == "gpt-5.6-terra"
+    # Moved on purpose (v1.424.0 review): codex-cli 0.157.0 REFUSES a
+    # top-level `profile` key ("legacy `profile` config is no longer
+    # supported" — thread/start fails, measured on a scratch CODEX_HOME), so
+    # with one the plan's default is not known (it was the profile's model).
     (codex_home / "config.toml").write_text(
         'model = "gpt-5.6-terra"\nprofile = "fast"\n[profiles.fast]\nmodel = "gpt-6-luna"\n',
         encoding="utf-8",
     )
     CM.read_catalog()
-    assert CM.default_model() == "gpt-6-luna"
+    assert CM.default_model() == ""
+    # A `[profiles.x]` table with no `profile` key is not read for the
+    # default: the top-level model is (measured: thread/start started on it,
+    # or on the first offered model when none is named).
+    (codex_home / "config.toml").write_text(
+        'model = "gpt-5.6-terra"\n[profiles.fast]\nmodel = "gpt-6-luna"\n', encoding="utf-8",
+    )
+    CM.read_catalog()
+    assert CM.default_model() == "gpt-5.6-terra"
+    # A file that is not valid TOML: Codex refuses it — not known either.
+    (codex_home / "config.toml").write_text('model = "gpt-5.6-terra\n[[[bad\n', encoding="utf-8")
+    CM.read_catalog()
+    assert CM.default_model() == ""
     # A configured model Codex's list does not hold: the default is not known
     # (never a guess).
     (codex_home / "config.toml").write_text('model = "gpt-9-imaginary"\n', encoding="utf-8")
