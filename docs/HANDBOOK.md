@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.422.2 (2026-11-01).*
+holds itself to. Current as of v1.422.3 (2026-11-01).*
 
 ---
 
@@ -2566,6 +2566,13 @@ way to carry on. This release closes the ways it could happen.
   between two copies). If the other account refuses the conversation, the
   reply fails in Codex's own words, the first account's copy is untouched,
   and nothing repeats by itself.
+- **The reviewer's git never reads through a link (v1.422.3).** If a folder
+  git tracks in your project has been replaced by a link to another place
+  (a junction or a symbolic link), the team reviewer's read-only git
+  declines, in plain words, rather than read whatever is on the other end.
+  OneDrive's own folders are not links and keep working. In a very large or
+  slow repository the check may take a moment, and after 20 seconds it
+  declines rather than guess.
 
 ## A team that works (v1.421.0)
 

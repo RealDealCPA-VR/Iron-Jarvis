@@ -13447,6 +13447,27 @@ does not need a bump, stop and bump it.
   untestable on this PC (one ChatGPT account connected). Pins:
   `tests/test_shells_policy_v14222.py`,
   `tests/test_git_read_{allowlist,file_settings,shortlog}_v14222.py`.
+  v1.422.3 (the v1.422.2 review's open junction item, closed for git_read;
+  author + reviewer): `git_read._linked_folder` lists the tracked paths
+  (`ls-files -z -s --full-name -- :/` through `safe_argv`, every guard on)
+  and refuses the call, in words (`LINK_REFUSAL`, naming read_file only),
+  when a folder holding a tracked path is a LINK — a symlink, a junction or
+  any NAME-SURROGATE reparse point (bit 0x20000000, Python's own rule;
+  OneDrive placeholders and ProjFS folders are NOT links, or every repo in
+  OneDrive would be refused). Entries git tracks as symlinks (mode 120000)
+  are skipped; folders are checked SHALLOWEST FIRST and the check stops at
+  the first link, so nothing is ever looked up THROUGH one (an lstat follows
+  every part but the last; a junction to a share would be an SMB
+  connection). ONE `LINK_CHECK_TIMEOUT_S` (20 s) deadline covers rev-parse,
+  the listing and the loop; an unfinished or refused listing runs nothing
+  (`LINK_CHECK_UNSURE`, fail-closed); a tracked name Windows cannot hold
+  (WinError 123/161, a Linux repo) reads as "not a link", any other lstat
+  error refuses. Cost measured: ~0.25 s on a 50,000-file repo. KNOWN, by the
+  app's broad-read policy and older than this: the reviewer's `grep`,
+  `glob` and `list_files` walk INTO junctions (`_walk_files` / `os.walk`),
+  and `ls-files -o` / `status -uall` list the NAMES inside an untracked
+  junction; a hard link to an outside file is read by everything. Pins:
+  `tests/test_git_read_links{,_review}_v14223.py` (16 mutations, all red).
 
 ## Map (where things live)
 
