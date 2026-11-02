@@ -35,6 +35,7 @@ import pytest
 
 from iron_jarvis.core import procs
 from iron_jarvis.harness.command_env import build_shell_description, is_build_call
+from iron_jarvis.harness.mode import unreachable_cut
 from iron_jarvis.harness_bench.bench import run_bench
 from iron_jarvis.harness_bench.catalog import load_tasks
 from iron_jarvis.harness_bench.runners import JarvisRunner
@@ -70,12 +71,14 @@ async def test_a_bench_turn_runs_as_a_build_session_with_the_model_held(tmp_path
     seen: dict = {}
     holds: list = []
     shell_words: list[str] = []
+    shown: set[str] = set()
     _wrap_lane(monkeypatch, seen)
 
     async def stream(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
         hold = current_hold()
         holds.append((hold.provider, hold.model) if hold is not None else None)
         shell_words.extend(t.get("description", "") for t in tools or [] if t.get("name") == "shell")
+        shown.update(str(t.get("name")) for t in tools or [])
         if len(holds) == 1:
             resp = LLMResponse(text="", usage={"input_tokens": 5, "output_tokens": 1}, tool_calls=[
                 ToolCall(id="s1", name="shell", arguments={"command": f'"{sys.executable}" -c "{_HOME_KEYS}"'})])
@@ -101,8 +104,11 @@ async def test_a_bench_turn_runs_as_a_build_session_with_the_model_held(tmp_path
     work = res.config_dir / "runs" / "bugfix-leap-year" / "work"
     keys = json.loads((work / "home_keys.json").read_text(encoding="utf-8"))
     assert keys, "the command ran with the scrubbed environment, not a Build session's"
-    # ... and the model was shown the Build session's shell.
-    assert shell_words and shell_words[0] == build_shell_description(), shell_words[:1]
+    # ... and the model was shown the Build session's shell. v1.425.0 (moved
+    # on purpose, Wave 5 C5): words naming a tool this turn cannot reach are
+    # cut (`mode.unreachable_cut`), so the expected text is the same cut.
+    want = unreachable_cut(build_shell_description(), shown, platform.registry.names())
+    assert shell_words and shell_words[0] == want, shell_words[:1]
 
     # The model was held for every call of the turn, and the hold ends with it.
     assert holds and all(h == ("scripted", "s") for h in holds), holds
@@ -114,8 +120,12 @@ def test_the_identity_names_the_build_session_and_its_shell(tmp_path):
     runner = JarvisRunner(platform, provider="custom", model="glm-5.3-flash")
     ident = runner.identity()
     assert ident["session"] == "build"
-    shell = [s for s in runner.harness().specs(platform.registry) if s["name"] == "shell"]
-    assert shell and shell[0]["description"] == build_shell_description()
+    specs = runner.harness().specs(platform.registry)
+    shell = [s for s in specs if s["name"] == "shell"]
+    # v1.425.0 (moved on purpose): the description as shown is cut of tools
+    # this turn cannot reach (`mode.unreachable_cut`).
+    want = unreachable_cut(build_shell_description(), {s["name"] for s in specs}, platform.registry.names())
+    assert shell and shell[0]["description"] == want
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job objects keep the child")
