@@ -7928,6 +7928,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // the daemon refuses (409) and the sentence shows below.
         ...(localOnlyRef.current ? { local_only: true } : {}),
         ...(saveTargetRef.current.id ? { thread_id: saveTargetRef.current.id } : {}),
+        // v1.424.0 review: a chat kept on one account is summarized on THAT
+        // account (the turn's rule: only while the chat's model is on the
+        // CLI it serves) — never on Iron-Proxy's first free one.
+        ...(accountForTurn(chatAccountRef.current, choice)
+          ? { account: accountForTurn(chatAccountRef.current, choice) }
+          : {}),
       });
       setContextUsage((u) =>
         u ? { ...u, level: "ok", compacted: true, covers: res.covers } : u,
@@ -8442,7 +8448,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       route?.provider || undefined,
       route?.model || undefined,
       // v1.332.0: a "local only" chat gets no suggestions from a cloud reply.
-      { localOnly: localOnlyRef.current, threadId: saveTargetRef.current.id ?? undefined },
+      // v1.424.0 review: and they are asked of the account the reply RAN on
+      // (the daemon's route.account), never Iron-Proxy's first free one.
+      {
+        localOnly: localOnlyRef.current,
+        threadId: saveTargetRef.current.id ?? undefined,
+        account: typeof route?.account?.id === "string" && route.account.id ? route.account.id : undefined,
+      },
     ).then((items) => {
       if (chatGenRef.current !== gen || !items.length) return;
       setFollowups({ forLen: len, items });
@@ -9708,6 +9720,14 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
               wait: false,
               ...(provider ? { provider } : {}),
               ...(model ? { model } : {}),
+              // v1.424.0 review: THE CHAT'S ACCOUNT RIDES THE HAND-OFF — the
+              // agent continues this chat's work on the account the chat runs
+              // on (the daemon checks it, keeps it for a continue, and pins
+              // every lease of the run), never Iron-Proxy's first free one.
+              // Only while the chat's model is on the CLI it serves.
+              ...(accountForTurn(chatAccountRef.current, choice)
+                ? { account: accountForTurn(chatAccountRef.current, choice) }
+                : {}),
               // Context spine: the run lands in the selected project (continues
               // inherit it server-side, so only the opener needs the tag).
               ...(projectIdRef.current

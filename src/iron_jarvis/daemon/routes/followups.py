@@ -103,6 +103,11 @@ class FollowupsBody(BaseModel):
     #: network: a reply that came from off it gets none, never an error.
     local_only: bool = False
     thread_id: str = ""
+    #: v1.424.0 (review): the Iron-Proxy account the chat runs on
+    #: (``ChatBody.account``; "" = none). The suggestion is the SAME chat's
+    #: extra call on the same model, so it runs on that account too — or not
+    #: at all (a reason, never another login).
+    account: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -299,6 +304,23 @@ def register(app: FastAPI, d) -> None:
 
         from ...providers.adapters.base import LLMMessage
 
+        # THE CHAT'S ACCOUNT (v1.424.0 review): a chat put on one Iron-Proxy
+        # account makes this extra call on that account (the turn's rule,
+        # ``iron_proxy.choice.pin_for``: that account or a plain refusal) —
+        # an account it cannot use is a reason, with no call. No account
+        # named: exactly as before (nothing armed).
+        from ...iron_proxy import choice as _choice
+        from ...iron_proxy.pin import reset_pin, set_pin
+
+        pin = None
+        account = _choice.clean(body.account)
+        if account:
+            pin, why = await asyncio.to_thread(_choice.pin_for, platform, account, provider, model,
+                                               who="chat")
+            if pin is None:
+                return {"suggestions": [], "reason": why}
+        pin_token = set_pin(pin) if pin is not None else None
+
         bound = asyncio.timeout(FOLLOWUP_TIMEOUT_S)
         try:
             async with bound:
@@ -332,6 +354,9 @@ def register(app: FastAPI, d) -> None:
                 "suggestions": [],
                 "reason": f"{_who(provider)} did not answer, so there are no suggestions this time.",
             }
+        finally:
+            if pin_token is not None:
+                reset_pin(pin_token)
 
         await asyncio.to_thread(_bill, route, body.thread_id)
         if _is_mock(route):

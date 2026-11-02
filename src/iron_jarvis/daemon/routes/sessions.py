@@ -409,6 +409,25 @@ def register(app: FastAPI, d) -> None:
                         "save files in"
                     ),
                 )
+        # THE CHAT'S ACCOUNT RIDES THE HAND-OFF (v1.424.0 review): a chat put
+        # on one Iron-Proxy account hands its work over on THAT account —
+        # checked here by the one rule (``iron_proxy.choice``; the provider
+        # the run will use, else the configured default), a 409 in words
+        # before any session; admitted, kept in the run's options, where the
+        # runtime arms it for every lease of the run (and a continue keeps
+        # it). None named: exactly as before.
+        run_options: dict[str, Any] = {"local_only": True} if body.local_only else {}
+        account = " ".join(str(body.account or "").split())
+        if account:
+            from ...iron_proxy import choice as _choice
+
+            _row, why = await asyncio.to_thread(
+                _choice.check, d.platform, account, str(body.provider or ""),
+                str(body.model or "") if body.provider else "", who="agent",
+            )
+            if why:
+                raise HTTPException(status_code=409, detail=why)
+            run_options["account"] = account
         try:
             session = await d.orchestrator.create_session(
                 body.task,
@@ -429,7 +448,7 @@ def register(app: FastAPI, d) -> None:
                 approval_mode=body.approval_mode,
                 # LOCAL ONLY RIDES TOO (v1.332.0): stored on the row; a
                 # provider off this network is refused inside create_session.
-                options={"local_only": True} if body.local_only else None,
+                options=run_options or None,
                 # v1.344.0: what the chat already ran this turn (the done
                 # frame's prior_tool_results) rides into the row's options so
                 # the run does not redo those reads.

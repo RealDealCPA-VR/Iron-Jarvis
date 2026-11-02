@@ -2020,8 +2020,23 @@ class AgentRuntime:
         # network and nothing fails over to one. A session that is not local
         # only keeps whatever scope its caller already had (none, normally).
         _lo = session_local_only(session) or _egress.current_scope().on
+        # THE ACCOUNT THE WORK WAS HANDED OVER ON (v1.424.0 review): a run a
+        # chat on one Iron-Proxy account handed over (``options["account"]``,
+        # checked at ``POST /sessions``; a continue or rerun copies it) leases
+        # THAT account for every call — armed here, in the run's own task, so
+        # a run parked and promoted later keeps it — or fails in the rule's
+        # words (Iron-Proxy off since, the account gone or turned off): never
+        # another login. A pin already armed (a coding session's, a member's)
+        # wins; a run with no account arms nothing (exactly as before).
+        try:
+            _acct_token, _acct_why = await self._arm_handed_account(session)
+        except BaseException:
+            reset_run_budget(token)
+            raise
         self._hold_repl(session.id)  # v1.333.0: released in _release_repl
         try:
+            if _acct_why:
+                return await self._refuse_run(session, agent_def, parent_id, _acct_why)
             if not _lo:
                 return await self._run_body(session, agent_def, parent_id)
             with _egress.local_only_scope(True):
@@ -2032,6 +2047,10 @@ class AgentRuntime:
             return await self._end_too_small(small.run, session, small.result)
         finally:
             reset_run_budget(token)
+            if _acct_token is not None:
+                from ..iron_proxy.pin import reset_pin as _reset_pin
+
+                _reset_pin(_acct_token)
             # v1.333.0 (D9): this run's in-run grants and taint flag are
             # dropped when it ENDS. They used to be popped only when the next
             # run of the same id started, and a continuation is a NEW id, so
@@ -2056,6 +2075,51 @@ class AgentRuntime:
                     await asyncio.to_thread(_procs.end_session, session.id)
                 except Exception:  # noqa: BLE001 — housekeeping never fails a run
                     pass
+
+    async def _arm_handed_account(self, session: Session) -> "tuple[Any, str]":
+        """Arm the pin of the account this run was HANDED OVER on
+        (``options["account"]``, v1.424.0 review) when no pin is armed yet:
+        ``(token to reset, "")``; ``(None, "")`` with no account or a pin
+        already armed; ``(None, refusal)`` when the account rule
+        (``iron_proxy.choice.pin_for``, decided again now) refuses it — the
+        run then ends FAILED with that sentence (:meth:`_refuse_run`), never
+        on another login. Cached reads only, off the loop."""
+        from ..iron_proxy import pin as _pin
+        from ..scheduling.knobs import session_options as _session_options
+
+        try:
+            account = str(_session_options(session).get("account") or "").strip()
+        except Exception:  # noqa: BLE001 — unreadable options: no account
+            account = ""
+        if not account or _pin.current() is not None:
+            return None, ""
+        from ..iron_proxy import choice as _choice
+
+        provider = str(getattr(session, "provider", "") or "")
+        model = str(getattr(session, "model", "") or "") if provider else ""
+        pin, why = await asyncio.to_thread(_choice.pin_for, self.p, account, provider, model,
+                                           who="agent")
+        if pin is None:
+            return None, why or _choice.NOT_READ_WORDS
+        return _pin.set_pin(pin), ""
+
+    async def _refuse_run(self, session: Session, agent_def: AgentDefinition,
+                          parent_id: str | None, result: str) -> AgentRun:
+        """A run refused before its first step (v1.424.0 review: the account
+        it was handed over on cannot be used now): its row, then FAILED with
+        the one sentence as its result — the ending a run too small for its
+        model gets (:meth:`_end_too_small`). No model was called."""
+        run = AgentRun(
+            session_id=session.id,
+            parent_id=parent_id,
+            agent_type=agent_def.type,
+            provider=session.provider,
+            model=session.model,
+            state=AgentState.CREATED,
+        )
+        await asyncio.to_thread(self._save, run)
+        await self._set_state(run, AgentState.RUNNING, session.id)
+        return await self._end_too_small(run, session, result)
 
     def _hold_repl(self, session_id: str) -> None:
         """Tell the REPL registry this session's run is in progress, so the

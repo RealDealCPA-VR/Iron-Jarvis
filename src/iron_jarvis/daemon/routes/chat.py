@@ -2691,8 +2691,23 @@ def register(app: FastAPI, d) -> None:
             d.platform.engine, getattr(body, "local_only", False),
             getattr(body, "thread_id", ""),
         )
-        with _egress.local_only_scope(on):
-            return await _chat_compact(body)
+        # THE CHAT'S ACCOUNT (v1.424.0 review): a chat put on one Iron-Proxy
+        # account is summarized on THAT account (the turn's rule,
+        # ``chat_turn.account_pin_for``: the pin, or a 409 in words before
+        # any call) — never on Iron-Proxy's first free account. No account
+        # named: exactly as before (nothing armed).
+        pin = await _chat_turn.account_pin_for(d.platform, body)
+        if pin is None:
+            with _egress.local_only_scope(on):
+                return await _chat_compact(body)
+        from ...iron_proxy.pin import reset_pin, set_pin
+
+        token = set_pin(pin)
+        try:
+            with _egress.local_only_scope(on):
+                return await _chat_compact(body)
+        finally:
+            reset_pin(token)
 
     async def _chat_compact(body: ChatCompactBody) -> dict[str, Any]:
         """The compaction itself (see :func:`chat_compact`).
