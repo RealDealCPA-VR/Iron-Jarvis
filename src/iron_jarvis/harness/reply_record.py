@@ -457,6 +457,29 @@ class ReplyRecord:
         #: it stopped") starts low from it (:func:`low_trust_of`).
         self.low_trust = ""
         self._low_written = False
+        #: v1.423.0 (Wave 3 lane D, item 5): the lane's ONE trust record for
+        #: the turn (:meth:`watch_trust`), read LIVE by :meth:`trust_now` — a
+        #: reply the user stops right after a flagged read is low before any
+        #: later save could note it.
+        self._live_trust: "dict[str, Any] | None" = None
+
+    def watch_trust(self, state: Any) -> None:
+        """v1.423.0 (Wave 3 lane D, item 5): the stream lane hands the turn's
+        ONE trust record (``{low, tainted, reason}`` — mutated in place by a
+        taint) when the turn starts, so :meth:`trust_now` reads the reply's
+        trust as it stands at any moment, a Stop included. Never raises."""
+        if isinstance(state, dict):
+            self._live_trust = state
+
+    def trust_now(self) -> str:
+        """Why the reply runs at LOW trust right now ("" = full): the live
+        record (:meth:`watch_trust`) first, else what a save noted. A low
+        reply stays low. The saved line of a reply the user STOPPED says so
+        from this (``routes/build._ReplyWatch``), and the fix-request report
+        (``agents/fix_request``) then reads nothing from it. Never raises."""
+        if self._live_trust is not None:
+            self.note_trust(self._live_trust)
+        return self.low_trust
 
     def note_trust(self, state: Any) -> None:
         """v1.422.0 review: the lane's trust record (``{low, tainted,

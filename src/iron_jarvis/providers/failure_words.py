@@ -446,22 +446,34 @@ _FAILURE_MASKS: tuple[tuple["re.Pattern[str]", str], ...] = (
 )
 
 
-def mask_failure_text(text: str) -> str:
+def mask_failure_text(text: str, *, strict: bool = False) -> str:
     """*text* with every secret-looking value masked: the shared mask, then
-    the shapes it does not know (``_FAILURE_MASKS``). Never raises."""
+    the shapes it does not know (``_FAILURE_MASKS``). Never raises — a step
+    that faults is skipped and the rest still run (a failure's words must
+    always reach the user).
+
+    v1.423.0 (Wave 3 lane D, item 6): ``strict`` — a step that faults RAISES
+    instead, so a caller that would rather drop a value than show it unmasked
+    can fail closed ("Copy as a fix request" pastes its text into another
+    agent's prompt: ``agents/fix_request.clean``). The default is unchanged."""
     if not isinstance(text, str) or not text:
         return text if isinstance(text, str) else ""
     try:
         from ..detections.redact import mask
 
-        text = mask(text)
+        masked = mask(text)
+        if strict and not isinstance(masked, str):
+            raise TypeError("the mask answered no text")
+        text = masked
     except Exception:  # noqa: BLE001 — never fail on wording
-        pass
+        if strict:
+            raise
     for rx, repl in _FAILURE_MASKS:
         try:
             text = rx.sub(repl, text)
         except Exception:  # noqa: BLE001
-            pass
+            if strict:
+                raise
     return text
 
 
