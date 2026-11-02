@@ -396,19 +396,20 @@ def _same_home(a: Path, b: Path) -> bool:
         return False
 
 
-def evidence(home: "Path | str | None" = None) -> "dict[str, Any] | None":
+def evidence(home: "Path | str | None" = None, *, fresh: bool = False) -> "dict[str, Any] | None":
     """The list of the home a call RUNS IN (``home``; None = this app's own,
     :func:`codex_home`), when it is EVIDENCE: read and recent
     (:data:`EVIDENCE_MAX_AGE_S`). None otherwise — nothing may be refused on
-    it. BLOCKING only for ANOTHER home (an Iron-Proxy account's own folder:
-    its own plan's list, read now); this app's own home answers the cached
-    reading. Never raises (v1.424.0 review)."""
+    it. BLOCKING for ANOTHER home (an Iron-Proxy account's own folder: its
+    own plan's list, read now) and with ``fresh`` (the file read again); this
+    app's own home otherwise answers the cached reading. Never raises
+    (v1.424.0 review)."""
     try:
         target = Path(home) if home else None
-        if target is None or _same_home(target, codex_home()):
+        if not fresh and (target is None or _same_home(target, codex_home())):
             data = catalog()
         else:
-            data = _read(target)
+            data = _read(target if target is not None else codex_home())
         if not data:
             return None
         written = data.get("written")
@@ -423,11 +424,15 @@ def refuses(model: Any, home: "Path | str | None" = None) -> "dict[str, Any] | N
     """The evidence list when Codex on ``home`` would NOT run ``model``
     (positive evidence: :func:`evidence` is read, recent, and does not hold
     the model — hidden rows count as held); None when it may run or nothing
-    can be said. BLOCKING for another home (see :func:`evidence`)."""
+    can be said. BLOCKING: a refusal is CONFIRMED on the file as it is now
+    (the cached reading can be up to :data:`TTL_S` behind a list Codex just
+    rewrote with a new model) — call it off the loop."""
     name = str(model or "").strip()
     if name.lower() in PLACEHOLDER_MODELS:
         return None
-    data = evidence(home)
+    if _holds(evidence(home), name) is not False:
+        return None
+    data = evidence(home, fresh=True)
     return data if _holds(data, name) is False else None
 
 

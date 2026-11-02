@@ -170,3 +170,16 @@ def test_the_home_of_a_lease_is_the_home_its_codex_runs_in():
     assert A._lease_home(adopted) == str(CM.cli_default_home())
     assert Path(A._lease_home(adopted)) != Path.home() / ".codex"
     assert A._lease_home(None) is None
+
+
+async def test_a_model_codex_just_added_is_never_refused_on_the_cached_reading(tmp_path, monkeypatch, _clean):
+    """The cached reading can be up to TTL_S behind the file; Codex rewrote
+    its list a moment ago with a new model: the refusal is confirmed on the
+    file as it is NOW, so the new model is sent."""
+    _write_list(_clean)
+    assert CM.read_catalog() is not None and CM.runs("gpt-6-nova") is False
+    _write_list(_clean, extra=("gpt-6-nova",))  # Codex just added it
+    assert A.not_offered_error("gpt-6-nova") is None
+    fake = Fake(tmp_path, monkeypatch, ONE_ANSWER)
+    out = await fake.adapter(model="gpt-6-nova").complete(system="", messages=[_user()], tools=[])
+    assert out.text == "hi from codex"

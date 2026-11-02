@@ -101,8 +101,9 @@ def not_offered_error(model: Any, home: Any = None) -> "CodexModelNotOffered | N
     holds — hidden rows included). v1.424.0 review: ONLY on positive
     evidence (``codex_models.refuses``) — the first cut read this app's own
     home for a call that runs on an Iron-Proxy account's home (another plan's
-    list), and believed a list of any age. Never raises; BLOCKING only for
-    another home (call it off the loop then)."""
+    list), and believed a list of any age. Never raises; BLOCKING (another
+    home's list is read, and a refusal is confirmed on the file as it is
+    now) — call it off the loop."""
     try:
         from ... import codex_models
 
@@ -464,7 +465,8 @@ class CodexNativeAdapter(LLMAdapter):
         # Iron-Proxy off); a call that leases an account is checked against
         # THAT account's own list once the lease names it (below).
         if _surely_this_apps_home():
-            refused = not_offered_error(self.model)
+            # Off the loop: a refusal is confirmed on the file as it is now.
+            refused = await asyncio.to_thread(not_offered_error, self.model)
             if refused is not None:
                 raise refused
         exe = await asyncio.to_thread(self._which, P.BINARY)
