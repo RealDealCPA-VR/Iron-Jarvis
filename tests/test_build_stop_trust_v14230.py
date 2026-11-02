@@ -156,9 +156,11 @@ async def test_a_low_trust_reply_stopped_before_a_word_mid_round_keeps_its_line(
     assert "missing-file" not in out["text"]
 
 
-async def test_a_full_trust_reply_stopped_before_a_word_still_keeps_no_line(home, work, monkeypatch):
-    """The control: nothing changes for a reply that never went low — a Stop
-    before a word keeps no line, as before, and its failed call is read."""
+async def test_a_full_trust_reply_stopped_before_a_word_keeps_a_plain_line(home, work, monkeypatch):
+    """The control: a reply that never went low and was stopped before a word,
+    after its calls ran, keeps a line with NO trust key (v1.425.0, moved on
+    purpose: it kept no line, so the steps that ran left no record), and its
+    failed call is still read by the report."""
     app = create_app(home)
     sid = new_session(app, work)["id"]  # read_file is trusted here: no taint
     hold = Hold()
@@ -179,7 +181,9 @@ async def test_a_full_trust_reply_stopped_before_a_word_still_keeps_no_line(home
     # to be WRITTEN (its driver task writes it after the status flips), never
     # a fixed sleep.
     assert await until(lambda: lg.task is not None and lg.task.done(), 30)
-    assert _reply_line(app, sid, "st-full") is None
+    line = _reply_line(app, sid, "st-full")
+    assert line is not None and line.get("steps"), line
+    assert "trust" not in line
     out = await asyncio.to_thread(FR.build_report, app.state.platform.engine, session=sid)
     assert "A tool call that failed: read_file" in out["text"], out["text"]
 

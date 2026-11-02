@@ -1287,14 +1287,17 @@ class _ReplyWatch:
             # and was stopped before it ran anything has nothing in its
             # window, and its line would read "Answered in 0.4 s · cut off"
             # over nothing — so it keeps no line, as at full trust.
-            low_window = bool(low_reason) and bool(self.steps or self._started)
+            ran_calls = bool(self.steps or self._started)
             if not partial.strip() and not self.helpers and not self.attempts and not keep_empty \
-                    and not low_window:
-                return out  # stopped before a word: nothing to keep
+                    and not ran_calls:
+                return out  # stopped before a word or a call: nothing to keep
             # (v1.372.0: a turn stopped while its helpers worked keeps a line
             # for them — what they did is part of the session. v1.423.0: so
             # does one that went to LOW trust after it ran a call, even with
-            # no words — its line is the window the fix request leaves out.)
+            # no words — its line is the window the fix request leaves out.
+            # v1.425.0: and so does ANY reply stopped after it ran a step,
+            # whatever its trust — the edits and commands it made happened,
+            # and no line read as if nothing had.)
             line.update({"content": partial, "interrupted": True})
             if status == "interrupted":
                 line["error"] = _durable.INTERRUPTED_DETAIL

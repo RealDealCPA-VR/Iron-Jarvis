@@ -135,12 +135,17 @@ def test_a_low_trust_reply_stopped_while_a_call_still_ran_keeps_its_line():
     assert line is not None and line["trust"] == "low"
 
 
-def test_a_full_trust_reply_stopped_before_a_word_still_keeps_no_line():
-    """The control: full trust, a step, no words — no line, as before."""
+def test_a_full_trust_reply_stopped_before_a_word_keeps_its_line_with_no_trust_key():
+    """The control: full trust, a step, no words. v1.425.0 (moved on purpose):
+    a reply stopped after a step ran keeps its line at ANY trust — the steps
+    happened — but a full-trust one carries no trust key, so the report still
+    reads its calls."""
     w = _watch("")
     _tool(w, "r1", "started")
     _tool(w, "r1", "finished")
-    assert _reply(w.lines("t-full", "stopped")) is None
+    line = _reply(w.lines("t-full", "stopped"))
+    assert line is not None and line.get("steps")
+    assert "trust" not in line and line["interrupted"] is True
 
 
 # --------------------------------------------------------------------------- #
