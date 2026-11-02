@@ -91,6 +91,14 @@ def create_backup(
     # Downloaded animated backgrounds (v1.410.0) in a dev or test home: they
     # are re-downloadable copies of repository files, never the user's state.
     backgrounds_dir = (home / "backgrounds").resolve()
+    # v1.424.0 (D4): Iron Jarvis's plugin folder for the owner's Claude Code
+    # setup on other accounts, in a dev or test home. It holds JUNCTIONS to the
+    # owner's own skills/commands/agents, and ``rglob`` follows a junction —
+    # matched on the path AS WALKED (a junction's files resolve elsewhere), so
+    # the owner's folders are never copied into a backup.
+    from .iron_proxy.claude_setup import FOLDER as _CLAUDE_SETUP
+
+    claude_setup_dir = home / _CLAUDE_SETUP
     # The running daemon's one-per-home lock (v1.335.0) is a Windows BYTE lock:
     # any other read of that byte fails with Errno 13, so archiving it failed
     # every backup on every install. Neither file means anything in a restore
@@ -106,6 +114,8 @@ def create_backup(
     try:
         with tarfile.open(tmp_out, "w:gz") as tar:
             for p in home.rglob("*"):
+                if claude_setup_dir == p or claude_setup_dir in p.parents:
+                    continue  # junctions to the owner's own folders (v1.424.0)
                 if not p.is_file():
                     continue
                 rp = p.resolve()
@@ -728,7 +738,11 @@ def storage_report(home: Path) -> dict:
             "clearable": False,
         }
     )
-    rest_files, rest_total, rest_newest = _walk_rest(home, {d for _l, d in _REPORT_DIRS})
+    # v1.424.0: Iron Jarvis's Claude setup folder holds junctions to the
+    # owner's own folders (``os.walk`` follows a junction): never counted.
+    from .iron_proxy.claude_setup import FOLDER as _CLAUDE_SETUP
+
+    rest_files, rest_total, rest_newest = _walk_rest(home, {d for _l, d in _REPORT_DIRS} | {_CLAUDE_SETUP})
     rows.append(
         {
             "label": "Everything else",

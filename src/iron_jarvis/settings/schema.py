@@ -361,6 +361,16 @@ SETTINGS: tuple[SettingDef, ...] = (
       ACCOUNT_GROUPS_HELP,
       tier="ask-floor", section="Several accounts", advanced=True, check=_account_groups_shape,
       aliases=("account group", "account groups", "work accounts", "take over at a limit")),
+    # v1.424.0 (audit D4): a second Claude account starts with the owner's
+    # Claude Code setup (iron_proxy/claude_setup.py). Read live at every start;
+    # "allow" from chat (the brief: default on, allow tier).
+    S("accounts_share_claude_setup", "Use my Claude Code setup on my other accounts", "connections", "bool",
+      "Claude Code on an account other than this PC's own login starts with your MCP servers, "
+      "skills, commands, agents, hooks and installed plugins. They show with “my:” in front "
+      "(/my:<name>). Your keys stay in the program's environment, never in a new file; nothing "
+      "is written in the other account's folder. Off: those accounts start with only their own.",
+      tier="allow", section="Several accounts",
+      aliases=("other accounts", "my setup", "mcp servers on other accounts", "skills on other accounts")),
     S("browser_access", "Your browser", "connections", "enum",
       "What Jarvis may do in your own browser through the add-on.",
       options=(("off", "Off"), ("read_only", "Read pages only"), ("interactive", "Read and act (each action asks)")),

@@ -838,6 +838,14 @@ class Config(BaseModel):
     # _SETTINGS_KEYS: a settings-page write would flip the flag without
     # starting or stopping anything.
     iron_proxy_enabled: bool = False
+    #: v1.424.0 (audit D4): Claude Code on an Iron-Proxy account that is NOT
+    #: this PC's own login starts with the owner's MCP servers, skills,
+    #: commands, agents, hooks and installed plugins — through one environment
+    #: variable naming Iron Jarvis's own plugin folder
+    #: (``iron_proxy/claude_setup.py``; nothing written in the account's home,
+    #: no credential copied). Off: a Build terminal and a Build › Code process
+    #: start exactly as before. Read live at every start.
+    accounts_share_claude_setup: bool = True
     #: v1.393.0 (the long-jobs plan's Phase 4, decision 4): when a coding
     #: session's account reaches its limit, the reply WAITS for the reset and
     #: carries on by itself — "Resume when ready" armed with no press (the

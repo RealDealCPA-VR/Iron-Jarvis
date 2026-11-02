@@ -418,6 +418,12 @@ class IronProxyService:
 
     # ------------------------------------------------------------- config
     @property
+    def config(self) -> Any:
+        """The app's config object (v1.424.0: ``claude_setup`` reads its
+        ``accounts_share_claude_setup`` switch and home from it, live)."""
+        return self._config
+
+    @property
     def enabled(self) -> bool:
         return bool(getattr(self._config, "iron_proxy_enabled", False))
 

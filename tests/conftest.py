@@ -455,6 +455,32 @@ def _isolate_grok_home():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_claude_owner_setup():
+    """v1.424.0 (D4): a Build terminal or Build › Code process on a Claude
+    account other than this PC's own login gets the OWNER's Claude Code setup
+    (``iron_proxy.claude_setup``) — read from ``~/.claude.json`` and
+    ``~/.claude``, MCP server keys included. A test must never read the
+    developer's real Claude Code setup (nor put its keys into a test child's
+    environment, nor link to its folders): the owner folder is an empty
+    scratch one for the session, so the owner setup is EMPTY and nothing is
+    added — every existing pin stays byte-identical. A test that drives the
+    feature points it at its own scratch owner."""
+    import tempfile
+
+    from iron_jarvis.iron_proxy import claude_setup as _cs
+
+    old = os.environ.get(_cs.OWNER_DIR_ENV)
+    os.environ[_cs.OWNER_DIR_ENV] = tempfile.mkdtemp(prefix="ij-test-no-claude-owner-")
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_cs.OWNER_DIR_ENV, None)
+        else:
+            os.environ[_cs.OWNER_DIR_ENV] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _code_host_off_by_default():
     """v1.422.0: Build › Code's tools run in the CODE HOST, a process that
     outlives the daemon ON PURPOSE — a host started by an ordinary test would

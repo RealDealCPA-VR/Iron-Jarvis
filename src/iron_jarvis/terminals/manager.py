@@ -154,6 +154,15 @@ def _with_pane_env(
     Iron-Proxy's unset list removed, an inherited home removed for "this PC's
     login" — and nothing an account says can touch the `IRONJARVIS_*` identity.
     None (every caller before v1.302.0) changes nothing.
+
+    v1.424.0 (D4): a Claude account that is NOT this PC's own login also gets
+    the owner's Claude Code setup — `iron_proxy.claude_setup.apply_for_accounts`
+    adds `CLAUDE_CODE_PLUGIN_DIRS` (+ the MCP values it references) when the
+    setting is on. This is the ONE place a Build terminal AND a Build › Code
+    process get their environment, so both start with it. It BLOCKS (small
+    reads and writes in Iron Jarvis's own folder): every caller is already off
+    the event loop (a pane's spawn; `hosted.service` hops before `build_env`).
+    Never raises; off, no account, or this PC's own login = unchanged.
     """
     base = dict(env) if env is not None else os.environ.copy()
     for name in _DAEMON_ONLY_ENV:
@@ -161,6 +170,9 @@ def _with_pane_env(
     drop_claude_session_markers(base)
     if accounts:
         accounts.apply(base)
+        from ..iron_proxy import claude_setup
+
+        claude_setup.apply_for_accounts(base, accounts)
     base.update(pane_env)
     return base
 

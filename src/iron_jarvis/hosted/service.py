@@ -1754,7 +1754,11 @@ class HostedService:
         loop = asyncio.get_running_loop()
         acc = store.account_record(row)
         accounts = PA.from_recorded({W.PROXY[row.harness]: acc})[0] if acc and row.harness in W.PROXY else None
-        env = build_env(accounts)
+        # v1.424.0 (D4): on a Claude account that is not this PC's own login the
+        # environment also carries the owner's setup (`iron_proxy.claude_setup`),
+        # which reads and writes small files — off the loop. No account = the
+        # same synchronous build as before.
+        env = await asyncio.to_thread(build_env, accounts) if accounts else build_env(accounts)
         if row.harness == PI:
             env = P.child_env(env)  # a parent Pi session's markers never cross
         rules_note = ""
