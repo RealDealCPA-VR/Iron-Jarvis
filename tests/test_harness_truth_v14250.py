@@ -352,7 +352,8 @@ def test_the_approval_sentence_is_true_for_each_posture(tmp_path):
     assert "a quick check find the call routine" in auto
     yolo = _turn(platform, mode="yolo").rendered
     assert "run without pausing, except a few calls that still wait" in yolo
-    assert "a git commit or push" in yolo
+    # v1.425.0 review (moved on purpose): the git guard's whole reach.
+    assert "git on this session's own branch that commits, pushes" in yolo
     assert M._GUARDED_EDITS_WORDS not in yolo, "Don't ask drops the guarded-edit card"
     # A turn whose only tools are allow-tier (no command, no page) is still
     # told about the guarded edits — except under "Don't ask".
@@ -364,7 +365,8 @@ def test_the_approval_sentence_is_true_for_each_posture(tmp_path):
 
     with egress.local_only_scope(True):
         local = _turn(platform, local_only=True).rendered
-    assert "so each of these asks every time" in local and "a command that only reads" not in local
+    # v1.425.0 review (moved on purpose): every tool that reaches past this PC.
+    assert "pause while the user approves them every time" in local and "a command that only reads" not in local
 
 
 def test_bash_and_qwens_command_tool_wait_two_minutes_when_given_no_timeout():

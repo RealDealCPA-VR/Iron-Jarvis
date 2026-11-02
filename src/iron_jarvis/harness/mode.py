@@ -374,7 +374,10 @@ HELPER_TARGETS = frozenset({"delegate", "spawn_agent"})
 #: (``read_document``, ``image_resize``) — the shape :func:`unreachable_cut`
 #: looks for.
 _TOOL_WORD_RX = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
-_SENTENCE_SPLIT_RX = re.compile(r"((?<=[.!?])\s+)")
+#: v1.425.0 review: never after "e.g." / "i.e." — page_open's "use it for
+#: the user's dev server, e.g. http://localhost:5173/cart, then page_click
+#: ..." was split there and lost its second half mid-sentence.
+_SENTENCE_SPLIT_RX = re.compile(r"((?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)\s+)")
 #: Tools a description names only as WHERE something came from ("a dynamic
 #: agent created with ``create_agent``"), never as one to call — the sentence
 #: stays (it carries the tool's own arguments).
@@ -396,8 +399,14 @@ def unreachable_cut(text: str, reachable: "Iterable[str]", registered: "Iterable
     session, so the model was steered to tools it could not call (a call
     then met "not armed"). The smallest part goes: a parenthesis or a
     ", which …" clause that names one, else the whole sentence; a sentence
-    naming only tools the turn has (or none) is kept as written. Never
-    raises."""
+    naming only tools the turn has (or none) is kept as written.
+
+    v1.425.0 review: the FIRST sentence — what the tool IS — is never
+    dropped (only its parenthesis / "which" clause may go): a low-trust
+    ``process_read`` ("Read what a program started with process_start
+    printed ...") and ``process_stop`` were left as "``wait_ms`` ..." and
+    "Returns its last unread output", and plan mode's ``page_open`` lost
+    its purpose. Never raises."""
     try:
         body = str(text or "")
         known = {str(n) for n in registered}
@@ -416,7 +425,7 @@ def unreachable_cut(text: str, reachable: "Iterable[str]", registered: "Iterable
             if _cant(sentence):
                 sentence = _PAREN_RX.sub(lambda m: "" if _cant(m.group(0)) else m.group(0), sentence)
                 sentence = _WHICH_RX.sub(lambda m: "" if _cant(m.group(0)) else m.group(0), sentence)
-                if _cant(sentence):
+                if _cant(sentence) and i > 0:
                     continue
             out.append(sentence + gap)
         return "".join(out).strip()
@@ -633,15 +642,50 @@ def _unasked(asking: "set[str]", *, commands: bool) -> str:
     parts.append(_SESSION_GRANT_WORDS)
     joined = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     return joined + " may run without asking"
-#: "Don't ask": the calls that still card in every posture (the git guard,
-#: a project's command file, page_screenshot / page_open of a page that is not
-#: the user's dev server, a spend) — "may", since which apply depends on the
-#: session.
-_YOLO_STILL_ASKS = (
-    "a git commit or push on this session's own branch, a command a project's own command file "
-    "asked for, opening a local page that is not the user's dev server, or anything that costs "
-    "money"
-)
+#: v1.425.0 review: the tools that run a command (the git guard and a
+#: project's command file read every one of them — ``harness/git_guard``,
+#: ``harness/command_shell``).
+_COMMAND_RUNNERS = frozenset({"shell", "process_start", "process_write"})
+
+
+def _yolo_still_asks(gate: "set[str]") -> str:
+    """"Don't ask": the calls that still card, every time, in every posture
+    — only the ones this turn's tools can make (v1.425.0 review: the list
+    said "a git commit or push" while the git guard also cards a change on
+    GitHub, git that throws away work not committed yet and a write to git's
+    settings (``harness/git_guard``), and left out a click on a button that
+    reads as deleting, sending or paying (``page_act``'s once-only check))."""
+    parts: list[str] = []
+    if gate & _COMMAND_RUNNERS:
+        parts.append(
+            "git on this session's own branch that commits, pushes or changes something on "
+            "GitHub, throws away work not committed yet or changes git's settings"
+        )
+        parts.append("a command a project's own command file asked for")
+    if gate & _PAGE_REAL:
+        parts.append(
+            "opening a local page that is neither the page the user's Browser pane shows nor one "
+            "already allowed"
+        )
+    if "page_click" in gate:
+        parts.append("a click on a button that reads as deleting, sending or paying for something")
+    parts.append("anything that costs money")
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + ", or " + parts[-1]
+
+
+def _reaches_past_pc(registry: Any, name: str) -> bool:
+    """A Local only chat asks about this tool's every call
+    (``egress.asks_first`` with the scope on: the tool reaches past this PC).
+    Never raises (a lookup that fails: does not)."""
+    try:
+        from ..providers import egress
+
+        tool = registry.get(name)
+        return tool is not None and bool(egress.reaches_outside(tool, registry))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 #: Every posture but "Don't ask": an edit of a file that steers git, the
 #: editor, CI or Iron Jarvis itself cards once, every time
 #: (``core/auto_approve.guarded_edit``, v1.407.2) — named only when the turn
@@ -672,26 +716,55 @@ def ask_sentence(
     v1.425.0 (Wave 5, C5): one sentence per posture, each true of the
     stream lane's card rules — see :data:`_DECLINE_WORDS` and the pieces
     beside it. ``low_trust`` (the turn starts low): the read-only exception
-    is not offered (``auto_approve`` keeps every card then)."""
+    is not offered (``auto_approve`` keeps every card then).
+
+    v1.425.0 review: (a) Auto in a LOW-TRUST turn passes nothing by rule or
+    check (``auto_approve.classify`` answers ASK "low_trust" first), so it
+    reads as Ask first without the read-only list; (b) Auto's "never
+    routine" list names what its rules READ — deleting, overwriting, sending
+    or paying, and an EDIT outside the folder (a command reading outside it
+    is judged, and a session grant lets even a deleting command through, so
+    nothing "always pauses" by rule); (c) a Local only chat names EVERY tool
+    of the turn that reaches past this PC as asking every time (the agent's
+    browser clicks and typing too, allow-tier elsewhere), and the rest of the
+    asking tools — an edit under "Ask before every action" — read as their
+    posture says (a session grant covers them); (d) "Don't ask"'s list is
+    :func:`_yolo_still_asks`."""
     from . import night as _night
 
     if _night.current() is not None:
         return _night_sentence(plan, local_only)
     mode = str(approval_mode or "")
+    gate = set(plan.gate)
     asking = set(plan.ask)
     if mode == "always_ask":
         # "Ask before every action" cards file edits and the web too
         # (``chat_turn.STRICT_ASK_TOOLS``), allow-tier as they are.
         from ..daemon.chat_turn import STRICT_ASK_TOOLS
 
-        asking |= set(plan.gate) & set(STRICT_ASK_TOOLS)
+        asking |= gate & set(STRICT_ASK_TOOLS)
+    guarded = "" if mode == "yolo" or not (gate & EDIT_TOOLS) else _GUARDED_EDITS_WORDS
+    lead = ""
+    if local_only:
+        # A Local only chat cards every call that reaches outside this PC —
+        # a command, a page, a click or typed entry in the agent's browser —
+        # every time, past every grant and the read-only list
+        # (``egress.asks_first``, v1.332.0 / v1.371.0 / v1.376.0), whatever
+        # the tool's tier.
+        every = {n for n in gate | asking if _reaches_past_pc(registry, n)}
+        every_shown = _shown_for(plan, every)
+        if every_shown:
+            lead = (
+                f"Calls to {', '.join(every_shown)} pause while the user approves them every time: "
+                "this chat is kept on this PC and each of these reaches past it, so no earlier OK "
+                "covers one"
+            )
+        asking -= every
     shown = _shown_for(plan, asking)
-    guarded = (
-        "" if mode == "yolo" or not (set(plan.gate) & EDIT_TOOLS) else _GUARDED_EDITS_WORDS
-    )
+    rest = ""
     if not shown:
-        return guarded
-    if mode == "yolo" and not local_only:
+        rest = ""
+    elif mode == "yolo":
         # v1.367.0: a once-only tool (the plan door) waits for the user even
         # under auto-approve — the sentence must not promise otherwise.
         once = set(ONCE_ONLY_TOOLS)
@@ -703,35 +776,33 @@ def ask_sentence(
             parts.append(
                 "The user chose not to be asked, so " + ", ".join(free) + " run without pausing, "
                 "except a few calls that still wait for the user's answer every time ("
-                + _YOLO_STILL_ASKS + "); " + _DECLINE_WORDS
+                + _yolo_still_asks(gate) + "); " + _DECLINE_WORDS
             )
         if always:
             parts.append(", ".join(always) + " always waits for the user's approval.")
-        return " ".join(parts)
-    names = ", ".join(shown)
-    if local_only:
-        # A Local only chat cards every call that reaches outside this PC —
-        # a command, a page — every time, past every grant and the read-only
-        # list (``egress.ask_first_tools``, v1.332.0 / v1.371.0).
-        text = (
-            f"Calls to {names} pause while the user approves them (this chat is kept on this PC, "
-            f"so each of these asks every time); {_DECLINE_WORDS}"
-        )
-    elif mode == "auto":
-        text = (
-            f"Calls to {names} pause while the user approves them unless the user already allowed "
-            "that tool for this session, or Iron Jarvis's rules or a quick check find the call "
-            "routine for what the user asked (a call that may delete, overwrite, send or pay for "
-            f"something, or reaches outside this folder, always pauses); {_DECLINE_WORDS}"
+        rest = " ".join(parts)
+    elif mode == "auto" and not low_trust:
+        rest = (
+            f"Calls to {', '.join(shown)} pause while the user approves them, unless the user "
+            "already allowed that tool for this session or Iron Jarvis's rules or a quick check "
+            "find the call routine for what the user asked (a call its rules read as deleting, "
+            "overwriting, sending or paying for something, or one that edits a file outside this "
+            f"folder, is never found routine); {_DECLINE_WORDS}"
         )
     else:
         # Ask first (the default) and Accept edits (which adds only file
         # edits inside the folder — allow-tier already, or a folder rule's);
         # "Ask before every action" and a low-trust turn keep every command's
-        # card (no read-only list).
+        # card (no read-only list). A Local only chat's commands and pages
+        # were taken out above (no read-only list, no page exception there).
         exceptions = _unasked(asking, commands=not low_trust and mode != "always_ask")
-        text = f"Calls to {names} pause while the user approves them; {exceptions}; {_DECLINE_WORDS}"
-    return (text + (" " + guarded if guarded else "")).strip()
+        rest = (
+            f"Calls to {', '.join(shown)} pause while the user approves them; {exceptions}; "
+            f"{_DECLINE_WORDS}"
+        )
+    if lead:
+        lead += (". " if rest else "; " + _DECLINE_WORDS)
+    return " ".join(p for p in (lead.strip(), rest, guarded) if p).strip()
 
 
 # --------------------------------------------------------------------------- #
