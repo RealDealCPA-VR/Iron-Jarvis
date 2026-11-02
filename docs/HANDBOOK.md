@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.423.0 (2026-11-02).*
+holds itself to. Current as of v1.424.0 (2026-11-02).*
 
 ---
 
@@ -2445,6 +2445,66 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## Every subscription, everywhere (v1.424.0)
+
+- **Failover stays within what you chose.** When the model you picked can't
+  answer, Iron Jarvis tries another of your models — but it only moves to one
+  that bills per use (an API key, a cloud endpoint, or a Claude model that
+  draws usage credits, shown as "pay per use" in the menu) when the model you
+  picked bills per use too. If you picked Claude Code, Codex, Grok or a model
+  on your own network, it moves only among your subscriptions and local
+  models. When nothing like that is left, the message says so, for example:
+  "Iron Jarvis didn't switch to OpenAI, which bills per use, because you
+  didn't choose a pay-per-use model for this." A picture follows the same
+  rule: it is never sent to a paid key you didn't pick, and the reply says
+  when an image was not seen.
+- **Each model says what it can do.** On the Fleet page, each model behind
+  one of your model servers shows its own tools and vision. A model nobody
+  has checked uses the server's check of its default model and says so
+  ("not checked for this model: from the server's check of glm"); press
+  Check on its row to ask that model itself.
+- **Codex's own models.** Every model menu lists the models your ChatGPT plan
+  offers, from Codex's own list on this PC, with their effort levels
+  (including Extra); your plan's default is marked. With no OpenAI key,
+  OpenAI's list is Codex's list. Iron Jarvis refuses a model in words before
+  anything is sent only when that list, for the account the work really runs
+  on, is recent and does not hold it; otherwise Codex's own answer decides.
+- **Choose an account anywhere.** With Iron-Proxy on, you can choose the
+  account for a chat (in its model menu, under Claude Code, Codex and Grok, or
+  "Any free account"), for a custom agent, a schedule or a night task. The
+  choice covers everything that work does: its replies, follow-up
+  suggestions, Summarize, a hand-off to an agent and its later continues. An
+  account only works for a model of its own vendor; if it can't be used the
+  work is refused in words and never runs on another login. A schedule whose
+  agent has its own account must name that account or none. The chat's reply
+  line says which account it ran on. Grok accounts can carry a coding session
+  like Claude Code and Codex accounts.
+- **Your Claude Code setup on your other Claude accounts.** When a Build
+  terminal or a Build › Code session runs Claude Code on an account other
+  than the one this PC is signed in to, it starts with your own MCP servers,
+  skills, commands, agents, hooks and installed plugins, shown with "my:" in
+  front (for example /my:pixio-story). Iron Jarvis keeps its own copies of
+  your skills, commands and agents in its folder, so deleting that folder can
+  never touch your originals; copies never include a file that holds a key,
+  and your server keys never go into a file — they ride in the session's
+  environment. Be aware that what your MCP servers can read (a QuickBooks
+  server's books, say), your skills and commands, and what your hooks print
+  reach the Claude account that session is signed in to, which may belong to
+  another organization. Turn it off in Settings › Connections › Several
+  accounts ("Use my Claude Code setup on my other accounts"); chat can turn it
+  off at once but always asks before turning it on.
+- **OpenCode behind a chat never acts on its own.** When OpenCode is the model
+  behind a chat or an agent run, Iron Jarvis runs it as its own agent with
+  every one of OpenCode's tools off: Iron Jarvis carries out every action
+  itself, with its usual cards, record and Undo. If OpenCode ever cannot find
+  that agent, the run stops before anything happens instead of using your own
+  OpenCode agent. A reply cut off at its output limit says so and offers
+  Continue. Build › Code is unchanged: there OpenCode keeps its own tools.
+- **Grok's real output limit.** Grok replies are no longer stopped at 4,096
+  tokens: Iron Jarvis sends the limit your Grok settings give (your
+  `max_completion_tokens`, if set). A cut Grok reply offers Continue, and a
+  Grok tool call whose details cannot be read runs nothing and says so.
 
 ## Your team's reviews are kept, and a report for fixing Iron Jarvis (v1.423.0)
 

@@ -13561,6 +13561,118 @@ does not need a bump, stop and bump it.
   `tests/test_fix_request{,_review}_v14230.py`,
   `dashboard/__tests__/{team-findings,fix-request,fix-request-review}-v1423-0.test.tsx`.
 
+- **Every subscription, everywhere: failover never spends money the user did
+  not choose; capability is per MODEL; Codex's own model list; an account can
+  be chosen anywhere; a second Claude account gets the owner's setup by
+  COPIES; OpenCode behind chat never runs its own tools; Grok's real output
+  budget** (v1.424.0, Wave 4 of `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`, D1
+  D2 D4 D5 D6 D7 D8 + the owner's decision D1; four builders + four reviewers
+  that found 24 more defects, each pinned red first and mutation-checked).
+  D1 (the owner: "Failover should remain within the same models provided. No
+  pay-per-use unless a pay-per-use model was chosen at the onset."):
+  `providers/billing.py` is THE pay-per-use definition (`billing_kind`
+  free/plan/pay; usage-credit Claude models are pay — the menu's
+  `CREDITS_CHIP` says "pay per use"; a fleet node by its address; a CANDIDATE
+  is pay when unsure, a pick is not; `model_team.cost_type` delegates). The
+  router's `_pick_pays` (computed once, before the capability reroute; Auto
+  reads what Auto picked; the local oracle keeps the user's default) and
+  `_spend_ok` gate the vision reroute (`_first_capable(pay_ok=)`), fallback (A)
+  and sideways (B) in BOTH `complete()` and `stream()` (MIRROR NOTE);
+  `daemon/app._failover_candidates(pick_pays=, left_out=)` gates the one-shots
+  (the demo-model hop never reaches a key; `d._paid_only_note()` names a
+  left-out key at every such refusal); `chat_turn._vision_unavailable_reason`
+  mirrors the filter (the OCR fallback keys off it). Left-out providers are
+  stamped `billing.mark_left_out`; `failure_words` appends `not_moved_sentence`
+  ("Iron Jarvis didn't switch to OpenAI, which bills per use, because you
+  didn't choose a pay-per-use model for this.") on every branch.
+  `strict_model_pin` unchanged. D8: `fleet/adapter.model_capability` = live
+  check > stated yes > node record (default model, "checked") > stated no >
+  node record for any other model ("node", `checked_model` — a model nobody
+  checked keeps the gateway's answer, said on the row) > not known (the router
+  reads not known as False); `FleetNode.model_caps` per-model checks;
+  `record_check` writes the node flags only for the default model; the verify
+  routes RE-REGISTER the fleet providers after a check (the factories close
+  over the FleetNode — a check never reached the router before); `/fleet` rows
+  `model_capabilities`, `/models` `fleet-*` rows `tool_use`/`vision` before
+  `reasoning_default`; the Fleet page has a per-model Check press.
+  D2: `providers/codex_models` is the ONE reader of
+  `<CODEX_HOME>/models_cache.json` (never blocks, background refresh 300 s,
+  cache keyed by home) for GET /models (`routes/connections.
+  _with_codex_catalog`, Codex's own rows after its "subscription" row, effort
+  levels incl. xhigh, `cli_default`), Build › Code's Codex list and efforts,
+  `reasoning_levels("codex-cli")` and `refresh_codex_windows`; a keyless
+  `openai` served by Codex lists exactly Codex's models. A REFUSAL
+  (`CodexModelNotOffered`, `no_failover`) needs POSITIVE evidence: the list of
+  the home the call really runs in (`adapter._lease_home` after the lease; up
+  front only with no pin and Iron-Proxy off), written within
+  `EVIDENCE_MAX_AGE_S` (24 h, `fetched_at` else mtime), matched case-blind,
+  confirmed on the file at refusal time; a config with a top-level `profile`
+  key or invalid TOML reads the default as not known (`CONFIG_REFUSED`,
+  measured on 0.157.0). Tests never read `~/.codex` through it
+  (`codex_models.TEST_HOME_FALLBACK`, `cli_default_home()`).
+  D6: `iron_proxy/choice.check` / `pin_for` / `agent_conflict` is the ONE
+  account rule (listed, turned on, of the work's model's vendor; refused in
+  words otherwise; never another login): `ChatBody.account` in both chat lanes
+  (`account_pin_for`, `_account_pinned_turn`, `account_pinned_frames`;
+  `route.account`, drawn by TurnReceipt), `/chat/followups`, `/chat/compact`,
+  `SessionCreate.account` (into `options["account"]`, armed by
+  `AgentRuntime._arm_handed_account`, refused through `_refuse_run`), a custom
+  agent's own account through `run_as_member` (spawn, schedule fire, the
+  assignment dispatcher), schedule `payload.account` (save + fire; a mismatch
+  with the agent's own account refused), `NightTaskRecord.account` (additive).
+  Grok joined `build_accounts.VENDORS`. The chat's menu reads GET
+  /build/accounts only when opened; Iron-Proxy off draws nothing
+  (`chat-model-menu-v1376` byte for byte).
+  D4: `iron_proxy/claude_setup.apply_for_accounts`, called only from
+  `terminals.manager._with_pane_env` (Build terminals and Build › Code), sets
+  `CLAUDE_CODE_PLUGIN_DIRS` for a non-default Claude account when
+  `accounts_share_claude_setup` is on (default on; turning it ON from chat is
+  ask-floor): Iron Jarvis's plugin `my` at `<userData>/claude-setup/my`
+  (skipped by backups and the storage report) plus the owner's enabled
+  user-scope plugins; nothing written in the account's home. `.mcp.json` holds
+  `${IJ_MY_SETUP_<hash>}` references whose values ride the child environment
+  only; skills, commands and agents are COPIES (refreshed by a signature,
+  walked by hand, never following a link, bounded, never a `secret_name` file
+  or a `secrets_in` text). NEVER JUNCTIONS: measured, NSIS 3.0.4.1 `RMDir /r`
+  (the uninstaller's `--delete-app-data`) and Electron 42's Node 24
+  `fs.rmSync(recursive)` follow a junction and delete the target's files —
+  future desktop code uses the async `fs.rm`. A managed `disableSideloadFlags`
+  leaves the variable unset. `claude_models.child_env` drops
+  `CLAUDE_CODE_PLUGIN_DIRS` and `IJ_MY_SETUP_*` for chat's child.
+  D5: `opencode_cli.text_only_setup` (off the loop, the user's config read
+  only) sets `OPENCODE_PERMISSION` ("*", every built-in tool and every key ANY
+  source names, `_rule_keys`, all deny) and `OPENCODE_CONFIG_CONTENT` (merged
+  into the user's own, refused before start if unusable) defining a fresh
+  `iron-jarvis-text-<hex>` primary agent, all-deny, named by `--agent` AND as
+  `default_agent` — measured on 1.18.18 with a stand-in model server: the
+  first cut's fallback ran the user's `build` agent's `bash: allow`; with ours
+  as `default_agent` a fallback throws before any model request. A call
+  OpenCode REFUSED (`REFUSED_CALL_ERRORS`) ran nothing; a tool that ran is an
+  error; `step_finish` `reason: "length"` -> `max_tokens`. Build › Code's
+  `hosted/opencode.py` unchanged (golden pin).
+  D7: Grok sends `max_output_tokens` only when the call's Grok home sets
+  `max_completion_tokens` (`[model."<id>"]`, models_cache, `[models]`, as grok
+  1.0.70 does); `response.incomplete` -> `max_tokens`, an unfinished call ->
+  `cut_calls`; a WHOLE reply's arguments go through `jsonish.loads_object` +
+  `unwrap_arguments`, unreadable ones raise a `plain_words` `no_failover`
+  ProviderError — never run as `{}`.
+  OPEN: the endpoint badge "That service sets any charge" vs the router's pay;
+  grok-cli counted "plan" even when keyed; menus list the daemon's own home's
+  Codex models; the phone escalation, workflow agent steps and @-agent seats
+  ignore a custom agent's own account; `IJ_MY_SETUP_*` values are visible to
+  every program in that terminal; skills discovery still reads the real
+  `~/.codex/skills` in tests that delete `CODEX_HOME`. Pins:
+  `tests/test_failover_spend{,_review}_v14240.py`,
+  `tests/test_model_capability_{per_model,review}_v14240.py`,
+  `tests/test_codex_models_v14240.py`, `tests/test_codex_refusal_evidence_v14240.py`,
+  `tests/test_account_choice_v14240.py`, `tests/test_chat_account_extras_v14240.py`,
+  `tests/test_agent_own_account_doors_v14240.py`,
+  `tests/test_claude_setup{,_review}_v14240.py`,
+  `tests/test_opencode_text_only{,_review}_v14240.py`,
+  `tests/test_grok_output_budget_v14240.py`, `tests/test_grok_arguments_review_v14240.py`,
+  `dashboard/__tests__/{model-capability,model-capability-review,chat-account,
+  chat-account-extras,account-choice,claude-setup-line}-v1424-0.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
