@@ -125,6 +125,38 @@ def pin_for(platform: Any, account: Any, provider: str, model: str = "", *,
     return AccountPin(profile_id=row["id"], ij_provider=row["provider"], title=row["name"]), ""
 
 
+#: v1.424.0 (review): a piece of work names one account and the custom agent
+#: that does it names ANOTHER of its own — the agent's own pin is armed inside
+#: the work's (``model_team.member_scope``), so the work would run on the
+#: agent's account, not the one chosen for it.
+AGENT_OWN_WORDS = (
+    "'{agent}' runs on its own account “{own}” — choose that account for this {who}, or No "
+    "account (it then runs on its own)."
+)
+
+
+def agent_conflict(platform: Any, account: Any, record: Any, *, who: str = "schedule") -> str:
+    """The sentence when ``account`` (the work's choice) is not the account
+    the custom agent ``record`` names of its own; "" when there is no
+    conflict (no account chosen, an agent with none, the same one). Cached
+    reads only; never raises (v1.424.0 review)."""
+    acct = clean(account)
+    own = clean(getattr(record, "account", "") if record is not None else "")
+    if not acct or not own or acct == own:
+        return ""
+    title = own
+    try:
+        from ..harness import build_accounts as BA
+
+        row = BA.find(_svc(platform), own)
+        if row is not None and row.get("name"):
+            title = str(row["name"])
+    except Exception:  # noqa: BLE001 — the id stands in for its name
+        pass
+    return AGENT_OWN_WORDS.format(agent=str(getattr(record, "name", "") or "This agent"),
+                                  own=title, who=who)
+
+
 def receipt(pin: Any) -> dict[str, Any]:
     """``route.account`` of work that ran on a chosen account: its id and
     NAME (Iron-Proxy's title — never an e-mail), as a Build turn's says it
@@ -134,4 +166,4 @@ def receipt(pin: Any) -> dict[str, Any]:
     return out
 
 
-__all__ = ["check", "clean", "pin_for", "receipt"]
+__all__ = ["agent_conflict", "check", "clean", "pin_for", "receipt"]

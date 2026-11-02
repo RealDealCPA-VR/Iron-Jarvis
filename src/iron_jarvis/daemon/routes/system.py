@@ -730,6 +730,16 @@ def register(app: FastAPI, d) -> None:
                     provider = str(rec.provider)
                     model = model or str(getattr(rec, "model", "") or "")
             _row, why = _choice.check(d.platform, raw_account, provider, model, who="schedule")
+            if not why and isinstance(raw_agent, str) and raw_agent.strip():
+                # v1.424.0 (review): a custom agent with an account of ITS
+                # OWN runs on it (its scope's pin is armed inside the
+                # schedule's) — another account named here is refused in
+                # words, never quietly lost at the fire.
+                try:
+                    _rec = d.platform.agents_registry.get(raw_agent.strip())
+                except Exception:  # noqa: BLE001 — a builtin: no account of its own
+                    _rec = None
+                why = _choice.agent_conflict(d.platform, raw_account, _rec, who="schedule")
             if why:
                 raise HTTPException(status_code=409, detail=why)
         wanted = payload.get("notify_channels")

@@ -196,3 +196,54 @@ async def test_a_hand_off_with_no_account_leases_as_before(app, fake, monkeypatc
     assert status == 200, view
     assert beh.leases and beh.leases[0] == ("claude-cli", "c-work")
     unpinned(fake)
+
+
+# --------------------------------------------------------------------------- #
+# a schedule's account against its custom agent's own account
+# --------------------------------------------------------------------------- #
+
+
+async def _agent(app, name: str, **extra) -> None:
+    status, body = await asgi(app, "POST", "/agents", {
+        "name": name, "system_prompt": "You help.", "tools": ["read_file"], **CLAUDE, **extra,
+    })
+    assert status in (200, 201), body
+
+
+async def test_a_schedules_account_never_loses_quietly_to_its_agents_own(app, fake, monkeypatch):
+    """The schedule names account A; its custom agent runs on its OWN
+    account B. Before, the save passed and every fire ran on B (the agent's
+    scope armed its own pin inside the schedule's) — an account the schedule
+    did not choose. Now the conflict is refused in words when saved, and at
+    a fire (the agent's account set since)."""
+    import asyncio
+
+    await enable(app)
+    beh = wire(app, monkeypatch, Behaviour())
+    await _agent(app, "scout", account="c-spare")
+    status, out = await asgi(app, "POST", "/schedules", {
+        "name": "rounds", "cron": "0 9 * * *", "kind": "task",
+        "payload": {"task": "Say hi.", "agent_type": "scout", "account": "c-work"},
+    })
+    assert status == 409 and "runs on its own account" in out["detail"], out
+    # The SAME account as the agent's own: fine.
+    status, out = await asgi(app, "POST", "/schedules", {
+        "name": "same", "cron": "0 9 * * *", "kind": "task",
+        "payload": {"task": "Say hi.", "agent_type": "scout", "account": "c-spare"},
+    })
+    assert status == 200, out
+    # Saved while the agent had no account; the agent's account set since: the
+    # fire is refused in words — no session, no lease.
+    await _agent(app, "helper")
+    status, out = await asgi(app, "POST", "/schedules", {
+        "name": "later", "cron": "0 9 * * *", "kind": "task",
+        "payload": {"task": "Say hi.", "agent_type": "helper", "account": "c-work"},
+    })
+    assert status == 200, out
+    status, _ = await asgi(app, "PATCH", "/agents/helper", {"account": "c-spare"})
+    assert status == 200
+    fake.queries.clear()
+    status, ran = await asgi(app, "POST", "/schedules/later/run", {})
+    assert ran["last_status"] == "error" and "runs on its own account" in ran["last_detail"], ran
+    assert beh.attempts == [] and picks(fake) == []
+    await asyncio.sleep(0)

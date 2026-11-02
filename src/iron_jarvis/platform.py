@@ -2272,6 +2272,12 @@ def build_platform(
                 )
                 if fire_pin is None:
                     raise _ScheduleRefused(_why)
+                # v1.424.0 (review): its custom agent's OWN account would be
+                # armed inside this one (``member_scope``) — a different
+                # account is refused in words, never quietly swapped.
+                _why = _choice.agent_conflict(platform, _acct, fire_member, who="schedule")
+                if _why:
+                    raise _ScheduleRefused(_why)
             if knob["skills"]:
                 # Per-job skills ride a COPY of the definition — the builtin
                 # singletons and a dynamic agent's composed definition are
