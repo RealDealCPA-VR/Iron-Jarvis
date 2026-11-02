@@ -1,0 +1,26 @@
+{
+ "builtin_caps": {
+  "grok-4.5": null,
+  "grok-4.6": null,
+  "grok-4.7": null,
+  "grok-4.7-build-fast": null
+ },
+ "grok": "grok 1.0.70",
+ "requests": {
+  "set": [
+   {
+    "max_output_tokens": 1234,
+    "model": "fake-model",
+    "store": false,
+    "stream": true
+   }
+  ],
+  "unset": [
+   {
+    "model": "fake-model",
+    "store": false,
+    "stream": true
+   }
+  ]
+ }
+}

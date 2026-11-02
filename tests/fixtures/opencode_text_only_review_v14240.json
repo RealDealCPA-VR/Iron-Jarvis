@@ -1,0 +1,416 @@
+{
+ "env": {
+  "OPENCODE_CONFIG_CONTENT": "{\"agent\":{\"iron-jarvis-text-review\":{\"mode\":\"primary\",\"description\":\"Iron Jarvis: answer in text; Iron Jarvis runs every tool itself.\",\"permission\":{\"*\":\"deny\",\"read\":\"deny\",\"glob\":\"deny\",\"grep\":\"deny\",\"list\":\"deny\",\"lsp\":\"deny\",\"todoread\":\"deny\",\"todowrite\":\"deny\",\"skill\":\"deny\",\"edit\":\"deny\",\"bash\":\"deny\",\"webfetch\":\"deny\",\"websearch\":\"deny\",\"codesearch\":\"deny\",\"task\":\"deny\",\"external_directory\":\"deny\",\"doom_loop\":\"deny\",\"write\":\"deny\",\"patch\":\"deny\",\"apply_patch\":\"deny\",\"multiedit\":\"deny\",\"question\":\"deny\",\"plan_enter\":\"deny\",\"plan_exit\":\"deny\"}}},\"default_agent\":\"iron-jarvis-text-review\"}",
+  "OPENCODE_PERMISSION": "{\"*\":\"deny\",\"read\":\"deny\",\"glob\":\"deny\",\"grep\":\"deny\",\"list\":\"deny\",\"lsp\":\"deny\",\"todoread\":\"deny\",\"todowrite\":\"deny\",\"skill\":\"deny\",\"edit\":\"deny\",\"bash\":\"deny\",\"webfetch\":\"deny\",\"websearch\":\"deny\",\"codesearch\":\"deny\",\"task\":\"deny\",\"external_directory\":\"deny\",\"doom_loop\":\"deny\",\"write\":\"deny\",\"patch\":\"deny\",\"apply_patch\":\"deny\",\"multiedit\":\"deny\",\"question\":\"deny\",\"plan_enter\":\"deny\",\"plan_exit\":\"deny\"}"
+ },
+ "opencode": "1.18.18",
+ "runs": {
+  "before": {
+   "agent_lines": [],
+   "code": 0,
+   "events": [
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "state": {
+       "input": {
+        "command": "echo pwned> proof.txt",
+        "description": "make a file"
+       },
+       "output": "(no output)",
+       "status": "completed",
+       "title": "echo pwned> proof.txt"
+      },
+      "tool": "bash",
+      "type": "tool"
+     },
+     "type": "tool_use"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    },
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "text": "done",
+      "type": "text"
+     },
+     "type": "text"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    }
+   ],
+   "offered": [
+    [],
+    [
+     "bash",
+     "edit",
+     "glob",
+     "grep",
+     "read",
+     "skill",
+     "task",
+     "todowrite",
+     "webfetch",
+     "write"
+    ],
+    [
+     "bash",
+     "edit",
+     "glob",
+     "grep",
+     "read",
+     "skill",
+     "task",
+     "todowrite",
+     "webfetch",
+     "write"
+    ]
+   ],
+   "proof_written": true,
+   "script": "bash"
+  },
+  "length": {
+   "agent_lines": [],
+   "code": 0,
+   "events": [
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "text": "The first half of the ans",
+      "type": "text"
+     },
+     "type": "text"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "length",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    }
+   ],
+   "offered": [
+    [],
+    []
+   ],
+   "proof_written": false,
+   "script": "length"
+  },
+  "missing-agent": {
+   "agent_lines": [
+    "!  agent \"iron-jarvis-text-review\" not found. Falling back to default agent"
+   ],
+   "code": 1,
+   "events": [
+    {
+     "error": {
+      "data": {
+       "message": "Unexpected server error. Check server logs for details.",
+       "ref": "err_7b562ce1"
+      },
+      "name": "UnknownError"
+     },
+     "type": "error"
+    }
+   ],
+   "offered": [],
+   "proof_written": false,
+   "script": "bash"
+  },
+  "missing-agent-old": {
+   "agent_lines": [
+    "!  agent \"iron-jarvis-text-review\" not found. Falling back to default agent"
+   ],
+   "code": 0,
+   "events": [
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "state": {
+       "input": {
+        "command": "echo pwned> proof.txt",
+        "description": "make a file"
+       },
+       "output": "(no output)",
+       "status": "completed",
+       "title": "echo pwned> proof.txt"
+      },
+      "tool": "bash",
+      "type": "tool"
+     },
+     "type": "tool_use"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    },
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "text": "done",
+      "type": "text"
+     },
+     "type": "text"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    }
+   ],
+   "offered": [
+    [],
+    [
+     "bash"
+    ],
+    [
+     "bash"
+    ]
+   ],
+   "proof_written": true,
+   "script": "bash"
+  },
+  "ours": {
+   "agent_lines": [],
+   "code": 0,
+   "events": [
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "state": {
+       "error": "Model tried to call unavailable tool 'invalid'. Available tools: .",
+       "input": {
+        "command": "echo pwned> proof.txt",
+        "description": "make a file"
+       },
+       "status": "error"
+      },
+      "tool": "bash",
+      "type": "tool"
+     },
+     "type": "tool_use"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    },
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "text": "done",
+      "type": "text"
+     },
+     "type": "text"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    }
+   ],
+   "offered": [
+    [],
+    [],
+    []
+   ],
+   "proof_written": false,
+   "script": "bash"
+  },
+  "stop": {
+   "agent_lines": [],
+   "code": 0,
+   "events": [
+    {
+     "part": {
+      "type": "step-start"
+     },
+     "type": "step_start"
+    },
+    {
+     "part": {
+      "text": "done",
+      "type": "text"
+     },
+     "type": "text"
+    },
+    {
+     "part": {
+      "cost": 0,
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 0,
+        "write": 0
+       },
+       "input": 11,
+       "output": 7,
+       "reasoning": 0,
+       "total": 18
+      },
+      "type": "step-finish"
+     },
+     "type": "step_finish"
+    }
+   ],
+   "offered": [
+    [],
+    []
+   ],
+   "proof_written": false,
+   "script": "stop"
+  },
+  "subagent": {
+   "agent_lines": [
+    "!  agent \"iron-jarvis-text-review\" is a subagent, not a primary agent. Falling back to default agent"
+   ],
+   "code": 1,
+   "events": [
+    {
+     "error": {
+      "data": {
+       "message": "Unexpected server error. Check server logs for details.",
+       "ref": "err_b97988d8"
+      },
+      "name": "UnknownError"
+     },
+     "type": "error"
+    }
+   ],
+   "offered": [],
+   "proof_written": false,
+   "script": "bash"
+  }
+ }
+}
