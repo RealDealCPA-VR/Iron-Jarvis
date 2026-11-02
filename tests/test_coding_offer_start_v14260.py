@@ -65,6 +65,9 @@ def test_the_chat_page_hands_the_door_to_the_coding_start():
     before the reply, the chat's project folder), and the Code view takes it."""
     page = (ROOT / "dashboard" / "app" / "chat" / "page.tsx").read_text(encoding="utf-8")
     assert "onOpen={(d) => h.openDoor(i, d)}" in page
-    assert "startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot)" in page
+    # v1.426.0 review (moved on purpose): the chat's Local only rides along.
+    assert "startCodingFromDoor(messagesRef.current, index, door.href, atFilesRoot, localOnlyRef.current)" in (
+        " ".join(page.split())
+    )
     view = (ROOT / "dashboard" / "components" / "harness" / "IjHarnessView.tsx").read_text(encoding="utf-8")
     assert "peekCodingStart()" in view and "clearCodingStart()" in view
