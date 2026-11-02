@@ -2933,7 +2933,8 @@ class FinishCheck:
             return None
         # v1.425.0 (C1): read the way the reply's start was (git's listing or
         # the walk): a reply that ran `git init` is compared walk to walk.
-        after = await FC.walk_bounded(self.folder, functools.partial(FC.take, self.folder, how=self._before.how))
+        after = await FC.walk_bounded(
+            self.folder, functools.partial(FC.take, self.folder, how=self._before.how))
         if after is None:
             after = FC.too_slow(self.folder)
         if not after.usable:
@@ -3053,8 +3054,9 @@ class FinishCheck:
     def first_readings(self) -> "tuple[Any, dict[str, bytes | None]]":
         """BLOCKING, before any tool of the reply runs (started by
         :func:`start` beside the first model call; the first tool waits for
-        it, :meth:`ready`): the folder's snapshot (``folder_changes.take``) and — when the request
-        points to a written description — that file as it is NOW, so the
+        it, :meth:`ready`): the folder's snapshot (``folder_changes.take``)
+        and — when the request points to a written description — that file as
+        it is NOW, so the
         check reads it as it was BEFORE the reply even when a command (which
         writes no journal row) changed it. Never raises."""
         from . import folder_changes as FC
@@ -3990,8 +3992,8 @@ async def start(
     folder's snapshot, off the loop (v1.425.0, Wave 5 C1: no longer waited
     for here — the reply's first model call goes out beside it, and the
     lanes await :meth:`FinishCheck.ready` before a round's tools run, so it
-    is still the folder before any tool of the reply ran). ``turn_id`` names this reply, so a carry-on of it can compare with
-    the same first snapshot (kept in this process: the newest reply of each
+    is still the folder before any tool of the reply ran). ``turn_id`` names
+    this reply, so a carry-on of it can compare with the same first snapshot (kept in this process: the newest reply of each
     session); a carry-on (``since``) names the reply it continues
     (``continues``) and uses that reply's snapshot — or, when the cut part
     ran no tool at all, a fresh one (nothing had changed yet) — and with
