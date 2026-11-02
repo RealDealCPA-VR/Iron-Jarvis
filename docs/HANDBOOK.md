@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.425.0 (2026-11-02).*
+holds itself to. Current as of v1.426.0 (2026-11-02).*
 
 ---
 
@@ -2445,6 +2445,18 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## See what a coding session is told, and folders that keep their own defaults (v1.426.0)
+
+**The instructions, visible.** A coding session's Session tab now says which instructions the newest reply ran with: whose tool names the model was shown, for which model family, and what they were built from. If your folder's own instruction files (`.ironjarvis/harness/`) were NOT used, it says so in the warning tone, with the reason. "Show the instructions" shows the whole text exactly as a reply puts it together. It is read fresh each time, never stored, and secrets are masked. A folder file that looks like an instruction to the AI shows as a "[BLOCKED…]" placeholder there, as the model sees it.
+
+**A coding request is never retyped.** When a plain chat reply ends with the "open a coding session" door (for example after "build me a todo app" or "fix the failing test in my repo"), pressing it opens Chat › Code with your request already in the box and the chat's project folder chosen. Nothing is made or sent until you press Send. A chat kept Local only opens its coding session Local only too.
+
+**One writer per conversation.** After you type `/clear` in a Build terminal running Claude Code, Open in Code view picks up the new conversation. A conversation your own Claude app wrote in the same folder is never taken for the terminal's. A terminal still running a conversation holds it, so the Code view never opens a second writer on it. Pressing Open in terminal twice never opens two terminals on one conversation.
+
+**Your coding tool's own setup.** Build › Code's Session tab lists the coding tool's own MCP servers as Claude Code or Codex reported them, each with its state: Connected, Starting…, Did not start (with the tool's own error), Needs you to sign in, or Turned off. A server waiting for a sign-in shows the tool's own way: for Claude Code, press Open in terminal, type `/mcp`, choose the server and pick Authenticate; for Codex, press Open in terminal, leave Codex with `/exit`, then run `codex mcp login <name>`. The tool uses the sign-in from its next start. Pi, OpenCode and Grok do not report their servers here, and the tab says so. Codex's "/" menu lists its own compact and its skills (typed as `$name`, Codex's own way); sending exactly `/compact` makes Codex summarize the conversation, and the Context drop-down offers the same.
+
+**Folder defaults.** A folder can keep defaults for new coding sessions started in it: in Chat › Code the model, reasoning level and approval level; in Build › Code the tool, model, effort and mode. Set them with the sliders button on the folder's heading, or "Use for new sessions in this folder" under the start box. A new session in that folder starts with them unless you change a choice yourself. The words under the start box say which defaults are in use, and say so when one cannot be used (a model that cannot answer right now, a tool that cannot start, a model that leaves this PC while Local only is on). "Don't ask" and Full access are never a folder's default: you choose those per session. A Clear or a save in the folder's panel takes effect in the open start box at once, and renaming the folder keeps its defaults.
 
 ## Working habits for your model team, and a truer coding session (v1.425.0)
 

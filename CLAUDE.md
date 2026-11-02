@@ -12773,9 +12773,9 @@ does not need a bump, stop and bump it.
   (`_SOFTWARE_THING` minus "program"/"script" without a language;
   `_NOT_SOFTWARE_AFTER` guards "game plan", "tool shed", "site visit",
   "in SharePoint") or an acting verb on "my repo"/a github.com address; it
-  ARMS nothing. NOT WIRED: the lanes (`chat_turn.py`/`routes/chat.py`,
-  lock-step) still need one line each to add it to their doors list beside
-  `with_connect_door`. THE TABLE: `tests/test_matcher_tables_v13610.py`
+  ARMS nothing; both lanes add it to their doors list beside
+  `with_connect_door` (`with_coding_offer`, lock-step; since v1.426.0 it
+  opens Chat › Code with the request carried). THE TABLE: `tests/test_matcher_tables_v13610.py`
   gained DOOR rows (16 own / 13 not), GUIDE_ROWS (17 / 13), MAIL_WEB (5 / 7)
   and CODING (13 / 17); two DOOR rows flipped ON PURPOSE ("any new emails
   from my accountant?", "read my latest emails": they pinned the gap).
@@ -13845,6 +13845,106 @@ does not need a bump, stop and bump it.
   _v14250.py`, `tests/test_finish_snapshot_v14250.py`, `tests/test_build_code_turn_tree_v14250.py`,
   `tests/test_build_app_start_lock_v14250.py`, `tests/test_wave5_lane_a_review_v14250.py`,
   `dashboard/__tests__/{team-notes,habit-measure}-v1423-0.test.tsx`.
+
+- **What a coding session's model is told is VISIBLE; the chat's coding door
+  carries the request; one writer per conversation between a terminal and
+  the Code view; the real CLI's own setup is visible; a folder keeps its
+  defaults; the subscription CLIs live in ONE table** (v1.426.0, Wave 6 of
+  `docs/HARNESS-BUILD-AUDIT-2026-11-01.md`, E1-E5; two builders + two
+  reviewers who found 11 more defects, each red first and mutation-checked).
+  E1 (`daemon/routes/build_harness.py`): `GET /build/sessions/{id}/harness`
+  = `instructions_view(platform, row)`, the component tree put together THE
+  SAME WAY a turn does (`chat_turn._build_harness`: layer read + validated,
+  rule files, accepted lessons, the family's dialect, plan mode, a team
+  lead's tools, Local only, the posture) and rendered by
+  `harness/components.render`; READ-ONLY, NEVER STORED, masked BEFORE the
+  cut to `SHOW_CAP` 80,000; answers `{family, dialect, dialect_label,
+  layers, note, mode, rule_files, text, chars, cut, fingerprint}`; a
+  failure is `SHOW_FAILED` with no text, never a 500; it reaches no model
+  (a Local only session's view pinned with a router that raises). A flagged
+  folder text is the `[BLOCKED…]` placeholder; a flagged check command voids
+  the layer and `note` says why. Per-turn parts (date, project map, skill
+  listing, a picked skill, team brief, summary) are not in the tree. The
+  Session tab (`HarnessSessionRail`, `lib/sessionRail`) shows the newest
+  reply's route facts and the folder note in the warning tone. E2
+  (`tools/autoselect.CODING_OFFER_HREF` == `lib/codingStart.
+  CODING_OFFER_HREF` "/chat?view=code"): the chat's coding door (both lanes)
+  opens Chat › Code; the press stages `{text, folder, localOnly?, at}` in
+  THIS TAB's sessionStorage (`CODING_START_KEY` "ij.code.startRequest",
+  `localOnly` present only when true) — never the address, never the
+  daemon; `IjHarnessView` takes it once, within 5 minutes, seeds the start
+  composer (Local only chip ON for a Local only chat); nothing is made or
+  sent before Send; an old saved door `/terminals?view=code` is a plain
+  link to Build › Code's empty start. E3 (`hosted/service`): `claude_later`
+  finds the conversation a `/clear` moved a terminal to — ONLY one a
+  `/clear` STARTED (`started_by_clear`: its first non-meta user record is
+  Claude Code's own `<command-name>/clear</command-name>`, `/reset` or
+  `/new`, measured on 2.1.280 and 2.1.296; a bounded 64 KB / 40-line head
+  read), in the same folder, written since the pane started and after the
+  recorded one, held by no Code-view row or other live terminal; several →
+  `W.CANNOT_TELL`; a newer ordinary conversation is the user's own Claude
+  outside Iron Jarvis and is never handed over or held. The pane's home is
+  `continue_on.claude_home` (a "this PC" pane reads `~/.claude`, never the
+  daemon's `CLAUDE_CONFIG_DIR`). `_handover()` (an asyncio lock; every walk
+  under it via `to_thread`) makes two hand-overs one row; Open in terminal
+  claims (`W.CLAIM_TERMINAL`) and refuses a second press
+  (`W.ALREADY_IN_TERMINAL`). `/resume` and a fresh `claude` typed in the
+  terminal are not read (the recorded conversation is handed over). E4
+  (`hosted/tool_setup.py`): frames the driver ALREADY receives become a
+  `setup` event `{mcp_servers: [{name, state, error?, source?}]}`
+  (`events.TYPES`), emitted only when the list changes (`note_servers`;
+  None = not said) — Claude Code's `system` `init` `mcp_servers`
+  (connected | pending | failed | needs-auth | disabled, 2.1.316), Codex's
+  `mcpServer/startupStatus/updated` (starting|ready|failed|cancelled; "not
+  logged in / codex mcp login" or `reauthenticationRequired` =
+  `needs_sign_in`); names and errors masked before the cut; SCREEN ONLY,
+  never a prompt; the overview gains `mcp {known, servers [{name, state,
+  words, error?, sign_in?}], at, note}` (`panes.session_view`, CodePanes
+  `ToolMcpSection`). Codex's sign-in words say `/exit` first (Open in
+  terminal opens Codex's own screen). `CodexDriver.open` WRITES `skills/list
+  {cwds}` before any turn's request (the newest-id rule of `after_restore`)
+  and takes the answer in a background task (`SKILLS_WAIT_S` 15, never
+  awaited by the start); rows: compact + enabled skills with `prefix: "$"`;
+  a message EXACTLY `/compact` (no files) → `thread/compact/start` (answers
+  `{}`, then its own turn; BUSY while a reply runs); `turn/started` names
+  the turn for Stop only for THIS thread; `/context` offers compact for
+  Codex. Pi/OpenCode/Grok compact NOT wired. E5 FOLDER DEFAULTS
+  (`harness/folder_defaults.py`, `BuildFolderRecord.defaults_json`,
+  additive): `GET|PUT /build/folders/defaults` (`routes/
+  build_folder_defaults.py`), code `{provider, model, reasoning,
+  approval_mode}` | tool `{harness, model, effort, mode}`; yolo and `full`
+  refused on save AND dropped on read; a bad row reads as none; used ONLY by
+  the two start composers (an untouched chip follows the folder, a touched
+  one wins; the create routes are unchanged) and never a model that cannot
+  answer, a tool that cannot start, a model the tool no longer offers, or a
+  cloud model under Local only — each said in words; `lib/folderDefaults`
+  is one cache per window whose saves every reader hears
+  (`onFolderDefaultsSaved`); `rename_folder` keeps a project root's row
+  when it holds a team OR defaults. ONE TABLE (`providers/
+  subscription_clis.py`: provider, vendor, proxy, home var/dir, harness,
+  binary, probed, names) read by iron_proxy/accounts, iron_proxy/service,
+  hosted/words, model_team `_CLI_LABELS`, `providers/billing.PLAN_CLIS`
+  (integrated: v1.424.0 had moved the plan set there), failure_words,
+  cli_auth and the manager/connections CLI checks, each pinned to its OLD
+  value; `dashboard/lib/subscriptionClis.ts` is GENERATED
+  (`scripts/gen_subscription_clis.py --check`). NOT in the table (routing or
+  a different list): `router._FAILOVER_ORDER`, `manager._AUTO_DEFAULT_ORDER`,
+  `egress._FRIENDLY`, `cli_auth.SIGN_IN_FIX`, `terminals/ai_clis`,
+  `connections._WATCHED`, `attempts.PROVIDER_WORDS`, `lib/cliSignIn`,
+  ConnectDoors, desktop/main.js. OPEN: `LAST_COMMANDS[codex]` is global;
+  `iron-jarvis-code` shows in the tool's own list; Codex `turn/completed`
+  has no thread check (older); not driven against the real CLIs. Pins:
+  `tests/test_build_harness_view{,_review}_v14260.py`,
+  `tests/test_coding_offer_start_v14260.py`,
+  `tests/test_build_app_handover{,_review}_v14260.py`,
+  `tests/test_build_app_tool_setup_v14260.py`,
+  `tests/test_folder_defaults_v14260.py`,
+  `tests/test_subscription_clis_v14260.py`, `tests/test_lane_b_review_v14260.py`,
+  `dashboard/__tests__/{session-instructions,coding-offer-page,coding-offer-start,build-code-tool-setup,folder-defaults,folder-defaults-review}-v1426-0.test.tsx`;
+  moved on purpose: `test_matcher_tables_v13610`, `test_lane_j_review_v1420`
+  (the door's address), `test_build_app_routes_v1409`,
+  `test_build_app_pi_v1411` (Codex's compact listed),
+  `test_integrate_wave4_v13540` (FRIENDLY reads the twin).
 
 ## Map (where things live)
 
