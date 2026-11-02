@@ -3624,11 +3624,21 @@ class FinishCheck:
             # findings, and none were stored — so its R numbers can never be
             # read as answers to an EARLIER review's (a second review's R1 is
             # another finding).
+            answers_for = self._review_child if not flagged else ""
             self._answer_windows.append({
                 "call": self._review_call_id,
-                "session": self._review_child if not flagged else "",
+                "session": answers_for,
                 "mark": int(self._answer_mark), "texts": [], "chars": 0,
             })
+            if answers_for:
+                # v1.423.0 review: this note SHOWS the review's findings and
+                # asks the lead to answer each — they become ``asked``, the
+                # only findings the member card counts (a review a lead hands
+                # out itself, or a mission's, is never asked). Off the loop;
+                # never raises (``team_findings.mark_asked``).
+                from ..agents.team_findings import mark_asked
+
+                await asyncio.to_thread(mark_asked, self.engine, review_session=answers_for)
         # v1.421.0 (A4): the lead routes each finding to the member who
         # changed that file — the same list the reviewer was handed.
         listed = who_changed_lines(self._who) if self._who else []

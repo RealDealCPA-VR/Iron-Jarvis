@@ -2302,6 +2302,22 @@ def _runtime_wrote(report: Any) -> bool:
         return True
 
 
+def _report_flagged(report: Any) -> bool:
+    """v1.423.0 review: does a reviewer's report, AS A WHOLE, read like an
+    injected instruction — ``computeruse.safety.detect_injection``, the very
+    scan the finish check withholds a report from the lead by
+    (``harness/finish.FinishCheck._review_text``)? Then neither its verdict
+    nor its findings are read: an injected line must not judge anyone's work,
+    and findings the lead was never shown could never be answered. Unscannable
+    counts as flagged (nothing is read on a guess). Pure; never raises."""
+    try:
+        from ..computeruse import safety
+
+        return bool(safety.detect_injection(str(report or "")).get("flagged"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _low_trust(engine: Any, session_id: str) -> bool:
     """Was the piece's run at LOW trust when it settled — from the door, or
     lowered mid-run by a flagged tool result (v1.298.0)? Read off its row
@@ -2355,7 +2371,10 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
     v1.423.0 (Team notes, Phase 1b): a ``review`` piece's report also yields
     its FINDINGS (``agents/team_findings.record_findings``) — under exactly
     the verdict's conditions (finished, written by the reviewer, not at low
-    trust), whether or not its last line is a verdict."""
+    trust), whether or not its last line is a verdict. Review: and never from
+    a report that reads AS A WHOLE like an instruction
+    (:func:`_report_flagged`, the finish check's own scan) — neither its
+    verdict nor its findings."""
     import asyncio
 
     from . import team_record as TR
@@ -2376,7 +2395,11 @@ async def note_piece(platform: Any, *, record: Any, role: str, session_id: str, 
     try:
         row = await asyncio.to_thread(_write)
         if role == "review" and finished and row and not _runtime_wrote(report):
-            if not await asyncio.to_thread(_low_trust, platform.engine, session_id):
+            # v1.423.0 review: a report the finish check would WITHHOLD from
+            # the lead (it reads like an instruction) gives no verdict and no
+            # finding either.
+            if not await asyncio.to_thread(_low_trust, platform.engine, session_id) and \
+                    not await asyncio.to_thread(_report_flagged, report):
                 verdict = TR.verdict_of(report)
                 if verdict:
                     await asyncio.to_thread(TR.credit_review, platform.engine, scope=scope,
