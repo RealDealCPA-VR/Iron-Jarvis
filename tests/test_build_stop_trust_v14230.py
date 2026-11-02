@@ -16,7 +16,9 @@ error branch writes, read from the reply's LIVE trust (``harness/
 reply_record.ReplyRecord.trust_now`` — the lane hands it the turn's one trust
 record at the start, so a taint the moment before the Stop counts, not only
 one a later save noted), and a low-trust reply stopped before a word still
-keeps its line (the window the report leaves out). A reply a CRASH cut off
+keeps its line (the window the report leaves out) — once it ran a call (the
+review: one that ran NOTHING keeps no line, ``test_fix_request_findings_
+review_v14230``; its window holds nothing to leave out). A reply a CRASH cut off
 after it went low says so too: the boot's reconcile reads the reply's kept
 record (``reply_record.low_trust_of``) when it writes the cut-off line.
 
