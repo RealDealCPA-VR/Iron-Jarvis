@@ -19,6 +19,14 @@ import { modelRowName, type NamedRow } from "@/lib/onboarding";
  *  it read "1M", a number only an engineer could read). */
 export const ONE_MILLION = 1_000_000;
 
+/** v1.424.0 review (D1): a model that draws usage credits, in the menu's own
+ *  billing words ("cloud · pay per use"), and what that means for failover. */
+export const CREDITS_CHIP = "pay per use";
+export const CREDITS_TITLE =
+  "This model draws from your plan's pay-as-you-go usage credits, so each message is billed. " +
+  "Iron Jarvis counts it as pay per use: if you pick it and it fails, another model that bills " +
+  "per use may answer instead.";
+
 type RowFacts = Pick<ModelOption, "model" | "label" | "context_window" | "usage_credits">;
 
 /** What a menu row calls the model: the picker's label when it sent one,
@@ -50,8 +58,16 @@ export function modelTitle(
 }
 
 /** The chips after a row's name: "long docs" for a million-token window, and a
- *  muted "uses credits" note when the model draws from usage credits on
- *  this plan. Renders nothing when neither applies. */
+ *  muted "pay per use" note when the model draws from usage credits on
+ *  this plan. Renders nothing when neither applies.
+ *
+ *  v1.424.0 review (the owner's decision D1): a model that draws pay-as-you-go
+ *  usage credits IS pay per use — real money each message (it has counted as
+ *  billed since v1.300.0), and the failover rule (`providers/billing.py`, the
+ *  one definition) treats it so: picked, it may fail over to other models
+ *  that bill per use, and it never stands in for a pick that does not. The
+ *  row under "cloud · on your plan" used to say only "uses credits", so the
+ *  menu and the rule disagreed; it now says it in the menu's own words. */
 export function ModelRowChips({ m }: { m: RowFacts }) {
   const big =
     typeof m.context_window === "number" &&
@@ -73,10 +89,10 @@ export function ModelRowChips({ m }: { m: RowFacts }) {
       {credits && (
         <span
           data-testid="model-credits"
-          title="This model draws from your plan's pay-as-you-go usage credits"
+          title={CREDITS_TITLE}
           className="shrink-0 font-sans text-[10px] text-zinc-500"
         >
-          uses credits
+          {CREDITS_CHIP}
         </span>
       )}
     </>

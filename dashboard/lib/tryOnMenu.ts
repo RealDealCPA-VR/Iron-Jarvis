@@ -61,7 +61,7 @@ export interface TryOnModel {
   /** The record behind the words: "provider · model". */
   title: string;
   place: TryOnPlace;
-  /** The row as listed (its chips: long docs, uses credits). */
+  /** The row as listed (its chips: long docs, pay per use for usage credits). */
   row: ModelOption;
 }
 

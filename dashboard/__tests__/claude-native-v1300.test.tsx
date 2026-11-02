@@ -497,7 +497,10 @@ describe("the composer's model menu shows the picker's label, the 1M chip and th
     expect(within(opus).getByText("Opus 5.5")).toHaveAttribute("title", "claude-opus-5-5");
     expect(within(menu).queryByText("claude-opus-5-5")).toBeNull();
     const fable = rowFor(menu, "Fable 5.1");
-    expect(within(fable).getByTestId("model-credits")).toHaveTextContent("uses credits");
+    // v1.424.0 review (decision D1, MOVED ON PURPOSE): a model that draws
+    // usage credits is pay per use, in the menu's own billing words (it read
+    // "uses credits" under a "cloud · on your plan" heading).
+    expect(within(fable).getByTestId("model-credits")).toHaveTextContent("pay per use");
     expect(within(fable).queryByTestId("model-1m")).toBeNull();
     // A null window and no credits flag: no chips at all. v1.359.0 (lane 9B,
     // changed on purpose): a row with no label reads in words, never its raw

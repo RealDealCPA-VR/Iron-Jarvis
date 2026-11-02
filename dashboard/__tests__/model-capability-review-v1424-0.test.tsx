@@ -240,3 +240,16 @@ describe("the per-model Check press", () => {
     expect(screen.queryByTestId("fleet-model-check")).toBeNull();
   });
 });
+
+/* ===================== the credits chip agrees with the money rule (D1) */
+
+describe("a model that draws usage credits says pay per use", () => {
+  it("in the menu's own billing words, with what that means for failover", async () => {
+    const { ModelRowChips, CREDITS_CHIP } = await import("@/components/ModelRowBits");
+    render(<ModelRowChips m={{ model: "claude-fable-5-1", label: "Fable 5.1", usage_credits: true }} />);
+    const chip = screen.getByTestId("model-credits");
+    expect(chip.textContent).toBe("pay per use");
+    expect(CREDITS_CHIP).toBe("pay per use");
+    expect(chip.getAttribute("title")).toMatch(/each message is billed\. Iron Jarvis counts it as pay per use/);
+  });
+});
