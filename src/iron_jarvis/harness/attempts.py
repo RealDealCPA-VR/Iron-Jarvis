@@ -1167,6 +1167,13 @@ class Attempt:
     cancelled: bool = False
     last_said: float = 0.0
     quiet_since_said: bool = False
+    #: v1.423.0 (lane E): the TRUST its turn ENDED at — the done frame's
+    #: ``trust`` ("full" | "low", the stream lane's receipt, always there), or
+    #: "low" when its error frame says so (``chat_turn.failed_trust_keys``);
+    #: "" = not known (an error frame that says nothing, a Stop, a crash).
+    #: Kept on the card row: the fix-request report reads an attempt's calls
+    #: only when its row says "full" (``agents/fix_request``).
+    trust: str = ""
     #: Review: its metered spend was written for the pay-per-use limit.
     spend_kept: bool = False
     #: Review: the session's cap ended it ({kind, limit}).
@@ -1226,6 +1233,8 @@ class Attempt:
             out["served_provider"] = self.served_provider
         if self.served_model:
             out["served_model"] = self.served_model
+        if self.trust:
+            out["trust"] = self.trust
         return out
 
     # -- what the attempt's own frames say ------------------------------- #
@@ -1281,6 +1290,10 @@ class Attempt:
             return self._alive()
         if event == "done":
             self.done = True
+            # v1.423.0 (lane E): the trust the turn ENDED at (the receipt's
+            # ``trust``, settled — a taint is sticky for the rest of a turn).
+            said = str(data.get("trust") or "")
+            self.trust = said if said in ("full", "low") else ""
             self.reply = _short(data.get("reply"), REPLY_CHARS)
             if isinstance(data.get("cap"), dict):
                 self.cap_met = dict(data["cap"])
@@ -1295,6 +1308,11 @@ class Attempt:
             return True
         if event == "error":
             self.errored = True
+            # v1.423.0 (lane E): an error frame says "low" when the turn ran
+            # at (or went to) low trust; saying nothing is NOT "full" (some
+            # error frames carry no trust at all) — the trust stays unknown.
+            if str(data.get("trust") or "") == "low":
+                self.trust = "low"
             title = str(data.get("title") or "").strip()
             fix = str(data.get("fix") or "").strip()
             if title and fix and title[-1] not in ".!?":
@@ -1883,6 +1901,11 @@ def _saved_item(raw: Any) -> "dict[str, Any] | None":
     for key in ("trashed", "kept"):
         if raw.get(key) is True:
             out[key] = True
+    # v1.423.0 (lane E): the trust the attempt's turn ended at — only the two
+    # words (anything else reads as not known: the fix-request report then
+    # leaves its calls out).
+    if raw.get("trust") in ("full", "low"):
+        out["trust"] = raw["trust"]
     if out.get("state") not in STATES:
         out["state"] = "stopped"
     return out
