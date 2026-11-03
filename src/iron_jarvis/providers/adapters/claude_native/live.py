@@ -114,6 +114,14 @@ def applies(call: T.NativeCall, runner: Any = None) -> bool:
         return False
     if call.budget_usd and call.budget_usd > 0:
         return False
+    if not call.manifest:
+        # Review: a call that offers NO tools is a one-shot inside the turn (the
+        # Auto judge, the mid-reply summary, the language rewrite, the
+        # final-answer nudge): it can never park on a tool step and is never
+        # continued, so a live session only kept its `claude` alive for the
+        # rest of the reply and, past the cap, pushed the lead's kept process
+        # out. Today's path: the CLI answers and exits.
+        return False
     return _scope.current() is not None
 
 
@@ -279,7 +287,15 @@ class LiveRoute:
         body = json.loads(raw)
         if not apply_replacements(body, replace, extras):
             return raw
-        return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        try:
+            return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except UnicodeEncodeError:
+            # Review: a lone UTF-16 surrogate in OUR result (a JavaScript MCP server
+            # that cut an emoji in half, a Windows file name that is not valid
+            # UTF-16) has no UTF-8 form; escaped (``\\udXXX``, as the CLI's own
+            # JSON.stringify writes it on today's path) it is sent, never a
+            # failed round.
+            return json.dumps(body, separators=(",", ":")).encode("ascii")
 
     def _after_feed(self, rec: _Request) -> None:
         """An answer that asks for tools is complete: its follow-up is the one to
