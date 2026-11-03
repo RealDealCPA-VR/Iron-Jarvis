@@ -12780,7 +12780,16 @@ does not need a bump, stop and bump it.
   `cost_usd` (the CLI's `total_cost_usd` covers a whole query; the price
   table prices usage). `--max-turns 1000`; a query that reaches it, or a
   denial whose follow-up never reaches the relay within 2 s ("unheld"),
-  ends that session after answering. LIFETIME: dies with its scope
+  ends that session after answering. CLAUDE CODE DENIES EAGERLY: each
+  tool's denial line comes the moment THAT tool_use block is complete,
+  while the model may still be streaming a long second tool input (the
+  first benchmark run failed `frontier-inventory-filter` on every retry:
+  the 2 s timer started at the first denial, the step ended "unheld" with
+  the capture incomplete, DROPPED). So denial ids ACCUMULATE across the
+  step's denial lines and the "unheld" timer starts only once the relay's
+  capture is COMPLETE (until then the idle timeout applies). Each miss is
+  ONE INFO line naming the reason word ("live session not reused
+  (<reason>)"); resumes are DEBUG. LIFETIME: dies with its scope
   (`scope.on_close`), reaper 1800 s, cap 4 (the oldest PARKED one makes
   room; none parked = today's path), Stop/walk-away/error kills the tree,
   the held request is aborted whenever its session dies, a helper's run is
@@ -12798,8 +12807,9 @@ does not need a bump, stop and bump it.
   per-round tool change) are misses, so the gain is smaller on those
   replies. Pins: `tests/test_claude_live_v1427.py` (+ the fake CLI
   `tests/fixtures/fake_claude_live_v1427.py`, 28 of 31 mutations red; the
-  3 survivors are redundant halves), `tests/test_claude_live_review_v1427.py`
-  (3 mutations red).
+  3 survivors are redundant halves; `FAKE_LIVE_EAGER=1` + the upstream's
+  `pause_s` pin the eager denial, 4 more mutations red),
+  `tests/test_claude_live_review_v1427.py` (3 mutations red).
 
 - **"My latest emails" is the mail KIND, a feature question asks the Guide,
   and a Build › Code file can be reverted per message** (v1.420.0, fix plan
