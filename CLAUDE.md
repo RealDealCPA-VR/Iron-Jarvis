@@ -12776,9 +12776,13 @@ does not need a bump, stop and bump it.
   check), the real process path (`runner is None`), no `--max-budget-usd`,
   and a call WITH tools (review: tool-less one-shots — the Auto judge, the
   mid-reply summary, the language rewrite, the final-answer nudge — went
-  live, parked and evicted the lead under the cap). Live rounds report NO
-  `cost_usd` (the CLI's `total_cost_usd` covers a whole query; the price
-  table prices usage). `--max-turns 1000`; a query that reaches it, or a
+  live, parked and evicted the lead under the cap). Live rounds never report
+  the CLI's `total_cost_usd` (it covers a whole query); their `cost_usd` is
+  the price table's figure for THAT step's usage priced by the model the
+  ANSWER names (`live.served_cost`, the relay's captured message; none when
+  the table does not know it) — priced by the call's alias, "sonnet" read as
+  the older, pricier Sonnet ($3/$15) and the first benchmark run showed
+  $11.12 against $7.88. `--max-turns 1000`; a query that reaches it, or a
   denial whose follow-up never reaches the relay within 2 s ("unheld"),
   ends that session after answering. CLAUDE CODE DENIES EAGERLY: each
   tool's denial line comes the moment THAT tool_use block is complete,

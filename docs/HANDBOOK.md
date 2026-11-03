@@ -2458,10 +2458,16 @@ Now one Claude Code stays running for the whole reply:
 
 - **Each step after the first starts faster.** On this PC a four-step reply
   went from about 6 seconds to about 3½ (a step after the first: about half a
-  second instead of 1¼ to 2 seconds).
+  second instead of 1¼ to 2 seconds). On 12 harder coding tasks, run three
+  times each on Sonnet, a task took about 46 seconds on average instead of 51
+  (a typical one 34 instead of 42), and every task still passed.
 - **Claude remembers the conversation between steps.** Each step only sends
-  what is new, so less of your plan's usage goes to re-sending what Claude has
-  already read.
+  what is new: on those tasks Claude read about a third less of the
+  conversation fresh, so less of your plan's usage goes to re-sending what it
+  has already read.
+- **The cost shown is the model that answered.** Each step is priced by the
+  model Claude Code actually used (for "Sonnet", Sonnet 5), at list price,
+  as before.
 - **Iron Jarvis still runs every tool.** Claude Code is never allowed to run
   one itself; Iron Jarvis runs it, with your approval settings, and hands the
   result back. A step that waits on your approval keeps its Claude Code (we

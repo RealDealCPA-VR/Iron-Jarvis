@@ -30,7 +30,10 @@ How (measured on the real CLI 2.1.316 by the coordinator, see the doc):
   ``cache_control`` placement is left alone (no :func:`admission.pin_message_
   breakpoint` here): each request read the earlier prefix from cache.
 * ``result.total_cost_usd`` covers the whole query (several requests), so a
-  live round reports usage only, never ``cost_usd``.
+  live round never reports it. Its ``cost_usd`` is the price table's figure
+  for THIS step's usage, priced by the model the answer names
+  (:func:`served_cost`) — the call's alias ("sonnet") reads as the older,
+  pricier Sonnet, and the first benchmark run showed $11.12 against $7.88.
 
 Anything else is a MISS and the call starts a new live session (a new process
 that replays the conversation), after the parked session of the same
@@ -970,6 +973,24 @@ def _find(call: T.NativeCall, facts: Facts, scope: Any) -> tuple[LiveSession | N
 # --------------------------------------------------------------------------- #
 # A round
 # --------------------------------------------------------------------------- #
+def served_cost(usage: Any, message: Any) -> float | None:
+    """The list-price equivalent of ONE live step: ``usage`` priced by the model
+    the answer itself names (the relay's captured message), never by the alias
+    the call asked for. None when the answer names no model the price table
+    knows (the caller then prices by the call's model, as for any adapter).
+    Never raises."""
+    try:
+        from ....eval import pricing
+
+        model = message.get("model") if isinstance(message, dict) else None
+        if not isinstance(model, str) or not model.strip():
+            return None
+        cost = pricing.cost_for_usage(T.PROVIDER, model.strip(), usage)
+        return cost if cost > 0 else None
+    except Exception:  # noqa: BLE001 — a price never breaks a step
+        return None
+
+
 def _mark_relay(clock: T._Clock, rec: Any) -> None:
     if T.TRACE is None or rec is None:
         return
@@ -1178,6 +1199,9 @@ async def _drive(
         )
         response.usage.pop("cost_usd", None)
         message = rec.capture.message if (rec is not None and rec.used and rec.capture.complete) else None
+        priced = served_cost(response.usage, message)
+        if priced is not None:
+            response.usage["cost_usd"] = priced
         if end in ("tools", "done") and message is not None:
             s.known = presented + [{"type": "assistant", "message": copy.deepcopy(message)}]
             if end == "tools":

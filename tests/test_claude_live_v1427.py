@@ -88,6 +88,9 @@ class Upstream:
 
     def __init__(self, steps: list) -> None:
         self.steps = steps
+        #: The model id the answer names (``message_start``); "fake" is a
+        #: model the price table does not know.
+        self.served_model = "fake"
         self.bodies: list[dict] = []
         #: Statuses to answer first, in order (an auth refusal body), then 200s.
         self.statuses: list[int] = []
@@ -174,7 +177,7 @@ class Upstream:
                  "cache_creation_input_tokens": 2}
         events = [{"type": "message_start", "message": {
             "id": f"msg_{uuid.uuid4().hex[:8]}", "type": "message", "role": "assistant",
-            "model": "fake", "content": [], "stop_reason": None, "usage": usage}}]
+            "model": self.served_model, "content": [], "stop_reason": None, "usage": usage}}]
         if kind == "tools":
             for i, (name, args) in enumerate(payload):
                 events += [
@@ -869,3 +872,36 @@ async def test_each_miss_is_one_info_line_naming_only_its_reason(tmp_path, upstr
     assert (logging.DEBUG, "claude-cli: live session reused (tools)") in rows
     assert (logging.DEBUG, "claude-cli: new live session (fresh)") in rows
     assert (logging.DEBUG, "claude-cli: new live session (edited)") in rows
+
+
+# --------------------------------------------------------------------------- #
+# v1.427.0 (the benchmark): a live step is priced by the model that ANSWERED
+# --------------------------------------------------------------------------- #
+async def test_a_live_step_is_priced_by_the_model_that_answered(tmp_path, upstream):
+    """A live step drops the CLI's whole-query cost, and pricing it by the
+    call's alias read "sonnet" as the older, pricier Sonnet ($3 / $15): the
+    first benchmark run showed $11.12 against $7.88 for the same work. Each
+    step is priced by the model the answer itself names."""
+    from iron_jarvis.eval import pricing
+
+    up = upstream(THREE)
+    up.served_model = "claude-sonnet-5-5"
+    ad = _adapter(tmp_path, up, model="sonnet")
+    async with _scope():
+        _, final, responses = await _reply(ad, [_user("fix it")])
+    assert final.text == "Done REAL-a|REAL-b"
+    for resp in responses:
+        usage = dict(resp.usage)
+        cost = usage.pop("cost_usd")
+        served = pricing.cost_for_usage("claude-cli", "claude-sonnet-5-5", usage)
+        assert served > 0 and cost == pytest.approx(served)
+        assert cost != pytest.approx(pricing.cost_for_usage("claude-cli", "sonnet", usage))
+
+
+def test_served_cost_never_guesses():
+    usage = {"input_tokens": 16, "output_tokens": 7, "cache_read_input_tokens": 4,
+             "cache_creation_input_tokens": 2}
+    assert live.served_cost(usage, {"model": "fake"}) is None
+    assert live.served_cost(usage, {"model": ""}) is None
+    assert live.served_cost(usage, None) is None
+    assert live.served_cost(None, {"model": "claude-sonnet-5-5"}) is None

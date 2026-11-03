@@ -83,6 +83,12 @@ a new one replays the conversation. A miss is never an error.
   relay (until then the call's idle timeout applies): the answer still goes
   back, the process is ended, the next call replays. A query that reaches
   `--max-turns` (1000) ends at the tool boundary the same way.
+* **The price.** Claude Code's `total_cost_usd` covers a whole query (several
+  requests), so a live step never reports it. Its cost is the price table's
+  figure for that step's usage, priced by the model the answer names (the
+  relay's captured message: `claude-sonnet-5-5` for a "sonnet" call), never
+  by the alias the call asked for — "sonnet" reads as the older, pricier
+  Sonnet, and the first benchmark run showed $11.12 against $7.88.
 * **The log.** Each miss is one INFO line naming its reason word only
   ("claude-cli: live session not reused (edited); starting a new process");
   a resume and a new session are DEBUG.
@@ -105,6 +111,22 @@ a new one replays the conversation. A miss is never an error.
 * **Off switch.** `IRONJARVIS_CLAUDE_LIVE=off`. The test suite runs with it off
   (`tests/conftest.py`): the older fake CLIs answer without the relay and
   only after stdin closes. `IJ_TEST_CLAUDE_LIVE=on` leaves it on.
+
+## Measured on the product path (frozen v1.427.0, 12 frontier tasks x 3, Sonnet medium)
+
+| | Claude Code | Iron Jarvis v1.426.2 | Iron Jarvis v1.427.0 |
+|---|---|---|---|
+| Passed | 36 / 36 | 36 / 36 | 36 / 36 |
+| Time a task, mean | 40.1 s | 50.9 s | 45.8 s |
+| Time a task, median | 23.6 s | 42.2 s | 33.6 s |
+| Uncached input tokens | 0.60 M | 1.61 M | 1.12 M |
+| Live misses / unheld steps | | | 0 / 0 |
+
+The first run of the build (before the eager-denial fix) failed
+`frontier-inventory-filter` on every retry ("unheld", DROPPED); the run
+above is the fixed build. Commands ran natively (Docker hidden from the
+benchmark with `DOCKER_HOST=tcp://127.0.0.1:9`, as the owner's installed app
+runs them).
 
 ## What stays the same
 
