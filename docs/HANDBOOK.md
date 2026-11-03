@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.426.2 (2026-11-02).*
+holds itself to. Current as of v1.427.0 (2026-11-03).*
 
 ---
 
@@ -2445,6 +2445,37 @@ asks into a card you answer.
   a small server of its own inside that process; Iron Jarvis starts it on
   this PC only (127.0.0.1), whatever the `server` settings in your OpenCode
   config say.
+
+## Faster steps in a coding session on your Claude plan (v1.427.0)
+
+A coding session in Chat › Code works in steps: the model asks for some
+tools, Iron Jarvis runs them, the model reads the results and decides what
+to do next. On your Claude plan each step used to start Claude Code again
+and send it the whole conversation, which cost about half a second a step
+and made Claude re-read the conversation instead of remembering it.
+
+Now one Claude Code stays running for the whole reply:
+
+- **Each step after the first starts faster.** On this PC a four-step reply
+  went from about 6 seconds to about 3½ (a step after the first: about half a
+  second instead of 1¼ to 2 seconds).
+- **Claude remembers the conversation between steps.** Each step only sends
+  what is new, so less of your plan's usage goes to re-sending what Claude has
+  already read.
+- **Iron Jarvis still runs every tool.** Claude Code is never allowed to run
+  one itself; Iron Jarvis runs it, with your approval settings, and hands the
+  result back. A step that waits on your approval keeps its Claude Code (we
+  checked a wait of over five minutes); one nobody continues within 30
+  minutes is ended, and the next step simply starts Claude Code again.
+- **Nothing breaks when it can't be used.** If the conversation changed in a
+  way the running Claude Code doesn't know about (an earlier message edited,
+  the model or account changed, the tools changed), Iron Jarvis ends it and
+  starts a fresh one exactly as before. Stop still ends Claude Code at once.
+
+This applies to Chat › Code coding sessions on Claude Code. Plain chat,
+agents and schedules work as before. If you ever need the old behaviour, set
+the environment variable `IRONJARVIS_CLAUDE_LIVE=off` before starting Iron
+Jarvis.
 
 ## See what a coding session is told, and folders that keep their own defaults (v1.426.0)
 

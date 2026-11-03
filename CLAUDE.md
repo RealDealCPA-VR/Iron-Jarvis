@@ -12738,10 +12738,68 @@ does not need a bump, stop and bump it.
   a KEPT connection that fails under `request`/`getresponse` (before any
   answer) is replaced ONCE by a new one — a new connection that fails is
   the failure, never retried. First-request-only, the sign-in retry, the
-  proxy tunnel and the cache pin are unchanged. NOT DONE (decision D4): a
-  long-lived `claude` per session (~0.5 s a round projected). Pins:
+  proxy tunnel and the cache pin are unchanged. D4 (a long-lived `claude`
+  per coding reply) is BUILT in v1.427.0 — see the next bullet. Pins:
   `tests/test_claude_native_round_cost_v1420.py` (fake CLI held open by a
   file, never a clock; 11 mutations, all red).
+
+- **Inside an open turn scope a claude-cli reply keeps ONE `claude`; the
+  relay HOLDS Claude Code's follow-up and fills in the REAL tool results**
+  (v1.427.0, D4; the owner said "build it" after the product-path
+  benchmark: 36/36 = Claude Code but 50.9 s vs 40.1 s a task and 1.6 M vs
+  0.6 M uncached input tokens). `providers/adapters/claude_native/live.py`
+  (design + real-CLI measurements: `docs/CLAUDE-LIVE-SESSION.md`). MEASURED
+  on Claude Code 2.1.316: with `--permission-mode dontAsk` the CLI denies an
+  `mcp__ij__*` call itself (`system/permission_denied`, a `tool_result`
+  "Permission to use … has been denied", `is_error`) and POSTs its follow-up
+  within ~30 ms; held 330 s (with `API_TIMEOUT_MS=3600000`) it still
+  answered; it stays alive after `result` and takes a new stdin message; it
+  sends its WHOLE history every request (the denials again). So the
+  `LiveRoute` (a route on the ONE relay listener; forwarding is the shared
+  `Handler._relay`, each request its own `admission.RequestRecord` so
+  `assemble`/`upstream_failure`/the Iron-Proxy `Attempt` are reused) holds a
+  request whose last user turn answers exactly the ids the previous answer
+  asked for, replaces each denial by `tool_use_id` (`is_error` dropped,
+  pictures kept) and appends text after the results, and RE-APPLIES every
+  replacement to EVERY later request (in place: the CLI's own blocks and
+  `cache_control` kept; no `pin_message_breakpoint` in live mode — the CLI's
+  own history is stable and its cache works: cache read 963 → 1,076 →
+  1,138 on a 4-step reply). A lone surrogate re-dumps as escaped ASCII (the
+  CLI's own `JSON.stringify` form). RESUME only when the call is EXACTLY
+  what the process holds plus ONE user frame (after a held step: leading
+  tool_results for exactly the held ids, then only text/pictures; after a
+  text answer: no tool_result), with the same system, model, effort, tools
+  (extra body), account (the whole Iron-Proxy env) and process facts;
+  anything else is a MISS: the parked session of that conversation in that
+  scope is ended and today's path replays (a miss is never an error).
+  APPLIES only inside `turn_scope.current()` (a coding turn with a finish
+  check), the real process path (`runner is None`), no `--max-budget-usd`,
+  and a call WITH tools (review: tool-less one-shots — the Auto judge, the
+  mid-reply summary, the language rewrite, the final-answer nudge — went
+  live, parked and evicted the lead under the cap). Live rounds report NO
+  `cost_usd` (the CLI's `total_cost_usd` covers a whole query; the price
+  table prices usage). `--max-turns 1000`; a query that reaches it, or a
+  denial whose follow-up never reaches the relay within 2 s ("unheld"),
+  ends that session after answering. LIFETIME: dies with its scope
+  (`scope.on_close`), reaper 1800 s, cap 4 (the oldest PARKED one makes
+  room; none parked = today's path), Stop/walk-away/error kills the tree,
+  the held request is aborted whenever its session dies, a helper's run is
+  never kept after its answer, `live.stop_all` at daemon shutdown.
+  `IRONJARVIS_CLAUDE_LIVE=off` is the off switch, and the TEST SUITE RUNS
+  WITH IT OFF (`tests/conftest.py`; the older fake CLIs answer only after
+  stdin closes and would hang) — `IJ_TEST_CLAUDE_LIVE=on` leaves it on.
+  Outside a scope everything is byte-identical (`--max-turns 1`, one
+  process per call, the pin, the CLI's `cost_usd`). Real CLI, Haiku, a
+  4-step reply: 1 process instead of 4, steps after the first 0.5–0.6 s
+  instead of 1.2–2.0 s, 3.2–3.5 s instead of 6.2 s. OPEN: `LiveRoute.abort`
+  closes sockets under live relay threads (a Windows handle-reuse race: a
+  spurious failure of another session's request, never wrong content);
+  lane edits (`trim_tool_images`, the planner, an overflow refit, a
+  per-round tool change) are misses, so the gain is smaller on those
+  replies. Pins: `tests/test_claude_live_v1427.py` (+ the fake CLI
+  `tests/fixtures/fake_claude_live_v1427.py`, 28 of 31 mutations red; the
+  3 survivors are redundant halves), `tests/test_claude_live_review_v1427.py`
+  (3 mutations red).
 
 - **"My latest emails" is the mail KIND, a feature question asks the Guide,
   and a Build › Code file can be reverted per message** (v1.420.0, fix plan
