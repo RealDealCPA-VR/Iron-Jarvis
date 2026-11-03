@@ -422,7 +422,7 @@ def test_what_was_shown_is_read_from_the_end_of_the_log(tmp_path):
     ]
     (d / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     facts = ADOPT.log_facts(tmp_path, "s1", "A")
-    assert facts == {"shown": 11, "resolved": {"ask_1": "allow"}, "open_turn": "t1"}
+    assert facts == {"shown": 11, "resolved": {"ask_1": "allow"}, "open_turn": "t1", "open_steps": {}}
     with open(d / "events.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "done", "turn": "t1", "stop": "completed"}) + "\n")
     assert ADOPT.log_facts(tmp_path, "s1", "A")["open_turn"] == ""

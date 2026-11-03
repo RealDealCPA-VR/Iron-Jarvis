@@ -61,6 +61,7 @@ import {
   helperStepsWords,
   helperSummary,
   showAllWords,
+  STEP_STOPPED_WORDS,
   type ItemText,
   type ConvItem,
   type ToolKind,
@@ -142,6 +143,14 @@ const ToolStep = memo(function ToolStep({
     meta.push(
       <span key="steps" data-testid="code-helper-count" className="shrink-0 text-zinc-600">
         · {helperStepsWords(helper.steps)}
+      </span>,
+    );
+  }
+  if (tool.status === "stopped") {
+    // v1.427.2: the tool stopped before this step finished (never a spinner).
+    meta.push(
+      <span key="stopped" data-testid="code-tool-stopped" className="shrink-0 text-zinc-600">
+        · {STEP_STOPPED_WORDS}
       </span>,
     );
   }

@@ -65,6 +65,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import hostlink as HL
+from . import open_steps as OS
 from . import store
 from .driver import ALLOW_LIKE, Ask, decode_value, encode_value
 from .events import FULL_KEY, coalesce, make, session_dir
@@ -184,6 +185,7 @@ def log_facts(home: Any, sid: str, tool: str) -> dict[str, Any]:
     resolved: dict[str, str] = {}
     done: set[str] = set()
     last_turn = ""
+    open_steps: dict[str, dict[str, Any]] = {}  # v1.427.2
     for raw in lines:
         try:
             ev = json.loads(raw)
@@ -196,6 +198,7 @@ def log_facts(home: Any, sid: str, tool: str) -> dict[str, Any]:
             shown = max(shown, hs)
         if ev.get("type") == "resolved" and ev.get("request_id"):
             resolved[str(ev["request_id"])] = str(ev.get("decision") or "")
+        OS.note(open_steps, ev)
         t = ev.get("turn")
         if t:
             if ev.get("type") == "done":
@@ -203,7 +206,10 @@ def log_facts(home: Any, sid: str, tool: str) -> dict[str, Any]:
             else:
                 last_turn = str(t)
     return {"shown": shown, "resolved": resolved,
-            "open_turn": last_turn if last_turn and last_turn not in done else ""}
+            "open_turn": last_turn if last_turn and last_turn not in done else "",
+            # v1.427.2: the steps the log leaves running — the adopted tool
+            # still runs them, and its exit closes them like any other.
+            "open_steps": open_steps}
 
 
 def keep_ids(home: Any) -> list[str]:
@@ -410,6 +416,7 @@ async def _adopt_one(svc: Any, link: HL.HostLink, t: dict[str, Any]) -> bool:
     held["driver"] = driver
     proc.ends_left_behind = bool(getattr(driver, "notes_started_on_stop", False))
     live.kept = dict(kept_service)
+    live.open_steps = dict(facts.get("open_steps") or {})  # v1.427.2
     live.title = str(service.get("title") or row.title or "")
     live.caps = dict(service.get("caps") or {})
     live.folder = str(service.get("folder") or row.folder or "")

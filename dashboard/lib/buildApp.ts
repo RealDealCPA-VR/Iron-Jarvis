@@ -821,7 +821,9 @@ type CodeEventBody =
       name: string;
       title: string;
       input: string;
-      status: "running" | "done" | "failed";
+      /** v1.427.2: "stopped" = the coding tool (or Iron Jarvis) stopped
+       *  before the step finished — drawn "did not finish", never a spinner. */
+      status: "running" | "done" | "failed" | "stopped";
       output: string;
       path: string;
       line: number | null;
@@ -945,7 +947,7 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
       const item = str(r.item, 200);
       if (!item) return null;
       const kind = TOOL_KINDS.includes(r.kind as ToolKind) ? (r.kind as ToolKind) : "other";
-      const status = r.status === "done" || r.status === "failed" ? r.status : "running";
+      const status = r.status === "done" || r.status === "failed" || r.status === "stopped" ? r.status : "running";
       const line = num(r.line);
       return {
         type,
@@ -1393,6 +1395,8 @@ export function foldConversation(
   let workAt = "";
   for (const ev of events) {
     if (turnAt && ev.type !== "user" && ev.type !== "done" && ev.type !== "error" && ev.type !== "notice"
+      // v1.427.2: a step closed "did not finish" is the app's own row too.
+      && !(ev.type === "tool" && ev.status === "stopped")
       && Number.isFinite(Date.parse(ev.at))) {
       workAt = ev.at;
     }
@@ -1646,6 +1650,10 @@ export function helperSummary(children: readonly ConvItem[] | undefined): { step
   }
   return { steps, finalText };
 }
+
+/** v1.427.2: a step the coding tool (or Iron Jarvis) stopped before it
+ *  finished — beside its title, where a running step shows its spinner. */
+export const STEP_STOPPED_WORDS = "did not finish";
 
 /** "3 steps" · "1 step". */
 export function helperStepsWords(n: number): string {

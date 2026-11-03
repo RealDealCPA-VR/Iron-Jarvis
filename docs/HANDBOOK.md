@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.427.1 (2026-11-03).*
+holds itself to. Current as of v1.427.2 (2026-11-03).*
 
 ---
 
@@ -5317,6 +5317,13 @@ session looked stuck.
 
 Only Claude Code reports its helpers; Codex, OpenCode and Grok sessions do
 not show the line.
+
+- **A step never spins after its tool stopped (v1.427.2).** If Claude Code
+  (or Iron Jarvis) stops while a step is still running, for example when you
+  close or update the app while Claude Code is working on its own, that step
+  now reads "did not finish" instead of spinning forever, and one line says
+  why. Steps left spinning by an earlier version are fixed the next time
+  Iron Jarvis starts. Send a message to carry on.
 
 ## Grok in the Code view (v1.418.0)
 

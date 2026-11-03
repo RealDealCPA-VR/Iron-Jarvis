@@ -254,6 +254,22 @@ ALREADY_IN_TERMINAL = (
 CLAIM_TERMINAL = "being opened in a terminal"
 STOPPED_BECAUSE = "Stopped because the session is {why}."
 STOPPED_PLAIN = "Stopped: the coding tool was closed."
+#: v1.427.2: steps a coding tool was running ON ITS OWN (after its reply ended:
+#: helpers, a reply it started itself) when it or Iron Jarvis stopped. Each
+#: step's row says "did not finish" (status ``stopped``); this says why, once.
+STEPS_CUT_RESTART = (
+    "Iron Jarvis closed while {label} was working on its own, so {steps} did not finish. "
+    "Send a message to carry on."
+)
+STEPS_CUT_STOPPED = (
+    "{label} stopped while it was working on its own, so {steps} did not finish. "
+    "Send a message to carry on."
+)
+
+
+def steps_words(n: int) -> str:
+    """'1 step' / '3 steps'."""
+    return "1 step" if n == 1 else f"{n} steps"
 CODEX_MODE_NEXT = (
     "Codex keeps its current mode for the message it is working on; {mode} applies from your "
     "next message."

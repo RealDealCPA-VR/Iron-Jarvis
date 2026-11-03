@@ -99,6 +99,7 @@ from . import queued as Q  # v1.418.0 (C4.8)
 from . import programs as PG  # v1.422.0 (B4, C4.7)
 from .process import HarnessGone, HarnessProcess, binary_for, build_env
 from . import hostlink as HL  # v1.422.0: the code host
+from . import open_steps as OS  # v1.427.2: a step runs only while its tool does
 
 log = logging.getLogger(__name__)
 
@@ -930,6 +931,10 @@ class LiveSession:
         self.kept: dict[str, Any] = {}
         #: v1.422.0: "no code host, so this stops with a restart" said once.
         self.no_host_said = False
+        #: v1.427.2: the steps the tool began and has not finished yet (item ->
+        #: kind, name, title, parent, turn) — closed ``stopped`` when the
+        #: process ends (:mod:`.open_steps`).
+        self.open_steps: dict[str, dict[str, Any]] = {}
 
     @property
     def running(self) -> bool:
@@ -2261,6 +2266,7 @@ class HostedService:
             asyncio.ensure_future(self._remove_files_if_stopped(live))
         self._room_changed()  # v1.425.0 (B7): a place in the pool came free
         self._expire_asks(live)
+        self._close_open_steps(live)
         turn = live.turn
         if turn is not None and turn.running and not turn.ending and not proc.stopped:
             technical = proc.stderr_text() or f"exit code {code}"
@@ -2304,6 +2310,7 @@ class HostedService:
         if drv is not None:
             drv.on_exit()
         self._expire_asks(live)
+        self._close_open_steps(live)
         self._room_changed()  # v1.425.0 (B7): a place in the pool came free
         turn = live.turn
         if end_turn and turn is not None and turn.running and not turn.ending:
@@ -2321,6 +2328,7 @@ class HostedService:
             return
         if turn is not None and turn.running:
             ev["turn"] = turn.id
+        OS.note(live.open_steps, ev)  # v1.427.2
         if ev.get("type") == "resolved":
             # v1.414.0: a card answered (anywhere), expired or stopped: its way
             # to the phone closes with it.
@@ -2423,6 +2431,28 @@ class HostedService:
                         self.platform, live.sid, turn.id, live.title, live.harness,
                         str(done.get("stop")), elapsed,
                     )))
+
+    def _close_open_steps(self, live: LiveSession) -> None:
+        """v1.427.2: the tool's process is gone (or going), so every step it
+        began and never finished is closed "did not finish" (status
+        ``stopped``) — never a spinner on a step nothing runs. Steps a reply
+        ran are closed silently (that reply's own end says why); steps the
+        tool ran ON ITS OWN get one notice. Never raises."""
+        steps = live.open_steps
+        if not steps:
+            return
+        try:
+            loose = OS.outside(steps)
+            rows = OS.closing_rows(steps)
+            live.open_steps = {}
+            for row in rows:
+                self._emit(live, row)
+            if loose:
+                words = W.STEPS_CUT_RESTART if self._closing else W.STEPS_CUT_STOPPED
+                self._emit(live, make("notice", text=words.format(
+                    label=W.label(live.harness), steps=W.steps_words(loose))))
+        except Exception:  # noqa: BLE001 — a stop never fails over its rows
+            log.warning("could not close a Code-view session's unfinished steps", exc_info=True)
 
     def _expire_asks(self, live: LiveSession) -> None:
         """Every open card closes when its process goes (nobody can answer it)."""
@@ -3071,6 +3101,7 @@ class HostedService:
             lives = [lv for lv in lives if lv not in kept]
         for live in lives:
             self._expire_asks(live)
+            self._close_open_steps(live)
             if live.turn is not None and live.turn.running and not live.turn.ending:
                 self._emit(live, W.error(STOPPED_TITLE, STOPPED_FIX, ""))
         await asyncio.gather(*(self._end_turn(lv, "interrupted") for lv in lives), return_exceptions=True)
@@ -3493,18 +3524,28 @@ def reconcile_cut_turns(home: Any, keep: "Collection[str]" = ()) -> int:
                 if isinstance(ev, dict):
                     events.append(ev)
             facts = CO.analyse_tail(events, stopped_title=STOPPED_TITLE)
-            if facts is None:
+            # v1.427.2: every step the log leaves running is closed "did not
+            # finish" — a cut reply's steps AND the ones the tool ran on its
+            # own after its reply ended (no turn, so the check above never
+            # saw them: their spinners stayed for days).
+            rows = OS.close_in_tail(events)
+            if rows:
+                log.info("closed %d unfinished step(s) in Code-view session %s",
+                         sum(1 for r in rows if r.get("type") == "tool"), sid)
+            if facts is None and not rows:
                 continue
-            if not facts["closed"]:
+            if facts is not None and not facts["closed"]:
                 turn = facts["turn"]
-                rows = [
+                rows += [
                     {**W.error(STOPPED_TITLE, STOPPED_FIX, ""), "turn": turn},
                     {**make("done", stop="interrupted"), "turn": turn},
                 ]
+                closed += 1
+            if rows:
                 with open(path, "ab") as fh:
                     fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8"))
-                closed += 1
-            CO.note_cut(home, sid, facts)
+            if facts is not None:
+                CO.note_cut(home, sid, facts)
         except OSError:
             continue
     return closed

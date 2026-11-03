@@ -4217,6 +4217,34 @@ does not need a bump, stop and bump it.
   and Build's Code view (`hosted/`, the real CLI with its own tools) is a
   different path and is untouched. Pin: `tests/test_claude_slash_text_v1416.py`.
 
+- **A step is "running" only while its coding tool runs it** (v1.427.2, a
+  USER BUG with a screenshot: six Build › Code steps spun for three days).
+  After Claude Code's reply ended on Oct 31 it kept working ON ITS OWN
+  (helpers' tests, then a reply it started itself; those events carry no
+  `turn`), the app closed mid-way, and the log kept six `tool` rows
+  `running`: `reconcile_cut_turns` closed only a reply the user started, and
+  nothing closed a step when the process ended with no reply open.
+  `hosted/open_steps.py` is the rule: `note()` tracks every emitted step in
+  `LiveSession.open_steps` (from `_emit`, after the turn stamp; bounded
+  `MAX_OPEN` 500), and `HostedService._close_open_steps` emits a `tool` row of
+  the new status `stopped` per open step from `_on_exit`, `_stop_process` and
+  `shutdown` (before the turns end), plus ONE notice
+  (`W.STEPS_CUT_STOPPED` / `W.STEPS_CUT_RESTART` when `_closing`) only for
+  steps with no recorded turn — a reply's own steps close silently, its end
+  already says why. The boot reconcile calls `close_in_tail(events)` for every
+  session the code host did not keep (rows timed to the record's last `at`,
+  never the boot's clock, and carrying no `turn`, so `analyse_tail` and a
+  carry-on's `cut_at` are unchanged); `adopt.log_facts` returns `open_steps`
+  so an adopted tool's later exit closes them too. Dashboard: `status:
+  "stopped"` decoded (an unknown status still reads running), drawn "· did
+  not finish" (`STEP_STOPPED_WORDS`, `code-tool-stopped`), never a spinner,
+  and never counted as the reply's work (receipt time). Dry-run on a copy of
+  the real log: exactly the six steps + one notice. Pins:
+  `tests/test_build_app_unfinished_steps_v14272.py`,
+  `dashboard/__tests__/build-code-unfinished-steps-v1427-2.test.tsx` (11
+  mutations, all red); moved on purpose: `test_code_host_v14220` (log_facts
+  gained `open_steps`).
+
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died
   together twice in one day, each ~15 min after the reply that said "I'll
