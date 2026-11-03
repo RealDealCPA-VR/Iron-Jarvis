@@ -14,7 +14,9 @@ are real ``tool_use`` blocks offered through an inert MCP inventory (the app
 still executes every tool — Iron Jarvis's own perceive→act loop, tool registry
 and permission engine stay in charge), text streams as it is written, images
 ride the user turn, and usage carries the cache buckets and the CLI's own
-list-price cost. One fresh process per step, cancellable as a tree. The
+list-price cost. One fresh process per step, cancellable as a tree — except
+inside an open turn scope (a coding reply with a finish check, v1.427.0 D4:
+``claude_native/live.py``), where one process serves the reply's steps. The
 ``codex`` adapter here (:func:`make_codex_cli`) stays text-only; since IJ
 harness phase 2 the ``codex-cli`` provider is :func:`make_codex_native`
 (``codex_native/``: the user's own ``codex app-server``, real tool calls),
@@ -714,7 +716,7 @@ class ClaudeCliAdapter(LLMAdapter):
         self, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]], reasoning: str
     ) -> AsyncIterator[dict[str, Any]]:
         from ...iron_proxy import accounts
-        from .claude_native import transport
+        from .claude_native import live, transport
 
         # v1.301.0: the Iron-Proxy account to run as (None = the default login,
         # exactly as before). Blocking HTTP: off the loop.
@@ -729,7 +731,17 @@ class ClaudeCliAdapter(LLMAdapter):
             )
             attempt = transport.Attempt()
             started = time.monotonic()
-            agen = transport.run(call, runner=self._runner, attempt=attempt)
+            # v1.427.0 (D4): inside an open turn scope (a coding reply with a
+            # finish check) ONE `claude` serves the reply's steps — a call that
+            # is exactly the kept process's next step continues it; anything
+            # else replays to a new one (`claude_native/live.py`). Everywhere
+            # else (plain chat, agents, schedules, a test runner, a budget
+            # ceiling) `live.applies` is False and this is byte for byte today's
+            # one-process-per-call path.
+            if live.applies(call, self._runner):
+                agen = live.run(call, attempt=attempt)
+            else:
+                agen = transport.run(call, runner=self._runner, attempt=attempt)
             try:
                 try:
                     async for frame in agen:

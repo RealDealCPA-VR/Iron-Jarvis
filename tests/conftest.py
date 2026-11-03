@@ -529,6 +529,34 @@ def _code_host_off_by_default():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _claude_live_off_by_default():
+    """v1.427.0 (D4): inside an open turn scope a claude-cli call keeps ONE
+    ``claude`` process across a coding reply's steps
+    (``providers/adapters/claude_native/live.py``). The older fake CLIs
+    (``fake_claude_v1300`` / ``_rounds_v1384`` / ``_reads_v1400`` ...) answer
+    without the relay and only after stdin closes, so a lane test that opens a
+    scope would wait out the idle timeout. The suite therefore runs claude-cli
+    the one-process-per-call way; the live session's own pins
+    (``tests/test_claude_live_*_v1427.py``, ``fixtures/fake_claude_live_v1427.py``)
+    turn it on (``monkeypatch.setenv``). ``IJ_TEST_CLAUDE_LIVE=on`` leaves it on
+    for every test (a parity run; the older fakes will not answer)."""
+    from iron_jarvis.providers.adapters.claude_native import live as _live
+
+    if os.environ.get("IJ_TEST_CLAUDE_LIVE") == "on":
+        yield
+        return
+    old = os.environ.get(_live.ENV_SWITCH)
+    os.environ[_live.ENV_SWITCH] = "off"
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(_live.ENV_SWITCH, None)
+        else:
+            os.environ[_live.ENV_SWITCH] = old
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_pi_store():
     """Keep the developer's REAL Pi session store out of every test (v1.213.0).
 

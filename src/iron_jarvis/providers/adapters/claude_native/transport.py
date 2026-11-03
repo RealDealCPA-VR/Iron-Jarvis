@@ -454,7 +454,9 @@ class _Resources:
         #: Which conversation this call belongs to (:func:`_chain_key`).
         self.chain = ""
 
-    def prepare(self, call: NativeCall, env: dict[str, str]) -> dict[str, str]:
+    def write_files(self, call: NativeCall) -> Path:
+        """The private temp dir and its four files (v1.427.0: shared with the
+        live session, ``live.py``)."""
         self.chain = _chain_key(call)
         root = Path(tempfile.mkdtemp(prefix="ij-claude-"))
         self.root = root
@@ -467,6 +469,10 @@ class _Resources:
         mcp = {"mcpServers": {F.SERVER: {"command": command[0], "args": command[1:]}}}
         (root / "mcp.json").write_text(json.dumps(mcp), encoding="utf-8")
         self.clock.mark("files_written")
+        return root
+
+    def prepare(self, call: NativeCall, env: dict[str, str]) -> dict[str, str]:
+        root = self.write_files(call)
         upstream = upstream_of(call.base_env)
         # The queried frame lets the relay keep the cache breakpoint off the
         # per-request context native appends to the turn it answers.
@@ -1208,15 +1214,22 @@ def _released_code(got: Collected, admission: Any) -> int | None:
     return None
 
 
-def _teardown_later(res: _Resources, expected: int) -> None:
+def _teardown_later(res: _Resources, expected: int, before: Callable[[], None] | None = None) -> None:
     """Tear a RELEASED call down on a daemon thread; the next call of the same
-    conversation awaits it (:func:`_after_previous`)."""
+    conversation awaits it (:func:`_after_previous`). ``before`` (v1.427.0, a live
+    session the CLI keeps open on stdin) runs first on that thread — closing
+    stdin, so the CLI exits by itself inside the grace."""
     fut: concurrent.futures.Future = concurrent.futures.Future()
     fut.set_running_or_notify_cancel()  # never cancellable: the thread sets it
     key = res.chain
 
     def work() -> None:
         try:
+            if before is not None:
+                try:
+                    before()
+                except Exception:  # noqa: BLE001 — the close below still runs
+                    pass
             res.close(grace_s=RELEASE_GRACE_S)
             proc = res.proc
             code = proc.returncode if proc is not None else None

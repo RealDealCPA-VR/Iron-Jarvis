@@ -418,31 +418,36 @@ def listener() -> RelayServer:
         return _LISTENER
 
 
-class Admission:
-    """One call's admission: exactly one upstream Messages request (v1.420.0: a route
-    on the shared :func:`listener`, no longer a listener of its own)."""
+def checked_upstream(upstream_base_url: str) -> Any:
+    """The parsed upstream base URL, or ValueError: HTTPS, or a loopback HTTP fixture,
+    with no credentials, query or fragment."""
+    upstream = urlsplit(upstream_base_url)
+    host = upstream.hostname
+    try:
+        local = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        local = host == "localhost"
+    if (
+        (upstream.scheme != "https" and not (upstream.scheme == "http" and local))
+        or not host
+        or upstream.username
+        or upstream.password
+        or upstream.query
+        or upstream.fragment
+    ):
+        raise ValueError("Native upstream must be HTTPS or a loopback HTTP fixture")
+    return upstream
 
-    def __init__(self, upstream_base_url: str, timeout: float, queried: list | None = None) -> None:
-        self.upstream = urlsplit(upstream_base_url)
-        self.queried = queried
-        host = self.upstream.hostname
-        try:
-            local = ipaddress.ip_address(host).is_loopback
-        except ValueError:
-            local = host == "localhost"
-        if (
-            (self.upstream.scheme != "https" and not (self.upstream.scheme == "http" and local))
-            or not host
-            or self.upstream.username
-            or self.upstream.password
-            or self.upstream.query
-            or self.upstream.fragment
-        ):
-            raise ValueError("Native upstream must be HTTPS or a loopback HTTP fixture")
-        self.timeout = timeout
-        self.lock = threading.Lock()
-        self.sockets: set[socket.socket] = set()
-        self.cancelled = False
+
+class RequestRecord:
+    """What ONE relayed upstream request did — the attributes ``transport.assemble``,
+    ``transport.upstream_failure`` and the Iron-Proxy attempt report read.
+
+    v1.427.0 (D4): lifted out of :class:`Admission` so a live session's route
+    (``live.LiveRoute``, one record per request it forwards) keeps the SAME record
+    and the same readers; an :class:`Admission` is still its own (one) record."""
+
+    def _new_record(self) -> None:
         self.used = False
         self.denied = 0
         self.request_id: str | None = None
@@ -456,7 +461,7 @@ class Admission:
         self.headers: dict[str, str] = {}
         #: True once the admitted request's whole answer has been relayed back.
         self.answered = False
-        #: True once the ONE sign-in retry (see :meth:`_reauth_allowed`) was admitted.
+        #: True once the ONE sign-in retry (see :meth:`_auth_refused`) was admitted.
         self.reauth = False
         self.capture = Capture()
         self.error_body = b""
@@ -464,14 +469,16 @@ class Admission:
         #: per-phase trace): request, connected, headers, first_byte,
         #: last_byte, plus ``reused`` (1.0 when a kept connection was used).
         self.stamps: dict[str, float] = {}
-        self._closed = False
-        #: Requests of this admission still being handled (close() waits for them).
-        self._active = 0
-        self._idle = threading.Condition(self.lock)
-        self.prefix = "/admit/" + secrets.token_urlsafe(32)
-        self.server = listener()
-        self.url = f"http://127.0.0.1:{self.server.server_port}" + self.prefix
-        self.server.register(self.prefix, self)
+
+    def _restart_record(self) -> None:
+        """The sign-in retry: start the record over for the answer that counts."""
+        self.reauth = True
+        self.answered = False
+        self.status = self.failure = self.failure_network = None
+        self.retry_after = self.request_id = None
+        self.headers = {}
+        self.error_body = b""
+        self.capture = Capture()
 
     def error_text(self) -> str:
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -482,17 +489,6 @@ class Admission:
             return text
         return message if isinstance(message, str) else text
 
-    def _reauth_allowed(self) -> bool:
-        """Under ``lock``: may a SECOND request go upstream? Only once, and only
-        after the first was answered with an authentication refusal (401, or a
-        403 typed ``authentication_error``). The CLI answers such a refusal by
-        refreshing its sign-in and sending the request again; that retry is the
-        one that can succeed, and the refusal spent nothing — so admitting it
-        cannot duplicate work. Every other retry stays refused (v1.300.0)."""
-        if self.cancelled or not self.answered or self.reauth:
-            return False
-        return self.status == 401 or (self.status == 403 and self.error_type() == "authentication_error")
-
     def error_type(self) -> str:
         """The upstream's error ``type`` ('authentication_error', ...), '' when none."""
         try:
@@ -500,6 +496,45 @@ class Admission:
         except (ValueError, KeyError, TypeError):
             return ""
         return kind if isinstance(kind, str) else ""
+
+    def _auth_refused(self) -> bool:
+        """May the ONE sign-in retry follow this request? Only once, and only after
+        it was answered with an authentication refusal (401, or a 403 typed
+        ``authentication_error``). The CLI answers such a refusal by refreshing its
+        sign-in and sending the request again; that retry is the one that can
+        succeed, and the refusal spent nothing — so admitting it cannot duplicate
+        work. Every other retry stays refused (v1.300.0)."""
+        if not self.answered or self.reauth:
+            return False
+        return self.status == 401 or (self.status == 403 and self.error_type() == "authentication_error")
+
+
+class Admission(RequestRecord):
+    """One call's admission: exactly one upstream Messages request (v1.420.0: a route
+    on the shared :func:`listener`, no longer a listener of its own)."""
+
+    def __init__(self, upstream_base_url: str, timeout: float, queried: list | None = None) -> None:
+        self.upstream = checked_upstream(upstream_base_url)
+        self.queried = queried
+        self.timeout = timeout
+        self.lock = threading.Lock()
+        self.sockets: set[socket.socket] = set()
+        self.cancelled = False
+        self._new_record()
+        self._closed = False
+        #: Requests of this admission still being handled (close() waits for them).
+        self._active = 0
+        self._idle = threading.Condition(self.lock)
+        self.prefix = "/admit/" + secrets.token_urlsafe(32)
+        self.server = listener()
+        self.url = f"http://127.0.0.1:{self.server.server_port}" + self.prefix
+        self.server.register(self.prefix, self)
+
+    def _reauth_allowed(self) -> bool:
+        """Under ``lock``: may a SECOND request go upstream? (:meth:`_auth_refused`)"""
+        if self.cancelled:
+            return False
+        return self._auth_refused()
 
     def abort(self) -> None:
         """Refuse everything from now on and shut any active client/upstream socket."""
@@ -574,9 +609,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         gate._enter()
         try:
-            self._admit(gate, path)
+            # v1.427.0 (D4): a LIVE route (one kept Claude Code process across a
+            # coding reply's steps, ``live.LiveRoute``) decides each request itself;
+            # an :class:`Admission` keeps the one-request rule below.
+            handle = getattr(gate, "handle", None)
+            if callable(handle):
+                handle(self, path)
+            else:
+                self._admit(gate, path)
         finally:
             gate._leave()
+
+    def _refuse(self) -> None:
+        """The local refusal of a request that may not go upstream (the CONSUMED body)."""
+        body = _CONSUMED_BODY
+        self.send_response(400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _upstream(self, gate: "Admission", reuse: bool) -> tuple[Any, tuple, bool]:
         """``(connection, pool key, reused)`` for the upstream — a kept one when
@@ -627,33 +678,44 @@ class Handler(BaseHTTPRequestHandler):
         with gate.lock:
             if gate.used and gate._reauth_allowed():
                 # The sign-in retry: start the record over for the answer that counts.
-                gate.reauth = True
-                gate.answered = False
-                gate.status = gate.failure = gate.failure_network = None
-                gate.retry_after = gate.request_id = None
-                gate.headers = {}
-                gate.error_body = b""
-                gate.capture = Capture()
+                gate._restart_record()
                 log.debug("claude admission: admitted the CLI's one retry after a sign-in refusal")
             elif gate.cancelled or gate.used:
                 gate.denied += 1
-                body = _CONSUMED_BODY
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._refuse()
                 log.debug("claude admission: refused a non-first attempt locally (denied=%d)", gate.denied)
                 return
             gate.used = True
             gate.sockets.add(self.connection)
             gate.stamps = {"request": time.perf_counter()}
+        self._relay(gate, gate, body_in, read_error, path,
+                    lambda raw: pin_message_breakpoint(raw, gate.queried))
+
+    def _relay(
+        self,
+        gate: Any,
+        rec: RequestRecord,
+        body_in: bytes,
+        read_error: BaseException | None,
+        path: Any,
+        prepare: Any,
+        after_feed: Any = None,
+    ) -> None:
+        """Forward ONE admitted request upstream and stream its answer back.
+
+        ``gate`` owns the lock, the cancel flag, the live sockets, the upstream and
+        the timeout; ``rec`` is the request's own record (status, capture, failure,
+        headers, stamps). For an :class:`Admission` both are the admission itself.
+        ``prepare(body) -> payload`` is applied inside the failure handling (the
+        cache pin; a live route's tool-result replacements). ``after_feed(rec)``
+        (a live route) runs after each answer chunk is captured and BEFORE the
+        chunk reaches the CLI."""
         conn: http.client.HTTPConnection | None = None
         upstream_socket = None
         try:
             if read_error is not None:
                 raise read_error
-            payload = pin_message_breakpoint(body_in, gate.queried)
+            payload = prepare(body_in)
             target = gate.upstream
             # Request identity and payload remain native; only HTTP transfer encoding changes.
             headers = {
@@ -674,8 +736,8 @@ class Handler(BaseHTTPRequestHandler):
             route = target.path.rstrip("/") + "/v1/messages" + ("?" + path.query if path.query else "")
             for attempt in (1, 2):
                 conn, pool_key, reused = self._upstream(gate, reuse=attempt == 1)
-                gate.stamps["connected"] = time.perf_counter()
-                gate.stamps["reused"] = 1.0 if reused else 0.0
+                rec.stamps["connected"] = time.perf_counter()
+                rec.stamps["reused"] = 1.0 if reused else 0.0
                 upstream_socket = conn.sock
                 with gate.lock:
                     if gate.cancelled:
@@ -704,11 +766,11 @@ class Handler(BaseHTTPRequestHandler):
                         raise
                     log.debug("claude admission: a kept upstream connection was closed; using a new one")
             del headers, payload, body_in
-            gate.stamps["headers"] = time.perf_counter()
-            gate.request_id = response.getheader("request-id") or response.getheader("x-request-id")
-            gate.status = response.status
-            gate.retry_after = response.getheader("retry-after")
-            gate.headers = exposed_headers(response.getheaders())
+            rec.stamps["headers"] = time.perf_counter()
+            rec.request_id = response.getheader("request-id") or response.getheader("x-request-id")
+            rec.status = response.status
+            rec.retry_after = response.getheader("retry-after")
+            rec.headers = exposed_headers(response.getheaders())
             log.debug("claude admission: upstream answered status %s", response.status)
             self.send_response(response.status)
             for key, value in response.getheaders():
@@ -721,11 +783,13 @@ class Handler(BaseHTTPRequestHandler):
                     chunk = response.read1(65536)
                     if not chunk:
                         break
-                    gate.stamps.setdefault("first_byte", time.perf_counter())
-                    gate.capture.feed(chunk)
+                    rec.stamps.setdefault("first_byte", time.perf_counter())
+                    rec.capture.feed(chunk)
+                    if after_feed is not None:
+                        after_feed(rec)
                     self.wfile.write(chunk)
                     self.wfile.flush()
-                gate.stamps["last_byte"] = time.perf_counter()
+                rec.stamps["last_byte"] = time.perf_counter()
             else:
                 # A refusal is small: read ALL of it, record it (the reason, bounded)
                 # and mark it answered BEFORE the CLI sees a byte — the CLI may retry
@@ -738,12 +802,12 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     data += chunk
                 with gate.lock:
-                    gate.error_body = data[:65536]
-                    gate.answered = True
+                    rec.error_body = data[:65536]
+                    rec.answered = True
                 self.wfile.write(data)
                 self.wfile.flush()
             with gate.lock:
-                gate.answered = True
+                rec.answered = True
                 gate.sockets.discard(upstream_socket)
                 keep = not gate.cancelled and response.isclosed() and not response.will_close
             if keep:
@@ -752,9 +816,9 @@ class Handler(BaseHTTPRequestHandler):
                 POOL.give(pool_key, conn)
                 conn = None
         except (OSError, http.client.HTTPException, ValueError, KeyError, IndexError, TypeError) as exc:
-            gate.failure = type(exc).__name__
-            gate.failure_network = isinstance(exc, (OSError, http.client.HTTPException))
-            log.debug("claude admission: relay failure %s", gate.failure)
+            rec.failure = type(exc).__name__
+            rec.failure_network = isinstance(exc, (OSError, http.client.HTTPException))
+            log.debug("claude admission: relay failure %s", rec.failure)
         finally:
             with gate.lock:
                 gate.sockets.discard(self.connection)

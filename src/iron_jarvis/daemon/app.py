@@ -2233,6 +2233,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.wait_for(asyncio.to_thread(_codex.POOL.stop_all), timeout=30.0)
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     log.debug("codex sessions at shutdown failed", exc_info=True)
+            # v1.427.0 (D4): a coding reply's kept `claude` processes go too
+            # (their turn scopes normally ended them already).
+            _claude_live = sys.modules.get("iron_jarvis.providers.adapters.claude_native.live")
+            if _claude_live is not None:
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(_claude_live.stop_all), timeout=30.0)
+                except Exception:  # noqa: BLE001 — shutdown never raises
+                    log.debug("claude-cli live sessions at shutdown failed", exc_info=True)
             # v1.420.0: a claude-cli call's CLI exits in the background after
             # its answer left; wait for those teardowns so no child outlives
             # the daemon. Bounded — a stuck exit must not hold shutdown.
