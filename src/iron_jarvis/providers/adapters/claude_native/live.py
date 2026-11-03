@@ -1057,28 +1057,44 @@ async def _drive(
 
         held: frozenset | None = None
         held_at = 0.0
+        #: Every tool the CLI has denied in this step (v1.427.0 fix: Claude Code
+        #: denies EAGERLY, one line per tool, the moment that tool's block is
+        #: complete — while the model may still be streaming the rest).
         denial: frozenset | None = None
-        denial_at = 0.0
+        #: When this loop first saw the step's answer COMPLETE at the relay
+        #: (message_stop captured). Before that the model is still writing.
+        complete_at: float | None = None
+        settled = False
         final_event: dict | None = None
         while True:
-            # The CLI writes its denial line BEFORE it POSTs the follow-up, and the
+            # The CLI writes its denial lines BEFORE it POSTs the follow-up, and the
             # relay sees that POST ~30 ms later. Whichever of the two arrives
-            # first, the other is given HELD_SETTLE_S: a hold whose denial line
-            # never shows ends the step anyway; a denial whose follow-up never
+            # first, the other is given HELD_SETTLE_S: a hold whose denial lines
+            # never all show ends the step anyway; a denial whose follow-up never
             # reaches the relay (a CLI that no longer behaves as measured) ends
             # the step UNHELD — the answer still goes back, the process does not
-            # park, and the next call replays to a new one.
+            # park, and the next call replays to a new one. The unheld clock
+            # starts only once the ANSWER IS COMPLETE at the relay: an eager
+            # denial of the first tool while the model is still streaming a long
+            # second one (a 900-word note) is not a missing follow-up — the
+            # normal idle timeout applies until then (measured on 2.1.316).
+            if complete_at is None:
+                now_rec = s.route.last_record(first)
+                if now_rec is not None and now_rec.capture.complete:
+                    complete_at = time.monotonic()
             settle = None
             if held is not None:
                 settle = HELD_SETTLE_S - (time.monotonic() - held_at)
-            elif denial is not None:
-                settle = HELD_SETTLE_S - (time.monotonic() - denial_at)
+            elif denial is not None and complete_at is not None:
+                settle = HELD_SETTLE_S - (time.monotonic() - complete_at)
             if settle is not None and settle <= 0:
                 end = "tools" if held is not None else "unheld"
+                settled = True
                 break
             event = await s.receive(timeouts, settle)
             if event is _EMPTY:
                 end = "tools" if held is not None else "unheld"
+                settled = True
                 break
             if event is _EOF:
                 break
@@ -1106,7 +1122,7 @@ async def _drive(
                     if isinstance(b, dict) and b.get("type") == "tool_result"
                 ] if isinstance(content, list) else []
                 if ids:
-                    denial, denial_at = frozenset(ids), time.monotonic()
+                    denial = (denial or frozenset()) | frozenset(ids)
                     if held is not None and denial == held:
                         end = "tools"
                         break
@@ -1171,7 +1187,7 @@ async def _drive(
                 key = await asyncio.to_thread(done_key, s.known, s.facts, s.scope)
                 kept = POOL.park(s, "parked_done", key)
             if kept:
-                clock.mark("live_parked", tools=len(held or ()))
+                clock.mark("live_parked", tools=len(held or ()), waited=1 if settled else 0)
         if remainder:
             got.emitted += remainder
             yield {"type": "text", "text": remainder}
@@ -1276,6 +1292,7 @@ async def run(call: T.NativeCall, *, attempt: T.Attempt | None = None) -> AsyncI
                     mode = "done"
                 if ok:
                     clock.mark("live_resume", reason=mode)
+                    log.debug("claude-cli: live session reused (%s)", mode)
                     inner = _drive(s, call, attempt, clock, mode, first=first,
                                    presented=list(s.known) + [frame])
                 else:
@@ -1286,6 +1303,9 @@ async def run(call: T.NativeCall, *, attempt: T.Attempt | None = None) -> AsyncI
             if inner is None:
                 if reason != "fresh":
                     clock.mark("live_miss", reason=reason)
+                    # The reason WORD only (a fixed vocabulary): never a path, a
+                    # body or an id. INFO: the benchmark's log counts the misses.
+                    log.info("claude-cli: live session not reused (%s); starting a new process", reason)
                 s = LiveSession(call, facts, scope, helper=_in_helper())
                 s.res.clock = clock  # one call id in the trace for this round
                 admitted, victims = POOL.admit(s)
@@ -1294,6 +1314,7 @@ async def run(call: T.NativeCall, *, attempt: T.Attempt | None = None) -> AsyncI
                 await _close_all(victims)
                 if not admitted:
                     clock.mark("live_full")
+                    log.debug("claude-cli: every kept live session is busy; this step runs one-shot")
                     inner = T.run(call, attempt=attempt)
                 elif not scope.on_close(lambda s=s: _scope_closed(s)):
                     POOL.forget(s)
@@ -1301,6 +1322,7 @@ async def run(call: T.NativeCall, *, attempt: T.Attempt | None = None) -> AsyncI
                     inner = T.run(call, attempt=attempt)
                 else:
                     clock.mark("live_new", reason=reason)
+                    log.debug("claude-cli: new live session (%s)", reason)
                     inner = _drive(s, call, attempt, clock, "new", first=0, presented=list(call.frames))
         async for out in inner:
             yield out

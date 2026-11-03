@@ -23,6 +23,11 @@ What the coordinator measured on the real Claude Code 2.1.316
 * stdin EOF: exit 0 (1 after an error or an ``error_max_turns``).
 * ``FAKE_LIVE_NO_FOLLOW_UP=1``: after a denial it does NOT post the follow-up
   (it waits on stdin) — a CLI that no longer behaves as measured.
+* ``FAKE_LIVE_EAGER=1`` (v1.427.0 fix, what 2.1.316 really does): each tool is
+  denied the MOMENT its ``tool_use`` block is complete — one ``user`` line per
+  tool — while the model may still be streaming the rest of the message; the
+  answer's SSE is read as it arrives. The follow-up still carries ONE user turn
+  with every denial.
 
 NO NETWORK beyond the loopback relay in ``ANTHROPIC_BASE_URL``. Every start
 APPENDS one JSON line to ``FAKE_LIVE_LOG``: ``{"event": "start", "pid", "argv",
@@ -73,15 +78,6 @@ def log(entry: dict) -> None:
             f.write(json.dumps(entry) + "\n")
 
 
-def parse_sse(raw: bytes) -> list[dict]:
-    events = []
-    for frame in raw.decode("utf-8", errors="replace").split("\n\n"):
-        data = "\n".join(line[5:].lstrip(" ") for line in frame.splitlines() if line.startswith("data:"))
-        if data:
-            events.append(json.loads(data))
-    return events
-
-
 def assemble(events: list[dict]) -> dict:
     message: dict = {}
     args: dict[int, str] = {}
@@ -126,16 +122,45 @@ def main() -> int:
     history: list[dict] = []
     emit({"type": "system", "subtype": "init", "model": model})
 
-    def post(body: dict) -> tuple[int | None, bytes]:
+    eager = bool(os.environ.get("FAKE_LIVE_EAGER"))
+
+    def deny(block: dict) -> dict:
+        return {"type": "tool_result", "tool_use_id": block["id"],
+                "content": DENIED.format(name=block["name"]), "is_error": True}
+
+    def post(body: dict) -> tuple[int | None, bytes, list[dict]]:
+        """``(status, error body, events)`` — a 200's SSE events are passed
+        through as ``stream_event`` lines AS THEY ARRIVE; in eager mode each
+        complete tool_use block is denied at once."""
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
                                      headers={"Content-Type": "application/json"})
+        events: list[dict] = []
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status, resp.read()
+                lines: list[str] = []
+                for raw in resp:
+                    line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                    if line:
+                        lines.append(line)
+                        continue
+                    data = "\n".join(x[5:].lstrip(" ") for x in lines if x.startswith("data:"))
+                    lines = []
+                    if not data:
+                        continue
+                    ev = json.loads(data)
+                    events.append(ev)
+                    emit({"type": "stream_event", "event": ev})
+                    if eager and ev.get("type") == "content_block_stop":
+                        block = assemble(events)["content"][ev["index"]]
+                        if block.get("type") == "tool_use":
+                            emit({"type": "assistant", "message": {"role": "assistant", "content": [block]}})
+                            emit({"type": "system", "subtype": "permission_denied"})
+                            emit({"type": "user", "message": {"role": "user", "content": [deny(block)]}})
+                return resp.status, b"", events
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read()
+            return exc.code, exc.read(), []
         except Exception as exc:  # noqa: BLE001 — the relay hung up
-            return None, type(exc).__name__.encode()
+            return None, type(exc).__name__.encode(), []
 
     def query() -> str:
         turns = 0
@@ -148,7 +173,7 @@ def main() -> int:
                     "tools": extra.get("tools") or []}
             if extra.get("output_config"):
                 body["output_config"] = extra["output_config"]
-            status, raw = post(body)
+            status, raw, events = post(body)
             if status != 200:
                 text = "API Error: Connection error." if status is None else f"API Error: {status} {raw[:200]!r}"
                 emit({"type": "assistant", "error": "unknown", "is_api_error_message": True,
@@ -157,11 +182,9 @@ def main() -> int:
                 emit({"type": "result", "subtype": "success", "is_error": True, "num_turns": turns + 1,
                       "result": text, "total_cost_usd": 0.5})
                 return "error"
-            events = parse_sse(raw)
-            for ev in events:
-                emit({"type": "stream_event", "event": ev})
             message = assemble(events)
-            emit({"type": "assistant", "message": message})
+            if not eager or message.get("stop_reason") != "tool_use":
+                emit({"type": "assistant", "message": message})
             history.append({"role": "assistant", "content": message.get("content") or []})
             turns += 1
             if message.get("stop_reason") == "tool_use":
@@ -171,10 +194,10 @@ def main() -> int:
                           "num_turns": turns, "total_cost_usd": 0.5,
                           "usage": message.get("usage") or {}})
                     return "error_max_turns"
-                emit({"type": "system", "subtype": "permission_denied"})
-                denials = [{"type": "tool_result", "tool_use_id": b["id"],
-                            "content": DENIED.format(name=b["name"]), "is_error": True} for b in uses]
-                emit({"type": "user", "message": {"role": "user", "content": denials}})
+                denials = [deny(b) for b in uses]
+                if not eager:  # (eager: each was denied as its block completed)
+                    emit({"type": "system", "subtype": "permission_denied"})
+                    emit({"type": "user", "message": {"role": "user", "content": denials}})
                 emit({"type": "rate_limit_event"})
                 history.append({"role": "user", "content": denials})
                 if os.environ.get("FAKE_LIVE_NO_FOLLOW_UP"):

@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import http.client
 import json
+import logging
 import os
 import stat
 import sys
@@ -92,6 +93,9 @@ class Upstream:
         self.statuses: list[int] = []
         #: A step answered ONCE with a 429 (a rate-limit body) instead.
         self.limited_steps: set[int] = set()
+        #: v1.427.0 fix: a step with two or more tools pauses this long after the
+        #: FIRST tool's block is complete (a long second input still streaming).
+        self.pause_s = 0.0
         self.reached = threading.Event()
         self.release = threading.Event()
         owner = self
@@ -131,13 +135,27 @@ class Upstream:
                     self.end_headers()
                     self.wfile.write(data)
                     return
-                data = owner.answer(body)
+                if owner.pause_s:
+                    events = owner.answer_events(body)
+                    data = _sse(events)
+                    tool_stops = [i for i, e in enumerate(events) if e["type"] == "content_block_stop"
+                                  and events[i - 2].get("content_block", {}).get("type") == "tool_use"]
+                    # The model is still writing the SECOND tool's input after
+                    # the first tool's block is complete.
+                    cut = len(_sse(events[:tool_stops[0] + 1])) if len(tool_stops) >= 2 else len(data)
+                else:
+                    data = owner.answer(body)  # (a subclass may answer in its own words)
+                    cut = len(data)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
-                self.wfile.write(data)
+                self.wfile.write(data[:cut])
                 self.wfile.flush()
+                if cut < len(data):
+                    time.sleep(owner.pause_s)
+                    self.wfile.write(data[cut:])
+                    self.wfile.flush()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Peer)
         self.server.daemon_threads = True
@@ -147,6 +165,9 @@ class Upstream:
         self.url = f"http://127.0.0.1:{self.server.server_port}"
 
     def answer(self, body: dict) -> bytes:
+        return _sse(self.answer_events(body))
+
+    def answer_events(self, body: dict) -> list[dict]:
         step = sum(1 for m in body.get("messages") or [] if m.get("role") == "assistant")
         kind, payload = self.steps[min(step, len(self.steps) - 1)]
         usage = {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 4,
@@ -175,7 +196,7 @@ class Upstream:
             stop = "end_turn"
         events += [{"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 7}},
                    {"type": "message_stop"}]
-        return _sse(events)
+        return events
 
     def stop(self) -> None:
         self.release.set()
@@ -779,3 +800,72 @@ async def test_a_rate_limit_mid_reply_raises_what_todays_path_raises_and_ends_th
         await _call(ad, _answer(msgs, first))
     assert str(today_err.value) == str(live_err.value)
     assert today_err.value.retry_after == live_err.value.retry_after
+
+
+# --------------------------------------------------------------------------- #
+# 8. EAGER denials (the real 2.1.316): one denial line per tool, the first while
+#    the model is still writing the rest of the message
+# --------------------------------------------------------------------------- #
+TWO_TOOLS = [("tools", [("read_file", {"path": "a"}), ("read_file", {"path": "b" * 4000})]),
+             ("text", "Done")]
+
+
+async def test_an_eager_denial_while_the_answer_still_streams_does_not_end_the_step(
+        tmp_path, upstream, monkeypatch, trace):
+    """The benchmark's frontier-inventory-filter on real Sonnet (and get_number +
+    a 900-word save_note on real Haiku): Claude Code denied the first tool the
+    moment its block was complete; the model was still writing the second
+    tool's long input 2 s later, so the step ended "unheld" with the relay's
+    capture incomplete and raised DROPPED — every attempt, every retry."""
+    monkeypatch.setenv("FAKE_LIVE_EAGER", "1")
+    monkeypatch.setattr(live, "HELD_SETTLE_S", 0.3)
+    up = upstream(TWO_TOOLS)
+    up.pause_s = 1.5  # five times the settle: the second input is still streaming
+    ad = _adapter(tmp_path, up)
+    async with _scope():
+        _, final, responses = await _reply(ad, [_user()])
+        assert len(_starts()) == 1, "the step parked and the next one resumed"
+        assert len(responses[0].tool_calls) == 2
+        assert _results_in(up.bodies[1]) == ["REAL-a", "REAL-" + "b" * 4000]
+        assert all(DENIAL not in json.dumps(b) for b in up.bodies)
+        assert final.text.startswith("Done REAL-a|REAL-b")
+    assert _phases(trace, "live_unheld") == []
+    assert [i.get("reason") for i in _phases(trace, "live_resume")] == ["tools"]
+
+
+async def test_a_two_tool_step_with_one_denial_line_per_tool_ends_at_once(
+        tmp_path, upstream, monkeypatch, trace):
+    """Eager denials arrive one line per tool: the ids are gathered across the
+    step's lines, so the step ends when the relay holds the follow-up — it never
+    waits out HELD_SETTLE_S (set far longer than any test here)."""
+    monkeypatch.setenv("FAKE_LIVE_EAGER", "1")
+    monkeypatch.setattr(live, "HELD_SETTLE_S", 60.0)
+    up = upstream(TWO_TOOLS)
+    ad = _adapter(tmp_path, up)
+    async with _scope():
+        _, final, responses = await _reply(ad, [_user()])
+        assert len(_starts()) == 1 and final.text.startswith("Done REAL-a|REAL-b")
+    parked = _phases(trace, "live_parked")
+    assert parked and parked[0]["tools"] == 2
+    assert parked[0]["waited"] == 0, "the step waited out HELD_SETTLE_S"
+
+
+async def test_each_miss_is_one_info_line_naming_only_its_reason(tmp_path, upstream, caplog):
+    """The benchmark's log is how the misses are counted: one INFO line per miss,
+    the reason WORD only (never a path, a body or an id); a resume and a new
+    session are DEBUG."""
+    caplog.set_level(logging.DEBUG, logger="ironjarvis.claude_native")
+    up = upstream(THREE)
+    ad = _adapter(tmp_path, up)
+    async with _scope():
+        msgs = [_user("fix it")]
+        msgs = _answer(msgs, await _call(ad, msgs))
+        msgs = _answer(msgs, await _call(ad, msgs))  # a resume
+        msgs[0] = _user("fix it, please")
+        await _call(ad, msgs)  # an edited history: a miss
+    rows = [(r.levelno, r.getMessage()) for r in caplog.records if "live session" in r.getMessage()]
+    misses = [m for lvl, m in rows if lvl == logging.INFO]
+    assert misses == ["claude-cli: live session not reused (edited); starting a new process"]
+    assert (logging.DEBUG, "claude-cli: live session reused (tools)") in rows
+    assert (logging.DEBUG, "claude-cli: new live session (fresh)") in rows
+    assert (logging.DEBUG, "claude-cli: new live session (edited)") in rows

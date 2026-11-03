@@ -73,11 +73,19 @@ a new one replays the conversation. A miss is never an error.
   one request per stdin message we wrote, or the sign-in retry goes
   upstream; everything else gets the CONSUMED refusal, as today.
 * **The step's end.** A tool step ends when the relay holds the follow-up and
-  the CLI's own denial line has been read (whichever comes second, within
-  2 s); a text step ends at `result`. A denial whose follow-up never reaches
-  the relay ends the step "unheld": the answer still goes back, the process
-  is ended, the next call replays. A query that reaches `--max-turns` (1000)
-  ends at the tool boundary the same way.
+  the CLI's denial lines cover every held call (whichever comes second, within
+  2 s); a text step ends at `result`. Claude Code denies EAGERLY — one line
+  per tool, the moment that tool's block is complete, while the model may
+  still be writing the rest (measured on 2.1.316: get_number denied while a
+  900-word save_note was still streaming) — so the denials are gathered
+  across the step's lines, and a denial whose follow-up never reaches the
+  relay ends the step "unheld" only 2 s after the answer is COMPLETE at the
+  relay (until then the call's idle timeout applies): the answer still goes
+  back, the process is ended, the next call replays. A query that reaches
+  `--max-turns` (1000) ends at the tool boundary the same way.
+* **The log.** Each miss is one INFO line naming its reason word only
+  ("claude-cli: live session not reused (edited); starting a new process");
+  a resume and a new session are DEBUG.
 * **Resume.** Exactly what the process holds plus ONE user frame: after a
   held step, the leading tool_result blocks answer exactly the held ids (any
   order) and only text or pictures follow; after a text answer, no
