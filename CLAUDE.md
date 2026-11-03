@@ -12814,6 +12814,15 @@ does not need a bump, stop and bump it.
   3 survivors are redundant halves; `FAKE_LIVE_EAGER=1` + the upstream's
   `pause_s` pin the eager denial, 4 more mutations red),
   `tests/test_claude_live_review_v1427.py` (3 mutations red).
+  v1.427.0 WAS NOT PUBLISHED (its Release gate went red, both Tests runs
+  green; v1.427.1 ships it): `test_chat_account_extras_v14240::test_a_hand_
+  off_whose_account_went_off_since_…` started a hand-off with `wait: False`,
+  slept a FIXED 0.5 s and then continued it; on the slower release runner the
+  hand-off was still running and the follow-up was refused 409 "A follow-up
+  is already running". It now waits until the hand-off's own run has ENDED
+  (`_ended`, polling GET /sessions/{id}). A model held 1.5 s by a scratch
+  plugin reproduced CI's exact 409 on the old shape; the new shape passes
+  with it held.
 
 - **"My latest emails" is the mail KIND, a feature question asks the Guide,
   and a Build › Code file can be reverted per message** (v1.420.0, fix plan

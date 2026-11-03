@@ -161,6 +161,25 @@ async def test_a_hand_off_on_an_account_it_cannot_use_is_a_409_before_any_sessio
     assert rows["sessions"] == []
 
 
+async def _ended(app, sid: str, bound_s: float = 60.0) -> str:
+    """Wait until the hand-off's own run has ENDED (v1.427.1: the release
+    gate's slower runner was still running it after the fixed 0.5 s this test
+    used to sleep, so the follow-up was refused "A follow-up is already
+    running" — a wait on the thing asserted, never on a clock). A bound is a
+    hang detector, not a speed bar."""
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + bound_s
+    while True:
+        _, view = await asgi(app, "GET", f"/sessions/{sid}")
+        state = ((view or {}).get("session") or {}).get("status")
+        if state not in ("active", "queued"):
+            return str(state)
+        assert time.monotonic() < deadline, f"the hand-off never ended ({state})"
+        await asyncio.sleep(0.05)
+
+
 async def test_a_hand_off_whose_account_went_off_since_fails_in_words_never_another_login(
     app, fake, monkeypatch
 ):
@@ -173,7 +192,7 @@ async def test_a_hand_off_whose_account_went_off_since_fails_in_words_never_anot
         "origin": "chat", "account": "c-spare",
     })
     assert status == 200, view
-    await asyncio.sleep(0.5)
+    await _ended(app, view["id"])
     beh.leases.clear()
     fake.profiles["c-spare"]["enabled"] = False
     await asyncio.to_thread(app.state.platform.iron_proxy.refresh_accounts)
