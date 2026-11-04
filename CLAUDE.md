@@ -4632,7 +4632,8 @@ does not need a bump, stop and bump it.
   background thread, single-flight; started by `HostedService._models(PI)`
   (off the loop) when the kept read is missing, older than `CATALOG_TTL_S`
   (600 s) or Pi's own `models.json` / `auth.json` / `settings.json` /
-  `models-store.json` changed (a stat each, `watch_signature`).
+  `models-store.json` changed (a stat each, `watch_signature`); after a read
+  Pi did not answer the next waits `RETRY_AFTER_FAIL_S` (300 s).
   `AUTO_PROBE` is OFF for the whole suite (`tests/conftest.py`); a test turns
   it on with a fake Pi. The harness row carries `models_reading` (the page
   re-reads the tool list `TOOLS_REREAD_TRIES` 5 times, `TOOLS_REREAD_MS` 2 s
@@ -4678,7 +4679,7 @@ does not need a bump, stop and bump it.
   session's Pi runs; compact during a run is not offered (a message waits for
   the reply anyway). Pins: `tests/test_build_app_pi_models_v1429.py` (+ the
   recording `tests/fixtures/build_app_v1429/pi_catalog.json`, a SCRATCH
-  config, paths masked; 25 mutations red), contract
+  config, paths masked; 26 mutations red), contract
   `dashboard/__tests__/fixtures/build-app-pi-models-v1429.json`
   (`IJ_REGEN_BUILD_APP_PI_MODELS=1`), `dashboard/__tests__/build-app-pi-models-v1429.test.tsx`
   (11 mutations red); moved on purpose: `test_build_app_pi_v1411` (gpt-6-astra

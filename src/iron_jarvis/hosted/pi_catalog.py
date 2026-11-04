@@ -48,9 +48,14 @@ PROBE_ARGS: tuple[str, ...] = ("--mode", "rpc", "--no-session", "--offline", "--
 WATCHED: tuple[str, ...] = ("models.json", "auth.json", "settings.json", "models-store.json")
 #: The suite turns the background read off (tests/conftest.py).
 AUTO_PROBE = True
+#: After a read Pi did not answer, the next one waits this long (a Pi that
+#: hangs at start must not cost a 20-second run at every look at the list).
+RETRY_AFTER_FAIL_S = 300.0
 
 _LOCK = threading.Lock()
 _RUNNING: set[str] = set()
+#: path -> when its last read failed (monotonic seconds).
+_FAILED_AT: dict[str, float] = {}
 
 
 def watch_signature(agent: Path | None = None) -> list[list[Any]]:
@@ -95,6 +100,9 @@ def refresh_soon(path: Path, home: Path, argv0: list[str]) -> bool:
     with _LOCK:
         if key in _RUNNING:
             return True
+        failed = _FAILED_AT.get(key)
+    if failed is not None and time.monotonic() - failed < RETRY_AFTER_FAIL_S:
+        return False
     doc = P._read_doc(path)
     if not is_stale(doc, watch=watch_signature()):
         return False
@@ -107,11 +115,17 @@ def refresh_soon(path: Path, home: Path, argv0: list[str]) -> bool:
 
 
 def _refresh(path: Path, home: Path, argv0: list[str]) -> None:
+    ok = False
     try:
-        read_now(path, home, argv0)
+        ok = read_now(path, home, argv0)
     except Exception:  # noqa: BLE001 — a background read never raises anywhere
         log.debug("could not read Pi's model list", exc_info=True)
     finally:
+        with _LOCK:
+            if ok:
+                _FAILED_AT.pop(str(path), None)
+            else:
+                _FAILED_AT[str(path)] = time.monotonic()
         with _LOCK:
             _RUNNING.discard(str(path))
 

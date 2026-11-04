@@ -501,3 +501,26 @@ async def test_export_names_the_file_pi_wrote_in_the_sessions_folder(tmp_path, m
         await stop_all(app)
     wrote = os.path.normpath(os.path.join(str(work), "pi-session-2026-11-04.html"))
     assert [e["text"] for e in evs if e["type"] == "notice"] == [f"Pi saved the conversation as {wrote}."]
+
+
+async def test_after_a_read_pi_did_not_answer_the_next_waits_a_while(tmp_path, monkeypatch, fresh):
+    gone = tmp_path / "gone.py"
+    gone.write_text("import sys; sys.exit(3)\n", encoding="utf-8")
+    monkeypatch.setattr(S, "binary_for", lambda harness: [sys.executable, str(gone)])
+    monkeypatch.setattr(PC, "AUTO_PROBE", True)
+    monkeypatch.setattr(PC, "_FAILED_AT", {})
+    tries: list[int] = []
+    real = PC.read_now
+    monkeypatch.setattr(PC, "read_now", lambda *a: tries.append(1) or real(*a))
+    app = create_app(str(tmp_path / "home"))
+    svc = S.service_for(app.state.platform)
+    async with client(app) as c:
+        await c.get("/build/app/harnesses")
+        await until(lambda: tries and not PC.reading(svc._pi_catalog))
+        pi = {r["id"]: r for r in (await c.get("/build/app/harnesses")).json()["harnesses"]}["pi"]
+        await asyncio.sleep(0.2)
+        assert len(tries) == 1, "a failed read is not tried again at once"
+        assert "models_reading" not in pi
+        monkeypatch.setattr(PC, "RETRY_AFTER_FAIL_S", 0.0)
+        await c.get("/build/app/harnesses")
+        await until(lambda: len(tries) == 2 and not PC.reading(svc._pi_catalog))
