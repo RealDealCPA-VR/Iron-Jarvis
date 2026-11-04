@@ -3425,10 +3425,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
              "help": "Set to true to let allowlisted people DM the bot and get "
                      "agent replies. Off by default."},
+            {"key": "chat_enabled", "label": "Chat with Iron Jarvis (true/false)", "secret": False,
+             "help": "Set to true to hold a real conversation with Iron Jarvis "
+                     "in your Slack messages with the bot — replies remember "
+                     "the thread, and the conversation shows up live on the "
+                     "desktop. Chat implies listening: turning this on also "
+                     "turns two-way ON when saved."},
             {"key": "allowed_senders", "label": "Allowlist (Slack member IDs)", "secret": False,
-             "help": "Comma-separated member IDs (U0123…, profile → three dots → "
-                     "Copy member ID). FAIL-CLOSED: empty allowlist = nobody may "
-                     "command the bot."},
+             "help": "Comma-separated member IDs (U0123…). Yours: in Slack, click "
+                     "your profile picture → Profile → ⋯ → Copy member ID. "
+                     "FAIL-CLOSED: an empty allowlist means nobody may message "
+                     "Jarvis, so it does not listen at all."},
         ],
         "discord": [
             {"key": "webhook_url", "label": "Webhook URL", "secret": False,
@@ -3477,6 +3484,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     "background_color": "#0a0c11"
   },
   "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
     "bot_user": {
       "display_name": "Iron Jarvis",
       "always_online": true

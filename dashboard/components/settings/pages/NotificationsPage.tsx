@@ -59,7 +59,18 @@ interface ChannelInfo {
    *  While set, the destination is NOT listening, whatever the last test said. */
   last_poll_error?: string | null;
   last_poll_error_at?: string | null;
+  /** v1.427.6: field keys that hold something (names only — never a secret),
+   *  so Edit can keep them when their box is left blank. */
+  saved_fields?: string[];
+  /** v1.427.6: the stored plain values Edit may show (no webhook, no ids). */
+  values?: Record<string, string>;
+  /** v1.427.6: why two-way cannot hear the user yet; empty/absent = it can. */
+  two_way_note?: string | null;
 }
+
+/** v1.427.6: a saved field the form is never handed back (the daemon's
+ *  ``HIDDEN_VALUES``): its box stays blank and says it is saved. */
+const HIDDEN_VALUE_KEYS = new Set(["webhook_url", "allowed_senders"]);
 
 /** A field the add-form must collect for a given channel type. */
 interface ChannelField {
@@ -283,6 +294,13 @@ export default function ChannelsPage() {
   // Non-null when the add form is reconfiguring an EXISTING channel (Edit). The
   // add endpoint replaces on the same name, so Edit = re-submit through it.
   const [editing, setEditing] = useState<string | null>(null);
+  // v1.427.6: what the destination being edited already holds. A blank box
+  // KEEPS its saved value (the daemon's rule); "Remove" puts a key in
+  // `clearKeys`; a shown value the user erased is removed too.
+  const [editSaved, setEditSaved] = useState<string[]>([]);
+  const [editShown, setEditShown] = useState<Record<string, string>>({});
+  const [editSendersCount, setEditSendersCount] = useState(0);
+  const [clearKeys, setClearKeys] = useState<string[]>([]);
   // Advanced fields collapsed by default (v1.118.0): Slack used to present
   // NINE fields as equals; the easy path is one webhook URL.
   const [advOpen, setAdvOpen] = useState(false);
@@ -431,10 +449,24 @@ export default function ChannelsPage() {
       selectedType?.fields.forEach((f) => {
         config[f.key] = addValues[f.key] ?? "";
       });
+      if (editing) {
+        // A value the form showed and the user erased means "remove it" —
+        // a blank box otherwise keeps what is saved (the daemon's rule).
+        const erased = Object.keys(editShown).filter(
+          (k) => !(addValues[k] ?? "").trim(),
+        );
+        const clear = Array.from(new Set([...clearKeys, ...erased]));
+        if (clear.length) config["clear"] = clear;
+      }
       // Full set = everything = omit (the server treats absent as all).
       if (addEvents.length && addEvents.length < EVENT_LABELS.length)
         config["events"] = addEvents;
-      await post("/comm/channels", { name, type: addType, config });
+      const saved = await post<{ two_way_note?: string }>("/comm/channels", {
+        name,
+        type: addType,
+        config,
+      });
+      const twoWayNote = (saved && typeof saved === "object" && saved.two_way_note) || "";
       // ADDING IS TESTING (v1.118.0): a destination that only fails later, the
       // night it mattered, is the exact trap this flow exists to remove. Send
       // the real test now; green means delivered, red keeps the form open with
@@ -459,7 +491,8 @@ export default function ChannelsPage() {
         return; // form stays open; the row already shows its red state
       }
       setAddSuccess(
-        `“${name}” ${editing ? "updated" : "added"} — test message delivered ✓`,
+        `“${name}” ${editing ? "updated" : "added"} — test message delivered ✓` +
+          (twoWayNote ? ` ${twoWayNote}` : ""),
       );
       setAddName("");
       setAddType("");
@@ -487,12 +520,24 @@ export default function ChannelsPage() {
     // that opened with the toggles blank would silently switch two-way OFF —
     // and a toggle that reads as the setting must BE the setting (v1.127.0).
     // Older daemons omit these GET fields; then this seeds nothing (status quo).
-    const seed: Record<string, string> = {};
+    // v1.427.6: the stored plain values (a channel, a chat ID, a mail host)
+    // fill their boxes; secrets, the webhook and the allowlist stay blank and
+    // say they are saved — a blank box keeps them.
+    const shown: Record<string, string> = { ...(c.values ?? {}) };
+    const seed: Record<string, string> = { ...shown };
     if (typeof c.inbound_enabled === "boolean")
       seed.inbound_enabled = String(c.inbound_enabled);
     if (typeof c.chat_enabled === "boolean")
       seed.chat_enabled = String(c.chat_enabled);
     setAddValues(seed);
+    setEditShown(shown);
+    setEditSaved(c.saved_fields ?? []);
+    setEditSendersCount(c.allowed_senders_count ?? 0);
+    setClearKeys([]);
+    // What is saved under Advanced (Slack's bot and app tokens) is shown, so
+    // the user sees it is kept instead of hunting for it.
+    const primary = PRIMARY_KEYS[c.type];
+    setAdvOpen(!!primary && (c.saved_fields ?? []).some((k) => !primary.includes(k)));
     setShowAdd(true);
     setAddError(null);
     setAddSuccess(null);
@@ -566,23 +611,11 @@ export default function ChannelsPage() {
             <form onSubmit={addChannel} className="space-y-3.5">
               {editing && (
                 <div className="rounded-xl border border-accent/20 bg-accent/[0.05] px-3.5 py-2.5 text-[12px] leading-relaxed text-zinc-300">
-                  Re-enter the details to update{" "}
-                  <span className="font-mono text-accent-soft">{editing}</span>. For
-                  your security, saved secrets aren&apos;t shown — re-paste the ones
-                  you&apos;re setting (Slack: a webhook URL, or a bot token + a
-                  channel).
-                  {selectedType?.fields.some((f) => f.key === "allowed_senders") && (
-                    <>
-                      {" "}
-                      The allowed senders list starts blank here too — re-enter
-                      it{" "}
-                      {(PRIMARY_KEYS[addType] ?? []).includes("allowed_senders")
-                        ? "below (with chat on, your chat ID fills it in)"
-                        : "under Advanced"}
-                      , or saving clears it (it fails closed: empty allows
-                      nobody).
-                    </>
-                  )}
+                  Change what you need in{" "}
+                  <span className="font-mono text-accent-soft">{editing}</span> and
+                  leave the rest: a blank box keeps what&apos;s saved. Saved tokens
+                  and secrets aren&apos;t shown, for your security — type a new one
+                  only to replace it.
                 </div>
               )}
               {editing ? (
@@ -715,10 +748,22 @@ export default function ChannelsPage() {
                     <input
                       id={`${fid}-f-${f.key}`}
                       type={f.secret ? "password" : "text"}
-                      value={addValues[f.key] ?? ""}
-                      onChange={(e) =>
-                        setAddValues((v) => ({ ...v, [f.key]: e.target.value }))
+                      placeholder={
+                        editing &&
+                        editSaved.includes(f.key) &&
+                        !clearKeys.includes(f.key) &&
+                        (f.secret || HIDDEN_VALUE_KEYS.has(f.key))
+                          ? f.key === "allowed_senders"
+                            ? `${editSendersCount} saved — leave blank to keep`
+                            : "Saved — leave blank to keep it"
+                          : undefined
                       }
+                      value={addValues[f.key] ?? ""}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setAddValues((v) => ({ ...v, [f.key]: next }));
+                        if (next) setClearKeys((k) => k.filter((x) => x !== f.key));
+                      }}
                       // A chat ID typed by hand counts once the box is left
                       // (never per keystroke: "1", "12"… are not senders).
                       onBlur={
@@ -730,6 +775,40 @@ export default function ChannelsPage() {
                       autoComplete="off"
                       className={`field text-sm ${f.secret ? "font-mono" : ""}`}
                     />
+                    {editing &&
+                      editSaved.includes(f.key) &&
+                      (f.secret || HIDDEN_VALUE_KEYS.has(f.key)) && (
+                        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                          {clearKeys.includes(f.key) ? (
+                            <>
+                              <span data-testid={`channel-clear-note-${f.key}`}>
+                                The saved one will be removed when you save.
+                              </span>{" "}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setClearKeys((k) => k.filter((x) => x !== f.key))
+                                }
+                                className="text-accent-soft hover:underline"
+                              >
+                                Keep it
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              data-testid={`channel-clear-${f.key}`}
+                              onClick={() => {
+                                setClearKeys((k) => (k.includes(f.key) ? k : [...k, f.key]));
+                                setAddValues((v) => ({ ...v, [f.key]: "" }));
+                              }}
+                              className="text-zinc-400 hover:text-zinc-200 hover:underline"
+                            >
+                              Remove the saved one
+                            </button>
+                          )}
+                        </p>
+                      )}
                     {help && (
                       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{help}</p>
                     )}
@@ -1061,6 +1140,17 @@ export default function ChannelsPage() {
                         {/* v1.231.0 (AE8): a dead token used to read "Working —
                             tested 3 days ago" forever; the daemon's last failed
                             poll now lands on the row, with the fix in its words. */}
+                        {/* v1.427.6: two-way is on but cannot hear the user
+                            (an empty allowlist, no app token…), said where the
+                            user looks — not only in the logs. */}
+                        {c.two_way_note && (
+                          <span
+                            data-testid={`channel-two-way-note-${c.name}`}
+                            className="block text-[11px] text-tone-warn"
+                          >
+                            {c.two_way_note}
+                          </span>
+                        )}
                         {c.last_poll_error && (
                           <span
                             data-testid={`channel-poll-error-${c.name}`}
