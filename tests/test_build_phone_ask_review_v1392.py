@@ -27,6 +27,7 @@ from iron_jarvis.daemon.routes import chat as chat_routes
 from iron_jarvis.harness import stall
 from iron_jarvis.providers.adapters.base import ToolCall
 from tests.test_build_phone_ask_v1392 import (
+    _answerable,
     CHAT_CFG,
     ChatMockChannel,
     FakeClock,
@@ -179,6 +180,7 @@ async def test_a_batch_card_on_the_phone_says_how_many_calls_ride_on_it(app, wor
         clock.advance(301)
         assert await until(lambda: ch.sent, 30)
         assert "(2 calls)" in ch.sent[0] and "echo" not in ch.sent[0]
+        await _answerable(app)
         res = await app.state.inbound_poller._handle("tg", ch, _msg("approve"))
         assert res["status"] == "approval_answered" and res["decision"] == "once"
         lg = turn_log(app, "bt-batch")

@@ -4330,7 +4330,14 @@ does not need a bump, stop and bump it.
   or an indexer reading the file never fails the switch. Pin:
   `tests/test_profile_share_replace_race_v14274.py` (3 mutations red). A
   file Jarvis writes with temp + `os.replace` is READ under the same lock
-  as its writes.
+  as its writes. SAME RELEASE (test-only; v1.427.5's first Tests run went
+  red): `test_build_phone_ask_review_v1392`'s batch card answered "approve"
+  as soon as the phone HEARD the question, but the notifier's send and
+  `comm/prompts`' record of it are two event handlers, so the answer landed
+  first and read as a chat (`'chat' == 'approval_answered'`). Both phone
+  tests now wait for `_answerable(app)` (the poller's
+  `_fresh_open_prompt`); recording the question 0.5 s late reproduced CI's
+  exact error on the old shape.
 
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died

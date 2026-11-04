@@ -133,6 +133,20 @@ async def _armed(ticks) -> None:
     await _looks(ticks, 1)
 
 
+async def _answerable(app) -> None:
+    """v1.427.5: wait until the phone's question is RECORDED before the test
+    answers it. The phone hears the question (the notifier) and the app
+    records it as answerable (``comm/prompts``, another event handler) as two
+    steps; a test that answered as soon as the phone heard it could answer in
+    between, and "approve" read as a new chat message (a loaded CI runner,
+    ``'chat' == 'approval_answered'``; reproduced by recording the question
+    half a second late). A person cannot answer in that gap."""
+    poller = app.state.inbound_poller
+    assert await until(lambda: poller._fresh_open_prompt("tg", "777") is not None, 30), (
+        "the phone's question was never recorded"
+    )
+
+
 def _msg(text: str, update_id: int = 1) -> InboundMessage:
     return InboundMessage(sender_id="777", text=text, update_id=update_id, reply_to="777")
 
@@ -174,6 +188,7 @@ async def test_a_card_unanswered_for_five_minutes_goes_to_the_phone_and_the_phon
         status, listed = await asgi(app, "GET", "/chat/approvals/pending")
         assert status == 200 and not [a for a in listed["approvals"] if a.get("id") == card["id"]]
         # The phone's approve resolves the card like the press in the app.
+        await _answerable(app)
         res = await app.state.inbound_poller._handle("tg", ch, _msg("approve"))
         assert res["status"] == "approval_answered", res
         lg = turn_log(app, "bt-ph")
