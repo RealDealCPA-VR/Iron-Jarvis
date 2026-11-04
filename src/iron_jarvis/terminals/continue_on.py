@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..iron_proxy import accounts as _acc
+from ..iron_proxy import claude_identity as _ci_words
 from . import pane_accounts as _pa
 
 log = logging.getLogger(__name__)
@@ -76,12 +77,9 @@ NO_OTHER = (
 #: v1.427.3 (a USER BUG): an account signed in to the SAME Claude account as
 #: the one the session is on shares its usage limit — moving there can never
 #: help (``iron_proxy.claude_identity``).
-SAME_LOGIN = '"{title}" is signed in to the same Claude account as "{current}", so it shares that limit'
-SAME_LOGIN_FIX = (
-    "To give an account its own limit, press Sign in beside it on the Connections page "
-    "(Iron-Proxy card) and sign in with that account's own Claude login: sign out of "
-    "claude.ai in your browser first, or open the sign-in link in a private window."
-)
+#: v1.427.4: one copy of the words, in ``iron_proxy.claude_identity``.
+SAME_LOGIN = _ci_words.SAME_LOGIN
+SAME_LOGIN_FIX = _ci_words.SAME_LOGIN_FIX
 
 
 class ContinueRefused(Exception):

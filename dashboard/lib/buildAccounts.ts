@@ -265,14 +265,26 @@ export function setSessionAccount(sessionId: string, account: string, model?: st
   );
 }
 
+/** v1.427.4: under another account at its limit in the limit card's list —
+ *  picking it there tries it anyway (the daemon clears its limit mark first;
+ *  the mark can be a guess, and the user may know it has usage left). */
+export const TRY_LIMITED_NOTE = "Picking it tries it anyway: its limit mark is cleared first.";
+
 /** "Choose account" on the limit card: set it and continue at once.
- *  Answers the session (raw) and the continuing turn's id ("" = none). */
+ *  Answers the session (raw) and the continuing turn's id ("" = none).
+ *  v1.427.4: `force` tries an account Iron-Proxy marked as at its limit
+ *  anyway (the daemon clears the mark first); the daemon refuses an account
+ *  signed in to the same Claude account as the session's (409, `same_login`). */
 export async function chooseAccountAndContinue(
   sessionId: string,
   account: string,
+  force = false,
 ): Promise<{ session: unknown; turnId: string }> {
   const res = rec(
-    await post<unknown>(`/build/sessions/${encodeURIComponent(sessionId)}/account`, { account, continue: true }),
+    await post<unknown>(
+      `/build/sessions/${encodeURIComponent(sessionId)}/account`,
+      force ? { account, continue: true, force: true } : { account, continue: true },
+    ),
   );
   return { session: res?.session ?? null, turnId: str(res?.turn_id, 80) };
 }

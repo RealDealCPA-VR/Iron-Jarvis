@@ -44,6 +44,7 @@ import {
   limitCardLine,
   limitCardWords,
   limitWaitingWords,
+  TRY_LIMITED_NOTE,
   vendorPlanLine,
   type AccountLimit,
   type AccountVendor,
@@ -78,6 +79,7 @@ export function AccountCard({
   onPick,
   onMakeDefault,
   busy,
+  tryNote,
 }: {
   account: BuildAccount;
   /** The session runs on this account. */
@@ -86,6 +88,9 @@ export function AccountCard({
   onPick?: () => void;
   onMakeDefault?: () => void;
   busy?: boolean;
+  /** v1.427.4: what picking it does when it is at its limit (the limit
+   *  card's list only: picking it there tries it anyway). */
+  tryNote?: string;
 }) {
   const line = accountStatusLine(account);
   // v1.377.0 (Phase 6): the model menu's rule, one function — turned off and
@@ -151,6 +156,11 @@ export function AccountCard({
           )}
         </div>
       ) : null}
+      {tryNote ? (
+        <p data-testid={`account-try-note-${account.id}`} className="mt-0.5 pl-[22px] text-[12px] text-zinc-500">
+          {tryNote}
+        </p>
+      ) : null}
       {onMakeDefault && !account.isDefault ? (
         <button
           type="button"
@@ -174,6 +184,7 @@ export function AccountList({
   onMakeDefault,
   busy,
   title,
+  triesLimited,
 }: {
   view: AccountsView;
   currentId: string | null;
@@ -181,6 +192,9 @@ export function AccountList({
   onMakeDefault: (a: BuildAccount) => void;
   busy?: boolean;
   title?: string;
+  /** v1.427.4: picking another account at its limit tries it anyway (the
+   *  limit card's list): each such row says so. */
+  triesLimited?: boolean;
 }) {
   const { groups, ironProxy } = view;
   const empty = ACCOUNT_VENDORS.every((v) => groups[v].length === 0);
@@ -214,6 +228,9 @@ export function AccountList({
                   onPick={onPick ? () => onPick(a) : undefined}
                   onMakeDefault={() => onMakeDefault(a)}
                   busy={busy}
+                  tryNote={
+                    triesLimited && onPick && a.status === "limit" && a.id !== currentId ? TRY_LIMITED_NOTE : undefined
+                  }
                 />
               ))}
             </div>

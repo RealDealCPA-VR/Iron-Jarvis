@@ -499,6 +499,43 @@ def usable_now(row: Mapping[str, Any] | None, state: Mapping[str, Any] | None,
     return peak is None or peak < TAKEOVER_MAX_PERCENT
 
 
+def home_of(snap: tuple[list[dict[str, Any]], dict[str, Any]] | None, account_id: str) -> str:
+    """The home folder Iron-Proxy runs ``account_id``'s CLI from (its
+    ``cli.home``), or "" when the snapshot does not say. Never raises."""
+    if snap is None or not account_id:
+        return ""
+    for prof in snap[0]:
+        if isinstance(prof, Mapping) and str(prof.get("id") or "") == account_id:
+            cli = prof.get("cli") if isinstance(prof.get("cli"), Mapping) else {}
+            return str(cli.get("home") or "").strip()
+    return ""
+
+
+def shares_login(snap: tuple[list[dict[str, Any]], dict[str, Any]] | None, a: str, b: str) -> bool:
+    """v1.427.4: are the CLAUDE accounts ``a`` and ``b`` signed in to ONE
+    Claude account (``iron_proxy.claude_identity``)? Then they share one usage
+    limit, and moving work from one to the other at a limit only meets it
+    again. False when either is not a Claude account, either sign-in is not
+    known, or ``a`` is ``b``. BLOCKING (two small file reads, cached by size
+    and time) — call it off the loop. Never raises."""
+    try:
+        if snap is None or not a or not b or a == b:
+            return False
+        proxy = VENDORS["claude"]["proxy"]
+        claude = {
+            str(p.get("id") or "") for p in snap[0]
+            if isinstance(p, Mapping) and p.get("provider") == proxy
+        }
+        if a not in claude or b not in claude:
+            return False
+        from ..iron_proxy import claude_identity as _ci
+
+        return _ci.same_login(home_of(snap, a), home_of(snap, b))
+    except Exception:  # noqa: BLE001 — unknown is never "the same"
+        log.debug("shared-login check failed", exc_info=True)
+        return False
+
+
 def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
     """The account that takes over from ``account_id`` at its limit: another
     account of the SAME group and the SAME vendor that is usable now
@@ -514,7 +551,12 @@ def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
     as 0% used. It is still tried before the session's own reset: it is in
     the group the user made, a wrong guess costs one refused call, and the
     move cap (``routes/build.MAX_GROUP_MOVES``) bounds the chain.
-    Iron-Proxy's order breaks a tie."""
+    Iron-Proxy's order breaks a tie.
+
+    v1.427.4 (a USER BUG): never an account signed in to the SAME Claude
+    login as ``account_id`` (:func:`shares_login`) — it shares the limit just
+    met. That reads two small files per Claude account: BLOCKING — callers
+    call it off the loop."""
     try:
         snap = snapshot(svc)
         found = group_of(groups, account_id)
@@ -537,6 +579,8 @@ def takeover(svc: Any, groups: Any, account_id: str) -> dict[str, Any] | None:
             state = _state_of(snap, pid)
             if not usable_now(row, state, now):
                 continue
+            if shares_login(snap, account_id, pid):
+                continue  # one Claude login: the same limit (v1.427.4)
             peak = peak_percent(state, now)
             key = (peak is None, peak if peak is not None else 0.0, order[pid])
             if best is None or key < best[0]:
@@ -645,12 +689,14 @@ __all__ = [
     "group_of",
     "group_partners",
     "group_problem",
+    "home_of",
     "kick_plan_reads",
     "peak_percent",
     "peak_usage",
     "plan_label",
     "row_of",
     "session_account",
+    "shares_login",
     "snapshot",
     "state_of",
     "takeover",

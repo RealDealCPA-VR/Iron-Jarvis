@@ -2304,7 +2304,11 @@ export function HarnessSession({
     setLimitError(null);
     setAccountBusy(true);
     try {
-      const res = await chooseAccountAndContinue(threadId, a.id);
+      // v1.427.4: another account the list says is at its limit is TRIED (the
+      // user picked it knowing that; Iron-Proxy's mark can be a guess) — the
+      // daemon clears the mark first. Never the session's own account.
+      const force = a.status === "limit" && a.id !== currentAccount?.id;
+      const res = await chooseAccountAndContinue(threadId, a.id, force);
       const v = decodeSessionView(res.session);
       if (v) adopt(v);
       setLimit(null);
@@ -3404,6 +3408,7 @@ export function HarnessSession({
                       onMakeDefault={(a) => void makeDefault(a)}
                       busy={accountBusy}
                       title="Continue this conversation on:"
+                      triesLimited
                     />
                   ) : accounts === null ? (
                     <p className="text-[12px] text-zinc-400">This version of Iron Jarvis has no account list.</p>

@@ -73,7 +73,7 @@ from typing import Any, Callable
 
 from ..providers import subscription_clis as _SUBS
 from . import pin as _pin
-from .service import PINNED_PICK_FEATURE, PLAN_USAGE_FEATURE
+from .service import PICK_PROFILE_FEATURE, PINNED_PICK_FEATURE, PLAN_USAGE_FEATURE
 
 log = logging.getLogger("ironjarvis.iron_proxy")
 
@@ -704,6 +704,155 @@ def _parked_after_call(spec: ProviderAccounts, pin: "_pin.AccountPin", current: 
     return _pinned_refusal(spec, pin, kind, reset, pin.title or current.title)
 
 
+# --------------------------------------------------------------------------- #
+# One Claude login behind two accounts (v1.427.4, a USER BUG)
+# --------------------------------------------------------------------------- #
+#: The park kinds that mean the LOGIN is at a limit (its usage, its request
+#: rate) — an account signed in to the same Claude account meets it too.
+_LOGIN_LIMIT_KINDS = frozenset({"usage", "rate"})
+
+
+def _cached_snapshot() -> tuple[list[Any], dict[str, Any]] | None:
+    """The daemon's cached ``(profiles, states)`` (no call), or None. A seam."""
+    try:
+        svc = _service_module().current()
+        cache = svc.cached_accounts() if svc is not None and hasattr(svc, "cached_accounts") else None
+    except Exception:  # noqa: BLE001 — unknown keeps today's pick
+        return None
+    if not cache:
+        return None
+    profiles, states = cache
+    return (profiles if isinstance(profiles, list) else [],
+            states if isinstance(states, dict) else {})
+
+
+def _parked_now(state: Mapping[str, Any]) -> bool:
+    if state.get("status") != "parked":
+        return False
+    until = str(state.get("parkedUntil") or "")
+    if not until:
+        return True
+    try:
+        when = datetime.fromisoformat(until.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when > datetime.now(timezone.utc)
+
+
+def _cli_profiles(spec: ProviderAccounts, profiles: list[Any]) -> list[dict[str, Any]]:
+    """This provider's CLI accounts that are turned on, in Iron-Proxy's order."""
+    return sorted(
+        (p for p in profiles
+         if isinstance(p, dict) and p.get("provider") == spec.proxy_provider
+         and (p.get("lane") or "cli") == "cli" and p.get("enabled") is not False and p.get("id")),
+        key=lambda p: p.get("order") or 0,
+    )
+
+
+def _profile_home(prof: Mapping[str, Any]) -> str:
+    cli = prof.get("cli") if isinstance(prof.get("cli"), Mapping) else {}
+    return str(cli.get("home") or "").strip()
+
+
+def _shares_claude_login(spec: ProviderAccounts, home_a: str, home_b: str) -> bool:
+    """Are two Claude accounts (by home) signed in to ONE Claude account?
+    False for any other provider, or when either is not known. BLOCKING."""
+    from . import claude_identity as _ci
+
+    return spec.home_var == _ci.HOME_VAR and _ci.same_login(home_a, home_b)
+
+
+def _limited_twin(spec: ProviderAccounts, got: Lease,
+                  snap: tuple[list[Any], dict[str, Any]]) -> dict[str, Any] | None:
+    """An OTHER account parked for its usage or request limit that ``got`` is
+    signed in to the same Claude account as — ``{title, kind, until}`` — or
+    None. BLOCKING (small file reads, cached)."""
+    profiles, states = snap
+    for prof in _cli_profiles(spec, profiles):
+        pid = str(prof.get("id"))
+        if pid == got.profile_id:
+            continue
+        st = states.get(pid) if isinstance(states.get(pid), dict) else {}
+        if not _parked_now(st) or _account_kind(st) not in _LOGIN_LIMIT_KINDS:
+            continue
+        home = _profile_home(prof)
+        if home and _shares_claude_login(spec, home, got.home):
+            return {"title": str(prof.get("title") or pid), "kind": _account_kind(st),
+                    "until": str(st.get("parkedUntil") or "")}
+    return None
+
+
+def _past_shared_login(spec: ProviderAccounts, client: Any, got: Lease, limited: dict[str, Any],
+                       skip: set[str], retry_after: float | None = None) -> Lease:
+    """Iron-Proxy picked ``got``, which shares ONE Claude login with the
+    account at its limit (``limited``): the next account in Iron-Proxy's order
+    that can serve now and is not signed in to that login, picked BY ID — or
+    a plain refusal that names the shared login and how to fix it. Nothing is
+    reported for ``got`` (it never made a call: it is never parked by a
+    guess). An Iron-Proxy that cannot pick by id keeps ``got`` (today's
+    behaviour). BLOCKING."""
+    from . import claude_identity as _ci
+
+    if not _has_feature(client, PICK_PROFILE_FEATURE):
+        return got
+    try:
+        profiles, states = client.profiles(), client.states()
+    except Exception as exc:  # noqa: BLE001 — keep today's pick
+        _note("states", exc)
+        return got
+    profiles = profiles if isinstance(profiles, list) else []
+    states = states if isinstance(states, dict) else {}
+    skip = set(skip) | {got.profile_id}
+    for prof in _cli_profiles(spec, profiles):
+        pid = str(prof.get("id"))
+        if pid in skip:
+            continue
+        st = states.get(pid) if isinstance(states.get(pid), dict) else {}
+        home = _profile_home(prof)
+        if not home or st.get("status") in ("unauthenticated", "disabled") or _parked_now(st):
+            continue
+        if _shares_claude_login(spec, home, got.home):
+            continue  # the same login again
+        try:
+            answer = client.pick(spec.proxy_provider, lane="cli", profile_id=pid)
+        except Exception as exc:  # noqa: BLE001 — it could not serve after all
+            _note("pick", exc)
+            continue
+        other = _lease_of(spec, answer)
+        if other is not None and other.profile_id == pid:
+            return other
+    what = _WHAT.get(str(limited.get("kind") or ""), "at its limit")
+    until_iso = str(limited.get("until") or "")
+    until, seconds = _local_time(until_iso) if until_iso else ("", None)
+    when = f" until {until}" if until else ""
+    words = (f'"{limited["title"]}" is {what}{when}, and '
+             + _ci.SAME_LOGIN.format(title=got.title, current=limited["title"])
+             + f"; no other {spec.label} account can take this right now. " + _ci.SAME_LOGIN_FIX)
+    raise _refusal(spec, words, retry_after if retry_after is not None else seconds)
+
+
+def _unshared(spec: ProviderAccounts, client: Any, got: Lease | None) -> Lease | None:
+    """A fresh pick: ``got``, unless it shares one Claude login with an
+    account the cached snapshot shows parked for a limit — then
+    :func:`_past_shared_login`. BLOCKING (small file reads, only while an
+    account is parked)."""
+    if got is None:
+        return got
+    from . import claude_identity as _ci
+
+    if spec.home_var != _ci.HOME_VAR:
+        return got
+    snap = _cached_snapshot()
+    if snap is None:
+        return got
+    twin = _limited_twin(spec, got, snap)
+    if twin is None:
+        return got
+    return _past_shared_login(spec, client, got, twin, set())
+
+
 def lease(ij_provider: str) -> Lease | None:
     """The account to run ``ij_provider``'s CLI as right now, or None (run as
     today: the default login). BLOCKING — call through ``asyncio.to_thread``.
@@ -757,7 +906,7 @@ def lease(ij_provider: str) -> Lease | None:
         if _is_unavailable(exc):
             raise _unavailable_error(spec, exc) from None
         raise _unanswered_error(spec, exc) from None
-    return _lease_of(spec, answer)
+    return _unshared(spec, client, _lease_of(spec, answer))
 
 
 def _lease_of(spec: ProviderAccounts, answer: Any) -> Lease | None:
@@ -1120,5 +1269,41 @@ async def retry_lease(
         raise _marked(cause) from exc
     if nxt is None or nxt.profile_id in tried:
         raise await _final_error(current, cause)
+    spec = PROVIDERS.get(current.ij_provider)
+    if spec is not None and await asyncio.to_thread(_shares_claude_login, spec, nxt.home, current.home):
+        # v1.427.4 (a USER BUG): the next account is signed in to the SAME
+        # Claude account — it would only meet this limit again, and be parked
+        # for it. The next account that is not, or the words that say why.
+        nxt = await _past_current_login(spec, current, nxt, cause, answer, tried)
+        if nxt.profile_id in tried:
+            raise await _final_error(current, cause)
     log.info("iron-proxy: %s account parked; retrying with the next account", current.ij_provider)
     return nxt
+
+
+async def _past_current_login(spec: ProviderAccounts, current: Lease, nxt: Lease,
+                              cause: BaseException, answer: dict[str, Any] | None,
+                              tried: list[str]) -> Lease:
+    """:func:`_past_shared_login` for a retry: ``current`` just met its limit
+    (Iron-Proxy's ``answer`` to the report: its ``signal`` kind and reset) and
+    Iron-Proxy offers ``nxt``, signed in to the same Claude account."""
+    try:
+        client = _client(for_lease=True)
+    except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "no_failover", False):
+            raise exc from cause
+        raise _marked(cause) from exc
+    if client is None:
+        return nxt
+    sig = (answer or {}).get("signal") if isinstance((answer or {}).get("signal"), dict) else {}
+    kind = _account_kind({"parkedReason": {"kind": str(sig.get("kind") or "")}})
+    retry_after = getattr(cause, "retry_after", None)
+    try:
+        return await asyncio.to_thread(
+            _past_shared_login, spec, client, nxt,
+            {"title": current.title, "kind": kind if kind in _LOGIN_LIMIT_KINDS else "",
+             "until": str(sig.get("resetAt") or "")},
+            set(tried), retry_after if isinstance(retry_after, (int, float)) else None,
+        )
+    except Exception as exc:  # the plain-words sentence, with the attempt behind it
+        raise exc from cause

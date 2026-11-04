@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.427.3 (2026-11-03).*
+holds itself to. Current as of v1.427.4 (2026-11-04).*
 
 ---
 
@@ -5338,6 +5338,17 @@ not show the line.
   has an account marked "at its limit" that you know still has usage, the card
   offers **Try <name> anyway**: Iron-Proxy's mark ends and the session moves
   there. A signed-out account is never offered; sign it in first.
+
+- **Chat › Code and chat skip a shared login too (v1.427.4).** The same rule
+  now holds everywhere Iron Jarvis picks "the next account": a Chat › Code
+  session that moves within an account group at its limit, **Choose
+  account** on its limit card (an account with the same login is refused in
+  words, and nothing moves), and plain chat when one account runs out.
+  Plain chat goes to the next account with its own login, or says why none
+  can take over; the account it passed over is never marked as limited. On
+  the limit card's list, another account marked "Limit reached" now says
+  "Picking it tries it anyway": picking it clears the mark first, for when
+  you know it still has usage.
 
 ## Grok in the Code view (v1.418.0)
 

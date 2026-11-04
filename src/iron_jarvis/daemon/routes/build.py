@@ -279,6 +279,11 @@ class BuildAccountChoice(BaseModel):
     continue_: bool = Field(default=False, alias="continue")
     #: A model of that account's vendor ("" = keep / the vendor's default).
     model: str = Field(default="", max_length=200)
+    #: v1.427.4: with ``continue``, an account Iron-Proxy marked as at its
+    #: limit is tried anyway — its mark is cleared first (the user knows it has
+    #: usage left; the mark can be Iron Jarvis's own guess). Never one that
+    #: must sign in again, is turned off, or is the session's own account.
+    force: bool = False
 
 
 class BuildFolderRename(BaseModel):
@@ -619,6 +624,60 @@ def account_patch(platform: Any, setup: dict[str, Any], account_id: "str | None"
     elif BA.vendor_of(platform, str(setup.get("provider") or "")) != row["vendor"]:
         patch["model"] = None  # that vendor's own default model
     return patch
+
+
+def continue_problem(platform: Any, setup: dict[str, Any], account_id: str,
+                     force: bool = False) -> "dict[str, str] | None":
+    """v1.427.4 (a USER BUG): why "Choose account" may NOT carry the cut-off
+    work on with ``account_id`` — ``{detail, code}`` — or None.
+
+    * ``same_login``: it is signed in to the same Claude account as the
+      session's own (``build_accounts.shares_login``), so it shares the limit
+      the work just met; the words say how to give it a login of its own.
+    * with ``force``: an account Iron-Proxy marked as at its limit has that
+      mark cleared first (``unpark``) — never one that must sign in again, is
+      turned off, or is the session's own account. A refused unpark is said.
+
+    BLOCKING (file reads, one Iron-Proxy call with ``force``). Never raises."""
+    from ...harness import build_accounts as BA
+    from ...iron_proxy import claude_identity as _ci
+
+    current = str(setup.get("account") or "")
+    target = str(account_id or "").strip()
+    if not current or not target or target == current:
+        return None
+    svc = _svc_of(platform)
+    snap = BA.snapshot(svc)
+    if snap is None:
+        return None  # account_patch says why
+    if BA.shares_login(snap, current, target):
+        mine = BA.find(svc, current) or {}
+        theirs = BA.find(svc, target) or {}
+        title = str(theirs.get("name") or target)
+        own = str(mine.get("name") or setup.get("account_name") or current)
+        return {
+            "detail": _ci.SAME_LOGIN.format(title=title, current=own) + ". " + _ci.SAME_LOGIN_FIX,
+            "code": "same_login",
+        }
+    if not force:
+        return None
+    row = BA.find(svc, target)
+    if row is None or row.get("status") != BA.LIMIT:
+        return None  # not marked at a limit: nothing to clear
+    title = str(row.get("name") or target)
+    from ...terminals import pane_accounts as PA
+
+    try:
+        client = svc.lease_client(timeout_s=PA.LEASE_TIMEOUT_S)
+        if client is None:
+            return {"detail": ACCOUNT_OFF, "code": ""}
+        client.unpark(target)
+    except Exception as exc:  # noqa: BLE001 — said in words
+        return {"detail": f'Iron-Proxy would not let "{title}" be tried again: '
+                          f"{PA._unavailable_sentence(exc)}", "code": ""}
+    with contextlib.suppress(Exception):
+        svc.refresh_accounts()  # the list shows it ready again
+    return None
 
 
 def _with_initial_account(platform: Any, setup: dict[str, Any], account_id: str) -> dict[str, Any]:
@@ -3716,7 +3775,7 @@ async def resume_due(d: Any, *, now: Any = None) -> list[str]:
                 resumed.append(thread_id)
                 continue
         if grouped:
-            target = BA.takeover(svc, groups, account)
+            target = await asyncio.to_thread(BA.takeover, svc, groups, account)
             if target is not None:
                 outcome = await _move_within_group(d, thread_id, setup, wait, target)
                 if outcome == "moved":
@@ -5194,6 +5253,17 @@ def register(app: FastAPI, d: Any) -> None:
                 content={"detail": RUNNING_SENTENCE, "turn_id": _running_turn(d, thread_id)},
             )
         row = await asyncio.to_thread(_session_or_404, thread_id)
+        if body.continue_:
+            # v1.427.4: never onto the same Claude login (the same limit), and
+            # a "try it anyway" clears Iron-Proxy's mark first.
+            problem = await asyncio.to_thread(
+                continue_problem, platform, _setup_of(row), body.account.strip(), body.force,
+            )
+            if problem is not None:
+                content: dict[str, Any] = {"detail": problem["detail"]}
+                if problem.get("code"):
+                    content["code"] = problem["code"]
+                return JSONResponse(status_code=409, content=content)
         patch = await asyncio.to_thread(
             account_patch, platform, _setup_of(row), body.account.strip(), body.model.strip() or None,
         )

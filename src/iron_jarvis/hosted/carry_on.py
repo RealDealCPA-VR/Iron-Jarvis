@@ -971,7 +971,9 @@ async def resume_due(svc: Any, *, now: datetime | None = None) -> list[str]:
                 # reaper, the pool and a restart (v1.417.0), a move Iron Jarvis
                 # makes by itself waits for that work (the wait stays).
                 background = live is not None and live.keeps_working(svc.clock())
-                target = None if background else BA.takeover(_ip(svc.platform), groups, account)
+                target = None if background else await asyncio.to_thread(
+                    BA.takeover, _ip(svc.platform), groups, account,
+                )
                 if target is not None and target.get("id") not in (wait.get("tried") or []):
                     outcome = await _move(svc, sid, row, wait, target)
                     if outcome in ("moved", "raced"):

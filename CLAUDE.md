@@ -4283,13 +4283,41 @@ does not need a bump, stop and bump it.
   `SHARED_LOGIN_FIX`. `_continue_blocking` gets `force` ONLY when set (a
   test double takes 5 arguments). Claude Code re-reads `.credentials.json`
   when its mtime changes (`lastCredentialsMtimeMs`, read from the binary),
-  so a re-sign-in reaches a running process without a restart. NOT DONE:
-  Chat › Code's own lease rotation (`accounts.lease`) still trusts
-  Iron-Proxy's pick and can rotate onto a clone. Pins:
+  so a re-sign-in reaches a running process without a restart. Pins:
   `tests/test_same_claude_login_v14273.py`,
   `dashboard/__tests__/same-claude-login-v1427-3.test.tsx`, the v1.427.3 case
   in `build-app-view-v1409`; moved on purpose: `test_build_app_pool_v1409`
   (a named signed-out account says "needs to sign in again").
+  v1.427.4 (the rest of it): THREE MORE PLACES chose "the next account" and
+  now skip a shared login. (1) Chat › Code's group move
+  (`build_accounts.takeover`) skips `shares_login(snap, a, b)` (Claude rows
+  only; homes from the snapshot's `cli.home`, `home_of`); it reads small
+  files, so BOTH callers (`routes/build.resume_due`, `hosted/carry_on`) call
+  it through `asyncio.to_thread`. (2) Chat › Code's "Choose account" with
+  `continue` (`POST /build/sessions/{id}/account`) runs
+  `routes/build.continue_problem` first: a same-login target is a 409
+  `{detail, code: "same_login"}` before anything moves; `force` (new on
+  `BuildAccountChoice`) unparks a target whose row status is `LIMIT` (never
+  needs-sign-in, never the session's own account) and refreshes the
+  snapshot. The limit card's list (`AccountList triesLimited`) says
+  `TRY_LIMITED_NOTE` under another account at its limit, and picking one
+  sends `force: true` (`chooseAccountAndContinue(…, force)`). (3) chat's own
+  rotation (unpinned `accounts.lease` / `retry_lease`): a fresh pick that
+  shares a login with an account the CACHED snapshot shows parked for usage
+  or rate (`_limited_twin`, via the `_cached_snapshot` seam), and a retry's
+  next pick that shares the limited account's login, go to
+  `_past_shared_login`: the next account in Iron-Proxy's order that is
+  usable and not that login, picked BY ID (`pick-profile`), else a
+  `no_failover` refusal naming both accounts + `SAME_LOGIN_FIX`. The
+  passed-over account is never signalled (it made no call). An Iron-Proxy
+  without `pick-profile` keeps its own pick. The words live once in
+  `claude_identity.SAME_LOGIN` / `SAME_LOGIN_FIX` (continue_on re-exports).
+  NOT DONE: Codex accounts sharing one ChatGPT login are not detected; the
+  model team's `member_account` still picks by the snapshot alone (a clone
+  of a limited account with no usage numbers can be pinned for a helper).
+  Pins: `tests/test_same_claude_login_chat_v14274.py` (15 mutations red),
+  the v1.427.4 cases in `dashboard/__tests__/ij-harness-session-v1369` (5
+  mutations red).
 
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died

@@ -33,6 +33,16 @@ from typing import Any, Iterable
 #: The variable a Claude account's home rides (``accounts.make_lease``).
 HOME_VAR = "CLAUDE_CONFIG_DIR"
 
+#: v1.427.4: THE words for an account that shares another's Claude login
+#: (Build › Code's Continue, Chat › Code's Choose account, chat's rotation).
+SAME_LOGIN = '"{title}" is signed in to the same Claude account as "{current}", so it shares that limit'
+#: ...and how to give it a login of its own.
+SAME_LOGIN_FIX = (
+    "To give an account its own limit, press Sign in beside it on the Connections page "
+    "(Iron-Proxy card) and sign in with that account's own Claude login: sign out of "
+    "claude.ai in your browser first, or open the sign-in link in a private window."
+)
+
 #: ``.claude.json`` past this is not read (the same bound the synced-plugins
 #: reader uses, ``harness.claude_commands.MAX_ACCOUNT_FILE_BYTES``).
 MAX_FILE_BYTES = 32 * 1024 * 1024

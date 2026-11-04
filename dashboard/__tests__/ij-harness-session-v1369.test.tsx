@@ -523,6 +523,53 @@ describe("an account limit", () => {
     expect(screen.queryByTestId("account-limit-card")).toBeNull();
   });
 
+  // v1.427.4 (a USER BUG): another account the list says is at its limit is
+  // TRIED from the limit card (the user may know it has usage left), and the
+  // row says so first; the session's own account and a ready one send no force.
+  it("another account at its limit says picking it tries it anyway, and picking it sends force", async () => {
+    api.gets["/build/accounts"] = {
+      ...ACCOUNTS,
+      claude: [
+        ...ACCOUNTS.claude,
+        { id: "spare", name: "Spare", vendor: "claude", vendor_label: "Claude Code", provider: "claude-cli", default: false, plan: "pro", plan_label: "Pro", status: "limit", resets_at: "2030-01-01T22:30:00Z", limit_kind: "rate" },
+      ],
+    };
+    api.postAnswers["POST /build/sessions/s1/account"] = {
+      session: view({ running: true, turn_id: "bt_10", account: { id: "spare", name: "Spare" }, account_vendor: "claude" }),
+      turn_id: "bt_10",
+    };
+    await hitLimit();
+    fetchMock.mockImplementation(async () => sse([["done", { reply: "Carried on." }]]));
+    fireEvent.click(screen.getByTestId("account-limit-choose"));
+    expect(await screen.findByTestId("account-try-note-spare")).toHaveTextContent(
+      "Picking it tries it anyway: its limit mark is cleared first.",
+    );
+    // The session's own account (at its limit too) and a ready one say nothing.
+    expect(screen.queryByTestId("account-try-note-work")).toBeNull();
+    expect(screen.queryByTestId("account-try-note-personal")).toBeNull();
+    fireEvent.click(screen.getByTestId("account-pick-spare"));
+    await waitFor(() =>
+      expect(api.calls).toContainEqual({
+        method: "POST",
+        path: "/build/sessions/s1/account",
+        body: { account: "spare", continue: true, force: true },
+      }),
+    );
+  });
+
+  it("a pick the daemon refuses because it shares the same Claude login shows the daemon's words", async () => {
+    api.gets["/build/accounts"] = ACCOUNTS;
+    api.postAnswers["POST /build/sessions/s1/account"] = new api.ApiError(
+      '"Personal" is signed in to the same Claude account as "Work", so it shares that limit. To give an account its own limit, press Sign in beside it.',
+      409,
+    );
+    await hitLimit();
+    fireEvent.click(screen.getByTestId("account-limit-choose"));
+    fireEvent.click(await screen.findByTestId("account-pick-personal"));
+    expect(await screen.findByText(/"Personal" is signed in to the same Claude account as "Work"/)).toBeInTheDocument();
+    expect(screen.getByTestId("account-limit-card")).toBeInTheDocument();
+  });
+
   it("an older Iron Jarvis without the wait says so in words", async () => {
     api.postAnswers["POST /build/sessions/s1/resume-when-ready"] = new api.ApiError("Not Found", 404);
     await hitLimit();
