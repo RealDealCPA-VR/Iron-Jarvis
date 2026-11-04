@@ -5351,6 +5351,81 @@ not show the line.
   you know it still has usage. (v1.427.5 ships this; it also fixes a rare
   error when turning **Share with Build** on or off.)
 
+## Microsoft 365, locked down for client data (v1.428.0)
+
+Microsoft 365 (Outlook, Calendar, OneDrive) is now set up the safe way for a
+firm that holds client information. Connecting it always means:
+
+- **Read and draft only.** Jarvis can read your mail, calendar, contacts and
+  OneDrive files, and can save a reply as a **draft** in your mailbox. It can
+  never send email and never change your calendar: those tools are not
+  installed. You send drafts from Outlook yourself. Microsoft is asked for four
+  permissions only: Calendars.Read, Contacts.Read, Files.Read and
+  Mail.ReadWrite (the smallest permission that saves a draft).
+- **One account.** You type your Microsoft email on the card. Only that
+  account can sign in; any other account (your admin account, by mistake) is
+  refused and its sign-in deleted.
+- **Your firm's own app.** A work or school account needs your firm's app ID
+  (the steps are below): the sign-in page shows your firm's app and goes to
+  your firm's own directory, and you can switch it off in one place. A
+  personal Outlook.com account can leave it empty.
+- **A locked copy of the program.** Iron Jarvis installs the Microsoft 365
+  program once, from a list of exact versions it ships, with a tamper check on
+  every package. It never downloads a newer version by itself. Only one
+  package runs an install step: the one that keeps the sign-in's key in
+  Windows Credential Manager.
+- **Your own models only, and only in Chat.** The mailbox works only in a
+  chat on this PC with **Local only** on and one of your own models — never
+  from your phone, in an agent's task or in a coding session. Anywhere else it
+  says so and does nothing. Once a chat has used it, that chat stays Local
+  only, because its replies may quote your mail: the switch says why and cannot
+  be turned off, the chat never offers to send a message to a cloud model
+  "once", it is never saved to a memory base that is not on this PC, and its
+  mail is left behind when the chat hands a task to an agent.
+- **It always asks first.** Jarvis asks you before each use of it; "run
+  without asking" cannot be turned on for it, and it cannot sign out, switch
+  or remove accounts from a chat — that happens only in its Sign in terminal.
+- **Its sign-in stays with Iron Jarvis.** The sign-in is kept in Iron
+  Jarvis's own folder, encrypted, with its key in Windows Credential Manager —
+  not in the program's shared folder another copy of it would read.
+
+**Set up your firm's app (once, about 5 minutes, with your Microsoft 365 admin
+account, in your browser — never inside Iron Jarvis):**
+
+1. Open the Microsoft Entra admin center (entra.microsoft.com) and sign in
+   with your admin account.
+2. Go to **Entra ID › App registrations › New registration**. Name it "Iron
+   Jarvis (Outlook)". Choose **Accounts in this organizational directory only
+   (single tenant)**. Leave the redirect address empty. Press **Register**.
+3. On the app's **Overview** page, copy the **Application (client) ID**.
+4. Open **Authentication**. Under **Advanced settings**, set **Allow public
+   client flows** to **Yes**, then **Save**. (The sign-in uses a code you type
+   on a Microsoft page, which needs this.)
+5. Open **API permissions › Add a permission › Microsoft Graph › Delegated
+   permissions**. Add Calendars.Read, Contacts.Read, Files.Read,
+   Mail.ReadWrite, offline_access, openid and profile (User.Read is already
+   there). Press **Grant admin consent** for your firm.
+6. Limit who can use it: go to **Entra ID › Enterprise applications**, open
+   "Iron Jarvis (Outlook)", then **Properties**. Set **Assignment required?**
+   to **Yes** and **Save**. Then open **Users and groups › Add user/group** and
+   add only your main account.
+
+**Connect it in Iron Jarvis:** on Settings › Connections, open the Directory
+card **Microsoft 365**. Choose **Work or school account**, type your main
+email, paste the app ID, and press **Connect**. Then press **Sign in to
+Microsoft**: a Build terminal shows a web address and a code. Open the address
+in a private browser window (so your admin account is not used by mistake),
+type the code, and sign in with your **main** account.
+
+**Good to know:** the first Connect needs Node.js and the internet (it
+installs the program, a few seconds). If your firm's Conditional Access
+blocks code sign-ins, allow it for this app or the sign-in is refused. To cut
+it off, delete the app in Enterprise applications, then press **Disconnect**
+on its card. A Microsoft 365 that was set up before this version is not started: remove it
+from the Tools page and connect it again from its card. It can only be added
+from its card — pasting or importing its program as an extension is refused.
+Asking the chat to connect it points you to the card.
+
 ## Grok in the Code view (v1.418.0)
 
 If the Grok CLI is installed and signed in on this PC, the Code view offers
@@ -6631,6 +6706,9 @@ read every control in plain words. The look of the app is the same.
   and changes calendar events, reads, drafts and sends email, reads contacts
   and reads OneDrive files, and asks before each use unless you allow it. It
   needs Node.js. Saying "connect my Outlook" in chat sets it up the same way.
+  (Changed in v1.428.0: it is now read and draft only, signs in one account,
+  works only on your own models, and is set up from its card. See "Microsoft
+  365, locked down for client data".)
 - **Adding and editing tools without technical words.** The Tools page says
   how each tool connects in words ("A web address", "(older servers)"), keeps
   its command or address folded under **Show command** / **Show address**,

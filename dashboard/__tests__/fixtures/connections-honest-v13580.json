@@ -173,12 +173,12 @@
     "name": "Microsoft 365 (Outlook, Calendar, OneDrive)",
     "category": "Productivity",
     "glyph": "📅",
-    "blurb": "Your Outlook email, calendar and OneDrive files.",
-    "unlocks": "Ask what's on your calendar, find and read email, draft or send a message, add or move a meeting, and find files in OneDrive — from chat and agents.",
+    "blurb": "Your Outlook email, calendar and OneDrive files, read and drafted on your own models.",
+    "unlocks": "Ask what's on your calendar, find and read email, save a reply as a draft (you send it from Outlook), and find files in OneDrive — from chats that run on your own models.",
     "connect_via": "mcp",
     "scopes": [
-      "Read & change calendar events",
-      "Read, draft & send email",
+      "Read calendar events",
+      "Read email and save drafts (never sends)",
       "Read contacts",
       "Read OneDrive files"
     ],
@@ -202,6 +202,20 @@
             "help": "Outlook.com, Hotmail or Live."
           }
         ]
+      },
+      {
+        "name": "MS365_MCP_EXPECTED_USERNAME",
+        "label": "Your Microsoft email",
+        "help": "Only this account can sign in. Any other account is refused and its sign-in deleted.",
+        "kind": "env",
+        "optional": false
+      },
+      {
+        "name": "MS365_MCP_CLIENT_ID",
+        "label": "Your firm's app ID (needed for a work account)",
+        "help": "The Application (client) ID of the app your Microsoft 365 admin registered for Iron Jarvis (the Handbook has the steps). A personal account can leave it empty.",
+        "kind": "env",
+        "optional": true
       }
     ],
     "provider": "",
@@ -214,9 +228,8 @@
     "connected": true,
     "status": "signin",
     "detail": "Sign in to Microsoft to finish.",
-    "tools_loaded": 24,
+    "tools_loaded": 18,
     "tool_names": [
-      "create-calendar-event",
       "create-draft-email",
       "download-bytes",
       "get-calendar-event",
@@ -232,13 +245,8 @@
       "list-mail-messages",
       "list-outlook-contacts",
       "login",
-      "logout",
       "read-mail-text",
-      "remove-account",
       "search-onedrive-files",
-      "select-account",
-      "send-mail",
-      "update-calendar-event",
       "verify-login"
     ],
     "account": "",
@@ -247,12 +255,12 @@
     "runtime_url": "https://nodejs.org",
     "enabled": true,
     "signin": {
-      "cli": "microsoft-365-signin-work",
+      "cli": "microsoft-365-signin",
       "label": "Sign in to Microsoft",
       "account": "Work or school account"
     },
     "signed_in": false,
-    "can_change": 9,
+    "can_change": 3,
     "asks_first": true,
     "held_back": 0,
     "keyed": false
@@ -262,12 +270,12 @@
     "name": "Microsoft 365 (Outlook, Calendar, OneDrive)",
     "category": "Productivity",
     "glyph": "📅",
-    "blurb": "Your Outlook email, calendar and OneDrive files.",
-    "unlocks": "Ask what's on your calendar, find and read email, draft or send a message, add or move a meeting, and find files in OneDrive — from chat and agents.",
+    "blurb": "Your Outlook email, calendar and OneDrive files, read and drafted on your own models.",
+    "unlocks": "Ask what's on your calendar, find and read email, save a reply as a draft (you send it from Outlook), and find files in OneDrive — from chats that run on your own models.",
     "connect_via": "mcp",
     "scopes": [
-      "Read & change calendar events",
-      "Read, draft & send email",
+      "Read calendar events",
+      "Read email and save drafts (never sends)",
       "Read contacts",
       "Read OneDrive files"
     ],
@@ -291,6 +299,20 @@
             "help": "Outlook.com, Hotmail or Live."
           }
         ]
+      },
+      {
+        "name": "MS365_MCP_EXPECTED_USERNAME",
+        "label": "Your Microsoft email",
+        "help": "Only this account can sign in. Any other account is refused and its sign-in deleted.",
+        "kind": "env",
+        "optional": false
+      },
+      {
+        "name": "MS365_MCP_CLIENT_ID",
+        "label": "Your firm's app ID (needed for a work account)",
+        "help": "The Application (client) ID of the app your Microsoft 365 admin registered for Iron Jarvis (the Handbook has the steps). A personal account can leave it empty.",
+        "kind": "env",
+        "optional": true
       }
     ],
     "provider": "",
@@ -303,9 +325,8 @@
     "connected": true,
     "status": "connected",
     "detail": "",
-    "tools_loaded": 24,
+    "tools_loaded": 18,
     "tool_names": [
-      "create-calendar-event",
       "create-draft-email",
       "download-bytes",
       "get-calendar-event",
@@ -321,13 +342,8 @@
       "list-mail-messages",
       "list-outlook-contacts",
       "login",
-      "logout",
       "read-mail-text",
-      "remove-account",
       "search-onedrive-files",
-      "select-account",
-      "send-mail",
-      "update-calendar-event",
       "verify-login"
     ],
     "account": "dana@contoso.com",
@@ -336,12 +352,12 @@
     "runtime_url": "https://nodejs.org",
     "enabled": true,
     "signin": {
-      "cli": "microsoft-365-signin-work",
+      "cli": "microsoft-365-signin",
       "label": "Sign in to Microsoft",
       "account": "Work or school account"
     },
     "signed_in": true,
-    "can_change": 9,
+    "can_change": 3,
     "asks_first": true,
     "held_back": 0,
     "keyed": false

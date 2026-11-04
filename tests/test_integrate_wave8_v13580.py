@@ -49,6 +49,7 @@ from iron_jarvis.scheduling.parked_runs import FILE_NAME, ParkedRuns
 from tests.test_chat_picks_tools_v13580 import _connect_github, _scripted, _send
 from tests.test_connections_honest_v13580 import (  # noqa: F401 — pytest fixtures
     CARD_ID,
+    MS365_TOOLS_LOADED,
     _connect_ms365,
     _fresh,
     _platform,
@@ -248,7 +249,8 @@ def _apps_row(c: TestClient) -> dict:
 def test_microsoft_365_reads_sign_in_to_finish_on_its_card_and_in_chat(ms365, signin_file):  # noqa: F811 — pytest fixtures
     """THE SEAM (8D review 3): the card said "Sign in to Microsoft to finish"
     while the chat's apps section told the model it was connected with 24
-    tools. MUTATION: ``_signin_unfinished`` returns "" -> chat reads
+    tools (v1.428.0: the locked card loads fewer; the count is read off the
+    honest harness). MUTATION: ``_signin_unfinished`` returns "" -> chat reads
     "connected" (red)."""
     _connect_ms365(ms365)
     card = _row(ms365, CARD_ID)
@@ -266,7 +268,9 @@ def test_microsoft_365_reads_sign_in_to_finish_on_its_card_and_in_chat(ms365, si
     assert _row(ms365, CARD_ID)["status"] == "connected"
     row = _apps_row(ms365)
     assert row["state"] == "connected", row
-    assert "connected (24 tools)" in app_names.apps_section([row])
+    # v1.428.0 (moved on purpose): the locked card's read and draft tools,
+    # no longer 24.
+    assert f"connected ({MS365_TOOLS_LOADED} tools)" in app_names.apps_section([row])
 
 
 def test_one_pixio_key_sentence_names_the_place_everywhere():

@@ -91,6 +91,9 @@ def create_backup(
     # Downloaded animated backgrounds (v1.410.0) in a dev or test home: they
     # are re-downloadable copies of repository files, never the user's state.
     backgrounds_dir = (home / "backgrounds").resolve()
+    # v1.428.0: an app installed from Iron Jarvis's own lock in a dev or test
+    # home (connectors/locked_pack.py) — a program, rebuilt from the lock.
+    packages_dir = (home / "mcp-packages").resolve()
     # v1.424.0 (D4): Iron Jarvis's plugin folder for the owner's Claude Code
     # setup on other accounts, in a dev or test home: COPIES of the owner's own
     # skills/commands/agents (v1.424.0 review: never junctions), remade at the
@@ -123,7 +126,12 @@ def create_backup(
                     continue  # never archive the backups themselves
                 if workspaces_dir in rp.parents:
                     continue  # skip disposable session scratch (unbounded growth)
-                if any(m in rp.parents for m in media_dirs) or trash_dir in rp.parents or backgrounds_dir in rp.parents:
+                if (
+                    any(m in rp.parents for m in media_dirs)
+                    or trash_dir in rp.parents
+                    or backgrounds_dir in rp.parents
+                    or packages_dir in rp.parents
+                ):
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():
                     continue  # the snapshot temp is added below, not as itself

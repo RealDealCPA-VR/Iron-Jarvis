@@ -15,6 +15,12 @@
  * THE DIRECTORY MOUNT (last block): the v1.356.0 integrator applied the
  * lane's patch to DirectoryPage.tsx (ChoiceField for a field with `options`,
  * AppSignIn on a saved card with `signin`), so those pins are plain `it` now.
+ *
+ * v1.428.0 (moved on purpose): the card is LOCKED DOWN (connectors/ms365.py).
+ * After the choice it asks for the account's email (required: only that
+ * account can sign in) and the firm's app ID (optional), and there is ONE
+ * sign-in job, `microsoft-365-signin` (the saved pack carries the account
+ * kind; the daemon types the saved pack's own program).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,15 +110,22 @@ afterEach(() => cleanup());
 // The daemon's rows, as the dashboard receives them
 // --------------------------------------------------------------------------- //
 describe("the daemon's Microsoft 365 row", () => {
+  // v1.428.0 (moved on purpose): the choice, then the account's email
+  // (required) and the firm's app ID (optional); ONE sign-in job.
   it("asks one plain question before Connect and offers a sign-in once saved", () => {
     expect(ROWS.before.name).toBe("Microsoft 365 (Outlook, Calendar, OneDrive)");
     expect(ROWS.before.signin).toBeNull();
-    const field = ROWS.before.fields[0];
+    const [field, email, app] = ROWS.before.fields;
     expect(field.label).toBe("Which Microsoft account?");
     expect(field.options?.map((o) => o.label)).toEqual(["Work or school account", "Personal account"]);
-    // Saved with the work answer ("common"): the sign-in for that answer.
+    expect(email.name).toBe("MS365_MCP_EXPECTED_USERNAME");
+    expect(email.optional).toBe(false);
+    expect(email.options).toBeUndefined();
+    expect(app.name).toBe("MS365_MCP_CLIENT_ID");
+    expect(app.optional).toBe(true);
+    // Saved with the work answer ("common"): the one sign-in, worded for it.
     expect(ROWS.after.signin).toEqual({
-      cli: "microsoft-365-signin-work",
+      cli: "microsoft-365-signin",
       label: "Sign in to Microsoft",
       account: "Work or school account",
     });
@@ -171,12 +184,13 @@ describe("ChoiceField", () => {
 describe("AppSignIn", () => {
   const signin = ROWS.after.signin!;
 
+  // v1.428.0 (moved on purpose): the one sign-in job.
   it("says what it needs and opens the app's own sign-in by NAME, with no account", async () => {
     render(<AppSignIn id="microsoft_365" signin={signin} />);
     expect(screen.getByText("It works once you sign in with your work or school account.")).toBeTruthy();
     fireEvent.click(screen.getByTestId("connector-signin-press-microsoft_365"));
     const hint = await screen.findByTestId("connector-signin-hint-microsoft_365");
-    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin-work" } }]);
+    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin" } }]);
     expect(hint.textContent).toContain(PANE_OPENED_LINE);
     const link = within(hint).getByRole("link", { name: "Open the Build terminal" });
     expect(link.getAttribute("href")).toBe("/terminals?focus=term_ms365");
@@ -204,9 +218,10 @@ describe("AppSignIn", () => {
     expect(signInLine({})).toBe("It works once you sign in.");
   });
 
+  // v1.428.0 (moved on purpose): the one sign-in job's id.
   it("launchAppSignIn never sends an account (an app sign-in is not an AI CLI)", async () => {
-    await expect(launchAppSignIn("microsoft-365-signin-personal")).resolves.toBe("term_ms365");
-    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin-personal" } }]);
+    await expect(launchAppSignIn("microsoft-365-signin")).resolves.toBe("term_ms365");
+    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin" } }]);
     expect(paneHref(null)).toBe("/terminals");
   });
 });
@@ -247,7 +262,7 @@ describe("the Directory card", () => {
         scopes: [],
         docs_url: "",
         provider: "",
-        tools_loaded: row.connected ? 24 : 0,
+        tools_loaded: row.connected ? 21 : 0,
         tool_names: [],
         needs: "",
         package_note: "",
@@ -261,6 +276,8 @@ describe("the Directory card", () => {
     return screen.findByTestId("connector-card-microsoft_365", {}, { timeout: 10_000 });
   }
 
+  // v1.428.0 (moved on purpose): Connect also waits for the account's email
+  // (required), never for the optional app ID, and sends both answers.
   it("asks the plain choice in the Connect form, and Connect waits for an answer", async () => {
     const card = await renderDirectory(ROWS.before);
     fireEvent.click(within(card).getByRole("button", { name: /Connect/ }));
@@ -268,21 +285,30 @@ describe("the Directory card", () => {
     const submit = within(card).getAllByRole("button", { name: /Connect/ }).at(-1)!;
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(group).getByLabelText(/Personal account/));
+    // The kind alone is not enough: the email is still to answer.
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(card).getByLabelText("Your Microsoft email"), {
+      target: { value: "me@example.com" },
+    });
     await waitFor(() => expect((submit as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(submit);
     await waitFor(() =>
       expect(api.posts).toEqual([
-        { path: "/connectors/microsoft_365/connect", body: { values: { MS365_MCP_TENANT_ID: "consumers" } } },
+        {
+          path: "/connectors/microsoft_365/connect",
+          body: { values: { MS365_MCP_TENANT_ID: "consumers", MS365_MCP_EXPECTED_USERNAME: "me@example.com" } },
+        },
       ]),
     );
   });
 
+  // v1.428.0 (moved on purpose): the one sign-in job.
   it("offers Sign in to Microsoft on the saved card, opening the sign-in pane", async () => {
     const card = await renderDirectory(ROWS.after);
     const press = await within(card).findByTestId("connector-signin-press-microsoft_365");
     expect(press.textContent).toContain("Sign in to Microsoft");
     fireEvent.click(press);
     await within(card).findByTestId("connector-signin-hint-microsoft_365");
-    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin-work" } }]);
+    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin" } }]);
   });
 });

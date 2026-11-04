@@ -118,7 +118,12 @@ export const CLICK_TO_ALLOW_HINT = "Click Allow once to run it · Esc to decline
  *  allow says so instead of promising "Enter to allow". */
 export function dockAskKeyHint(kind: DockAskItem["kind"], item?: DockAskItem | null): string {
   if (item && !enterAllows(item)) return CLICK_TO_ALLOW_HINT;
-  if (kind === "cloud") return "Enter to send once · Esc to keep it local";
+  if (kind === "cloud") {
+    // v1.428.0: a chat held Local only offers no "Send once".
+    return item?.kind === "cloud" && (item.ask.held?.length ?? 0) > 0
+      ? "Esc to keep it local"
+      : "Enter to send once · Esc to keep it local";
+  }
   if (kind === "question") return "Enter to send · Esc to skip";
   return kind === "elicitation" ? "Enter to send · Esc to decline" : "Enter to allow · Esc to decline";
 }

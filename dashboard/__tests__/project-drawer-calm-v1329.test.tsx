@@ -264,7 +264,9 @@ describe("a project chat's drawer: plain sections, not cards", () => {
     expect(panel.getAttribute("aria-labelledby")).toBe(knowledge.id);
     expect(knowledge.getAttribute("aria-controls")).toBe(panel.id);
     // The knowledge base draws bare under its tab (no second titled card).
-    const kb = await within(drawer).findByTestId("knowledge-panel");
+    // v1.400.9: KnowledgePanel is a lazily loaded chunk of the chat page;
+    // the release runner loaded it after the default 1 s wait.
+    const kb = await within(drawer).findByTestId("knowledge-panel", {}, { timeout: 10_000 });
     expect(kb.getAttribute("data-bare")).toBe("true");
   });
 

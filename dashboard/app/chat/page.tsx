@@ -384,6 +384,8 @@ import {
   LOCAL_ONLY_MODEL_MENU_LINE,
   LOCAL_ONLY_TITLE_OFF,
   LOCAL_ONLY_TITLE_ON,
+  localOnlyHeldTitle,
+  localOnlyHolds,
   cloudAskFor,
   cloudModelName,
   firstModelFor,
@@ -4021,8 +4023,19 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     localOnlyRef.current = on;
     setLocalOnly(on);
   }
+  // v1.428.0: the apps that hold THIS chat Local only (it used Microsoft 365,
+  // whose data stays on the user's own models): the switch stays on, and says
+  // why. Read from the saved setup on open, and again when the user tries to
+  // turn the switch off (the daemon writes the hold during a turn).
+  const [localOnlyHeld, setLocalOnlyHeldState] = useState<string[]>([]);
+  const localOnlyHeldRef = useRef<string[]>([]);
+  function setLocalOnlyHeld(holds: string[]) {
+    localOnlyHeldRef.current = holds;
+    setLocalOnlyHeldState(holds);
+  }
   useEffect(() => {
     setLocalOnlyNow(readLocalOnlyDefault());
+    setLocalOnlyHeld([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, after mount
   }, []);
   // v1.332.0: the send waiting on the ask-first card (drawn in the dock), and
@@ -5741,10 +5754,31 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
    *  local" semantics: nothing is sent, the words stay in the box). */
   function toggleLocalOnly() {
     const on = !localOnlyRef.current;
+    // v1.428.0: a chat that used an app kept on the user's own models stays
+    // Local only (the daemon keeps it on whatever is saved).
+    if (!on && localOnlyHeldRef.current.length > 0) return;
     setLocalOnlyNow(on);
     writeLocalOnlyDefault(on);
     if (!on) setCloudAsk(null);
     markSetupChanged();
+    if (!on) void recheckLocalOnlyHeld();
+  }
+
+  /** v1.428.0: the daemon may have held this chat Local only during a turn
+   *  the page has not re-read: ask once, and put the switch back when so. */
+  async function recheckLocalOnlyHeld() {
+    const id = saveTargetRef.current.id;
+    if (!id) return;
+    try {
+      const t = (await get(`/chat/threads/${encodeURIComponent(id)}`)) as { setup?: unknown } | null;
+      const holds = localOnlyHolds(t?.setup);
+      if (holds.length > 0 && saveTargetRef.current.id === id) {
+        setLocalOnlyHeld(holds);
+        setLocalOnlyNow(true);
+      }
+    } catch {
+      /* the daemon keeps a held chat local anyway */
+    }
   }
 
   /** "Allow for this conversation" on an approval card (chat's mid-turn ask and
@@ -6043,6 +6077,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     approvalPinnedRef.current = false; // v1.353.0: the device default may land
     // v1.332.0: so does "Local only": the user's last choice.
     setLocalOnlyNow(readLocalOnlyDefault());
+    setLocalOnlyHeld([]);
     threadDocsRef.current = [];
     setThreadDocs([]);
     sendSetupRef.current = false;
@@ -6097,6 +6132,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // v1.332.0: the chat comes back local only exactly when it was saved so
       // (the daemon stores true only; absent = off).
       setLocalOnlyNow(setup.local_only === true);
+      setLocalOnlyHeld(localOnlyHolds(setup));
       // Thread-local restore: the panel points at this conversation's folder
       // without touching the localStorage default (New chat returns to it).
       setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
@@ -8114,7 +8150,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   ): boolean {
     const ask = needsCloudAsk(turnChoice, chatChoice);
     if (!ask) return false;
-    setCloudAsk({ ...ask, id: mintTurnId(), proceed: () => proceed(ask.provider), keep });
+    // v1.428.0: a chat held Local only (it read Microsoft 365) is asked with
+    // no "Send once": the daemon refuses any message off this network there.
+    const held = localOnlyHeldRef.current;
+    setCloudAsk({
+      ...ask,
+      ...(held.length > 0 ? { held } : {}),
+      id: mintTurnId(),
+      proceed: () => proceed(ask.provider),
+      keep,
+    });
     return true;
   }
 
@@ -10452,6 +10497,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     approvalPinnedRef.current = false; // v1.353.0: the device default may land
     // v1.332.0: a new chat starts local only when the user's last choice was.
     setLocalOnlyNow(readLocalOnlyDefault());
+    setLocalOnlyHeld([]);
     setLocalRefusal(null);
     setPreviewPath(null); // a fresh conversation starts without a preview
     setThreadDocs([]); // document chips belong to their conversation
@@ -12780,6 +12826,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                             Retry would only be refused again, so it waits. */}
                         {failedTurn && !busy && localRefusal && (
                           <>
+                            {/* v1.428.0: never offered in a chat held Local only. */}
+                            {localOnlyHeld.length === 0 && (
                             <button
                               type="button"
                               data-testid="local-refusal-send-once"
@@ -12789,6 +12837,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                             >
                               Send to {cloudModelName(localRefusal.provider, localRefusal.model, models)} once
                             </button>
+                            )}
                             <button
                               type="button"
                               data-testid="local-refusal-choose-local"
@@ -13821,12 +13870,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
                           data-testid="local-only-chip"
                           aria-pressed={localOnly}
                           aria-label="Local only"
+                          aria-disabled={localOnlyHeld.length > 0 || undefined}
+                          data-held={localOnlyHeld.length > 0 ? "true" : undefined}
                           title={
-                            fitOn("local")
-                              ? iconOnlyTitle("Local only", localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF)
-                              : localOnly
-                                ? LOCAL_ONLY_TITLE_ON
-                                : LOCAL_ONLY_TITLE_OFF
+                            localOnlyHeld.length > 0
+                              ? localOnlyHeldTitle(localOnlyHeld)
+                              : fitOn("local")
+                                ? iconOnlyTitle("Local only", localOnly ? LOCAL_ONLY_TITLE_ON : LOCAL_ONLY_TITLE_OFF)
+                                : localOnly
+                                  ? LOCAL_ONLY_TITLE_ON
+                                  : LOCAL_ONLY_TITLE_OFF
                           }
                           onClick={() => toggleLocalOnly()}
                           className={composerChipClass(localOnly, "success")}

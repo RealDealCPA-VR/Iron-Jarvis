@@ -356,6 +356,129 @@ describe("the Local only chip", () => {
   });
 });
 
+/* ============ v1.428.0: a chat that used Microsoft 365 stays Local only */
+
+describe("a chat that used an app kept on your own models stays Local only (v1.428.0)", () => {
+  const HELD = "Local only stays on: this chat used Microsoft 365, which stays on your own models.";
+
+  it("a saved chat that holds it opens on, says why, and a press never turns it off", async () => {
+    H.api.responses["/chat/threads/t9"] = {
+      id: "t9",
+      title: "Client mail",
+      messages: [
+        { role: "user", content: "what did the client send" },
+        { role: "assistant", content: "mail reply" },
+      ],
+      setup: { local_only: true, local_only_holds: ["microsoft_365"] },
+    };
+    window.history.replaceState({}, "", "/chat?thread=t9");
+    render(<ChatPage />);
+    await screen.findByText("mail reply");
+    await waitFor(async () => expect((await chip()).getAttribute("data-held")).toBe("true"));
+    const c = await chip();
+    expect(c.getAttribute("aria-pressed")).toBe("true");
+    expect(c.getAttribute("title")).toBe(HELD);
+    fireEvent.click(c);
+    expect((await chip()).getAttribute("aria-pressed")).toBe("true");
+    // New chat lets go of the hold (it belongs to that chat).
+    act(() => {
+      window.dispatchEvent(new Event(NEW_CHAT_EVENT));
+    });
+    await waitFor(async () => expect((await chip()).getAttribute("data-held")).toBeNull());
+  });
+
+  it("turning it off re-reads the chat, and a hold written during a turn puts it back on", async () => {
+    H.api.responses["/chat/threads/t10"] = {
+      id: "t10",
+      title: "Client mail",
+      messages: [
+        { role: "user", content: "what did the client send" },
+        { role: "assistant", content: "fresh mail reply" },
+      ],
+      setup: { local_only: true },
+    };
+    window.history.replaceState({}, "", "/chat?thread=t10");
+    render(<ChatPage />);
+    await screen.findByText("fresh mail reply");
+    await waitFor(async () => expect((await chip()).getAttribute("aria-pressed")).toBe("true"));
+    // The daemon held the chat during a turn this page has not re-read.
+    H.api.responses["/chat/threads/t10"] = {
+      ...(H.api.responses["/chat/threads/t10"] as object),
+      setup: { local_only: true, local_only_holds: ["microsoft_365"] },
+    };
+    const before = H.api.gets.filter((g) => g === "/chat/threads/t10").length;
+    fireEvent.click(await chip());
+    await waitFor(() =>
+      expect(H.api.gets.filter((g) => g === "/chat/threads/t10").length).toBe(before + 1),
+    );
+    await waitFor(async () => expect((await chip()).getAttribute("aria-pressed")).toBe("true"));
+    expect((await chip()).getAttribute("title")).toBe(HELD);
+  });
+});
+
+describe("a held chat never offers to send a message to the cloud (v1.428.0 review)", () => {
+  function heldThread(id: string): void {
+    H.api.responses[`/chat/threads/${id}`] = {
+      id,
+      title: "Client mail",
+      messages: [
+        { role: "user", content: "what did the client send" },
+        { role: "assistant", content: `held reply ${id}` },
+      ],
+      setup: { local_only: true, local_only_holds: ["microsoft_365"] },
+    };
+    window.history.replaceState({}, "", `/chat?thread=${id}`);
+  }
+
+  it("the ask-first card says why and offers only Keep it local", async () => {
+    heldThread("t21");
+    render(<ChatPage />);
+    await screen.findByText("held reply t21");
+    await waitFor(async () => expect((await chip()).getAttribute("data-held")).toBe("true"));
+    await pickModel("opus");
+    await type("summarize the payroll file");
+    const card = await screen.findByTestId("cloud-ask-card");
+    expect(screen.getByTestId("cloud-ask-body").textContent).toBe(
+      "Local only stays on: this chat used Microsoft 365, which stays on your own models. " +
+        "So this message can't go to Opus 4.8: choose one of your own models.",
+    );
+    expect(within(card).queryByRole("button", { name: "Send once" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Keep it local" })).toBeTruthy();
+    expect(H.run.bodies).toHaveLength(0);
+  });
+
+  it("the daemon's refusal offers no Send … once", async () => {
+    heldThread("t22");
+    render(<ChatPage />);
+    await screen.findByText("held reply t22");
+    await waitFor(async () => expect((await chip()).getAttribute("data-held")).toBe("true"));
+    await pickModel("qwen");
+    H.run.fail.push(refusal());
+    await type("read this scan");
+    await screen.findByTestId("chat-turn-error");
+    expect(screen.queryByTestId("local-refusal-send-once")).toBeNull();
+    expect(screen.getByTestId("local-refusal-choose-local")).toBeTruthy();
+  });
+
+  it("the dock's keys line and the card itself never promise Send once", () => {
+    const held = { id: "c2", provider: "claude-cli", model: "claude-opus-4-8", name: "Opus 4.8",
+      held: ["microsoft_365"] };
+    const [item] = collectDockAsks({ cloud: held });
+    expect(dockAskKeyHint("cloud", item)).toBe("Esc to keep it local");
+    render(
+      <DockAsk
+        asks={[item]}
+        onAnswerElicitation={async () => ({ ok: true })}
+        onDecideSampling={async () => true}
+        onCloudAnswer={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Send once" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep it local" })).toBeTruthy();
+  });
+});
+
 /* ======================================================= asking first */
 
 describe("a cloud model in a local-only chat asks first", () => {

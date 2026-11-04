@@ -4339,6 +4339,110 @@ does not need a bump, stop and bump it.
   `_fresh_open_prompt`); recording the question 0.5 s late reproduced CI's
   exact error on the old shape.
 
+- **Microsoft 365 is LOCKED DOWN for client data: read and draft only, one
+  account, the firm's own app, a locked install, the user's own models only**
+  (v1.428.0; the user, a CPA firm: "highly secure", the main mailbox, drafts
+  only, "local only, always"). THE CARD (`connectors/catalog` `microsoft_365`,
+  `locked="ms365"`, `local_only=True`, `command="node"`, `args=[]`,
+  `replaces=[MS365_PACKAGE]`): fields = the account-kind choice
+  (common/consumers), `MS365_MCP_EXPECTED_USERNAME` (required) and
+  `MS365_MCP_CLIENT_ID` (a GUID; REQUIRED for a work account — `NEED_APP`; a
+  personal account gets the package's own `DEFAULT_APP`, named explicitly).
+  `connectors/ms365.env_for(values, signin_dir)` is THE
+  rule: `ENABLED_TOOLS` = `SAFE_TOOLS` (15: calendar/contacts/OneDrive read,
+  mail read + `create-draft-email`; never send-mail or calendar writes — the
+  package then asks Microsoft for Calendars.Read, Contacts.Read, Files.Read,
+  Mail.ReadWrite, measured with its `--list-permissions`),
+  `MS365_MCP_CLOUD_TYPE=global`, the email lowercased (the package refuses and
+  deletes any other account's sign-in, `rejectUnexpectedLoginAccount`), a work
+  account's `MS365_MCP_TENANT_ID` = the email's domain (a single-tenant app
+  refuses "common"), and `MS365_MCP_TOKEN_CACHE_PATH` /
+  `MS365_MCP_SELECTED_ACCOUNT_PATH` inside `locked_pack.signin_dir`
+  (`<install root>/_signin/ms365`; the package encrypts the cache with a key it
+  keeps in Windows Credential Manager) — never its shared `%APPDATA%` folder.
+  The pack door keeps a LOCKED row's settings PLAIN (`TOKEN_CACHE_PATH` names a
+  file, not a secret; the generic split would vault it). THE INSTALL
+  (`connectors/locked_pack.py`, `LockedPackage` `MS365` 0.170.2): the lock
+  `connectors/locked/ms365/package.json` + `package-lock.json` (188 packages
+  without optional ones, every one sha512; keytar a DIRECT dependency so
+  `--omit=optional` keeps it and drops the Azure Key Vault extras) installs
+  ONCE into `<userData>/mcp-packages/ms365-<lock hash>` (else
+  `<home>/mcp-packages`, skipped by `create_backup`) with `npm ci
+  --omit=optional --omit=dev --ignore-scripts`, then `npm rebuild keytar`
+  ALONE (its prebuilt binary keeps the sign-in key in Windows Credential
+  Manager) and its native file checked against a pinned sha256
+  (`LockedPackage.native_files`, win32-x64; an unlisted platform skips the
+  rebuild), the package's own version checked, a marker written, a failure
+  leaving nothing; NO_NODE when Node.js is missing. A changed lock is a new
+  folder; nothing updates in place. The pack runs `node <entry>` with the
+  install folder as cwd (the package reads a `.env` from its cwd —
+  `dist/load-env.js`). THE ROW (`connectors/service.locked_body`, the ONLY
+  door: `pack_body` and the chat's `app_connect` refuse a locked card,
+  `LOCKED_ELSEWHERE`): command "node", args [entry], cwd, env, `local_only:
+  true`, `locked: "ms365"` (`McpServerBody.local_only/locked`, written by
+  `mcp/pack_door.add_pack`); `update_mcp_pack` refuses any settings edit of a
+  `locked` row (409 `LOCKED_EDIT`; the switch and auto-approve stay). SIGN IN:
+  ONE job `microsoft-365-signin` (`ai_clis.SETUP_LAUNCHES`,
+  `catalog.signin_launches` — a locked card has no per-choice job);
+  `routes/terminals.launch_pane` types the SAVED row's own argv
+  (`service.locked_signin`: `resolve_launcher`'s node, the entry, `--login`)
+  with the saved env and cwd, or 409s when the row is not exactly what the card
+  writes (`_locked_signin_row` round-trips `env_for(answers_from_env(env))`).
+  LOCAL ONLY: `mcp/tools` marks a `local_only` row's tools; `execute` refuses
+  (`LOCAL_ONLY_APP_REFUSAL`) unless `egress.current_scope()` is on with NO
+  `allowed_once`, and a successful call HOLDS the chat:
+  `egress.hold_local_only(engine, thread_id, app)` writes `local_only: true` +
+  `local_only_holds` (never `updated_at`), or — a new chat's first turn —
+  `note_pending_hold(turn_id)` that `POST /chat/turns/{id}/thread` applies.
+  `setup_says_local_only` reads holds too; `routes/chat._clean_setup` keeps
+  them and forces local_only; the thread PUT merges the STORED holds into
+  whatever the page sends (it cannot clear them). The chat page reads them
+  (`lib/localOnly.localOnlyHolds`, the chip `data-held`, its title
+  `localOnlyHeldTitle`; a press never turns it off; turning it off re-reads the
+  chat once). The Handbook section "Microsoft 365, locked down for client
+  data" holds the admin-center steps (single-tenant app, public client flows,
+  the four Graph permissions + openid/profile/offline_access, admin consent,
+  assignment required). OPEN: an existing open (npx) Microsoft 365 row is not
+  migrated (it must be disconnected and reconnected); Disconnect does not run
+  the package's `--logout` (revoke in Entra); pending holds live in memory (a
+  restart between a new chat's first turn and its link loses that hold — the
+  tools still refuse outside Local only). REVIEW (each red first, 16
+  mutations red): (b) `locked_pack.clean_env` drops every `MS365_MCP_*`,
+  ENABLED_TOOLS, READ_ONLY, NODE_OPTIONS and NODE_PATH from the daemon's own
+  environment before a locked pack starts (`mcp/tools._build_transport`) and
+  before its Sign in terminal starts (`routes/terminals._job_base`) — a stray
+  `MS365_MCP_OAUTH_TOKEN` skips the account lock, `MS365_MCP_AUTH_CACHE_COMMAND`
+  runs a program with the sign-in; (c) `mcp/tools.chat_only_refusal`: its tools
+  answer only when `ctx.session_id == "chat"` and
+  `failure_words.current_surface()` is the chat's (never an agent run, a Build
+  session or the phone — each carries the answer further); (d)
+  `LOCKED_HIDDEN_TOOLS` (logout, remove-account, select-account) are never
+  registered; (e) `pack_grants_auto` is False for a `locked` row and PATCH
+  `{auto_approve: true}` on one is 409 `LOCKED_ASKS` (both the update path and
+  the auto-approve-only fast path); (f) `chat_turn.local_only_scope_for` drops
+  `allow_cloud_once` when the saved chat has holds (`egress.thread_holds`), and
+  the page offers no "Send once" on a held chat (`CloudAsk.held`,
+  `cloudHeldBody`, `dockAskKeyHint`, the refusal's button); (g)
+  `egress.note_pending_hold` answers the chat a turn is ALREADY linked to
+  (`_TURN_THREADS`, filled by `link_turn_holds` in the link route; one
+  `_HOLD_LOCK` for both maps), so a link that lands before the tool reads the
+  mail still holds the chat; (h) `locked_pack.unlocked_copy` (name
+  `microsoft_365`, or a command line naming `ms-365-mcp-server`, on a row that
+  is not `locked`) is refused at `pack_door.add_pack` (409, paste/import/npm
+  doors) and never started by `_load_one_server` (its load record says to
+  connect from the card); (i) `cap_prior_tool_results(entries, platform)`
+  leaves `local_only` tools' rows behind on an escalation (both lanes); (j)
+  `POST /chat/threads/{id}/remember` on a local-only or held chat refuses a
+  memory base `egress.ltm_connector_is_local` does not call local (409). Pins:
+  `tests/test_ms365_locked_v14280.py`, `tests/test_ms365_review_v14280.py`, the
+  sign-in-terminal case in `tests/test_microsoft_365_v13560.py`, the v1.428.0
+  blocks of `dashboard/__tests__/local-only-chat-v1332.test.tsx`; moved on
+  purpose: the v13560/v13580 Microsoft 365 suites (a firm app ID, 18 tools,
+  the domain as tenant, the sign-in folder) and both their recorded fixtures.
+  STILL OPEN: an agent run under Local only can still use internet tools (a
+  general gap, older); the keytar binary was compared with GitHub by size
+  only (its sha256 is now pinned on this PC's build).
+
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died
   together twice in one day, each ~15 min after the reply that said "I'll

@@ -32,6 +32,7 @@ from iron_jarvis.scheduling import run_outcome as ro
 # The lanes' own harnesses (fixtures are registered by import).
 from tests.test_connections_honest_v13580 import (  # noqa: F401 — pytest fixtures
     CARD_ID,
+    MS365_TOOLS_LOADED,
     _connect_ms365,
     _fresh,
     _platform,
@@ -130,7 +131,9 @@ def test_the_first_chat_read_after_a_restart_says_signed_in_when_it_is(ms365, si
     signin_seen.forget()  # a restart: nothing has been asked yet
     row = _apps_row(ms365)
     assert row["state"] == "connected", row
-    assert "connected (24 tools)" in app_names.apps_section([row])
+    # v1.428.0 (moved on purpose): the locked card's read and draft tools,
+    # no longer 24.
+    assert f"connected ({MS365_TOOLS_LOADED} tools)" in app_names.apps_section([row])
 
 
 def test_the_first_chat_read_still_says_sign_in_when_nobody_signed_in(ms365, signin_file):  # noqa: F811 — pytest fixtures

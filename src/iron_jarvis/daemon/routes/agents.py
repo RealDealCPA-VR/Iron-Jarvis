@@ -1242,6 +1242,20 @@ class McpServerSwitchPatchBody(McpServerPatchBody):
     enabled: bool | None = None
 
 
+#: v1.428.0: why a locked app's settings cannot be edited here.
+LOCKED_EDIT = (
+    "This app is locked down and set up only from its card in Settings › Connections. "
+    "To change it, press Disconnect on that card, then connect it again."
+)
+
+
+#: v1.428.0 review: why a locked app cannot be set to run without asking.
+LOCKED_ASKS = (
+    "This app is locked down: Jarvis asks you before each use of it, and that "
+    "cannot be turned off."
+)
+
+
 def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
     """Edit a configured pack PARTIALLY and reload it (v1.343.0, lane J).
 
@@ -1276,6 +1290,19 @@ def update_mcp_pack(d, name: str, body: McpServerPatchBody) -> dict[str, Any]:
             detail="the name cannot change; remove the extension and add it again under the new name",
         )
     old = servers[idx]
+    if isinstance(old, dict) and old.get("locked"):
+        # v1.428.0: a LOCKED app (Microsoft 365) is changed only from its
+        # card, where its rules are checked; only its switch stays editable
+        # here. It always asks before each use (review: "run without asking"
+        # on a mailbox of client data is not a choice this door offers).
+        shape = {k for k in body.model_fields_set if k not in ("name", "enabled")}
+        if "auto_approve" in shape and not body.auto_approve:
+            shape.discard("auto_approve")  # turning it OFF is always fine
+        if shape:
+            raise HTTPException(
+                status_code=409,
+                detail=LOCKED_ASKS if shape == {"auto_approve"} else LOCKED_EDIT,
+            )
     row = json.loads(json.dumps(old))
     old_transport = (
         row["transport"] if isinstance(row.get("transport"), str) and row.get("transport") else "stdio"
@@ -4555,6 +4582,9 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such server")
         if body.auto_approve is None:
             return {"name": name, "auto_approve": bool(target.get("auto_approve"))}
+        if body.auto_approve and target.get("locked"):
+            # v1.428.0 review: a LOCKED app (Microsoft 365) always asks.
+            raise HTTPException(status_code=409, detail=LOCKED_ASKS)
 
         if body.auto_approve:
             target["auto_approve"] = True

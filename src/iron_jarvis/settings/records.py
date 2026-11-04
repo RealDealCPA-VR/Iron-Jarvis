@@ -1614,7 +1614,9 @@ class AppConnectTool(_RecordTool):
         from ..connectors.catalog import get_connector
 
         conn = get_connector(self._target(args))
-        if conn is None or conn.connect_via in ("oauth", "api_key"):
+        if conn is None or conn.connect_via in ("oauth", "api_key") or getattr(conn, "locked", ""):
+            # v1.428.0: a LOCKED app is set up only from its card — this call
+            # answers where, and changes nothing.
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
         # v1.356.0 integrate (G78): a saved app the user switched off — the
         # call only says so (``execute``), so it is no card either.
@@ -1756,6 +1758,21 @@ class AppConnectTool(_RecordTool):
                     ),
                     data={"app": conn.id, "already_connected": True, "tools_loaded": live},
                 )
+        if getattr(conn, "locked", ""):
+            # v1.428.0: Microsoft 365 is LOCKED DOWN for client data (read and
+            # draft only, one account, its own lock, the user's own models) —
+            # set up from its card, where the person types the account and the
+            # firm's app, never from a model's arguments.
+            from ..connectors.app_names import APPS_PLACE
+            from ..connectors.service import LOCKED_ELSEWHERE
+
+            return ToolResult(
+                ok=False,
+                error=LOCKED_ELSEWHERE.format(name=conn.name).replace(
+                    "Settings › Connections", APPS_PLACE
+                ),
+                data={"app": conn.id, "locked": True},
+            )
         cfg_args = list(conn.args)
         # v1.356.0 integrate (G60, lane 6D's review): the settings the pack
         # ALWAYS starts with (Microsoft 365's tool filter) — the Directory's

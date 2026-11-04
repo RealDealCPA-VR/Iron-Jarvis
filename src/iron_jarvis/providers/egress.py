@@ -747,15 +747,140 @@ def local_ltm(ltm: Any) -> Any:
 # --------------------------------------------------------------------------- #
 # A saved chat's own setting
 # --------------------------------------------------------------------------- #
+#: v1.428.0: a chat that has READ an app kept on the user's own models
+#: (Microsoft 365, ``connectors/ms365.py``) names that app here, in its saved
+#: setup — and from then on the chat is Local only whatever the switch says:
+#: its replies may quote the mail, and the next turn sends them again.
+HOLDS_KEY = "local_only_holds"
+_HOLD_ID_RX = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_PENDING_HOLDS: dict[str, set[str]] = {}
+_PENDING_MAX = 200
+#: v1.428.0 review: the chat each linked turn was saved as. The page may link
+#: a new chat's first turn BEFORE the tool reads the mail (it saves the chat
+#: while the turn still runs), so a hold during a turn with no thread id looks
+#: here first — never a pending hold nobody will take. One lock covers both
+#: maps, so a link and a hold of the same turn can never miss each other.
+_TURN_THREADS: dict[str, str] = {}
+_HOLD_LOCK = __import__("threading").Lock()
+
+
+def clean_holds(raw: Any) -> list[str]:
+    """The app ids a saved setup holds a chat local for (sorted, valid, ≤ 8)."""
+    if not isinstance(raw, list):
+        return []
+    return sorted({str(x) for x in raw if isinstance(x, str) and _HOLD_ID_RX.match(x)})[:8]
+
+
 def setup_says_local_only(setup_json: Any) -> bool:
-    """True when a saved thread's ``setup_json`` carries ``local_only: true``."""
+    """True when a saved thread's ``setup_json`` carries ``local_only: true``,
+    or holds the chat local for an app it read (v1.428.0, :data:`HOLDS_KEY`)."""
     import json
 
     try:
         data = json.loads(setup_json or "{}")
     except Exception:  # noqa: BLE001
         return False
-    return isinstance(data, dict) and data.get("local_only") is True
+    if not isinstance(data, dict):
+        return False
+    return data.get("local_only") is True or bool(clean_holds(data.get(HOLDS_KEY)))
+
+
+def hold_local_only(engine: Any, thread_id: Any, app: str) -> bool:
+    """Keep the saved chat *thread_id* Local only for *app* from now on
+    (v1.428.0). BLOCKING (one row read + write, under the conversation write
+    lock); never touches ``updated_at`` (the page's save check must not trip
+    on it). False when there is no such chat or the write failed."""
+    tid = str(thread_id or "").strip()[:80]
+    if not tid or engine is None or not _HOLD_ID_RX.match(str(app or "")):
+        return False
+    try:
+        import json
+
+        from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
+        from ..core.models import ChatThreadRecord as T
+
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(T, tid)
+            if row is None:
+                return False
+            try:
+                setup = json.loads(row.setup_json or "{}")
+            except ValueError:
+                setup = {}
+            if not isinstance(setup, dict):
+                setup = {}
+            holds = clean_holds(setup.get(HOLDS_KEY))
+            if app in holds and setup.get("local_only") is True:
+                return True
+            setup["local_only"] = True
+            setup[HOLDS_KEY] = clean_holds([*holds, app])
+            row.setup_json = json.dumps(setup)
+            db.add(row)
+            db.commit()
+        return True
+    except Exception:  # noqa: BLE001 — the tool's own refusal still holds each turn
+        return False
+
+
+def note_pending_hold(turn_id: Any, app: str) -> str:
+    """A new chat's FIRST turn has no saved chat id in its context: when the
+    page has ALREADY linked the turn, answer that chat's id (the caller holds
+    it now); else remember that the turn read *app*, for
+    :func:`link_turn_holds` when the page links it, and answer ""."""
+    tid = str(turn_id or "").strip()[:80]
+    if not tid or not _HOLD_ID_RX.match(str(app or "")):
+        return ""
+    with _HOLD_LOCK:
+        linked = _TURN_THREADS.get(tid, "")
+        if linked:
+            return linked
+        if tid not in _PENDING_HOLDS and len(_PENDING_HOLDS) >= _PENDING_MAX:
+            _PENDING_HOLDS.pop(next(iter(_PENDING_HOLDS)))
+        _PENDING_HOLDS.setdefault(tid, set()).add(app)
+    return ""
+
+
+def link_turn_holds(turn_id: Any, thread_id: Any) -> list[str]:
+    """The page linked *turn_id* to the chat it saved: remember the link (a
+    hold later in this turn goes straight to the chat) and answer the apps the
+    turn already read, for the caller to hold."""
+    tid = str(turn_id or "").strip()[:80]
+    th = str(thread_id or "").strip()[:80]
+    if not tid:
+        return []
+    with _HOLD_LOCK:
+        if th:
+            if tid not in _TURN_THREADS and len(_TURN_THREADS) >= _PENDING_MAX:
+                _TURN_THREADS.pop(next(iter(_TURN_THREADS)))
+            _TURN_THREADS[tid] = th
+        return sorted(_PENDING_HOLDS.pop(tid, set()))
+
+
+def take_pending_holds(turn_id: Any) -> list[str]:
+    with _HOLD_LOCK:
+        return sorted(_PENDING_HOLDS.pop(str(turn_id or "").strip()[:80], set()))
+
+
+def thread_holds(engine: Any, thread_id: Any) -> list[str]:
+    """The apps a saved chat is held Local only for ([] = none, or unread).
+    Blocking (one row read): call it off the loop."""
+    tid = str(thread_id or "").strip()[:80]
+    if not tid or engine is None:
+        return []
+    try:
+        import json
+
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import ChatThreadRecord as T
+
+        with session_scope(engine) as db:
+            row = db.exec(select(T.setup_json).where(T.id == tid)).first()
+        data = json.loads(row or "{}")
+        return clean_holds(data.get(HOLDS_KEY)) if isinstance(data, dict) else []
+    except Exception:  # noqa: BLE001 — unread: no hold known (the tool still refuses)
+        return []
 
 
 def thread_local_only(engine: Any, thread_id: Any) -> bool:

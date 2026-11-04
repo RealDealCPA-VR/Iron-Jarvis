@@ -3132,14 +3132,32 @@ def step_detail(name: str, safe_args: object, content: object) -> dict[str, str]
         return {"input": "", "output": ""}
 
 
-def cap_prior_tool_results(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def cap_prior_tool_results(entries: list[dict[str, Any]], platform: Any = None) -> list[dict[str, Any]]:
     """The list an escalation carries: *entries* through the ONE normaliser
     the runtime renders with (``agents/runtime.normalize_prior_tool_results``
     — masked again, per-row caps, then the NEWEST rows that fit 12 entries /
-    12,000 chars, oldest first)."""
+    12,000 chars, oldest first).
+
+    v1.428.0 review: a row of an app kept on the user's own models
+    (Microsoft 365 — its tools are marked ``local_only``) is LEFT BEHIND: the
+    app answers only in a plain chat, and an agent's task would carry its mail
+    on. With *platform* given, those rows are dropped first."""
     from ..agents.runtime import normalize_prior_tool_results
 
+    if platform is not None:
+        entries = [e for e in entries if not _kept_local_tool(platform, e.get("tool"))]
     return normalize_prior_tool_results(entries)
+
+
+def _kept_local_tool(platform: Any, name: Any) -> bool:
+    """Is *name* a registered tool marked ``local_only``? Never raises: a
+    registry read that fails keeps the row out (fail closed)."""
+    try:
+        reg = getattr(platform, "registry", None)
+        tool = reg.get(str(name)) if reg is not None else None
+        return bool(getattr(tool, "local_only", False))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -9126,6 +9144,17 @@ async def local_only_scope_for(platform, body) -> "_egress.LocalOnlyScope":
         chosen = await chosen_provider_for(platform, body)
         if once.lower() != chosen.lower():
             once = ""
+    if once:
+        # v1.428.0 review: a chat that has read an app kept on the user's own
+        # models (Microsoft 365) never sends a message off this network, even
+        # once with the user's OK — its earlier replies may quote the mail.
+        import asyncio as _asyncio
+
+        held = await _asyncio.to_thread(
+            _egress.thread_holds, getattr(platform, "engine", None), getattr(body, "thread_id", "")
+        )
+        if held:
+            once = ""
     return _egress.make_scope(True, once)
 
 
@@ -11435,7 +11464,7 @@ async def run_chat_turn(
     # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py carries
     # the same conditional key — edit both or neither.
     if escalate:
-        out["prior_tool_results"] = cap_prior_tool_results(_prior_results)
+        out["prior_tool_results"] = cap_prior_tool_results(_prior_results, platform)
     # UNREAD STEER NOTES (v1.287.0) — the stream done-frame's conditional
     # `unread_steers` key is ABSENT here by construction, not by omission:
     # this lane never registers a turn (TURNS), so no steer note can be

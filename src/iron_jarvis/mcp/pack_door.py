@@ -253,6 +253,17 @@ def add_pack(
     is_http = body.transport in ("http", "sse")
     if not is_http and not (body.command or "").strip():
         raise PackDoorError(400, "command is required")
+    # v1.428.0 review: a LOCKED app's program (Microsoft 365) is added only
+    # from its card. Every other door — a pasted config, an import, the npm
+    # door — would run it unlocked, so it is refused here, before anything.
+    from ..connectors.locked_pack import locked_elsewhere_words, unlocked_copy
+
+    _app = unlocked_copy({"name": name, "command": body.command, "args": list(body.args or []),
+                          "package": getattr(body, "package", "") or "",
+                          "url": getattr(body, "url", "") or "",
+                          "locked": getattr(body, "locked", "") or ""})
+    if _app:
+        raise PackDoorError(409, locked_elsewhere_words(_app))
     servers = _servers(platform)
     old_row = next((s for s in servers if isinstance(s, dict) and s.get("name") == name), None)
     if old_row is not None and not replace:
@@ -280,7 +291,15 @@ def add_pack(
     from .secrets import store_url_secret as _store_url_secret
     from .secrets import vault_name as _vault_name
 
-    plain_env, secret_values = _split_env(name, body.env or {})
+    if getattr(body, "locked", ""):
+        # v1.428.0: a LOCKED card's settings are Iron Jarvis's own (an account
+        # lock, a tool filter, the path of the sign-in folder) and none is a
+        # secret — `MS365_MCP_TOKEN_CACHE_PATH` names a FILE. Kept plain, so
+        # the saved row is exactly what the card writes and its Sign in press
+        # can check it.
+        plain_env, secret_values = {str(k): str(v) for k, v in (body.env or {}).items()}, {}
+    else:
+        plain_env, secret_values = _split_env(name, body.env or {})
     # v1.355.0 (G44): a key the CALLER knows is a secret is one, whatever its
     # name says (an empty value is dropped, as the split drops it).
     for key in [str(k) for k in secret_keys]:
@@ -374,6 +393,9 @@ def add_pack(
             **({"env_secrets": env_secrets} if env_secrets else {}),
             **({"cwd": body.cwd} if body.cwd else {}),
             **({"auto_approve": True} if body.auto_approve else {}),
+            # v1.428.0: a locked card's marks (connectors.service.locked_body).
+            **({"local_only": True} if getattr(body, "local_only", False) else {}),
+            **({"locked": body.locked} if getattr(body, "locked", "") else {}),
         }
     if not enabled:
         # v1.356.0 (G78): saved switched off — `install_config` stores it and

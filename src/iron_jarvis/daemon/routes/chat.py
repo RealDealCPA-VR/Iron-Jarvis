@@ -1104,6 +1104,16 @@ def _clean_setup(raw: Any) -> str:
     # out, exactly like the posture's default above.
     if raw.get("local_only") is True:
         out["local_only"] = True
+    # v1.428.0: a chat that READ an app kept on the user's own models
+    # (Microsoft 365) stays Local only — its replies may quote the mail. The
+    # holds are written by the daemon (egress.hold_local_only), kept by every
+    # write here, and turn the switch back on whatever the page sent.
+    from ...providers.egress import HOLDS_KEY, clean_holds
+
+    holds = clean_holds(raw.get(HOLDS_KEY))
+    if holds:
+        out[HOLDS_KEY] = holds
+        out["local_only"] = True
     # IJ HARNESS SESSIONS (v1.367.0, Phase 4) — the same whitelist, so a
     # Build session's setup survives every write: its MODE ("plan" stored;
     # "act", the default, stored as nothing) and the PLAN the user approved
@@ -2147,6 +2157,18 @@ def register(app: FastAPI, d) -> None:
             # autosave (messages-only PUT) never clobbers a stored setup; an
             # explicit null clears it (same contract as project_id above).
             if "setup" in body:
+                # v1.428.0: the page never clears a chat's Local only hold
+                # (it does not know of it): the stored holds ride along.
+                from ...providers.egress import HOLDS_KEY, clean_holds
+
+                try:
+                    kept_holds = clean_holds(json.loads(r.setup_json or "{}").get(HOLDS_KEY))
+                except (ValueError, AttributeError):
+                    kept_holds = []
+                if kept_holds:
+                    merged = dict(raw_setup) if isinstance(raw_setup, dict) else {}
+                    merged[HOLDS_KEY] = clean_holds([*kept_holds, *(merged.get(HOLDS_KEY) or [])])
+                    raw_setup = merged
                 r.setup_json = _clean_setup(raw_setup)
             kept: list = []
             if not daemon_owned:
@@ -2449,6 +2471,17 @@ def register(app: FastAPI, d) -> None:
         src = (body.source or "").strip() or ltm.default_source()
         if not src or ltm.get(src) is None:
             raise HTTPException(status_code=400, detail=f"no such memory base: {src}")
+        if local_only and not _egress.ltm_connector_is_local(ltm.get(src)):
+            # v1.428.0 review: a local-only chat (or one held Local only after
+            # it read Microsoft 365) is never written to a memory base off
+            # this PC — the transcript may quote the mail.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This chat is local only, so nothing was written to {src}: "
+                    "that memory base is not on this PC. Choose a memory base on this PC."
+                ),
+            )
         title = (r.title or "Chat").strip() or "Chat"
         transcript = _share_transcript(title, r.persona or "", r.updated_at, msgs)
 
@@ -3053,6 +3086,12 @@ def register(app: FastAPI, d) -> None:
             logs.link_later(turn_id, tid)
             await asyncio.to_thread(_durable.link_record, d.platform.engine, turn_id, tid)
             linked = "later"
+        # v1.428.0: a new chat's first turn that read a mailbox kept on the
+        # user's own models holds the chat it was saved as Local only.
+        from ...providers.egress import hold_local_only, link_turn_holds
+
+        for app_id in link_turn_holds(turn_id, tid):
+            await asyncio.to_thread(hold_local_only, d.platform.engine, tid, app_id)
         # v1.347.0: a picture/video/song this turn started comes home to the
         # chat now named — and one that FINISHED before the link (a new chat's
         # first question carried no thread id) is delivered here.
@@ -7484,7 +7523,7 @@ async def chat_stream(
         # POST /sessions. MIRROR NOTE (lock-step): chat_turn.py's response
         # carries the same conditional key — edit both or neither.
         if escalate:
-            done_frame["prior_tool_results"] = cap_prior_tool_results(_prior_results)
+            done_frame["prior_tool_results"] = cap_prior_tool_results(_prior_results, platform)
         # v1.287.0: present ONLY when a note was left unread (see above).
         if unread_steers:
             done_frame["unread_steers"] = unread_steers

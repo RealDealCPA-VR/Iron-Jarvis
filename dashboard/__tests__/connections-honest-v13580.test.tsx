@@ -177,7 +177,7 @@ describe("(2) N connected counts what works", () => {
     expect(screen.getByTestId("directory-count-off").textContent).toBe("1 off");
     // Slack (didn't start), Microsoft 365 (sign-in to finish), Pixio (key refused).
     expect(screen.getByTestId("directory-count-attention").textContent).toBe("3 need attention");
-    // "tools live" counts working cards only (Microsoft 365's 24 are not live).
+    // "tools live" counts working cards only (Microsoft 365's are not live).
     expect(t).toMatch(/\b3 tools live\b/);
 
     const filter = screen.getAllByRole("button", { name: /connected/i }).find((b) => b.hasAttribute("aria-pressed"))!;
@@ -253,11 +253,12 @@ describe("(3) Microsoft 365 before and after its sign-in", () => {
     );
     const press = within(card).getByTestId("connector-signin-press-microsoft_365");
     expect(press.textContent).toContain("Sign in to Microsoft");
-    // No list of 24 tools that would all fail until then.
+    // No list of tools that would all fail until then.
     expect(within(card).queryByText("get-calendar-view")).toBeNull();
     fireEvent.click(press);
     await within(card).findByTestId("connector-signin-hint-microsoft_365");
-    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin-work" } }]);
+    // v1.428.0 (moved on purpose): the locked card's ONE sign-in job.
+    expect(api.posts).toEqual([{ path: "/terminals/launch", body: { cli: "microsoft-365-signin" } }]);
   });
 
   it("is green and says who once the daemon's check says signed in", async () => {

@@ -61,6 +61,7 @@ from iron_jarvis.tools.autoselect import select_auto_tools
 # server (it lists the REAL server's tool names). Fixtures are registered by
 # import (the integrate tests' way).
 from tests.test_microsoft_365_v13560 import (  # noqa: F401 — pytest fixtures
+    TOOLS_LOADED,
     _connect,
     _fresh_records,
     client,
@@ -450,13 +451,18 @@ def test_words_that_name_the_app_still_offer_that_app(app, text, label):
 @pytest.mark.parametrize("lane", ["stream", "post"])
 def test_an_outlook_user_who_says_check_my_inbox_gets_microsoft_365(client, lane):  # noqa: F811 — fixture
     """THE ACCEPTANCE: Microsoft 365 connected from its Directory card (its
-    24 tools loaded from the stand-in server), Gmail not. "check my inbox":
+    tools loaded from the stand-in server), Gmail not. "check my inbox":
     the model is told about Microsoft 365, never "Gmail: not connected"; no
     "Connect Gmail" door; and (stream lane) Microsoft 365's tools are armed.
     MUTATION: drop the ``resolve_kinds`` call in ``_gather_grounding`` ->
-    the section says Gmail and the tools are missing (red)."""
+    the section says Gmail and the tools are missing (red).
+
+    v1.428.0 (moved on purpose): the locked card loads its read and draft
+    tools (``TOOLS_LOADED``, not 24) and its Connect needs the account's email
+    (``_connect`` sends it). The model here never calls a tool, so the turn
+    needs no Local only: arming is unchanged, only a call is refused."""
     r = _connect(client, "common")
-    assert r.status_code == 200 and r.json()["tools_loaded"] == 24, r.text
+    assert r.status_code == 200 and r.json()["tools_loaded"] == TOOLS_LOADED, r.text
     platform = client.app.state.d.platform
     out, model = (_stream_turn if lane == "stream" else _post_turn)(platform, "check my inbox")
     section = _section(model.systems[0])

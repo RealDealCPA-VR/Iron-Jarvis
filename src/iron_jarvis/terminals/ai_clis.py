@@ -76,24 +76,18 @@ SETUP_LAUNCHES: list[dict[str, str]] = [
         "url": "https://ollama.com",
     },
     {
-        "id": "microsoft-365-signin-work",
-        "label": "Microsoft sign-in · Work or school account",
-        "command": "npx -y @softeria/ms-365-mcp-server --login",
+        # v1.428.0: Microsoft 365 is LOCKED DOWN — one sign-in, and the line
+        # the pane types is the SAVED pack's own (``connectors.service.
+        # locked_signin``: the locked copy's path on this PC); this command
+        # only names it.
+        "id": "microsoft-365-signin",
+        "label": "Microsoft sign-in",
+        "command": "node <Microsoft 365 (Outlook, Calendar, OneDrive): Iron Jarvis's locked copy> --login",
         "agent_cli": "",
         "provider": "Microsoft",
         "url": "https://github.com/Softeria/ms-365-mcp-server",
         "app": "microsoft_365",
-        "choice": "work",
-    },
-    {
-        "id": "microsoft-365-signin-personal",
-        "label": "Microsoft sign-in · Personal account",
-        "command": "npx -y @softeria/ms-365-mcp-server --login",
-        "agent_cli": "",
-        "provider": "Microsoft",
-        "url": "https://github.com/Softeria/ms-365-mcp-server",
-        "app": "microsoft_365",
-        "choice": "personal",
+        "choice": "",
     },
 ]
 

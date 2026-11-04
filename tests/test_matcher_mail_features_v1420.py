@@ -30,6 +30,7 @@ from iron_jarvis.tools.autoselect import coding_offer
 
 from tests.test_chat_matches_meant_v13600 import (  # noqa: F401 — fixtures
     MAIL_DOOR,
+    TOOLS_LOADED,
     _clean,
     _connect,
     _fresh_records,
@@ -61,11 +62,15 @@ def test_fresh_install_fresh_mail_offers_the_mail_choice_and_no_web(app, lane, t
 
 @pytest.mark.timeout(180)
 def test_an_outlook_user_who_says_summarize_my_latest_emails_gets_microsoft_365(client):  # noqa: F811
-    """THE ACCEPTANCE: Microsoft 365 connected (its 24 tools from the
+    """THE ACCEPTANCE: Microsoft 365 connected (its tools from the
     stand-in server), Gmail not. The stream lane ask-arms Microsoft 365's
-    tools, no web tool, no door; the model is told about Microsoft 365."""
+    tools, no web tool, no door; the model is told about Microsoft 365.
+
+    v1.428.0 (moved on purpose): the locked card loads its read and draft
+    tools (``TOOLS_LOADED``, not 24); its Connect sends the account's email.
+    The model never calls a tool here, so no Local only is needed."""
     r = _connect(client, "common")
-    assert r.status_code == 200 and r.json()["tools_loaded"] == 24, r.text
+    assert r.status_code == 200 and r.json()["tools_loaded"] == TOOLS_LOADED, r.text
     platform = client.app.state.d.platform
     out, model = _stream_turn(platform, "summarize my latest emails")
     section = _section(model.systems[0])

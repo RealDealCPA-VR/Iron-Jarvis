@@ -122,6 +122,15 @@ class Connector:
     signin_args: list[str] = field(default_factory=list)
     # Whose account the sign-in is for, in the press's words ("Microsoft").
     signin_name: str = ""
+    # -- v1.428.0: an app LOCKED DOWN for client data --
+    # ``locked`` names a ``connectors.locked_pack`` package: the program is
+    # installed ONCE from the lock Iron Jarvis ships (every package pinned by
+    # version and sha512) and runs as ``node <entry>`` — never ``npx`` at its
+    # newest. Its settings come from the card's own rules
+    # (``connectors.service.LOCKED_RULES``), and ``local_only`` marks every
+    # tool it loads as usable only in a turn on the user's own models.
+    locked: str = ""
+    local_only: bool = False
     # -- v1.357.0 (G82): the Tools page's catalog is built from THIS file --
     # The id of this pack's row in ``GET /mcp/catalog`` (the name the Tools
     # page saves the pack under), "" when the Tools page does not offer it.
@@ -389,25 +398,31 @@ CATALOG: list[Connector] = [
         # in through different Microsoft authorities (MS365_TENANT_ENV): a
         # wrong guess either refuses the sign-in or (a personal account on
         # "common") ends it an hour later.
+        # v1.428.0 (the user's decision: a firm holding client information):
+        # LOCKED DOWN — read and draft only, ONE account, the firm's own app
+        # when given, the program from Iron Jarvis's own lock, and its mail
+        # only ever on the user's own models (connectors/ms365.py).
         id="microsoft_365",
         name="Microsoft 365 (Outlook, Calendar, OneDrive)",
         category="Productivity",
         glyph="📅",
-        blurb="Your Outlook email, calendar and OneDrive files.",
-        unlocks="Ask what's on your calendar, find and read email, draft or send "
-        "a message, add or move a meeting, and find files in OneDrive — from "
-        "chat and agents.",
+        blurb="Your Outlook email, calendar and OneDrive files, read and drafted on your own models.",
+        unlocks="Ask what's on your calendar, find and read email, save a reply as a "
+        "draft (you send it from Outlook), and find files in OneDrive — from chats "
+        "that run on your own models.",
         connect_via="mcp",
         scopes=[
-            "Read & change calendar events",
-            "Read, draft & send email",
+            "Read calendar events",
+            "Read email and save drafts (never sends)",
             "Read contacts",
             "Read OneDrive files",
         ],
         docs_url="https://github.com/Softeria/ms-365-mcp-server",
-        command="npx",
-        args=["-y", MS365_PACKAGE],
-        env={"ENABLED_TOOLS": MS365_ENABLED_TOOLS},
+        command="node",
+        args=[],
+        replaces=[MS365_PACKAGE],
+        locked="ms365",
+        local_only=True,
         fields=[
             Field(
                 MS365_TENANT_ENV,
@@ -428,6 +443,20 @@ CATALOG: list[Connector] = [
                         key="personal",
                     ),
                 ],
+            ),
+            Field(
+                "MS365_MCP_EXPECTED_USERNAME",
+                "Your Microsoft email",
+                help="Only this account can sign in. Any other account is refused and its sign-in deleted.",
+                kind="env",
+            ),
+            Field(
+                "MS365_MCP_CLIENT_ID",
+                "Your firm's app ID (needed for a work account)",
+                help="The Application (client) ID of the app your Microsoft 365 admin registered "
+                "for Iron Jarvis (the Handbook has the steps). A personal account can leave it empty.",
+                kind="env",
+                optional=True,
             ),
         ],
         signin_args=["--login"],
@@ -747,7 +776,11 @@ def signin_launch_id(connector_id: str, key: str = "") -> str:
 
 def signin_argv(c: Connector) -> list[str]:
     """The sign-in's command line: the pack's own command and arguments, then
-    ``signin_args``. Never anything the pack does not run."""
+    ``signin_args``. Never anything the pack does not run. A LOCKED card's
+    program is a path on this PC: its line here only names it; the pane types
+    the saved pack's own (``connectors.service.locked_signin``)."""
+    if c.locked:
+        return [c.command, f"<{c.name}: Iron Jarvis's locked copy>", *c.signin_args]
     return [c.command, *c.args, *c.signin_args]
 
 
@@ -778,6 +811,9 @@ def signin_launches() -> list[dict[str, str]]:
             continue
         f = choice_field(c)
         answers = [(o.key, o.label) for o in f.options] if f is not None else [("", "")]
+        if c.locked:
+            # v1.428.0: one sign-in; the saved pack carries the account kind.
+            answers = [("", "")]
         for key, words in answers:
             label = f"{c.signin_name or c.name} sign-in"
             rows.append(

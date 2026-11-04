@@ -20,6 +20,7 @@ import json
 import os
 import re
 import threading
+from pathlib import Path
 from typing import Any
 
 from ..core.config import persist_config_values
@@ -249,6 +250,124 @@ def _off_status() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# v1.428.0: an app LOCKED DOWN for client data (Microsoft 365)
+# --------------------------------------------------------------------------- #
+
+#: The words for a door that cannot set a locked app up (pack_body, the chat).
+LOCKED_ELSEWHERE = (
+    "{name} is set up only from its card in Settings › Connections, where it is "
+    "locked down: read and draft only, one account, your own models only."
+)
+
+
+def _locked_rules(connector):
+    """``(env_for, answers_from_env, kind_of)`` for a locked card."""
+    if connector.id == "microsoft_365":
+        from . import ms365
+
+        return ms365.env_for, ms365.answers_from_env, ms365.kind_of
+    raise ValueError(LOCKED_ELSEWHERE.format(name=connector.name))
+
+
+def locked_body(platform, connector, values: dict[str, Any]):
+    """The pack a locked card saves: the program from Iron Jarvis's own lock
+    (installed first when it is not in place — BLOCKING, seconds), run as
+    ``node <entry>`` from its own folder, with the card's rules' settings and
+    ``local_only``. Raises ``ValueError`` in plain words."""
+    from ..daemon.schemas import McpServerBody
+    from . import locked_pack
+
+    env_for, _answers, _kind = _locked_rules(connector)
+    pkg = locked_pack.PACKAGES[connector.locked]
+    home = getattr(getattr(platform, "config", None), "home", None)
+    if not home:
+        raise ValueError(f"{connector.name} could not find Iron Jarvis's own folder, so nothing was installed.")
+    try:
+        env = env_for(values, locked_pack.signin_dir(pkg, home))
+    except ValueError as exc:
+        raise ValueError(str(exc)) from None
+    try:
+        entry = locked_pack.ensure_installed(pkg, home)
+    except locked_pack.LockedInstallError as exc:
+        raise ValueError(str(exc)) from None
+    return McpServerBody(
+        name=connector.id,
+        command=connector.command,
+        args=[str(entry)],
+        env=env,
+        cwd=str(entry.parents[len(Path(pkg.entry).parts) - 1]),
+        local_only=bool(connector.local_only),
+        locked=connector.locked,
+    )
+
+
+def _locked_entry_ok(connector, cfg: dict) -> bool:
+    """Does the saved row run THIS card's locked program, from its own folder?"""
+    from . import locked_pack
+
+    pkg = locked_pack.PACKAGES.get(connector.locked)
+    args = [str(a) for a in (cfg.get("args") or [])]
+    if pkg is None or str(cfg.get("command") or "") != connector.command or len(args) != 1:
+        return False
+    entry = Path(args[0])
+    if not entry.as_posix().endswith(pkg.entry):
+        return False
+    folder = entry.parents[len(Path(pkg.entry).parts) - 1]
+    return str(cfg.get("cwd") or "") == str(folder) and cfg.get("locked") == connector.locked
+
+
+def _locked_signin_row(connector, cfg: dict) -> "dict[str, str] | None":
+    """A locked card's Sign in press: only while the saved row is EXACTLY what
+    the card writes (its program from the lock, its own folder, the settings
+    its rules make from the row's own answers, ``local_only``)."""
+    try:
+        env_for, answers, kind_of = _locked_rules(connector)
+    except ValueError:
+        return None
+    if cfg.get("env_secrets") or cfg.get("arg_secrets") or not _locked_entry_ok(connector, cfg):
+        return None
+    if bool(cfg.get("local_only")) != bool(connector.local_only):
+        return None
+    env = {str(k): str(v) for k, v in dict(cfg.get("env") or {}).items()}
+    from . import locked_pack
+
+    signin = locked_pack.signin_dir_for_cwd(locked_pack.PACKAGES[connector.locked], str(cfg.get("cwd") or ""))
+    try:
+        if env != env_for(answers(env), signin):
+            return None
+    except ValueError:
+        return None
+    f = choice_field(connector)
+    kind = kind_of(env)
+    opt = next((o for o in (f.options if f is not None else []) if o.key == kind), None)
+    return {
+        "cli": signin_launch_id(connector.id),
+        "label": f"Sign in to {connector.signin_name or connector.name}",
+        "account": opt.label if opt is not None else "",
+    }
+
+
+def locked_signin(platform, connector_id: str) -> "tuple[list[str], dict[str, str], str] | None":
+    """``(argv, env, cwd)`` the sign-in pane runs for a LOCKED app: exactly the
+    saved pack's own program, settings and folder, plus the card's sign-in
+    arguments — None when the app is not saved as its card writes it (then
+    nothing is started). File reads only."""
+    connector = get_connector(connector_id)
+    if connector is None or not getattr(connector, "locked", ""):
+        return None
+    server = _configured_name(platform, connector.id)
+    cfg = _server_cfg(platform, server) if server else None
+    if cfg is None or _locked_signin_row(connector, cfg) is None:
+        return None
+    from ..mcp.tools import resolve_launcher
+
+    program = resolve_launcher(str(cfg.get("command") or "")) or str(cfg.get("command") or "")
+    argv = [program, *[str(a) for a in cfg.get("args") or []], *connector.signin_args]
+    env = {str(k): str(v) for k, v in dict(cfg.get("env") or {}).items()}
+    return argv, env, str(cfg.get("cwd") or "")
+
+
 def signin_row(connector, cfg: "dict | None") -> "dict[str, str] | None":
     """What the card's Sign in press needs (v1.356.0, G60): ``{cli, label,
     account}`` — the Build set-up job to open (``POST /terminals/launch
@@ -262,6 +381,8 @@ def signin_row(connector, cfg: "dict | None") -> "dict[str, str] | None":
     Microsoft for a different sign-in than the pack uses. None otherwise."""
     if not getattr(connector, "signin_args", None) or not isinstance(cfg, dict):
         return None
+    if getattr(connector, "locked", ""):
+        return _locked_signin_row(connector, cfg)
     if str(cfg.get("command") or "") != connector.command:
         return None
     if [str(a) for a in (cfg.get("args") or [])] != list(connector.args):
@@ -881,6 +1002,10 @@ def pack_body(connector, values: dict[str, Any]):
     does not validate (the route answers it as a 400)."""
     from ..daemon.schemas import McpAuthBody, McpServerBody
 
+    if getattr(connector, "locked", ""):
+        # v1.428.0: a locked app is built by `locked_body` (it installs the
+        # program from Iron Jarvis's lock first) — never the generic way.
+        raise ValueError(LOCKED_ELSEWHERE.format(name=connector.name))
     if is_remote(connector):
         url = connector.url
         headers: dict[str, str] = {}
@@ -939,7 +1064,10 @@ def _connect_mcp(platform, connector, values: dict[str, Any]) -> dict[str, Any]:
     # drops the manifest).
     from ..mcp.pack_door import PackDoorError, add_pack
 
-    body = pack_body(connector, values)
+    if getattr(connector, "locked", ""):
+        body = locked_body(platform, connector, values)
+    else:
+        body = pack_body(connector, values)
     secret_keys = [f.name for f in connector.fields if f.kind == "secret"]
     try:
         out = add_pack(

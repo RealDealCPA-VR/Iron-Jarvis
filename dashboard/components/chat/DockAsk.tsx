@@ -62,6 +62,7 @@ import {
   CLOUD_ASK_SEND,
   CLOUD_ASK_TITLE,
   cloudAskBody,
+  cloudHeldBody,
   type CloudAsk,
 } from "@/lib/localOnly";
 import type { AnswerResult } from "@/lib/mcpInteract";
@@ -91,6 +92,7 @@ const EDGE: Record<DockAskItem["kind"], string> = {
  *  with the user's OK, `onAnswer(false)` closes and leaves the words in the
  *  box). Drawn inside the dock's card, so no border or tint of its own. */
 function CloudAskCard({ ask, onAnswer }: { ask: CloudAsk; onAnswer: (send: boolean) => void }) {
+  const held = (ask.held?.length ?? 0) > 0;
   return (
     <div
       role="alertdialog"
@@ -104,19 +106,23 @@ function CloudAskCard({ ask, onAnswer }: { ask: CloudAsk; onAnswer: (send: boole
         <p className="text-[13px] font-medium text-zinc-100">{CLOUD_ASK_TITLE}</p>
       </div>
       <p data-testid="cloud-ask-body" className="text-[13px] leading-relaxed text-zinc-300">
-        {cloudAskBody(ask.name)}
+        {held ? cloudHeldBody(ask.held ?? [], ask.name) : cloudAskBody(ask.name)}
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        {/* The dock's Enter / Esc press these buttons (lib/dockAsk). */}
-        <Button
-          variant="primary"
-          size="sm"
-          data-testid="cloud-ask-send"
-          onClick={() => onAnswer(true)}
-          data-dock-primary=""
-        >
-          {CLOUD_ASK_SEND}
-        </Button>
+        {/* The dock's Enter / Esc press these buttons (lib/dockAsk). A chat
+            held Local only (v1.428.0) offers no "Send once": the daemon would
+            refuse it, so only the way that keeps it local is there. */}
+        {!held && (
+          <Button
+            variant="primary"
+            size="sm"
+            data-testid="cloud-ask-send"
+            onClick={() => onAnswer(true)}
+            data-dock-primary=""
+          >
+            {CLOUD_ASK_SEND}
+          </Button>
+        )}
         <Button
           variant="secondary"
           size="sm"

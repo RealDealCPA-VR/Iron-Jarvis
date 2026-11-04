@@ -1,0 +1,9 @@
+{
+  "name": "iron-jarvis-ms365",
+  "private": true,
+  "description": "Iron Jarvis installs the Microsoft 365 pack from this exact lock (every package pinned by version and sha512).",
+  "dependencies": {
+    "@softeria/ms-365-mcp-server": "0.170.2",
+    "keytar": "7.9.0"
+  }
+}

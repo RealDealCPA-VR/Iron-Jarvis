@@ -197,6 +197,69 @@ def quarantined_in_flight() -> bool:
     return bool(tool is not None and getattr(tool, "quarantined", False))
 
 
+#: v1.428.0: why a tool kept on the user's own models was not run.
+LOCAL_ONLY_APP_REFUSAL = (
+    "{app} is set to stay on your own models, so it can't be used in this chat. "
+    "Turn on Local only for this chat, choose one of your own models, then ask again."
+)
+
+
+def local_only_refusal(app: str) -> str:
+    """The plain refusal when this turn may reach a model off the user's own
+    network (Local only off, or a message the user let go to a cloud model
+    once), else "". Read from the turn's own scope (``egress``)."""
+    from ..providers import egress
+
+    scope = egress.current_scope()
+    if scope.on and not scope.allowed_once:
+        return ""
+    return LOCAL_ONLY_APP_REFUSAL.format(app=app)
+
+
+#: v1.428.0 review: a LOCKED app answers only in a plain chat on this PC. An
+#: agent's task, a coding session and the phone each carry what a tool returns
+#: further than the chat that asked (a run's summaries, a session's history, a
+#: Slack or Telegram reply), so its mail never reaches them.
+CHAT_ONLY_APP_REFUSAL = (
+    "{app} can be used only in Chat on this PC — not from your phone, in an "
+    "agent's task or in a coding session — so its mail stays on your own models "
+    "and in this app. Ask from a chat with Local only on."
+)
+
+#: The package's own account tools a LOCKED pack never offers (it keeps its
+#: one account: signing out, removing or switching accounts happen in its
+#: Sign in terminal, never from a chat a message could steer).
+LOCKED_HIDDEN_TOOLS = frozenset({"logout", "remove-account", "select-account"})
+
+
+def chat_only_refusal(app: str, ctx: Any) -> str:
+    """The plain refusal when this call is not a plain chat turn on this PC
+    (``session_id`` "chat" and the chat's own failure surface), else ""."""
+    from ..providers.failure_words import SURFACE_CHAT, current_surface
+
+    if str(getattr(ctx, "session_id", "") or "") != "chat" or current_surface() != SURFACE_CHAT:
+        return CHAT_ONLY_APP_REFUSAL.format(app=app)
+    return ""
+
+
+async def _hold_chat_local(ctx: Any, app_id: str) -> None:
+    """A chat that just read a local-only app stays Local only (the saved
+    chat now, or — a new chat's first turn — once the page links the turn).
+    Never raises: the refusal above still guards every later turn."""
+    from ..providers import egress
+
+    try:
+        thread_id = str(getattr(ctx, "thread_id", "") or "")
+        if not thread_id:
+            # A new chat's first turn: the chat the page already linked it
+            # to, else a hold the link will apply (egress.link_turn_holds).
+            thread_id = egress.note_pending_hold(getattr(ctx, "turn_id", ""), app_id)
+        if thread_id:
+            await asyncio.to_thread(egress.hold_local_only, getattr(ctx, "engine", None), thread_id, app_id)
+    except Exception:  # noqa: BLE001
+        log.debug("local-only hold for %s failed", app_id, exc_info=True)
+
+
 class MCPRemoteTool(Tool):
     """A native ``Tool`` that proxies to one remote MCP tool via an ``MCPClient``."""
 
@@ -236,6 +299,11 @@ class MCPRemoteTool(Tool):
         self.risk_class, self.reversibility = risk_for(spec)
         self.write_like: bool = is_write_like(spec)
         self.quarantined = False
+        #: v1.428.0: the pack's row says ``local_only`` (a LOCKED card,
+        #: Microsoft 365): usable only in a turn on the user's own models, and
+        #: a chat that used it stays Local only (``egress.hold_local_only``).
+        self.local_only = False
+        self.app_name = server_name
 
     @classmethod
     def from_spec(
@@ -267,6 +335,10 @@ class MCPRemoteTool(Tool):
         }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self.local_only:
+            refusal = chat_only_refusal(self.app_name, ctx) or local_only_refusal(self.app_name)
+            if refusal:
+                return ToolResult(ok=False, error=refusal)
         try:
             result = await self.client.call_tool(self.remote_name, args)
         except Exception as exc:  # a remote failure must never crash the runtime
@@ -285,6 +357,8 @@ class MCPRemoteTool(Tool):
         # `isError` is the remote tool saying no to these arguments, not the
         # pack failing — it counts as an answer.
         note_call_success(self.server_name)
+        if self.local_only:
+            await _hold_chat_local(ctx, self.server_name)
         result = result if isinstance(result, dict) else {}
         text = _content_to_text(result.get("content"), result.get("structuredContent"))
         if result.get("isError"):
@@ -397,7 +471,16 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
                 value = None
             if value:
                 env[str(env_key)] = value
-    merged_env = {**_os.environ, **env} if env else None
+    if cfg.get("locked"):
+        # v1.428.0 review: a LOCKED program gets its settings from Iron Jarvis
+        # ONLY. A daemon started with any `MS365_MCP_*` (an OAuth token that
+        # skips the account lock, a command that stores the sign-in) or a
+        # wider ENABLED_TOOLS / NODE_OPTIONS must not hand it on.
+        from ..connectors.locked_pack import clean_env as _clean_env
+
+        merged_env = {**_clean_env(_os.environ), **env}
+    else:
+        merged_env = {**_os.environ, **env} if env else None
     # v1.351.0 (G12): an argument that carried a secret (an mcp-remote
     # `--header "Authorization: Bearer …"`, `--api-key …`, a connection
     # string's password) is stored MASKED with `arg_secrets[i]` naming its
@@ -1051,7 +1134,14 @@ def pack_grants_auto(cfg: Any) -> bool:
     would otherwise keep every OTHER pack running without asking after the
     user turned the trusted one off. The boot resolver (platform.py), the
     connectors service and GET /mcp/servers all read this one rule."""
-    return isinstance(cfg, dict) and bool(cfg.get("auto_approve")) and pack_enabled(cfg)
+    # v1.428.0 review: a LOCKED app (Microsoft 365) never opens it — its
+    # every use asks, whatever an older row or a hand edit says.
+    return (
+        isinstance(cfg, dict)
+        and bool(cfg.get("auto_approve"))
+        and not cfg.get("locked")
+        and pack_enabled(cfg)
+    )
 
 
 def pack_enabled(cfg: Any) -> bool:
@@ -1498,6 +1588,23 @@ def _load_one_server(
     failure and its caller could only say "advertised no tools".
     """
     name = cfg.get("name") or "mcp"
+    # v1.428.0 review: a row that runs a LOCKED app's program without being
+    # its locked row (saved before v1.428.0, or by hand) is never started: it
+    # would run that program unlocked. Its load record says how to set it up.
+    from ..connectors.locked_pack import locked_elsewhere_words, unlocked_copy
+
+    _app = unlocked_copy(cfg)
+    if _app:
+        words = (
+            locked_elsewhere_words(_app)
+            + " Remove this extension, then connect it from its card."
+        )
+        if errors is not None:
+            errors[name] = {"error": words, "reason": words, "fix": "", "stderr_tail": ""}
+        if record:
+            _record_load(name, error=words, tools_loaded=0, cfg=cfg)
+            forget_live_client(name)
+        return []
     try:
         client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
     except Exception as exc:  # skip the bad/hung server; keep booting
@@ -1531,10 +1638,18 @@ def _load_one_server(
         # prompts and resources (v1.324.0).
         _set_live_client(name, client)
     tools: list[Tool] = []
+    keep_local = bool(cfg.get("local_only"))
+    app_name = _app_display_name(name) if keep_local else name
     for spec in specs:
         if not isinstance(spec, dict) or not spec.get("name"):
             continue
-        tools.append(MCPRemoteTool.from_spec(client, name, spec))
+        if cfg.get("locked") and str(spec.get("name")) in LOCKED_HIDDEN_TOOLS:
+            continue
+        tool = MCPRemoteTool.from_spec(client, name, spec)
+        if keep_local:
+            tool.local_only = True
+            tool.app_name = app_name
+        tools.append(tool)
     held: list[str] = []
     if record:
         # The manifest follows the load record's rule exactly: a probe
@@ -1557,6 +1672,20 @@ def _load_one_server(
             launch=_launch_info(getattr(client, "transport", None)),
         )
     return tools
+
+
+def _app_display_name(server: str) -> str:
+    """"Microsoft 365" for the ``microsoft_365`` pack (its card's name before
+    the brackets), else the pack's own name."""
+    try:
+        from ..connectors.catalog import get_connector
+
+        card = get_connector(server)
+        if card is not None:
+            return card.name.split(" (", 1)[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return server
 
 
 def mcp_tools(

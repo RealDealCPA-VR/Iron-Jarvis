@@ -42,6 +42,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from iron_jarvis.connectors import catalog, service, signin_seen
+from iron_jarvis.connectors import locked_pack as LP
+from iron_jarvis.connectors import ms365 as M
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.mcp import client as mcp_client
 from iron_jarvis.mcp import tools as mcp_tools_mod
@@ -91,6 +93,8 @@ def _app(tmp_path, monkeypatch):
     monkeypatch.delenv("IRONJARVIS_IRON_PROXY_NODE", raising=False)
     monkeypatch.delenv("ENABLED_TOOLS", raising=False)
     monkeypatch.delenv(catalog.MS365_TENANT_ENV, raising=False)
+    for var in (M.EMAIL_ENV, M.APP_ENV, M.CLOUD_ENV):  # v1.428.0: the locked card's own settings
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("PIXIO_API_KEY", raising=False)
 
     async def _no_watch(*_a, **_k):
@@ -152,9 +156,20 @@ def test_the_gallery_rows_carry_the_built_in_fields(client):
 # =========================================================================== #
 # (3) Microsoft 365 is green only once it is signed in
 # =========================================================================== #
+def _stand_in_install(pkg, home):
+    """v1.428.0: ``locked_pack.ensure_installed`` without npm — the program
+    file the lock would install (the stand-in server runs in its place)."""
+    entry = LP.entry_path(pkg, home)
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("// stand-in for the locked program", encoding="utf-8")
+    return entry
+
+
 def _use_server(monkeypatch, script: Path, signin_file: Path | None = None) -> None:
     """The pack's program is ``script`` (only the program is swapped — the
-    command, arguments and settings are the card's)."""
+    command, arguments and settings are the card's). v1.428.0: the card's
+    locked install is a stand-in (never npm, never the network)."""
+    monkeypatch.setattr(LP, "ensure_installed", _stand_in_install)
     real = mcp_client.StdioTransport
 
     def _transport(command, args=None, env=None, cwd=None, request_timeout=None, **_kw):
@@ -184,24 +199,36 @@ def ms365(tmp_path, monkeypatch, signin_file):
             mcp_tools_mod.unload_pack_tools(_platform(c).registry, CARD_ID)
 
 
+#: v1.428.0 (moved on purpose): the locked card loads its read and draft
+#: tools plus the server's sign-in tools (measured: 15 + 6), no longer 24.
+# v1.428.0 review (moved on purpose): the 3 account-switching tools are hidden.
+MS365_TOOLS_LOADED = 18
+
+
 def _connect_ms365(c: TestClient, answer: str = "common"):
-    r = c.post(f"/connectors/{CARD_ID}/connect", json={"values": {catalog.MS365_TENANT_ENV: answer}})
+    # v1.428.0 (moved on purpose): the locked card also needs the account's
+    # email (only that account can sign in).
+    values = {catalog.MS365_TENANT_ENV: answer, M.EMAIL_ENV: "me@example.com",
+              # v1.428.0 review (moved on purpose): a work account needs the firm's app.
+              M.APP_ENV: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}
+    r = c.post(f"/connectors/{CARD_ID}/connect", json={"values": values})
     assert r.status_code == 200, r.text
-    assert r.json()["tools_loaded"] == 24
+    assert r.json()["tools_loaded"] == MS365_TOOLS_LOADED
     return r
 
 
 def test_microsoft_365_reads_sign_in_to_finish_until_its_own_check_says_signed_in(ms365, signin_file):
-    """THE ACCEPTANCE: after Connect its 24 tools load, but nobody signed in
+    """THE ACCEPTANCE: after Connect its tools load, but nobody signed in
     to Microsoft — the card is not green and says "Sign in to Microsoft to
     finish" beside the existing Sign in press. Test asks the app's own check
     and says the same. Once the sign-in lands (the server's token file), Test
     and the card say signed in, and who. MUTATION: drop the
     ``_signin_state`` call in ``_status_for`` -> the first row reads
     "connected" (red)."""
+    # v1.428.0 (moved on purpose): the locked card's tool count.
     _connect_ms365(ms365)
     row = _row(ms365, CARD_ID)
-    assert row["connected"] is True and row["tools_loaded"] == 24
+    assert row["connected"] is True and row["tools_loaded"] == MS365_TOOLS_LOADED
     assert row["status"] == "signin" and row["signed_in"] is False
     assert row["detail"] == "Sign in to Microsoft to finish."
     assert row["signin"]["label"] == "Sign in to Microsoft"

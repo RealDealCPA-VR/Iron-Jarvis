@@ -1735,6 +1735,13 @@ class McpServerBody(BaseModel):
     url: str | None = None
     headers: dict[str, str] = {}
     auth: McpAuthBody | None = None
+    #: v1.428.0: set only by a LOCKED Directory card (``connectors.service.
+    #: locked_body``): ``local_only`` = its tools run only in a turn on the
+    #: user's own models; ``locked`` = the ``connectors.locked_pack`` key the
+    #: program was installed from. Both are kept by an edit, and an edit of a
+    #: locked pack's shape is refused (change it from its card).
+    local_only: bool = False
+    locked: str = ""
     #: v1.343.0 (lane J), the npm/GitHub door: ``launcher`` is one of
     #: ``mcp.import_config.LAUNCHERS`` (npx / uvx / pipx / node / python /
     #: command) and ``package`` a bare package reference. With ``package``

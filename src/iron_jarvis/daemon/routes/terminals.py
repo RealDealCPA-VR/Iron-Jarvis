@@ -230,6 +230,25 @@ def launch_pane(
             status_code=409,
             detail=f"{cat['label']} could not read its app's settings, so nothing was started.",
         ) from None
+    # v1.428.0: a LOCKED app's sign-in runs the SAVED pack's own program
+    # (Iron Jarvis's locked copy, by its path on this PC), settings and
+    # folder — nothing if it is not saved exactly as its card writes it.
+    locked_argv: list[str] | None = None
+    locked_cwd = ""
+    if cat.get("app"):
+        from ...connectors.catalog import get_connector
+        from ...connectors.service import locked_signin
+
+        card = get_connector(cat["app"])
+        if card is not None and getattr(card, "locked", ""):
+            got = locked_signin(platform, card.id)
+            if got is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Connect {card.name.split(' (', 1)[0]} on its card in Settings › Connections "
+                    "first, then press Sign in there.",
+                )
+            locked_argv, job_env, locked_cwd = got
     provider = CLI_PROVIDER.get(cli_id)
     account = (body.account or "").strip()
     if account and provider is None:
@@ -238,8 +257,8 @@ def launch_pane(
             detail=f"{cat['label']} does not run on an Iron-Proxy account.",
         )
     terminals = platform.terminals
-    cwd = (body.cwd or "").strip() or None
-    if body.near:
+    cwd = locked_cwd or (body.cwd or "").strip() or None
+    if body.near and not locked_cwd:
         near = terminals.get(body.near)
         if near is None:
             raise HTTPException(status_code=404, detail="no such terminal")
@@ -277,7 +296,7 @@ def launch_pane(
                 # Only when the job has settings: every other pane's create
                 # call is exactly what it was (the backends then copy the
                 # daemon's environment themselves).
-                **({"env": {**os.environ, **job_env}} if job_env else {}),
+                **({"env": {**_job_base(locked_argv is not None), **job_env}} if job_env else {}),
             )
         except ShellStartStuck as exc:  # v1.418.1: another shell is stuck starting
             raise HTTPException(status_code=503, detail=str(exc)) from None
@@ -292,6 +311,11 @@ def launch_pane(
         return session
     # v1.355.0 (G73): byte-identical for every Launch-menu CLI; a set-up job
     # is typed by full path when the daemon's PATH predates the install.
+    if locked_argv is not None:
+        from .iron_proxy import shell_line
+
+        session.write(shell_line(session.shell or "", locked_argv) + "\r")
+        return session
     command = launch_line(cat, session.shell)
     session.write(command if command.endswith(" ") else command + "\r")
     return session
@@ -395,6 +419,17 @@ def coalesced_waker(loop: asyncio.AbstractEventLoop, wake: asyncio.Event):
             armed[0] = False
 
     return waker
+
+
+def _job_base(locked: bool) -> dict[str, str]:
+    """The environment a set-up job's terminal starts from. A LOCKED app's
+    sign-in (v1.428.0 review) drops every setting its program must only get
+    from Iron Jarvis (``locked_pack.clean_env``); every other job is unchanged."""
+    if not locked:
+        return dict(os.environ)
+    from ...connectors.locked_pack import clean_env
+
+    return clean_env(os.environ)
 
 
 def register(app: FastAPI, d) -> None:

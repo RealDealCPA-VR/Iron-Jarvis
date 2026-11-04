@@ -40,6 +40,30 @@ export const LOCAL_ONLY_KEY = "ij.chat.localOnly";
 export const LOCAL_ONLY_TITLE_ON = "Nothing in this chat leaves this PC or your own network without asking you.";
 export const LOCAL_ONLY_TITLE_OFF = "Keep this chat on this PC or your own network.";
 
+/** v1.428.0: the saved setup key naming the apps that hold a chat Local only
+ *  (the daemon writes it when the chat uses an app kept on the user's own
+ *  models — Microsoft 365; `providers/egress.HOLDS_KEY`). */
+export const HOLDS_KEY = "local_only_holds";
+const HELD_APP_WORDS: Record<string, string> = { microsoft_365: "Microsoft 365" };
+
+/** The apps a saved setup holds the chat Local only for ([] = none). */
+export function localOnlyHolds(setup: unknown): string[] {
+  const raw = setup && typeof setup === "object" ? (setup as Record<string, unknown>)[HOLDS_KEY] : null;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is string => typeof x === "string" && /^[a-z0-9][a-z0-9_-]{0,39}$/.test(x)).slice(0, 8);
+}
+
+/** v1.428.0: the held chat's card, in words: no "Send once" is offered. */
+export function cloudHeldBody(holds: string[], name: string): string {
+  return `${localOnlyHeldTitle(holds)} So this message can't go to ${name}: choose one of your own models.`;
+}
+
+/** Why the switch stays on, in words. */
+export function localOnlyHeldTitle(holds: string[]): string {
+  const names = holds.map((h) => HELD_APP_WORDS[h] ?? h);
+  return `Local only stays on: this chat used ${names.join(" and ")}, which stays on your own models.`;
+}
+
 /** The ⋯ menu's checkable row. */
 export const LOCAL_ONLY_MENU_ROW = "Keep this chat on this PC or your own network";
 
@@ -144,6 +168,9 @@ export interface CloudAsk {
   provider: string;
   model: string;
   name: string;
+  /** v1.428.0: the apps holding this chat Local only (it read Microsoft
+   *  365): the card offers no "Send once" — the daemon would refuse it. */
+  held?: string[];
 }
 
 /** Null when the message may go as it is; otherwise the model to ask about.
