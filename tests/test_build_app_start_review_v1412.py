@@ -342,7 +342,11 @@ def test_a_pi_model_with_no_reasoning_takes_no_effort(tmp_path):
     ])
     by = {r["id"]: r for r in rows}
     assert by["ollama/llama3"]["efforts"] == []
-    assert "efforts" not in by["anthropic/claude-x"] and "efforts" not in by["openai/gpt-x"]
+    # v1.429.0 (moved on purpose): a model that reasons takes Pi's levels by
+    # Pi's own rule (no map: "xhigh" and "max" are not offered); a record that
+    # does not say whether it reasons keeps the tool's whole list.
+    assert by["anthropic/claude-x"]["efforts"] == ["off", "minimal", "low", "medium", "high"]
+    assert "efforts" not in by["openai/gpt-x"]
     # Kept on disk and read back the same.
     path = tmp_path / "pi-models.json"
     P.save_models(path, rows)
@@ -354,7 +358,8 @@ def test_a_pi_model_with_no_reasoning_takes_no_effort(tmp_path):
         P.LAST_MODELS[:] = saved
     assert again["ollama/llama3"]["efforts"] == []
     assert S.efforts_for("pi", "ollama/llama3", rows) == ()
-    assert S.efforts_for("pi", "anthropic/claude-x", rows) == S.EFFORTS["pi"]
+    assert S.efforts_for("pi", "anthropic/claude-x", rows) == ("off", "minimal", "low", "medium", "high")
+    assert S.efforts_for("pi", "openai/gpt-x", rows) == S.EFFORTS["pi"]
 
 
 # --------------------------------------------------------------------------- #

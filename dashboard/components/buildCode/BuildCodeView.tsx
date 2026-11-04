@@ -130,8 +130,11 @@ import {
   backgroundRereadMs,
   backgroundWorkWords,
   CODE_SEEN_BEAT_MS,
-  commandPrefix,
+  COMMAND_SOURCE_WORDS,
   closeToolWords,
+  decodeCommands,
+  modelGroups,
+  slashMenuRows,
   signsInItself,
   sessionTitle,
   STEER_RETURNED_WORDS,
@@ -173,6 +176,10 @@ import {
 const API = "/build/app";
 const SESSIONS = `${API}/sessions`;
 const TOOLS = `${API}/harnesses`;
+/** v1.429.0: how often (and how many times) the tool list is read again while
+ *  a tool's model list is still being read (Pi answers in about a second). */
+export const TOOLS_REREAD_MS = 2_000;
+export const TOOLS_REREAD_TRIES = 5;
 
 /** How often the list is read again while it is on screen. */
 export const CODE_LIST_REREAD_MS = 15_000;
@@ -1206,30 +1213,16 @@ function SessionPane({
       return;
     get<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/commands`)
       .then((raw) => {
-        const list = Array.isArray(raw) ? raw : (raw as { commands?: unknown })?.commands;
-        const out: ToolCommand[] = [];
-        for (const c of Array.isArray(list) ? list : []) {
-          const o = c as { name?: unknown; description?: unknown };
-          if (typeof o?.name === "string" && o.name.trim())
-            out.push({
-              name: o.name.trim().replace(/^\//, ""),
-              description: typeof o.description === "string" ? o.description : "",
-              // v1.426.0 (E4): a Codex skill is typed `$<name>`.
-              ...commandPrefix((c as { prefix?: unknown })?.prefix),
-            });
-        }
-        setFetchedCommands(out);
+        // v1.426.0 (E4): a Codex skill is typed `$<name>`; v1.429.0: each
+        // row keeps its kind and (Pi) why it stays in Pi's own terminal.
+        setFetchedCommands(decodeCommands(raw) ?? []);
         setHints((cur) => ({ ...commandHints(raw), ...cur }));
       })
       .catch(() => setFetchedCommands([]));
   }, [slashKey, session, viewCommands, tool, fetchedCommands]);
   const menuRows: MenuRow[] = useMemo(() => {
     if (slash) {
-      const q = slash.query.toLowerCase();
-      return commands
-        .filter((c) => c.name.toLowerCase().includes(q))
-        .slice(0, SLASH_ROWS)
-        .map((cmd) => ({ kind: "command", cmd }));
+      return slashMenuRows(commands, slash.query, SLASH_ROWS).map((cmd) => ({ kind: "command", cmd }));
     }
     if (at) {
       return matchProjectEntries(filesState.listing, at[2], files, 6, { fuzzy: true }).map((entry) => ({ kind: "file", entry }));
@@ -1242,6 +1235,14 @@ function SessionPane({
   }, [text, slashKey, atKey]);
 
   const pick = (row: MenuRow) => {
+    if (row.kind === "command" && row.cmd.note) {
+      // v1.429.0: one of Pi's commands that only its own terminal has — the
+      // one line says why, and nothing is typed.
+      setNote(`/${row.cmd.name}: ${row.cmd.note}`);
+      setMenuOpen(false);
+      boxRef.current?.focus();
+      return;
+    }
     if (row.kind === "command") {
       if (slash) {
         // v1.418.0 (C4.8): only the `/word` is replaced (a line of its own).
@@ -1640,7 +1641,14 @@ function SessionPane({
                               {hints[row.cmd.name]}
                             </span>
                           ) : null}
-                          <span className="min-w-0 truncate text-[12px] text-zinc-500">{row.cmd.description}</span>
+                          <span className="min-w-0 truncate text-[12px] text-zinc-500">
+                            {row.cmd.note ? `${row.cmd.description}: ${row.cmd.note}` : row.cmd.description}
+                          </span>
+                          {row.cmd.source ? (
+                            <span data-testid="code-command-source" className="ml-auto shrink-0 text-[11px] text-zinc-500">
+                              {COMMAND_SOURCE_WORDS[row.cmd.source]}
+                            </span>
+                          ) : null}
                         </>
                       ) : (
                         <span className="min-w-0 truncate">{row.entry.rel}</span>
@@ -1703,11 +1711,24 @@ function SessionPane({
                     {defaultModelWords(toolName, keepsLast)}
                   </option>
                 ) : null}
-                {(tool?.models ?? []).map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {toolName} · {m.label}
-                  </option>
-                ))}
+                {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
+                {modelGroups(tool?.models ?? []).map(({ group, models: list }) =>
+                  group ? (
+                    <optgroup key={group} label={group}>
+                      {list.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : (
+                    list.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {toolName} · {m.label}
+                      </option>
+                    ))
+                  ),
+                )}
                 {session.model && !(tool?.models ?? []).some((m) => m.id === session.model) ? (
                   <option value={session.model}>
                     {toolName} · {session.model}
@@ -1936,9 +1957,31 @@ export function BuildCodeView({
   }, []);
   useEffect(() => {
     readList();
-    get<unknown>(TOOLS)
-      .then((raw) => setTools(decodeCodingTools(raw)))
-      .catch((e) => setToolsError(errorWords(e, "The coding tools could not be looked for.")));
+    // v1.429.0: a tool whose model list is still being read (Pi, the first
+    // time) is looked at again a few times, a moment apart — never polled.
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let gone = false;
+    const readTools = () => {
+      get<unknown>(TOOLS)
+        .then((raw) => {
+          if (gone) return;
+          const got = decodeCodingTools(raw);
+          setTools(got);
+          if (got.some((t) => t.modelsReading) && tries < TOOLS_REREAD_TRIES) {
+            tries += 1;
+            timer = setTimeout(readTools, TOOLS_REREAD_MS);
+          }
+        })
+        .catch((e) => {
+          if (!gone) setToolsError(errorWords(e, "The coding tools could not be looked for."));
+        });
+    };
+    readTools();
+    return () => {
+      gone = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [readList]);
   useVisibleInterval(readList, CODE_LIST_REREAD_MS);
 

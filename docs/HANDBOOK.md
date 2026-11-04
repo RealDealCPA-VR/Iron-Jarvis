@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.428.1 (2026-11-04).*
+holds itself to. Current as of v1.429.0 (2026-11-04).*
 
 ---
 
@@ -2265,14 +2265,49 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     type `/login`, or choose another model (typing `/login` in the Code view's
     box says the same, because Pi's sign-in screen needs a terminal). Continue
     on another account is not offered for Pi.
-  - **The model** list is the one Pi itself lists (shown once a Pi session
-    has started on this PC), and the **effort** is Pi's thinking level (off
-    to max). Both change at once, even while Pi runs. Once a conversation
+  - **The model** list (v1.429.0) is the one Pi's own `/model` shows:
+    every model of every provider you signed Pi in to, grouped by provider,
+    with each model named as Pi names it. It is there from the first look,
+    even before you ever started a Pi session here: Iron Jarvis asks Pi for
+    it once in the background (a quick, quiet Pi run that calls no model,
+    saves no session, makes no network call and starts none of your MCP
+    servers), and asks again when the list is older than ten minutes or when
+    Pi's own model, sign-in or settings files changed (after a `/login`, say).
+    While it is being read the composer says "Reading Pi's model list…".
+    "Pi's default" names the model Pi starts on by itself. If Pi has no model
+    it can use, the composer says so: open Pi in a terminal and type `/login`,
+    or add a model to Pi's `models.json`. A list you narrowed in Pi with
+    `enabledModels` is not followed here: Pi does not say which models those
+    are, so the menu lists them all.
+  - **The effort** is Pi's thinking level, and the menu offers only the
+    levels the chosen model takes, by Pi's own rule: a model without thinking
+    shows no effort menu, and many models stop at "high" or have no "off".
+    Model and effort change at once, even while Pi runs. Once a conversation
     has messages, Pi reopens it on the model and thinking level it last used,
     so "Pi's default" is no longer offered for it. The usage line's cost is
     Pi's own figure from its price table and reads "the cost Pi reported":
     on a pay-per-use key it is what you spent, on a subscription it is not,
     and Pi does not say which.
+  - **Pi's own `/` commands** (v1.429.0). The `/` menu lists Pi's own
+    commands first, then your extensions' commands, your prompt templates and
+    your skills (`/skill:name`), each marked with what it is. These do what
+    they do in Pi's terminal: `/model provider/model` and `/thinking level`
+    change the session's model and thinking level (as the menus do),
+    `/compact` (with optional instructions) summarizes the conversation to
+    make room, `/session` shows its messages, tokens and cost, `/name`
+    names it, `/export` saves it as a web page in the session's folder, and
+    `/reload` makes Pi read your extensions, skills and templates again
+    before your next message. Before v1.429.0 these reached the model as
+    plain words. A few of Pi's commands are its own screens or move it to
+    another conversation, so they need Pi's terminal (**Open in terminal**):
+    `/settings`, `/scoped-models`, `/hotkeys`, `/changelog`, `/trust`,
+    `/bug`, `/login`, `/logout`, `/tree`, `/fork`, `/clone`, `/import` and
+    `/share`; `/new` is **New session**, `/resume` is your session list,
+    `/copy` is the copy button under a reply, and `/quit` is not needed.
+    Typing one of these says why in one line, and the `/` menu shows that
+    line as soon as you type its name. If an extension of yours has a command
+    with the same name, Pi runs yours. A note sent while Pi works is plain
+    words, so one of Pi's commands waits for its own message.
   - **When an extension starts work by itself**, Pi works on it outside any
     message: the session stays busy until it finishes, and a message sent
     meanwhile is answered "Pi is still working on something an extension

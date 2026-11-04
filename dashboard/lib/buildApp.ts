@@ -217,11 +217,73 @@ export interface ToolCommand {
   /** v1.426.0 (E4): how the tool takes it — "$" for a Codex skill (typed
    *  `$<name>` in the message, Codex's own way); absent = a `/` command. */
   prefix?: "$";
+  /** v1.429.0 (Pi): what kind of command — one of Pi's own ("pi"), an
+   *  extension's, a prompt template or a skill. Absent = not said. */
+  source?: CommandSource;
+  /** v1.429.0 (Pi): why this one is not done here (only in Pi's own
+   *  terminal). The menu shows such a row only when its name is typed, and
+   *  picking it shows this line instead of typing it. */
+  note?: string;
 }
+
+/** v1.429.0: the kinds of command Pi lists (rpc `get_commands` "source"),
+ *  plus Pi's own built-ins. */
+export type CommandSource = "pi" | "extension" | "prompt" | "skill";
+const COMMAND_SOURCES: readonly CommandSource[] = ["pi", "extension", "prompt", "skill"];
+
+/** v1.429.0: the words the `/` menu shows for a command's kind. */
+export const COMMAND_SOURCE_WORDS: Record<CommandSource, string> = {
+  pi: "Pi",
+  extension: "extension",
+  prompt: "template",
+  skill: "skill",
+};
 
 /** v1.426.0 (E4): a command row's prefix as the daemon said it ("$" only). */
 export function commandPrefix(raw: unknown): { prefix?: "$" } {
   return raw === "$" ? { prefix: "$" } : {};
+}
+
+/** v1.429.0: a command row's kind and note, as the daemon said them. */
+export function commandExtras(raw: Record<string, unknown>): { source?: CommandSource; note?: string } {
+  const out: { source?: CommandSource; note?: string } = {};
+  const source = raw.source;
+  if (typeof source === "string" && (COMMAND_SOURCES as readonly string[]).includes(source)) out.source = source as CommandSource;
+  const note = typeof raw.note === "string" ? raw.note.trim().slice(0, 300) : "";
+  if (note) out.note = note;
+  return out;
+}
+
+/** v1.429.0: the `/` menu's rows for what is typed after the slash. A row
+ *  that is only a note (one of Pi's terminal-only commands) shows only once
+ *  its name is being typed — never a silent gap, never a crowded menu. */
+export function slashMenuRows(commands: readonly ToolCommand[], query: string, max: number): ToolCommand[] {
+  const q = query.toLowerCase();
+  return commands
+    .filter((c) => (c.note ? q.length > 0 && c.name.toLowerCase().startsWith(q) : c.name.toLowerCase().includes(q)))
+    .slice(0, max);
+}
+
+/** v1.429.0: a model as the menus show it — `group` is its provider (Pi
+ *  lists every model under the provider that serves it). */
+export interface ToolModel {
+  id: string;
+  label: string;
+  efforts?: string[];
+  group?: string;
+}
+
+/** v1.429.0: the models in their groups, in the daemon's order (Pi's: by
+ *  provider). A list with no group at all is one group named "". */
+export function modelGroups(models: readonly ToolModel[]): { group: string; models: ToolModel[] }[] {
+  const byGroup = new Map<string, ToolModel[]>();
+  for (const m of models) {
+    const g = m.group ?? "";
+    const list = byGroup.get(g);
+    if (list) list.push(m);
+    else byGroup.set(g, [m]);
+  }
+  return [...byGroup].map(([group, list]) => ({ group, models: list }));
 }
 
 export interface CodingTool {
@@ -241,11 +303,19 @@ export interface CodingTool {
   hiddenModes: HiddenMode[];
   /** v1.412.0 review: `efforts` on a model = the levels THAT model takes when
    *  the daemon knows them (`[]` = none: the effort chip hides); absent = the
-   *  tool's own `efforts` apply (lib/buildApp effortsFor). */
-  models: { id: string; label: string; efforts?: string[] }[];
+   *  tool's own `efforts` apply (lib/buildApp effortsFor). v1.429.0: `group`
+   *  = the provider (Pi). */
+  models: ToolModel[];
   efforts: string[];
   /** v1.412.0 review: the levels the tool's DEFAULT model takes, when known. */
   defaultEfforts?: string[];
+  /** v1.429.0 (Pi): the name of the model the tool starts on by itself. */
+  defaultName?: string;
+  /** v1.429.0 (Pi): the tool's model list is being read right now (the page
+   *  looks again shortly). */
+  modelsReading?: boolean;
+  /** v1.429.0 (Pi): why the tool lists no model (one line, the daemon's). */
+  modelsNote?: string;
   accounts: ToolAccount[];
   /** The tool's own `/` commands, when the daemon lists them. */
   commands: ToolCommand[];
@@ -308,8 +378,9 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       if (!mo || !mid || modes.some((x) => x.id === mid)) continue;
       hiddenModes.push({ id: mid, label: str(mo.label, 80) || mid, reason: str(mo.reason, 400) });
     }
-    const models: { id: string; label: string; efforts?: string[] }[] = [];
+    const models: ToolModel[] = [];
     let defaultEfforts: string[] | undefined;
+    let defaultName = "";
     for (const m of Array.isArray(r.models) ? r.models : []) {
       const mo = obj(m);
       const mid = mo ? str(mo.id, 200).trim() : typeof m === "string" ? m.trim() : "";
@@ -319,11 +390,18 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
           : undefined;
       if (!mid) {
         // The tool's default (id ""): never a row of its own (the menus add
-        // it), but the levels it takes are kept.
+        // it), but the levels it takes — and (Pi) its name — are kept.
         if (mo && levels) defaultEfforts = levels;
+        if (mo) defaultName = str(mo.default_name, 120).trim();
         continue;
       }
-      models.push(levels ? { id: mid, label: (mo && str(mo.label, 120)) || mid, efforts: levels } : { id: mid, label: (mo && str(mo.label, 120)) || mid });
+      const group = mo ? str(mo.group, 80).trim() : "";
+      models.push({
+        id: mid,
+        label: (mo && str(mo.label, 120)) || mid,
+        ...(levels ? { efforts: levels } : {}),
+        ...(group ? { group } : {}),
+      });
     }
     const efforts: string[] = [];
     for (const e of Array.isArray(r.efforts) ? r.efforts : []) {
@@ -343,8 +421,9 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       const co = obj(c);
       const name = co ? str(co.name, 80).trim().replace(/^\//, "") : "";
       if (!co || !name) continue;
-      commands.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix) });
+      commands.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix), ...commandExtras(co) });
     }
+    const modelsNote = str(r.models_note, 300).trim();
     out.push({
       id,
       label: str(r.label, 80) || toolLabel(id),
@@ -358,6 +437,9 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       models,
       efforts,
       ...(defaultEfforts ? { defaultEfforts } : {}),
+      ...(defaultName ? { defaultName } : {}),
+      ...(r.models_reading === true ? { modelsReading: true } : {}),
+      ...(modelsNote ? { modelsNote } : {}),
       accounts,
       commands,
     });
@@ -1170,7 +1252,7 @@ export function decodeCommands(raw: unknown): ToolCommand[] | null {
     const co = obj(c);
     const name = co ? str(co.name, 80).trim().replace(/^\//, "") : "";
     if (!co || !name || out.some((x) => x.name === name)) continue;
-    out.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix) });
+    out.push({ name, description: str(co.description, 300), ...commandPrefix(co.prefix), ...commandExtras(co) });
   }
   return out;
 }

@@ -4614,6 +4614,82 @@ does not need a bump, stop and bump it.
   plan extension's "what next?" answered as a question card, and `pi
   --session <id>` reopening the same conversation.
 
+- **Pi in Build › Code offers what Pi's terminal offers: Pi's OWN model list
+  (read in the background before any session), each model's OWN thinking
+  levels, and Pi's own `/` commands done through its RPC** (v1.429.0; the
+  user: "select a model like i can in the terminal … with related effort and
+  … the same things i do in the pi terminal"). WHY IT WAS BARE (measured,
+  read-only, on the live install): the list was kept only from a Pi process
+  the Code view started (`hosted/pi_models.json`) and that file did not
+  exist, so the menu held "Pi's default" alone and the `/` menu nothing; and
+  Pi's built-ins typed in the box (`/compact`, `/model`…) reached the MODEL as
+  plain text (measured with a stand-in model server). READER
+  (`hosted/pi_catalog.py`): `pi --mode rpc --no-session --offline --no-mcp`
+  fed `get_state`, `get_commands`, `get_available_models` on stdin answers all
+  three and exits at end of input in ~0.8 s (measured on pi 1.3.0): no model
+  call, no session file, no network, none of the user's MCP servers; one
+  `core.procs.run` (20 s bound) in an empty `<home>/hosted/pi-probe`, on a
+  background thread, single-flight; started by `HostedService._models(PI)`
+  (off the loop) when the kept read is missing, older than `CATALOG_TTL_S`
+  (600 s) or Pi's own `models.json` / `auth.json` / `settings.json` /
+  `models-store.json` changed (a stat each, `watch_signature`).
+  `AUTO_PROBE` is OFF for the whole suite (`tests/conftest.py`); a test turns
+  it on with a fake Pi. The harness row carries `models_reading` (the page
+  re-reads the tool list `TOOLS_REREAD_TRIES` 5 times, `TOOLS_REREAD_MS` 2 s
+  apart, only while it says so) or `models_note` (`W.PI_NO_MODELS`). The
+  kept file is one doc (`P.save_catalog`, merged under a lock, temp +
+  replace): models, commands, default, fetched_at, watch. ROWS (`P.model_rows`):
+  `{id: provider/id, label: Pi's name, group: provider, efforts, pictures?}`,
+  sorted by provider (stable — Pi's own order inside one), `MAX_MODELS` 1000.
+  LEVELS (`P.levels_of`) is pi-ai `getSupportedThinkingLevels` ported: no
+  `reasoning` → ["off"] → `efforts: []` (chip hides); a `thinkingLevelMap`
+  entry of `null` is left out; xhigh/max only when the map names them; no
+  `reasoning` key → not known (the tool's whole list). Pi's default (a NEW
+  conversation started with no model named, never a resumed one — it
+  restores its LAST model) rides the "" row as `default_name` + `efforts`
+  (`P.note_default`, `LAST_DEFAULT`, reset per test in conftest); the live
+  driver also re-asks `get_available_models` `REREAD_MODELS_S` (16 s) after
+  open, because Pi refreshes catalogs in the background at start (main.js,
+  15 s). COMMANDS: `P.command_rows` keeps `source` (extension/prompt/skill);
+  only USER-scope ones are kept for every folder (`user_only`), a session's
+  own list has its project's too. `commands_for(PI)` = `P.builtin_rows()`
+  (`BUILTINS`: model, thinking, compact, name, session, export, reload —
+  `source: "pi"`, argument hints; then `TERMINAL_ONLY` rows with a `note`),
+  then the user's; it reads the file only with `disk=True` (the sync
+  harnesses route), memory otherwise. TYPED (`HostedService._pi_typed`, before
+  any turn; `P.typed_builtin` — an extension/template/skill of the user's with
+  the same name wins): a terminal-only one is a 400 in its own words (the old
+  `/login` refusal is part of this table); `/model x` resolves exact
+  provider/id, else one unique id or name, and `/thinking x` checks the
+  model's own levels — both run through `patch` (`_pi_setting`, no Pi start)
+  and say one line; `/reload` sets `live.restart`; compact/session/name/export
+  run as a turn of their own through `PiDriver.run_builtin` (Pi's RPC
+  `compact` with `customInstructions` and a 600 s bound, `get_session_stats`,
+  `set_session_name` + the row's title, `export_html`), a refusal said as
+  "Pi said: <Pi's words>", Stop ends a running one at once ("Pi may still
+  finish summarizing"). A builtin never titles a session, never rides a note
+  (`steer` 400 `W.PI_COMMAND_NOT_A_NOTE`). DASHBOARD: `lib/buildApp`
+  `ToolModel.group`, `modelGroups` (optgroups in both model chips),
+  `defaultName`, `modelsReading`/`modelsNote`, `ToolCommand.source`/`note`,
+  `commandExtras`, `COMMAND_SOURCE_WORDS`, `slashMenuRows` (a note row only
+  once its name is typed; picking it shows the note in `code-note` and types
+  nothing). OPEN: Pi's `enabledModels` (scoped models) is not read — RPC does
+  not say which; a project's own templates/skills appear only once its
+  session's Pi runs; compact during a run is not offered (a message waits for
+  the reply anyway). Pins: `tests/test_build_app_pi_models_v1429.py` (+ the
+  recording `tests/fixtures/build_app_v1429/pi_catalog.json`, a SCRATCH
+  config, paths masked; 25 mutations red), contract
+  `dashboard/__tests__/fixtures/build-app-pi-models-v1429.json`
+  (`IJ_REGEN_BUILD_APP_PI_MODELS=1`), `dashboard/__tests__/build-app-pi-models-v1429.test.tsx`
+  (11 mutations red); moved on purpose: `test_build_app_pi_v1411` (gpt-6-astra
+  takes no "off") and `test_build_app_start_review_v1412` (a reasoning model's
+  levels are known). LIVE-PROVEN on a scratch daemon (8797, scratch root,
+  scratch `PI_CODING_AGENT_DIR` + `USERPROFILE`, real pi 1.3.0, a stand-in
+  model server on 127.0.0.1): the list filled on a fresh install, the chosen
+  model and level reached the server, `/model`, `/thinking`, `/session`,
+  `/name`, `/export`, `/compact` (Pi's own refusal) worked, a template and a
+  skill were expanded by Pi, an extension's command answered, and the page
+  showed the groups, "Pi's default (Think Big)" and only each model's levels.
 - **Build › Code: "Allow all commands this session" is Iron Jarvis's OWN
   whole-tool session rule; the plan is on its card; a failure names the tool
   and has Retry; cards reach the autonomy metrics** (v1.417.0, fix plan wave

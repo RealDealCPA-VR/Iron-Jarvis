@@ -84,6 +84,7 @@ from .codex import CodexDriver
 from .driver import DECISIONS, Ask, AskRefused, ControlRefused, Driver
 from . import pi as P
 from .pi import HARNESS as PI
+from . import pi_catalog as PC
 from .pi import PiDriver
 from . import opencode as O
 from .opencode import HARNESS as OPENCODE
@@ -352,8 +353,9 @@ def efforts_for(harness: str, model: Any = "", pi_rows: list[dict[str, Any]] | N
         known_codex = _codex_efforts(model)
         if known_codex is not None:
             return known_codex
-    if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK)):
-        # (OpenCode, Grok: the default row "" carries its default model's levels.)
+    if harness in LISTED_MODELS and pi_rows and (model or harness in (OPENCODE, GROK, PI)):
+        # (OpenCode, Grok and — v1.429.0 — Pi: the default row "" carries its
+        # default model's levels, when they are known.)
         for r in pi_rows:
             if r.get("id") == model and isinstance(r.get("efforts"), list):
                 if harness == OPENCODE:
@@ -467,15 +469,6 @@ def disk_sessions(harness: str, home: str, folder: str, *, since: float | None =
             s["mtime"] = path.stat().st_mtime if path.exists() else 0
             out.append(s)
     return out
-
-
-def _pi_login_typed(text: str, commands: list[dict[str, str]]) -> bool:
-    """Is the message Pi's interactive ``/login`` (or ``/logout``) — unless
-    an extension of the user's offers a command by that name?"""
-    word = (str(text or "").strip().split() or [""])[0].lower()
-    if word not in ("/login", "/logout"):
-        return False
-    return word[1:] not in {str(c.get("name") or "").lower().lstrip("/") for c in commands or []}
 
 
 def pi_keeps_last(row: Any) -> bool:
@@ -1137,8 +1130,20 @@ class HostedService:
                 "only_when_installed": h in ONLY_WHEN_INSTALLED,
                 # v1.413.0: how THIS tool signs in by itself (the chip's title).
                 "sign_in_hint": W.SIGN_IN_HINTS.get(h, ""),
-                "commands": self.commands_for(h),
+                "commands": self.commands_for(h, disk=True),
+                **(self._pi_list_state() if h == PI and installed else {}),
             })
+        return out
+
+    def _pi_list_state(self) -> dict[str, Any]:
+        """v1.429.0: whether Pi's model list is being read right now
+        (``models_reading``: the page looks again shortly), and — when Pi
+        listed NO model — the one line saying why (``models_note``)."""
+        out: dict[str, Any] = {}
+        if PC.reading(self._pi_catalog):
+            out["models_reading"] = True
+        elif not P.cached_models(self._pi_catalog) and P._read_doc(self._pi_catalog).get("fetched_at"):
+            out["models_note"] = W.PI_NO_MODELS
         return out
 
     def _models_with_efforts(self, harness: str) -> list[dict[str, Any]]:
@@ -1172,8 +1177,19 @@ class HostedService:
     def _models(self, harness: str) -> list[dict[str, Any]]:
         rows = [{"id": "", "label": f"{W.label(harness)}'s default"}]
         if harness == PI:
-            # What a Pi process last listed (never a start just to ask).
+            # What a Pi process last listed — v1.429.0: and, before any Pi
+            # session ran, what one short background read of Pi listed
+            # (hosted/pi_catalog: no model call, no session, no network).
+            argv0 = binary_for(PI)
+            if argv0 is not None:
+                PC.refresh_soon(self._pi_catalog, self.home, argv0)
             rows += P.cached_models(self._pi_catalog)
+            default = P.cached_default(self._pi_catalog)
+            if default.get("label"):
+                rows[0]["label"] = f"Pi's default ({default['label']})"
+                rows[0]["default_name"] = default["label"]
+            if isinstance(default.get("efforts"), list):
+                rows[0]["efforts"] = list(default["efforts"])
         if harness in (OPENCODE, GROK):
             # What an OpenCode (Grok) process last listed (never a start just to
             # ask); the default row takes the levels of the model it starts on.
@@ -1208,12 +1224,22 @@ class HostedService:
                 log.debug("claude model catalog unreadable", exc_info=True)
         return rows
 
-    def commands_for(self, harness: str, live: "LiveSession | None" = None) -> list[dict[str, str]]:
+    def commands_for(self, harness: str, live: "LiveSession | None" = None, *,
+                     disk: bool = False) -> list[dict[str, str]]:
         """The harness's own `/` commands: what its running process said, else
-        what it said last in this process (never a start just to ask)."""
+        what it said last in this process (never a start just to ask).
+        ``disk`` (v1.429.0, a caller OFF the loop): Pi's kept list may be read
+        from its file when nothing is in memory yet."""
         from .claude import LAST_COMMANDS
 
         rows = live.driver.commands if (live and live.driver and live.driver.commands) else LAST_COMMANDS.get(harness, [])
+        if harness == PI:
+            # v1.429.0: Pi's own commands (done here, or said why not), then
+            # the extensions, templates and skills Pi listed — a session's own
+            # list, else what was kept (a background read, an earlier session).
+            theirs = list(rows) if rows else (P.cached_commands(self._pi_catalog) if disk else [])
+            taken = {str(c.get("name") or "").lower() for c in theirs}
+            rows = [c for c in P.builtin_rows() if c["name"] not in taken] + theirs
         if not rows and harness == CODEX:
             # v1.426.0 (E4): Codex's own compact is there before its first
             # start (its skills are read when it starts).
@@ -1224,7 +1250,11 @@ class HostedService:
         # v1.426.0 (E4): a Codex skill is typed ``$<name>`` (``prefix``).
         return [{"name": c["name"], "description": c.get("description", ""),
                  **({"argument_hint": c["argument_hint"]} if c.get("argument_hint") else {}),
-                 **({"prefix": c["prefix"]} if c.get("prefix") else {})} for c in rows]
+                 **({"prefix": c["prefix"]} if c.get("prefix") else {}),
+                 # v1.429.0: what kind of command (Pi), and why one stays in
+                 # Pi's own terminal (the menu shows that line, never a gap).
+                 **({"source": c["source"]} if c.get("source") else {}),
+                 **({"note": c["note"]} if c.get("note") else {})} for c in rows]
 
     async def commands(self, sid: str) -> list[dict[str, str]]:
         row = await self._row(sid)
@@ -2572,6 +2602,10 @@ class HostedService:
             raise Refused("Type a note first.", 400)
         if live is None or live.turn is None or not live.turn.running or live.turn.ending:
             raise Refused(W.STEER_NOT_WORKING.format(label=label), 409, code="not_working")
+        if row.harness == PI and P.typed_builtin(text, self.commands_for(row.harness, live)) is not None:
+            # v1.429.0: a note reaches Pi as plain words — one of Pi's own
+            # commands goes as a message of its own, after this reply.
+            raise Refused(W.PI_COMMAND_NOT_A_NOTE, 400)
         problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
             raise Refused(problems, 400)
@@ -2672,10 +2706,7 @@ class HostedService:
             raise Refused(W.BUSY)
         if live.working_alone:
             raise Refused(W.PI_STILL_WORKING)
-        if row.harness == PI and _pi_login_typed(text, self.commands_for(row.harness, live)):
-            # /login is Pi's sign-in SCREEN (a terminal's only): typed here it
-            # would reach the model as plain text.
-            raise Refused(W.PI_LOGIN_HERE, 400)
+        builtin = await self._pi_typed(row, live, text, files) if row.harness == PI and not carry else None
         if row.terminal_id:
             if await asyncio.to_thread(self._opened_terminal_runs, row):
                 raise Refused(W.OPEN_IN_TERMINAL.format(label=W.label(row.harness), exit=W.exit_command(row.harness)))
@@ -2699,16 +2730,17 @@ class HostedService:
         turn.carry = dict(carry) if carry else None
         # v1.422.0: a carry-on Iron Jarvis sends by itself never names the
         # session (its words are the app's, not the user's).
-        live.title = (row.title or "").strip() or ("" if carry else first_message_title(text))
+        live.title = (row.title or "").strip() or ("" if carry or builtin else first_message_title(text))
         self.turns[turn_id] = turn
         live.turn = turn
         live.last_active = self.clock()
-        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget, carry=carry))
+        turn.task = asyncio.ensure_future(self._drive(live, row, turn, text, files, made, forget, carry=carry,
+                                                      builtin=builtin))
         # v1.409.0 (found live): a session is titled by its first message, as
         # a chat is — never "New Claude Code session" forever. Only an EMPTY
         # title (a name the user gave is theirs) and only once the turn is
         # really running (a refused send titles nothing).
-        if not (row.title or "").strip() and not carry:
+        if not (row.title or "").strip() and not carry and not builtin:
             title = first_message_title(text)
             if title:
                 try:
@@ -2738,8 +2770,71 @@ class HostedService:
                 return why or f"Iron Jarvis may not read {clip(os.path.basename(f), 120)}."
         return ""
 
+    async def _pi_typed(self, row: Any, live: "LiveSession", text: str,
+                        files: list[str]) -> tuple[str, str] | None:
+        """v1.429.0: the message is one of Pi's OWN ``/`` commands? Pi's RPC
+        would hand it to the model as plain text (measured), so the Code view
+        does it: ``(name, words)`` to run, a Refused (one line) for one only
+        Pi's terminal has, None for any other message (an extension, template
+        or skill of the user's with that name included — Pi runs theirs)."""
+        typed = P.typed_builtin(text, self.commands_for(row.harness, live))
+        if typed is None:
+            return None
+        name, args = typed
+        if name in P.TERMINAL_ONLY:
+            raise Refused(P.TERMINAL_ONLY[name], 400)
+        if files:
+            raise Refused("Pi's own commands take no files — send the files in a message of their own.", 400)
+        if name == "model":
+            if not args:
+                raise Refused(P.MODEL_NEEDS_NAME, 400)
+            got = P.resolve_model(args, await asyncio.to_thread(self._models, PI))
+            if not got:
+                raise Refused(W.PI_NO_SUCH_MODEL.format(name=clip(args, 80)), 400)
+            args = got
+        elif name == "thinking":
+            if not args:
+                raise Refused(P.THINKING_NEEDS_LEVEL, 400)
+            rows = await asyncio.to_thread(self._models, PI)
+            args = check_effort(PI, args.split()[0], row.model, rows)
+        return name, args
+
+    async def _pi_setting(self, live: "LiveSession", row: Any, name: str, args: str) -> None:
+        """v1.429.0: ``/model``, ``/thinking`` and ``/reload`` — the session's
+        own settings, through the same path as the chips (``patch``), said
+        in one line; no Pi process is started for them."""
+        if name == "reload":
+            if live.running:
+                live.restart = True
+                said = "Pi will read your extensions, skills and templates again before your next message."
+            else:
+                said = "Pi reads your extensions, skills and templates fresh when it starts, with your next message."
+            self._emit(live, make("notice", text=said))
+            await self._end_turn(live, "completed")
+            return
+        try:
+            out = await self.patch(live.sid, {"model": args} if name == "model" else {"effort": args})
+        except Refused as r:
+            self._emit(live, W.error(r.sentence, "", ""))
+            await self._end_turn(live, "failed")
+            return
+        if name == "model":
+            rows = await asyncio.to_thread(self._models, PI)
+            hit = next((r for r in rows if r.get("id") == args), {})
+            label = str(hit.get("label") or args)
+            group = str(hit.get("group") or "")
+            said = f"Pi now uses {label}{f' ({group})' if group else ''}."
+            cleared = (out.get("applied") or {}).get("effort_cleared")
+            if cleared:
+                said += f" This model does not take the {cleared} thinking level, so Pi's default level applies."
+        else:
+            said = f"Pi's thinking level is now {args}."
+        self._emit(live, make("notice", text=said))
+        await self._end_turn(live, "completed")
+
     async def _drive(self, live: LiveSession, row: Any, turn: HostedTurn, text: str, files: list[str],
-                     made: str = "", forget: bool = False, *, carry: dict[str, Any] | None = None) -> None:
+                     made: str = "", forget: bool = False, *, carry: dict[str, Any] | None = None,
+                     builtin: tuple[str, str] | None = None) -> None:
         user = make("user", text=clip(text, TEXT_CHARS))
         if files:
             user["files"] = [clip(f, 500) for f in files]
@@ -2764,6 +2859,10 @@ class HostedService:
             # dropped (the tool may already be working).
             from . import panes as PN
 
+            if builtin is not None and builtin[0] in P.SETTING_BUILTINS:
+                # v1.429.0: the session's own setting — no Pi process needed.
+                await self._pi_setting(live, row, *builtin)
+                return
             await PN.record_turn_start_async(self.home, live.sid, str(getattr(row, "folder", "") or ""), turn.id)
             async with live.lock:
                 self._say_start(live, row)  # v1.417.0 (C4.7)
@@ -2776,7 +2875,14 @@ class HostedService:
                 # while it waited for a place): the tool never hears it.
                 raise _StoppedWhileWaiting()
             turn.unsent = False  # from here a Stop is the tool's to act on
-            await live.driver.send_user(text, files)
+            if builtin is not None:
+                # v1.429.0: one of Pi's own commands (compact, session, name,
+                # export) through Pi's RPC, as a turn of its own.
+                await live.driver.run_builtin(*builtin)
+                if builtin[0] == "name" and builtin[1]:
+                    await asyncio.to_thread(store.update, self.engine, live.sid, title=clip(builtin[1], 120))
+            else:
+                await live.driver.send_user(text, files)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:

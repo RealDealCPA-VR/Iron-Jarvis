@@ -202,7 +202,9 @@ async def test_a_model_and_a_thinking_level_are_pis_own_flags_and_change_live(ap
         r = await c.patch(f"/build/app/sessions/{s['id']}", json={"model": "gpt-6-astra"})
         assert r.status_code == 409 and "provider/model" in r.json()["detail"]
         r = await c.patch(f"/build/app/sessions/{s['id']}", json={"effort": "ultra"})
-        assert r.status_code == 400 and "off, minimal, low, medium, high, xhigh, max" in r.json()["detail"]
+        # v1.429.0 (moved on purpose): the levels THIS model takes, by Pi's
+        # own rule — gpt-6-astra's map says "off": null (the recording).
+        assert r.status_code == 400 and "use minimal, low, medium, high, xhigh, max." in r.json()["detail"]
     await stop_all(app)
     ins = sent(log)
     assert {"type": "set_model", "provider": "openai-codex", "modelId": "gpt-6-astra"}.items() <= next(

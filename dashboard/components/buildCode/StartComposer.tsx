@@ -72,6 +72,7 @@ import {
   decodeCodeSession,
   effortsFor,
   modeLabel,
+  modelGroups,
   ownSignInWords,
   toolChoiceWords,
   toolLabel,
@@ -690,15 +691,41 @@ export function StartComposer({
               aria-invalid={chipProblem?.field === "model" || undefined}
               className={CHIP_SELECT}
             >
-              {tool.models.some((m) => m.id === "") ? null : <option value="">{tool.label}&apos;s default</option>}
-              {tool.models.map((m) => (
-                <option key={m.id || "default"} value={m.id}>
-                  {m.label}
+              {tool.models.some((m) => m.id === "") ? null : (
+                <option value="">
+                  {tool.label}&apos;s default{tool.defaultName ? ` (${tool.defaultName})` : ""}
                 </option>
-              ))}
+              )}
+              {/* v1.429.0: grouped by provider, as Pi's own picker sorts them. */}
+              {modelGroups(tool.models).map(({ group, models: list }) =>
+                group ? (
+                  <optgroup key={group} label={group}>
+                    {list.map((m) => (
+                      <option key={m.id || "default"} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : (
+                  list.map((m) => (
+                    <option key={m.id || "default"} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))
+                ),
+              )}
             </select>
           ) : null}
           <ChipProblem field="model" problem={chipProblem} />
+          {tool && (tool.modelsReading || tool.modelsNote) ? (
+            <span
+              data-testid="code-start-models-note"
+              role="status"
+              className={`px-1 text-[12px] ${tool.modelsNote ? "text-tone-warn" : "text-zinc-500"}`}
+            >
+              {tool.modelsNote ?? `Reading ${tool.label}'s model list…`}
+            </span>
+          ) : null}
           {tool && efforts.length ? (
             <select
               aria-label="Effort"

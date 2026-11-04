@@ -442,6 +442,41 @@ def _isolate_opencode_sessions():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_real_pi_catalog_read():
+    """v1.429.0: listing the coding tools starts ONE background read of Pi's
+    model list (``hosted.pi_catalog``: a short ``pi --mode rpc`` run) when
+    Pi is installed and nothing was read yet. On a dev box with Pi on PATH
+    that would start the developer's REAL Pi (their extensions, their
+    ``~/.pi``) from any test that lists the tools. Off for the whole suite;
+    a test of the reader turns it on with a fake Pi."""
+    from iron_jarvis.hosted import pi_catalog as _pc
+
+    old = _pc.AUTO_PROBE
+    _pc.AUTO_PROBE = False
+    try:
+        yield
+    finally:
+        _pc.AUTO_PROBE = old
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pi_default():
+    """v1.429.0: Pi's own default model is kept in process memory
+    (``hosted.pi.LAST_DEFAULT``) by any Pi session a test replays; a later
+    test on the same worker would read that recording's default. Each test
+    starts with none."""
+    from iron_jarvis.hosted import pi as _hp
+
+    saved = dict(_hp.LAST_DEFAULT)
+    _hp.LAST_DEFAULT.clear()
+    try:
+        yield
+    finally:
+        _hp.LAST_DEFAULT.clear()
+        _hp.LAST_DEFAULT.update(saved)
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_grok_home():
     """v1.416.0: the Code view reads Grok's own saved sessions, model list and
     sign-in file from its home (``hosted.grok.default_home``). A test must

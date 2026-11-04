@@ -1,0 +1,199 @@
+{
+ "harness": "pi",
+ "source": "recorded live 2026-11-04, pi 1.3.0, this PC, a SCRATCH PI_CODING_AGENT_DIR (two stand-in providers on 127.0.0.1, a prompt template, a skill, an extension; paths masked) - pi --mode rpc --no-session --offline --no-mcp answering get_state, get_commands, get_available_models",
+ "steps": [
+  {
+   "await": "command",
+   "command": "get_state"
+  },
+  {
+   "out": {
+    "id": "s",
+    "type": "response",
+    "command": "get_state",
+    "success": true,
+    "data": {
+     "model": {
+      "id": "think-big",
+      "name": "Think Big",
+      "api": "openai-completions",
+      "provider": "standin-a",
+      "baseUrl": "http://127.0.0.1:18931/v1",
+      "reasoning": true,
+      "thinkingLevelMap": {
+       "xhigh": "xhigh"
+      },
+      "input": [
+       "text",
+       "image"
+      ],
+      "cost": {
+       "input": 0,
+       "output": 0,
+       "cacheRead": 0,
+       "cacheWrite": 0
+      },
+      "contextWindow": 128000,
+      "maxTokens": 16384
+     },
+     "thinkingLevel": "low",
+     "isStreaming": false,
+     "isCompacting": false,
+     "steeringMode": "one-at-a-time",
+     "followUpMode": "one-at-a-time",
+     "sessionId": "01a1a80e-afd8-7333-adc7-aeecf358d262",
+     "autoCompactionEnabled": true,
+     "messageCount": 0,
+     "pendingMessageCount": 0
+    }
+   },
+   "reply_to_command": "get_state"
+  },
+  {
+   "await": "command",
+   "command": "get_commands"
+  },
+  {
+   "out": {
+    "id": "c",
+    "type": "response",
+    "command": "get_commands",
+    "success": true,
+    "data": {
+     "commands": [
+      {
+       "name": "hello",
+       "description": "Show a greeting",
+       "source": "extension",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\pi-scratch\\agent\\extensions\\hello.ts",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level",
+        "baseDir": "C:\\Users\\me\\pi-scratch\\agent"
+       }
+      },
+      {
+       "name": "llama",
+       "description": "Manage llama.cpp router models",
+       "source": "extension",
+       "sourceInfo": {
+        "path": "builtin:llama.cpp",
+        "source": "builtin",
+        "scope": "temporary",
+        "origin": "top-level"
+       }
+      },
+      {
+       "name": "review",
+       "description": "Review the staged changes",
+       "source": "prompt",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\pi-scratch\\agent\\prompts\\review.md",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level",
+        "baseDir": "C:\\Users\\me\\pi-scratch\\agent"
+       }
+      },
+      {
+       "name": "skill:hello-skill",
+       "description": "Says hello in a friendly way",
+       "source": "skill",
+       "sourceInfo": {
+        "path": "C:\\Users\\me\\pi-scratch\\agent\\skills\\hello-skill\\SKILL.md",
+        "source": "auto",
+        "scope": "user",
+        "origin": "top-level",
+        "baseDir": "C:\\Users\\me\\pi-scratch\\agent"
+       }
+      }
+     ]
+    }
+   },
+   "reply_to_command": "get_commands"
+  },
+  {
+   "await": "command",
+   "command": "get_available_models"
+  },
+  {
+   "out": {
+    "id": "m",
+    "type": "response",
+    "command": "get_available_models",
+    "success": true,
+    "data": {
+     "models": [
+      {
+       "id": "think-big",
+       "name": "Think Big",
+       "api": "openai-completions",
+       "provider": "standin-a",
+       "baseUrl": "http://127.0.0.1:18931/v1",
+       "reasoning": true,
+       "thinkingLevelMap": {
+        "xhigh": "xhigh"
+       },
+       "input": [
+        "text",
+        "image"
+       ],
+       "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+       },
+       "contextWindow": 128000,
+       "maxTokens": 16384
+      },
+      {
+       "id": "plain",
+       "name": "Plain Model",
+       "api": "openai-completions",
+       "provider": "standin-a",
+       "baseUrl": "http://127.0.0.1:18931/v1",
+       "reasoning": false,
+       "input": [
+        "text"
+       ],
+       "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+       },
+       "contextWindow": 128000,
+       "maxTokens": 16384
+      },
+      {
+       "id": "think-small",
+       "name": "Think Small",
+       "api": "openai-completions",
+       "provider": "standin-b",
+       "baseUrl": "http://127.0.0.1:18931/v1",
+       "reasoning": true,
+       "thinkingLevelMap": {
+        "off": null,
+        "minimal": null
+       },
+       "input": [
+        "text"
+       ],
+       "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0
+       },
+       "contextWindow": 128000,
+       "maxTokens": 16384
+      }
+     ]
+    }
+   },
+   "reply_to_command": "get_available_models"
+  }
+ ]
+}

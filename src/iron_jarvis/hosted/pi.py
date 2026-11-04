@@ -77,6 +77,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -127,18 +128,27 @@ REQUEST_TIMEOUT_S = 30.0
 HANDLED_GRACE_S = 2.0
 #: A running command's output is redrawn at most this often.
 UPDATE_EVERY_S = 1.0
+#: v1.429.0: Pi refreshes its model catalogs in the background at start
+#: (main.js: bounded by 15 s); the list is read again after that.
+REREAD_MODELS_S = 16.0
 #: Pictures sent with a message (Pi takes base64 images).
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp"}
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGES = 8
 #: The model list the composer offers (what a Pi process last said).
-MAX_MODELS = 200
+#: v1.429.0: 1000 (was 200) — Pi's own picker lists every model of every
+#: provider the user signed in to, and one OpenRouter key alone lists hundreds.
+MAX_MODELS = 1000
 
 #: The models a Pi process last listed (``get_available_models``): the
 #: harnesses listing shows them without starting anything. Kept on disk by
 #: the service (``pi_models.json``) so a restart still has them.
-LAST_MODELS: list[dict[str, str]] = []
+LAST_MODELS: list[dict[str, Any]] = []
+#: v1.429.0: the model and thinking level Pi starts on when none is named
+#: (``get_state`` of a process started with neither): ``{model, label,
+#: thinking}``, else empty.
+LAST_DEFAULT: dict[str, Any] = {}
 
 #: A parent Pi session's markers (Pi sets them for the commands its own
 #: shell tools run): a daemon started from inside Pi must not hand them on.
@@ -469,28 +479,229 @@ def takes_pictures(model: Any) -> bool | None:
     return "image" in model["input"]
 
 
-def model_rows(models: Any) -> list[dict[str, str]]:
-    """``get_available_models`` -> the composer's rows (``provider/id``)."""
-    out: list[dict[str, str]] = []
+#: Pi's thinking levels in Pi's own order (pi-ai ``EXTENDED_THINKING_LEVELS``).
+_LEVEL_ORDER: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def levels_of(model: Any) -> list[str] | None:
+    """v1.429.0: the thinking levels ONE Pi model takes — Pi's own rule
+    (pi-ai ``getSupportedThinkingLevels``, read from pi 1.3.0's bundle): a
+    model without ``reasoning`` takes only "off"; otherwise every level whose
+    ``thinkingLevelMap`` entry is not ``null``, with "xhigh" and "max" only
+    when the map names them. Measured live: a map ``{off: null, minimal:
+    null}`` -> low, medium, high (Pi's own ``get_available_thinking_levels``
+    said the same). None when the record does not say whether it reasons
+    (not known: the tool's whole list applies)."""
+    if not isinstance(model, dict) or not isinstance(model.get("reasoning"), bool):
+        return None
+    if not model["reasoning"]:
+        return ["off"]
+    mapping = model.get("thinkingLevelMap") if isinstance(model.get("thinkingLevelMap"), dict) else {}
+    out = []
+    for level in _LEVEL_ORDER:
+        if level in mapping and mapping[level] is None:
+            continue
+        if level in ("xhigh", "max") and level not in mapping:
+            continue
+        out.append(level)
+    return out
+
+
+def model_rows(models: Any) -> list[dict[str, Any]]:
+    """``get_available_models`` -> the composer's rows (``provider/id``).
+
+    v1.429.0: the list Pi's OWN model picker shows (``/model`` reads the same
+    ``getAvailableSnapshot``), grouped by provider as Pi sorts it (by
+    provider, Pi's order kept inside one); each row names the model as Pi
+    names it (``label``), its provider (``group``) and the thinking levels
+    THAT model takes (``efforts``, :func:`levels_of`; ``[]`` = none, the
+    effort chip hides)."""
+    out: list[dict[str, Any]] = []
     for m in models if isinstance(models, list) else []:
         if not isinstance(m, dict):
             continue
         provider, mid = str(m.get("provider") or "").strip(), str(m.get("id") or "").strip()
         if not provider or not mid:
             continue
-        name = str(m.get("name") or mid).strip()
-        row: dict[str, Any] = {"id": clip(f"{provider}/{mid}", 120), "label": clip(f"{name} ({provider})", 120)}
-        if m.get("reasoning") is False:
-            # v1.412.0 review: Pi says this model has no reasoning — it takes
-            # no thinking level (the effort chip hides for it).
-            row["efforts"] = []
+        name = str(m.get("name") or mid).strip() or mid
+        row: dict[str, Any] = {"id": clip(f"{provider}/{mid}", 120), "label": clip(name, 120),
+                               "group": clip(provider, 80)}
+        levels = levels_of(m)
+        if levels is not None:
+            # "off" alone = a model that does not reason: no level to choose.
+            row["efforts"] = [] if levels == ["off"] else levels
         if takes_pictures(m) is False:
             # v1.412.0: Pi says this model reads no pictures (its `input`).
             row["pictures"] = False
         out.append(row)
         if len(out) >= MAX_MODELS:
             break
+    # Python's sort is stable: Pi's own order stays inside each provider.
+    out.sort(key=lambda r: r["group"].lower())
     return out
+
+
+#: What ``get_commands`` says a command is (rpc-commands.md "source").
+COMMAND_SOURCES: tuple[str, ...] = ("extension", "prompt", "skill")
+
+
+def command_rows(cmds: Any, *, user_only: bool = False) -> list[dict[str, str]]:
+    """``get_commands`` -> the ``/`` menu's rows: extension commands, prompt
+    templates and skills (``skill:<name>``), each with its ``source``.
+    ``user_only``: leave out a PROJECT's own (``sourceInfo.scope``) — what is
+    kept for every folder's menu holds the user's own commands only."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for c in cmds if isinstance(cmds, list) else []:
+        if not isinstance(c, dict):
+            continue
+        info = c.get("sourceInfo") if isinstance(c.get("sourceInfo"), dict) else {}
+        if user_only and info.get("scope") == "project":
+            continue
+        name = str(c.get("name") or "").strip().lstrip("/")
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        row = {"name": clip(name, 80), "description": clip(c.get("description") or "", 200)}
+        if c.get("source") in COMMAND_SOURCES:
+            row["source"] = str(c["source"])
+        out.append(row)
+        if len(out) >= 300:
+            break
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Pi's own `/` commands (v1.429.0)
+# --------------------------------------------------------------------------- #
+#: Pi's built-in commands Iron Jarvis does here through Pi's RPC (pi 1.3.0
+#: docs/slash-commands.md + docs/rpc-commands.md). Typed in Pi's RPC prompt
+#: they would reach the MODEL as plain text (measured: the stand-in model
+#: received "/compact"), so the Code view does each one itself.
+BUILTINS: dict[str, dict[str, str]] = {
+    "model": {"description": "Choose the model", "argument_hint": "<provider/model>"},
+    "thinking": {"description": "Set the thinking level", "argument_hint": "<level>"},
+    "compact": {"description": "Summarize the conversation so far to make room", "argument_hint": "[instructions]"},
+    "name": {"description": "Name this session", "argument_hint": "[name]"},
+    "session": {"description": "Show this session's messages, tokens and cost"},
+    "export": {"description": "Save the conversation as a web page in the session's folder",
+               "argument_hint": "[file]"},
+    "reload": {"description": "Read your extensions, skills and templates again before the next message"},
+}
+#: The ones that change the session's own settings (no Pi process needed).
+SETTING_BUILTINS = ("model", "thinking", "reload")
+
+_TERMINAL_SCREEN = ("That is one of Pi's own screens, which needs Pi's terminal — "
+                    "open this session there with Open in terminal.")
+_OTHER_CONVERSATION = ("That moves Pi to another conversation, which only Pi's own terminal can follow — "
+                       "open this session there with Open in terminal.")
+#: Pi's built-ins its RPC cannot do here, and the one line said instead.
+TERMINAL_ONLY: dict[str, str] = {
+    "settings": _TERMINAL_SCREEN,
+    "scoped-models": _TERMINAL_SCREEN,
+    "hotkeys": _TERMINAL_SCREEN,
+    "changelog": _TERMINAL_SCREEN,
+    "trust": _TERMINAL_SCREEN,
+    "bug": _TERMINAL_SCREEN,
+    "login": W.PI_LOGIN_HERE,
+    "logout": W.PI_LOGIN_HERE,
+    "tree": _OTHER_CONVERSATION,
+    "fork": _OTHER_CONVERSATION,
+    "clone": _OTHER_CONVERSATION,
+    "import": _OTHER_CONVERSATION,
+    "new": "Start another session with New session.",
+    "resume": "Your Pi conversations are listed with your sessions — open one there.",
+    "copy": "Use the copy button under a reply.",
+    "share": ("It uploads the conversation, so it stays in Pi's own terminal — "
+              "open this session there with Open in terminal."),
+    "quit": "There is nothing to quit here: Iron Jarvis stops Pi after the session has been idle a while.",
+}
+MODEL_NEEDS_NAME = "Choose the model from the model menu under the box, or type /model provider/model."
+THINKING_NEEDS_LEVEL = "Choose the thinking level from the effort menu under the box, or type /thinking low."
+#: How long Pi's own compaction (a model call) may take.
+COMPACT_TIMEOUT_S = 600.0
+
+
+def builtin_rows() -> list[dict[str, str]]:
+    """The ``/`` menu's rows for Pi's own commands: the ones done here, then
+    the terminal-only ones with their one-line ``note`` (the menu shows a
+    note row only when its name is typed — never a silent gap)."""
+    rows = [{"name": n, "description": d["description"], "source": "pi",
+             **({"argument_hint": d["argument_hint"]} if d.get("argument_hint") else {})}
+            for n, d in BUILTINS.items()]
+    rows += [{"name": n, "description": "Only in Pi's own terminal", "source": "pi", "note": why}
+             for n, why in TERMINAL_ONLY.items()]
+    return rows
+
+
+def typed_builtin(text: str, commands: list[dict[str, Any]] | None) -> tuple[str, str] | None:
+    """``(name, words after it)`` when the message is one of Pi's own ``/``
+    commands — unless an extension, template or skill of the user's offers a
+    command by that name (Pi runs theirs). None for anything else."""
+    stripped = str(text or "").strip()
+    if not stripped.startswith("/"):
+        return None
+    word, _, rest = stripped[1:].partition(" ")
+    if "\n" in word:
+        word, _, more = word.partition("\n")
+        rest = (more + " " + rest).strip()
+    name = word.strip().lower()
+    if name not in BUILTINS and name not in TERMINAL_ONLY:
+        return None
+    theirs = {str(c.get("name") or "").lower().lstrip("/") for c in commands or []
+              if isinstance(c, dict) and c.get("source") != "pi"}
+    if name in theirs:
+        return None
+    return name, rest.strip()
+
+
+def resolve_model(arg: str, rows: list[dict[str, Any]]) -> str:
+    """The model id ``/model <arg>`` means: an exact ``provider/model``, else
+    the ONE model whose id or name is ``arg`` (case does not matter). ""
+    when none or several match."""
+    want = str(arg or "").strip()
+    if not want:
+        return ""
+    ids = [str(r.get("id") or "") for r in rows if r.get("id")]
+    if want in ids:
+        return want
+    low = want.lower()
+    hits = [r["id"] for r in rows if r.get("id") and (
+        str(r["id"]).lower() == low or str(r["id"]).split("/", 1)[-1].lower() == low
+        or str(r.get("label") or "").lower() == low)]
+    return hits[0] if len(set(hits)) == 1 else ""
+
+
+def compact_words(result: Any) -> str:
+    """What Pi's own compaction did, in plain words."""
+    before = result.get("tokensBefore") if isinstance(result, dict) else None
+    if isinstance(before, (int, float)) and not isinstance(before, bool) and before > 0:
+        return f"Pi summarized the conversation so far to make room ({int(before):,} tokens before)."
+    return "Pi summarized the conversation so far to make room."
+
+
+def stats_words(stats: Any) -> str:
+    """``get_session_stats`` as one line (what Pi reported)."""
+    s = stats if isinstance(stats, dict) else {}
+    parts = []
+    users, replies = s.get("userMessages"), s.get("assistantMessages")
+    if isinstance(users, int) and isinstance(replies, int):
+        parts.append(f"{users} message{'' if users == 1 else 's'} from you, {replies} from Pi")
+    calls = s.get("toolCalls")
+    if isinstance(calls, int):
+        parts.append(f"{calls} tool call{'' if calls == 1 else 's'}")
+    tokens = s.get("tokens") if isinstance(s.get("tokens"), dict) else {}
+    total = tokens.get("total")
+    if isinstance(total, (int, float)) and not isinstance(total, bool):
+        parts.append(f"{int(total):,} tokens")
+    cost = s.get("cost")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+        parts.append(f"${cost:.4f} as Pi reported it")
+    usage = s.get("contextUsage") if isinstance(s.get("contextUsage"), dict) else {}
+    pct, window = usage.get("percent"), usage.get("contextWindow")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool) and isinstance(window, int) and window:
+        parts.append(f"{pct:.0f}% of the {window:,}-token context used")
+    return ("This session: " + ", ".join(parts) + ".") if parts else "Pi did not say anything about this session yet."
 
 
 def split_model(model: str) -> tuple[str, str]:
@@ -550,6 +761,10 @@ class PiDriver(Driver):
         #: Does the model in use take pictures? (Pi's model ``input``; None =
         #: not known — sent as pictures.)
         self.takes_pictures: bool | None = None
+        #: v1.429.0: the Pi command this turn runs (``run_builtin``), "" = none.
+        self._builtin = ""
+        self._manual_compact = False
+        self._reread: asyncio.Future | None = None
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         out = ["--mode", "rpc", "--session-id", session_id]
@@ -560,13 +775,13 @@ class PiDriver(Driver):
         return out
 
     # -- commands -----------------------------------------------------------------
-    async def request(self, kind: str, **fields: Any) -> Any:
+    async def request(self, kind: str, _timeout: float = REQUEST_TIMEOUT_S, **fields: Any) -> Any:
         """One command; its ``data`` — or ControlRefused with Pi's own words."""
         self._n += 1
         rid = f"ij-{kind}-{self._n}"
         fut = self._replies.make(rid)
         await self.write({"id": rid, "type": kind, **fields})
-        return await asyncio.wait_for(fut, timeout=REQUEST_TIMEOUT_S)
+        return await asyncio.wait_for(fut, timeout=_timeout)
 
     async def open(self, *, session_id: str, resume: bool) -> None:
         state = await self.request("get_state")
@@ -581,29 +796,107 @@ class PiDriver(Driver):
         self.takes_pictures = takes_pictures(model)
         self.emit(make("session", harness=HARNESS, harness_session_id=sid, model=clip(shown, 120),
                        cwd=clip(self.cwd, 500), mode=self.mode))
+        # v1.429.0: a NEW conversation started on Pi's own default says what
+        # that default is (a reopened one restores its LAST model instead).
+        on_default = not resume and not self.model and not self.effort and bool(model.get("id"))
+        if on_default:
+            note_default(model, state.get("thinkingLevel"))
         # The `/` list and the model list: a failure here never fails a start.
+        kept: list[dict[str, str]] = []
         try:
             got = await self.request("get_commands")
-            cmds = got.get("commands") if isinstance(got, dict) else None
-            self.commands = [
-                {"name": str(c.get("name") or ""), "description": clip(c.get("description") or "", 200)}
-                for c in (cmds or []) if isinstance(c, dict) and c.get("name")
-            ][:300]
-            if self.commands:
+            listed = got.get("commands") if isinstance(got, dict) else None
+            self.commands = command_rows(listed)
+            kept = command_rows(listed, user_only=True)
+            if kept:
                 from .claude import LAST_COMMANDS
 
-                LAST_COMMANDS[HARNESS] = list(self.commands)
+                LAST_COMMANDS[HARNESS] = list(kept)
         except Exception:  # noqa: BLE001
             log.debug("pi did not list its commands", exc_info=True)
+        await self._read_models()
+        if self.catalog_path is not None:
+            await asyncio.to_thread(save_catalog, self.catalog_path, commands=kept or None,
+                                    default=dict(LAST_DEFAULT) if on_default and LAST_DEFAULT else None)
+            # v1.429.0: Pi refreshes its model catalogs in the background when
+            # it starts (main.js, up to 15 s): what it lists after that is read
+            # once more, so a new catalog reaches the menu without a restart.
+            self._reread = asyncio.ensure_future(self._read_models_later())
+
+    async def _read_models(self) -> bool:
+        """Pi's model list (what its own ``/model`` shows), kept for the menu."""
         try:
             got = await self.request("get_available_models")
-            rows = model_rows(got.get("models") if isinstance(got, dict) else None)
-            if rows:
-                LAST_MODELS[:] = rows
-                if self.catalog_path is not None:
-                    await asyncio.to_thread(save_models, self.catalog_path, rows)
         except Exception:  # noqa: BLE001
             log.debug("pi did not list its models", exc_info=True)
+            return False
+        rows = model_rows(got.get("models") if isinstance(got, dict) else None)
+        if rows:
+            LAST_MODELS[:] = rows
+            if self.catalog_path is not None:
+                await asyncio.to_thread(save_models, self.catalog_path, rows)
+        return bool(rows)
+
+    async def _read_models_later(self) -> None:
+        try:
+            await asyncio.sleep(REREAD_MODELS_S)
+            await self._read_models()
+        except Exception:  # noqa: BLE001 — a stopped process lists nothing
+            pass
+
+    # -- Pi's own `/` commands (v1.429.0) --------------------------------------------
+    async def run_builtin(self, name: str, args: str) -> None:
+        """One of Pi's own commands that needs the conversation (compact,
+        session, name, export), as a turn of its own: Pi's RPC does it, the
+        turn says what happened in plain words and ends. A refusal is Pi's own
+        words (e.g. "Nothing to compact (session too small)")."""
+        self._turn_n += 1
+        self.turn_open = True
+        self._errored = False
+        self._interrupting = False
+        self._usage = {"input": 0, "output": 0, "cache_read": 0}
+        self._cost = 0.0
+        self._waiting_run = False
+        self._builtin = name
+        try:
+            if name == "compact":
+                self._manual_compact = True
+                got = await self.request("compact", _timeout=COMPACT_TIMEOUT_S,
+                                         **({"customInstructions": args} if args else {}))
+                said = compact_words(got)
+            elif name == "session":
+                said = stats_words(await self.request("get_session_stats"))
+            elif name == "name":
+                if args:
+                    await self.request("set_session_name", name=clip(args, 120))
+                    said = f'Pi named this session "{clip(args, 120)}".'
+                else:
+                    state = await self.request("get_state")
+                    current = str((state or {}).get("sessionName") or "") if isinstance(state, dict) else ""
+                    said = f'This session is called "{current}".' if current else (
+                        "This session has no name in Pi yet — type /name and a name.")
+            elif name == "export":
+                got = await self.request("export_html", **({"outputPath": args} if args else {}))
+                path = str((got or {}).get("path") or "") if isinstance(got, dict) else ""
+                if path and not os.path.isabs(path) and self.cwd:
+                    path = os.path.normpath(os.path.join(self.cwd, path))
+                said = f"Pi saved the conversation as {clip(path, 400)}." if path else "Pi saved the conversation."
+            else:  # pragma: no cover — the service sends only these
+                said = ""
+            if self.turn_open and said:
+                self.emit(make("notice", text=clip(said, 600)))
+            self._end("interrupted" if self._interrupting else "completed")
+        except ControlRefused as exc:
+            if self.turn_open:
+                self.emit(W.error(clip(f"Pi said: {exc}", 300), "", ""))
+                self._end("failed")
+        except asyncio.TimeoutError:
+            if self.turn_open:
+                self.emit(W.error("Pi did not answer in time", OTHER_FIX, ""))
+                self._end("failed")
+        finally:
+            self._builtin = ""
+            self._manual_compact = False
 
     # -- the user's side ----------------------------------------------------------
     @property
@@ -792,6 +1085,14 @@ class PiDriver(Driver):
 
     async def interrupt(self) -> None:
         self._interrupting = True
+        if self._builtin:
+            # v1.429.0: one of Pi's own commands (no run to abort): the turn
+            # ends now. Pi may still finish it by itself (a compaction).
+            if self.turn_open:
+                if self._builtin == "compact":
+                    self.emit(make("notice", text="Stopped waiting. Pi may still finish summarizing by itself."))
+                self._end("interrupted")
+            return
         if any(s == "sent" for s in self.steers.values()):
             # v1.412.0: Pi's abort RUNS notes still queued (docs: "send
             # clear_queue before abort, then restore the returned text in the
@@ -882,6 +1183,9 @@ class PiDriver(Driver):
         if self._handled is not None:
             self._handled.cancel()
             self._handled = None
+        if self._reread is not None:
+            self._reread.cancel()
+            self._reread = None
         self._replies.fail_all(HarnessGone("Pi stopped"))
 
     # -- Pi's side (ON THE LOOP) ----------------------------------------------------
@@ -947,7 +1251,8 @@ class PiDriver(Driver):
                 self.emit(make("notice", text=f"Pi is trying again{f' ({said})' if said else ''}."))
             return
         if kind == "compaction_end" and obj.get("result"):
-            self.emit(make("notice", text="Pi compacted the conversation to make room."))
+            if not self._manual_compact:  # /compact says it itself (run_builtin)
+                self.emit(make("notice", text="Pi compacted the conversation to make room."))
             return
         if kind == "extension_error":
             where = _base(obj.get("extensionPath"))
@@ -1237,36 +1542,110 @@ def _read_images(files: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
 # --------------------------------------------------------------------------- #
 # The model list kept on disk
 # --------------------------------------------------------------------------- #
-def save_models(path: Path, rows: list[dict[str, str]]) -> None:
-    """BLOCKING: the model list a Pi process said, for the next listing."""
+_CATALOG_LOCK = threading.Lock()
+#: The catalog file is never read past this size.
+MAX_CATALOG_BYTES = 4_000_000
+
+
+def _read_doc(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(json.dumps({"models": rows[:MAX_MODELS]}, ensure_ascii=False).encode("utf-8"))
-        os.replace(tmp, path)
-    except OSError:
-        log.debug("could not keep Pi's model list", exc_info=True)
+        if path.is_file() and path.stat().st_size < MAX_CATALOG_BYTES:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        pass
+    return {}
 
 
-def cached_models(path: Path | None) -> list[dict[str, str]]:
+def save_catalog(path: Path, **parts: Any) -> None:
+    """BLOCKING: merge ``parts`` (``models``, ``commands``, ``default``,
+    ``fetched_at``, ``watch``, ``problem``) into the kept catalog — a key
+    given as None is left as it was. One writer at a time (a background read
+    and a session's own list can land together); temp file + replace."""
+    with _CATALOG_LOCK:
+        doc = _read_doc(path)
+        for key, value in parts.items():
+            if value is not None:
+                doc[key] = value
+        if isinstance(doc.get("models"), list):
+            doc["models"] = doc["models"][:MAX_MODELS]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_bytes(json.dumps(doc, ensure_ascii=False).encode("utf-8"))
+            os.replace(tmp, path)
+        except OSError:
+            log.debug("could not keep Pi's model list", exc_info=True)
+
+
+def save_models(path: Path, rows: list[dict[str, Any]]) -> None:
+    """BLOCKING: the model list a Pi process said, for the next listing."""
+    save_catalog(path, models=rows[:MAX_MODELS])
+
+
+def note_default(model: Any, thinking: Any) -> None:
+    """v1.429.0: the model and thinking level Pi starts on by itself (a
+    ``get_state`` of a process started with neither named)."""
+    if not isinstance(model, dict) or not model.get("id") or not model.get("provider"):
+        return
+    LAST_DEFAULT.clear()
+    LAST_DEFAULT.update({
+        "model": clip(f"{model.get('provider')}/{model.get('id')}", 120),
+        "label": clip(str(model.get("name") or model.get("id")), 120),
+        "thinking": clip(str(thinking or ""), 20),
+    })
+    levels = levels_of(model)
+    if levels is not None:
+        LAST_DEFAULT["efforts"] = [] if levels == ["off"] else levels
+
+
+def _clean_row(r: Any) -> dict[str, Any] | None:
+    if not (isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("id")):
+        return None
+    row: dict[str, Any] = {"id": clip(r.get("id"), 120), "label": clip(r.get("label") or r.get("id"), 120)}
+    if isinstance(r.get("group"), str) and r["group"].strip():
+        row["group"] = clip(r["group"], 80)
+    if isinstance(r.get("efforts"), list):
+        row["efforts"] = [x for x in _LEVEL_ORDER if x in r["efforts"]]
+    if r.get("pictures") is False:
+        row["pictures"] = False
+    return row
+
+
+def cached_models(path: Path | None) -> list[dict[str, Any]]:
     """BLOCKING-light: what a Pi process last listed (memory, else disk)."""
     if LAST_MODELS:
         return list(LAST_MODELS)
-    if path is None:
-        return []
-    try:
-        if path.is_file() and path.stat().st_size < 2_000_000:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            rows = data.get("models") if isinstance(data, dict) else None
-            out = []
-            for r in (rows or []):
-                if not (isinstance(r, dict) and isinstance(r.get("id"), str) and r.get("id")):
-                    continue
-                row: dict[str, Any] = {"id": clip(r.get("id"), 120), "label": clip(r.get("label") or r.get("id"), 120)}
-                if r.get("efforts") == []:
-                    row["efforts"] = []
-                out.append(row)
-            return out[:MAX_MODELS]
-    except (OSError, ValueError):
-        pass
-    return []
+    rows = _read_doc(path).get("models")
+    out = [row for row in (_clean_row(r) for r in (rows if isinstance(rows, list) else [])) if row]
+    return out[:MAX_MODELS]
+
+
+def cached_commands(path: Path | None) -> list[dict[str, str]]:
+    """BLOCKING-light: the ``/`` list a Pi process last said (memory, else
+    disk) — extensions, templates and skills of the user's own."""
+    from .claude import LAST_COMMANDS
+
+    if LAST_COMMANDS.get(HARNESS):
+        return [dict(c) for c in LAST_COMMANDS[HARNESS] if c.get("source") != "pi"]
+    rows = command_rows(_read_doc(path).get("commands"))
+    if rows:
+        LAST_COMMANDS[HARNESS] = list(rows)  # read once; memory from then on
+    return rows
+
+
+def cached_default(path: Path | None) -> dict[str, Any]:
+    """BLOCKING-light: Pi's own default model (``{model, label, thinking,
+    efforts?}``), else {}."""
+    if LAST_DEFAULT:
+        return dict(LAST_DEFAULT)
+    got = _read_doc(path).get("default")
+    if not (isinstance(got, dict) and isinstance(got.get("model"), str) and got.get("model")):
+        return {}
+    out: dict[str, Any] = {"model": clip(got["model"], 120), "label": clip(got.get("label") or got["model"], 120),
+                           "thinking": clip(got.get("thinking") or "", 20)}
+    if isinstance(got.get("efforts"), list):
+        out["efforts"] = [x for x in _LEVEL_ORDER if x in got["efforts"]]
+    return out

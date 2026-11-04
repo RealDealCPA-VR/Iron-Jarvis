@@ -137,6 +137,17 @@ PI_KEEPS_LAST = (
     "This Pi conversation keeps the model and thinking level it last used — "
     "choose one from the list instead."
 )
+#: v1.429.0: Pi listed no model at all (nothing signed in, none configured).
+PI_NO_MODELS = (
+    "Pi has no model it can use yet. Open Pi in a Build terminal and type /login, "
+    "or add a model to Pi's models.json."
+)
+#: v1.429.0: a /model typed with a name Pi does not list.
+PI_NO_SUCH_MODEL = (
+    "Pi does not list a model called {name}. Type it as provider/model, the way the model menu shows it."
+)
+#: v1.429.0: Pi's own commands are a message of their own (never a note).
+PI_COMMAND_NOT_A_NOTE = "Pi's own commands go as a message of their own — send it once Pi has finished."
 #: v1.413.0: OpenCode signs in by itself, per provider (`opencode auth login`).
 OPENCODE_OWN_SIGN_IN = (
     "OpenCode signs in by itself, per provider, so an OpenCode session has no account to choose — "

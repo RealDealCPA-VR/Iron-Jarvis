@@ -1,0 +1,263 @@
+{
+ "_about": "Pi's row in GET /build/app/harnesses, written by the REAL daemon after one background read of tests/fixtures/build_app_v1429/pi_catalog.json (recorded pi 1.3.0). Regenerate with IJ_REGEN_BUILD_APP_PI_MODELS=1.",
+ "pi": {
+  "id": "pi",
+  "label": "Pi",
+  "installed": true,
+  "signed_in": null,
+  "version": null,
+  "modes": [
+   {
+    "id": "own",
+    "label": "Pi's own rules",
+    "dangerous": false,
+    "about": "Pi asks nothing before a tool; only an extension of yours can ask."
+   }
+  ],
+  "hidden_modes": [
+   {
+    "id": "ask",
+    "label": "Ask first",
+    "reason": "Pi does not ask before it runs a tool. Only an extension of yours can ask, and its question comes here as a card."
+   },
+   {
+    "id": "edits",
+    "label": "Auto edits",
+    "reason": "Pi has no setting that lets edits run while commands still ask."
+   },
+   {
+    "id": "plan",
+    "label": "Plan",
+    "reason": "Pi's plan mode comes from an extension that switches itself off when you run the plan, so this menu could not stay in step with it. If you have it, type /plan instead."
+   },
+   {
+    "id": "full",
+    "label": "Full access",
+    "reason": "Pi already runs every tool without asking (Pi's own rules)."
+   }
+  ],
+  "models": [
+   {
+    "id": "",
+    "label": "Pi's default (Think Big)",
+    "default_name": "Think Big",
+    "efforts": [
+     "off",
+     "minimal",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   {
+    "id": "standin-a/think-big",
+    "label": "Think Big",
+    "group": "standin-a",
+    "efforts": [
+     "off",
+     "minimal",
+     "low",
+     "medium",
+     "high",
+     "xhigh"
+    ]
+   },
+   {
+    "id": "standin-a/plain",
+    "label": "Plain Model",
+    "group": "standin-a",
+    "efforts": [],
+    "pictures": false
+   },
+   {
+    "id": "standin-b/think-small",
+    "label": "Think Small",
+    "group": "standin-b",
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "pictures": false
+   }
+  ],
+  "efforts": [
+   "off",
+   "minimal",
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "accounts": [],
+  "own_sign_in": true,
+  "only_when_installed": false,
+  "sign_in_hint": "Pi signs in by itself, per model provider: to change it, open Pi in a Build terminal and type /login there. Iron Jarvis's accounts do not apply.",
+  "commands": [
+   {
+    "name": "model",
+    "description": "Choose the model",
+    "argument_hint": "<provider/model>",
+    "source": "pi"
+   },
+   {
+    "name": "thinking",
+    "description": "Set the thinking level",
+    "argument_hint": "<level>",
+    "source": "pi"
+   },
+   {
+    "name": "compact",
+    "description": "Summarize the conversation so far to make room",
+    "argument_hint": "[instructions]",
+    "source": "pi"
+   },
+   {
+    "name": "name",
+    "description": "Name this session",
+    "argument_hint": "[name]",
+    "source": "pi"
+   },
+   {
+    "name": "session",
+    "description": "Show this session's messages, tokens and cost",
+    "source": "pi"
+   },
+   {
+    "name": "export",
+    "description": "Save the conversation as a web page in the session's folder",
+    "argument_hint": "[file]",
+    "source": "pi"
+   },
+   {
+    "name": "reload",
+    "description": "Read your extensions, skills and templates again before the next message",
+    "source": "pi"
+   },
+   {
+    "name": "settings",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "scoped-models",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "hotkeys",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "changelog",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "trust",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "bug",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That is one of Pi's own screens, which needs Pi's terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "login",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "Pi signs in on its own screen, which needs a terminal — open Pi in a Build terminal (Open in terminal) and type /login there."
+   },
+   {
+    "name": "logout",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "Pi signs in on its own screen, which needs a terminal — open Pi in a Build terminal (Open in terminal) and type /login there."
+   },
+   {
+    "name": "tree",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That moves Pi to another conversation, which only Pi's own terminal can follow — open this session there with Open in terminal."
+   },
+   {
+    "name": "fork",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That moves Pi to another conversation, which only Pi's own terminal can follow — open this session there with Open in terminal."
+   },
+   {
+    "name": "clone",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That moves Pi to another conversation, which only Pi's own terminal can follow — open this session there with Open in terminal."
+   },
+   {
+    "name": "import",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "That moves Pi to another conversation, which only Pi's own terminal can follow — open this session there with Open in terminal."
+   },
+   {
+    "name": "new",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "Start another session with New session."
+   },
+   {
+    "name": "resume",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "Your Pi conversations are listed with your sessions — open one there."
+   },
+   {
+    "name": "copy",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "Use the copy button under a reply."
+   },
+   {
+    "name": "share",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "It uploads the conversation, so it stays in Pi's own terminal — open this session there with Open in terminal."
+   },
+   {
+    "name": "quit",
+    "description": "Only in Pi's own terminal",
+    "source": "pi",
+    "note": "There is nothing to quit here: Iron Jarvis stops Pi after the session has been idle a while."
+   },
+   {
+    "name": "hello",
+    "description": "Show a greeting",
+    "source": "extension"
+   },
+   {
+    "name": "llama",
+    "description": "Manage llama.cpp router models",
+    "source": "extension"
+   },
+   {
+    "name": "review",
+    "description": "Review the staged changes",
+    "source": "prompt"
+   },
+   {
+    "name": "skill:hello-skill",
+    "description": "Says hello in a friendly way",
+    "source": "skill"
+   }
+  ]
+ }
+}
