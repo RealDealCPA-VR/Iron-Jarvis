@@ -50,6 +50,9 @@ import {
 } from "@/lib/buildCodeCarry";
 import {
   CONTINUE_ON_ANOTHER,
+  TRY_ACCOUNTS_LEAD,
+  tryAccountWords,
+  type TryChoice,
   doneWords,
   signInProvider,
   planChecklistSteps,
@@ -266,6 +269,10 @@ interface FailurePresses {
   tool: string;
   onContinueOn?: () => void;
   continuing?: boolean;
+  /** v1.427.3: after Continue on another account found none free, the
+   *  accounts the user may still try (Iron-Proxy parked them for a limit). */
+  tryChoices?: readonly TryChoice[];
+  onTryAccount?: (id: string) => void;
   /** v1.417.0 (C4.9): send the reply's message again (same words, same
    *  files) — the failure's own words say "Press Retry". */
   onRetry?: () => void;
@@ -417,6 +424,27 @@ const Item = memo(function Item({
               {CONTINUE_ON_ANOTHER}
             </button>
           ) : null}
+          {press && item.fixKind === "account_limit" && press.onTryAccount && press.tryChoices?.length
+            && canMoveAccounts(press.tool) ? (
+            <div data-testid="code-try-accounts" className="mt-1 text-zinc-400">
+              <p>{TRY_ACCOUNTS_LEAD}</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {press.tryChoices.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    data-testid={`code-try-account-${c.id}`}
+                    disabled={press.continuing}
+                    title={c.why || undefined}
+                    onClick={() => press.onTryAccount?.(c.id)}
+                    className="inline-flex h-7 items-center rounded-lg px-2 text-[13px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                  >
+                    {tryAccountWords(c.title)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {press && item.fixKind === "sign_in" && signInProvider(press.tool) ? (
             <CliSignInPress provider={signInProvider(press.tool)} testIdPrefix="code" />
           ) : null}
@@ -508,6 +536,8 @@ export const CodeConversation = memo(function CodeConversation({
   tool = "",
   onContinueOn,
   continuing = false,
+  tryChoices,
+  onTryAccount,
   onRetry,
   cut = null,
   onContinueCut,
@@ -525,6 +555,9 @@ export const CodeConversation = memo(function CodeConversation({
   tool?: string;
   onContinueOn?: () => void;
   continuing?: boolean;
+  /** v1.427.3: accounts to try anyway after none was free. */
+  tryChoices?: readonly TryChoice[];
+  onTryAccount?: (id: string) => void;
   /** v1.417.0 (C4.9): send the failed reply's message again (absent while
    *  a reply runs). */
   onRetry?: () => void;
@@ -558,7 +591,8 @@ export const CodeConversation = memo(function CodeConversation({
           folder={folder}
           press={
             newest && i === lastError
-              ? { tool, onContinueOn, continuing, onRetry, cut, onContinueCut, continuingCut, wait, onCancelWait, limitNote }
+              ? { tool, onContinueOn, continuing, tryChoices, onTryAccount, onRetry, cut, onContinueCut,
+                  continuingCut, wait, onCancelWait, limitNote }
               : null
           }
           toolName={toolLabel(tool)}

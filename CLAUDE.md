@@ -4245,6 +4245,52 @@ does not need a bump, stop and bump it.
   mutations, all red); moved on purpose: `test_code_host_v14220` (log_facts
   gained `open_steps`).
 
+- **Two Iron-Proxy Claude accounts can be ONE Claude login; Continue never
+  moves between them, and a parked account can be tried anyway** (v1.427.3,
+  a USER BUG: the user's three Claude accounts — two Iron-Proxy homes and the
+  adopted `~/.claude` — reported the same 11 claude.ai connectors and the same
+  usage windows (5-hour 100%, 7-day 43%, same resets, same cost), because
+  Claude Code's `/login` authorises whichever claude.ai account the BROWSER
+  has open. Continue on another account moved twice onto the same limit,
+  signalled each account it left as limited, then refused: everything was
+  parked. Read off the live session log, read-only; the account homes under
+  `~/.iron-proxy` were NOT read). Claude Code 2.1.316's limit state is
+  in-process only (`class ot` starts `allowed`; a 429 fills it), so the 429s
+  were real. `iron_proxy/claude_identity.py` (BLOCKING, cached by
+  size+mtime): the signed-in account is `.claude.json` `oauthAccount`
+  `(organizationUuid, accountUuid)` — in `<home>/.claude.json`, or
+  `~/.claude.json` for the adopted default home (`is_default_home`); unknown
+  (no file, no pair, > 32 MB, junk, a `\host`/`//host` spelling, never
+  looked up) is never "the same"; only the two ids are read (no e-mail kept).
+  `terminals/continue_on`: `_own_choice` / `_none_free` take `current_home`
+  (else the current profile's) and skip `same_login_as`; `_none_free` names
+  a clone (`SAME_LOGIN`) + `SAME_LOGIN_FIX` (sign out of claude.ai first, or
+  a private window) and returns `choices` = other accounts parked for a limit
+  (never signed-out/disabled/clone); `prepare` (Build terminal) overrides
+  Iron-Proxy's own pick when it hands back a clone. Code view
+  (`service._continue_blocking`): a named clone is `Refused(code=
+  "same_login")`; `force` (with `account`) `client.unpark`s a limit-parked
+  account first, never a signed-out one; none free is `code: "none_free"` +
+  `choices`; nothing is signalled or copied on any refusal. `Refused.choices`
+  rides `routes/build_app._refused` (the continue-on route now answers
+  refusals through it; `{detail}` alone when there is no code). The auto
+  group move goes through the same explicit path, so a clone is refused and
+  remembered as tried. `GET /iron-proxy` adds `shared_logins` (lists of ids)
+  ONLY when a pair exists; the card says it under the Claude group
+  (`iron-proxy-shared-login`). Dashboard: `lib/buildApp.decodeTryChoices`,
+  `tryAccountWords`, the limit card's `code-try-account-<id>` (posts
+  `{account, force: true}`), `lib/ironProxy.sharedLoginLines` /
+  `SHARED_LOGIN_FIX`. `_continue_blocking` gets `force` ONLY when set (a
+  test double takes 5 arguments). Claude Code re-reads `.credentials.json`
+  when its mtime changes (`lastCredentialsMtimeMs`, read from the binary),
+  so a re-sign-in reaches a running process without a restart. NOT DONE:
+  Chat › Code's own lease rotation (`accounts.lease`) still trusts
+  Iron-Proxy's pick and can rotate onto a clone. Pins:
+  `tests/test_same_claude_login_v14273.py`,
+  `dashboard/__tests__/same-claude-login-v1427-3.test.tsx`, the v1.427.3 case
+  in `build-app-view-v1409`; moved on purpose: `test_build_app_pool_v1409`
+  (a named signed-out account says "needs to sign in again").
+
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died
   together twice in one day, each ~15 min after the reply that said "I'll

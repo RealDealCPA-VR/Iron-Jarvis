@@ -48,6 +48,8 @@ import {
   GROUP_PROVIDERS,
   adoptable,
   claudeSetupLine,
+  sharedLoginLines,
+  SHARED_LOGIN_FIX,
   createdId,
   decodeGroups,
   groupAccounts,
@@ -303,6 +305,7 @@ function IronProxyBody({
   const toAdopt = adoptable(snap.discovered ?? [], accounts);
   const usedBy = { ...DEFAULT_USED_BY, ...(snap.providers_used_by_jarvis ?? {}) };
   const setupLine = claudeSetupLine(snap);
+  const sharedLines = sharedLoginLines(snap);
   // v1.393.0 review: the groups this card SAVED, held until a newer answer
   // arrives (`over` = the answer they were saved over). A second pick made
   // before the re-read landed was computed from the old answer and saved
@@ -582,6 +585,20 @@ function IronProxyBody({
                     >
                       {setupLine.words}
                     </p>
+                  ) : null}
+                  {g.provider === "anthropic" && sharedLines.length ? (
+                    // v1.427.3 (a USER BUG): two accounts holding one Claude
+                    // login looked like spare usage and were not.
+                    <div
+                      data-testid="iron-proxy-shared-login"
+                      role="status"
+                      className="mb-1.5 text-[11px] leading-relaxed text-tone-warn"
+                    >
+                      {sharedLines.map((line) => (
+                        <p key={line}>{line}</p>
+                      ))}
+                      <p className="text-zinc-400">{SHARED_LOGIN_FIX}</p>
+                    </div>
                   ) : null}
                   <div className="divide-y divide-white/[0.06] rounded-xl border border-white/[0.06] bg-white/[0.02]">
                     {g.accounts.map((a, i) => (

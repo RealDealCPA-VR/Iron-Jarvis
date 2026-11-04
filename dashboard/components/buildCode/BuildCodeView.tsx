@@ -118,6 +118,7 @@ import {
   decodeCodeSession,
   decodeCodeSessionView,
   decodeCodeSessions,
+  decodeTryChoices,
   effortsFor,
   decodeCodingTools,
   foldConversation,
@@ -143,6 +144,7 @@ import {
   type DiskSession,
   type OpenAsk,
   type ToolCommand,
+  type TryChoice,
 } from "@/lib/buildApp";
 import {
   LOAD_EARLIER,
@@ -308,6 +310,7 @@ function SessionPane({
   /** A quiet word that is not an error ("applies from your next message"). */
   const [info, setInfo] = useState<string | null>(null);
   const [continuing, setContinuing] = useState(false);
+  const [tryChoices, setTryChoices] = useState<TryChoice[]>([]);
   /** v1.422.0 (B3, B5): a reply a restart cut off (Continue) and a limit's
    *  wait that carries on by itself (until when; Cancel). */
   const [carryFacts, setCarryFacts] = useState<CarryFacts>({ cut: null, wait: null, limitNote: "" });
@@ -1092,13 +1095,19 @@ function SessionPane({
     }
   }, [conv.items]);
 
-  const continueOn = useCallback(async () => {
+  /** v1.427.3: `account` + `force` = the user's "Try X anyway" (an account
+   *  Iron-Proxy has parked for a limit); none = the daemon picks. */
+  const moveAccount = useCallback(async (account = "", force = false) => {
     if (!session || continuing) return;
     setContinuing(true);
     setNote(null);
     setInfo(null);
     try {
-      const raw = await post<unknown>(`${SESSIONS}/${encodeURIComponent(session.id)}/continue-on`, {});
+      const raw = await post<unknown>(
+        `${SESSIONS}/${encodeURIComponent(session.id)}/continue-on`,
+        account ? { account, force } : {},
+      );
+      setTryChoices([]);
       const next = decodeCodeSession(raw);
       if (next) {
         setSession(next);
@@ -1110,10 +1119,14 @@ function SessionPane({
       setInfo(`${name ? `Now on ${name}.` : "Moved to another account."}${extraWords} Send your message again to carry on.`);
     } catch (e) {
       setNote(errorWords(e, "The session could not move to another account."));
+      // Kept when a "Try X anyway" itself was refused: the others stay offered.
+      if (!account) setTryChoices(decodeTryChoices(e instanceof ApiError ? e.body : null));
     } finally {
       setContinuing(false);
     }
   }, [session, continuing, onChanged, tools]);
+  const continueOn = useCallback(() => moveAccount(), [moveAccount]);
+  const tryAccount = useCallback((id: string) => moveAccount(id, true), [moveAccount]);
 
   /** v1.422.0 (B3): Continue on a reply a restart cut off — the same hidden
    *  carry-on the app sends by itself, started by this press; the running
@@ -1476,6 +1489,8 @@ function SessionPane({
                 tool={session.tool}
                 onContinueOn={continueOn}
                 continuing={continuing}
+                tryChoices={tryChoices}
+                onTryAccount={tryAccount}
                 onRetry={running ? undefined : retryFailed}
                 cut={running ? null : carryFacts.cut}
                 onContinueCut={continueCut}

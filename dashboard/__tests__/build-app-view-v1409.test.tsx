@@ -33,7 +33,7 @@ const H = vi.hoisted(() => ({
   posts: [] as { path: string; body: unknown }[],
   patches: [] as { path: string; body: unknown }[],
   postReply: {} as Record<string, unknown>,
-  postFail: {} as Record<string, { status: number; message: string }>,
+  postFail: {} as Record<string, { status: number; message: string; body?: unknown }>,
   streams: [] as { path: string; body: unknown }[],
   /** Frames each stream sends (in order of the streams opened); a
    *  `{yield}` entry is what the reader itself yields (a refusal, a drop). */
@@ -52,10 +52,12 @@ const H = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => {
   class FakeApiError extends Error {
     status: number;
-    constructor(message: string, status = 0) {
+    body?: unknown;
+    constructor(message: string, status = 0, body?: unknown) {
       super(message);
       this.status = status;
       this.name = "ApiError";
+      if (body !== undefined) this.body = body;
     }
   }
   return {
@@ -69,7 +71,7 @@ vi.mock("@/lib/api", () => {
     post: (path: string, body?: unknown) => {
       H.posts.push({ path, body });
       const fail = H.postFail[path];
-      if (fail) return Promise.reject(new FakeApiError(fail.message, fail.status));
+      if (fail) return Promise.reject(new FakeApiError(fail.message, fail.status, fail.body));
       return Promise.resolve(H.postReply[path] ?? {});
     },
     patch: (path: string, body?: unknown) => {
@@ -948,6 +950,26 @@ describe("an account at its limit", () => {
     render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
     fireEvent.click(within(await screen.findByTestId("code-error")).getByTestId("code-continue-on"));
     expect((await screen.findByTestId("code-note")).textContent).toBe("There is no other Claude account to move to.");
+  });
+
+  it("v1.427.3: none free offers the daemon's choices; Try X anyway names that account with force", async () => {
+    atLimit();
+    const path = "/build/app/sessions/a1/continue-on";
+    H.postFail[path] = {
+      status: 409,
+      message: 'No other Claude account can take over right now: "Other" is at its usage limit until 10:30 PM.',
+      body: { detail: "x", code: "none_free", choices: [{ id: "p3", title: "Other", why: "at its usage limit until 10:30 PM" }] },
+    };
+    render(<BuildCodeView initialSession="a1" onOpenedTerminal={() => {}} />);
+    fireEvent.click(within(await screen.findByTestId("code-error")).getByTestId("code-continue-on"));
+    const btn = await screen.findByTestId("code-try-account-p3");
+    expect(btn.textContent).toBe("Try Other anyway");
+    delete H.postFail[path];
+    H.postReply[path] = { session: sess("a1", { account: "p3", account_name: "Other" }), account: "p3", account_name: "Other" };
+    fireEvent.click(btn);
+    await waitFor(() => expect(H.posts.filter((p) => p.path === path).map((p) => p.body)).toEqual([{}, { account: "p3", force: true }]));
+    expect((await screen.findByTestId("code-info")).textContent).toBe("Now on Other. Send your message again to carry on.");
+    expect(screen.queryByTestId("code-try-accounts")).toBeNull();
   });
 
   it("an older failure (the conversation went on after it) offers no press", async () => {

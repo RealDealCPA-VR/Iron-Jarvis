@@ -270,6 +270,7 @@ async def test_continue_on_refuses_in_words(app, work, tmp_path, monkeypatch):
         parked = _Client(profiles, {"p1": {"status": "ready"}, "p2": {"status": "unauthenticated"}})
         monkeypatch.setattr(app.state.platform, "iron_proxy", _Svc(parked), raising=False)
         r = await c.post(f"/build/app/sessions/{acct.id}/continue-on", json={"account": "p2"})
-        assert r.status_code == 409 and "cannot take over" in r.json()["detail"]
+        # v1.427.3: a signed-out account says what it needs (moved on purpose).
+        assert r.status_code == 409 and "needs to sign in again" in r.json()["detail"]
     assert only_one.signals == [] and parked.signals == [], "nothing was told before a refusal"
     assert not list((h2).rglob("*.jsonl")), "nothing was copied before a refusal"

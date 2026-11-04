@@ -78,6 +78,8 @@ class AppAnswer(BaseModel):
 
 class AppContinue(BaseModel):
     account: str | None = None
+    #: v1.427.3: try ``account`` although Iron-Proxy has it parked for a limit.
+    force: bool = False
 
 
 def _http(r: S.Refused) -> HTTPException:
@@ -94,6 +96,8 @@ def _refused(r: S.Refused) -> JSONResponse:
         content["field"] = r.field
     if getattr(r, "code", ""):
         content["code"] = r.code
+    if getattr(r, "choices", None):
+        content["choices"] = list(r.choices)
     return JSONResponse(status_code=r.status, content=content)
 
 
@@ -289,11 +293,19 @@ def register(app: FastAPI, d: Any) -> None:
             raise _http(r) from None
 
     @app.post("/build/app/sessions/{sid}/continue-on")
-    async def app_continue_on(sid: str, body: AppContinue | None = None) -> dict[str, Any]:
+    async def app_continue_on(sid: str, body: AppContinue | None = None) -> Any:
+        """Move the session to another account. A refusal is ``{detail}``;
+        v1.427.3: with none free it adds ``code: none_free`` and ``choices``
+        (the accounts the page offers to try anyway, ``force: true``), and an
+        account signed in to this one's own Claude account is ``same_login``."""
+        account = (body.account if body else "") or ""
+        force = bool(body.force) if body else False
+        if force and not account.strip():
+            raise HTTPException(status_code=400, detail="Name the account to try.")
         try:
-            return await svc().continue_on(sid, (body.account if body else "") or "")
+            return await svc().continue_on(sid, account, force=force)
         except S.Refused as r:
-            raise _http(r) from None
+            return _refused(r)
 
     # v1.422.0 (B4, C4.7): the Code view's beat while it shows a session (the
     # reaper gives the session in front 60 minutes, not 15), and the user's own

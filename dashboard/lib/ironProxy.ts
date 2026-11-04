@@ -81,6 +81,10 @@ export interface IronProxySnapshot {
    *  servers, skills and commands. Present only when such an account is
    *  listed; the words are the daemon's. */
   claude_setup?: ClaudeSetupLine;
+  /** v1.427.3 (a USER BUG): Claude accounts signed in to ONE Claude account
+   *  (they share one usage limit): lists of account ids, present only when
+   *  there is such a pair. */
+  shared_logins?: string[][];
 }
 
 export interface ClaudeSetupLine {
@@ -97,6 +101,38 @@ export function claudeSetupLine(snap: Pick<IronProxySnapshot, "claude_setup"> | 
   if (typeof words !== "string" || !words.trim()) return null;
   return { on: (raw as { on?: unknown }).on !== false, words: words.trim() };
 }
+
+/** v1.427.3: one sentence per set of Claude accounts signed in to the SAME
+ *  Claude account — they share one usage limit, so moving between them never
+ *  helps. [] for an older daemon or none. Names come from the accounts list;
+ *  an id the list does not name is left out (a set with fewer than two names
+ *  says nothing). */
+export function sharedLoginLines(
+  snap: Pick<IronProxySnapshot, "shared_logins" | "accounts"> | null | undefined,
+): string[] {
+  const raw = snap?.shared_logins as unknown;
+  if (!Array.isArray(raw)) return [];
+  const names = new Map((snap?.accounts ?? []).map((a) => [a.id, a.title || a.id]));
+  const out: string[] = [];
+  for (const set of raw.slice(0, 10)) {
+    if (!Array.isArray(set)) continue;
+    const titles = set.filter((id): id is string => typeof id === "string" && names.has(id)).map((id) => names.get(id)!);
+    if (titles.length < 2) continue;
+    out.push(`${joinNames(titles)} are signed in to the same Claude account, so they share one usage limit.`);
+  }
+  return out;
+}
+
+function joinNames(titles: string[]): string {
+  const q = titles.map((t) => `"${t}"`);
+  return q.length === 2 ? `${q[0]} and ${q[1]}` : `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+}
+
+/** What to do about it: Claude Code's sign-in uses whichever claude.ai
+ *  account the browser has open. */
+export const SHARED_LOGIN_FIX =
+  "To give one its own limit, press Sign in beside it and sign in with that account's own Claude login: " +
+  "sign out of claude.ai in your browser first, or open the sign-in link in a private window.";
 
 // ------------------------------------------------ account groups (v1.393.0)
 

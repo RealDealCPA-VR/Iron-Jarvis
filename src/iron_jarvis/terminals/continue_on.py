@@ -73,11 +73,27 @@ NO_OTHER = (
     "the Connections page (Iron-Proxy card)."
 )
 
+#: v1.427.3 (a USER BUG): an account signed in to the SAME Claude account as
+#: the one the session is on shares its usage limit — moving there can never
+#: help (``iron_proxy.claude_identity``).
+SAME_LOGIN = '"{title}" is signed in to the same Claude account as "{current}", so it shares that limit'
+SAME_LOGIN_FIX = (
+    "To give an account its own limit, press Sign in beside it on the Connections page "
+    "(Iron-Proxy card) and sign in with that account's own Claude login: sign out of "
+    "claude.ai in your browser first, or open the sign-in link in a private window."
+)
+
+
 class ContinueRefused(Exception):
-    def __init__(self, sentence: str, status: int = 409) -> None:
+    def __init__(self, sentence: str, status: int = 409, choices: list[dict[str, str]] | None = None) -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.status = status
+        #: v1.427.3: the other accounts the user may still TRY (Iron-Proxy
+        #: parked them for a limit — a guess Iron Jarvis itself may have made):
+        #: ``[{id, title, why}]``, none of them known to share this account's
+        #: sign-in. Empty for every other refusal.
+        self.choices = list(choices or [])
 
 
 def encode_cwd(cwd: str) -> str:
@@ -457,16 +473,46 @@ def _usable(state: Mapping[str, Any]) -> bool:
     return not _pa._parked_now(state)
 
 
+def _profile_home(prof: Mapping[str, Any]) -> str:
+    cli = prof.get("cli") if isinstance(prof.get("cli"), Mapping) else {}
+    return str(cli.get("home") or "").strip()
+
+
+def _current_home(profiles: list[dict[str, Any]], current: str, current_home: str | None) -> str:
+    if current_home is not None and str(current_home).strip():
+        return str(current_home).strip()
+    for prof in profiles:
+        if isinstance(prof, Mapping) and prof.get("id") == current:
+            return _profile_home(prof)
+    return ""
+
+
+def _same_home_login(home: str, current_home: str) -> bool:
+    from ..iron_proxy import claude_identity as _ci
+
+    return bool(home and current_home) and _ci.same_login(home, current_home)
+
+
+def same_login_as(prof: Mapping[str, Any], current_home: str) -> bool:
+    """v1.427.3: is ``prof`` signed in to the same Claude account as the
+    account whose home is ``current_home``? True only when both are KNOWN
+    (``iron_proxy.claude_identity``). BLOCKING (two small file reads, cached)."""
+    return _same_home_login(_profile_home(prof), current_home)
+
+
 def _own_choice(
-    profiles: list[dict[str, Any]], states: Mapping[str, Any], current: str
+    profiles: list[dict[str, Any]], states: Mapping[str, Any], current: str,
+    current_home: str | None = None,
 ) -> _acc.Lease | None:
-    """The first usable OTHER Claude CLI account in Iron-Proxy's order."""
+    """The first usable OTHER Claude CLI account in Iron-Proxy's order — never
+    one signed in to the same Claude account as this one (v1.427.3)."""
     spec = _pa.SPECS[PROVIDER]
+    mine = _current_home(profiles, current, current_home)
     for prof in _others(profiles, current):
         st = states.get(prof.get("id")) if isinstance(states.get(prof.get("id")), Mapping) else {}
         cli = prof.get("cli") if isinstance(prof.get("cli"), Mapping) else {}
         home = str(cli.get("home") or "").strip()
-        if home and _usable(st):
+        if home and _usable(st) and not same_login_as(prof, mine):
             pid = str(prof.get("id"))
             return _acc.make_lease(
                 spec, pid, str(prof.get("title") or pid), home, sorted(_pa.PANE_OWN_KEYS[PROVIDER])
@@ -486,13 +532,27 @@ def _others(profiles: list[dict[str, Any]], current: str) -> list[dict[str, Any]
     )
 
 
-def _none_free(profiles: list[dict[str, Any]], states: Mapping[str, Any], current: str) -> ContinueRefused:
+def _none_free(
+    profiles: list[dict[str, Any]], states: Mapping[str, Any], current: str,
+    current_home: str | None = None,
+) -> ContinueRefused:
     """No other account can take over: each other account BY KIND, with when
-    it frees ("…is at its request limit until 3:05 PM")."""
+    it frees ("…is at its request limit until 3:05 PM"). v1.427.3: an account
+    signed in to the same Claude account as this one is said so (that is why
+    it is no use), with how to fix it; an account parked for a limit whose
+    sign-in is not known to be this one's is offered in ``choices`` (the user
+    may know it has usage left — the park can be Iron Jarvis's own guess)."""
     others = _others(profiles, current)
     if not others:
         return ContinueRefused(NO_OTHER)
+    mine = _current_home(profiles, current, current_home)
+    current_title = next(
+        (str(p.get("title") or current) for p in profiles if isinstance(p, Mapping) and p.get("id") == current),
+        current,
+    )
     parts: list[str] = []
+    choices: list[dict[str, str]] = []
+    shared = False
     for prof in others:
         st = states.get(prof.get("id")) if isinstance(states.get(prof.get("id")), Mapping) else {}
         title = str(prof.get("title") or prof.get("id"))
@@ -500,6 +560,15 @@ def _none_free(profiles: list[dict[str, Any]], states: Mapping[str, Any], curren
         words, _secs = _acc._local_time(until) if until else ("", None)
         when = f" until {words}" if words and _pa._parked_now(st) else ""
         kind = _acc._account_kind(dict(st))
+        if same_login_as(prof, mine):
+            shared = True
+            parts.append(SAME_LOGIN.format(title=title, current=current_title))
+            continue
+        if kind != "signin" and st.get("status") not in ("disabled", "unauthenticated") and _profile_home(prof):
+            choices.append({
+                "id": str(prof.get("id")), "title": title,
+                "why": (f"{_acc._WHAT.get(kind, 'parked')}{when}").strip(),
+            })
         if kind == "signin":
             parts.append(f'"{title}" needs to sign in again on {_acc._CONNECTIONS}')
         elif st.get("status") == "disabled":
@@ -508,7 +577,10 @@ def _none_free(profiles: list[dict[str, Any]], states: Mapping[str, Any], curren
             parts.append(f'"{title}" is {_acc._WHAT[kind]}{when}')
         else:
             parts.append(f'"{title}" is parked{when}')
-    return ContinueRefused("No other Claude account can take over right now: " + "; ".join(parts) + ".")
+    sentence = "No other Claude account can take over right now: " + "; ".join(parts) + "."
+    if shared:
+        sentence += " " + SAME_LOGIN_FIX
+    return ContinueRefused(sentence, choices=choices)
 
 
 FULL = "Build already has as many panes open as it can — close one, then try again."
@@ -549,9 +621,10 @@ def prepare(
         svc.note_accounts(profiles, states)
     except Exception:  # noqa: BLE001
         log.debug("iron-proxy snapshot refresh failed", exc_info=True)
-    fallback = _own_choice(profiles, states, current)
+    mine = str(rec.get("home") or "")
+    fallback = _own_choice(profiles, states, current, mine)
     if fallback is None:
-        raise _none_free(profiles, states, current)
+        raise _none_free(profiles, states, current, mine)
 
     # Tell Iron-Proxy — ONLY the matched limit message (normalised so its own
     # classifier reads the kind and the reset; built from nothing else).
@@ -581,7 +654,9 @@ def prepare(
         code = str(getattr(exc, "code", "") or "")
         if code not in ("ALL_PROFILES_EXHAUSTED", "QUOTA_EXCEEDED", "AUTH_REQUIRED", "NO_PROFILE"):
             raise ContinueRefused(_pa._unavailable_sentence(exc)) from None
-    if lease is None or lease.profile_id == current:
+    if lease is None or lease.profile_id == current or _same_home_login(lease.home, mine):
+        # v1.427.3: Iron-Proxy's pick knows nothing of WHO an account is signed
+        # in as — one sharing this account's login shares its limit.
         lease = fallback
 
     # The conversation, in THIS account's folder — never another account's.

@@ -215,10 +215,14 @@ class _StoppedWhileWaiting(Exception):
 class Refused(Exception):
     """A request the Code view refuses, in one plain sentence."""
 
-    def __init__(self, sentence: str, status: int = 409, field: str = "", code: str = "") -> None:
+    def __init__(self, sentence: str, status: int = 409, field: str = "", code: str = "",
+                 choices: list[dict[str, str]] | None = None) -> None:
         super().__init__(sentence)
         self.sentence = sentence
         self.status = status
+        #: v1.427.3: Continue on another account found none free — the
+        #: accounts the user may still try anyway (``[{id, title, why}]``).
+        self.choices = list(choices or [])
         #: v1.412.0 review: which choice of the start composer the refusal is
         #: about ("folder", "tool", "account", "mode", "model", "effort"; ""
         #: = none in particular) — the page says it on THAT chip.
@@ -3320,13 +3324,17 @@ class HostedService:
         return harness, hid, clip(title, 120), acc
 
     # -- continue on the next account (Claude Code; v1.422.0: and Codex) -------
-    async def continue_on(self, sid: str, account: str = "", *, note: str = "") -> dict[str, Any]:
+    async def continue_on(self, sid: str, account: str = "", *, note: str = "",
+                          force: bool = False) -> dict[str, Any]:
         """Move the conversation to another account (a COPY) and run the
         session there from the next message. ``note``: the line said in the
         conversation (v1.422.0: a move made BY ITSELF within an account group
         says so, ``hosted.carry_on``). v1.422.0 (B5): Codex too — measured,
         its rollout file copied into the other ``CODEX_HOME`` resumes there
-        (:mod:`.codex_move`)."""
+        (:mod:`.codex_move`). v1.427.3: ``force`` (with ``account``) tries
+        that Claude account although Iron-Proxy has it parked for a limit —
+        the user's own press; never one signed out, turned off, or signed in
+        to the same Claude account as this one."""
         row = await self._row(sid)
         if row.harness not in (CLAUDE, CODEX):
             raise Refused(W.PI_CONTINUE if row.harness == PI
@@ -3361,7 +3369,8 @@ class HostedService:
                     raise Refused(str(exc)) from None
             else:
                 plan = await asyncio.to_thread(
-                    self._continue_blocking, row, str(account or "").strip(), limit, live.limit_since
+                    self._continue_blocking, row, str(account or "").strip(), limit, live.limit_since,
+                    **({"force": True} if force else {}),
                 )
                 lease, source, client, current = plan
                 # The process goes BEFORE the copy: its last write lands first.
@@ -3387,7 +3396,9 @@ class HostedService:
         return {"session": self._with_live(store.view(row)), "account": lease.profile_id,
                 "account_name": lease.title, "note": note}
 
-    def _continue_blocking(self, row: Any, account: str, limit: Any, since: str) -> tuple[Any, Path, Any, str]:
+    def _continue_blocking(
+        self, row: Any, account: str, limit: Any, since: str, force: bool = False,
+    ) -> tuple[Any, Path, Any, str]:
         """BLOCKING: pick the next account and FIND the conversation (and check
         it can be copied) — refusing in words BEFORE Iron-Proxy is told
         anything or anything is copied. Returns ``(lease, source file, client,
@@ -3415,6 +3426,7 @@ class HostedService:
             raise Refused(PA._unavailable_sentence(exc)) from None
         profiles = [p for p in (profiles if isinstance(profiles, list) else []) if isinstance(p, dict)]
         states = states if isinstance(states, dict) else {}
+        mine = str(rec.get("home") or "")
         if account:
             lease = None
             for prof in CO._others(profiles, current):
@@ -3423,18 +3435,37 @@ class HostedService:
                 st = states.get(prof.get("id")) if isinstance(states.get(prof.get("id")), dict) else {}
                 cli = prof.get("cli") if isinstance(prof.get("cli"), dict) else {}
                 home = str(cli.get("home") or "").strip()
+                title = str(prof.get("title") or account)
+                if home and CO.same_login_as(prof, mine):
+                    # v1.427.3 (a USER BUG): it shares this account's limit.
+                    raise Refused(
+                        CO.SAME_LOGIN.format(title=title, current=str(rec.get("title") or current)) + ". "
+                        + CO.SAME_LOGIN_FIX, code="same_login",
+                    )
+                if home and not CO._usable(st) and force and st.get("status") not in ("unauthenticated", "disabled"):
+                    # v1.427.3: the user knows it has usage left — Iron-Proxy's
+                    # park ends first (it may be Iron Jarvis's own guess).
+                    try:
+                        client.unpark(str(prof.get("id")))
+                    except Exception as exc:  # noqa: BLE001
+                        raise Refused(f'Iron-Proxy would not let "{title}" be tried again: '
+                                      f"{PA._unavailable_sentence(exc)}") from None
+                    st = {**st, "status": "ready", "parkedUntil": ""}
                 if home and CO._usable(st):
                     pid = str(prof.get("id"))
-                    lease = _acc.make_lease(PA.SPECS[CO.PROVIDER], pid, str(prof.get("title") or pid),
+                    lease = _acc.make_lease(PA.SPECS[CO.PROVIDER], pid, title,
                                             home, sorted(PA.PANE_OWN_KEYS[CO.PROVIDER]))
+                elif st.get("status") == "unauthenticated" or _acc._account_kind(dict(st)) == "signin":
+                    raise Refused(f'"{title}" needs to sign in again on {_acc._CONNECTIONS} first.')
                 else:
-                    raise Refused(f'"{prof.get("title") or account}" cannot take over right now.')
+                    raise Refused(f'"{title}" cannot take over right now.')
             if lease is None:
                 raise Refused("That account is not another Claude account in Iron-Proxy.", 404)
         else:
-            lease = CO._own_choice(profiles, states, current)
+            lease = CO._own_choice(profiles, states, current, mine)
             if lease is None:
-                raise Refused(CO._none_free(profiles, states, current).sentence)
+                none = CO._none_free(profiles, states, current, mine)
+                raise Refused(none.sentence, code="none_free" if none.choices else "", choices=none.choices)
         home = str(rec.get("home") or "")
         source = CO.newest_recorded(home, row.harness_session_id) if home else None
         if source is None and home:

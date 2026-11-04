@@ -446,6 +446,21 @@ def register(app: FastAPI, d) -> None:
             for a in body["accounts"]
         ):
             body["claude_setup"] = await asyncio.to_thread(_cs.card_line, getattr(svc, "config", None))
+        # v1.427.3 (a USER BUG): Claude accounts signed in to ONE Claude account
+        # share one usage limit — the card says so (``shared_logins``: lists of
+        # account ids, only when there is such a pair; off the loop, it reads
+        # each home's ``.claude.json`` — only two ids from it, never kept).
+        claude_homes = [
+            (str(a.get("id")), str(a.get("home")))
+            for a in body["accounts"]
+            if a.get("provider") == _cs.PROVIDER and a.get("id") and a.get("home")
+        ]
+        if len(claude_homes) > 1:
+            from ...iron_proxy import claude_identity as _ci
+
+            shared = await asyncio.to_thread(_ci.shared_groups, claude_homes)
+            if shared:
+                body["shared_logins"] = shared
         if isinstance(discovered, BaseException):
             body["discover_error"] = (
                 _said(discovered) if isinstance(discovered, IronProxyError)

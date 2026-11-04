@@ -1907,6 +1907,42 @@ export function signInProvider(tool: string): string {
 /** "Continue on another account": the words of the press. */
 export const CONTINUE_ON_ANOTHER = "Continue on another account";
 
+/** v1.427.3 (a USER BUG): Continue on another account found none free, but
+ *  Iron-Proxy's "at its limit" can be Iron Jarvis's own guess — the accounts
+ *  the daemon offers to try anyway (`choices` of its `none_free` refusal). */
+export interface TryChoice {
+  id: string;
+  title: string;
+  /** "at its usage limit until 10:30 PM" — the button's tooltip. */
+  why: string;
+}
+
+export const TRY_ACCOUNTS_LEAD = "Iron-Proxy has these marked as at their limit. If you know one still has usage:";
+
+export function tryAccountWords(title: string): string {
+  return `Try ${title} anyway`;
+}
+
+/** The `choices` of a refused Continue on another account (`ApiError.body`),
+ *  or [] for anything else. */
+export function decodeTryChoices(body: unknown): TryChoice[] {
+  if (!body || typeof body !== "object") return [];
+  const o = body as { code?: unknown; choices?: unknown };
+  if (o.code !== "none_free" || !Array.isArray(o.choices)) return [];
+  const out: TryChoice[] = [];
+  for (const c of o.choices.slice(0, 10)) {
+    if (!c || typeof c !== "object") continue;
+    const r = c as { id?: unknown; title?: unknown; why?: unknown };
+    if (typeof r.id !== "string" || !r.id) continue;
+    out.push({
+      id: r.id,
+      title: typeof r.title === "string" && r.title ? r.title : r.id,
+      why: typeof r.why === "string" ? r.why : "",
+    });
+  }
+  return out;
+}
+
 // ── drawing only what changed (the v1.250.0 rule) ───────────────────────────
 
 function sameValue(a: unknown, b: unknown): boolean {

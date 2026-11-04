@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.427.2 (2026-11-03).*
+holds itself to. Current as of v1.427.3 (2026-11-03).*
 
 ---
 
@@ -5324,6 +5324,20 @@ not show the line.
   now reads "did not finish" instead of spinning forever, and one line says
   why. Steps left spinning by an earlier version are fixed the next time
   Iron Jarvis starts. Send a message to carry on.
+
+- **Two accounts can hold the same Claude login (v1.427.3).** Claude Code's
+  sign-in uses whichever claude.ai account your browser has open, so signing
+  a second account in can quietly give it your first account's login. Two
+  such accounts share ONE usage limit, so moving between them never helps.
+  Iron Jarvis now reads which Claude account each one is signed in to (only
+  two ids from Claude Code's own `.claude.json`; never your e-mail). The
+  Iron-Proxy card on Settings › Connections says which accounts share a
+  login. **Continue on another account** skips them and says why. To fix one,
+  press **Sign in** beside it after signing out of claude.ai in your browser,
+  or open the sign-in link in a private window. When none is free but Iron-Proxy
+  has an account marked "at its limit" that you know still has usage, the card
+  offers **Try <name> anyway**: Iron-Proxy's mark ends and the session moves
+  there. A signed-out account is never offered; sign it in first.
 
 ## Grok in the Code view (v1.418.0)
 
