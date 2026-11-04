@@ -6,3 +6,7 @@ desktop/vendor/iron-proxy/** -text
 # release tag and checked against the sha256 in both catalogs. Never let a
 # checkout rewrite their line endings (CI's Windows runners set autocrlf=true).
 backgrounds/** -text
+
+# v1.428.0: the locked install lists are hashed byte for byte (a changed
+# lock is a new install folder), so no checkout may rewrite their line ends.
+src/iron_jarvis/connectors/locked/** -text
