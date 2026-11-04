@@ -3582,6 +3582,15 @@ does not need a bump, stop and bump it.
   the end). Pins: `tests/test_durable_chat_turns_v1336.py`,
   `dashboard/__tests__/chat-durable-v1336.test.tsx`,
   `dashboard/__tests__/chat-stream-rejoin-v1336.test.ts` (13 mutations, all red).
+  v1.428.1 (a REAL race the v1.428.0 Release gate found; nothing was
+  published): the driver tells followers a turn ended (`_end_followers`) and
+  only THEN saves its record, while `TurnLogs.shutdown` waited only for turns
+  still RUNNING. A stop in between left the record "running" and the next
+  boot's reconcile replayed a finished refusal as "cut off" with no title.
+  `shutdown` now also awaits every driver task not yet done. Reproduced by
+  starting the final save 0.5 s late (CI's exact `KeyError: 'title'`); pin
+  `tests/test_turn_final_save_v14281.py` (the save held on a gate; red on the
+  old shutdown).
 
 - **An agent run KEEPS its conversation; Continue after a restart RESUMES
   it** (v1.337.0, part 3 of the pi-durable borrow). `core/models.RunTranscript`

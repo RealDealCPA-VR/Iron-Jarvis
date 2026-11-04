@@ -780,8 +780,16 @@ class TurnLogs:
         tasks = [lg.task for lg in self.running() if lg.task is not None]
         for t in tasks:
             t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # v1.428.1: a turn that has just ENDED tells its followers before it
+        # saves its record (the driver's ``finally``). Wait for that save too,
+        # or a stop in between leaves the record "running" and the next boot
+        # reads a finished reply as cut off.
+        pending = [
+            lg.task for lg in list(self._logs.values())
+            if lg.task is not None and not lg.task.done()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def waiting_unwatched(
