@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.427.4 (2026-11-04).*
+holds itself to. Current as of v1.427.5 (2026-11-04).*
 
 ---
 
@@ -5348,7 +5348,8 @@ not show the line.
   can take over; the account it passed over is never marked as limited. On
   the limit card's list, another account marked "Limit reached" now says
   "Picking it tries it anyway": picking it clears the mark first, for when
-  you know it still has usage.
+  you know it still has usage. (v1.427.5 ships this; it also fixes a rare
+  error when turning **Share with Build** on or off.)
 
 ## Grok in the Code view (v1.418.0)
 

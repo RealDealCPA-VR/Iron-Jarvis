@@ -4318,6 +4318,19 @@ does not need a bump, stop and bump it.
   Pins: `tests/test_same_claude_login_chat_v14274.py` (15 mutations red),
   the v1.427.4 cases in `dashboard/__tests__/ij-harness-session-v1369` (5
   mutations red).
+  v1.427.4 WAS NOT PUBLISHED (its Release gate went red, Tests green;
+  v1.427.5 ships it): `test_profile_share_pi_opencode_v1414` got a 500 from
+  PUT /profile/share — "[WinError 5] Access is denied" replacing
+  `profile-share.json`. A REAL race: `ProfileShare._run` (the debounce
+  timer) read the status file OUTSIDE `self._lock`, which every write holds,
+  and Windows refuses to replace a file another thread has open. The timer
+  now reads under the lock, and `_atomic_write` tries a refused
+  (`PermissionError`) replace again for about a second (`REPLACE_TRIES` 20 x
+  `REPLACE_WAIT_S` 0.05), re-checking `expect` before each try, so a backup
+  or an indexer reading the file never fails the switch. Pin:
+  `tests/test_profile_share_replace_race_v14274.py` (3 mutations red). A
+  file Jarvis writes with temp + `os.replace` is READ under the same lock
+  as its writes.
 
 - **A Code-view session whose tool still runs BACKGROUND work is never reaped
   or evicted** (v1.418.0, a USER BUG: seven Claude Code builder teams died

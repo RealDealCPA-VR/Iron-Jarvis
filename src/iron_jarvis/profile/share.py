@@ -386,11 +386,20 @@ def _is_link(path: Path) -> bool:
     return _stat.S_ISLNK(st.st_mode) or st.st_nlink > 1
 
 
+#: v1.427.4: Windows refuses to replace a file another program (or thread)
+#: has open for a moment — a backup, an indexer, a reader — with WinError 5.
+#: The replace is tried again for about a second before the error stands.
+REPLACE_TRIES = 20
+REPLACE_WAIT_S = 0.05
+
+
 def _atomic_write(path: Path, data: bytes, *, expect: Any = _UNCHECKED) -> None:
     """Temp + ``os.replace``. With ``expect`` (the bytes read before deciding,
     ``None`` = the file did not exist), the file is read again right before the
     replace and :class:`FileChanged` is raised when it differs — an edit saved
-    while Jarvis was writing is never overwritten."""
+    while Jarvis was writing is never overwritten. A replace Windows refuses
+    because the file is open elsewhere for a moment is tried again
+    (:data:`REPLACE_TRIES`), each time after the same re-check."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.ij-{uuid.uuid4().hex[:8]}.tmp")
     try:
@@ -398,9 +407,16 @@ def _atomic_write(path: Path, data: bytes, *, expect: Any = _UNCHECKED) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        if expect is not _UNCHECKED and _read(path) != expect:
-            raise FileChanged("it changed while Jarvis was writing it")
-        os.replace(tmp, path)
+        for attempt in range(REPLACE_TRIES):
+            if expect is not _UNCHECKED and _read(path) != expect:
+                raise FileChanged("it changed while Jarvis was writing it")
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    raise
+                time.sleep(REPLACE_WAIT_S)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -876,7 +892,12 @@ class ProfileShare:
 
     def _run(self) -> None:
         try:
-            if not any(self.is_on(c) for c in CLIS) and not self._load()["files"]:
+            # v1.427.4: the state file is read under the SAME lock every write
+            # holds — a read outside it kept the file open while a PUT replaced
+            # it, and Windows refused the replace (a 500 on the switch).
+            with self._lock:
+                idle = not any(self.is_on(c) for c in CLIS) and not self._load()["files"]
+            if idle:
                 return
             self.sync()
         except Exception:  # noqa: BLE001 — a share never breaks the daemon
