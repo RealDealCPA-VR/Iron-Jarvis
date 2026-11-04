@@ -14275,6 +14275,29 @@ does not need a bump, stop and bump it.
   [data-testid=\"code-ask\"]"; new shape green). A `findBy…` on a surface
   that needs a read and a stream first must name its own timeout.
 
+- **A destination's Edit KEEPS what is saved; two-way says why it cannot hear
+  the user** (v1.427.6, a USER BUG: "i need to re-enter the tokens because they
+  are cleared when i go to edit" and "i couldnt message it back"). Edit
+  re-submits `POST /comm/channels`, which rebuilt the config from the form
+  alone; the form never holds a secret or the allowlist's ids, so every edit
+  DROPPED the Slack tokens and the allowlist, and an empty allowlist means
+  `SlackSocketMode.candidates()` never arms the pump (the live log said
+  "slack socket mode disarmed"). Now, for an existing destination of the SAME
+  type, a blank field keeps its stored value (secrets by their `<key>_secret`
+  reference), a key in `config.clear` is removed (its vault row deleted after
+  the save), a typed value replaces; NEW secrets are written only after the
+  whole save is valid (a refused edit never swaps a working token). `GET
+  /comm/channels` rows add `saved_fields` (names only), `values` (plain values
+  except `HIDDEN_VALUES` = webhook_url, allowed_senders) and `two_way_note`
+  (`routes/comm.two_way_note`: two-way on with no allowlist / no way to hear
+  Slack / no bot token; also on the POST answer). Slack gains `chat_enabled`;
+  the manifest turns on `features.app_home` messages tab (not read-only). The
+  page seeds `values`, says "Saved — leave blank to keep it", sends `clear`
+  for "Remove the saved one" and for an erased shown value, opens Advanced
+  when saved fields live there. Pins: `tests/test_slack_keep_tokens_v14276.py`
+  (8 mutations red), `dashboard/__tests__/notifications-edit-keeps-v1427-6.test.tsx`
+  (7 mutations red).
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

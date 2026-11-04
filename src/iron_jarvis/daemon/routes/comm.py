@@ -78,6 +78,73 @@ def _channel_config_problem(ctype: str, config: dict) -> str | None:
     return None
 
 
+def two_way_note(ctype: str, config: dict) -> str | None:
+    """v1.427.6: why a destination with two-way ON still cannot hear the user,
+    in one sentence — ``None`` when two-way is off or can work. The save keeps
+    such a destination (its outbound alerts still work); the Notifications row
+    and the save's answer say this sentence instead of "added ✓" alone. The
+    user's own report: a Slack destination that sent alerts fine and never
+    heard a reply — its allowlist was empty, so the Socket Mode pump never
+    even dialled (``SlackSocketMode.candidates``)."""
+    if not config.get("inbound_enabled") or ctype not in ("slack", "telegram"):
+        return None
+    if not config.get("allowed_senders"):
+        if ctype == "slack":
+            return (
+                "Two-way is on, but no one is on the allowlist, so Jarvis isn't "
+                "listening. Add your Slack member ID: in Slack, click your profile "
+                "picture → Profile → ⋯ → Copy member ID."
+            )
+        return (
+            "Two-way is on, but no one is on the allowed senders list, so Jarvis "
+            "isn't listening. Add your Telegram user ID (message @userinfobot to find it)."
+        )
+    if ctype == "slack":
+        if not config.get("app_token_secret") and not config.get("signing_secret_secret"):
+            return (
+                "Two-way is on, but Jarvis has no way to hear Slack: add the App-level "
+                "token (xapp-…, from Basic Information → App-Level Tokens, with the "
+                "connections:write scope)."
+            )
+        if not config.get("token_secret"):
+            return (
+                "Two-way is on, but Jarvis can't answer you in Slack: add the Bot "
+                "token (xoxb-…, from OAuth & Permissions)."
+            )
+    return None
+
+
+#: Plain fields whose stored VALUE the edit form is never handed back: a
+#: webhook URL is itself a credential, and the allowlist's ids stay in the
+#: daemon (only their count leaves it, as since v1.136.0). The form still
+#: learns they are SAVED, so a blank box keeps them.
+HIDDEN_VALUES = frozenset({"webhook_url", "allowed_senders"})
+
+
+def saved_fields(fields: list[dict], spec: dict) -> tuple[list[str], dict[str, str]]:
+    """``(saved, values)`` for one stored destination: the field keys that hold
+    something (secrets by their vault reference — never the secret), and the
+    plain values the edit form may show (everything but :data:`HIDDEN_VALUES`,
+    the two switches and lists)."""
+    saved: list[str] = []
+    values: dict[str, str] = {}
+    for f in fields:
+        key = str(f.get("key") or "")
+        if not key:
+            continue
+        if f.get("secret"):
+            if spec.get(f"{key}_secret"):
+                saved.append(key)
+            continue
+        val = spec.get(key)
+        if val is None or val == "" or val == []:
+            continue
+        saved.append(key)
+        if key not in HIDDEN_VALUES and not isinstance(val, (bool, list, dict)):
+            values[key] = str(val)
+    return saved, values
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/vault")
@@ -190,6 +257,9 @@ def register(app: FastAPI, d) -> None:
                 inbound_on, chat_on, allowed_count = False, False, 0
             poller = getattr(d, "inbound_poller", None)
             poll_err = (getattr(poller, "poll_errors", None) or {}).get(name) or {}
+            # v1.427.6: what the edit form keeps when a box is left blank.
+            stype = str(spec.get("type") or "")
+            saved, values = saved_fields(d._CHANNEL_TYPE_FIELDS.get(stype, []), spec)
             out.append(
                 {
                     "name": name,
@@ -211,6 +281,12 @@ def register(app: FastAPI, d) -> None:
                     # three days ago".
                     "last_poll_error": poll_err.get("detail"),
                     "last_poll_error_at": poll_err.get("at"),
+                    # v1.427.6: field keys that hold something (names only),
+                    # the plain values the edit form may show, and why
+                    # two-way cannot hear the user yet ("" = it can, or off).
+                    "saved_fields": saved,
+                    "values": values,
+                    "two_way_note": two_way_note(stype, spec) if spec else None,
                 }
             )
         return {"channels": out}
@@ -226,11 +302,15 @@ def register(app: FastAPI, d) -> None:
                     "manifest_help": (
                         "Create the Slack app in one paste: api.slack.com/apps → "
                         "Create New App → From an app manifest → paste this JSON, "
-                        "then install it to your workspace and copy the Bot token "
-                        "(plus the Signing Secret from Basic Information for "
-                        "two-way events — point Slack's Event Subscriptions "
-                        "request URL at /comm/slack/events/<channel-name> once "
-                        "this machine is reachable, e.g. via a Tailscale funnel)."
+                        "then install it to your workspace. Copy the Bot token "
+                        "(OAuth & Permissions, xoxb-…) and pick a channel for "
+                        "alerts. To message Jarvis back: make an App-level token "
+                        "with the connections:write scope (Basic Information → "
+                        "App-Level Tokens, xapp-…), turn on two-way, and add your "
+                        "Slack member ID to the allowlist — no public address "
+                        "needed. An app made from an older manifest also needs "
+                        "App Home → Messages Tab → \"Allow users to send Slash "
+                        "commands and messages from the messages tab\"."
                         if t == "slack"
                         else None
                     ),
@@ -274,16 +354,51 @@ def register(app: FastAPI, d) -> None:
         if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
             raise HTTPException(status_code=400, detail="invalid channel name")
 
+        # BLANK KEEPS (v1.427.6, the user's report: "when i go back in to
+        # edit, i need to re-enter the tokens because they are cleared"). Edit
+        # re-submits here, and the form never holds a saved secret, so a blank
+        # box used to DROP the saved token, the allowlist and every other
+        # field the form could not show. Now, for an existing destination of
+        # the SAME type, a blank field keeps what is stored; a key named in
+        # ``clear`` is removed; a typed value replaces. (The v1.164.0
+        # remote-agent rule: replace / keep / clear are three intents.)
+        configured_now = (d.platform.config.comm or {}).get("channels") or {}
+        prior = configured_now.get(name)
+        if not isinstance(prior, dict) or prior.get("type") != ctype:
+            prior = None  # a new destination, or another type: nothing carries
+        raw_clear = (body.config or {}).get("clear")
+        clear = {str(k) for k in raw_clear} if isinstance(raw_clear, list) else set()
+        # Secrets are written only once the whole save is valid: a refused
+        # edit must never swap the token a working destination is using.
+        pending_secrets: dict[str, str] = {}
+        drop_secrets: list[str] = []
+
         config: dict[str, Any] = {"type": ctype}
         for field in d._CHANNEL_TYPE_FIELDS[ctype]:
             key = field["key"]
             value = (body.config or {}).get(key)
             if value in (None, ""):
+                if prior is None:
+                    continue
+                if key in clear:
+                    old_ref = prior.get(f"{key}_secret")
+                    if field.get("secret") and isinstance(old_ref, str) and old_ref:
+                        drop_secrets.append(old_ref)
+                    continue
+                if field.get("secret"):
+                    old_ref = prior.get(f"{key}_secret")
+                    if isinstance(old_ref, str) and old_ref:
+                        config[f"{key}_secret"] = old_ref
+                elif key in prior and prior[key] not in (None, ""):
+                    config[key] = prior[key]
                 continue
             if field.get("secret"):
                 secret_name = f"channel_{name}_{key}"
-                d.platform.secrets.set(secret_name, str(value), kind="token")
+                pending_secrets[secret_name] = str(value)
                 config[f"{key}_secret"] = secret_name
+                old_ref = (prior or {}).get(f"{key}_secret")
+                if isinstance(old_ref, str) and old_ref and old_ref != secret_name:
+                    drop_secrets.append(old_ref)
             elif key == "allowed_senders":
                 # Comma-separated ids -> the list the fail-closed allowlist reads.
                 config[key] = [s.strip() for s in str(value).split(",") if s.strip()]
@@ -327,6 +442,9 @@ def register(app: FastAPI, d) -> None:
                 )
             config["events"] = wanted
 
+        for secret_name, secret_value in pending_secrets.items():
+            d.platform.secrets.set(secret_name, secret_value, kind="token")
+
         # Persist to config.comm.channels (survives restart) + atomic write.
         comm = dict(d.platform.config.comm or {})
         channels = dict(comm.get("channels") or {})
@@ -343,11 +461,26 @@ def register(app: FastAPI, d) -> None:
             secret_resolver=d.platform.secrets.get,
         )
         d.platform.notifier.add_channel(name, channel)
+        # A secret the user removed (or replaced under another name) leaves
+        # the vault once nothing refers to it any more.
+        for old_ref in drop_secrets:
+            if old_ref in pending_secrets:
+                continue
+            try:
+                d.platform.secrets.delete(old_ref)
+            except Exception:  # noqa: BLE001 — a leftover vault row is not a failed save
+                pass
         # Two-way Slack (Socket Mode) dials out from a background pump that
         # used to be armed only at boot — connect (or re-token) it now.
         if ctype == "slack":
             _rearm_slack_socket()
-        return {"name": name, "type": ctype, "added": True}
+        return {
+            "name": name,
+            "type": ctype,
+            "added": True,
+            # v1.427.6: why two-way still cannot hear the user ("" when it can).
+            "two_way_note": two_way_note(ctype, config) or "",
+        }
 
     @app.delete("/comm/channels/{name}")
     def delete_comm_channel(name: str) -> dict[str, Any]:

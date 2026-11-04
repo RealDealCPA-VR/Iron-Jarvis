@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.427.5 (2026-11-04).*
+holds itself to. Current as of v1.427.6 (2026-11-04).*
 
 ---
 
@@ -749,6 +749,22 @@ with the request typed in.
   destination") include **The night shift's summary**. With every box ticked a
   destination gets every alert. Untick some and it gets only the ones still
   ticked; before, any smaller set also silently dropped the night summary.
+- **Editing a destination keeps what is saved, and two-way says why it cannot
+  hear you** (v1.427.6). Edit used to empty every box it could not show — the
+  Slack bot and app tokens, the allowlist — and saving then threw them away, so
+  every edit meant pasting the tokens again. Now a box left blank keeps what is
+  saved (secret boxes say **Saved — leave blank to keep it**, the allowlist says
+  how many are saved), typing replaces, and **Remove the saved one** under a
+  saved field takes it out. Two-way Slack needs three things to hear you: the
+  **App-level token** (xapp-…, with connections:write), the **Bot token**
+  (xoxb-…, to answer), and **your Slack member ID in the allowlist** (in Slack:
+  your profile picture → Profile → ⋯ → Copy member ID) — with the allowlist
+  empty, Jarvis does not listen at all. When one is missing, the destination's
+  row and the save say which, in plain words. Slack can now also hold a real
+  conversation with Jarvis: tick **Chat with Iron Jarvis**. The Slack app
+  manifest turns on the app's **Messages tab**; an app made from an older
+  manifest needs it switched on once in Slack: App Home → Messages Tab → tick
+  **Allow users to send Slash commands and messages from the messages tab**.
 - **A dead phone token is visible, and a dropped message says so**
   (v1.231.0): if your Telegram bot token is revoked or rotated (or your
   mailbox refuses the IMAP login), the Channels row turns red with **Not
