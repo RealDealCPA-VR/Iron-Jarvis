@@ -366,7 +366,7 @@ describe("the folder heading's defaults panel", () => {
     expect((await screen.findByTestId("p-words")).textContent).toBe("New sessions here start with the app's own choices.");
     fireEvent.click(screen.getByTestId("p-use"));
     await waitFor(() =>
-      expect(screen.getByTestId("p-words").textContent).toBe("New sessions in shop start with: Opus 5.5 · Auto (its own safety check)."),
+      expect(screen.getByTestId("p-words").textContent).toBe("New sessions in shop start with: Opus 5.5 · Auto." /* v1.430.0: the level is named "Auto" */),
     );
     expect(api.puts[0].body).toEqual({
       folder: FOLDER,

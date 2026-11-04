@@ -35,6 +35,8 @@ import {
   permissionMenuPlacement,
   permissionMenuPosition,
   PERMISSION_MENU_GAP,
+  PERMISSION_MENU_H,
+  PERMISSION_MENU_W,
 } from "@/components/chat/PermissionChip";
 
 afterEach(() => {
@@ -254,8 +256,10 @@ describe("permissionMenuPosition", () => {
           const v = { width, height: 844 };
           const place = permissionMenuPlacement(a, v);
           const p = permissionMenuPosition(a, place, v);
-          const h = Math.min(226, place.maxHeight ?? 226);
-          const w = Math.min(288, width - 32);
+          // v1.430.0 (moved on purpose): the box the placement was worked out
+          // for — the names-only menu's guess, no longer 288x226.
+          const h = Math.min(PERMISSION_MENU_H, place.maxHeight ?? PERMISSION_MENU_H);
+          const w = Math.min(PERMISSION_MENU_W, width - 32);
           const t = p.top ?? v.height - (p.bottom as number) - h;
           const l = p.left ?? v.width - (p.right as number) - w;
           const tag = `${width}px, chip at ${top},${left}`;

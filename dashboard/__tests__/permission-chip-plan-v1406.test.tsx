@@ -44,7 +44,7 @@ describe("the one switch", () => {
       "Ask before every action",
       "Ask before commands",
       "Accept edits",
-      "Auto (its own safety check)",
+      "Auto", // v1.430.0 (moved on purpose): names only in the menu
       "Don't ask",
     ]);
   });

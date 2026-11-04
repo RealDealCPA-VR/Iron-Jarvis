@@ -135,8 +135,10 @@ describe("(1) the approval menu is placed again when its rows' words change whil
       await land(CHOSEN);
       const now = screen.getByTestId("permission-menu");
       expect(now).toBe(menu); // the same menu, never closed and reopened
-      for (const row of within(now).getAllByTestId("permission-item")) {
-        expect(row.textContent).toContain("only in the folders you chose");
+      // v1.430.0 (moved on purpose): the sentence is each row's meaning, read
+      // through its aria-describedby (the row itself shows its name only).
+      for (const r of within(now).getAllByTestId("permission-item")) {
+        expect(document.getElementById(r.getAttribute("aria-describedby") ?? "")?.textContent ?? "").toContain("only in the folders you chose");
       }
       // 262px above (270 - 8) cannot hold 274px: capped there, with its own
       // scroll, so every row is reachable and its top stays in the window.
@@ -151,7 +153,8 @@ describe("(1) the approval menu is placed again when its rows' words change whil
     await withLayout(async () => {
       const menu = await tapBeforeTheReadLands();
       await land(OPEN);
-      expect(within(menu).getAllByTestId("permission-item")[0].textContent).toContain("anywhere on this PC");
+      const r = within(menu).getAllByTestId("permission-item")[0];
+      expect(document.getElementById(r.getAttribute("aria-describedby") ?? "")?.textContent ?? "").toContain("anywhere on this PC");
       expect(menu.style.maxHeight).toBe("");
       expect(menu.style.overflowY).toBe("");
       expect(menu.style.bottom).toBe(`${VIEW.height - CHIP.top + 6}px`);

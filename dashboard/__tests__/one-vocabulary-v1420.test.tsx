@@ -184,7 +184,7 @@ describe("the approval levels are named by what they do, the same everywhere (C1
       "Ask before every action",
       "Ask before commands",
       "Accept edits",
-      "Auto (its own safety check)",
+      "Auto", // v1.430.0 (moved on purpose): names only in the menu
       "Don't ask",
     ]);
   });
@@ -208,7 +208,8 @@ describe("the approval levels are named by what they do, the same everywhere (C1
   });
 
   it("the chip stays short and keeps reading what Jarvis may read", () => {
-    expect(PERMISSION_LEVELS.auto.chip).toBe("Auto");
+    // v1.430.0 (moved on purpose): the name IS "Auto", so no separate chip word.
+    expect(PERMISSION_LEVELS.auto.chip ?? PERMISSION_LEVELS.auto.label).toBe("Auto");
     const line = readsLevelLine({ limited: true, chosen: ["C:\\Work"] });
     expect(permissionLevel("approve_for_me", line).description).toContain(line);
     expect(permissionLevel("yolo", line).description).toContain(line);

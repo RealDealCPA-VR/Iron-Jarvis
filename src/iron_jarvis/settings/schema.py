@@ -766,8 +766,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       # v1.420.0 (fix plan C1.8, decision D3): named by what each does, the
       # same words as the chat chip (dashboard/lib/permissionLevels.ts; a pin
       # holds the two equal). Older words: settings/tools._RETIRED_OPTION_WORDS.
+      # v1.430.0: "Auto (its own safety check)" is "Auto" again (the menu shows
+      # names only; the safety check is in what the level does).
       options=(("always_ask", "Ask before every action"), ("approve_for_me", "Ask before commands"),
-               ("accept_edits", "Accept edits"), ("auto", "Auto (its own safety check)"), ("yolo", "Don't ask")),
+               ("accept_edits", "Accept edits"), ("auto", "Auto"), ("yolo", "Don't ask")),
       # v1.406.0 part 2: Auto lets calls through with no card, so turning it
       # on from chat is ask-floor like Don't ask; Accept edits is allow.
       tier="allow", floor_when=("yolo", "auto"), store="device",

@@ -14384,6 +14384,40 @@ does not need a bump, stop and bump it.
   (8 mutations red), `dashboard/__tests__/notifications-edit-keeps-v1427-6.test.tsx`
   (7 mutations red).
 
+- **The approvals menu shows NAMES; a level's meaning shows beside its row
+  after a pause** (v1.430.0; the user: "the descriptions are too verbose …
+  just the titles … a popup of what it means if the user waves the mouse over
+  it for long enough"). `components/chat/PermissionChip.tsx` (the chat's AND
+  Chat › Code's chip): each row is the check column + `span.block` holding
+  `label` only (w-56, `PERMISSION_MENU_W` 224 / `_H` 176 guess); the meaning
+  (`description`, readsLine included) is each row's `aria-describedby` → a
+  `hidden` `permission-about` span, and the eye's box `permission-hint`
+  (aria-hidden, pointer-events-none, fixed, portaled with the menu) shows
+  after `PERMISSION_HINT_DELAY_MS` (500) of the pointer on a row, or of the
+  arrow keys' highlight resting (opening shows none), at once while one is
+  already showing; leaving the menu or closing it hides it (a reopened menu
+  starts empty). Touch: a finger HELD that long shows it and the lift picks
+  nothing (`heldRef`); a tap picks; a mouse press is never a hold.
+  `permissionHintPlacement` (pure): right of the menu level with the row,
+  else left, else (a phone) under the row, or over it with no room under,
+  8 px inside the window. "Auto (its own safety check)" is **Auto** again
+  (`lib/permissionLevels` + `settings/schema.py`, pinned equal; the old name
+  is a retired word in `settings/tools._RETIRED_OPTION_WORDS`; its safety
+  check moved into `does`). The chip's `title` still holds the description.
+  Build › Code's ModeChip still prints its `about` lines (not changed). Pins:
+  `dashboard/__tests__/permission-menu-names-v1430.test.tsx` (12 mutations,
+  all red), e2e `dashboard/e2e/permission-menu-names.spec.ts` (1280 × 800,
+  1024 × 640, 390 × 844); moved on purpose: `permission-chip-v1327`,
+  `permission-chip-clip-v1327`, `reads-follow-setting-v13600`,
+  `labels-say-it-once-v13610`, `ux-wave2-chat-words-v1314`,
+  `permission-chip-plan-v1406`, `one-vocabulary-v1420`, `approval-mode-v1188`,
+  `folder-defaults-v1426-0`, `page-copy-v1232`, `test_approval_words_v13520`.
+  SAME DAY (not this change): the main checkout's `dashboard/node_modules` was
+  found with every entry before `next` gone (no `.bin`, `@types`, `.modules.yaml`;
+  folder changed 13:07) — an interrupted recursive delete, cause not proven;
+  `pnpm install --frozen-lockfile` restored it. If `npx tsc` says "This is not
+  the tsc command you are looking for", check that folder first.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

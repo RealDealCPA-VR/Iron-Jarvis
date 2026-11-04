@@ -28,7 +28,7 @@ PR that ships it.
 | A coding session's separate checkout of its own branch, beside the repository (v1.375.0) | **its own copy of the folder** | worktree |
 | The program that keeps several Claude Code / Codex / Grok accounts and picks one for each call (Iron-Proxy) | on the coding surfaces: **your accounts** (the **Several accounts** card on Connections); when the program itself is meant: **the account manager** | Iron-Proxy (on the coding surfaces; it stays the program's own name on its Connections card and in its own errors) |
 | A change the undo journal cannot reverse | **can't be undone** | no safe inverse |
-| How much Jarvis asks before it acts (the chat's chip, a coding session's picker, Settings › Approvals in chat), each named by what it does | **Ask before every action**, **Ask before commands** (the default), **Accept edits**, **Auto (its own safety check)**, **Don't ask**; a coding session also offers **Plan** | Ask first, Ask when risky, Ask before everything, Approve for me, Auto-approve, Auto mode |
+| How much Jarvis asks before it acts (the chat's chip, a coding session's picker, Settings › Approvals in chat), each named by what it does | **Ask before every action**, **Ask before commands** (the default), **Accept edits**, **Auto**, **Don't ask**; a coding session also offers **Plan**. The menu shows the names only; what each does shows beside it when the pointer rests on it (v1.430.0) | Ask first, Ask when risky, Ask before everything, Approve for me, Auto-approve, Auto mode, Auto (its own safety check) |
 | A chat that keeps its words off the cloud | **Local only**: nothing leaves **this PC or your own network** without asking | — |
 | A run the user (or Emergency stop) ended before it finished | **Stopped** (grey; its own lane on the Session board) | — |
 | A coding session's reply drawn on one time axis, the tab beside Plan (v1.390.0): the model you talk to, each step it took, each helper with its model | **Timeline**; its pieces are **steps**, **model calls** and **helpers** (the run log's words) | trace, span, waterfall, orchestrator, LLM call, round (never shown) |
@@ -245,7 +245,9 @@ own sentences (other lanes' files) still say them; each moves into `RETIRED`
 The approval levels are named by what they do (decision D3): the default is
 **Ask before commands** (it edits files freely and asks before a command; in
 Build › Code "Ask first" asks before a file change too, so one name meant two
-things), **Auto (its own safety check)** says who decides, and **Don't ask**
+things), **Auto** decides each step with its own safety check (v1.420.0
+named it "Auto (its own safety check)"; since v1.430.0 the menu shows names
+only and that sentence is part of what the level does), and **Don't ask**
 names what it covers and what still asks. The old words still find their
 level in chat (`settings/tools._RETIRED_OPTION_WORDS`).
 

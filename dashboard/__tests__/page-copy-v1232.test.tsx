@@ -149,7 +149,9 @@ describe("U8 — chat controls explain themselves", () => {
     // level's name first, since the words are no longer on screen.
     expect(chip).toContain("title={iconOnly ? iconOnlyTitle(level.label, level.description) : level.description}");
     expect(chip).toContain("aria-label={`Permissions: ${level.label}`}");
-    expect(chip).toContain("{row.description}");
+    // v1.430.0 (moved on purpose, the user): the menu shows names only; a
+    // level's line shows in the box beside its row after a pause.
+    expect(chip).toContain("{rowFor(hintKey).description}");
   });
 
   it("the footer names the default model instead of saying 'default model'", () => {

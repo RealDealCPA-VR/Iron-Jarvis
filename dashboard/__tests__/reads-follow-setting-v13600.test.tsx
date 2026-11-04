@@ -165,10 +165,12 @@ describe("the chat's approval chip follows the setting", () => {
     await waitFor(() => {
       const rows = within(menu).getAllByTestId("permission-item");
       expect(rows).toHaveLength(5);
-      for (const r of rows) expect(r.textContent).toContain(CHOSEN_LINE);
+      // v1.430.0 (moved on purpose): a row shows its name only; its meaning
+      // is its accessible description (and the box beside it on a pause).
+      for (const r of rows) expect(document.getElementById(r.getAttribute("aria-describedby") ?? "")?.textContent ?? "").toContain(CHOSEN_LINE);
     }, W);
     for (const r of within(menu).getAllByTestId("permission-item")) {
-      expect(r.textContent).not.toMatch(/anywhere/);
+      expect(document.getElementById(r.getAttribute("aria-describedby") ?? "")?.textContent ?? "").not.toMatch(/anywhere/);
     }
   });
 
@@ -189,7 +191,8 @@ describe("the chat's approval chip follows the setting", () => {
     fireEvent.click(el);
     await waitFor(() => expect(H.calls).toEqual([READ_FACTS_PATH]), W);
     const rows = within(screen.getByTestId("permission-menu")).getAllByTestId("permission-item");
-    expect(rows[4].textContent).toContain(PERMISSION_LEVELS.yolo.description);
+    const r = rows[4];
+    expect(document.getElementById(r.getAttribute("aria-describedby") ?? "")?.textContent ?? "").toContain(PERMISSION_LEVELS.yolo.description);
   });
 });
 

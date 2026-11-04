@@ -344,7 +344,7 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
       "Ask before every action",
       "Ask before commands",
       "Accept edits",
-      "Auto (its own safety check)",
+      "Auto", // v1.430.0 (moved on purpose): the menu shows names only
       "Don't ask",
     ]);
   });
@@ -357,9 +357,12 @@ describe("composer footer speaks plainly (composer-footer-jargon)", () => {
     const yolo = within(screen.getByTestId("permission-menu"))
       .getAllByTestId("permission-item")
       .find((i) => i.getAttribute("data-mode") === "yolo") as HTMLElement;
-    expect(yolo.textContent).not.toMatch(/YOLO/);
-    expect(yolo.textContent).toMatch(/without asking/i);
-    expect(yolo.textContent).toMatch(/care/i); // a warning tone, per the verifier
+    // v1.430.0 (moved on purpose): the row shows its name; its meaning is its
+    // accessible description (and the box beside it on a pause).
+    const about = document.getElementById(yolo.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(yolo.textContent + about).not.toMatch(/YOLO/);
+    expect(about).toMatch(/without asking/i);
+    expect(about).toMatch(/care/i); // a warning tone, per the verifier
     fireEvent.click(yolo);
     await waitFor(() => expect(chip.getAttribute("data-mode")).toBe("yolo"));
     expect(chip.title).not.toMatch(/YOLO/);

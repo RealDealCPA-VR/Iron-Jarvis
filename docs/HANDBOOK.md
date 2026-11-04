@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.429.0 (2026-11-04).*
+holds itself to. Current as of v1.430.0 (2026-11-04).*
 
 ---
 
@@ -1996,6 +1996,29 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## The approvals menu shows names only (v1.430.0)
+
+The menu behind the shield chip in the chat box (in Chat and in Chat › Code)
+now lists the levels by name only, one line each:
+
+- **Ask before every action**
+- **Ask before commands** (the default)
+- **Accept edits**
+- **Auto** (called *Auto (its own safety check)* until now)
+- **Plan** (a coding session only)
+- **Don't ask**
+
+To see what a level does, rest the pointer on its row for half a second: a
+small box beside the menu says what that level does and what it may read.
+Once one box is showing, moving to another row shows that row's at once.
+The arrow keys do the same when the highlight rests on a row. On a touch
+screen, hold a finger on a row for half a second; lifting it then does not
+pick that level, and a normal tap still does. The chip itself still shows
+the current level's full description when you rest the pointer on it.
+
+Nothing about what each level does changed, and "Auto (its own safety
+check)" typed in chat still finds Auto.
 
 ## The background glow costs less while the app sits idle (v1.410.1)
 

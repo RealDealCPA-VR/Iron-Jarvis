@@ -45,7 +45,7 @@ describe("the posture vocabulary", () => {
     // v1.420.0 (fix plan C1.8, moved on purpose): named by what each does.
     expect(levels).toContain('label: "Ask before commands"');
     expect(levels).toContain('label: "Accept edits"');
-    expect(levels).toContain('label: "Auto (its own safety check)"');
+    expect(levels).toContain('label: "Auto"'); // v1.430.0 (moved on purpose)
     expect(levels).toContain(`label: "Don't ask"`);
     // Unknown → the DEFAULT, never yolo (mirrors normalize_approval_mode).
     expect(levels).toContain('export const DEFAULT_PERMISSION_MODE: PermissionMode = "approve_for_me";');

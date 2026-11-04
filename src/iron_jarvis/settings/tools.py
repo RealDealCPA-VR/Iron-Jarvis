@@ -101,6 +101,8 @@ _RETIRED_OPTION_WORDS: dict[str, dict[str, str]] = {
         # their level ("Ask first" is the default, "Auto" is Auto).
         "ask first": "approve_for_me",
         "auto": "auto",
+        # v1.430.0: the v1.420.0 name, before the menu showed names only.
+        "auto (its own safety check)": "auto",
         # v1.420.0 review: the chip's TOOLBAR words (lib/permissionLevels
         # `chip`) are what the user sees and types; they are not option
         # labels, so they live here (pinned:

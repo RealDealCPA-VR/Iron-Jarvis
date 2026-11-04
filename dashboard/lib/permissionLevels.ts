@@ -56,7 +56,8 @@ export type PermissionTone = "neutral" | "warn";
 export interface PermissionLevel {
   /** The chip's word for the level. */
   label: string;
-  /** One line under the label in the menu: what Jarvis does in this level. */
+  /** What Jarvis does in this level. Since v1.430.0 the menu shows it beside
+   *  the row after a pause (PermissionChip's hint), never under the name. */
   description: string;
   /** `warn` = the level that runs things without asking, shown in amber. */
   tone: PermissionTone;
@@ -99,13 +100,15 @@ const LEVEL_DOES: Readonly<Record<PermissionMode, { label: string; does: string;
     does: "Like Ask before commands, and a file edit in this folder never asks, even where the folder's own rules would.",
     tone: "neutral",
   },
-  // v1.420.0 (D3): the name says who decides — its own safety check; the
-  // toolbar chip keeps the short word.
+  // v1.420.0 (D3) named it "Auto (its own safety check)". v1.430.0 (the
+  // user: "just the titles"): the menu shows names only and each meaning on
+  // a pause over the row, so the name is "Auto" and the safety check moved
+  // into what it does. The old name still finds the level
+  // (settings/tools._RETIRED_OPTION_WORDS).
   auto: {
-    label: "Auto (its own safety check)",
-    does: "Lets routine work through without asking: reading, edits in this folder, running the tests, and anything a quick check finds routine for what you asked. Always asks before anything that deletes, sends, pays or acts in your browser.",
+    label: "Auto",
+    does: "Decides each step with its own safety check: routine work goes ahead without asking (reading, edits in this folder, running the tests, and anything else it finds routine for what you asked). Always asks before anything that deletes, sends, pays or acts in your browser.",
     tone: "neutral",
-    chip: "Auto",
   },
   // v1.420.0 (C6.7): the sentence names what it covers (connected apps too)
   // and what still asks (a coding session's commits and pushes on its own

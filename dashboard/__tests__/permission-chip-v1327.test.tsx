@@ -14,8 +14,9 @@ import { join } from "node:path";
  *  - the riskiest level (yolo) is the one amber level, in tone tokens only;
  *  - the chip: shield + plain name + chevron, a ghost (transparent at rest,
  *    a fill only on hover), 30px tall; an unknown value reads as the default;
- *  - the menu: every level with its one-line description, the current one
- *    checked; arrows wrap, Enter picks, Esc closes WITHOUT reaching the page
+ *  - the menu: every level by name (v1.430.0: its meaning is the row's
+ *    accessible description and shows beside it on a pause, pinned in
+ *    permission-menu-names-v1430), the current one checked; arrows wrap, Enter picks, Esc closes WITHOUT reaching the page
  *    and gives focus back; an outside press closes; picking the current level
  *    calls nothing; disabled = nothing opens;
  *  - the menu fits the window: above by default, below when above has no room,
@@ -94,8 +95,8 @@ describe("the levels table", () => {
       const row = PERMISSION_LEVELS[mode];
       expect(row.label.trim().length).toBeGreaterThan(0);
       // v1.406.0 part 2: the menu's name may be longer; the CHIP's word fits.
-      // v1.420.0 (C1.8, moved on purpose): "Auto (its own safety check)" is
-      // 27 — the name says who decides; the chip keeps "Auto".
+      // v1.420.0 (C1.8) allowed 28 for "Auto (its own safety check)"; since
+      // v1.430.0 the menu shows names only and that level is "Auto" again.
       expect(row.label.length).toBeLessThanOrEqual(28);
       expect((row.chip ?? row.label).length).toBeLessThanOrEqual(16);
       expect(row.description.trim().length).toBeGreaterThan(0);
@@ -171,7 +172,7 @@ describe("the chip", () => {
 });
 
 describe("the menu", () => {
-  it("lists every level with its description and checks the current one", () => {
+  it("lists every level by name and checks the current one", () => {
     const { chip } = setup("always_ask");
     const menu = openWithClick(chip);
     expect(chip.getAttribute("aria-expanded")).toBe("true");
@@ -181,8 +182,10 @@ describe("the menu", () => {
     for (const el of items) {
       const row = PERMISSION_LEVELS[el.dataset.mode as keyof typeof PERMISSION_LEVELS];
       expect(el.getAttribute("role")).toBe("menuitemradio");
-      expect(el.textContent).toContain(row.label);
-      expect(el.textContent).toContain(row.description);
+      // v1.430.0 (moved on purpose, the user): the name only; the meaning is
+      // the row's description (aria-describedby) and the box on a pause.
+      expect(el.textContent).toBe(row.label);
+      expect(document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent).toBe(row.description);
     }
     const checked = items.filter((el) => el.getAttribute("aria-checked") === "true");
     expect(checked.map((el) => el.dataset.mode)).toEqual(["always_ask"]);
@@ -401,25 +404,28 @@ describe("permissionMenuPlacement", () => {
 
   it("shifts the menu on a 390px phone where neither alignment fits", () => {
     const phone = { width: 390, height: 700 };
-    const anchor = { top: 600, bottom: 630, left: 130, right: 250 };
+    // v1.430.0 (moved on purpose): the names-only menu is 224px, so neither
+    // alignment fits a chip whose left is past 158 and right short of 232.
+    const anchor = { top: 600, bottom: 630, left: 170, right: 220 };
     const place = permissionMenuPlacement(anchor, phone);
     expect(place.align).toBe("shift");
-    // 390 - 288 - 8 = 94 is the furthest right the menu's left edge may sit.
-    expect(place.left).toBe(94 - 130);
-    expect(menuEdges(anchor, 390, place)).toEqual({ left: 94, right: 382 });
+    // 390 - 224 - 8 = 158 is the furthest right the menu's left edge may sit.
+    expect(place.left).toBe(158 - 170);
+    expect(menuEdges(anchor, 390, place)).toEqual({ left: 158, right: 382 });
   });
 
   it("uses the menu's real box", () => {
-    expect(PERMISSION_MENU_W).toBe(288);
-    // The guess covers the box Edge measured (three two-line rows, 226px).
-    expect(PERMISSION_MENU_H).toBeGreaterThanOrEqual(226);
+    // v1.430.0 (moved on purpose): names only, w-56; five or six one-line
+    // rows stand about 170-200px tall.
+    expect(PERMISSION_MENU_W).toBe(224);
+    expect(PERMISSION_MENU_H).toBeGreaterThanOrEqual(170);
     // Exactly enough room above (menu height + the 8px edge) stays above.
     expect(permissionMenuPlacement(chipAt(PERMISSION_MENU_H + 8, 300), vp).side).toBe("above");
     expect(permissionMenuPlacement(chipAt(PERMISSION_MENU_H + 7, 300), { width: 1280, height: 2000 }).side).toBe(
       "below",
     );
-    // A chip 220px from the top: the 226px box does not fit above.
-    expect(permissionMenuPlacement(chipAt(220, 300), vp).side).toBe("below");
+    // A chip just short of the guess from the top: it does not fit above.
+    expect(permissionMenuPlacement(chipAt(PERMISSION_MENU_H, 300), vp).side).toBe("below");
   });
 });
 
@@ -452,8 +458,8 @@ describe("the menu, measured once it renders", () => {
   }
 
   it("opens above once the real menu turns out to fit there", () => {
-    // 200px from the top: the 232px guess says below; the real 150px box fits above.
-    withBoxes({ top: 200, bottom: 230, left: 300, right: 400 }, { width: 288, height: 150 }, () => {
+    // 170px from the top: the 176px guess says below; the real 150px box fits above.
+    withBoxes({ top: 170, bottom: 200, left: 300, right: 400 }, { width: 224, height: 150 }, () => {
       const { chip } = setup("approve_for_me");
       const menu = openWithClick(chip);
       expect(menu.dataset.side).toBe("above");
@@ -462,7 +468,7 @@ describe("the menu, measured once it renders", () => {
   });
 
   it("opens below once the real menu turns out too tall for above", () => {
-    // 240px from the top: the 232px guess says above; a real 260px box would
+    // 240px from the top: the 176px guess says above; a real 260px box would
     // lose 28px off the top, so it moves below.
     withBoxes({ top: 240, bottom: 270, left: 300, right: 400 }, { width: 288, height: 260 }, () => {
       const { chip } = setup("approve_for_me");
