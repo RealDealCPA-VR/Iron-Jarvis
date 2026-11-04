@@ -151,6 +151,9 @@ def view(row: HostedSessionRecord) -> dict[str, Any]:
         # v1.414.0: the five Capabilities (all off by default) — Browser and
         # Memory give the coding tool Iron Jarvis's own tools.
         "capabilities": _capabilities(row),
+        # v1.431.0: a Pi session the user told to load its folder's own Pi
+        # extensions, skills and settings (``pi --approve``).
+        "load_folder_resources": bool(getattr(row, "load_folder_resources", False)),
         "source": "app",
     }
 

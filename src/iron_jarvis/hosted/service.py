@@ -85,6 +85,7 @@ from .driver import DECISIONS, Ask, AskRefused, ControlRefused, Driver
 from . import pi as P
 from .pi import HARNESS as PI
 from . import pi_catalog as PC
+from . import pi_trust as PT
 from .pi import PiDriver
 from . import opencode as O
 from .opencode import HARNESS as OPENCODE
@@ -1641,6 +1642,12 @@ class HostedService:
         out["commands"] = self.commands_for(row.harness, live)
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
+        if row.harness == PI:
+            # v1.431.0: the folder's own Pi resources Pi skips here (it can
+            # only ask about them in its terminal) — said, with one press.
+            folder = await asyncio.to_thread(self._pi_folder_view, row)
+            if folder is not None:
+                out["pi_folder"] = folder
         # v1.418.0 (C4.6): "Load earlier" reads the page before this cursor.
         out["older"] = got["older"]
         # v1.418.0 (C4.8): the messages waiting behind the reply.
@@ -1942,12 +1949,45 @@ class HostedService:
                     if live.running and JT.wanted(merged) != JT.wanted(before):
                         live.restart = True
                 applied["capabilities"] = "next" if live is not None and live.running                     and JT.wanted(merged) != JT.wanted(before) else "now"
+        if body.get("load_folder_resources") is not None:
+            # v1.431.0: the ONE way a Pi session loads its folder's own
+            # extensions, skills and settings — the user's press. Pi reads them
+            # at start only, so a running Pi starts again (same conversation)
+            # before the next message.
+            if row.harness != PI:
+                raise Refused(W.PI_FOLDER_NOT_PI)
+            load = bool(body["load_folder_resources"])
+            got = await asyncio.to_thread(PT.check, row.folder, fresh=True)
+            if load:
+                problem = {PT.NONE: W.PI_FOLDER_NOTHING, PT.TRUSTED: W.PI_FOLDER_ALREADY,
+                           PT.DECLINED: W.PI_FOLDER_DECLINED, PT.UNKNOWN: W.PI_FOLDER_CANNOT_TELL}.get(got["state"])
+                if problem:
+                    raise Refused(problem)
+            if load != bool(getattr(row, "load_folder_resources", False)):
+                fields["load_folder_resources"] = load
+                things = PT.found_words(got["found"])
+                if live is not None:
+                    if live.running:
+                        live.restart = True
+                    self._emit(live, make("notice", text=(W.PI_FOLDER_LOAD_NOW if load
+                                                          else W.PI_FOLDER_SKIP_NOW).format(things=things)))
+            applied["load_folder_resources"] = "next"
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
+        if row.harness == PI:
+            out["pi_folder"] = await asyncio.to_thread(self._pi_folder_view, row)
         return out
+
+    def _pi_folder_view(self, row: Any) -> dict[str, Any] | None:
+        """BLOCKING. The view's ``pi_folder`` key (``hosted/pi_trust``), or None."""
+        try:
+            return PT.view(row.folder or "", bool(getattr(row, "load_folder_resources", False)))
+        except Exception:  # noqa: BLE001 — a view never fails over this
+            log.warning("could not read a Pi session folder's own resources", exc_info=True)
+            return None
 
     async def archive(self, sid: str, archived: bool = True) -> dict[str, Any]:
         row = await self._row(sid)
@@ -2262,6 +2302,8 @@ class HostedService:
         )
         if isinstance(driver, PiDriver):
             driver.catalog_path = self._pi_catalog
+            # v1.431.0: only the user's press sets this (the row's column).
+            driver.approve_folder = bool(getattr(row, "load_folder_resources", False))
             driver.forget_ask = lambda ask_id: self._forget_ask(live, ask_id)
         if isinstance(driver, OpenCodeDriver):
             driver.catalog_path = self._oc_catalog

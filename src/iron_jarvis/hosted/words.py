@@ -148,6 +148,30 @@ PI_NO_SUCH_MODEL = (
 )
 #: v1.429.0: Pi's own commands are a message of their own (never a note).
 PI_COMMAND_NOT_A_NOTE = "Pi's own commands go as a message of their own — send it once Pi has finished."
+#: v1.431.0 (``hosted/pi_trust``): a folder's OWN Pi resources, which Pi
+#: skips here because it cannot ask (its terminal would).
+PI_FOLDER_THINGS = "extensions and settings"
+PI_FOLDER_SKIPPED = (
+    "This folder has its own Pi {things}. Pi skips them here, because it can only ask about them "
+    "in its terminal."
+)
+PI_FOLDER_LOADED = "This folder's own Pi {things} load in this session."
+PI_FOLDER_TITLE = (
+    "A folder's Pi extensions run as programs on this PC. Load them only if you trust this folder. "
+    "This applies to this session only and saves nothing in Pi's trust list. If one of your own Pi "
+    "extensions decides trust itself, Pi may already load them; Iron Jarvis cannot see that."
+)
+PI_FOLDER_LOAD_NOW = "Pi will load this folder's own {things} from your next message."
+PI_FOLDER_SKIP_NOW = "Pi will skip this folder's own {things} again from your next message."
+PI_FOLDER_NOT_PI = "Only a Pi session loads a folder's own Pi extensions."
+PI_FOLDER_NOTHING = "This folder has no Pi extensions or settings of its own to load."
+PI_FOLDER_ALREADY = "Pi already loads this folder's own extensions: your Pi settings trust this folder."
+PI_FOLDER_DECLINED = (
+    "You told Pi not to trust this folder. To change that, open Pi in a Build terminal and type /trust."
+)
+PI_FOLDER_CANNOT_TELL = (
+    "Iron Jarvis cannot read this folder's Pi settings safely, so it will not load them from here."
+)
 #: v1.413.0: OpenCode signs in by itself, per provider (`opencode auth login`).
 OPENCODE_OWN_SIGN_IN = (
     "OpenCode signs in by itself, per provider, so an OpenCode session has no account to choose — "

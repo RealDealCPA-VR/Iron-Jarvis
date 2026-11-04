@@ -1241,6 +1241,38 @@ export interface CodeSessionView {
    *  them when it reopens a conversation with messages), so "the tool's
    *  default" is not offered. */
   keepsLast: boolean;
+  /** v1.431.0: a Pi session's folder has its own Pi extensions, skills or
+   *  settings that Pi skips here (it can only ask in its terminal), or this
+   *  session already loads them; null = nothing to say. */
+  piFolder: PiFolder | null;
+}
+
+/** v1.431.0: what the daemon says about a Pi folder's own resources
+ *  (`hosted/pi_trust`). `offer`: the folder is undecided and this session
+ *  does not load them yet — the one press loads them (`pi --approve`). */
+export interface PiFolder {
+  line: string;
+  title: string;
+  offer: boolean;
+  loaded: boolean;
+}
+
+/** The press that loads a Pi folder's own resources for this session. */
+export const PI_FOLDER_LOAD_LABEL = "Load them for this session";
+/** The press that goes back to Pi's own rule (skip them). */
+export const PI_FOLDER_SKIP_LABEL = "Stop loading them";
+
+/** An answer's `pi_folder`: the facts, null (said: nothing), or undefined
+ *  when the answer does not carry the key at all (an older daemon, another
+ *  tool). Only the daemon's own words are shown. */
+export function piFolderOf(raw: unknown): PiFolder | null | undefined {
+  const r = obj(raw);
+  if (!r || !("pi_folder" in r)) return undefined;
+  const p = obj(r.pi_folder);
+  if (!p) return null;
+  const line = str(p.line, 400).trim();
+  if (!line) return null;
+  return { line, title: str(p.title, 600).trim(), offer: p.offer === true, loaded: p.loaded === true };
 }
 
 /** The `/` commands an answer lists (null when the answer has no list). */
@@ -1286,6 +1318,7 @@ export function decodeCodeSessionView(raw: unknown): CodeSessionView | null {
     dropped: dropped !== null && dropped > 0 ? Math.floor(dropped) : 0,
     commands: decodeCommands(r.commands),
     keepsLast: r.keeps_last === true,
+    piFolder: piFolderOf(r) ?? null,
   };
 }
 

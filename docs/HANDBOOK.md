@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.430.0 (2026-11-04).*
+holds itself to. Current as of v1.431.0 (2026-11-04).*
 
 ---
 
@@ -2331,6 +2331,25 @@ same switch as the chat page's Chat | Code, in the same place on the page.
     line as soon as you type its name. If an extension of yours has a command
     with the same name, Pi runs yours. A note sent while Pi works is plain
     words, so one of Pi's commands waits for its own message.
+  - **A folder's own Pi extensions** (v1.431.0). A project folder can carry
+    its own Pi extensions, skills, prompt templates, themes, settings, MCP
+    servers or system prompt (in its `.pi` folder, or skills in an
+    `.agents/skills` folder in it or above it). Pi loads those only for a
+    folder you trust, and its terminal asks you the first time. In the Code
+    view Pi cannot ask, so it skips them without a word. Iron Jarvis now
+    notices this and says it in one quiet line above the box ("This folder
+    has its own Pi extensions…"), with one press: **Load them for this
+    session**. Nothing of the folder's loads before you press it. The press
+    is for that session only (another session in the same folder asks
+    again), and nothing is saved in Pi's own trust list; if Pi is running it
+    starts again on the same conversation before your next message. **Stop
+    loading them** goes back. A folder you already trust in Pi, or told Pi
+    not to trust (or a Pi set to always or never trust folders), says
+    nothing here: that is your own choice. To make a choice that lasts, open
+    Pi in a terminal and type `/trust`. If one of your own Pi extensions
+    decides trust itself, Pi may load a folder's extensions anyway; Iron
+    Jarvis cannot see that. A folder's extensions run as programs on this PC,
+    so load them only for a folder you trust.
   - **When an extension starts work by itself**, Pi works on it outside any
     message: the session stays busy until it finishes, and a message sent
     meanwhile is answered "Pi is still working on something an extension

@@ -765,9 +765,16 @@ class PiDriver(Driver):
         self._builtin = ""
         self._manual_compact = False
         self._reread: asyncio.Future | None = None
+        #: v1.431.0: the user pressed "Load them for this session" — Pi trusts
+        #: the folder's own extensions, skills and settings for THIS process
+        #: (``--approve``; nothing is saved in Pi's trust list). Set by the
+        #: service from the session row, never by anything else.
+        self.approve_folder = False
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         out = ["--mode", "rpc", "--session-id", session_id]
+        if self.approve_folder:
+            out.append("--approve")
         if self.model:
             out += ["--model", self.model]
         if self.effort:

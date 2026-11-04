@@ -57,6 +57,11 @@ class HostedSessionRecord(SQLModel, table=True):
     #: OFF until the user ticks one. Browser and Memory give the coding tool
     #: Iron Jarvis's own MCP connection (``hosted/jarvis_tools``). "" = none.
     capabilities_json: str = ""
+    #: v1.431.0: a Pi session whose user pressed "Load them for this session":
+    #: Pi starts with ``--approve`` (trusts the folder's own extensions,
+    #: skills and settings for that process only). Set ONLY by that press;
+    #: NULL on older rows = False.
+    load_folder_resources: bool | None = Field(default=False)
     #: The Build terminal "Open in terminal" started on this conversation;
     #: the row takes no message while that terminal's CLI still runs.
     terminal_id: str = ""

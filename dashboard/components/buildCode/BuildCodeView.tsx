@@ -124,6 +124,10 @@ import {
   foldConversation,
   groupByFolder,
   keepsLastOf,
+  piFolderOf,
+  PI_FOLDER_LOAD_LABEL,
+  PI_FOLDER_SKIP_LABEL,
+  type PiFolder,
   modeIsDangerous,
   sessionFolderWords,
   sessionRowLine,
@@ -297,6 +301,9 @@ function SessionPane({
   const [viewCommands, setViewCommands] = useState<ToolCommand[] | null>(null);
   /** v1.411.0: the conversation keeps its last model and effort (Pi). */
   const [keepsLast, setKeepsLast] = useState(false);
+  /** v1.431.0: a Pi folder's own extensions Pi skips here (one press loads
+   *  them for this session), or the session already loads them. */
+  const [piFolder, setPiFolder] = useState<PiFolder | null>(null);
   const [dropped, setDropped] = useState(0);
   /** v1.418.0 (C4.6): steps loaded with "Load earlier" (oldest first), the
    *  cursor of the page before them, and how many are older still. */
@@ -461,6 +468,7 @@ function SessionPane({
         setDropped(view.dropped);
         if (view.commands) setViewCommands(view.commands);
         setKeepsLast(view.keepsLast);
+        setPiFolder(view.piFolder);
         // v1.422.0 (B3, B5): what carries on by itself, and what is offered.
         setCarryFacts(decodeCarry(raw));
         // v1.418.0 (C4.8): argument hints, and the messages waiting behind
@@ -1067,6 +1075,8 @@ function SessionPane({
         if (later) setInfo(later);
         const keeps = keepsLastOf(raw);
         if (keeps !== null) setKeepsLast(keeps);
+        const folder = piFolderOf(raw);
+        if (folder !== undefined) setPiFolder(folder);
         const next = decodeCodeSession(raw);
         if (next) {
           setSession(next);
@@ -1570,6 +1580,25 @@ function SessionPane({
             <p role="status" data-testid="code-info" className="mb-2 text-[12px] text-zinc-500">
               {info}
             </p>
+          ) : null}
+          {/* v1.431.0: the folder's own Pi extensions, skills or settings —
+              Pi skips them here (it asks only in its terminal); nothing
+              loads without this press, and it is for this session only. */}
+          {piFolder && (piFolder.offer || piFolder.loaded) ? (
+            <div data-testid="code-pi-folder" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+              <p role="status" className="min-w-0 text-[12px] text-zinc-500" title={piFolder.title || undefined}>
+                {piFolder.line}
+              </p>
+              <button
+                type="button"
+                data-testid={piFolder.offer ? "code-pi-folder-load" : "code-pi-folder-skip"}
+                title={piFolder.title || undefined}
+                onClick={() => void change({ load_folder_resources: piFolder.offer })}
+                className="shrink-0 rounded-full px-2.5 py-0.5 text-[12px] text-zinc-300 shadow-[0_0_0_0.5px_rgb(var(--white)/0.16)] transition-colors hover:bg-white/[0.06] hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+              >
+                {piFolder.offer ? PI_FOLDER_LOAD_LABEL : PI_FOLDER_SKIP_LABEL}
+              </button>
+            </div>
           ) : null}
           {asking ? (
             <>

@@ -4691,6 +4691,57 @@ does not need a bump, stop and bump it.
   `/name`, `/export`, `/compact` (Pi's own refusal) worked, a template and a
   skill were expanded by Pi, an extension's command answered, and the page
   showed the groups, "Pi's default (Think Big)" and only each model's levels.
+
+- **A Pi folder's OWN extensions are loaded only by the user's press, for
+  that session (`pi --approve`); Iron Jarvis says when Pi skips them**
+  (v1.431.0; the user: "Yes, add that"). Pi 1.3.0 loads a folder's
+  protected resources only when the folder is trusted; its terminal asks,
+  RPC mode cannot, so with no decision Pi SKIPS them silently (read from
+  `dist/core/trust-manager.js`, `project-trust.js`, `main.js`, docs
+  `security.md`). `hosted/pi_trust.py` (BLOCKING, read-only, bounded;
+  `check` cached `CACHE_S` 10 s) mirrors Pi's rules: needs a decision =
+  any of `PROJECT_RESOURCES` under `<folder>/.pi` (the folder ONLY), or
+  `.agents/skills` in the folder or ANY parent except the user's own
+  `~/.agents/skills` (`HOME`, else the home folder); decision order =
+  nearest `trust.json` entry (folder, then parents; keys EXACT strings, as
+  Pi's object lookup) -> agent `settings.json` `defaultProjectTrust`
+  (always | never | anything else = ask). The folder is spelled as Pi
+  spells it (`realpathSync(path.resolve(cwd))`: Node's JS realpath follows
+  links and KEEPS case) through `code_editor._walk_links` (one hop at a
+  time, never a share: the v1.379.0 rule); a `\\host` folder, a link it
+  will not follow, or a trust list Pi could not read is UNKNOWN. States:
+  none | trusted | declined (the user's own "do not trust" / `never`:
+  NEVER second-guessed) | undecided (OFFERED) | unknown. A user-level
+  extension answering Pi's `project_trust` event can decide too; Iron
+  Jarvis cannot see that (said in the title). THE PRESS:
+  `HostedSessionRecord.load_folder_resources` (additive, NULL = False),
+  set ONLY by `PATCH /build/app/sessions/{id} {load_folder_resources}`
+  (Pi sessions only; `true` refused in words unless the folder is
+  undecided, checked fresh); `_new_driver` copies it to
+  `PiDriver.approve_folder`, the ONLY thing that adds `--approve` to
+  argv; a running Pi gets `live.restart` (same conversation, before the
+  next message) and a notice. Nothing is ever written to Pi's
+  `trust.json`; another session of the same folder is not trusted by it.
+  View: `pi_folder {state, found, loaded, offer, line, title}` only for an
+  undecided folder or a session that loads them. Dashboard
+  (`lib/buildApp.piFolderOf`, `PI_FOLDER_LOAD_LABEL` / `_SKIP_LABEL`):
+  one quiet line above the box (`code-pi-folder`) with **Load them for
+  this session** / **Stop loading them**; only the daemon's own `true`
+  offers. PROVEN with the real pi 1.3.0 (scratch agent dir, HOME, folder;
+  `--offline --no-session --no-mcp`, no model call): a `.pi/extensions`
+  command is absent without `--approve`, listed with it, listed with a
+  saved trust, and NOT listed with a saved key in other capitals — the
+  check agreed every time. Tests fence every lookup inside their scratch
+  folder (`_exists` patched): the temp folder sits under the real home,
+  whose own `~/.agents/skills` Pi would count once HOME points elsewhere.
+  Pins: `tests/test_build_app_pi_folder_trust_v14310.py` (17 mutations
+  red), `dashboard/__tests__/build-app-pi-folder-v1431.test.tsx` (7
+  mutations red) + the contract fixture
+  `dashboard/__tests__/fixtures/build-app-pi-folder-v1431.json`
+  (`IJ_REGEN_BUILD_APP_PI_FOLDER=1`). OPEN: not driven through a scratch
+  daemon with the real Pi (the argv is pinned with the fake, Pi's answer
+  to the flag with the real Pi); Open in terminal's Pi asks its own
+  question there.
 - **Build › Code: "Allow all commands this session" is Iron Jarvis's OWN
   whole-tool session rule; the plan is on its card; a failure names the tool
   and has Retry; cards reach the autonomy metrics** (v1.417.0, fix plan wave

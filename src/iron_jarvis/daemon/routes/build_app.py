@@ -46,6 +46,9 @@ class AppSessionPatch(BaseModel):
     #: its value). Browser and Memory give the coding tool Iron Jarvis's own
     #: tools; all five are off until ticked.
     capabilities: dict[str, Any] | None = None
+    #: v1.431.0: a Pi session loads its folder's own Pi extensions, skills and
+    #: settings (``pi --approve``, this session only) — set by the user's press.
+    load_folder_resources: bool | None = None
 
 
 class AppTurn(BaseModel):
