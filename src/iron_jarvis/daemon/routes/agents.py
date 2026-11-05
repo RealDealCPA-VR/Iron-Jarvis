@@ -1666,6 +1666,354 @@ def panel_reply_lines(round_out: dict[str, Any], room_id: str) -> list[dict[str,
     return lines
 
 
+def _json_list(text: Any) -> list[Any]:
+    """A stored JSON list; garbage reads as ``[]`` (v1.435.0: lifted out of
+    ``register`` with the agent doors below, which read it too)."""
+    try:
+        value = json.loads(text or "[]")
+    except (TypeError, ValueError):
+        return []
+    return list(value) if isinstance(value, list) else []
+
+
+def team_account_problem(platform: Any, account: str, provider: str) -> str:
+    """Why a team member cannot run on ``account`` (v1.394.0), or "".
+    Read from Iron-Proxy's CACHED snapshot (never a call): the account
+    must be one it lists, and of the vendor the agent's model runs on."""
+    from ...harness import build_accounts as BA
+
+    svc = getattr(platform, "iron_proxy", None)
+    if BA.snapshot(svc) is None:
+        return (
+            "Iron-Proxy is off or has not listed its accounts yet — turn it on in "
+            "Settings › Connections, or leave the account blank for the normal pick"
+        )
+    row = BA.find(svc, account)
+    if row is None:
+        return "Iron-Proxy does not list that account — pick one it lists, or leave it blank"
+    served = _team._served_cli(provider, getattr(platform, "providers", None))
+    if not served:
+        return (
+            f"'{row['name']}' is a {row['vendor_label']} account, and an account only "
+            "applies to an agent that runs on Claude Code, Codex or Grok — pick its model first"
+        )
+    if served != row["provider"]:
+        return (
+            f"'{row['name']}' is a {row['vendor_label']} account, and this agent runs on "
+            f"{_team.model_words(platform, provider, '')} — pick an account of that "
+            "vendor, or leave it blank for the normal pick"
+        )
+    return ""
+
+
+def team_on_demo(provider: Any, roles: Any) -> None:
+    """v1.394.0 review: the demo model is never a team member — its
+    answers are scripted, and the planner would hand it real work. 422 in
+    words; nothing written."""
+    if roles and str(provider or "").strip() == "mock":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The demo model (scripted) cannot be on the model team: its answers are "
+                "scripted. Pick a real model for this agent first, or take its roles off."
+            ),
+        )
+
+
+def employee_fields(
+    platform: Any, body: Any, *, name: str, creating: bool, provider: str = ""
+) -> dict[str, Any]:
+    """Validate a hire/edit body's employee fields and return ONLY the
+    provided ones as ``register()`` kwargs (v1.295.0).
+
+    Plain-words 422s, never silent coercion: a value the registry or the
+    runtime would quietly reshape ("yolo" → approve_for_me, an unknown
+    base type → builder) is refused HERE with the reason, because the job
+    card the user wrote and the one on file must say the same thing. On a
+    PATCH ``None`` means "keep" and is simply not passed; on a create every
+    field is present (its default when unstated) and all are passed.
+    """
+
+    def refuse(sentence: str) -> None:
+        raise HTTPException(status_code=422, detail=sentence)
+
+    builtins = ", ".join(t.value for t in AgentType if t is not AgentType.SUPERVISOR)
+    out: dict[str, Any] = {}
+
+    base_type = getattr(body, "base_type", None)
+    if base_type is not None:
+        base = str(base_type).strip()
+        try:
+            AgentType(base)
+        except ValueError:
+            refuse(
+                f"base_type '{base_type}' is not a builtin agent type — "
+                f"pick one of: {builtins}"
+            )
+        if base == AgentType.SUPERVISOR.value:
+            refuse(
+                "base_type 'supervisor' is refused: the builtin supervisor "
+                "would run and silently discard this agent's custom system "
+                f"prompt — pick one of: {builtins}"
+            )
+        out["base_type"] = base
+
+    mode = getattr(body, "approval_mode", None)
+    if mode is not None:
+        posture = str(mode).strip()
+        if posture == "yolo":
+            refuse(
+                "approval_mode 'yolo' is refused for an agent: a chat's "
+                "auto-approve is consented to one turn at a time with you "
+                "watching, and a background run of many tool calls is a "
+                "different blast radius — use 'approve_for_me' or "
+                "'always_ask', or leave it blank for the default"
+            )
+        if posture not in AGENT_APPROVAL_MODES:
+            refuse(
+                f"approval_mode '{mode}' is not one of: approve_for_me, "
+                "always_ask (or blank for the default)"
+            )
+        out["approval_mode"] = posture
+
+    # Bounds already enforced by the schema's own validator (the session
+    # door's `_clean_max_steps`); None on a create = the configured default.
+    # On a PATCH, None = keep, and `clear_max_steps` passes None EXPLICITLY
+    # (the registry only keeps an OMITTED kwarg) to go back to the default.
+    steps = getattr(body, "max_steps", None)
+    if getattr(body, "clear_max_steps", False):
+        if steps is not None:
+            refuse(
+                f"clear_max_steps and max_steps={steps} say opposite things "
+                "— send one or the other"
+            )
+        out["max_steps"] = None
+    elif creating or steps is not None:
+        out["max_steps"] = steps
+
+    for field, unit in (("allowance_tokens", "tokens"), ("allowance_usd", "dollars")):
+        amount = getattr(body, field, None)
+        if amount is None:
+            continue
+        if isinstance(amount, bool) or amount < 0:
+            refuse(
+                f"{field} must be 0 (unlimited) or a positive number of "
+                f"{unit} for the month, not {amount!r}"
+            )
+        out[field] = amount
+
+    manager = getattr(body, "reports_to", None)
+    if manager is not None:
+        target = str(manager).strip()
+        if target in (name, f"custom:{name}"):
+            refuse(
+                "reports_to cannot be the agent itself — an agent is not its "
+                "own manager; leave it blank to report to you"
+            )
+        if target.startswith("custom:"):
+            bare = target[len("custom:"):]
+            if not bare or platform.agents_registry.get(bare) is None:
+                refuse(
+                    f"reports_to '{target}' names a custom agent that does "
+                    "not exist — create it first, or leave reports_to blank "
+                    "to report to you"
+                )
+        elif target:
+            try:
+                AgentType(target)
+            except ValueError:
+                refuse(
+                    f"reports_to '{target}' is neither a builtin agent "
+                    f"({builtins}, supervisor) nor 'custom:<name>' of an "
+                    "existing custom agent; leave it blank to report to you"
+                )
+        out["reports_to"] = target
+
+    # THE MODEL TEAM (v1.394.0): the roles are a small fixed vocabulary
+    # (agents/model_team.ROLES) — an unknown one is refused, never
+    # dropped quietly; an empty list takes the agent off the team.
+    roles = getattr(body, "roles", None)
+    if roles is not None:
+        bad = _team.unknown_roles(roles)
+        if bad:
+            refuse(
+                f"roles must be some of: {', '.join(_team.ROLE_IDS)} — "
+                f"'{bad[0]}' is not one"
+            )
+        out["roles"] = _team.clean_roles(roles)
+    account = getattr(body, "account", None)
+    if account is not None:
+        acct = " ".join(str(account).split())
+        if acct:
+            problem = team_account_problem(platform, acct, provider)
+            if problem:
+                refuse(problem)
+        out["account"] = acct
+
+    for field in ("skills", "deny_tools"):
+        items = getattr(body, field, None)
+        if items is None:
+            continue
+        cleaned: list[str] = []
+        for index, raw in enumerate(items, start=1):
+            text = str(raw).strip()
+            if not text:
+                refuse(
+                    f"{field} must be a list of names — entry {index} is "
+                    "blank"
+                )
+            if text not in cleaned:
+                cleaned.append(text)
+        out[field] = cleaned
+    return out
+
+
+def create_custom_agent(platform: Any, body: AgentCreate) -> Any:
+    """THE body of ``POST /agents`` (v1.435.0, chat-first plan Wave 3 group G):
+    a hire through the SAME rules the Agents page uses (the name must be new,
+    the employee fields validated by :func:`employee_fields`, never the demo
+    model on the team). Returns the stored record. Raises ``HTTPException``
+    with the route's own status and words. Blocking (SQLite)."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    # A hire is a CREATE (v1.295.0). The registry upserts by name, so a
+    # second POST used to overwrite the whole job card (allowance, manager,
+    # skills, pause) with whatever the new body carried — a re-create that
+    # cost an employee its terms. Editing is the PATCH on its row.
+    if platform.agents_registry.get(name) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{name} already exists — edit it on its row (PATCH) "
+                "instead of re-creating it"
+            ),
+        )
+    fields = employee_fields(platform, body, name=name, creating=True, provider=body.provider)
+    team_on_demo(body.provider, fields.get("roles") or [])
+    rec = platform.agents_registry.register(
+        name,
+        body.system_prompt,
+        body.tools,
+        description=body.description,
+        provider=body.provider,
+        model=body.model,
+        **fields,
+    )
+    return rec
+
+
+def update_custom_agent(platform: Any, name: str, body: AgentPatch) -> Any:
+    """THE body of ``PATCH /agents/{name}`` (v1.435.0, chat-first plan Wave 3
+    group G): chat's ``agent_update`` changes an agent through it — PARTIAL,
+    only the fields the body carries. Returns the stored record. Raises
+    ``HTTPException`` with the route's own status and words. Blocking."""
+    rec = platform.agents_registry.get(name)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="unknown agent")
+    # PARTIAL on purpose (v1.295.0): the identity columns (`register`'s
+    # positional parameters, always written) travel body-or-record, and
+    # the job-card kwargs are passed ONLY when the body carries them (the
+    # registry keeps an omitted one). The old route re-passed
+    # `rec.provider`/`rec.model`/`rec.base_type` unconditionally, so a
+    # PATCH that changed the model was silently a no-op.
+    fields = employee_fields(
+        platform, body, name=rec.name, creating=False,
+        provider=body.provider if body.provider is not None else rec.provider,
+    )
+    # THE MODEL TEAM (v1.394.0): an account belongs to ONE vendor's model.
+    # Moving a member with an account to another vendor's model would
+    # leave its runs pinned to an account that cannot serve them — said
+    # here, never cleared behind the user's back.
+    stored_account = str(getattr(rec, "account", "") or "")
+    _mgr = getattr(platform, "providers", None)
+    # v1.394.0 review: a model change WITHIN the account's vendor keeps an
+    # account that still applies — nothing to refuse (the check refused
+    # every model change while Iron-Proxy was off or not read yet).
+    _same_vendor = bool(body.provider is not None and stored_account) and (
+        _team._served_cli(body.provider, _mgr) != ""
+        and _team._served_cli(body.provider, _mgr) == _team._served_cli(rec.provider, _mgr)
+    )
+    if body.provider is not None and stored_account and "account" not in fields and not _same_vendor:
+        problem = team_account_problem(platform, stored_account, body.provider)
+        if problem:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{rec.name} runs on an Iron-Proxy account of its own — {problem}. "
+                    "Set its account to \"No account of its own\" in Settings › Model team "
+                    "first, then pick the new model."
+                ),
+            )
+    # The demo model is never on the team (its answers are scripted).
+    team_on_demo(
+        body.provider if body.provider is not None else rec.provider,
+        fields["roles"] if "roles" in fields else _team.roles_of(rec),
+    )
+    updated = platform.agents_registry.register(
+        name,
+        body.system_prompt if body.system_prompt is not None else rec.system_prompt,
+        [str(t) for t in body.tools] if body.tools is not None else _json_list(rec.tools_json),
+        base_type=fields.pop("base_type", rec.base_type),
+        description=body.description if body.description is not None else rec.description,
+        provider=body.provider if body.provider is not None else rec.provider,
+        model=body.model if body.model is not None else rec.model,
+        **fields,
+    )
+    # Raising the allowance LIFTS an allowance auto-pause (reviewer
+    # finding): the refusal says "raise it on the Agents page", so the
+    # raise must be enough on its own. Only when THIS body changed a bound,
+    # only for the AUTO reason (a user's day off is never lifted here),
+    # and only if the month's ledger is no longer exhausted against the
+    # new bound; the 80% warning dedupe is reset so the new bound warns
+    # afresh.
+    allowance_changed = (
+        updated.allowance_tokens != rec.allowance_tokens
+        or updated.allowance_usd != rec.allowance_usd
+    )
+    auto_paused = str(getattr(updated, "paused_reason", "") or "").startswith(
+        AUTO_PAUSE_PREFIX
+    )
+    if allowance_changed and auto_paused:
+        state = allowance_state(
+            updated, month_spend(platform.engine, f"custom:{updated.name}")
+        )
+        if state.get("status") != "exhausted":
+            resumed = platform.agents_registry.resume(name)
+            cleared = platform.agents_registry.set_warned_month(name, "")
+            updated = cleared or resumed or updated
+    return updated
+
+
+def pause_custom_agent(platform: Any, name: str, reason: str = "") -> Any:
+    """THE body of ``POST /agents/{name}/pause`` (v1.435.0, Wave 3 group G):
+    a day off — every spawn answers with ``reason`` until resumed (blank gets
+    :data:`PAUSE_DEFAULT_REASON`). Returns the record; 404 for an unknown
+    agent. Blocking."""
+    reason = (reason or "").strip() or PAUSE_DEFAULT_REASON
+    rec = platform.agents_registry.set_paused(name, reason)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="unknown agent")
+    return rec
+
+
+def resume_custom_agent(platform: Any, name: str) -> Any:
+    """THE body of ``POST /agents/{name}/resume`` (v1.435.0, Wave 3 group G).
+    Returns the record; 404 for an unknown agent. Blocking."""
+    rec = platform.agents_registry.resume(name)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="unknown agent")
+    return rec
+
+
+def delete_custom_agent(platform: Any, name: str) -> None:
+    """THE body of ``DELETE /agents/{name}`` (v1.435.0, Wave 3 group G): the
+    row goes and the agent's folder MOVES to the trash (``DynamicAgentRegistry.
+    remove``). 404 for an unknown agent. Blocking."""
+    if not platform.agents_registry.remove(name):
+        raise HTTPException(status_code=404, detail="unknown agent")
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/tools")
@@ -1851,15 +2199,6 @@ def register(app: FastAPI, d) -> None:
             key = None
         return key or os.environ.get("PIXIO_API_KEY") or None
 
-    def _json_list(text: Any) -> list[Any]:
-        import json as _json
-
-        try:
-            value = _json.loads(text or "[]")
-        except (TypeError, ValueError):
-            return []
-        return list(value) if isinstance(value, list) else []
-
     def _dynamic_row(r) -> dict[str, Any]:
         """ONE row shape for a custom agent — ``GET /agents`` and the
         pause/resume doors all answer with it (v1.295.0), so the Agents page
@@ -1929,195 +2268,6 @@ def register(app: FastAPI, d) -> None:
             "account": str(getattr(r, "account", "") or ""),
         }
 
-    def _team_account_problem(account: str, provider: str) -> str:
-        """Why a team member cannot run on ``account`` (v1.394.0), or "".
-        Read from Iron-Proxy's CACHED snapshot (never a call): the account
-        must be one it lists, and of the vendor the agent's model runs on."""
-        from ...harness import build_accounts as BA
-
-        svc = getattr(d.platform, "iron_proxy", None)
-        if BA.snapshot(svc) is None:
-            return (
-                "Iron-Proxy is off or has not listed its accounts yet — turn it on in "
-                "Settings › Connections, or leave the account blank for the normal pick"
-            )
-        row = BA.find(svc, account)
-        if row is None:
-            return "Iron-Proxy does not list that account — pick one it lists, or leave it blank"
-        served = _team._served_cli(provider, getattr(d.platform, "providers", None))
-        if not served:
-            return (
-                f"'{row['name']}' is a {row['vendor_label']} account, and an account only "
-                "applies to an agent that runs on Claude Code, Codex or Grok — pick its model first"
-            )
-        if served != row["provider"]:
-            return (
-                f"'{row['name']}' is a {row['vendor_label']} account, and this agent runs on "
-                f"{_team.model_words(d.platform, provider, '')} — pick an account of that "
-                "vendor, or leave it blank for the normal pick"
-            )
-        return ""
-
-    def _team_on_demo(provider: Any, roles: Any) -> None:
-        """v1.394.0 review: the demo model is never a team member — its
-        answers are scripted, and the planner would hand it real work. 422 in
-        words; nothing written."""
-        if roles and str(provider or "").strip() == "mock":
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "The demo model (scripted) cannot be on the model team: its answers are "
-                    "scripted. Pick a real model for this agent first, or take its roles off."
-                ),
-            )
-
-    def _employee_fields(
-        body: Any, *, name: str, creating: bool, provider: str = ""
-    ) -> dict[str, Any]:
-        """Validate a hire/edit body's employee fields and return ONLY the
-        provided ones as ``register()`` kwargs (v1.295.0).
-
-        Plain-words 422s, never silent coercion: a value the registry or the
-        runtime would quietly reshape ("yolo" → approve_for_me, an unknown
-        base type → builder) is refused HERE with the reason, because the job
-        card the user wrote and the one on file must say the same thing. On a
-        PATCH ``None`` means "keep" and is simply not passed; on a create every
-        field is present (its default when unstated) and all are passed.
-        """
-
-        def refuse(sentence: str) -> None:
-            raise HTTPException(status_code=422, detail=sentence)
-
-        builtins = ", ".join(t.value for t in AgentType if t is not AgentType.SUPERVISOR)
-        out: dict[str, Any] = {}
-
-        base_type = getattr(body, "base_type", None)
-        if base_type is not None:
-            base = str(base_type).strip()
-            try:
-                AgentType(base)
-            except ValueError:
-                refuse(
-                    f"base_type '{base_type}' is not a builtin agent type — "
-                    f"pick one of: {builtins}"
-                )
-            if base == AgentType.SUPERVISOR.value:
-                refuse(
-                    "base_type 'supervisor' is refused: the builtin supervisor "
-                    "would run and silently discard this agent's custom system "
-                    f"prompt — pick one of: {builtins}"
-                )
-            out["base_type"] = base
-
-        mode = getattr(body, "approval_mode", None)
-        if mode is not None:
-            posture = str(mode).strip()
-            if posture == "yolo":
-                refuse(
-                    "approval_mode 'yolo' is refused for an agent: a chat's "
-                    "auto-approve is consented to one turn at a time with you "
-                    "watching, and a background run of many tool calls is a "
-                    "different blast radius — use 'approve_for_me' or "
-                    "'always_ask', or leave it blank for the default"
-                )
-            if posture not in AGENT_APPROVAL_MODES:
-                refuse(
-                    f"approval_mode '{mode}' is not one of: approve_for_me, "
-                    "always_ask (or blank for the default)"
-                )
-            out["approval_mode"] = posture
-
-        # Bounds already enforced by the schema's own validator (the session
-        # door's `_clean_max_steps`); None on a create = the configured default.
-        # On a PATCH, None = keep, and `clear_max_steps` passes None EXPLICITLY
-        # (the registry only keeps an OMITTED kwarg) to go back to the default.
-        steps = getattr(body, "max_steps", None)
-        if getattr(body, "clear_max_steps", False):
-            if steps is not None:
-                refuse(
-                    f"clear_max_steps and max_steps={steps} say opposite things "
-                    "— send one or the other"
-                )
-            out["max_steps"] = None
-        elif creating or steps is not None:
-            out["max_steps"] = steps
-
-        for field, unit in (("allowance_tokens", "tokens"), ("allowance_usd", "dollars")):
-            amount = getattr(body, field, None)
-            if amount is None:
-                continue
-            if isinstance(amount, bool) or amount < 0:
-                refuse(
-                    f"{field} must be 0 (unlimited) or a positive number of "
-                    f"{unit} for the month, not {amount!r}"
-                )
-            out[field] = amount
-
-        manager = getattr(body, "reports_to", None)
-        if manager is not None:
-            target = str(manager).strip()
-            if target in (name, f"custom:{name}"):
-                refuse(
-                    "reports_to cannot be the agent itself — an agent is not its "
-                    "own manager; leave it blank to report to you"
-                )
-            if target.startswith("custom:"):
-                bare = target[len("custom:"):]
-                if not bare or d.platform.agents_registry.get(bare) is None:
-                    refuse(
-                        f"reports_to '{target}' names a custom agent that does "
-                        "not exist — create it first, or leave reports_to blank "
-                        "to report to you"
-                    )
-            elif target:
-                try:
-                    AgentType(target)
-                except ValueError:
-                    refuse(
-                        f"reports_to '{target}' is neither a builtin agent "
-                        f"({builtins}, supervisor) nor 'custom:<name>' of an "
-                        "existing custom agent; leave it blank to report to you"
-                    )
-            out["reports_to"] = target
-
-        # THE MODEL TEAM (v1.394.0): the roles are a small fixed vocabulary
-        # (agents/model_team.ROLES) — an unknown one is refused, never
-        # dropped quietly; an empty list takes the agent off the team.
-        roles = getattr(body, "roles", None)
-        if roles is not None:
-            bad = _team.unknown_roles(roles)
-            if bad:
-                refuse(
-                    f"roles must be some of: {', '.join(_team.ROLE_IDS)} — "
-                    f"'{bad[0]}' is not one"
-                )
-            out["roles"] = _team.clean_roles(roles)
-        account = getattr(body, "account", None)
-        if account is not None:
-            acct = " ".join(str(account).split())
-            if acct:
-                problem = _team_account_problem(acct, provider)
-                if problem:
-                    refuse(problem)
-            out["account"] = acct
-
-        for field in ("skills", "deny_tools"):
-            items = getattr(body, field, None)
-            if items is None:
-                continue
-            cleaned: list[str] = []
-            for index, raw in enumerate(items, start=1):
-                text = str(raw).strip()
-                if not text:
-                    refuse(
-                        f"{field} must be a list of names — entry {index} is "
-                        "blank"
-                    )
-                if text not in cleaned:
-                    cleaned.append(text)
-            out[field] = cleaned
-        return out
-
     @app.get("/agents")
     def list_agents() -> dict[str, Any]:
         from ...agents.types import _DEFINITIONS
@@ -2129,32 +2279,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/agents")
     def create_agent(body: AgentCreate) -> dict[str, Any]:
-        name = (body.name or "").strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="name is required")
-        # A hire is a CREATE (v1.295.0). The registry upserts by name, so a
-        # second POST used to overwrite the whole job card (allowance, manager,
-        # skills, pause) with whatever the new body carried — a re-create that
-        # cost an employee its terms. Editing is the PATCH on its row.
-        if d.platform.agents_registry.get(name) is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{name} already exists — edit it on its row (PATCH) "
-                    "instead of re-creating it"
-                ),
-            )
-        fields = _employee_fields(body, name=name, creating=True, provider=body.provider)
-        _team_on_demo(body.provider, fields.get("roles") or [])
-        rec = d.platform.agents_registry.register(
-            name,
-            body.system_prompt,
-            body.tools,
-            description=body.description,
-            provider=body.provider,
-            model=body.model,
-            **fields,
-        )
+        rec = create_custom_agent(d.platform, body)
         return {
             "name": rec.name,
             "provider": rec.provider,
@@ -3782,103 +3907,21 @@ def register(app: FastAPI, d) -> None:
         """Give a custom agent a day off: every spawn answers 409 with the
         reason until ``/resume``. Answers with the same row ``GET /agents``
         shows, so the page can render the change without a second fetch."""
-        reason = (body.reason or "").strip() or PAUSE_DEFAULT_REASON
-        rec = d.platform.agents_registry.set_paused(name, reason)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="unknown agent")
-        return _dynamic_row(rec)
+        return _dynamic_row(pause_custom_agent(d.platform, name, body.reason))
 
     @app.post("/agents/{name}/resume")
     def resume_agent(name: str) -> dict[str, Any]:
-        rec = d.platform.agents_registry.resume(name)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="unknown agent")
-        return _dynamic_row(rec)
+        return _dynamic_row(resume_custom_agent(d.platform, name))
 
     # --- Dynamic-agent edit / delete (catch-all {name} — keep AFTER remote) ---
 
     @app.patch("/agents/{name}")
     def patch_agent(name: str, body: AgentPatch) -> dict[str, Any]:
-        rec = d.platform.agents_registry.get(name)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="unknown agent")
-        # PARTIAL on purpose (v1.295.0): the identity columns (`register`'s
-        # positional parameters, always written) travel body-or-record, and
-        # the job-card kwargs are passed ONLY when the body carries them (the
-        # registry keeps an omitted one). The old route re-passed
-        # `rec.provider`/`rec.model`/`rec.base_type` unconditionally, so a
-        # PATCH that changed the model was silently a no-op.
-        fields = _employee_fields(
-            body, name=rec.name, creating=False,
-            provider=body.provider if body.provider is not None else rec.provider,
-        )
-        # THE MODEL TEAM (v1.394.0): an account belongs to ONE vendor's model.
-        # Moving a member with an account to another vendor's model would
-        # leave its runs pinned to an account that cannot serve them — said
-        # here, never cleared behind the user's back.
-        stored_account = str(getattr(rec, "account", "") or "")
-        _mgr = getattr(d.platform, "providers", None)
-        # v1.394.0 review: a model change WITHIN the account's vendor keeps an
-        # account that still applies — nothing to refuse (the check refused
-        # every model change while Iron-Proxy was off or not read yet).
-        _same_vendor = bool(body.provider is not None and stored_account) and (
-            _team._served_cli(body.provider, _mgr) != ""
-            and _team._served_cli(body.provider, _mgr) == _team._served_cli(rec.provider, _mgr)
-        )
-        if body.provider is not None and stored_account and "account" not in fields and not _same_vendor:
-            problem = _team_account_problem(stored_account, body.provider)
-            if problem:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"{rec.name} runs on an Iron-Proxy account of its own — {problem}. "
-                        "Set its account to \"No account of its own\" in Settings › Model team "
-                        "first, then pick the new model."
-                    ),
-                )
-        # The demo model is never on the team (its answers are scripted).
-        _team_on_demo(
-            body.provider if body.provider is not None else rec.provider,
-            fields["roles"] if "roles" in fields else _team.roles_of(rec),
-        )
-        updated = d.platform.agents_registry.register(
-            name,
-            body.system_prompt if body.system_prompt is not None else rec.system_prompt,
-            [str(t) for t in body.tools] if body.tools is not None else _json_list(rec.tools_json),
-            base_type=fields.pop("base_type", rec.base_type),
-            description=body.description if body.description is not None else rec.description,
-            provider=body.provider if body.provider is not None else rec.provider,
-            model=body.model if body.model is not None else rec.model,
-            **fields,
-        )
-        # Raising the allowance LIFTS an allowance auto-pause (reviewer
-        # finding): the refusal says "raise it on the Agents page", so the
-        # raise must be enough on its own. Only when THIS body changed a bound,
-        # only for the AUTO reason (a user's day off is never lifted here),
-        # and only if the month's ledger is no longer exhausted against the
-        # new bound; the 80% warning dedupe is reset so the new bound warns
-        # afresh.
-        allowance_changed = (
-            updated.allowance_tokens != rec.allowance_tokens
-            or updated.allowance_usd != rec.allowance_usd
-        )
-        auto_paused = str(getattr(updated, "paused_reason", "") or "").startswith(
-            AUTO_PAUSE_PREFIX
-        )
-        if allowance_changed and auto_paused:
-            state = allowance_state(
-                updated, month_spend(d.platform.engine, f"custom:{updated.name}")
-            )
-            if state.get("status") != "exhausted":
-                resumed = d.platform.agents_registry.resume(name)
-                cleared = d.platform.agents_registry.set_warned_month(name, "")
-                updated = cleared or resumed or updated
-        return _dynamic_row(updated)
+        return _dynamic_row(update_custom_agent(d.platform, name, body))
 
     @app.delete("/agents/{name}")
     def delete_agent(name: str) -> dict[str, Any]:
-        if not d.platform.agents_registry.remove(name):
-            raise HTTPException(status_code=404, detail="unknown agent")
+        delete_custom_agent(d.platform, name)
         return {"removed": name}
 
     # --- Agent threads: cross-source panels with roles (the Agents page) -----

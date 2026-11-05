@@ -50,7 +50,12 @@ _ABSENT_BY_DESIGN = {
 
 #: Tools whose capability is the reason they ask. Pinned so a future "make the
 #: agent smoother" pass cannot quietly promote one to allow.
-_MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create_agent"}
+_MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create_agent"} | {
+    # v1.435.0 (chat-first plan Wave 3 group G): a project or an agent of the
+    # user's own made, changed, archived or removed from chat — always a card.
+    "project_create", "project_update", "project_archive", "project_focus",
+    "agent_create", "agent_update", "agent_pause", "agent_delete",
+}
 
 
 @pytest.fixture(scope="module")

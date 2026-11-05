@@ -1,5 +1,21 @@
 {
   "lines": {
+    "agent_create": {
+      "ok": "made an agent",
+      "failed": "tried an agent creation and it failed"
+    },
+    "agent_delete": {
+      "ok": "removed an agent",
+      "failed": "tried an agent removal and it failed"
+    },
+    "agent_pause": {
+      "ok": "switched an agent on or off",
+      "failed": "tried an agent switch and it failed"
+    },
+    "agent_update": {
+      "ok": "changed an agent",
+      "failed": "tried an agent change and it failed"
+    },
     "app_connect": {
       "ok": "connected an app",
       "failed": "tried an app connection and it failed"
@@ -407,6 +423,22 @@
     "process_write": {
       "ok": "typed into a running program",
       "failed": "tried a program input and it failed"
+    },
+    "project_archive": {
+      "ok": "changed whether a project is archived",
+      "failed": "tried a project archive and it failed"
+    },
+    "project_create": {
+      "ok": "made a project",
+      "failed": "tried a project creation and it failed"
+    },
+    "project_focus": {
+      "ok": "switched the focused project",
+      "failed": "tried a focus switch and it failed"
+    },
+    "project_update": {
+      "ok": "changed a project",
+      "failed": "tried a project change and it failed"
     },
     "provider_rescan": {
       "ok": "looked again for your models",

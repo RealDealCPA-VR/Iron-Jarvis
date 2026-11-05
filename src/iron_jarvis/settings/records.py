@@ -93,6 +93,16 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "reflex_delete": "ask",
     # Taking back an "always allow" only narrows what runs without a card.
     "grant_revoke": "allow",
+    # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+    # agents (settings.records_projects) — each asks, each has an Undo.
+    "project_create": "ask",
+    "project_update": "ask",
+    "project_archive": "ask",
+    "project_focus": "ask",
+    "agent_create": "ask",
+    "agent_update": "ask",
+    "agent_pause": "ask",
+    "agent_delete": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -447,6 +457,7 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     the readers — see :data:`_QUESTION_HEAD`."""
     t = text or ""
     out = _record_tools_named(t, workflow_names=workflow_names)
+    out += _rp().projects_tools_for(t)  # v1.435.0 (Wave 3 group G): projects and agents
     if is_question(t):
         return [n for n in out if n in _RECORD_READERS]
     return out
@@ -1490,7 +1501,17 @@ _SNAP = {
     "goal": snap_goal,
     "reflex": snap_reflex,
     "grant": snap_grant,
+    "project": lambda p, n: _rp().snap_project(p, n),
+    "agent": lambda p, n: _rp().snap_agent(p, n),
 }
+
+
+def _rp() -> Any:
+    """v1.435.0 (Wave 3 group G): projects and the user's own agents live in
+    ``settings.records_projects`` (imported late — it builds on this module)."""
+    from . import records_projects
+
+    return records_projects
 
 
 def restore(platform: Any, desc: dict[str, Any]) -> str:
@@ -1518,6 +1539,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return restore_reflex(platform, name, prior)
     if record == "grant":
         return restore_grant(platform, name, prior)
+    if record in ("project", "agent"):
+        return getattr(_rp(), f"restore_{record}")(platform, name, prior)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -2974,6 +2997,7 @@ def record_tools(platform: Any) -> list[Tool]:
         ReflexDeleteTool(platform),
         GrantRevokeTool(platform),
         ConfigUndoTool(platform),
+        *_rp().project_agent_tools(platform),
     ]
 
 

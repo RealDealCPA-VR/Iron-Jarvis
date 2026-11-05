@@ -75,9 +75,25 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
     words: "memory",
     tools: ["memory_write", "memory_propose", "ltm_append", "notebook", "remember_preference", "brain_save", "brain_change"],
   },
+  // v1.435.0 (chat-first plan Wave 3 group G): projects from chat — a
+  // project grounds every later chat filed in it.
+  {
+    words: "projects",
+    tools: ["project_create", "project_update", "project_archive", "project_focus"],
+  },
   {
     words: "agents or skills",
-    tools: ["create_agent", "skill_create", "capability_propose", "tool_create", "tool_delete"],
+    tools: [
+      "create_agent",
+      "skill_create",
+      "capability_propose",
+      "tool_create",
+      "tool_delete",
+      "agent_create",
+      "agent_update",
+      "agent_pause",
+      "agent_delete",
+    ],
   },
   {
     words: "terminals",
@@ -114,7 +130,7 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
 
 /** What a low-trust run cannot do, one sentence (the chip's hover). */
 export const LOW_TRUST_CANNOT =
-  "This run can't change settings, schedules, rules, connections, memory, agents or skills, " +
+  "This run can't change settings, schedules, rules, connections, memory, projects, agents or skills, " +
   "can't type into your terminals, can't start programs that keep running, " +
   "can't call your web services, can't take screenshots of pages, can't use pages in its own browser " +
   "and can't spend credits. " +

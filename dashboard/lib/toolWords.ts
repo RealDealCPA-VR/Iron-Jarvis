@@ -114,6 +114,17 @@ const WORDS: Record<string, string> = {
   // what starting one does.
   delegate: "hand part of the work to a helper agent",
   spawn_agent: "start a helper agent",
+  // v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+  // agents from chat (settings/records_projects.py). desktop/main.js
+  // TOOL_WORDS and agents/mission.ASK_WORDS say the same (pinned equal).
+  project_create: "make a project",
+  project_update: "change a project",
+  project_archive: "archive or bring back a project",
+  project_focus: "switch the focused project",
+  agent_create: "make an agent",
+  agent_update: "change an agent",
+  agent_pause: "pause or resume an agent",
+  agent_delete: "remove an agent",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/

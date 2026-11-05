@@ -356,6 +356,17 @@ def default_permissions() -> dict[str, str]:
         "reflex_delete": "ask",
         "grant_revoke": "allow",
         "config_undo": "ask",
+        # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's
+        # own agents from chat (settings.records_projects) — each asks on the
+        # card and has an Undo.
+        "project_create": "ask",
+        "project_update": "ask",
+        "project_archive": "ask",
+        "project_focus": "ask",
+        "agent_create": "ask",
+        "agent_update": "ask",
+        "agent_pause": "ask",
+        "agent_delete": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +

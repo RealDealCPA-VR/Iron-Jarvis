@@ -347,6 +347,16 @@ ASK_WORDS: dict[str, str] = {
     "reflex_delete": "remove a rule that acts on its own",
     "config_undo": "undo your last change",
     "approve_plan": "follow this plan",
+    # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+    # agents from chat (settings.records_projects).
+    "project_create": "make a project",
+    "project_update": "change a project",
+    "project_archive": "archive or bring back a project",
+    "project_focus": "switch the focused project",
+    "agent_create": "make an agent",
+    "agent_update": "change an agent",
+    "agent_pause": "pause or resume an agent",
+    "agent_delete": "remove an agent",
 }
 
 
@@ -532,6 +542,16 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     # v1.421.0 (Wave 1, A4): the team reviewer's read-only git
     # (harness/git_read). Twin: lib/runWords.ts AGENT_TOOLS.
     "git_read": ("looked something up in git", "git lookup"),
+    # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+    # agents from chat. Twin: lib/runWords.ts AGENT_TOOLS.
+    "project_create": ("made a project", "project creation"),
+    "project_update": ("changed a project", "project change"),
+    "project_archive": ("changed whether a project is archived", "project archive"),
+    "project_focus": ("switched the focused project", "focus switch"),
+    "agent_create": ("made an agent", "agent creation"),
+    "agent_update": ("changed an agent", "agent change"),
+    "agent_pause": ("switched an agent on or off", "agent switch"),
+    "agent_delete": ("removed an agent", "agent removal"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the
