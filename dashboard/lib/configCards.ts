@@ -22,6 +22,11 @@ export interface ConfigChangeCard {
   change_id: string;
   /** Set on the message once the user pressed Undo. */
   undone?: boolean;
+  /** Wave 3 group G review: what the Undo REALLY did when that was not
+   *  "put it back as it was" (a made project ARCHIVED because work was filed
+   *  in it, a change that was already undone) — the daemon's own words, so
+   *  the card never claims more than the Undo did. */
+  undone_note?: string;
 }
 
 export interface SecretRequestCard {
@@ -60,6 +65,7 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
         restart: r.restart === true,
         change_id: str(r.change_id),
         ...(r.undone === true ? { undone: true } : {}),
+        ...(r.undone === true && str(r.undone_note) ? { undone_note: str(r.undone_note).slice(0, 300) } : {}),
       });
     } else if (r.kind === "secret" && str(r.name) && str(r.request_id)) {
       out.push({
@@ -76,6 +82,30 @@ export function decodeConfigCards(raw: unknown): ConfigCard[] {
     }
   }
   return out;
+}
+
+/** Wave 3 group G review: a record Undo's own answer (``POST /undo``'s
+ *  ``output``, "undo: archived the project 'Brown' (work was already filed in
+ *  it, so it was kept)") as one sentence — ONLY when it says the Undo kept
+ *  something or found it already back ("" otherwise: the card's own "is back
+ *  to how it was" is then true). */
+export function undoAnswerNote(output: unknown): string {
+  const text = typeof output === "string" ? output.replace(/^undo:\s*/i, "").trim() : "";
+  if (!text || !/\b(?:kept|already)\b/i.test(text)) return "";
+  const s = text.charAt(0).toUpperCase() + text.slice(1);
+  return (/[.!?]$/.test(s) ? s : `${s}.`).slice(0, 300);
+}
+
+/** Wave 3 group G review: an Undo the daemon REFUSED in words (a 409 —
+ *  "the project was changed again after this change…") says why; "" for any
+ *  other failure (the card keeps its own "try again" line). */
+export function undoRefusalWords(err: unknown): string {
+  const e = err as { status?: unknown; message?: unknown } | null;
+  if (!e || e.status !== 409 || typeof e.message !== "string") return "";
+  const text = e.message.replace(/^undo failed:\s*/i, "").trim();
+  if (!text) return "";
+  const s = text.charAt(0).toUpperCase() + text.slice(1);
+  return (/[.!?]$/.test(s) ? s : `${s}.`).slice(0, 300);
 }
 
 /** A setting's value, in words. */

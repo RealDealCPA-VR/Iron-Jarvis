@@ -3210,6 +3210,14 @@ const TOOL_WORDS = {
   page_read: "read the page in its browser",
   delegate: "hand part of the work to a helper agent",
   spawn_agent: "start a helper agent",
+  project_create: "make a project",
+  project_update: "change a project",
+  project_archive: "archive or bring back a project",
+  project_focus: "switch the focused project",
+  agent_create: "make an agent",
+  agent_update: "change an agent",
+  agent_pause: "pause or resume an agent",
+  agent_delete: "remove an agent",
 };
 
 //: The batch forms ("rename or move 4 files") for the asks that come in
@@ -3250,6 +3258,10 @@ const ASK_BROWSER_TOOLS = new Set([
 //: fails when it is stale). Readiness 12A (G24): the card's words for EVERY
 //: registered built-in, so no toast says "use pack restart".
 const TOOL_WORDS_BUILTIN = {
+  agent_create: "make an agent",
+  agent_delete: "remove an agent",
+  agent_pause: "pause or resume an agent",
+  agent_update: "change an agent",
   app_connect: "connect an app",
   app_health: "check how Iron Jarvis is doing",
   app_search: "search your Iron Jarvis setup",
@@ -3372,6 +3384,10 @@ const TOOL_WORDS_BUILTIN = {
   process_start: "start a program that keeps running",
   process_stop: "stop a running program",
   process_write: "type into a running program",
+  project_archive: "archive or bring back a project",
+  project_create: "make a project",
+  project_focus: "switch the focused project",
+  project_update: "change a project",
   provider_rescan: "look again for your models",
   read_document: "read a file",
   read_file: "read a file",

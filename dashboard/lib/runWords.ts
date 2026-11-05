@@ -193,6 +193,16 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   // v1.421.0 (Wave 1, A4): the team reviewer's read-only git
   // (harness/git_read; agents/mission.py _RUN_TOOL_WORDS is the twin).
   git_read: { did: "Looked something up in git", noun: "git lookup" },
+  // v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+  // agents from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  project_create: { did: "Made a project", noun: "project creation" },
+  project_update: { did: "Changed a project", noun: "project change" },
+  project_archive: { did: "Changed whether a project is archived", noun: "project archive" },
+  project_focus: { did: "Switched the focused project", noun: "focus switch" },
+  agent_create: { did: "Made an agent", noun: "agent creation" },
+  agent_update: { did: "Changed an agent", noun: "agent change" },
+  agent_pause: { did: "Switched an agent on or off", noun: "agent switch" },
+  agent_delete: { did: "Removed an agent", noun: "agent removal" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

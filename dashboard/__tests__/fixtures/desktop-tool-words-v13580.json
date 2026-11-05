@@ -432,6 +432,54 @@
       "kind": "table",
       "card": "start a helper agent",
       "desktop": "start a helper agent"
+    },
+    {
+      "tool": "project_create",
+      "kind": "table",
+      "card": "make a project",
+      "desktop": "make a project"
+    },
+    {
+      "tool": "project_update",
+      "kind": "table",
+      "card": "change a project",
+      "desktop": "change a project"
+    },
+    {
+      "tool": "project_archive",
+      "kind": "table",
+      "card": "archive or bring back a project",
+      "desktop": "archive or bring back a project"
+    },
+    {
+      "tool": "project_focus",
+      "kind": "table",
+      "card": "switch the focused project",
+      "desktop": "switch the focused project"
+    },
+    {
+      "tool": "agent_create",
+      "kind": "table",
+      "card": "make an agent",
+      "desktop": "make an agent"
+    },
+    {
+      "tool": "agent_update",
+      "kind": "table",
+      "card": "change an agent",
+      "desktop": "change an agent"
+    },
+    {
+      "tool": "agent_pause",
+      "kind": "table",
+      "card": "pause or resume an agent",
+      "desktop": "pause or resume an agent"
+    },
+    {
+      "tool": "agent_delete",
+      "kind": "table",
+      "card": "remove an agent",
+      "desktop": "remove an agent"
     }
   ]
 }

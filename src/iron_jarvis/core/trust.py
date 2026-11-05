@@ -130,6 +130,16 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "page_click",
         "page_type",
         "page_read",
+        # v1.435.0 (chat-first plan Wave 3 group G): a project or an agent of
+        # the user's own outlives the run and grounds or does LATER work.
+        "project_create",
+        "project_update",
+        "project_archive",
+        "project_focus",
+        "agent_create",
+        "agent_update",
+        "agent_pause",
+        "agent_delete",
     }
 )
 

@@ -202,6 +202,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # The rest of AUDIT §6.3 + "undo that" — same reasoning: a card + Undo where the user is present.
     "webhook_update", "webhook_delete", "sentinel_update", "sentinel_delete", "goal_update",
     "goal_delete", "reflex_create", "reflex_update", "reflex_delete", "grant_revoke", "config_undo",
+    # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
+    # agents from chat — same reasoning: a card + Undo where the user is
+    # present. Chat arms them (settings.records_projects.projects_tools_for,
+    # through record_tools_for); pinned by tests/test_records_projects_v14350.py.
+    "project_create", "project_update", "project_archive", "project_focus",
+    "agent_create", "agent_update", "agent_pause", "agent_delete",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

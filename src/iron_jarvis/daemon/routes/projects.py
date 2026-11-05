@@ -162,6 +162,237 @@ def _world_asks(d, session_ids) -> dict[str, dict]:
     return out
 
 
+def create_project_record(d, body: ProjectCreate) -> dict[str, Any]:
+    """THE body of ``POST /projects`` (v1.435.0, chat-first plan Wave 3
+    group G): lifted out of the route so chat's ``project_create`` makes a
+    project by the SAME rules (the folder door, the first-project focus) —
+    never a second copy. Raises ``HTTPException`` with the route's own
+    status and words. BLOCKING (the folder probe): call off the loop."""
+    from ...core.models import Project
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="project name is required")
+    root = _validate_root(body.root or "")  # honest 400 on a bad folder
+    project = Project(name=name, brief=(body.brief or "").strip(), root=root)
+    with session_scope(d.platform.engine) as db:
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+    # First project with nothing active -> make it active, so the spine
+    # starts working immediately (chat/Spotlight tag into it from now on).
+    activated = False
+    if not getattr(d.platform.config, "active_project_id", None):
+        d.platform.config.active_project_id = project.id
+        d._persist_config(["active_project_id"])
+        activated = True
+    return {**project.model_dump(), "active": activated}
+
+
+def update_project_record(d, project_id: str, body: ProjectPatch) -> dict[str, Any]:
+    """THE body of ``PATCH /projects/{id}`` (v1.435.0, Wave 3 group G):
+    chat's ``project_update`` / ``project_archive`` change a project through
+    it. Only the fields the body carries change. Raises ``HTTPException``
+    with the route's own status and words. BLOCKING."""
+    from ...core.models import Project
+
+    if body.status is not None and body.status not in ("active", "archived"):
+        raise HTTPException(status_code=400, detail="status must be active|archived")
+    with session_scope(d.platform.engine) as db:
+        project = db.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        if body.name is not None and body.name.strip():
+            project.name = body.name.strip()
+        if body.brief is not None:
+            project.brief = body.brief.strip()
+        if body.root is not None:
+            project.root = _validate_root(body.root)  # honest 400 on a bad folder
+        if body.status is not None:
+            project.status = body.status
+        if body.instructions is not None:
+            project.instructions = body.instructions.strip()
+        if body.default_provider is not None:
+            _validate_project_model(
+                d,
+                body.default_provider,
+                body.default_model
+                if body.default_model is not None
+                else project.default_model,
+            )
+            project.default_provider = body.default_provider.strip()
+        if body.default_model is not None:
+            project.default_model = body.default_model.strip()
+        if body.memory_sources is not None:
+            # Validated against the LIVE sources so a typo cannot quietly
+            # bind a project to a base that does not exist — the symptom
+            # would be a project that silently recalls nothing.
+            known = set(d.platform.ltm.sources())
+            names = [str(n).strip() for n in body.memory_sources if str(n).strip()]
+            unknown = [n for n in names if n not in known]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"unknown memory base(s): {', '.join(unknown)} — "
+                        f"available: {', '.join(sorted(known)) or 'none yet'}"
+                    ),
+                )
+            project.memory_sources = _json.dumps(names)
+        if body.brain_profile is not None:
+            # v1.406.0: "" follows the app, "off" turns it off here, an id
+            # must name a profile that exists (a typo would silently bind
+            # the project to no brain at all).
+            choice = body.brain_profile.strip()
+            if choice not in ("", "off"):
+                from ...brain.models import BrainProfileRecord
+
+                if db.get(BrainProfileRecord, choice) is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="That profile no longer exists. Choose another one.",
+                    )
+            project.brain_profile = choice
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+    # Archiving the ACTIVE project deactivates it (new work shouldn't tag
+    # into something the user closed out).
+    if project.status == "archived" and (
+        getattr(d.platform.config, "active_project_id", None) == project_id
+    ):
+        d.platform.config.active_project_id = None
+        d._persist_config(["active_project_id"])
+    return project.model_dump()
+
+
+def delete_project_record(d, project_id: str) -> dict[str, Any]:
+    """Remove a project from Iron Jarvis ONLY — the folder it pointed at
+    and every file on disk are untouched (the root is just a reference).
+    Sessions that were tagged to it keep their history; they simply lose
+    the project association. So does every AUTOMATION bound to it: task
+    schedules, goal contracts and reflex rules keep running, ungrounded,
+    instead of spawning session after session tagged to a ghost id."""
+    from sqlalchemy.exc import OperationalError
+
+    from ...core.models import ChatThreadRecord, Project, ProjectKnowledge
+    from ...core.models import Session as SessionModel
+    from ...goals.models import GoalContractRecord
+    from ...reflex.models import ReflexRule
+    from ...scheduling.models import ScheduledTaskRecord
+    from ...workflows.models import WorkflowRunRecord
+
+    knowledge_deleted = 0
+    untagged: dict[str, int] = {
+        "sessions": 0,
+        "threads": 0,
+        "workflow_runs": 0,
+        "goals": 0,
+        "reflex_rules": 0,
+        "schedules": 0,
+    }
+    with session_scope(d.platform.engine) as db:
+        proj = db.get(Project, project_id)
+        if proj is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        # Untag sessions, chat threads, and workflow runs (history preserved,
+        # association dropped) — otherwise their project_id dangles at a
+        # project that no longer exists and the UI 404s following it.
+        # Goal contracts and reflex rules are untagged for a stronger
+        # reason: each one SPAWNS sessions with its project_id, so left
+        # bound they would tag new work into the deleted project forever
+        # (the runtime's _project_context finds no row and grounds nothing,
+        # silently). ``platform.reflex`` / the goal store are the owners,
+        # but both read this engine, so one transaction covers all of it.
+        for key, model in (
+            ("sessions", SessionModel),
+            ("threads", ChatThreadRecord),
+            ("workflow_runs", WorkflowRunRecord),
+            ("goals", GoalContractRecord),
+            ("reflex_rules", ReflexRule),
+        ):
+            try:
+                rows = list(db.exec(select(model).where(model.project_id == project_id)))
+            except OperationalError:
+                # The table is created by its own package's boot step; a
+                # build without that package has no rows to untag. Say so
+                # in the log rather than 500 the whole delete.
+                log.warning("project delete: no %s table to untag", key)
+                continue
+            for row in rows:
+                row.project_id = None
+                db.add(row)
+                untagged[key] += 1
+        # A task schedule carries its project INSIDE payload_json (the
+        # scheduler re-reads the row on every fire, so rewriting the row is
+        # enough — no in-memory job to refresh). Workflow/event/goal kinds
+        # carry one too, for the pin their action inherits.
+        try:
+            scheds = list(db.exec(select(ScheduledTaskRecord)))
+        except OperationalError:
+            log.warning("project delete: no schedules table to untag")
+            scheds = []
+        for sched in scheds:
+            payload = sched.decoded_payload()
+            if payload.get("project_id") != project_id:
+                continue
+            payload.pop("project_id", None)
+            sched.payload_json = _json.dumps(payload, default=str)
+            db.add(sched)
+            untagged["schedules"] += 1
+        # A PROJECT ROOM (v1.304.0) goes back to the General world: left
+        # bound, it would vanish from the Agents page entirely (General
+        # lists rooms with no project; the dead project has no world).
+        try:
+            from ...agents.threads import AgentThreadRecord
+
+            rooms = list(
+                db.exec(
+                    select(AgentThreadRecord).where(
+                        AgentThreadRecord.project_id == project_id
+                    )
+                )
+            )
+        except OperationalError:
+            log.warning("project delete: no agent-thread table to untag")
+            rooms = []
+        untagged["agent_threads"] = 0
+        for room in rooms:
+            room.project_id = ""
+            db.add(room)
+            untagged["agent_threads"] += 1
+        # Knowledge belongs TO the project — delete it (no home without it).
+        for k in db.exec(
+            select(ProjectKnowledge).where(ProjectKnowledge.project_id == project_id)
+        ):
+            db.delete(k)
+            knowledge_deleted += 1
+        db.delete(proj)
+        room_ids = [room.id for room in rooms]
+        db.commit()
+    # The handed-back rooms' history-search docs follow them to General
+    # (v1.304.0): otherwise project-scoped recall would keep filing them
+    # under a project that no longer exists. Best-effort per room.
+    if room_ids:
+        from ...agents.threads import AgentThreads
+
+        threads = AgentThreads(d.platform.engine)
+        for rid in room_ids:
+            try:
+                threads.reindex(rid)
+            except Exception:  # noqa: BLE001 — the delete already landed
+                log.warning("project delete: re-index of room %s failed", rid, exc_info=True)
+    if getattr(d.platform.config, "active_project_id", None) == project_id:
+        d.platform.config.active_project_id = None
+        d._persist_config(["active_project_id"])
+    return {
+        "deleted": project_id,
+        "files_touched": 0,
+        "knowledge_deleted": knowledge_deleted,
+        "untagged": untagged,
+    }
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/projects")
@@ -214,25 +445,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/projects")
     def create_project(body: ProjectCreate) -> dict[str, Any]:
-        from ...core.models import Project
-
-        name = (body.name or "").strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="project name is required")
-        root = _validate_root(body.root or "")  # honest 400 on a bad folder
-        project = Project(name=name, brief=(body.brief or "").strip(), root=root)
-        with session_scope(d.platform.engine) as db:
-            db.add(project)
-            db.commit()
-            db.refresh(project)
-        # First project with nothing active -> make it active, so the spine
-        # starts working immediately (chat/Spotlight tag into it from now on).
-        activated = False
-        if not getattr(d.platform.config, "active_project_id", None):
-            d.platform.config.active_project_id = project.id
-            d._persist_config(["active_project_id"])
-            activated = True
-        return {**project.model_dump(), "active": activated}
+        return create_project_record(d, body)
 
     @app.get("/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
@@ -276,203 +489,12 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/projects/{project_id}")
     def patch_project(project_id: str, body: ProjectPatch) -> dict[str, Any]:
-        from ...core.models import Project
-
-        if body.status is not None and body.status not in ("active", "archived"):
-            raise HTTPException(status_code=400, detail="status must be active|archived")
-        with session_scope(d.platform.engine) as db:
-            project = db.get(Project, project_id)
-            if project is None:
-                raise HTTPException(status_code=404, detail="no such project")
-            if body.name is not None and body.name.strip():
-                project.name = body.name.strip()
-            if body.brief is not None:
-                project.brief = body.brief.strip()
-            if body.root is not None:
-                project.root = _validate_root(body.root)  # honest 400 on a bad folder
-            if body.status is not None:
-                project.status = body.status
-            if body.instructions is not None:
-                project.instructions = body.instructions.strip()
-            if body.default_provider is not None:
-                _validate_project_model(
-                    d,
-                    body.default_provider,
-                    body.default_model
-                    if body.default_model is not None
-                    else project.default_model,
-                )
-                project.default_provider = body.default_provider.strip()
-            if body.default_model is not None:
-                project.default_model = body.default_model.strip()
-            if body.memory_sources is not None:
-                # Validated against the LIVE sources so a typo cannot quietly
-                # bind a project to a base that does not exist — the symptom
-                # would be a project that silently recalls nothing.
-                known = set(d.platform.ltm.sources())
-                names = [str(n).strip() for n in body.memory_sources if str(n).strip()]
-                unknown = [n for n in names if n not in known]
-                if unknown:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"unknown memory base(s): {', '.join(unknown)} — "
-                            f"available: {', '.join(sorted(known)) or 'none yet'}"
-                        ),
-                    )
-                project.memory_sources = _json.dumps(names)
-            if body.brain_profile is not None:
-                # v1.406.0: "" follows the app, "off" turns it off here, an id
-                # must name a profile that exists (a typo would silently bind
-                # the project to no brain at all).
-                choice = body.brain_profile.strip()
-                if choice not in ("", "off"):
-                    from ...brain.models import BrainProfileRecord
-
-                    if db.get(BrainProfileRecord, choice) is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="That profile no longer exists. Choose another one.",
-                        )
-                project.brain_profile = choice
-            db.add(project)
-            db.commit()
-            db.refresh(project)
-        # Archiving the ACTIVE project deactivates it (new work shouldn't tag
-        # into something the user closed out).
-        if project.status == "archived" and (
-            getattr(d.platform.config, "active_project_id", None) == project_id
-        ):
-            d.platform.config.active_project_id = None
-            d._persist_config(["active_project_id"])
-        return project.model_dump()
+        return update_project_record(d, project_id, body)
 
     @app.delete("/projects/{project_id}")
     def delete_project(project_id: str) -> dict[str, Any]:
-        """Remove a project from Iron Jarvis ONLY — the folder it pointed at
-        and every file on disk are untouched (the root is just a reference).
-        Sessions that were tagged to it keep their history; they simply lose
-        the project association. So does every AUTOMATION bound to it: task
-        schedules, goal contracts and reflex rules keep running, ungrounded,
-        instead of spawning session after session tagged to a ghost id."""
-        from sqlalchemy.exc import OperationalError
-
-        from ...core.models import ChatThreadRecord, Project, ProjectKnowledge
-        from ...core.models import Session as SessionModel
-        from ...goals.models import GoalContractRecord
-        from ...reflex.models import ReflexRule
-        from ...scheduling.models import ScheduledTaskRecord
-        from ...workflows.models import WorkflowRunRecord
-
-        knowledge_deleted = 0
-        untagged: dict[str, int] = {
-            "sessions": 0,
-            "threads": 0,
-            "workflow_runs": 0,
-            "goals": 0,
-            "reflex_rules": 0,
-            "schedules": 0,
-        }
-        with session_scope(d.platform.engine) as db:
-            proj = db.get(Project, project_id)
-            if proj is None:
-                raise HTTPException(status_code=404, detail="no such project")
-            # Untag sessions, chat threads, and workflow runs (history preserved,
-            # association dropped) — otherwise their project_id dangles at a
-            # project that no longer exists and the UI 404s following it.
-            # Goal contracts and reflex rules are untagged for a stronger
-            # reason: each one SPAWNS sessions with its project_id, so left
-            # bound they would tag new work into the deleted project forever
-            # (the runtime's _project_context finds no row and grounds nothing,
-            # silently). ``platform.reflex`` / the goal store are the owners,
-            # but both read this engine, so one transaction covers all of it.
-            for key, model in (
-                ("sessions", SessionModel),
-                ("threads", ChatThreadRecord),
-                ("workflow_runs", WorkflowRunRecord),
-                ("goals", GoalContractRecord),
-                ("reflex_rules", ReflexRule),
-            ):
-                try:
-                    rows = list(db.exec(select(model).where(model.project_id == project_id)))
-                except OperationalError:
-                    # The table is created by its own package's boot step; a
-                    # build without that package has no rows to untag. Say so
-                    # in the log rather than 500 the whole delete.
-                    log.warning("project delete: no %s table to untag", key)
-                    continue
-                for row in rows:
-                    row.project_id = None
-                    db.add(row)
-                    untagged[key] += 1
-            # A task schedule carries its project INSIDE payload_json (the
-            # scheduler re-reads the row on every fire, so rewriting the row is
-            # enough — no in-memory job to refresh). Workflow/event/goal kinds
-            # carry one too, for the pin their action inherits.
-            try:
-                scheds = list(db.exec(select(ScheduledTaskRecord)))
-            except OperationalError:
-                log.warning("project delete: no schedules table to untag")
-                scheds = []
-            for sched in scheds:
-                payload = sched.decoded_payload()
-                if payload.get("project_id") != project_id:
-                    continue
-                payload.pop("project_id", None)
-                sched.payload_json = _json.dumps(payload, default=str)
-                db.add(sched)
-                untagged["schedules"] += 1
-            # A PROJECT ROOM (v1.304.0) goes back to the General world: left
-            # bound, it would vanish from the Agents page entirely (General
-            # lists rooms with no project; the dead project has no world).
-            try:
-                from ...agents.threads import AgentThreadRecord
-
-                rooms = list(
-                    db.exec(
-                        select(AgentThreadRecord).where(
-                            AgentThreadRecord.project_id == project_id
-                        )
-                    )
-                )
-            except OperationalError:
-                log.warning("project delete: no agent-thread table to untag")
-                rooms = []
-            untagged["agent_threads"] = 0
-            for room in rooms:
-                room.project_id = ""
-                db.add(room)
-                untagged["agent_threads"] += 1
-            # Knowledge belongs TO the project — delete it (no home without it).
-            for k in db.exec(
-                select(ProjectKnowledge).where(ProjectKnowledge.project_id == project_id)
-            ):
-                db.delete(k)
-                knowledge_deleted += 1
-            db.delete(proj)
-            room_ids = [room.id for room in rooms]
-            db.commit()
-        # The handed-back rooms' history-search docs follow them to General
-        # (v1.304.0): otherwise project-scoped recall would keep filing them
-        # under a project that no longer exists. Best-effort per room.
-        if room_ids:
-            from ...agents.threads import AgentThreads
-
-            threads = AgentThreads(d.platform.engine)
-            for rid in room_ids:
-                try:
-                    threads.reindex(rid)
-                except Exception:  # noqa: BLE001 — the delete already landed
-                    log.warning("project delete: re-index of room %s failed", rid, exc_info=True)
-        if getattr(d.platform.config, "active_project_id", None) == project_id:
-            d.platform.config.active_project_id = None
-            d._persist_config(["active_project_id"])
-        return {
-            "deleted": project_id,
-            "files_touched": 0,
-            "knowledge_deleted": knowledge_deleted,
-            "untagged": untagged,
-        }
+        """Remove a project from Iron Jarvis ONLY (``delete_project_record``)."""
+        return delete_project_record(d, project_id)
 
     @app.post("/projects/{project_id}/activate")
     def activate_project(project_id: str) -> dict[str, Any]:

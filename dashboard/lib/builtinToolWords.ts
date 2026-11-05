@@ -13,6 +13,10 @@
 
 /** "The assistant wants to …": the card's words for each built-in. */
 export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
+  "agent_create": "make an agent",
+  "agent_delete": "remove an agent",
+  "agent_pause": "pause or resume an agent",
+  "agent_update": "change an agent",
   "app_connect": "connect an app",
   "app_health": "check how Iron Jarvis is doing",
   "app_search": "search your Iron Jarvis setup",
@@ -135,6 +139,10 @@ export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
   "process_start": "start a program that keeps running",
   "process_stop": "stop a running program",
   "process_write": "type into a running program",
+  "project_archive": "archive or bring back a project",
+  "project_create": "make a project",
+  "project_focus": "switch the focused project",
+  "project_update": "change a project",
   "provider_rescan": "look again for your models",
   "read_document": "read a file",
   "read_file": "read a file",
@@ -193,6 +201,10 @@ export const BUILTIN_CARD_WORDS: Readonly<Record<string, string>> = {
 /** The work line's words for a built-in it does not word by kind:
  *  [done, running] — "Searched your chats" / "Searching your chats". */
 export const BUILTIN_STEP_WORDS: Readonly<Record<string, readonly [string, string]>> = {
+  "agent_create": ["Made an agent", "Making an agent"],
+  "agent_delete": ["Removed an agent", "Removing an agent"],
+  "agent_pause": ["Switched an agent on or off", "Switching an agent on or off"],
+  "agent_update": ["Changed an agent", "Changing an agent"],
   "app_connect": ["Connected an app", "Connecting an app"],
   "app_health": ["Checked how Iron Jarvis is doing", "Checking how Iron Jarvis is doing"],
   "app_search": ["Searched your Iron Jarvis setup", "Searching your Iron Jarvis setup"],
@@ -272,6 +284,10 @@ export const BUILTIN_STEP_WORDS: Readonly<Record<string, readonly [string, strin
   "process_read": ["Read a running program's output", "Reading a running program's output"],
   "process_stop": ["Stopped a running program", "Stopping a running program"],
   "process_write": ["Typed into a running program", "Typing into a running program"],
+  "project_archive": ["Changed whether a project is archived", "Changing whether a project is archived"],
+  "project_create": ["Made a project", "Making a project"],
+  "project_focus": ["Switched the focused project", "Switching the focused project"],
+  "project_update": ["Changed a project", "Changing a project"],
   "provider_rescan": ["Looked again for your models", "Looking again for your models"],
   "recall": ["Searched everything Jarvis knows", "Searching everything Jarvis knows"],
   "recall_lessons": ["Checked its lessons", "Checking its lessons"],

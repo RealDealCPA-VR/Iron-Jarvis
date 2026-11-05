@@ -23,7 +23,14 @@ import Link from "next/link";
 import { ArrowRight, Check, Eye, EyeOff, KeyRound, RotateCcw, Settings2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { Button } from "@/components/ui";
-import { showValue, type ConfigCard, type ConfigChangeCard, type SecretRequestCard } from "@/lib/configCards";
+import {
+  showValue,
+  undoAnswerNote,
+  undoRefusalWords,
+  type ConfigCard,
+  type ConfigChangeCard,
+  type SecretRequestCard,
+} from "@/lib/configCards";
 import {
   connectedFromSave,
   connectedOf,
@@ -43,10 +50,13 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
       const found = await get<{ action_id: string; undone: boolean }>(
         `/config/changes/${encodeURIComponent(card.change_id)}`,
       );
-      if (!found.undone) await post(`/undo/${encodeURIComponent(found.action_id)}`, {});
-      onSettle({ ...card, undone: true });
-    } catch {
-      setError("Couldn't undo that — try again, or use Activity.");
+      const res = found.undone
+        ? null
+        : await post<{ output?: string }>(`/undo/${encodeURIComponent(found.action_id)}`, {});
+      const note = card.title ? undoAnswerNote(res?.output) : "";
+      onSettle({ ...card, undone: true, ...(note ? { undone_note: note } : {}) });
+    } catch (err) {
+      setError(undoRefusalWords(err) || "Couldn't undo that — try again, or use Activity.");
     } finally {
       setBusy(false);
     }
@@ -56,7 +66,9 @@ function ChangeCard({ card, onSettle }: { card: ConfigChangeCard; onSettle: (nex
     return (
       <div data-testid="config-card-undone" className="text-[12px] text-zinc-500">
         <RotateCcw size={11} className="mr-1 inline align-[-1px]" aria-hidden />
-        {card.title
+        {card.title && card.undone_note
+          ? `Undone — ${card.undone_note}`
+          : card.title
           ? `Undone — ${card.label} is back to how it was.`
           : `Undone — ${card.label} is ${showValue(card.old)} again.`}
       </div>
