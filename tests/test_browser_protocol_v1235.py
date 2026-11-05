@@ -279,6 +279,10 @@ def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
         "models",
         "transcript",  # v1.269.0
         "history",  # v1.270.0: the conversation, replayed on open
+        # v1.433.0 (moved on purpose): the words of the answer being written
+        # are taken back (the lane's own `reset`, or a final reply that does
+        # not continue what was shown). Not the `reset` ACTION: opposite way.
+        "reset",
     )
     assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
     assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)

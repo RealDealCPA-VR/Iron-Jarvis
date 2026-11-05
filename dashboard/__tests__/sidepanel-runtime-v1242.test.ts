@@ -399,6 +399,46 @@ if (absent.length) {
       h.emit("error", { text: "Iron Jarvis could not reach that page." });
       expect(document.body.dataset.turn).toBe("idle");
       expect(transcript()).toContain("could not reach that page");
+      // No technical text sent: nothing folded under it.
+      expect(el("transcript").querySelector('details[data-kind="technical"]')).toBeNull();
+    });
+
+    it("v1.433.0: a reset takes back the answer being written; the next words start again", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      h.emit("delta", { text: "Bonjour, voici " });
+      h.emit("delta", { text: "<tool_call>" });
+      h.emit("reset", { reason: "language" });
+      h.emit("delta", { text: "Hello, here it is." });
+      const said = turns().map((t) => `${t.dataset["who"]}:${t.textContent}`);
+      expect(said).toEqual(["jarvis:Hello, here it is."]);
+      expect(transcript()).not.toContain("Bonjour");
+      expect(transcript()).not.toContain("does not understand");
+      // A reset with nothing being written changes nothing — and is no error.
+      h.emit("tool", { name: "browser_read_page", text: "Reading the page" });
+      h.emit("reset", { reason: "failover" });
+      h.emit("delta", { text: "Second." });
+      expect(turns().map((t) => t.textContent)).toEqual(["Hello, here it is.", "Second."]);
+      expect(transcript()).not.toContain("does not understand");
+    });
+
+    it("v1.433.0: an error says it in plain words and folds the exact message under Details", async () => {
+      const h = await panelReady({ state: "connected", access: "read_only", paired: true });
+      startTurn(h);
+      h.emit("error", {
+        text: "Claude Code hit its usage limit. Try again after it resets.",
+        technical: "ProviderError: 429 rate_limit_error",
+      });
+      expect(document.body.dataset.turn).toBe("idle");
+      const lines = turns().filter((t) => t.dataset["who"] === "error").map((t) => t.textContent);
+      expect(lines).toEqual(["Claude Code hit its usage limit. Try again after it resets."]);
+      const fold = el("transcript").querySelector<HTMLDetailsElement>('details[data-kind="technical"]');
+      expect(fold).not.toBeNull();
+      expect(fold?.open).toBe(false);
+      expect(fold?.querySelector("summary")?.textContent).toBe("Details");
+      expect(fold?.querySelector(".technical")?.textContent).toBe("ProviderError: 429 rate_limit_error");
+      // A new conversation empties it with the rest.
+      (el("reset") as HTMLButtonElement).click();
+      expect(el("transcript").querySelector('details[data-kind="technical"]')).toBeNull();
     });
   });
 

@@ -1097,6 +1097,40 @@ CODING = [
     ('build me a budget spreadsheet', False),
     ('write me a Python script', True),
     ('fix the bug in my repo of recipes', False),
+    # --- v1.433.0 (A13): "make THE app <do something>" is a setting of this
+    # app, not software to build. Both ways, so the line is where it says.
+    ('Make the app start with Windows', False),
+    ('make the app use a green theme', False),
+    ('can you make the app open when my computer starts', False),
+    ('make this app remember my last chat', False),
+    ('make the app stop showing notifications', False),
+    ('make the app always start minimized', False),
+    ('Jarvis, make the app look darker', False),
+    ('make the app turn off at night', False),
+    ('make the app darker', False),
+    ('make the app bigger on my screen', False),
+    ('make this app green', False),
+    ('make it start with Windows', False),
+    ('make me an app that starts with Windows', True),
+    ('make an app that uses a green theme', True),
+    ('make my app start faster', True),
+    ('make me a dark mode app', True),
+    ('build the app that we planned', True),
+    ('write the app in Python', True),
+    # --- v1.433.0 review: "the Iron Jarvis / Jarvis / desktop app" is this
+    # app too; and a causative "make the app <do>" that names the code it is
+    # written in is the user's own software, so the door stays.
+    ('make the Iron Jarvis app start with Windows', False),
+    ('make the Jarvis app open when my computer starts', False),
+    ('make the desktop app start with Windows', False),
+    ('make the app use React and TypeScript', True),
+    ("make the app look good, it's a react todo app I am writing", True),
+    ('make the app use a postgres database', True),
+    ('make the app run on Next.js', True),
+    # ... and never on one of this app's own settings words.
+    ('make the app use my OpenAI API key', False),
+    ('make the app use Docker for commands', False),
+    ('make the app use the DGX node for chat', False),
 ]
 
 

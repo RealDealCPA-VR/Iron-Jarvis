@@ -3726,9 +3726,17 @@ def _no_text_reply(
             "The model finished without writing an answer. "
             f"Here is what {ran} returned:\n{snippet}"
         )
+    # v1.433.0 review: "Press Retry" where there is a Retry button; the
+    # browser sidebar has none (``failure_words.press_retry``).
+    try:
+        from ..providers.failure_words import press_retry
+
+        retry = press_retry(surface)
+    except Exception:  # noqa: BLE001 — wording only
+        retry = "Press Retry"
     return (
         "The model returned an empty answer — no tool ran and nothing was "
-        "written. Press Retry, or pick a different model."
+        f"written. {retry}, or pick a different model."
     )
 
 
@@ -7306,12 +7314,34 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
             f" The reply says it changed {shown}, but no tool that changes files"
             f" succeeded this turn — so {which} did not change."
         )
+    if _in_the_sidebar():
+        # v1.433.0 review: the browser sidebar has no Tools menu, and its turn
+        # never arms a document tool (its ceiling is the browser tools).
+        return f"\n\n_Note: nothing was written to disk this turn.{said} {SIDEBAR_NO_FILES}_"
     return (
         # v1.358.0 (integrate): the place is the chat's Tools menu (the wrench
         # chip); it said "the “+” menu", a different button.
         f"\n\n_Note: nothing was written to disk this turn.{said} Ask again with"
         f" Auto tools on, or a document tool turned on, in the chat's Tools menu._"
     )
+
+
+#: v1.433.0 review: what the honesty notes say in the browser SIDEBAR, which
+#: shows them since it reads the lane's whole reply: it has no Tools menu, and
+#: a sidebar turn can never arm a document tool (its ceiling is the browser
+#: tools, ``browser/panel.browser_tool_ceiling``).
+SIDEBAR_NO_FILES = "The browser sidebar can't write documents; ask in the Iron Jarvis window."
+
+
+def _in_the_sidebar() -> bool:
+    """True inside the browser sidebar's turn (``failure_words.SURFACE_SIDEBAR``,
+    armed by ``browser/panel``). Never raises."""
+    try:
+        from ..providers.failure_words import SURFACE_SIDEBAR, current_surface
+
+        return current_surface() == SURFACE_SIDEBAR
+    except Exception:  # noqa: BLE001 — wording only
+        return False
 
 
 def _asked_for_a_file(body) -> bool:
@@ -7407,6 +7437,9 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
         return ""
     if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
+    if _in_the_sidebar() and not set(armed) & _FILE_WRITING_TOOLS:
+        # v1.433.0 review: no Tools menu there to turn a writer on in.
+        return f"\n\n_Note: no file was actually created this turn. {SIDEBAR_NO_FILES}_"
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
             "\n\n_Note: no file was actually written this turn — the model "
@@ -9370,6 +9403,19 @@ async def run_chat_turn(
     # checked before anything runs. MIRROR NOTE (lock-step): stream_chat_turn.
     _tool_session = turn_session_id(session_id)
     plan_mode = turn_plan_mode(plan_mode, harness)
+    # An unknown "/" skill is refused HERE, before any work starts (v1.433.0,
+    # C1: it was checked after the grounding, the memory-profile search and
+    # the harness build — each paid for, each a turn that never ran). The
+    # steps further down also run at once, so a later refusal would land after
+    # the bound folder was made, the apps were read and events were published.
+    # The stream lane refuses it before its response opens (`_eager_checks`);
+    # same 404, same words.
+    # v1.417.0 (skill parity): a turn bound to a folder may name a skill of
+    # that FOLDER (``.claude/skills``, ``.agents/skills`` …) as well as the
+    # registry's — ``turn_skill_async``. MIRROR NOTE (lock-step).
+    _skill_early = await turn_skill_async(d.platform, body)
+    if (body.skill or "").strip() and _skill_early is None:
+        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
 
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
@@ -9552,17 +9598,7 @@ async def run_chat_turn(
     # order, byte for byte, and the first failure met is the serial one.
     # MIRROR NOTE (lock-step): routes/chat.py's stream lane starts the same
     # steps at the same seam.
-    # An unknown "/" skill is refused HERE, before any step starts: the steps
-    # below run at once, so a later refusal would land after the bound folder
-    # was made, the apps were read and events were published for a turn that
-    # never ran. The stream lane refuses it even earlier (`_eager_checks`,
-    # before the response opens); same 404, same words.
-    # v1.417.0 (skill parity): a turn bound to a folder may name a skill of
-    # that FOLDER (``.claude/skills``, ``.agents/skills`` …) as well as the
-    # registry's — ``turn_skill_async``. MIRROR NOTE (lock-step).
-    _skill_early = await turn_skill_async(d.platform, body)
-    if (body.skill or "").strip() and _skill_early is None:
-        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+    # (The unknown "/" skill was refused at the top of the turn — v1.433.0.)
     _prep = _PREP_GROUP.get() or _PrepGroup()
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED with POST /chat/stream (v1.174.0) — the two lanes ran
@@ -11411,6 +11447,12 @@ async def run_chat_turn(
         # MIRROR NOTE (lock-step): the stream done-frame carries the
         # identical key, filled from its `approval_resolved` answers.
         "approved": [],
+        # DENIED TOOLS (v1.433.0, A15): one entry per call the permission
+        # engine refused, in order — ALWAYS PRESENT (possibly []). The stream
+        # done-frame has carried it since v1.165.0 and the chat page's POST
+        # fallback reads it; this lane filled the list and never sent it.
+        # MIRROR NOTE (lock-step): routes/chat.py's done frame, same key.
+        "denied_tools": list(denied_tools),
         # One surface (v1.108.0): the turn decided it needs the full agent.
         # The client re-runs the SAME message as a session — the user is
         # never asked to pick a mode.

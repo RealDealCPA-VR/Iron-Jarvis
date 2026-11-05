@@ -300,7 +300,10 @@ def test_the_exchange_is_written_before_the_terminal_frame_leaves(exit_path: str
             turns._turn_text, turns._remembered, turns._answer = "q?", False, []
             await turns._translate(conn, "token", {"text": "half "})
             await turns._translate(conn, "token", {"text": "answer"})
-            await turns._translate(conn, "done", {"text": "half answer"})
+            # v1.433.0 (moved on purpose): the lane's REAL done frame carries
+            # the answer as `reply` — it never had a `text` key, which is why
+            # the sidebar never showed what rides only there.
+            await turns._translate(conn, "done", {"reply": "half answer"})
 
         asyncio.run(drive())
         assert conn.at("done") == [{"role": "user", "content": "q?"}, {"role": "assistant", "content": "half answer"}]
@@ -669,7 +672,9 @@ def test_tool_frames_carry_status_and_ok(tmp_path, monkeypatch):
 def test_the_vocabulary_and_the_generated_protocol():
     assert P.PANEL_ACTION_RESET in P.ALL_PANEL_ACTIONS and P.PANEL_ACTION_AUTO_ALLOW in P.ALL_PANEL_ACTIONS
     assert P.PANEL_EVENT_HISTORY in P.ALL_PANEL_EVENTS
-    assert len(P.ALL_PANEL_ACTIONS) == 10 and len(P.ALL_PANEL_EVENTS) == 10
+    # v1.433.0 (moved on purpose): eleven events — `reset` takes back the words
+    # of the answer being written.
+    assert len(P.ALL_PANEL_ACTIONS) == 10 and len(P.ALL_PANEL_EVENTS) == 11
     generated = _src(PROTOCOL_TS)
     for name, value in (
         ("PANEL_ACTION_RESET", "reset"),

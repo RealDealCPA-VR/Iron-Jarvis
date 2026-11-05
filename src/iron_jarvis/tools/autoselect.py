@@ -3624,9 +3624,39 @@ _OFFER_LEAD_IN = (
     r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|i\s+(?:want|need)\s+you\s+to\s+"
     r"|i['’]?d\s+like\s+you\s+to\s+|help\s+me\s+|let['’]?s\s+|go\s+ahead\s+and\s+)?"
 )
+#: v1.433.0: "make the app start with Windows", "make the app use a green
+#: theme", "make the app darker" — "make THE app <do / look like something>"
+#: is about how THIS app behaves (a setting), not a request to build software:
+#: no coding door. Only the definite "the / this app" followed by a
+#: settings-like verb, "itself", or a word about how it looks; "make me an app
+#: that starts with Windows" and "make my app start faster" (the user's own
+#: software) still get the door.
+#: v1.433.0 review: "the Iron Jarvis app", "the Jarvis app" and "the desktop
+#: app" are this app too; and a sentence that names the code the app is
+#: written in ("make the app use React and TypeScript", "… it's a react todo
+#: app I am writing") is the user's own software, so the door stays. Only
+#: words that name CODE: never one of this app's own settings words (an API
+#: key, an endpoint, a node, Docker for commands, its database).
+_CODE_NAMED_AHEAD = (
+    r"(?![^.!?\n]{0,200}?\b(?:react|vue|angular|svelte|next\.js|nuxt|typescript"
+    r"|javascript|python|java|kotlin|swift|flutter|dart|rust|golang|php|ruby|rails"
+    r"|django|flask|fastapi|node\.js|html|css|tailwind|sql|sqlite"
+    r"|postgres(?:ql)?|mysql|mongodb|codebase|components?|front\s*-?\s*end"
+    r"|back\s*-?\s*end|compile|unit\s+tests?)\b)"
+)
+_APP_SETTING_AHEAD = (
+    r"(?!make\s+(?:the|this)\s+(?:(?:iron\s+)?jarvis\s+|desktop\s+)?(?:app|application)\s+"
+    r"(?:(?:always|never|automatically|just|also|not|to|itself)\s+)?"
+    r"(?:(?:start|open|launch|use|look|show|run|keep|stop|remember|turn)(?:s|es|d|ed|ing)?"
+    r"|dark|darker|light|lighter|bright|brighter|dim|dimmer|big|bigger|small|smaller"
+    r"|large|larger|loud|louder|quiet|quieter"
+    r"|green|blue|red|purple|black|white|gr[ae]y|pink|orange|yellow)\b"
+    + _CODE_NAMED_AHEAD + r")"
+)
 #: "build me a …" / "write an app that …" / "can you make me a website".
 _BUILD_ME_RX = re.compile(
     _OFFER_LEAD_IN
+    + _APP_SETTING_AHEAD
     + r"(?:build|write|make|create|code|develop|program|scaffold|spin\s+up)"
     r"(?:\s+(?:me|us))?\s+(?:a|an|the|my|our|some|one)\s+"
     r"(?:(?!(?:of|for|about|with|to|from|on|in|that|which)\b)[\w'’-]+\s+){0,3}?"
