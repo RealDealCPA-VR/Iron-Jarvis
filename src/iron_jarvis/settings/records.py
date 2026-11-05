@@ -1540,7 +1540,7 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
     if record == "grant":
         return restore_grant(platform, name, prior)
     if record in ("project", "agent"):
-        return getattr(_rp(), f"restore_{record}")(platform, name, prior)
+        return getattr(_rp(), f"restore_{record}")(platform, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 

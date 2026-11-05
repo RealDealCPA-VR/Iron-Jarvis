@@ -29,16 +29,22 @@ goals:
   MADE can be changed; a built-in one is said to be built in.
 
 Every tool asks first (ask tier — the ordinary approval card), and every
-change has an Undo that puts the record back EXACTLY (every column, read from
-the table): a made project or agent is taken away, a changed one gets its
-fields back, an archived project comes back as it was (and focused again if
-the archive took its focus), a removed agent comes back with its own id and
-its FOLDER — instructions, notes, earlier versions — moved back out of the
-trash (``agent_delete`` records which trash folder the route moved it to). If
-that folder is no longer in the trash, Undo says so and writes back the
-instructions and notes the snapshot kept; it never claims more than it did.
-A made project that already has work filed in it (a chat, a run, knowledge) is
-ARCHIVED by its Undo rather than removed, and the Undo says so.
+change has an Undo that puts back what THAT change did and nothing else (read
+from the table; each tool records the row it found — ``prior`` — AND the row
+it left — ``after`` — so the Undo knows which fields it touched): a changed
+one gets those fields back (the focus too, only when the change took it); a
+field the user changed AGAIN since, or a record removed or made again since,
+refuses the Undo in one sentence rather than write over the user's newer work
+(review, Wave 3 group G). A removed agent comes back with its own id and its
+FOLDER — instructions, notes, earlier versions — moved back out of the trash
+(``agent_delete`` records which trash folder the route moved it to); if that
+folder is no longer in the trash, Undo says so and writes back the
+instructions and notes the snapshot kept; it never claims more than it did. A
+made agent edited since is not removed by its Undo. A made project is removed
+only while it is exactly as made and nothing is filed in or bound to it (ANY
+table carrying its id, or a schedule's payload); otherwise its Undo ARCHIVES
+it and says so. A folder spelled as a network share is refused by its text
+before anything touches the disk.
 
 Refusals are ONE plain sentence (the route's own reason, worded for a person —
 no field names). Arming (:func:`projects_tools_for`) reads the sentence the
@@ -86,8 +92,52 @@ WORKS_LIKE_WORDS = (
     "researcher reads and searches the web; planner plans and hands out work"
 )
 
-_DELETE_DESC: contextvars.ContextVar["dict[str, Any] | None"] = contextvars.ContextVar(
-    "ij_agent_delete_desc", default=None
+#: The Undo descriptor THIS call captured (review: every tool here records
+#: what its change LEFT — ``after`` — beside what it found — ``prior`` — so the
+#: Undo puts back only the fields this change touched, and refuses when the
+#: user changed one of them again since). Set by ``capture_undo``, consumed by
+#: :func:`_note` after a successful write; a direct ``execute`` (no capture)
+#: finds ``None`` and journals nothing.
+_DESC: contextvars.ContextVar["dict[str, Any] | None"] = contextvars.ContextVar(
+    "ij_project_agent_desc", default=None
+)
+
+
+def _stash(desc: "dict[str, Any] | None") -> "dict[str, Any] | None":
+    _DESC.set(desc)
+    return desc
+
+
+def _note(**fields: Any) -> None:
+    """Add ``fields`` to the descriptor this call captured (the registry
+    journals it only after a SUCCESSFUL execute). No-op with no capture."""
+    desc = _DESC.get()
+    _DESC.set(None)
+    if not desc:
+        return
+    try:
+        meta = json.loads(desc.get("pre_inline") or "{}")
+    except (TypeError, ValueError):
+        return
+    if not isinstance(meta, dict):
+        return
+    meta.update(fields)
+    desc["pre_inline"] = json.dumps(meta, default=str)
+
+
+def _network_folder(text: Any) -> bool:
+    """A folder spelled as a network share or a device path (``\\\\host\\x``,
+    ``//host/x``, ``\\\\?\\…``) — judged on the TEXT, before anything touches
+    the disk: looking at a share is a connection to that computer, which
+    sends this PC's sign-in to it (the v1.379.0 lesson)."""
+    t = str(text or "").strip().replace("/", "\\")
+    return t.startswith("\\\\")
+
+
+#: The refusal for a network folder (review, Wave 3 group G).
+NETWORK_FOLDER = (
+    "That folder is a network location on another computer; a project's folder must be on this PC "
+    "(give its full location starting with its drive, for example D:\\Clients\\Johnson)."
 )
 
 
@@ -201,20 +251,44 @@ def snap_project(platform: Any, project_id: str) -> dict[str, Any] | None:
 
 
 def _has_work(platform: Any, project_id: str) -> bool:
-    """Has anything been filed in the project — a chat, a run, knowledge?"""
-    from sqlmodel import select
+    """Has anything been filed in or bound to the project — a chat, a run,
+    knowledge, a workflow pin or run, a goal, a rule, a project room, an
+    assignment, a made file, a task schedule? EVERY table that carries a
+    ``project_id`` is asked (review: the first cut asked three, so an Undo of
+    a made project deleted it and silently unbound a schedule, a goal or a
+    rule the user had filed in it since — ``delete_project_record`` untags
+    them), plus the schedules, which carry it inside their payload. A table
+    that cannot be read counts as holding something (fail-closed: the
+    project is archived, never removed). Blocking."""
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.exc import OperationalError
+    from sqlmodel import SQLModel, select
 
     from ..core.db import session_scope
-    from ..core.models import ChatThreadRecord, ProjectKnowledge
-    from ..core.models import Session as SessionModel
 
     with session_scope(platform.engine) as db:
-        for model in (SessionModel, ChatThreadRecord, ProjectKnowledge):
-            try:
-                if db.exec(select(model).where(model.project_id == project_id).limit(1)).first() is not None:
-                    return True
-            except Exception:  # noqa: BLE001 — a missing table holds nothing
+        for table in list(SQLModel.metadata.sorted_tables):
+            if table.name == "project" or "project_id" not in table.c:
                 continue
+            try:
+                hit = db.exec(sa_select(table.c.project_id).where(table.c.project_id == project_id).limit(1)).first()
+            except OperationalError:
+                db.rollback()
+                continue  # a table this build never made holds nothing
+            except Exception:  # noqa: BLE001 — unreadable: keep the project
+                return True
+            if hit is not None:
+                return True
+        try:
+            from ..scheduling.models import ScheduledTaskRecord
+
+            for sched in db.exec(select(ScheduledTaskRecord)):
+                if sched.decoded_payload().get("project_id") == project_id:
+                    return True
+        except OperationalError:
+            pass
+        except Exception:  # noqa: BLE001
+            return True
     return False
 
 
@@ -231,53 +305,121 @@ def _set_focus(platform: Any, project_id: str) -> None:
         log.info("undo: the focus could not be put back on %s", project_id)
 
 
-def restore_project(platform: Any, project_id: str, prior: dict[str, Any] | None) -> str:
-    """``POST /undo`` for a project change. A MADE project is taken away —
-    removed through the route's own delete when nothing was filed in it yet,
-    ARCHIVED when something was (its chats and runs keep their project). A
-    changed or archived one gets every column back, and the focus too when the
-    change had taken it. Blocking."""
+#: A project's columns an Undo may put back (``id`` and ``created_at``
+#: never change), and what each is called in a sentence.
+_PROJECT_WORDS = {
+    "name": "its name",
+    "root": "its folder",
+    "brief": "its description",
+    "instructions": "its instructions",
+    "default_provider": "its default model",
+    "default_model": "its default model",
+    "memory_sources": "its memory bases",
+    "status": "whether it is archived",
+    "team_json": "its team",
+    "brain_profile": "its memory profile",
+}
+
+
+def _project_cols() -> list[str]:
+    from ..core.models import Project
+
+    return [k for k in Project.model_fields if k not in ("id", "created_at")]
+
+
+def _words_for(keys: list[str], table: dict[str, str]) -> str:
+    out: list[str] = []
+    for k in keys:
+        w = table.get(k, k.replace("_", " "))
+        if w not in out:
+            out.append(w)
+    return ", ".join(out)
+
+
+def restore_project(
+    platform: Any, project_id: str, prior: dict[str, Any] | None, desc: "dict[str, Any] | None" = None
+) -> str:
+    """``POST /undo`` for a project change. It puts back what THIS change did
+    and nothing else (review, Wave 3 group G):
+
+    * A MADE project is removed through the route's own delete only while
+      it is exactly as the create left it and nothing is filed in or bound to
+      it; otherwise it is ARCHIVED (its chats, runs, schedules and the user's
+      later edits are kept) and the answer says so.
+    * A changed or archived one gets back ONLY the fields the change touched
+      (``prior`` vs the ``after`` the tool recorded). A field the user changed
+      AGAIN since refuses the whole Undo in words (never written over); a
+      project removed since is never brought back. The focus comes back only
+      when THIS change took it; restoring "archived" takes the focus off it
+      (the route's rule).
+
+    Blocking."""
     from ..core.db import session_scope
     from ..core.models import Project
     from ..daemon.routes.projects import delete_project_record, update_project_record
     from ..daemon.schemas import ProjectPatch
 
+    meta = desc if isinstance(desc, dict) else {}
+    after_known = "after" in meta
+    after = meta.get("after") if isinstance(meta.get("after"), dict) else None
     d = _d(platform)
-    with session_scope(platform.engine) as db:
-        row = db.get(Project, project_id)
-        name = row.name if row is not None else str((prior or {}).get("name") or project_id)
+    current = snap_project(platform, project_id)
+    name = str((current or prior or {}).get("name") or project_id)
+    cols = _project_cols()
     if prior is None:
-        if row is None:
+        if current is None:
             return "undo: the project was already gone"
         if d is None:
             raise R.RecordError(NEEDS_THE_APP)
-        if _has_work(platform, project_id):
-            update_project_record(d, project_id, ProjectPatch(status="archived"))
-            return f"undo: archived the project '{name}' (work was already filed in it, so it was kept)"
+        changed = bool(after) and any(current.get(k) != after.get(k) for k in cols)
+        if changed or _has_work(platform, project_id):
+            if current.get("status") != "archived":
+                update_project_record(d, project_id, ProjectPatch(status="archived"))
+            why = "it was changed after it was made" if changed else "work was already filed in it"
+            return f"undo: archived the project '{name}' ({why}, so it was kept)"
         delete_project_record(d, project_id)
         return f"undo: removed the project '{name}'"
-    fields = set(Project.model_fields) - {"id"}
-    with session_scope(platform.engine) as db:
-        row = db.get(Project, project_id)
-        recreated = row is None
-        if row is None:
-            row = Project(id=project_id, name=str(prior.get("name") or ""))
-        for key, value in prior.items():
-            if key not in fields:
-                continue
-            if key == "created_at":
-                value = R._dt(value)  # noqa: SLF001
-                if value is None:
-                    continue
-            setattr(row, key, value)
-        db.add(row)
-        db.commit()
+    if current is None:
+        if after_known:
+            raise R.RecordError(
+                f"The project “{name}” was removed after this change, so there is nothing to put back."
+            )
+        current = {}
+    if after_known and after is not None:
+        touched = [k for k in cols if prior.get(k) != after.get(k)]
+        again = [k for k in touched if current.get(k) != after.get(k) and current.get(k) != prior.get(k)]
+        if again:
+            raise R.RecordError(
+                f"The project “{name}” was changed again after this change ({_words_for(again, _PROJECT_WORDS)}), "
+                "so Undo would undo that too; change it on the Projects page instead."
+            )
+        took_focus = bool(prior.get("focused")) and not after.get("focused")
+    else:
+        touched = [k for k in cols if k in prior]
+        took_focus = bool(prior.get("focused"))
+    todo = [k for k in touched if current.get(k) != prior.get(k)]
     focus = getattr(platform.config, "active_project_id", None)
-    if prior.get("focused") and not focus:
+    give_focus = took_focus and not focus
+    if not todo and not give_focus:
+        return f"undo: the project '{name}' was already back as it was"
+    if todo:
+        with session_scope(platform.engine) as db:
+            row = db.get(Project, project_id)
+            if row is None:
+                row = Project(id=project_id, name=str(prior.get("name") or ""))
+                created = R._dt(prior.get("created_at"))  # noqa: SLF001
+                if created is not None:
+                    row.created_at = created
+            for key in todo:
+                setattr(row, key, prior.get(key))
+            db.add(row)
+            db.commit()
+    focus = getattr(platform.config, "active_project_id", None)
+    if give_focus and not focus:
         _set_focus(platform, project_id)
-    elif not prior.get("focused") and focus == project_id and prior.get("status") == "archived":
+    elif "status" in todo and prior.get("status") == "archived" and focus == project_id:
         _set_focus(platform, "")
-    return f"undo: {'recreated' if recreated else 'restored'} the project '{prior.get('name') or name}'"
+    return f"undo: restored the project '{prior.get('name') or name}'"
 
 
 def _model_words(provider: Any, model: Any) -> str:
@@ -325,6 +467,10 @@ class _ProjectTool(R._RecordTool):  # noqa: SLF001 — the records module's own 
     def _resolve(self, args: dict[str, Any]) -> str:
         return resolve_project(self.platform, self._target(args))[0]
 
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        _DESC.set(None)
+        return _stash(await super().capture_undo(args, ctx))
+
 
 class ProjectCreateTool(_ProjectTool):
     name = "project_create"
@@ -347,7 +493,8 @@ class ProjectCreateTool(_ProjectTool):
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         # The store mints the id: captured "pending", named after the write.
-        return await R.capture_create_undo(self.platform, "project", "", pending=True)
+        _DESC.set(None)
+        return _stash(await R.capture_create_undo(self.platform, "project", "", pending=True))
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
@@ -359,6 +506,8 @@ class ProjectCreateTool(_ProjectTool):
         if d is None:
             return ToolResult(ok=False, error=NEEDS_THE_APP)
         name = " ".join(str(args.get("name") or "").split())
+        if _network_folder(args.get("folder")):
+            return ToolResult(ok=False, error=NETWORK_FOLDER)
         body = ProjectCreate(
             name=name, root=str(args.get("folder") or "").strip(), brief=str(args.get("description") or "").strip()
         )
@@ -369,6 +518,7 @@ class ProjectCreateTool(_ProjectTool):
         pid = str(out.get("id") or "")
         R.bind_created(pid)
         after = await asyncio.to_thread(snap_project, self.platform, pid)
+        _note(after=after)
         where = f" in {out['root']}" if out.get("root") else " with no folder"
         focus = " It is now the focused project, so new chats are filed in it." if out.get("active") else ""
         card = R.create_card("project", pid, _describe_project(after), label=f"Project {_q(name)}")
@@ -421,6 +571,8 @@ class ProjectUpdateTool(_ProjectTool):
             if not new_name:
                 return ToolResult(ok=False, error="A project needs a name.")
             fields["name"] = new_name
+        if _network_folder(args.get("folder")):
+            return ToolResult(ok=False, error=NETWORK_FOLDER)
         for arg, field in (("folder", "root"), ("description", "brief"), ("provider", "default_provider"), ("model", "default_model")):
             if args.get(arg) is not None:
                 fields[field] = str(args.get(arg) or "")
@@ -431,6 +583,7 @@ class ProjectUpdateTool(_ProjectTool):
         except HTTPException as exc:
             return ToolResult(ok=False, error=_route_words(exc, what=before.get("name") or ""))
         after = await asyncio.to_thread(snap_project, self.platform, pid) or {}
+        _note(after=after)
         old, new = _project_change_words(before, after)
         label = f"Project {_q(before.get('name'))}"
         return ToolResult(
@@ -479,6 +632,7 @@ class ProjectArchiveTool(_ProjectTool):
         except HTTPException as exc:
             return ToolResult(ok=False, error=_route_words(exc, what=before.get("name") or ""))
         after = await asyncio.to_thread(snap_project, self.platform, pid) or {}
+        _note(after=after)
         old = "archived" if before.get("status") == "archived" else ("in use, focused" if before.get("focused") else "in use")
         new = "archived" if after.get("status") == "archived" else "in use"
         unfocused = " It is no longer the focused project." if before.get("focused") and not after.get("focused") else ""
@@ -694,58 +848,159 @@ def _move_back(platform: Any, name: str, trashed: str) -> bool:
         return False
 
 
-def restore_agent(platform: Any, name: str, prior: dict[str, Any] | None) -> str:
-    """``POST /undo`` for an agent change. A MADE agent is removed (its folder
-    to the trash, as the Agents page's Delete does). A changed, paused or
-    removed one gets EVERY column back — its own id too — and a removed one
-    its folder from the trash; if the folder is gone from the trash, the
-    instructions and notes the snapshot kept are written back and the reply
-    says what did not come back. Blocking."""
+#: An agent's columns an Undo may put back (``name`` is the key, ``id`` and
+#: ``created_at`` never change on a live row), and what each is called.
+_AGENT_WORDS = {
+    "system_prompt": "its instructions",
+    "tools_json": "its tools",
+    "base_type": "what it works like",
+    "description": "its description",
+    "provider": "its model",
+    "model": "its model",
+    "approval_mode": "its approval setting",
+    "max_steps": "its step limit",
+    "allowance_tokens": "its monthly limit",
+    "allowance_usd": "its monthly limit",
+    "allowance_warned_month": "its monthly limit warning",
+    "paused_reason": "whether it is paused",
+    "paused_at": "whether it is paused",
+    "reports_to": "who it reports to",
+    "skills_json": "its skills",
+    "deny_tools_json": "the tools it may never use",
+    "roles_json": "its team roles",
+    "account": "its account",
+}
+#: The columns the USER sets (the job card): a made agent whose card differs
+#: from what the create left was edited since, so its Undo keeps it.
+_AGENT_CARD = (
+    "system_prompt", "tools_json", "base_type", "description", "provider", "model", "approval_mode",
+    "max_steps", "allowance_tokens", "allowance_usd", "reports_to", "skills_json", "deny_tools_json",
+    "roles_json", "account",
+)
+
+
+def _agent_cols() -> list[str]:
+    from ..agents.dynamic_models import DynamicAgentRecord
+
+    return [k for k in DynamicAgentRecord.model_fields if k not in ("name", "id", "created_at")]
+
+
+def _write_agent(platform: Any, name: str, values: dict[str, Any], *, recreate_from: "dict[str, Any] | None" = None) -> None:
+    """Write ``values`` onto the agent's row (or make the row again from
+    ``recreate_from``, with its own id and created time) and refresh the
+    registry's cached copy. Blocking."""
+    from sqlmodel import select
+
     from ..agents.dynamic_models import DynamicAgentRecord
     from ..core.db import session_scope
 
-    reg = platform.agents_registry
-    if prior is None:
-        if reg.get(name) is None:
-            return "undo: the agent was already gone"
-        reg.remove(name)
-        return f"undo: removed the agent '{name}' (its folder is in the trash)"
-    current = _agent_row(platform, name)
-    fields = set(DynamicAgentRecord.model_fields) - {"name"}
     with session_scope(platform.engine) as db:
-        from sqlmodel import select
-
         row = db.exec(select(DynamicAgentRecord).where(DynamicAgentRecord.name == name)).first()
-        recreated = row is None
         if row is None:
             row = DynamicAgentRecord(name=name)
-        for key, value in prior.items():
-            if key not in fields or (key == "id" and not recreated):
-                continue
-            if key in ("created_at", "paused_at"):
+            if recreate_from is not None:
+                if recreate_from.get("id"):
+                    row.id = str(recreate_from["id"])
+                created = R._dt(recreate_from.get("created_at"))  # noqa: SLF001
+                if created is not None:
+                    row.created_at = created
+        for key, value in values.items():
+            if key == "paused_at":
                 value = R._dt(value)  # noqa: SLF001
-                if key == "created_at" and value is None:
-                    continue
             setattr(row, key, value)
         db.add(row)
         db.commit()
     # The registry's cached copy follows the row (a no-op write refreshes it).
-    reg._update(name, lambda _row: None)  # noqa: SLF001 — the registry's own refresh
+    platform.agents_registry._update(name, lambda _row: None)  # noqa: SLF001 — the registry's own refresh
+
+
+def restore_agent(
+    platform: Any, name: str, prior: dict[str, Any] | None, desc: "dict[str, Any] | None" = None
+) -> str:
+    """``POST /undo`` for an agent change. It puts back what THIS change did
+    and nothing else (review, Wave 3 group G):
+
+    * A MADE agent is removed (its folder to the trash, as the Agents page's
+      Delete does) only while its job card is exactly what the create left;
+      edited since, the Undo refuses in words (the user's edits are kept).
+    * A REMOVED one comes back with its own id and every column, and its
+      folder out of the trash — unless an agent of that name was made since,
+      which is never written over. If the folder is no longer in the trash,
+      the instructions and notes the snapshot kept are written back and the
+      answer says what did not come back.
+    * A changed or paused one gets back ONLY the fields the change touched
+      (``prior`` vs the ``after`` the tool recorded); a field the user changed
+      AGAIN since refuses the whole Undo; an agent removed since is never
+      brought back.
+
+    Blocking."""
+    meta = desc if isinstance(desc, dict) else {}
+    after_known = "after" in meta
+    after = meta.get("after") if isinstance(meta.get("after"), dict) else None
+    reg = platform.agents_registry
     files = getattr(reg, "files", None)
-    prompt = str(prior.get("system_prompt") or "")
-    if not recreated:
-        if current is not None and (current.system_prompt or "") != prompt and files is not None:
-            try:
-                files.write_instructions(name, prompt, reason="undo")
-            except Exception:  # noqa: BLE001
-                log.warning("undo: could not write %r's instructions", name, exc_info=True)
-        return f"undo: restored the agent '{name}'"
-    if _move_back(platform, name, str(prior.get("trash") or "")):
+    current = snap_agent(platform, name)
+    if prior is None:
+        if current is None:
+            return "undo: the agent was already gone"
+        if after is not None:
+            edited = [k for k in _AGENT_CARD if current.get(k) != after.get(k)]
+            if current.get("id") != after.get("id") or edited:
+                what = _words_for(edited, _AGENT_WORDS) if current.get("id") == after.get("id") else "it was removed and made again"
+                raise R.RecordError(
+                    f"The agent “{name}” was changed after it was made ({what}), so Undo would take those "
+                    "changes with it; remove it on the Agents page if you still want it gone."
+                )
+        reg.remove(name)
+        return f"undo: removed the agent '{name}' (its folder is in the trash)"
+    cols = _agent_cols()
+    if after_known and after is None:
+        # The change REMOVED the agent: bring it back.
+        if current is not None:
+            if current.get("id") == prior.get("id"):
+                return f"undo: the agent '{name}' was already back"
+            raise R.RecordError(
+                f"A new agent called “{name}” was made since this removal, so Undo would overwrite it; "
+                "rename or remove that one on the Agents page first."
+            )
+        return _bring_back(platform, name, prior, str(meta.get("trash") or prior.get("trash") or ""), cols)
+    if current is None:
+        if after_known:
+            raise R.RecordError(f"The agent “{name}” was removed after this change, so there is nothing to put back.")
+        return _bring_back(platform, name, prior, str(prior.get("trash") or ""), cols)
+    if after is not None:
+        touched = [k for k in cols if prior.get(k) != after.get(k)]
+        again = [k for k in touched if current.get(k) != after.get(k) and current.get(k) != prior.get(k)]
+        if again:
+            raise R.RecordError(
+                f"The agent “{name}” was changed again after this change ({_words_for(again, _AGENT_WORDS)}), "
+                "so Undo would undo that too; change it on the Agents page instead."
+            )
+    else:
+        touched = [k for k in cols if k in prior]
+    todo = [k for k in touched if current.get(k) != prior.get(k)]
+    if not todo:
+        return f"undo: the agent '{name}' was already back as it was"
+    _write_agent(platform, name, {k: prior.get(k) for k in todo})
+    if "system_prompt" in todo and files is not None:
+        try:
+            files.write_instructions(name, str(prior.get("system_prompt") or ""), reason="undo")
+        except Exception:  # noqa: BLE001
+            log.warning("undo: could not write %r's instructions", name, exc_info=True)
+    return f"undo: restored the agent '{name}'"
+
+
+def _bring_back(platform: Any, name: str, prior: dict[str, Any], trashed: str, cols: list[str]) -> str:
+    """Make a removed agent's row again — its own id, created time and every
+    column — and move its folder back out of the trash. Blocking."""
+    _write_agent(platform, name, {k: prior.get(k) for k in cols if k in prior}, recreate_from=prior)
+    files = getattr(platform.agents_registry, "files", None)
+    if _move_back(platform, name, trashed):
         return f"undo: brought back the agent '{name}' with its folder (instructions, notes and earlier versions)"
     if files is None:
         return f"undo: brought back the agent '{name}'"
     try:
-        files.write_instructions(name, prompt, reason="undo")
+        files.write_instructions(name, str(prior.get("system_prompt") or ""), reason="undo")
         if prior.get("notes"):
             files.write_notes(name, str(prior["notes"]))
     except Exception:  # noqa: BLE001
@@ -809,6 +1064,11 @@ def _agent_change_words(before: dict[str, Any], after: dict[str, Any]) -> tuple[
     if before.get("description") != after.get("description"):
         old.append(f"description {_q(before.get('description')) if before.get('description') else 'none'}")
         new.append(f"description {_q(after.get('description')) if after.get('description') else 'none'}")
+    # Review: a raised limit also lifts an allowance pause (the route's own
+    # rule) — the card says the agent is working again, never only the limit.
+    if bool(before.get("paused_reason")) != bool(after.get("paused_reason")):
+        old.append(f"paused ({before.get('paused_reason')})" if before.get("paused_reason") else "working")
+        new.append(f"paused ({after.get('paused_reason')})" if after.get("paused_reason") else "working")
     return ", ".join(old) or "unchanged", ", ".join(new) or "unchanged"
 
 
@@ -882,6 +1142,10 @@ class _AgentTool(R._RecordTool):  # noqa: SLF001 — the records module's own ba
     def _resolve(self, args: dict[str, Any]) -> str:
         return resolve_agent(self.platform, self._target(args))[0]
 
+    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
+        _DESC.set(None)
+        return _stash(await super().capture_undo(args, ctx))
+
 
 class AgentCreateTool(_AgentTool):
     name = "agent_create"
@@ -902,7 +1166,8 @@ class AgentCreateTool(_AgentTool):
         return " ".join(str(args.get("name") or "").split())
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
-        return await R.capture_create_undo(self.platform, "agent", self._target(args))
+        _DESC.set(None)
+        return _stash(await R.capture_create_undo(self.platform, "agent", self._target(args)))
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
@@ -926,6 +1191,7 @@ class AgentCreateTool(_AgentTool):
         except ValidationError:
             return ToolResult(ok=False, error="One of those details is not in a form an agent can take; check the numbers and names.")
         after = await asyncio.to_thread(snap_agent, self.platform, rec.name)
+        _note(after=after)
         words = _describe_agent(after)
         card = R.create_card("agent", rec.name, words, label=f"Agent {_q(rec.name)}")
         data: dict[str, Any] = {"name": rec.name}
@@ -974,6 +1240,7 @@ class AgentUpdateTool(_AgentTool):
         except ValidationError:
             return ToolResult(ok=False, error="One of those details is not in a form an agent can take; check the numbers and names.")
         after = await asyncio.to_thread(snap_agent, self.platform, name) or {}
+        _note(after=after)
         old, new = _agent_change_words(before or {}, after)
         return ToolResult(
             ok=True,
@@ -1015,6 +1282,7 @@ class AgentPauseTool(_AgentTool):
         except HTTPException as exc:
             return ToolResult(ok=False, error=_route_words(exc, what=name))
         after = await asyncio.to_thread(snap_agent, self.platform, name) or {}
+        _note(after=after)
         old = f"paused ({before.get('paused_reason')})" if before.get("paused_reason") else "working"
         new = f"paused ({after.get('paused_reason')})" if after.get("paused_reason") else "working"
         return ToolResult(
@@ -1037,11 +1305,6 @@ class AgentDeleteTool(_AgentTool):
     )
     input_schema = {"type": "object", "properties": {"agent": {"type": "string"}}, "required": ["agent"]}
 
-    async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
-        desc = await super().capture_undo(args, ctx)
-        _DELETE_DESC.set(desc)
-        return desc
-
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
 
@@ -1057,19 +1320,10 @@ class AgentDeleteTool(_AgentTool):
         except HTTPException as exc:
             return ToolResult(ok=False, error=_route_words(exc, what=name))
         moved = sorted((await asyncio.to_thread(_trash_folders, self.platform, name)) - had)
-        desc = _DELETE_DESC.get()
-        _DELETE_DESC.set(None)
-        if desc and len(moved) == 1:
-            # Which trash folder the route moved it to — journaled with this
-            # call (the registry writes the descriptor after a successful
-            # execute), so the Undo can move that very folder back.
-            try:
-                meta = json.loads(desc.get("pre_inline") or "{}")
-                if isinstance(meta.get("prior"), dict):
-                    meta["prior"]["trash"] = moved[0]
-                    desc["pre_inline"] = json.dumps(meta, default=str)
-            except (TypeError, ValueError):
-                pass
+        # Which trash folder the route moved it to — journaled with this
+        # call (the registry writes the descriptor after a successful
+        # execute), so the Undo can move that very folder back.
+        _note(after=None, trash=moved[0] if len(moved) == 1 else "")
         folder = " Its folder is in the trash; Undo brings the agent and its folder back." if moved else ""
         return ToolResult(
             ok=True,
@@ -1121,8 +1375,19 @@ _PROJECT_THING = re.compile(
     r"|pages?\b|views?\b|tabs?\b|panels?\b|screens?\b|boards?\b|menus?\b|settings\b|scope\b|risks?\b"
     r"|milestones?\b|tasks?\b|leads?\b|costs?\b|estimates?\b|goals?\b|requirements\b|specs?\b|code\b"
     r"|repo\b|repository\b|workspace\b|structure\b|outline\b|emails?\b|messages?\b|threads?\b|chats?\b"
-    r"|photos?\b|pictures?\b|images?\b)",
+    r"|photos?\b|pictures?\b|images?\b"
+    # Review (Wave 3 group G): office things and a possessive ("rename the
+    # project spreadsheet", "set up a meeting with the project team", "the
+    # project's files") — the thing is the noun after, never the project.
+    r"|spreadsheets?\b|workbooks?\b|sheets?\b|decks?\b|slides?\b|presentations?\b|memos?\b|letters?\b"
+    r"|invoices?\b|calendars?\b|teams?\b|members?\b|['’]s\b)",
     re.IGNORECASE,
+)
+#: Review (Wave 3 group G): a preposition among the words BEFORE "project"
+#: makes the made thing something else ("make a list of projects", "set up a
+#: meeting with the project team", "make a copy of the Smith project").
+_PRE_PREP = re.compile(
+    r"\b(?:of|about|on|for|with|from|to|in|into|at|by|per|among|between|like|regarding)\b", re.IGNORECASE
 )
 #: A coding project or another app's project ("a new React project", "a
 #: project in Asana", "Microsoft Project") — never one of Iron Jarvis's.
@@ -1157,7 +1422,8 @@ _P_SET_FIELD = re.compile(
     r"(?:folder|location|directory|description|brief|default\s+model|model|name|title)\b"
     r"|(?:change|update|set|edit)\s+(?:the\s+)?(?:folder|location|description|brief|default\s+model|model|name|title)"
     r"\s+(?:of|for)\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?projects?(?![\w-])"
-    r"|move\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?projects?\s+to\s+(?:[a-z]:[\\/]|\\\\|the\s+folder|a\s+(?:new\s+)?folder|folder)",
+    r"|(?:move|point)\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?projects?\s+(?:to|at)\s+"
+    r"(?:[a-z]:[\\/]|\\\\|the\s+folder|a\s+(?:new\s+)?folder|folder)",
     re.IGNORECASE,
 )
 _P_ARCHIVE = re.compile(
@@ -1190,7 +1456,12 @@ _HUMAN_AGENT = frozenset(
 _AGENT_THING = re.compile(
     r"\s*(?:-|list\b|filing\b|forms?\b|letters?\b|agreements?\b|fees?\b|commissions?\b|licen[cs]es?\b|contracts?\b"
     r"|portal\b|reports?\b|strings?\b|code\b|class(?:es)?\b|loops?\b|framework\b|sdk\b|librar(?:y|ies)\b"
-    r"|functions?\b|toolkit\b|files?\b|ids?\b|of\s+(?:change|record|service)\b|for\s+(?:service|the\s+llc)\b)",
+    r"|functions?\b|toolkit\b|files?\b|ids?\b|of\s+(?:change|record|service)\b|for\s+(?:service|the\s+llc)\b"
+    # Review (Wave 3 group G): what an agent SAID or LEFT ("delete the agent
+    # notes", "pause the agent conversation") and a possessive ("remove the
+    # agent's signature") — the thing is the noun after, never the agent.
+    r"|notes?\b|minutes\b|transcripts?\b|logs?\b|conversations?\b|chats?\b|messages?\b|emails?\b|calls?\b"
+    r"|threads?\b|replies\b|answers?\b|outputs?\b|['’]s\b)",
     re.IGNORECASE,
 )
 _A_CREATE = re.compile(
@@ -1228,7 +1499,8 @@ _A_STRONG_FIELD = re.compile(
 _A_PAUSE = re.compile(
     r"(?:pause|resume|un-?pause|suspend|unsuspend|reactivate|re-?enable|disable|enable|turn\s+(?:off|on)"
     r"|switch\s+(?:off|on)|wake\s+up)\s+" + _DEF + r"?" + _WORDS + r"agents?(?![\w-])" + _TAIL
-    + r"|give\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?agents?\s+(?:a|the)\s+day\s+off",
+    + r"|give\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?agents?\s+(?:a|the)\s+day\s+off"
+    + r"|(?:turn|switch)\s+" + _DEF + r"(?:[\w'.&-]+\s+){0,3}?agents?\s+(?:back\s+)?(?:on|off)\b",
     re.IGNORECASE,
 )
 _A_DELETE = re.compile(
@@ -1283,7 +1555,8 @@ def _project_clause(c: str) -> bool:
         det = m.group("det").lower()
         definite_ok = verb.startswith("create") or det not in ("the", "my")
         indefinite = verb not in ("start", "open") or det in ("a", "an", "new", "another", "one")
-        if definite_ok and indefinite and _not_code(m.group("pre")) and _project_ok(m):
+        pre = m.group("pre") or ""
+        if definite_ok and indefinite and _not_code(pre) and not _PRE_PREP.search(pre) and _project_ok(m):
             return True
     m = _P_NEW.match(c)
     if m is not None and _OTHER_PLACE.search(m.group("tail")) is None:
@@ -1307,7 +1580,12 @@ def _agent_ok(pre: str, tail: str) -> bool:
 
 def _agent_clause(c: str) -> bool:
     m = _A_CREATE.match(c)
-    if m is not None and _not_code(m.group("pre")) and _agent_ok(m.group("pre"), m.group("tail")):
+    if (
+        m is not None
+        and _not_code(m.group("pre"))
+        and not _PRE_PREP.search(m.group("pre") or "")
+        and _agent_ok(m.group("pre"), m.group("tail"))
+    ):
         return True
     m = _A_NEW.match(c)
     if m is not None and _OTHER_PLACE.search(m.group("tail")) is None:
