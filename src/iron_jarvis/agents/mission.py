@@ -291,6 +291,12 @@ ASK_WORDS: dict[str, str] = {
     # couldn't use app connect" / "use generate media". The card's words
     # (lib/toolWords WORDS, pinned equal by test_receipt_seams_v13520).
     "app_connect": "connect an app",
+    # v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps).
+    "app_switch": "turn an app on or off",
+    "app_disconnect": "disconnect an app",
+    "app_import": "add an app from another program on this PC",
+    "channel_remove": "remove a notification destination",
+    "channel_alerts": "choose which alerts a destination gets",
     "write_document": "create a document",
     "excel_edit": "edit a workbook",
     "generate_media": "make an image, video or sound",
@@ -507,6 +513,12 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "workflow_schedule": ("scheduled a workflow", "workflow schedule"),
     "workflow_update": ("changed a workflow", "workflow change"),
     "app_connect": ("connected an app", "app connection"),
+    # v1.435.0 (Wave 3 group H): twin lib/runWords.ts AGENT_TOOLS.
+    "app_switch": ("switched an app on or off", "app switch"),
+    "app_disconnect": ("disconnected an app", "app disconnect"),
+    "app_import": ("added an app from another program", "app import"),
+    "channel_remove": ("removed a notification destination", "destination removal"),
+    "channel_alerts": ("changed which alerts a destination gets", "alert choice"),
     "generate_media": ("made an image, video or sound", "media generation"),
     # v1.364.0 (IJ harness Phase 1): the new coding tools the work line does
     # not word by kind (multi_edit / notebook_edit are "change", glob is
@@ -741,6 +753,8 @@ _PRESENT: dict[str, str] = {
     "presented": "present",
     # v1.376.0 (IJ harness part 2, Phase 5).
     "clicked": "click",
+    # v1.435.0 (Wave 3 group H).
+    "disconnected": "disconnect",
 }
 
 
@@ -841,6 +855,7 @@ _ING: dict[str, str] = {
     "switched": "switching", "tested": "testing", "took": "taking", "typed": "typing",
     "undid": "undoing", "waited": "waiting", "worked": "working", "applied": "applying",
     "stopped": "stopping", "presented": "presenting", "clicked": "clicking",
+    "disconnected": "disconnecting",
 }
 
 

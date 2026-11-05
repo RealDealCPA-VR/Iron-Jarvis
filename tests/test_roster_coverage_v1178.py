@@ -202,6 +202,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # The rest of AUDIT §6.3 + "undo that" — same reasoning: a card + Undo where the user is present.
     "webhook_update", "webhook_delete", "sentinel_update", "sentinel_delete", "goal_update",
     "goal_delete", "reflex_create", "reflex_update", "reflex_delete", "grant_revoke", "config_undo",
+    # v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps): an
+    # app's switch / disconnect / import, a destination's removal / alerts —
+    # a card + Undo where the user is present; pinned by
+    # tests/test_apps_destinations_v14350.py.
+    "app_switch", "app_disconnect", "app_import", "channel_remove", "channel_alerts",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

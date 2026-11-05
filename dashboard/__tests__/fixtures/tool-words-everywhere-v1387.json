@@ -2,9 +2,12 @@
   "about": "Readiness 12A (G22/G24): every built-in the REAL registry holds, with the card's words (agents/mission.card_words) and, for the ones the work line does not word by kind, its line words (step_line_words). Written by tests/test_tool_words_everywhere_v1387.py (IJ_REGEN_TOOL_WORDS_EVERYWHERE=1); read by dashboard/__tests__/tool-words-everywhere-v1387.test.tsx through the real card and work line.",
   "builtins": [
     "app_connect",
+    "app_disconnect",
     "app_health",
+    "app_import",
     "app_search",
     "app_status",
+    "app_switch",
     "apply_patch",
     "ask_user",
     "assign_work",
@@ -32,7 +35,9 @@
     "browser_scroll",
     "browser_type",
     "capability_propose",
+    "channel_alerts",
     "channel_connect",
+    "channel_remove",
     "channel_toggle",
     "code_load",
     "code_run",
@@ -178,9 +183,12 @@
   ],
   "card": {
     "app_connect": "connect an app",
+    "app_disconnect": "disconnect an app",
     "app_health": "check how Iron Jarvis is doing",
+    "app_import": "add an app from another program on this PC",
     "app_search": "search your Iron Jarvis setup",
     "app_status": "check your Iron Jarvis setup",
+    "app_switch": "turn an app on or off",
     "apply_patch": "change files with a patch",
     "ask_user": "ask you a question",
     "assign_work": "queue a task for a teammate",
@@ -208,7 +216,9 @@
     "browser_scroll": "act in a browser tab",
     "browser_type": "act in a browser tab",
     "capability_propose": "suggest a new ability for Iron Jarvis",
+    "channel_alerts": "choose which alerts a destination gets",
     "channel_connect": "add a notification channel",
+    "channel_remove": "remove a notification destination",
     "channel_toggle": "turn a channel's two-way messages on or off",
     "code_load": "open a saved script",
     "code_run": "run a saved script",
@@ -357,9 +367,17 @@
       "Connected an app",
       "Connecting an app"
     ],
+    "app_disconnect": [
+      "Disconnected an app",
+      "Disconnecting an app"
+    ],
     "app_health": [
       "Checked how Iron Jarvis is doing",
       "Checking how Iron Jarvis is doing"
+    ],
+    "app_import": [
+      "Added an app from another program",
+      "Adding an app from another program"
     ],
     "app_search": [
       "Searched your Iron Jarvis setup",
@@ -368,6 +386,10 @@
     "app_status": [
       "Checked your Iron Jarvis setup",
       "Checking your Iron Jarvis setup"
+    ],
+    "app_switch": [
+      "Switched an app on or off",
+      "Switching an app on or off"
     ],
     "apply_patch": [
       "Applied a patch",
@@ -417,9 +439,17 @@
       "Suggested a new ability for Iron Jarvis",
       "Suggesting a new ability for Iron Jarvis"
     ],
+    "channel_alerts": [
+      "Changed which alerts a destination gets",
+      "Changing which alerts a destination gets"
+    ],
     "channel_connect": [
       "Connected a messaging channel",
       "Connecting a messaging channel"
+    ],
+    "channel_remove": [
+      "Removed a notification destination",
+      "Removing a notification destination"
     ],
     "channel_toggle": [
       "Switched a messaging channel's listening",
@@ -832,9 +862,12 @@
   },
   "kind": {
     "app_connect": "",
+    "app_disconnect": "",
     "app_health": "",
+    "app_import": "",
     "app_search": "",
     "app_status": "",
+    "app_switch": "",
     "apply_patch": "",
     "ask_user": "",
     "assign_work": "",
@@ -862,7 +895,9 @@
     "browser_scroll": "browser",
     "browser_type": "browser",
     "capability_propose": "",
+    "channel_alerts": "",
     "channel_connect": "",
+    "channel_remove": "",
     "channel_toggle": "",
     "code_load": "",
     "code_run": "",
