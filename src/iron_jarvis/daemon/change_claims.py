@@ -25,12 +25,30 @@ WHAT COUNTS AS A CLAIM (deliberately narrow; when unsure, no note):
 
 NEVER A CLAIM: a question; an offer or a future ("I can turn it on", "Shall
 I…", "it will…", "once you approve…"); the user's own action ("you turned it
-on"); quoted words, code, a block quote; how a setting works ("When read
-aloud is on, …"); a sentence that points back to an EARLIER turn ("earlier",
-"already", "yesterday", "as I said", "in my last reply"); and a claim whose
-kind an EARLIER assistant message in this conversation already claimed (the
-reply may be summarising it — a claim the earlier reply's own note marked as
-not made does not count as that excuse).
+on", "…because you changed it in Settings"); quoted words, code, a block
+quote; how a setting works ("When read aloud is on, …"); a sentence that
+points back to an EARLIER turn ("earlier", "already", "yesterday", "as I
+said", "in my last reply"); and a claim an EARLIER assistant message in this
+conversation already made — same kind, same direction, no other value (the
+reply may be summarising it). A claim the earlier reply's own note marked as
+not made, and another agent's line in the chat, are no excuse; "…to
+Midnight" after "…to Daylight", or "turned off" after "turned on", is a NEW
+claim.
+
+REVIEW (Wave 5 group K) — what a record or a setting is, read narrowly: a
+record is the HEAD of the object's first noun phrase ("the notification
+email template" is a template, "a schedule of payments" a document), never a
+CPA's or a person's schedule ("the depreciation schedule", "Schedule C",
+"your schedule"), never another product's ("a GitHub Actions workflow", "a
+project in Asana", "the alerts in Datadog"), never in a sentence about the
+user's own content ("In the story, I created a rogue agent"). A setting
+claim never points into content or a file, is never code ("dark mode
+support", "…in config.py") and is never a thing MADE ("a Google Calendar
+reminder"). An undo is only of "that change" / "it" / a record. After an
+action in another app or on a web page (an app's own tool, a click, typing)
+no record, setting or undo claim is judged. "Done!" / "You're all set —"
+before a plain state ("the nightly schedule is gone", "Sonnet is your
+default") makes it a claim.
 
 THE RECORD (this turn only): ``tools_used`` (the calls that SUCCEEDED — a
 refused, failed, declined or still-waiting call is not in it) and the
@@ -272,11 +290,15 @@ _NOT_THE_RECORD_AFTER = frozenset(
 #: Words before "agent" that name someone else's agent.
 _NOT_OUR_AGENT_BEFORE = frozenset(
     {"travel", "estate", "insurance", "booking", "user", "support", "customer", "real",
-     "sales", "secret", "free", "double", "enrollment", "transfer", "leasing", "ai", "an"}
+     "sales", "secret", "free", "double", "enrollment", "transfer", "leasing", "ai", "an",
+     # Review (Wave 5 group K): a story's, a firm's or a call centre's agents.
+     "rogue", "undercover", "fbi", "cia", "special", "field", "enemy", "sleeper", "government",
+     "federal", "talent", "literary", "ticket", "registered", "human", "live", "service", "call",
+     "tax", "crewai", "langchain", "autogen"}
 )
 #: The user's own content: a record noun "in your spreadsheet" is something
 #: else ("a schedule in your spreadsheet", "the goal of this essay").
-_CONTENT = frozenset(
+_CONTENT_HEAD = frozenset(
     {
         "spreadsheet", "sheet", "sheets", "workbook", "document", "doc", "docs", "file", "files",
         "email", "emails", "calendar", "essay", "report", "presentation", "slide", "slides",
@@ -287,7 +309,24 @@ _CONTENT = frozenset(
         "\x00file",
     }
 )
-_ELSEWHERE_PREPS = frozenset({"in", "of", "inside", "into", "from", "on", "within"})
+#: …and, behind a preposition, more of it (Review, Wave 5 group K): a story,
+#: a tax return, a CPA's work papers, someone else's system ("removed the
+#: agent from the support queue"). Not read as a claim's FIRST word: "the
+#: account groups setting" is one of the app's.
+_CONTENT = _CONTENT_HEAD | frozenset(
+    {
+        "story", "stories", "novel", "plot", "scene", "chapter", "character", "characters",
+        "game", "resume", "cv", "return", "returns", "proposal", "form", "forms", "budget",
+        "forecast", "workpaper", "workpapers", "statement", "statements", "csv", "excel", "pdf",
+        "template", "templates", "queue", "ticket", "tickets", "account", "accounts",
+        "workspace", "org", "organization", "company", "portal", "crm", "config",
+        "configuration", "server", "campaign", "board",
+    }
+)
+#: Review (Wave 5 group K): "to", "with" and "using" too — "I've added three
+#: goals TO your plan", "an agent USING LangChain". Never "for": "a schedule
+#: FOR your weekly report" is one of Iron Jarvis's schedules.
+_ELSEWHERE_PREPS = frozenset({"in", "of", "inside", "into", "from", "on", "within", "to", "with", "using"})
 _DETS = frozenset({"your", "the", "this", "that", "my", "a", "an", "our", "these", "those"})
 #: A calendar item, never one of Iron Jarvis's schedules.
 _NOT_OUR_SCHEDULE = frozenset(
@@ -318,6 +357,136 @@ _IN_APP_CONTENT = frozenset(
 _UNDO_CODE = frozenset(
     {"file", "files", "line", "lines", "function", "commit", "commits", "edit", "edits", "code",
      "patch", "diff", "branch", "test", "tests", "\x00file", "import", "imports", "migration"}
+)
+
+# --- Review (Wave 5 group K): the guards the first cut lacked. Each one was a
+# FALSE note on a true reply, measured on replies outside the builder's table.
+
+#: The words that END an object's first noun phrase. A record is what a claim
+#: is about only as that phrase's HEAD (its last word): "the notification
+#: email template" is a template, "a cron schedule" (to the workflow file) a
+#: schedule, "the agent persona" a persona, "the project board" a board.
+_NP_END = _BOUNDARY | frozenset(
+    {"in", "of", "inside", "into", "from", "on", "within", "to", "for", "with", "at", "by",
+     "about", "under", "over", "that", "which", "who", "whose", "so", "using", "via", "across",
+     "between", "per", "after", "before", "when", "since", "called", "named", "titled",
+     "each", "every", "if", "once", "until", "unless"}
+)
+#: Before "schedule": someone else's schedule — a CPA's (depreciation,
+#: amortization, payment, lead…), a person's (work, workout, class…), never
+#: one of Iron Jarvis's. "Schedule C" never reaches here: its head is "c".
+_NOT_OUR_SCHEDULE_BEFORE = frozenset(
+    {
+        "depreciation", "amortization", "amortisation", "payment", "payments", "repayment",
+        "loan", "payroll", "tax", "fee", "fees", "rate", "rates", "price", "pricing", "work",
+        "workout", "training", "class", "exam", "shift", "school", "bus", "train", "flight",
+        "delivery", "shipping", "production", "filing", "billing", "invoice", "invoicing",
+        "vesting", "medication", "feeding", "cleaning", "study", "reading", "posting",
+        "content", "editorial", "release", "publishing", "project", "engagement", "audit",
+        "closing", "close", "asset", "assets", "lease", "debt", "interest", "cash", "inventory",
+        "supporting", "lead", "fixed", "accrual", "accruals", "prepaid", "rent", "rental",
+        "mortgage", "dividend", "distribution", "contribution", "commission", "sleep", "meal",
+        "travel", "itinerary", "game", "tour", "court", "hearing",
+    }
+)
+#: Another company's product: a record named with it is THAT product's ("a
+#: GitHub Actions workflow", "the alerts in Datadog", "a project in Asana") —
+#: and a claim after one of these words, behind a preposition, is work done
+#: there. The catalog's own app ids are added below.
+_EXTERNAL = frozenset(
+    {
+        "asana", "jira", "trello", "linear", "clickup", "monday", "basecamp", "airtable",
+        "hubspot", "salesforce", "zapier", "ifttt", "n8n", "datadog", "pagerduty", "sentry",
+        "stripe", "mailchimp", "shopify", "wordpress", "squarespace", "wix", "quickbooks",
+        "qbo", "xero", "freshbooks", "netsuite", "outlook", "teams", "zoom", "calendly",
+        "crewai", "langchain", "autogen", "windows", "macos", "linux", "android", "iphone",
+        "ios", "excel", "word", "powerpoint", "sheets", "docs", "chrome", "firefox", "safari",
+        "aws", "azure", "gcp", "kubernetes", "docker", "jenkins", "circleci", "gitlab",
+        "bitbucket", "vercel", "netlify", "heroku", "cloudflare", "twilio", "sendgrid",
+        "intercom", "zendesk", "freshdesk", "linkedin", "facebook", "instagram", "twitter",
+        "youtube", "tiktok", "canva", "figma", "miro", "dropbox", "onedrive", "sharepoint",
+        "icloud", "evernote", "todoist", "gusto", "adp", "paychex", "expensify", "ramp",
+        "brex", "plaid", "paypal", "venmo", "docusign", "adobe", "acrobat", "lacerte",
+        "ultratax", "drake", "proconnect", "cch", "axcess", "github", "gmail", "notion",
+        "slack", "microsoft", "postgres", "supabase", "firebase", "mongodb",
+        # …and the languages and frameworks a coding chat builds in.
+        "python", "javascript", "typescript", "java", "react", "nextjs", "nodejs",
+        "django", "flask", "fastapi", "langgraph", "llamaindex", "sdk", "framework",
+        "package", "npm", "pip",
+    }
+)
+#: Apps that ARE Iron Jarvis's notification destinations ("your Slack alerts"
+#: is a destination; "a Slack workflow" is Slack's).
+_NOTIFY_APPS = frozenset({"slack", "telegram", "discord", "email", "phone", "sms", "whatsapp", "signal"})
+#: An action OUTSIDE Iron Jarvis (an app's own tool, a click or typing in a
+#: web page or on the desktop): a claim after one may be about THAT change
+#: ("I turned on dark mode", "I created the project") and is not judged —
+#: the file twin's rule for a command, applied to another app.
+#: The change history was READ this turn ("what did you change?"): the
+#: reply recaps the ledger — earlier turns, other chats, the settings pages —
+#: so its "I turned on read aloud at 3:12" is a report, never this reply's.
+_RECAPS_THE_LEDGER = frozenset({"changes_list"})
+_ACTS_ELSEWHERE = frozenset(
+    {"browser_click", "browser_type", "browser_press_key", "browser_fill_form", "browser_navigate",
+     "page_click", "page_type", "web_action", "browse", "desktop"}
+)
+#: Words in a SETTING claim's object that make it code ("dark mode support",
+#: "the default model in the config"): never one of the app's settings.
+_CODE_WORDS = frozenset(
+    {
+        "support", "component", "components", "css", "html", "stylesheet", "function",
+        "functions", "class", "classes", "endpoint", "endpoints", "route", "routes",
+        "flag", "flags", "template", "templates", "config", "env", "variable",
+        "variables", "constant", "constants", "property", "properties", "prop", "props",
+        "schema", "code", "script", "scripts", "module", "modules", "\x00file", "test", "tests",
+        "reducer", "middleware", "migration", "migrations", "dockerfile", "yaml", "json",
+        "readme", "repo", "repository", "branch", "commit", "column", "columns", "query",
+        "handler", "handlers", "hook", "hooks", "jsx", "tsx", "frontend", "backend",
+    }
+)
+#: An undo's object: what Iron Jarvis's own Undo reverses — "that", "it",
+#: "the change", "your theme change". "I rolled back the release" and "I
+#: reverted the migration" are someone else's.
+_UNDO_OBJECT = frozenset(
+    {"it", "that", "this", "change", "changes", "last", "latest", "previous", "recent", "your",
+     "my", "the", "a", "setting", "settings", "for", "you", "me", "just", "now", "so", "again",
+     "one", "update"}
+)
+#: The verb a user's own action is told with: "…because YOU CHANGED it in
+#: Settings" — the sentence reports the user's change, never Jarvis's.
+_USER_ACTION_VERBS = frozenset(
+    {"turned", "switched", "set", "changed", "picked", "chose", "selected", "clicked", "pressed",
+     "toggled", "flipped", "made", "updated", "enabled", "disabled", "created", "added",
+     "deleted", "removed", "paused", "connected", "disconnected", "archived", "saved", "moved"}
+)
+#: A date in a claim's own words (before any "that runs…"): a report of an
+#: EARLIER change ("…was created on October 3", "I paused it on Monday").
+_MONTHS = frozenset(
+    {"january", "february", "march", "april", "june", "july", "august", "september", "october",
+     "november", "december", "jan", "feb", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov",
+     "dec"}
+)
+_WEEKDAYS = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+_DATE_PREPS = frozenset({"on", "in", "during"})
+_DATE_STOP = frozenset({"that", "which", "who", "to", "runs", "run", "will", "every", "each", "so"})
+_YEAR = re.compile(r"(?:19|20)\d\d$")
+_ORDINAL = re.compile(r"\d{1,2}(?:st|nd|rd|th)$")
+#: An offer, a future or a condition in a "this reply is Local only" sentence.
+_OFFER_WORDS = frozenset(
+    {"can", "could", "i'll", "we'll", "i'd", "we'd", "would", "should", "shall", "may", "might",
+     "want", "wants", "if", "once", "when", "whenever", "let", "let's", "lets", "try", "going",
+     "gonna", "able", "ready", "new"}
+)
+#: A completion said on its own ("Done!", "You're all set —"): the state
+#: after it ("the nightly schedule is gone", "Sonnet is your default") is a
+#: claim even with no "now".
+_DONE_LEADS: tuple[tuple[str, ...], ...] = (
+    ("done",), ("all", "done"), ("all", "set"), ("you're", "all", "set"),
+    ("you", "are", "all", "set"), ("that's", "done"), ("thats", "done"), ("finished",),
+    ("there", "you", "go"), ("ok", "done"), ("okay", "done"), ("all", "finished"),
+)
+_DONE_STATES = (
+    _STATE_ON | _STATE_OFF | _STATE_PAUSE | _STATE_REMOVE | frozenset({"connected", "disconnected"})
 )
 
 # --------------------------------------------------------------------------
@@ -507,65 +676,116 @@ def _object(toks: list[str], after: int) -> list[str]:
     return obj
 
 
-def _elsewhere(phrase: list[str]) -> bool:
-    """The words point at the user's own content ("in your spreadsheet",
-    "of this essay"), never one of Iron Jarvis's records."""
+def _elsewhere(phrase: list[str], *, brands: bool = True) -> bool:
+    """The words point at the user's own content or another product ("in
+    your spreadsheet", "of this essay", "to your plan", "in Asana", "from
+    the support queue"), never one of Iron Jarvis's records. The noun after
+    the preposition is read up to three words in (its determiners skipped),
+    stopping at the next preposition. *brands* False reads content only (a
+    setting's value may be a brand: "your default model to Claude")."""
+    return bool(_elsewhere_words(phrase, brands=brands))
+
+
+def _elsewhere_words(phrase: list[str], *, brands: bool = True) -> set[str]:
+    """The words that make :func:`_elsewhere` true (empty when it is not)."""
+    out: set[str] = set()
+    n = len(phrase)
     for i, t in enumerate(phrase):
         if t not in _ELSEWHERE_PREPS:
             continue
-        nxt = phrase[i + 1] if i + 1 < len(phrase) else ""
-        if nxt in _DETS and i + 2 < len(phrase):
-            nxt = phrase[i + 2]
-        if nxt in _CONTENT:
-            return True
-    return False
+        j = i + 1
+        while j < n and j <= i + 2 and phrase[j] in _DETS:
+            j += 1
+        for k in range(j, min(n, j + 3)):
+            w = phrase[k]
+            if t == "to" and w in _NOTIFY_APPS:
+                break  # "…posts TO Slack": one of Iron Jarvis's destinations
+            if w in _CONTENT or (brands and w in _EXTERNAL):
+                out.add(w)
+                break
+            if w in _NP_END:
+                break
+    return out
+
+
+#: Words that END a noun phrase but may also OPEN one ("that always-allow",
+#: "every schedule").
+_LEADS_NP = _DETS | frozenset({"every", "each"})
+
+
+def _np(phrase: list[str]) -> list[str]:
+    """The object's FIRST noun phrase: its words up to the first word that
+    ends one (a preposition, a relative, "called"…)."""
+    for i, t in enumerate(phrase):
+        if t in _NP_END and not (i == 0 and t in _LEADS_NP):  # "that always-allow", "every schedule"
+            return phrase[:i]
+    return phrase
+
+
+#: A recurring "rule" is a reflex rule: "a rule that sends …".
+_RULE_VERBS = frozenset({"runs", "fires", "starts", "sends", "notifies", "triggers", "watches", "alerts", "will"})
+
+
+def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> str:
+    """The record kind the noun phrase *np* is ABOUT — read off its head (its
+    last word) — or "" (Review, Wave 5 group K: the first cut read a record
+    noun anywhere in fourteen words, so "the notification email template",
+    "a Goals section with three goals" and "the depreciation schedule" were
+    each one of Iron Jarvis's records)."""
+    if not np:
+        return ""
+    head = np[-1]
+    prv = np[-2] if len(np) > 1 else ""
+    mods = np[:-1]
+    nxt = rest[0] if rest else ""
+    after = rest[1] if len(rest) > 1 else ""
+    brand = _EXTERNAL.intersection(mods)
+    if nxt in _NOT_THE_RECORD_AFTER:
+        return ""  # "a schedule OF payments", "the goal OF this essay": a document's
+    if head in ("schedule", "schedules"):
+        if prv in _NOT_OUR_SCHEDULE_BEFORE or brand or nxt in _NOT_OUR_SCHEDULE:
+            return ""
+        if np in (["your", "schedule"], ["my", "schedule"]):
+            return ""  # a person's calendar ("I updated your schedule")
+        return "schedule"
+    if brand and not (head in ("notification", "notifications", "alert", "alerts") and brand <= _NOTIFY_APPS):
+        return ""  # "a GitHub Actions workflow", "your Mailchimp campaign agent"
+    if head in ("workflow", "workflows"):
+        return "workflow"
+    if head in ("webhook", "webhooks"):
+        return "webhook"
+    if head in ("watcher", "watchers", "sentinel", "sentinels"):
+        return "watcher"
+    if head in ("goal", "goals"):
+        return "" if prv in ("soccer", "football", "hockey", "field", "own") else "goal"
+    if head in ("rule", "rules"):
+        if prv in ("reflex", "automation", "trigger", "signal") or (
+            nxt in ("that", "which") and after in _RULE_VERBS
+        ):
+            return "rule"
+        return ""
+    if head == "allow" and prv == "always":
+        return "grant"
+    if head in ("project", "projects"):
+        return "project" if (_DETS.intersection(mods) or nxt in ("called", "named")) else ""
+    if head in ("agent", "agents"):
+        return "" if (prv in _NOT_OUR_AGENT_BEFORE or prv == "sub") else "agent"
+    if head in ("destination", "destinations"):
+        return "destination" if _NOTIFY_WORDS.intersection(sentence_toks) else ""
+    if head in ("notification", "notifications", "alert", "alerts"):
+        return "destination"
+    return ""
 
 
 def _records_in(phrase: list[str], verb_word: str, sentence_toks: list[str]) -> list[str]:
-    """The record kinds *phrase* names (a noun with its guards)."""
+    """The record kinds *phrase* names (its head noun, with its guards)."""
     out: list[str] = []
     if _elsewhere(phrase):
         return out
-
-    def add(kind: str) -> None:
-        if kind not in out:
-            out.append(kind)
-
-    for i, t in enumerate(phrase):
-        prv = phrase[i - 1] if i > 0 else ""
-        nxt = phrase[i + 1] if i + 1 < len(phrase) else ""
-        if nxt in _NOT_THE_RECORD_AFTER:
-            continue
-        if t in ("schedule", "schedules"):
-            if nxt not in _NOT_OUR_SCHEDULE and not (nxt in _DETS and i + 2 < len(phrase) and phrase[i + 2] in _NOT_OUR_SCHEDULE):
-                add("schedule")
-        elif t in ("workflow", "workflows"):
-            add("workflow")
-        elif t in ("webhook", "webhooks"):
-            add("webhook")
-        elif t in ("watcher", "watchers", "sentinel", "sentinels"):
-            add("watcher")
-        elif t in ("goal", "goals") and prv not in ("soccer", "football", "hockey", "field", "own"):
-            add("goal")
-        elif t in ("rule", "rules") and (
-            prv in ("reflex", "automation", "trigger", "signal")
-            or (nxt in ("that", "which") and i + 2 < len(phrase) and phrase[i + 2] in (
-                "runs", "fires", "starts", "sends", "notifies", "triggers", "watches", "alerts", "will"
-            ))
-        ):
-            add("rule")
-        elif t == "always" and nxt == "allow":
-            add("grant")
-        elif t in ("project", "projects") and (
-            _DETS.intersection(phrase[:i]) or nxt in ("called", "named")
-        ):
-            add("project")
-        elif t in ("agent", "agents") and prv not in _NOT_OUR_AGENT_BEFORE and prv != "sub":
-            add("agent")
-        elif t in ("destination", "destinations") and _NOTIFY_WORDS.intersection(sentence_toks):
-            add("destination")
-        elif t in ("notification", "notifications", "alert", "alerts"):
-            add("destination")
+    np = _np(phrase)
+    kind = _record_kind(np, phrase[len(np):], sentence_toks)
+    if kind:
+        out.append(kind)
     if verb_word == "scheduled":
         # "I scheduled the triage workflow to run every morning" — a schedule
         # (the thing the claim is about, so it leads); "I scheduled a meeting
@@ -649,9 +869,44 @@ def _head(phrase: list[str]) -> str:
     return ""
 
 
+_INDEFINITE = frozenset({"a", "an", "another", "some", "new"})
+
+
+def _setting_words_ok(claim: Claim, phrase: list[str]) -> bool:
+    """May *phrase* name one of the app's settings at all? (Review, Wave 5
+    group K.) Never a thing MADE ("I set up A Google Calendar reminder": a
+    setting is changed, never created). The words that make it code or
+    content are judged per setting (:func:`_vetoed`)."""
+    return not (claim.verb == CREATE and phrase[:1] and phrase[0] in _INDEFINITE)
+
+
+def _label_words(key: str) -> set[str]:
+    try:
+        from ..settings import schema
+
+        d = schema.BY_KEY.get(key)
+        if d is None:
+            return set()
+        return set(re.findall(r"[a-z0-9]+", " ".join([d.label, *d.aliases]).lower()))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _vetoed(keys: list[str], phrase: list[str]) -> list[str]:
+    """*keys* without the settings the words are not about: a claim that
+    points into the user's own content or a file ("the default model IN
+    CONFIG.PY") or is code ("dark mode SUPPORT") names no setting — unless
+    that word is the setting's OWN ("the Custom ENDPOINT URL setting", "Share
+    my profile with Claude CODE")."""
+    veto = set(_CODE_WORDS.intersection(phrase)) | _elsewhere_words(phrase, brands=False)
+    if not veto:
+        return keys
+    return [k for k in keys if veto <= _label_words(k)]
+
+
 def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list[str]) -> None:
     claim.phrase = phrase
-    if _head(phrase) in _CONTENT:
+    if _head(phrase) in _CONTENT_HEAD:
         return  # "I changed the email to ask first": the user's own content
     if {"preference", "preferences", "memory", "memories", "lesson", "lessons"}.intersection(phrase):
         return  # a kept preference is memory (``remember_preference``), not a setting
@@ -661,10 +916,14 @@ def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list
         claim.local_only = True
     if claim.verb in _KIND_VERBS["record"]:
         claim.records = _records_in(phrase, claim.word, sentence_toks)
-    if claim.verb in _KIND_VERBS["app"]:
-        claim.apps = _app_ids(phrase_text, claim.word.split()[0], phrase)
-    if claim.verb in _KIND_VERBS["setting"] and not claim.local_only:
-        claim.settings = _setting_keys(phrase_text)
+    if claim.verb in _KIND_VERBS["app"] and phrase[:1] != ["to"]:
+        # Review: the app is the claim's OBJECT ("I've connected GitHub"),
+        # never a word further on ("enabled two-factor authentication on your
+        # GitHub account" is work in GitHub).
+        np = _np(phrase)
+        claim.apps = _app_ids(" ".join(np), claim.word.split()[0], np)
+    if claim.verb in _KIND_VERBS["setting"] and not claim.local_only and _setting_words_ok(claim, phrase):
+        claim.settings = _vetoed(_setting_keys(phrase_text), phrase)
     if claim.local_only and claim.verb not in _KIND_VERBS["local_only"]:
         claim.local_only = False
     if claim.local_only:
@@ -694,8 +953,66 @@ def _state_family(pred: list[str]) -> str:
     return CHANGE
 
 
-def _claims_in_sentence(sentence: str) -> list[Claim]:
-    """Every change claim one sentence makes. Never raises."""
+def _done_lead(toks: list[str]) -> int:
+    """The length of a completion said first ("Done —", "You're all set:")
+    when one opens *toks* and ends the sentence or its clause; else 0."""
+    for lead in _DONE_LEADS:
+        n = len(lead)
+        if tuple(toks[:n]) == lead and (len(toks) == n or toks[n] in _BOUNDARY):
+            return n
+    return 0
+
+
+def _dated(phrase: list[str]) -> bool:
+    """The claim's own words name WHEN it happened ("on October 3", "in
+    2025", "on Monday") — a report of an earlier change, never this reply's.
+    Only before the words that describe the thing ("a schedule that runs on
+    Monday" is no date)."""
+    n = len(phrase)
+    for i, t in enumerate(phrase):
+        if t in _DATE_STOP:
+            return False
+        if t not in _DATE_PREPS or i + 1 >= n:
+            continue
+        nxt = phrase[i + 1]
+        if nxt in _DETS and i + 2 < n:
+            nxt = phrase[i + 2]
+        if nxt in _MONTHS or nxt in _WEEKDAYS or _YEAR.match(nxt) or _ORDINAL.match(nxt):
+            return True
+    return False
+
+
+def _user_acted(toks: list[str]) -> bool:
+    """The sentence tells the USER's own change: "because you changed it in
+    Settings", "you just switched it" (Review, Wave 5 group K)."""
+    for j in range(len(toks) - 1):
+        if toks[j] not in ("you", "you've"):
+            continue
+        nxt = toks[j + 1]
+        if nxt in _ADVERBS and j + 2 < len(toks):
+            nxt = toks[j + 2]
+        if nxt in _USER_ACTION_VERBS:
+            return True
+    return False
+
+
+def _undo_object_ok(obj: list[str]) -> bool:
+    """An undo's object is one of Iron Jarvis's own undos: nothing, "it",
+    "that change", "your theme change", a record ("the schedule change") —
+    never a release, a migration or a document."""
+    np = _np(obj)
+    if _UNDO_CODE.intersection(obj):
+        return False
+    if not np or all(t in _UNDO_OBJECT for t in np):
+        return True
+    return np[-1] in ("change", "changes", "update", "setting", "settings") or bool(
+        _record_kind(np, obj[len(np):], obj)
+    )
+
+
+def _claims_in_sentence(sentence: str, after_done: bool = False) -> list[Claim]:
+    """Every change claim one sentence makes. *after_done*: the sentence
+    before this one was only a completion ("Done!"). Never raises."""
     if sentence.endswith("?"):
         return []
     toks = _tokens(sentence)[: MAX_SENTENCE]
@@ -707,10 +1024,16 @@ def _claims_in_sentence(sentence: str) -> list[Claim]:
     core = [t for t in toks if t not in _INTERJECTIONS and t not in _BOUNDARY]
     if core in (["undone"], ["reverted"], ["rolled", "back"]):
         return [Claim(verb=UNDO, word=core[0], undo=True)]
+    # Review (Wave 5 group K): a sentence about the user's own content or
+    # another product ("In the story, I created a rogue agent", "…the
+    # formatting changes in your doc") names none of Iron Jarvis's records.
+    content_sentence = _elsewhere(toks)
+    user_acted = _user_acted(toks)
+    done = after_done or bool(_done_lead(toks))
     # Passive and state forms: "<subject> is now <state>", "<subject> has been
     # <verb>", "<subject> was <verb>".
     for k, t in enumerate(toks):
-        if len(out) >= MAX_CLAIMS:
+        if len(out) >= MAX_CLAIMS or user_acted:
             break
         if t not in ("is", "are", "was", "were", "has", "have", "it's"):
             continue
@@ -741,6 +1064,18 @@ def _claims_in_sentence(sentence: str) -> list[Claim]:
         elif t in ("is", "are") and rest[:2] == ["all", "set"]:
             claim = Claim(verb=CREATE, word="set up")
             phrase = list(subj)
+        elif done and t in ("is", "are") and rest[0] in _DONE_STATES and "default" not in rest:
+            # Review: after "Done!" / "You're all set —" a plain state is the
+            # claim: "the nightly backup schedule is gone".
+            claim = Claim(verb=_state_family(rest[:1]), word=rest[0])
+            phrase = list(subj)
+        elif done and t in ("is", "are") and rest[:1] == ["your"] and "default" in rest[1:3]:
+            # …and "Sonnet is your default (model)".
+            claim = Claim(verb=CHANGE, word="changed")
+            named = rest[2:3] if rest[1] == "default" else rest[3:4]
+            if not named and any(_MODEL_NAME.match(w) for w in subj):
+                rest = rest[:3] + ["model"]  # "Sonnet is your default" names the model
+            phrase = rest + ["to"] + subj
         elif t in ("has", "have") and rest[0] == "been" and len(rest) > 1:
             j = 1
             while j < len(rest) and rest[j] in ("successfully", "now", "also", "just"):
@@ -767,13 +1102,21 @@ def _claims_in_sentence(sentence: str) -> list[Claim]:
             if after_by and after_by[0] not in ("me", "jarvis", "iron"):
                 continue
         if claim.verb == UNDO:
-            if {"change", "changes", "that", "it", "this"}.intersection(subj) and not _UNDO_CODE.intersection(subj):
+            if (
+                {"change", "changes", "that", "it", "this"}.intersection(subj)
+                and not _UNDO_CODE.intersection(subj)
+                and not content_sentence
+            ):
                 claim.undo = True
                 out.append(claim)
             continue
         if any(w in _NOT_A_CLAIM_BEFORE - {"your", "this", "that", "it"} for w in subj):
             continue
+        if _dated(phrase):
+            continue
         _fill(claim, phrase, " ".join(phrase), toks)
+        if content_sentence:
+            claim.records = []
         if claim.named():
             out.append(claim)
             used.update(range(start, k + 1))
@@ -795,12 +1138,19 @@ def _claims_in_sentence(sentence: str) -> list[Claim]:
         obj = _object(toks, after)
         claim = Claim(verb=family, word=word)
         if family == UNDO:
-            if not _UNDO_CODE.intersection(obj):
+            # Review: an undo of a release, a migration or a document is not
+            # one of Iron Jarvis's ("I rolled back the release").
+            if _undo_object_ok(obj) and not content_sentence:
                 claim.undo = True
                 out.append(claim)
             i = after
             continue
+        if word != "scheduled" and _dated(obj):
+            i = after
+            continue
         _fill(claim, obj, " ".join(obj), toks)
+        if content_sentence:
+            claim.records = []
         if claim.named():
             out.append(claim)
         i = after
@@ -812,10 +1162,14 @@ def claims_in(text: str) -> list[Claim]:
     docstring). Pure and bounded; never raises."""
     try:
         out: list[Claim] = []
+        after_done = False
         for s in _sentences(_clean(text)):
-            out.extend(_claims_in_sentence(s))
+            out.extend(_claims_in_sentence(s, after_done))
             if len(out) >= MAX_CLAIMS:
                 break
+            # A sentence that is only "Done!" makes the next one's state a claim.
+            toks = _tokens(s)[:8]
+            after_done = bool(toks) and _done_lead(toks) == len(toks)
         return out[:MAX_CLAIMS]
     except Exception:  # noqa: BLE001 — a fault claims nothing
         return []
@@ -857,6 +1211,10 @@ def claims_this_reply_local(text: str) -> bool:
                 continue  # every form names Local only itself
             toks = _tokens(low)
             if _negated(toks) or "next" in toks or "will" in toks and "be" not in toks:
+                continue
+            if _OFFER_WORDS.intersection(toks):
+                # Review: an offer, a condition or the new-chats setting ("I can
+                # turn Local only on right away", "…right away for new chats").
                 continue
             if any(rx.search(low) for rx in _THIS_REPLY_LOCAL):
                 return True
@@ -1064,6 +1422,8 @@ def _participle(claim: Claim) -> str:
     word = claim.word
     if word == "scheduled":
         return "created"
+    if word == "gone":
+        return "removed"  # Review: "the schedule is now gone" — never "was gone"
     if claim.verb == CHANGE and word in ("switched", "made", "put", "moved", "configured", "set"):
         return "changed"
     if claim.verb == CREATE and word in ("built", "made", "saved", "added", "set up"):
@@ -1106,25 +1466,118 @@ THIS_REPLY_NOT_LOCAL = "This reply was not kept Local only"
 NEXT_MESSAGE = "; Local only applies from your next message"
 
 
-def _excused(history: Iterable[Any]) -> set[tuple[str, str]]:
-    """The kinds an EARLIER assistant message in this conversation claimed —
-    this reply may be summarising them. A claim that message's own note said
-    was not made does not count."""
-    out: set[tuple[str, str]] = set()
+#: Another agent's words in the chat's history (an @-agent, a remote agent, a
+#: run delivered to the chat): never Iron Jarvis's own earlier claim. The
+#: SAME words ``comm.threads.agent_line_label`` and the page's
+#: ``toRequestMessages`` put first on such a line.
+_AGENT_LINE_PREFIX = "[Reply from the agent "
+
+#: The words of a claim that are not its VALUE ("Sonnet", "Daylight", "9pm").
+_NOT_A_VALUE = (
+    _DETS
+    | _STATE_ON | _STATE_OFF | _STATE_PAUSE | _STATE_REMOVE | _STATE_CREATE
+    | frozenset(
+        {"to", "for", "you", "me", "it", "on", "off", "now", "in", "of", "with", "at", "this",
+         "chat", "chats", "reply", "replies", "again", "also", "all", "as", "requested", "asked",
+         "so", "and", "is", "are", "set", "up", "mode", "setting", "settings", "option", "switch",
+         "feature", "here", "there", "just", "both", "its", "it's", "default", "new", "every",
+         "one", "please", "already", "still", "too", "that", "which", "will", "be", "by", "from",
+         "back", "over", "away", "whole", "app", "jarvis", "iron", "conversation", "turned",
+         "switched", "rolled", "hooked", "gone", "connected", "disconnected", "undone"}
+    )
+    | frozenset(_VERBS)
+)
+#: The verb DIRECTION a summary must share with its earlier claim: turning
+#: something on, making it, connecting it or changing it are one direction;
+#: each of the ways back is its own ("paused" is never "deleted").
+_POSITIVE = frozenset({ON, CREATE, CONNECT, CHANGE})
+
+
+def _direction(claim: Claim) -> str:
+    if claim.verb in _POSITIVE:
+        return "positive"
+    if claim.verb == PAUSE:
+        return "resume" if claim.word in ("resumed", "restarted") else "pause"
+    if claim.verb == UNDO:
+        return UNDO
+    return claim.verb
+
+
+def _values(claim: Claim) -> set[str]:
+    """The words a claim says the thing was changed TO or about — its value —
+    minus its setting's own label and aliases and the record nouns."""
+    words = {t for t in claim.phrase if t not in _NOT_A_VALUE}
+    words -= set(_RECORD_NOUN) | {f"{n}s" for n in _RECORD_NOUN}
+    try:
+        from ..settings import schema
+
+        for k in claim.settings:
+            d = schema.BY_KEY.get(k)
+            if d is not None:
+                words -= set(re.findall(r"[a-z0-9]+", " ".join([d.label, *d.aliases]).lower()))
+    except Exception:  # noqa: BLE001 — every word stays a value
+        pass
+    return words
+
+
+def _excused(history: Iterable[Any]) -> list[tuple[set[tuple[str, str]], str, set[str]]]:
+    """The claims EARLIER assistant messages in this conversation made — this
+    reply may be summarising them. A claim that message's own note said was
+    not made does not count, and neither does another agent's line.
+
+    Review (Wave 5 group K): the first cut kept only the KIND of each earlier
+    claim, so one true "I set your theme to Daylight" excused every later
+    false "I switched your theme to Midnight", and one true "I turned on read
+    aloud" a false "I turned it off" — for six messages. A claim is now only
+    excused by an earlier one of the same kind, the same direction and no
+    other value (:func:`_is_excused`). Each earlier claim is kept as its
+    kinds, direction and values, worked out once."""
+    out: list[tuple[set[tuple[str, str]], str, set[str]]] = []
     msgs = [m for m in (history or ()) if str(getattr(m, "role", "") or "") == "assistant"]
     for m in msgs[-MAX_HISTORY_MESSAGES:]:
         content = getattr(m, "content", "")
         if not isinstance(content, str) or not content.strip():
             continue
+        if content.lstrip().startswith(_AGENT_LINE_PREFIX):
+            continue  # another agent said it, never Iron Jarvis
         text = content[-MAX_HISTORY_CHARS:]
         noted = " ".join(
             ln for ln in text.split("\n") if ln.lstrip().startswith("_Note:") and IN_THIS_REPLY in ln
         ).lower()
         for c in claims_in(text):
-            if noted and sentence_for(c).lower().rstrip(".") in noted:
+            if noted and _noted_as_not_made(c, noted):
                 continue
-            out |= c.candidates()
+            out.append((c.candidates(), _direction(c), _values(c)))
     return out
+
+
+def _noted_as_not_made(claim: Claim, noted: str) -> bool:
+    """Did the earlier reply's own note say *claim* was not made? Its
+    sentence as said with no card ("Notion was not connected…") or with a
+    card still waiting for the key ("Notion is not connected yet…")."""
+    if sentence_for(claim).lower().rstrip(".") in noted:
+        return True
+    for a in claim.apps:
+        name = (_app_name(a) or "the app").lower()
+        if f"{name} is not connected yet" in noted:
+            return True
+    return False
+
+
+def _is_excused(claim: Claim, earlier: "list[tuple[set[tuple[str, str]], str, set[str]]]") -> bool:
+    """An earlier claim of the same kind, in the same direction, with no
+    value this one does not share (both naming a value and the values
+    differing is a NEW change: "…to Midnight" after "…to Daylight")."""
+    cands = claim.candidates()
+    direction = _direction(claim)
+    mine = _values(claim)
+    for their_cands, their_direction, theirs in earlier:
+        if not (their_cands & cands) or their_direction != direction:
+            continue
+        if mine and theirs and not mine <= theirs:
+            continue
+        return True
+    return False
 
 
 def _earlier_turns(history: Iterable[Any]) -> list[Any]:
@@ -1163,8 +1616,16 @@ def claimed_change_note(
         return ""
 
 
+#: The reply Iron Jarvis writes itself when the model wrote none
+#: (``chat_turn._no_text_reply``): it quotes a TOOL's own output, which is
+#: never the model's claim.
+_NO_TEXT_LEAD = "The model finished without writing an answer."
+
+
 def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_only) -> str:
     if not reply or not str(reply).strip():
+        return ""
+    if str(reply).lstrip().startswith(_NO_TEXT_LEAD):
         return ""
     record = TurnRecord.build(tools_used, config_cards)
     said: list[str] = []
@@ -1192,6 +1653,13 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
     except Exception:  # noqa: BLE001
         _FILE_CHANGING_TOOLS = frozenset()  # type: ignore[assignment]
     coding = bool(record.used & _FILE_CHANGING_TOOLS)
+    # Review (Wave 5 group K): an action in ANOTHER app or a web page (an app's
+    # own tool, a click, typing) may be what the reply is about — "I created
+    # the project", "I turned on dark mode" after clicks on a site.
+    elsewhere = (
+        bool(record.used & (_ACTS_ELSEWHERE | _RECAPS_THE_LEDGER))
+        or any(n.startswith("mcp__") for n in record.used)
+    )
     claims = claims_in(reply)
     if not claims:
         return _line(said)
@@ -1203,9 +1671,13 @@ def _note(reply, tools_used, config_cards, history, custom_tools, reply_local_on
             claim.records, claim.apps, claim.undo = [], [], False
             if not claim.named():
                 continue
+        if elsewhere:
+            claim.records, claim.settings, claim.undo = [], [], False
+            if not claim.named():
+                continue
         if record.answers(claim):
             continue
-        if claim.candidates() & excused:
+        if _is_excused(claim, excused):
             continue
         s = sentence_for(claim, record)
         if s and s not in said:
