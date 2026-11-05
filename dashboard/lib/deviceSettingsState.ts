@@ -18,6 +18,20 @@ export interface DeviceSettingsState {
   /** The read in flight, and whether one more read was asked for. */
   inFlight: Promise<void> | null;
   again: boolean;
+  /** v1.433.0 review: saves go one at a time, in press order (the tail). */
+  writeChain: Promise<unknown>;
+  /** Saves not yet answered, by key: a read answering meanwhile may hold the
+   *  row from BEFORE the press, so it never decides that key. */
+  pending: Map<string, number>;
+  /** A count per key, moved by every save, so a read can tell a press landed
+   *  while it was out. */
+  seq: Map<string, number>;
+  /** The daemon's value for each key as last read or saved (what a failed
+   *  save puts back as known). */
+  confirmed: Map<string, DeviceValue>;
+  /** A read set a key aside for a save still out: read again once the saves
+   *  are answered. */
+  recheck: boolean;
 }
 
 export const deviceSettingsState: DeviceSettingsState = {
@@ -25,6 +39,11 @@ export const deviceSettingsState: DeviceSettingsState = {
   listeners: new Map(),
   inFlight: null,
   again: false,
+  writeChain: Promise.resolve(),
+  pending: new Map(),
+  seq: new Map(),
+  confirmed: new Map(),
+  recheck: false,
 };
 
 /** Where `known` is kept between visits. */
@@ -36,6 +55,11 @@ export function __resetDeviceSettings(): void {
   deviceSettingsState.inFlight = null;
   deviceSettingsState.again = false;
   deviceSettingsState.listeners.clear();
+  deviceSettingsState.writeChain = Promise.resolve();
+  deviceSettingsState.pending = new Map();
+  deviceSettingsState.seq = new Map();
+  deviceSettingsState.confirmed = new Map();
+  deviceSettingsState.recheck = false;
   try {
     window.localStorage.removeItem(KNOWN_STORAGE_KEY);
   } catch {

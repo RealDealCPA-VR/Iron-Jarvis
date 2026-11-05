@@ -94,10 +94,14 @@ _SECRET_SHAPES = [
     # v1.433.0 (A4): a Discord webhook address, and a database connection
     # string that carries a password — the same two the dashboard holds back.
     re.compile(
-        r"\bhttps?://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api(?:/v\d+)?/webhooks/\d{5,}/[A-Za-z0-9_-]{20,}",
+        r"\bdiscord(?:app)?\.com/api(?:/v\d+)?/webhooks/\d{5,}/[A-Za-z0-9_-]{20,}",
         re.I | _A,
     ),
-    re.compile(r"\b(?:postgres(?:ql)?|mysql)(?:\+[a-z0-9]+)?://[^\s:/@]*:[^\s@/]+@[^\s/]", re.I | _A),
+    re.compile(
+        r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|mssql|sqlserver)(?:\+[a-z0-9]+)?://"
+        r"[^\s:/@]*:[^\s@/]+(?:/[^\s@/?#]*)*@[^\s/]",
+        re.I | _A,
+    ),
 ]
 #: lib/workTarget EXTRA_SECRET_SHAPES.
 _EXTRA_SECRET_SHAPES = [

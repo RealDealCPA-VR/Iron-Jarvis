@@ -35,6 +35,20 @@
  * set from chat, from the Settings rows, or from another window of this
  * device — is applied.
  *
+ * v1.433.0 review, three more rules:
+ *  - A save not yet answered decides its key: a read that answers meanwhile
+ *    (the window's first read, or the read a previous save's
+ *    `config.changed` started) may hold the row from BEFORE the press, so it
+ *    is set aside for that key and read again once the saves are answered.
+ *  - Saves go one at a time, in press order, so the row ends on the LAST
+ *    press (two PUTs at once may land in either order).
+ *  - The FIRST time this browser sees a key (upgrade day: these rows did
+ *    nothing on screen before this release, so a row set back then is older
+ *    than what the person sees), a value the screen already keeps wins, and
+ *    a row that says otherwise is set to it — else a later chat change to
+ *    the row's old value would raise no event and never reach the screen. A
+ *    screen that keeps nothing for the key takes the row.
+ *
  * An older daemon answers 404 for /settings/device: nothing is applied and a
  * press still works exactly as before (the write is best effort). Kept out of
  * lib/api.ts (most page tests mock that module wholesale), and it imports
@@ -49,7 +63,7 @@ import {
   deviceSettingsState as state,
   type DeviceValue,
 } from "@/lib/deviceSettingsState";
-import { THEMES, applyTheme, isCustomTheme, type Mark } from "@/lib/theme";
+import { THEMES, THEME_STORAGE_KEY, allThemes, applyTheme, isCustomTheme, type Mark } from "@/lib/theme";
 
 export { __resetDeviceSettings } from "@/lib/deviceSettingsState";
 
@@ -192,6 +206,40 @@ function applyOne(key: AppliedDeviceKey, value: unknown): boolean {
   return false;
 }
 
+/** What the screen ALREADY keeps for a key in its own storage, or
+ *  `undefined` when it keeps nothing (it shows the default). A theme of the
+ *  user's own is kept as `null`: the row only holds built-in themes. */
+function screenValue(key: AppliedDeviceKey): Value | undefined {
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(
+      key === DEVICE_THEME_KEY
+        ? THEME_STORAGE_KEY
+        : key === DEVICE_PERSONA_KEY
+          ? PERSONA_STORAGE_KEY
+          : key === DEVICE_AUTO_TOOLS_KEY
+            ? AUTO_TOOLS_STORAGE_KEY
+            : READ_ALOUD_STORAGE_KEY,
+    );
+  } catch {
+    return undefined;
+  }
+  if (raw === null) return undefined;
+  switch (key) {
+    case DEVICE_THEME_KEY:
+      if (isBuiltinThemeId(raw)) return raw;
+      // A palette that still exists is the user's own choice; a stale id
+      // (a deleted palette) paints the default, so it is no choice.
+      return isCustomTheme(raw) && allThemes().some((t) => t.id === raw) ? null : undefined;
+    case DEVICE_PERSONA_KEY:
+      return raw.trim() ? raw.trim() : undefined;
+    case DEVICE_AUTO_TOOLS_KEY:
+    case DEVICE_READ_ALOUD_KEY:
+      return raw === "1" ? true : raw === "0" ? false : undefined;
+  }
+  return undefined;
+}
+
 /** The `values` of a GET/PUT /settings/device answer, or null. */
 export function deviceValuesFrom(raw: unknown): Record<string, unknown> | null {
   if (!raw || typeof raw !== "object") return null;
@@ -203,21 +251,44 @@ export function deviceValuesFrom(raw: unknown): Record<string, unknown> | null {
 
 /** Apply every value of `values` that changed since this window last knew
  *  it. Exported for the tests; the bridge goes through
- *  `refreshDeviceSettings`. */
-export function applyDeviceValues(values: Record<string, unknown>): void {
+ *  `refreshDeviceSettings`, which passes `setAside` — true for a key a save
+ *  owns while this read was out (the value is then left for a later read).
+ *  The first look at a key keeps what the screen already holds (see the
+ *  module comment). */
+export function applyDeviceValues(
+  values: Record<string, unknown>,
+  setAside?: (key: AppliedDeviceKey) => boolean,
+): void {
   const map = knownMap();
   let moved = false;
+  const reconcile: Partial<Record<AppliedDeviceKey, Value>> = {};
   for (const key of APPLIED_DEVICE_KEYS) {
     // A row an older daemon does not have: leave the screen as it is.
     if (!(key in values)) continue;
     const raw = values[key];
     const v: Value = raw === null || typeof raw === "string" || typeof raw === "boolean" ? raw : null;
-    if (key in map && map[key] === v) continue;
+    if (key in map && map[key] === v) {
+      state.confirmed.set(key, v);
+      continue;
+    }
+    if (setAside?.(key)) continue;
+    state.confirmed.set(key, v);
+    if (!(key in map)) {
+      const screen = screenValue(key);
+      if (screen !== undefined) {
+        // The first look, and the screen keeps its own value: it wins.
+        map[key] = v;
+        moved = true;
+        if (v !== null && screen !== v) reconcile[key] = screen;
+        continue;
+      }
+    }
     map[key] = v;
     moved = true;
     if (v !== null) applyOne(key, v);
   }
   if (moved) saveKnown();
+  if (Object.keys(reconcile).length > 0) void writeDeviceValues(reconcile);
 }
 
 /** This device's values, or null (an older daemon's 404, offline). */
@@ -240,8 +311,23 @@ export function refreshDeviceSettings(): Promise<void> {
   const run: Promise<void> = (async () => {
     do {
       state.again = false;
+      const startSeq = new Map(state.seq);
       const values = await readDeviceValues();
-      if (values) applyDeviceValues(values);
+      if (values) {
+        applyDeviceValues(values, (key) => {
+          if ((state.pending.get(key) ?? 0) > 0) {
+            // A save still out owns this key: read again once it answers.
+            state.recheck = true;
+            return true;
+          }
+          if ((state.seq.get(key) ?? 0) !== (startSeq.get(key) ?? 0)) {
+            // A save landed while this read was out: read again now.
+            state.again = true;
+            return true;
+          }
+          return false;
+        });
+      }
     } while (state.again);
   })()
     .catch(() => {
@@ -264,28 +350,64 @@ export function namesDeviceKey(payload: unknown): boolean {
 /**
  * Save a press on the screen's own control as this device's row. Best
  * effort: false when the daemon did not take it (an older daemon, offline),
- * and then what this window knew stays as it was, so the next read does not
- * mistake the old row for a new choice. Never throws.
+ * and then what this window knew goes back to the daemon's own value, so the
+ * next read does not mistake the old row for a new choice. Never throws.
  */
-export async function writeDeviceSetting(key: AppliedDeviceKey, value: Value): Promise<boolean> {
+export function writeDeviceSetting(key: AppliedDeviceKey, value: Value): Promise<boolean> {
+  return writeDeviceValues({ [key]: value });
+}
+
+/** One save of several keys (the first look's reconcile uses it: one PUT,
+ *  one ledger row). Saves run one at a time, in call order. */
+function writeDeviceValues(values: Partial<Record<AppliedDeviceKey, Value>>): Promise<boolean> {
   const map = knownMap();
-  const had = key in map;
-  const before = map[key];
+  // This window's books as they are now (the test setup swaps them between
+  // tests; a save that answers later keeps to its own).
+  const { pending, seq: seqs, confirmed } = state;
+  const keys = Object.keys(values) as AppliedDeviceKey[];
+  const mine = new Map<AppliedDeviceKey, number>();
   // Known BEFORE the write lands: the `config.changed` this write raises
   // reads the row back, and it must not be taken for someone else's change.
-  map[key] = value;
-  saveKnown();
-  try {
-    await put("/settings/device", { device_id: getDeviceId(), values: { [key]: value } });
-    return true;
-  } catch {
-    if (map[key] === value) {
-      if (had) map[key] = before as Value;
-      else delete map[key];
-      saveKnown();
-    }
-    return false;
+  for (const key of keys) {
+    // What this window believed the daemon held (kept since an earlier
+    // visit), so a refused save can put it back.
+    if (!confirmed.has(key) && !pending.has(key) && key in map) confirmed.set(key, map[key]);
+    const seq = (seqs.get(key) ?? 0) + 1;
+    seqs.set(key, seq);
+    pending.set(key, (pending.get(key) ?? 0) + 1);
+    mine.set(key, seq);
+    map[key] = values[key] as Value;
   }
+  saveKnown();
+  const run = state.writeChain.then(async () => {
+    try {
+      await put("/settings/device", { device_id: getDeviceId(), values });
+      for (const key of keys) confirmed.set(key, values[key] as Value);
+      return true;
+    } catch {
+      let back = false;
+      for (const [key, seq] of mine) {
+        if (seqs.get(key) !== seq) continue; // a later press owns it now
+        if (confirmed.has(key)) map[key] = confirmed.get(key) as Value;
+        else delete map[key];
+        back = true;
+      }
+      if (back && state.known === map) saveKnown();
+      return false;
+    } finally {
+      for (const key of keys) {
+        const left = (pending.get(key) ?? 1) - 1;
+        if (left > 0) pending.set(key, left);
+        else pending.delete(key);
+      }
+      if (state.pending === pending && pending.size === 0 && state.recheck) {
+        state.recheck = false;
+        void refreshDeviceSettings();
+      }
+    }
+  });
+  state.writeChain = run.catch(() => false);
+  return run;
 }
 
 /**

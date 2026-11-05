@@ -85,7 +85,12 @@ describe("the card says the tool is new in its app", () => {
     render(<ApprovalCard approval={{ ...ASK, quarantined: true }} scope="chat" />);
     const line = screen.getByTestId("approval-quarantined");
     expect(line.textContent).toBe(QUARANTINED_LINE);
-    expect(QUARANTINED_LINE).toBe("This tool is new in its app since you added it. Check it before you allow it.");
+    // v1.433.0 review: the daemon also holds a tool whose shape CHANGED
+    // (mcp/manifest.py), and the person added the app, never the tool — the
+    // first cut said "new … since you added it" (the tool) for both.
+    expect(QUARANTINED_LINE).toBe(
+      "This tool is new or changed in its app since you added the app. Check it before you allow it.",
+    );
     expect(screen.getAllByText(QUARANTINED_LINE)).toHaveLength(1);
   });
 

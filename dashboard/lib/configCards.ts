@@ -102,12 +102,17 @@ const SECRET_SHAPES: RegExp[] = [
   /\b\d{8,10}:[A-Za-z0-9_-]{30,}\b/, // a Telegram bot token
   // v1.433.0 (A4): a Discord webhook address IS its secret — anyone holding
   // it can post as the hook (discord.com, the older discordapp.com, the
-  // ptb/canary hosts, an /api/v10 path).
-  /\bhttps?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{5,}\/[A-Za-z0-9_-]{20,}/i,
+  // www/ptb/canary hosts, an /api/v10 path; pasted with or without
+  // https://). Matched from the host's own name, so any of those prefixes
+  // holds it; "mydiscord.com" does not.
+  /\bdiscord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{5,}\/[A-Za-z0-9_-]{20,}/i,
   // v1.433.0 (A4): a database connection string that carries a password
-  // (postgres://user:pass@host, postgresql+driver://…, mysql://user:pass@…).
-  // One with no password ("postgres://host/db", "mysql://me@host") is not.
-  /\b(?:postgres(?:ql)?|mysql)(?:\+[a-z0-9]+)?:\/\/[^\s:/@]*:[^\s@/]+@[^\s/]/i,
+  // (postgres://user:pass@host, postgresql+driver://…, mysql, MariaDB,
+  // MongoDB incl. mongodb+srv, Redis, SQL Server). The password may hold a
+  // "/" (a generated one often does), but no "?" or "#" after one — so a
+  // query string holding an "@" is not read as a password. A string with no
+  // password ("postgres://host/db", "mysql://me@host") is not held.
+  /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|mssql|sqlserver)(?:\+[a-z0-9]+)?:\/\/[^\s:/@]*:[^\s@/]+(?:\/[^\s@/?#]*)*@[^\s/]/i,
 ];
 
 export function looksLikeSecret(text: string): boolean {

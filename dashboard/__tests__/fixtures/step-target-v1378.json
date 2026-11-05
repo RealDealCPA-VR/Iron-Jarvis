@@ -577,6 +577,55 @@
         "target": "https://discord.com/channels/123/456"
       },
       "target": "https://discord.com/channels/123/456"
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "discord.com/api/webhooks/12345/abcdefghij_klmnopqrst"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "https://ptb.discord.com/api/webhooks/12345/abcdefghij_klmnopqrst"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "mydiscord.com/api/webhooks/12345/abcdefghij_klmnopqrst"
+      },
+      "target": "mydiscord.com/api/webhooks/12345/abcdefghij_klmnopqrst"
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "mongodb+srv://me:s3cret@cluster0.ab.mongodb.net/x"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "redis://:s3cretpw@cache.local:6379"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "postgres://app:ab/cd@db.local/x"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "postgres://db.local:5432/x?u=me@work"
+      },
+      "target": "postgres://db.local:5432/x?u=me@work"
     }
   ]
 }
