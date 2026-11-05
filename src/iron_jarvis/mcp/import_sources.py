@@ -232,9 +232,30 @@ def _install_root(records: Any) -> Path | None:
     return None
 
 
+def _network_spelling(path: Any) -> bool:
+    """A network share or device path (``\\\\host\\share``, ``//host/share``,
+    ``\\\\?\\UNC\\…``), judged on the TEXT before anything touches the disk:
+    a stat or a resolve of such a path is an SMB connection, which sends the
+    user's Windows sign-in to that host (the v1.379.0 lesson). Only a local
+    drive behind a device prefix (``\\\\?\\C:\\…``) is let through."""
+    import re
+
+    t = str(path or "").strip().replace("/", "\\")
+    if not t.startswith("\\\\"):
+        return False
+    return not re.match(r"^\\\\[?.]\\[A-Za-z]:(\\|$)", t)
+
+
 def _inside(root: Path, rel: str) -> Path | None:
     """``root/rel`` when it stays inside ``root`` (a manifest names files
-    RELATIVE to its plugin; a path that climbs out is not read)."""
+    RELATIVE to its plugin; a path that climbs out is not read).
+
+    v1.435.0 review: a plugin's manifest is written by the plugin's author,
+    and ``.resolve()`` touches the disk — an absolute or network ``rel``
+    (``\\\\evil\\share\\x.json``) is refused by its text first, before
+    anything resolves it (chat's ``app_import`` can start this scan)."""
+    if _network_spelling(rel) or Path(rel).is_absolute() or Path(rel).drive or str(rel).startswith(("\\", "/")):
+        return None
     try:
         base = root.resolve()
         target = (root / rel).resolve()
@@ -384,6 +405,12 @@ def read_claude_plugins(path: Path) -> tuple[list[PackSpec], bool, str]:
             break
         root = _install_root(records)
         if root is None:
+            continue
+        if _network_spelling(root) and not _network_spelling(path):
+            # v1.435.0 review: a plugin folder on a network share while the
+            # record itself is on this PC is never touched (see
+            # :func:`_network_spelling`) — a Claude Code that keeps its
+            # whole folder on a share still reads its plugins there.
             continue
         try:
             found = _plugin_specs(root)

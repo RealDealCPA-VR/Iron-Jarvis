@@ -76,7 +76,11 @@ APPS_TOOL_TIERS: dict[str, str] = {
 APP_REMOVED = "app_removed"
 DESTINATION_REMOVED = "destination_removed"
 DESTINATION_ALERTS = "destination_alerts"
-KINDS = (APP_REMOVED, DESTINATION_REMOVED, DESTINATION_ALERTS)
+#: v1.435.0 review: an app's switch has its OWN kind (it used ``app``, whose
+#: restore puts the whole stored row back — so an Undo re-added an app the
+#: user had disconnected since, without its keys, and wrote over an edit).
+APP_SWITCHED = "app_switched"
+KINDS = (APP_REMOVED, DESTINATION_REMOVED, DESTINATION_ALERTS, APP_SWITCHED)
 
 #: Where a key is kept for an Undo (the ``settings.credentials`` prefix).
 BACKUP_PREFIX = "__undo__"
@@ -89,6 +93,19 @@ _PLAN: ContextVar[dict[str, Any] | None] = ContextVar("ij_apps_removal_plan", de
 #: address: whoever holds it posts as the destination). Kept out of the
 #: journal: a removal copies them into the vault, encrypted.
 CREDENTIAL_FIELDS = ("webhook_url",)
+
+#: v1.435.0 review: what a removal says about the keys it kept — the copy
+#: exists (encrypted) and the reply must not read as "the key is gone from
+#: this PC". It expires with the change's history (core.db.prune_events).
+KEPT_FOR_UNDO = (
+    "A copy of its keys is kept, encrypted, only so the Undo on the reply can bring it back; "
+    "it is deleted when the Undo is used or the change leaves the activity history."
+)
+
+
+def _kept_words(written: list[str]) -> str:
+    return KEPT_FOR_UNDO if written else "The Undo on the reply brings it back."
+
 
 #: The one sentence a removal says when no Undo could be prepared.
 NO_UNDO_PLAN = (
@@ -129,7 +146,13 @@ def resolve_app(platform: Any, ref: Any) -> tuple[str, str, Any]:
     fold = _fold(raw)
     stored = next((str(s.get("name")) for s in servers if str(s.get("name") or "") == raw), "")
     if not stored:
-        stored = next((str(s.get("name")) for s in servers if _fold(s.get("name")) == fold and fold), "")
+        folded = [str(s.get("name")) for s in servers if _fold(s.get("name")) == fold and fold]
+        if len(folded) > 1:
+            # v1.435.0 review: two added apps spelled alike ("My-App",
+            # "my_app") — never the first one silently; the refusal lists
+            # both and the model names one exactly.
+            return "", raw, None
+        stored = folded[0] if folded else ""
     conn = get_connector(stored) if stored else None
     if conn is None:
         conn = get_connector(raw.lower()) or next(
@@ -159,6 +182,9 @@ def _short_name(display: str) -> str:
 
 def _no_such_app(platform: Any, ref: str) -> str:
     names = [str(s.get("name")) for s in _servers(platform) if s.get("name")]
+    alike = [n for n in names if _fold(n) == _fold(ref) and _fold(ref)]
+    if len(alike) > 1:
+        return f"Several added apps are spelled like {ref!r} ({', '.join(alike)}): name one exactly."
     have = f" The apps added are: {', '.join(names)}." if names else " No apps are added yet."
     return f"There is no app called {ref!r} added in Iron Jarvis.{have}"
 
@@ -203,7 +229,29 @@ def snap_app_removal(platform: Any, name: str) -> dict[str, Any] | None:
             manifest = path.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001 — a manifest is a convenience, not a key
         manifest = None
-    return {"row": cfg, "vault": {n: _backup_name() for n in names}, "manifest": manifest}
+    secrets = getattr(platform, "secrets", None)
+    return {
+        "row": cfg,
+        "vault": {n: _backup_name() for n in names},
+        "kinds": _kinds_of(secrets, names),
+        "manifest": manifest,
+    }
+
+
+def _kinds_of(secrets: Any, names: list[str]) -> dict[str, list[str]]:
+    """v1.435.0 review: each vault row's KIND and description (metadata only,
+    never a value) so an Undo puts a key back exactly as it was — it used to
+    come back as "password" with no description. Never raises."""
+    try:
+        rows = secrets.list() if secrets is not None else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    wanted = set(names)
+    return {
+        str(r.get("name")): [str(r.get("kind") or "generic"), str(r.get("description") or "")]
+        for r in rows
+        if isinstance(r, dict) and str(r.get("name") or "") in wanted
+    }
 
 
 def _copy_keys(secrets: Any, mapping: dict[str, str]) -> list[str]:
@@ -232,17 +280,35 @@ def _drop(secrets: Any, names: list[str]) -> None:
             pass
 
 
-def _put_keys_back(secrets: Any, mapping: dict[str, str]) -> list[str]:
-    """Write each backed-up value back under its own name. Returns the names
-    whose backup is gone (an earlier Undo used it, or it was never written)."""
+def _put_keys_back(
+    secrets: Any, mapping: dict[str, str], kinds: dict[str, Any] | None = None
+) -> tuple[list[str], list[str]]:
+    """Write each backed-up value back under its own name, with its own kind
+    and description. Returns ``(lost, newer)``: the names whose backup is gone
+    (an earlier Undo used it, or it was never written), and the names that
+    hold a value AGAIN — set since the removal (another app reads the same
+    row, or the user saved it again). A newer value is never written over
+    (v1.435.0 review: the old Undo put the OLD key back over it)."""
     lost: list[str] = []
+    newer: list[str] = []
     for vname, backup in (mapping or {}).items():
+        if secrets.get(vname):
+            newer.append(vname)
+            continue
         value = secrets.get(backup) if backup else None
         if value is None:
             lost.append(vname)
             continue
-        secrets.set(vname, value, kind="api_key" if "key" in vname.lower() else "password")
-    return lost
+        meta = list((kinds or {}).get(vname) or [])
+        kind = str(meta[0]) if meta else ("api_key" if "key" in vname.lower() else "password")
+        description = str(meta[1]) if len(meta) > 1 else ""
+        secrets.set(vname, value, kind=kind, description=description)
+    return lost, newer
+
+
+#: What an Undo says about keys it could not, or would not, put back.
+LOST_KEY_WORDS = " (one of its keys was not kept: add it again on {where})"
+NEWER_KEY_WORDS = " (one of its keys was saved again since, so the newer one was kept)"
 
 
 def restore_app_removal(platform: Any, name: str, prior: dict[str, Any] | None) -> str:
@@ -254,7 +320,7 @@ def restore_app_removal(platform: Any, name: str, prior: dict[str, Any] | None) 
         raise R.RecordError(f"An app called {name!r} is added again, so there is nothing to bring back.")
     secrets = platform.secrets
     mapping = dict(prior.get("vault") or {})
-    lost = _put_keys_back(secrets, mapping)
+    lost, newer = _put_keys_back(secrets, mapping, prior.get("kinds"))
     text = prior.get("manifest")
     if isinstance(text, str) and text:
         try:
@@ -271,8 +337,40 @@ def restore_app_removal(platform: Any, name: str, prior: dict[str, Any] | None) 
     _drop(secrets, [b for v, b in mapping.items() if v not in lost])
     out = f"undo: brought back the app '{name}'"
     if lost:
-        out += " (one of its keys was not kept: add it again on its card)"
+        out += LOST_KEY_WORDS.format(where="its card")
+    if newer:
+        out += NEWER_KEY_WORDS
     return out
+
+
+def restore_app_switch(platform: Any, name: str, prior: dict[str, Any] | None) -> str:
+    """Undo of ``app_switch``: the switch goes back to where it was — only
+    while the app is still there and nothing else on it changed since (an
+    Undo never re-adds an app the user disconnected since, and never writes
+    over an edit). BLOCKING (turning an app on connects it)."""
+    if not isinstance(prior, dict):
+        raise R.RecordError("this change kept nothing to bring back")
+    now = R.snap_app(platform, name)
+    if now is None:
+        raise R.RecordError(f"The app {name!r} was disconnected since, so there is nothing to switch back.")
+
+    def _rest(row: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in row.items() if k != "enabled"}
+
+    if _rest(now) != _rest(prior):
+        raise R.RecordError(
+            f"The app {name!r} was changed since, so this Undo would undo that too: switch it on its row in Settings › Tools."
+        )
+    from ..mcp.pack_door import install_config, set_pack_enabled
+    from ..mcp.tools import pack_enabled
+
+    want = pack_enabled(prior)
+    if pack_enabled(now) != want:
+        set_pack_enabled(platform, name, want)
+    if R.snap_app(platform, name) != prior:
+        # The row as it was, key for key (an explicit ``enabled = true``).
+        install_config(platform, copy.deepcopy(prior), load=False)
+    return f"undo: switched the app '{name}' {'on' if want else 'off'} again"
 
 
 # =========================================================================== #
@@ -326,7 +424,8 @@ def snap_destination_removal(platform: Any, name: str) -> dict[str, Any] | None:
         if str(k).endswith("_secret") and isinstance(v, str) and v
     }
     plain = {k: _backup_name() for k in CREDENTIAL_FIELDS if cfg.get(k)}
-    return {"cfg": clean, "vault": vault, "plain": plain}
+    kinds = _kinds_of(getattr(platform, "secrets", None), list(vault))
+    return {"cfg": clean, "vault": vault, "plain": plain, "kinds": kinds}
 
 
 def remove_destination(platform: Any, name: str) -> tuple[bool, dict[str, Any] | None]:
@@ -356,7 +455,7 @@ def restore_destination_removal(platform: Any, name: str, prior: dict[str, Any] 
     secrets = platform.secrets
     vault = dict(prior.get("vault") or {})
     plain = dict(prior.get("plain") or {})
-    lost = _put_keys_back(secrets, vault)
+    lost, newer = _put_keys_back(secrets, vault, prior.get("kinds"))
     cfg = copy.deepcopy(prior["cfg"])
     for field_name, backup in plain.items():
         value = secrets.get(backup)
@@ -368,7 +467,9 @@ def restore_destination_removal(platform: Any, name: str, prior: dict[str, Any] 
     _drop(secrets, [b for v, b in vault.items() if v not in lost] + [b for f, b in plain.items() if f not in lost])
     out = f"undo: brought back the destination '{name}'"
     if lost:
-        out += " (one of its keys was not kept: add it again on the Notifications page)"
+        out += LOST_KEY_WORDS.format(where="the Notifications page")
+    if newer:
+        out += NEWER_KEY_WORDS
     return out
 
 
@@ -402,6 +503,37 @@ ONLY_FAILED_NOT_YET = (
 )
 
 
+#: v1.435.0 review: what an alert choice does NOT narrow, said whenever a
+#: destination's alerts are narrowed. Read off the senders: a schedule's own
+#: result line goes to every destination unless the schedule names its own
+#: (platform._run_scheduled), a workflow's notify step to every destination
+#: (workflows/engine), and neither looks at a destination's alert list — so
+#: "only failures" would otherwise read as true while every scheduled run's
+#: result still arrived there.
+STILL_SENT = (
+    "A schedule's own result message and a workflow's notify step are not alert types: "
+    "they still go to every destination unless that schedule or workflow names its own."
+)
+
+
+def _wanted_alerts(args: dict[str, Any]) -> tuple[list[str], str]:
+    """``(the alert list to keep, problem)`` from a ``channel_alerts`` call:
+    ``[]`` = every alert. The ONE reading of the call, for its ``execute``
+    and for the ``now`` its Undo checks."""
+    if (args or {}).get("all") is True:
+        return [], ""
+    raw = (args or {}).get("alerts")
+    if not isinstance(raw, list) or not raw:
+        return [], "Choose at least one alert in `alerts`, or set `all` to true."
+    unknown = [str(a) for a in raw if str(a) not in ALERT_WORDS]
+    if unknown:
+        return [], (
+            f"Not an alert a destination can get: {', '.join(unknown)}. The alerts: {', '.join(ALERT_WORDS)}."
+        )
+    wanted = list(dict.fromkeys(str(a) for a in raw))
+    return ([] if set(wanted) == set(ALERT_WORDS) else wanted), ""
+
+
 def _alerts_words(events: Any) -> str:
     if not events:
         return "every alert"
@@ -418,10 +550,23 @@ def snap_destination_alerts(platform: Any, name: str) -> dict[str, Any] | None:
     return {"events": list(cfg.get("events") or [])}
 
 
-def restore_destination_alerts(platform: Any, name: str, prior: dict[str, Any] | None) -> str:
+def restore_destination_alerts(platform: Any, name: str, prior: dict[str, Any] | None, now: str = "") -> str:
+    """Undo of ``channel_alerts``. ``now`` is the alert list the change set
+    (JSON); when the destination's list is no longer that, it was changed
+    since and the Undo refuses rather than write over it (v1.435.0 review)."""
     cfg = R.snap_channel(platform, name)
     if cfg is None:
         raise R.RecordError(f"The destination {name!r} is no longer there, so its alerts can't be put back.")
+    if now:
+        try:
+            set_then = list(json.loads(now))
+        except (TypeError, ValueError):
+            set_then = None
+        if set_then is not None and list(cfg.get("events") or []) != set_then:
+            raise R.RecordError(
+                f"The alerts of the destination {name!r} were changed since, so this Undo would undo that too: "
+                "choose them on the Notifications page."
+            )
     events = list((prior or {}).get("events") or [])
     if events:
         cfg["events"] = events
@@ -435,18 +580,36 @@ SNAP = {
     APP_REMOVED: snap_app_removal,
     DESTINATION_REMOVED: snap_destination_removal,
     DESTINATION_ALERTS: snap_destination_alerts,
+    APP_SWITCHED: lambda platform, name: R.snap_app(platform, name),
 }
 
 
-def restore_kind(platform: Any, record: str, name: str, prior: Any) -> str:
+def restore_kind(platform: Any, record: str, name: str, prior: Any, now: str = "") -> str:
     """``records.restore`` for this module's kinds. BLOCKING."""
     if record == APP_REMOVED:
         return restore_app_removal(platform, name, prior)
     if record == DESTINATION_REMOVED:
         return restore_destination_removal(platform, name, prior)
     if record == DESTINATION_ALERTS:
-        return restore_destination_alerts(platform, name, prior)
+        return restore_destination_alerts(platform, name, prior, now)
+    if record == APP_SWITCHED:
+        return restore_app_switch(platform, name, prior)
     raise R.RecordError(f"unknown record kind {record!r}")
+
+
+def backups_named(record: str, prior: Any) -> list[str]:
+    """The ``__undo__`` vault rows a journal row of ``record`` keeps (v1.435.0
+    review): read by ``core.db.prune_events`` so a backup expires with the
+    Undo that could use it — a disconnected app's key must not outlive the
+    change's history in the vault. Names only; never raises."""
+    if record not in (APP_REMOVED, DESTINATION_REMOVED) or not isinstance(prior, dict):
+        return []
+    out: list[str] = []
+    for key in ("vault", "plain"):
+        for backup in dict(prior.get(key) or {}).values():
+            if isinstance(backup, str) and backup.startswith(BACKUP_PREFIX):
+                out.append(backup)
+    return out
 
 
 # =========================================================================== #
@@ -485,7 +648,7 @@ class _RemovalTool(R._RecordTool):
 
 class AppSwitchTool(R._RecordTool):
     name = "app_switch"
-    RECORD = "app"
+    RECORD = APP_SWITCHED
     description = (
         "Turn an app the user added on or off (\"turn off the GitHub app\"): `app` is its name "
         "(github, notion, quickbooks, …), `on` true or false. Off keeps the app and its keys and "
@@ -625,7 +788,7 @@ class AppDisconnectTool(_RemovalTool):
             return ToolResult(ok=False, error=f"{name} could not be disconnected ({type(exc).__name__}).")
         return ToolResult(
             ok=True,
-            output=f"Disconnected {name}: its tools and saved keys are gone. The Undo on the reply brings it back.",
+            output=f"Disconnected {name}: its tools and saved keys are gone. {_kept_words(written)}",
             data={"record_change": self._card("App disconnected", name, "connected", None, f"app.{stored}")},
         )
 
@@ -685,6 +848,40 @@ def list_other_apps(platform: Any) -> str:
         "Servers the user's other apps have (call app_import with `name`, and `source` when "
         "two apps list the same name):\n" + "\n".join(lines)
     )
+
+
+#: v1.435.0 review: the most an import's card shows of what it starts.
+PREVIEW_CHARS = 300
+
+
+def import_preview(found: Any, spec: Any) -> str:
+    """The import card's sentence (v1.435.0 review): "Adds quickbooks from
+    Claude Desktop; it starts the program: npx -y @acme/qb (its keys come
+    from Claude Desktop's settings)." The command line as the add door
+    stores it (``mcp.secrets.split_args``: the value after a secret-named
+    flag, a password in an address — masked), then masked again; never an
+    environment value or a header. "" when it cannot be said (the ordinary
+    card still asks). Never raises."""
+    try:
+        from ..mcp.secrets import split_args, split_url
+
+        transport = str(getattr(spec, "transport", "") or "").lower()
+        if transport in ("http", "sse") or getattr(spec, "url", ""):
+            shown_url, _ = split_url(getattr(spec, "url", "") or "")
+            what = f"it connects to {shown_url}"
+        else:
+            shown_args, _ = split_args(list(getattr(spec, "args", None) or []))
+            line = " ".join([str(getattr(spec, "command", "") or ""), *[str(a) for a in shown_args]]).strip()
+            if not line:
+                return ""
+            what = f"it starts the program: {line}"
+        what = " ".join(str(R.masked_args(what)).split())
+        if len(what) > PREVIEW_CHARS:
+            what = what[: PREVIEW_CHARS - 1].rstrip() + "…"
+        label = str(getattr(found, "label", "") or "another program")
+        return f"Adds {spec.name} from {label}; {what} (its keys come from {label}'s settings)."
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 #: A config that leaves a value to be TYPED (``${input:token}``): never typed in chat.
@@ -748,16 +945,29 @@ class AppImportTool(R._RecordTool):
         if not name:
             return _NOTHING
         try:
-            _found, spec, _p = await asyncio.to_thread(
+            found, spec, _p = await asyncio.to_thread(
                 _find_server, self.platform, name, str((args or {}).get("source") or "").strip()
             )
             if spec is None or list(spec.asks):
                 return _NOTHING
             if await asyncio.to_thread(R.snap_app, self.platform, spec.name) is not None:
                 return _NOTHING
+            from ..connectors.locked_pack import unlocked_copy
+
+            if unlocked_copy(spec):
+                return _NOTHING  # refused by the add door: never started
         except Exception:  # noqa: BLE001 — unsure: the ordinary card
             return None
-        return None
+        # v1.435.0 review — the plan's "preview card": an import STARTS a
+        # program (or reaches an address) from another app's settings, so its
+        # card says exactly what, every time — also when the page armed the
+        # tool by name (arming alone would otherwise grant it). "Don't ask"
+        # keeps its meaning (the user chose it); the POST lane, which cannot
+        # show a card, refuses it.
+        preview = import_preview(found, spec)
+        if not preview:
+            return None
+        return SpendCheck(ask=True, words=preview, once_only=True, dont_ask_skips=True)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = self._target(args)
@@ -850,7 +1060,7 @@ class ChannelRemoveTool(_RemovalTool):
         kind = str(cfg.get("type") or "destination")
         return ToolResult(
             ok=True,
-            output=f"Removed the {kind} destination '{name}': nothing is sent there now. The Undo on the reply brings it back.",
+            output=f"Removed the {kind} destination '{name}': nothing is sent there now. {_kept_words(written)}",
             data={
                 "record_change": self._card(
                     "Destination removed", f"Destination “{name}”", R._describe_channel(cfg), None, f"channel.{name}"
@@ -873,7 +1083,8 @@ class ChannelAlertsTool(R._RecordTool):
         + ". Only bad news: "
         + ", ".join(PROBLEM_ALERTS)
         + ". A finished task or workflow is sent whether it worked or not — say so when it matters. "
-        "The user approves on a card; the change has an Undo."
+        + STILL_SENT
+        + " The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",
@@ -888,6 +1099,13 @@ class ChannelAlertsTool(R._RecordTool):
     def _resolve(self, args: dict[str, Any]) -> str:
         return resolve_destination(self.platform, self._target(args))[0]
 
+    def _now(self, args: dict[str, Any]) -> str:
+        """The alert list this change sets (JSON), so its Undo can tell when
+        the list was changed since (v1.435.0 review). "" when the call is
+        refused anyway."""
+        wanted, problem = _wanted_alerts(args)
+        return "" if problem else json.dumps(wanted)
+
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         try:
             name, _p = await asyncio.to_thread(resolve_destination, self.platform, self._target(args))
@@ -899,21 +1117,9 @@ class ChannelAlertsTool(R._RecordTool):
         name, problem = await asyncio.to_thread(resolve_destination, self.platform, self._target(args))
         if not name:
             return ToolResult(ok=False, error=problem)
-        every = args.get("all") is True
-        raw = args.get("alerts")
-        wanted: list[str] = []
-        if not every:
-            if not isinstance(raw, list) or not raw:
-                return ToolResult(ok=False, error="Choose at least one alert in `alerts`, or set `all` to true.")
-            unknown = [str(a) for a in raw if str(a) not in ALERT_WORDS]
-            if unknown:
-                return ToolResult(
-                    ok=False,
-                    error=f"Not an alert a destination can get: {', '.join(unknown)}. The alerts: {', '.join(ALERT_WORDS)}.",
-                )
-            wanted = list(dict.fromkeys(str(a) for a in raw))
-            if set(wanted) == set(ALERT_WORDS):
-                wanted = []
+        wanted, problem = _wanted_alerts(args)
+        if problem:
+            return ToolResult(ok=False, error=problem)
         cfg = await asyncio.to_thread(R.snap_channel, self.platform, name)
         if cfg is None:
             return ToolResult(ok=False, error=f"There is no destination called {name!r}.")
@@ -930,6 +1136,8 @@ class ChannelAlertsTool(R._RecordTool):
             output += " " + ONLY_FAILED_NOT_YET
         elif wanted:
             output += " A finished task or workflow is sent whether it worked or not."
+        if wanted:
+            output += " " + STILL_SENT
         return ToolResult(
             ok=True,
             output=output,
@@ -1013,14 +1221,25 @@ _NOT_A_SERVER = re.compile(
 )
 
 
+#: What may follow the tool noun in the span: nothing, "over", or the
+#: clause that says whose it is ("the server I use", "the tools that I set up").
+_SPAN_TAIL_OK = re.compile(r"^(?:over|(?:that|which)\s+\w+|(?:i|we|you)\b)", re.IGNORECASE)
+
+
 def _import_span_ok(span: str) -> bool:
     """The words between the verb and "from <program>": a tool noun ("the
     QuickBooks server I use"), or a NAME — one or two words, capitalised,
     no article, not a file, a setting or text ("add QuickBooks from Claude
     Desktop", never "add a breakpoint in VS Code" or "copy the text from
-    Cursor")."""
-    if _TOOLISH.search(span):
-        return True
+    Cursor").
+
+    v1.435.0 review: the tool noun must END what is being moved — "the
+    server logs", "the tool output", "the app version" name something OF a
+    server, never the server (each armed ``app_import`` before)."""
+    nouns = list(_TOOLISH.finditer(span))
+    if nouns:
+        tail = span[nouns[-1].end():].strip()
+        return not tail or bool(_SPAN_TAIL_OK.match(tail))
     words = span.split()
     if words and words[0].lower() == "my":
         words = words[1:]
@@ -1051,8 +1270,8 @@ _ALERT_WHAT = (
     r"|failures?|errors?|problems?|important|bad\s+news|alerts?|notifications?)"
 )
 _ALERTS = re.compile(
-    r"\bonly\s+" + _ALERT_VERB + r"\s+me\s+" + _ALERT_WHAT + r"\b"
-    + r"|\b" + _ALERT_VERB + r"\s+me\s+only\s+" + _ALERT_WHAT + r"\b"
+    r"\bonly\s+" + _ALERT_VERB + r"\s+me\s+" + _ALERT_WHAT + r"\b(?!-)"
+    + r"|\b" + _ALERT_VERB + r"\s+me\s+only\s+" + _ALERT_WHAT + r"\b(?!-)"
     + r"|\b(?:stop|quit|don'?t|do\s+not|no\s+more)\s+(?:send(?:ing)?|notify(?:ing)?|alert(?:ing)?"
     r"|messag(?:e|ing)|text(?:ing)?|ping(?:ing)?|email(?:ing)?)\s+me\s+"
     r"(?:(?:alerts?|notifications?|messages?|updates?)\s+)?(?:about|when|for|every\s+time)\b"
@@ -1062,7 +1281,10 @@ _ALERTS = re.compile(
 )
 _ALERT_CHOICE = re.compile(
     r"\b(?:change|choose|pick|set|select|adjust|limit|narrow|filter|edit|customi[sz]e|mute|unmute|reduce)"
-    r"\s+(?:(?:the|my|which|what|its)\s+)?(?:[\w'-]+\s+){0,2}?(?:alerts?|notifications?)\b",
+    r"\s+(?:(?:the|my|which|what|its)\s+)?(?:[\w'-]+\s+){0,2}?(?:alerts|notifications)\b"
+    # v1.435.0 review: the alerts themselves — never "the alert sound", "a
+    # calendar alert", "the notification sound in Windows" (each armed it).
+    r"(?!\s+(?:sounds?|tones?|ringtones?|volume|style|badges?|banners?|previews?)\b)",
     re.IGNORECASE,
 )
 _DEST_WORD = re.compile(r"\b(?:" + _DEST_TYPE + r"|destinations?|channels?)\b", re.IGNORECASE)
@@ -1071,12 +1293,19 @@ _DEST_WORD = re.compile(r"\b(?:" + _DEST_TYPE + r"|destinations?|channels?)\b", 
 _MAX_TEXT = 20_000
 
 
-@lru_cache(maxsize=256)
 def apps_tools_for(text: str) -> tuple[str, ...]:
     """The tools of this module a chat message asks for, in a fixed order.
     Called ONCE from ``records.record_tools_for`` (which drops writers for a
-    question). Linear-time matchers only; never raises."""
-    t = str(text or "")[:_MAX_TEXT]
+    question). Linear-time matchers only; never raises.
+
+    v1.435.0 review: the cache is keyed on the CUT text — keyed on the whole
+    message it held up to 256 whole pasted messages (a pasted key among them)
+    for the life of the process."""
+    return _apps_tools_for(str(text or "")[:_MAX_TEXT])
+
+
+@lru_cache(maxsize=256)
+def _apps_tools_for(t: str) -> tuple[str, ...]:
     if not t.strip():
         return ()
     out: list[str] = []
@@ -1094,3 +1323,8 @@ def apps_tools_for(text: str) -> tuple[str, ...]:
     except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
         return ()
     return tuple(out)
+
+
+#: The tests clear the cache through the public name, as before.
+apps_tools_for.cache_clear = _apps_tools_for.cache_clear  # type: ignore[attr-defined]
+apps_tools_for.cache_info = _apps_tools_for.cache_info  # type: ignore[attr-defined]

@@ -720,6 +720,50 @@ def restore_channel(platform: Any, name: str, prior: dict[str, Any] | None) -> s
     return f"undo: {'removed' if prior is None else 'restored'} the channel '{name}'"
 
 
+#: v1.435.0 review (Wave 3 group H, item 7): ``channel_toggle`` snapshotted
+#: the WHOLE destination (``snap_channel``) — a Discord or Slack destination's
+#: webhook address, its credential, landed in the undo journal in plain text —
+#: and its Undo put the whole destination back, re-adding one the user had
+#: removed since. The switch changes two flags, so its record keeps only
+#: those (no credential, nothing to encrypt) and its Undo puts only those
+#: back, on the destination as it is then. Older journal rows keep the
+#: ``channel`` kind and restore as before.
+CHANNEL_MODE_KEYS = ("inbound_enabled", "chat_enabled")
+
+
+def _mode_flags(mode: str) -> dict[str, bool]:
+    return {"inbound_enabled": mode in ("two_way", "chat"), "chat_enabled": mode == "chat"}
+
+
+def snap_channel_mode(platform: Any, name: str) -> dict[str, Any] | None:
+    cfg = snap_channel(platform, name)
+    if cfg is None:
+        return None
+    return {k: cfg[k] for k in CHANNEL_MODE_KEYS if k in cfg}
+
+
+def restore_channel_mode(platform: Any, name: str, prior: dict[str, Any] | None, now: str = "") -> str:
+    if not isinstance(prior, dict):
+        raise RecordError("this change kept nothing to bring back")
+    cfg = snap_channel(platform, name)
+    if cfg is None:
+        raise RecordError(f"The channel {name!r} was removed since, so its two-way setting can't be put back.")
+    if now in ("two_way", "chat", "off") and any(
+        bool(cfg.get(k)) != v for k, v in _mode_flags(now).items()
+    ):
+        raise RecordError(
+            f"The channel {name!r}'s two-way setting was changed since, so this Undo would undo that too: "
+            "change it on the Notifications page."
+        )
+    for k in CHANNEL_MODE_KEYS:
+        if k in prior:
+            cfg[k] = prior[k]
+        else:
+            cfg.pop(k, None)
+    apply_channel(platform, name, cfg)
+    return f"undo: restored the channel '{name}'"
+
+
 def _describe_channel(c: dict[str, Any] | None) -> str | None:
     if c is None:
         return None
@@ -1497,6 +1541,7 @@ _SNAP = {
     "schedule": snap_schedule,
     "workflow": snap_workflow,
     "channel": snap_channel,
+    "channel_mode": snap_channel_mode,
     "app": snap_app,
     "webhook": snap_webhook,
     "sentinel": snap_sentinel,
@@ -1517,7 +1562,7 @@ def _apps_snap(kind: str) -> Any:
 
 #: v1.435.0 (Wave 3 group H): a removed app, a removed destination, a
 #: destination's alerts (settings/records_apps).
-_APPS_KINDS = ("app_removed", "destination_removed", "destination_alerts")
+_APPS_KINDS = ("app_removed", "destination_removed", "destination_alerts", "app_switched")
 _SNAP.update({k: _apps_snap(k) for k in _APPS_KINDS})
 
 
@@ -1534,6 +1579,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return restore_workflow(platform, name, prior, str(desc.get("now") or ""))
     if record == "channel":
         return restore_channel(platform, name, prior)
+    if record == "channel_mode":
+        return restore_channel_mode(platform, name, prior, str(desc.get("now") or ""))
     if record == "app":
         return restore_app(platform, name, prior)
     if record == "webhook":
@@ -1549,7 +1596,7 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
     if record in _APPS_KINDS:
         from .records_apps import restore_kind
 
-        return restore_kind(platform, record, name, prior)
+        return restore_kind(platform, record, name, prior, str(desc.get("now") or ""))
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -1815,7 +1862,7 @@ class WorkflowScheduleTool(_RecordTool):
 
 class ChannelToggleTool(_RecordTool):
     name = "channel_toggle"
-    RECORD = "channel"
+    RECORD = "channel_mode"
     description = (
         "Turn a notification channel's two-way listening on or off: `mode` 'two_way' (people "
         "on the allowlist can message Iron Jarvis), 'chat' (they can chat with it), or 'off' "
@@ -1826,6 +1873,10 @@ class ChannelToggleTool(_RecordTool):
         "properties": {"name": {"type": "string"}, "mode": {"type": "string", "enum": ["two_way", "chat", "off"]}},
         "required": ["name", "mode"],
     }
+
+    def _now(self, args: dict[str, Any]) -> str:
+        """The mode this change sets, so its Undo can tell a change since."""
+        return str(args.get("mode") or "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = self._target(args)
