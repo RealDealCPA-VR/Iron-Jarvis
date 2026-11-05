@@ -43,6 +43,27 @@ record tools are (``settings.records``):
   journal cannot reverse (no inverse kept, a message sent, money spent, a
   change already undone) is refused in plain words before anything runs.
 
+REVIEW (v1.435.0), each pinned in tests/test_chat_history_review_v14350.py:
+
+* ``chat_local_only`` and ``change_undo`` act only in a chat on the Chat page
+  (session "chat", the chat's failure surface — :func:`_chat_page_problem`):
+  an agent run's card is a phone alert anyone can answer "approve" to, the
+  browser sidebar has no saved chat, the phone and a coding session neither.
+  Elsewhere there is no card (``SpendCheck(ask=False)``) and execute refuses.
+* Both cards are SAFETY cards (``once_reason`` :data:`LOCAL_ONLY_REASON` /
+  :data:`UNDO_REASON`, in ``harness/stall.SAFETY_REASONS`` and
+  ``dashboard/lib/onceReason.ts``): Enter never allows them.
+* Turning Local only ON in a reply that is not Local only HOLDS that reply's
+  steer notes (``core/turns.TurnHandle.hold_steers``): a note typed after it
+  stays in the box and goes with the next, Local only, message.
+* An undo of a pause / resume / stop of a goal from chat puts back its STATE
+  only, never its books (spend, checkpoint); only an undo of a DELETE gives
+  its always-allows back.
+* The history never tells a turn that may not recall Local only chats the
+  NAME of a change made in Local only work (:func:`local_only_rows`).
+* ``config_undo`` (records.py) refuses an undo that would put a setting back
+  at a value that always asks (``records.protected_restores``).
+
 Every snapshot, restore and read is BLOCKING (SQLite) and runs through
 ``asyncio.to_thread``. Every pattern here is linear (each repeat bounded, no
 two adjacent unbounded runs).
@@ -72,6 +93,31 @@ LOCAL_ONLY_TOOL = "chat_local_only"
 #: The card key the chat page reads to set its Local only switch
 #: (dashboard/lib/localOnlyChat.ts, pinned equal).
 LOCAL_ONLY_CARD_KEY = "chat.local_only"
+#: Review (v1.435.0): the once-only cards these tools put up are SAFETY cards
+#: (``harness/stall.SAFETY_REASONS``, ``dashboard/lib/onceReason.ts``): Enter
+#: never allows them and they never go to the phone. Turning Local only off is
+#: a privacy decision; an undo cannot itself be undone.
+LOCAL_ONLY_REASON = "privacy"
+UNDO_REASON = "undo"
+#: Review: both tools act for the person looking at a chat on the Chat page —
+#: never from an agent run (its ask can be answered from the phone), the
+#: browser sidebar (it has no saved chat: "now on" would be a lie), the phone
+#: or a coding session.
+CHAT_PAGE_ONLY = "{what} can be changed only from a chat on the Chat page, by the person looking at it."
+
+
+def _chat_page_problem(ctx: Any, what: str) -> str:
+    """"" when this call is a chat turn on the Chat page (session "chat", the
+    chat's own failure surface — ``mcp.tools.chat_only_refusal``'s rule),
+    else the refusal. Never raises (unknown = refused)."""
+    try:
+        from ..providers.failure_words import SURFACE_CHAT, current_surface
+
+        if str(getattr(ctx, "session_id", "") or "") == "chat" and current_surface() == SURFACE_CHAT:
+            return ""
+    except Exception:  # noqa: BLE001 — unknown: refused
+        pass
+    return CHAT_PAGE_ONLY.format(what=what)
 
 # --------------------------------------------------------------------------
 # arming
@@ -331,10 +377,28 @@ def restore_goal_contract(platform: Any, goal_id: str, prior: dict[str, Any] | N
         if row is None:
             row = GoalContractRecord(id=goal_id)
         state_now = row.state if not recreated else ""
-        for f, v in prior.items():
-            if f in ("id", "grants") or f not in fields:
-                continue
-            setattr(row, f, R._dt(v) if f in _CONTRACT_DATES else v)
+        if recreated:
+            # Undo of a DELETE: the whole row back, with its own id.
+            for f, v in prior.items():
+                if f in ("id", "grants") or f not in fields:
+                    continue
+                setattr(row, f, R._dt(v) if f in _CONTRACT_DATES else v)
+        else:
+            # Review (v1.435.0): undo of a pause / resume / stop puts back the
+            # STATE the change moved — never the goal's books. Its spend, its
+            # checkpoint and its breaker are the engine's (single writer): a
+            # stop's cancelled run settled its spend AFTER the snapshot, and
+            # writing the snapshot back erased that spend (the budget gate then
+            # allowed more) and put back a `running_session_id` for a run that
+            # had ended (the next boot read it as interrupted: a false breaker
+            # strike). A tripped goal gets its breaker back with its state, so
+            # it says why it stopped.
+            row.state = str(prior.get("state") or row.state)
+            if row.state == "tripped" and prior.get("breaker_json"):
+                row.breaker_json = str(prior.get("breaker_json"))
+            from ..core.ids import utcnow
+
+            row.updated_at = utcnow()
         db.add(row)
         db.commit()
     try:
@@ -343,7 +407,11 @@ def restore_goal_contract(platform: Any, goal_id: str, prior: dict[str, Any] | N
         store._sync_schedule(goal_id, str(prior.get("schedule") or ""), str(prior.get("state") or ""))
     except Exception:  # noqa: BLE001 — the row is back; the schedule re-syncs on the next state change
         log.warning("goal %s: schedule not re-synced after undo", goal_id, exc_info=True)
-    given_back = _unrevoke_grants(platform, list(prior.get("grants") or []))
+    # Only an undo of a DELETE gives always-allows back (the delete took
+    # them). An undo of a pause or a stop must never give back one the user
+    # revoked on the Autonomy page since (review: that widened what runs
+    # without a card).
+    given_back = _unrevoke_grants(platform, list(prior.get("grants") or [])) if recreated else 0
     name = prior.get("name") or goal_id
     note = ""
     try:
@@ -650,7 +718,14 @@ class ChatLocalOnlyTool(R._RecordTool):
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """Turning it OFF asks every time (once only, every posture, past every
         grant); turning it on — or a call that will change nothing — has no
-        opinion (the tool's own allow tier)."""
+        opinion (the tool's own allow tier). Outside a chat on the Chat page
+        there is no card at all (review): "nothing to ask" (``ask=False`` —
+        the verdict a call that will change nothing gets) and execute refuses
+        in words, so an agent run never parks this ask where the phone could
+        answer it, whatever tier the user gave the tool."""
+        if _chat_page_problem(ctx, "Local only"):
+            self._asked.pop(self._call_key(ctx), None)
+            return SpendCheck(ask=False)
         if args.get("on") is not False:
             return None
         try:
@@ -661,7 +736,9 @@ class ChatLocalOnlyTool(R._RecordTool):
             self._asked.pop(self._call_key(ctx), None)  # no card: nothing may turn it off
             return None  # execute refuses in words; nothing changes
         self._note_asked(ctx)
-        return SpendCheck(ask=True, words=LOCAL_ONLY_OFF_CARD, once_only=True, attended_only=True)
+        return SpendCheck(
+            ask=True, words=LOCAL_ONLY_OFF_CARD, once_only=True, attended_only=True, reason=LOCAL_ONLY_REASON
+        )
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         R._CHANGE_ID.set("")  # never a previous call's id on this card
@@ -684,6 +761,10 @@ class ChatLocalOnlyTool(R._RecordTool):
         on = args.get("on")
         if not isinstance(on, bool):
             return ToolResult(ok=False, error="Say on: true or on: false.")
+        problem = _chat_page_problem(ctx, "Local only")
+        if problem:
+            self._asked.pop(self._call_key(ctx), None)
+            return ToolResult(ok=False, error=problem + " Nothing changed.")
         thread_id = str(getattr(ctx, "thread_id", "") or "").strip()[:80]
         turn_id = str(getattr(ctx, "turn_id", "") or "").strip()[:80]
         if not thread_id and not turn_id:
@@ -717,9 +798,24 @@ class ChatLocalOnlyTool(R._RecordTool):
             if stored is not on:
                 return ToolResult(ok=False, error=LOCAL_ONLY_HELD.format(apps=_held_words(st["holds"])))
         if on:
+            held = ""
+            if not scope_on and turn_id:
+                # Review (v1.435.0): "from your next message" must hold for a
+                # NOTE typed while this (not local) reply runs too — a steer
+                # note joins THIS reply. From now on this turn takes none: a
+                # note stays in the box (the steer route answers 404) and a
+                # note already queued comes back with the reply (unread), so
+                # each goes with the next, Local only, message.
+                from ..core.turns import TURNS
+
+                if TURNS.hold_steers(turn_id):
+                    held = (
+                        " Anything you type before this reply ends stays in the box and goes with your "
+                        "next message."
+                    )
             output = (
                 "Local only is now on for this chat. It applies from your next message: this reply was "
-                "already being written when you asked, so it finishes the way it started."
+                "already being written when you asked, so it finishes the way it started." + held
             )
         else:
             output = (
@@ -839,9 +935,103 @@ def _ago(at: datetime | None, now: datetime) -> str:
     return f"{secs // 86400} days ago"
 
 
-def change_row(inv: Any, journal: Any, now: datetime | None = None) -> dict[str, Any]:
+#: Review (v1.435.0): what a change made in LOCAL ONLY work says to a turn
+#: that may not recall Local only chats (``egress.may_recall_local_only_
+#: chats``) — what was done, never what it was done to.
+LOCAL_WORK_WORDS = "in a Local only chat (its name stays out of a chat that is not Local only)"
+_LOCAL_SLACK_S = 2.0
+
+
+def _naive(at: Any) -> Any:
+    """*at* as naive UTC (SQLite hands back naive datetimes; a caller's may be
+    aware)."""
+    if isinstance(at, datetime) and at.tzinfo is not None:
+        return at.astimezone(timezone.utc).replace(tzinfo=None)
+    return at
+
+
+def local_only_rows(db: Any, engine: Any, invs: list[Any]) -> set[str]:
+    """The ids of the ledger rows in *invs* made by LOCAL ONLY work (review,
+    v1.435.0): a chat turn of a chat switched Local only (its ``AgentRun``
+    window, or its durable turn's while it runs), a coding session whose chat
+    is, an agent run started Local only (or from such a chat). Settings-page
+    rows are never. When the Local only chats cannot be read, every chat /
+    session row counts (fail closed). A row no window covers (a turn that
+    has not saved its window yet) is not counted. Blocking."""
+    from datetime import timedelta
+
+    from sqlmodel import select
+
+    from ..core.models import AgentRun, ChatTurnRecord, Session
+    from ..providers import egress
+
+    rows = [i for i in invs if str(getattr(i, "session_id", "") or "") not in ("settings", "")]
+    if not rows:
+        return set()
+    local = egress.local_only_thread_ids(engine)
+    if local is None:
+        return {i.id for i in rows}
+    out: set[str] = set()
+    sess_ids = {
+        i.session_id for i in rows if i.session_id != "chat" and not str(i.session_id).startswith("build:")
+    }
+    local_sessions: set[str] = set()
+    if sess_ids:
+        for sid, opts in db.exec(select(Session.id, Session.options_json).where(Session.id.in_(sess_ids))):  # type: ignore[attr-defined]
+            try:
+                o = json.loads(opts or "{}")
+            except (TypeError, ValueError):
+                o = {}
+            if isinstance(o, dict) and (
+                o.get("local_only") is True or str(o.get("chat_thread_id") or "") in local
+            ):
+                local_sessions.add(sid)
+    windows: list[tuple[datetime, datetime]] = []
+    chat_rows = [i for i in rows if i.session_id == "chat" and i.created_at is not None]
+    if local and chat_rows:
+        slack = timedelta(seconds=_LOCAL_SLACK_S)
+        lo = min(_naive(i.created_at) for i in chat_rows) - slack
+        hi = max(_naive(i.created_at) for i in chat_rows) + slack
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for start, end in db.exec(
+            select(AgentRun.created_at, AgentRun.finished_at)
+            .where(AgentRun.session_id == "chat")
+            .where(AgentRun.thread_id.in_(local))  # type: ignore[union-attr]
+            .where(AgentRun.created_at <= hi)
+        ):
+            start, end = _naive(start), _naive(end)
+            if start is not None and (end is None or end >= lo):
+                windows.append((start - slack, (end or now) + slack))
+        for start, end, status in db.exec(
+            select(ChatTurnRecord.started_at, ChatTurnRecord.updated_at, ChatTurnRecord.status)
+            .where(ChatTurnRecord.thread_id.in_(local))  # type: ignore[attr-defined]
+            .where(ChatTurnRecord.started_at <= hi)
+        ):
+            start, last = _naive(start), (now if status == "running" else _naive(end))
+            if start is not None and last is not None and last >= lo:
+                windows.append((start - slack, last + slack))
+    for i in rows:
+        sid = str(i.session_id)
+        if sid.startswith("build:"):
+            if sid[len("build:"):] in local:
+                out.add(i.id)
+        elif sid == "chat":
+            at = _naive(i.created_at)
+            if at is not None and any(a <= at <= b for a, b in windows):
+                out.add(i.id)
+        elif sid in local_sessions:
+            out.add(i.id)
+    return out
+
+
+def change_row(
+    inv: Any, journal: Any, now: datetime | None = None, *, local_work: bool = False
+) -> dict[str, Any]:
     """One change in plain words: ``{id, at, ago, where, kind, what, state,
-    why}`` — ``state`` is ``can`` (can be undone), ``undone`` or ``cannot``."""
+    why}`` — ``state`` is ``can`` (can be undone), ``undone`` or ``cannot``.
+    ``local_work`` (review): made in Local only work — ``what`` keeps its
+    name for the person's card, ``what_safe`` is what a turn that may not
+    recall Local only chats is told."""
     from ..agents.mission import fallback_line
 
     now = now or datetime.now(timezone.utc)
@@ -878,10 +1068,20 @@ def change_row(inv: Any, journal: Any, now: datetime | None = None) -> dict[str,
         "where": _where(inv.session_id),
         "kind": kind_of(jkind),
         "what": what,
-        "summary": _masked(inv.output, 160),
+        "what_safe": f"{did} {LOCAL_WORK_WORDS}" if local_work else what,
+        "local_work": bool(local_work),
+        "summary": "" if local_work else _masked(inv.output, 160),
         "state": state,
         "why": why,
     }
+
+
+def _for_model(row: dict[str, Any], recall_local: bool) -> dict[str, Any]:
+    """*row* as a turn is told it: a Local only change's name withheld from a
+    turn that may not recall Local only chats."""
+    if recall_local or not row.get("local_work"):
+        return row
+    return {**row, "what": row["what_safe"]}
 
 
 def list_changes(engine: Any, *, hours: int = 24, kind: str = "any", limit: int = 20) -> tuple[list[dict[str, Any]], int]:
@@ -908,12 +1108,11 @@ def list_changes(engine: Any, *, hours: int = 24, kind: str = "any", limit: int 
             .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
             .limit(_SCAN_ROWS)
         ).all()
-        for inv, j in rows:
-            if kind != "any" and kind_of(j.kind) != kind:
-                continue
-            total += 1
-            if len(out) < limit:
-                out.append(change_row(inv, j, now))
+        picked = [(inv, j) for inv, j in rows if kind == "any" or kind_of(j.kind) == kind]
+        total = len(picked)
+        picked = picked[:limit]
+        local = local_only_rows(db, engine, [inv for inv, _j in picked])
+        out = [change_row(inv, j, now, local_work=inv.id in local) for inv, j in picked]
     return out, total
 
 
@@ -932,7 +1131,9 @@ def find_change(engine: Any, action_id: str = "", kind: str = "any") -> dict[str
             inv = db.get(ToolInvocation, action_id)
             if inv is None or inv.undo_of is not None:
                 return None
-            return change_row(inv, db.get(UndoJournal, action_id))
+            return change_row(
+                inv, db.get(UndoJournal, action_id), local_work=inv.id in local_only_rows(db, engine, [inv])
+            )
         rows = db.exec(
             select(ToolInvocation, UndoJournal)
             .where(UndoJournal.action_id == ToolInvocation.id)
@@ -948,7 +1149,7 @@ def find_change(engine: Any, action_id: str = "", kind: str = "any") -> dict[str
                 continue
             if kind != "any" and kind_of(j.kind) != kind:
                 continue
-            return change_row(inv, j)
+            return change_row(inv, j, local_work=inv.id in local_only_rows(db, engine, [inv]))
     return None
 
 
@@ -989,7 +1190,11 @@ class ChangesListTool(Tool):
         except (TypeError, ValueError):
             return ToolResult(ok=False, error="hours and limit are whole numbers.")
         kind = _kind_arg(args)
+        from ..providers import egress
+
+        recall_local = egress.may_recall_local_only_chats()
         rows, total = await asyncio.to_thread(list_changes, self.platform.engine, hours=hours, kind=kind, limit=limit)
+        rows = [_for_model(r, recall_local) for r in rows]
         span = f"the last {hours} hour{'s' if hours != 1 else ''}"
         noun = "change" if kind == "any" else f"{kind} change"
         if not rows:
@@ -1041,7 +1246,13 @@ class ChangeUndoTool(Tool):
 
     def __init__(self, platform: Any) -> None:
         self.platform = platform
-        self._held: dict[str, tuple[float, dict[str, Any] | None]] = {}
+        #: Per call key, the targets the cards named, oldest first (review:
+        #: two undo calls in one round each get their own card, both naming
+        #: the newest change; a single slot let the second card's Allow undo
+        #: a DIFFERENT, older change than the one it named). A DENIED card's
+        #: target stays here unread — :meth:`_pick_held` takes the NEWEST, so
+        #: it is never lent to a later card.
+        self._held: dict[str, list[tuple[float, dict[str, Any] | None]]] = {}
 
     @staticmethod
     def _key(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -1061,16 +1272,47 @@ class ChangeUndoTool(Tool):
 
     def _hold(self, key: str, target: dict[str, Any] | None) -> None:
         now = time.monotonic()
-        for k in [k for k, (exp, _t) in self._held.items() if exp < now]:
-            self._held.pop(k, None)
+        for k in list(self._held):
+            kept = [(exp, t) for exp, t in self._held[k] if exp >= now]
+            if kept:
+                self._held[k] = kept
+            else:
+                self._held.pop(k, None)
         if len(self._held) > 200:
             self._held.pop(next(iter(self._held)))
-        self._held[key] = (now + self._HOLD_S, target)
+        slots = self._held.setdefault(key, [])
+        slots.append((now + self._HOLD_S, target))
+        del slots[:-20]
+
+    def _pick_held(self, key: str) -> tuple[bool, dict[str, Any] | None]:
+        """``(found, target)`` — the change the card being answered named:
+        the NEWEST held target of these arguments. A round's spend checks all
+        run just before its cards (so one round's entries of one key all name
+        the same change), and each later round's come after the earlier
+        round's answers — so the newest entry is the card being answered.
+        Never an older card's (a denied card's target is never undone by a
+        later card's Allow; the target is re-read by its own id after)."""
+        now = time.monotonic()
+        slots = [(exp, t) for exp, t in (self._held.get(key) or []) if exp >= now]
+        if not slots:
+            self._held.pop(key, None)
+            return False, None
+        _exp, target = slots.pop()
+        if slots:
+            self._held[key] = slots
+        else:
+            self._held.pop(key, None)
+        return True, target
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """A card EVERY time, naming the change (once only: a wider answer
         never covers the next undo). A call that will undo nothing (no such
-        change, or one that cannot be undone) has no card: it is refused."""
+        change, or one that cannot be undone) has no card: it is refused.
+        Outside a chat on the Chat page there is no card either (review):
+        execute refuses in words, so an agent run never parks an undo where
+        the phone could answer it."""
+        if _chat_page_problem(ctx, "An undo"):
+            return SpendCheck(ask=False)  # no card: execute refuses in words
         try:
             target = await self._target(args)
         except Exception:  # noqa: BLE001 — unknown: no card, execute reads again and refuses honestly
@@ -1080,22 +1322,28 @@ class ChangeUndoTool(Tool):
             return SpendCheck(ask=False)
         when = ", ".join(b for b in (target["ago"], target["where"]) if b)
         words = f"Undo this change: {target['what']}" + (f" ({when})" if when else "") + "."
-        return SpendCheck(ask=True, words=words[:400], once_only=True, attended_only=True)
+        return SpendCheck(ask=True, words=words[:400], once_only=True, attended_only=True, reason=UNDO_REASON)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
 
         from ..daemon.routes.undo import perform_undo
 
+        problem = _chat_page_problem(ctx, "An undo")
+        if problem:
+            return ToolResult(ok=False, error=problem + " Nothing was undone.")
         d = R._d(self.platform)
         if d is None:
             return ToolResult(ok=False, error="Undo from chat needs the running app.")
         key = self._key(args, ctx)
-        held = self._held.pop(key, None)
-        if held is not None and held[0] >= time.monotonic():
-            target = held[1]
-        else:
+        found, target = self._pick_held(key)
+        if not found:
             target = await self._target(args)
+        elif target is not None:
+            # Exactly the change the card named, as it stands NOW (undone on
+            # a page while the card waited → refused in words below).
+            now_row = await asyncio.to_thread(find_change, self.platform.engine, target["id"])
+            target = now_row if now_row is not None else target
         aid = str(args.get("action_id") or "").strip()
         if target is None:
             return ToolResult(
@@ -1106,11 +1354,14 @@ class ChangeUndoTool(Tool):
                     else "There is no recent change that can still be undone."
                 ),
             )
+        from ..providers import egress as _egress
+
+        said = _for_model(target, _egress.may_recall_local_only_chats())["what"]
         if target["state"] == "undone":
-            return ToolResult(ok=False, error=f"That change was already undone: {target['what']}.")
+            return ToolResult(ok=False, error=f"That change was already undone: {said}.")
         if target["state"] == "cannot":
             return ToolResult(
-                ok=False, error=f"That change cannot be undone ({target['why']}): {target['what']}."
+                ok=False, error=f"That change cannot be undone ({target['why']}): {said}."
             )
         try:
             out = await perform_undo(d, target["id"])
@@ -1118,11 +1369,11 @@ class ChangeUndoTool(Tool):
             return ToolResult(ok=False, error=f"It could not be undone: {exc.detail}")
         return ToolResult(
             ok=True,
-            output=f"Undone: {target['what']}.",
+            output=f"Undone: {said}.",
             data={
                 "undone": target["id"],
                 "tool": target["tool"],
-                "what": target["what"],
+                "what": said,
                 "undo_invocation_id": out.get("undo_invocation_id"),
             },
         )

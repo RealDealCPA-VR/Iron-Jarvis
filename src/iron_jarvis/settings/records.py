@@ -2961,6 +2961,41 @@ def find_undo_target(engine: Any, action_id: str = "") -> dict[str, Any] | None:
     return None
 
 
+def protected_restores(engine: Any, action_id: str) -> list[str]:
+    """The settings an undo of *action_id* would put back at a value that is
+    ASK-FLOOR from chat (``schema.SettingDef.tier_for`` — "Start new chats
+    local only" off, Don't ask, …): their labels, [] when none or when the
+    action is not a settings change. Blocking; never raises (unreadable = [],
+    and ``perform_undo`` still refuses what it cannot do).
+
+    v1.435.0 review: ``config_undo`` is ask tier, so "Don't ask" (or an "allow
+    for this chat") runs it with no card — and undoing a NARROWING (turning
+    "Start new chats local only" on) widens the setting again without the
+    card its own tool must show. ``change_undo`` cards every time."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import UndoJournal
+        from . import schema as _schema
+
+        with session_scope(engine) as db:
+            j = db.get(UndoJournal, str(action_id or ""))
+            if j is None or j.kind != "setting_restore":
+                return []
+            pre = json.loads(j.pre_inline or "{}")
+        prior = pre.get("prior") if isinstance(pre, dict) else None
+        out: list[str] = []
+        for key, value in (prior or {}).items() if isinstance(prior, dict) else ():
+            try:
+                d = _schema.get(str(key))
+            except KeyError:
+                continue
+            if d.tier_for(value) == "ask-floor":
+                out.append(d.label)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 class ConfigUndoTool(Tool):
     """"undo that" from chat: reverse a configuration change through THE code
     ``POST /undo/{id}`` runs (``routes.undo.perform_undo``), so chat and the
@@ -3009,6 +3044,15 @@ class ConfigUndoTool(Tool):
             return ToolResult(
                 ok=False,
                 error="That change is Local only for a chat: undoing it needs the user's OK on a card. Call change_undo for it.",
+            )
+        protected = await asyncio.to_thread(protected_restores, self.platform.engine, target["action_id"])
+        if protected:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"Undoing that puts back {', '.join(protected)} the way it was, which always needs "
+                    "the user's OK on a card. Call change_undo for it."
+                ),
             )
         try:
             out = await perform_undo(d, target["action_id"])

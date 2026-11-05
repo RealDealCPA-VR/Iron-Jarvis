@@ -322,6 +322,13 @@ def _contract_row(p, gid):
         return rec.model_dump() if rec is not None else None
 
 
+def _but_stamp(row):
+    """A goal row without ``updated_at`` (moved on purpose in the review: an
+    undo of a pause or a stop puts back the STATE and writes a fresh stamp —
+    it never rewinds the books, tests/test_chat_history_review_v14350.py)."""
+    return {k: v for k, v in (row or {}).items() if k != "updated_at"}
+
+
 @pytest.mark.asyncio
 async def test_goal_list_shows_goals_from_chat_marked_as_such(tmp_path):
     app = _app(tmp_path, [(GL, {})])
@@ -362,7 +369,7 @@ async def test_pausing_a_goal_from_chat_asks_applies_and_undo_restores_the_whole
     (card,) = [c for c in _cards(frames) if c.get("title") == "Goal changed"]
     assert card["old"].startswith("running") and card["new"].startswith("paused")
     await _undo_card(app, card)
-    assert _contract_row(p, g.id) == before
+    assert _but_stamp(_contract_row(p, g.id)) == _but_stamp(before)
     assert p.scheduler.get(f"goal:{g.id}").enabled is True
 
 
@@ -401,7 +408,7 @@ async def test_stopping_a_goal_from_chat_says_a_stopped_run_is_not_started_again
     r = TestClient(app).post(f"/undo/{look['action_id']}")
     assert r.status_code == 200, r.text
     assert "not started again" in r.json()["output"]
-    assert _contract_row(p, g.id) == before
+    assert _but_stamp(_contract_row(p, g.id)) == _but_stamp(before)
 
 
 @pytest.mark.asyncio

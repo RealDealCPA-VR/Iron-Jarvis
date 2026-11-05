@@ -43,6 +43,26 @@ export function localOnlyFromCards(cards: readonly ConfigCard[] | null | undefin
   return out;
 }
 
+/** The tool these cards and steps come from (records_history LOCAL_ONLY_TOOL). */
+export const LOCAL_ONLY_TOOL = "chat_local_only";
+
+/** v1.435.0 review: what a turn's STEPS switched Local only to — the newest
+ *  `chat_local_only` step that finished ok — or null when none did. Read
+ *  when the turn FAILED or was stopped after the step ran: there is then no
+ *  done frame (no card), and the failed turn's save would otherwise carry the
+ *  switch as it was and put the old value back over the daemon's write. */
+export function localOnlyFromTools(
+  tools: ReadonlyArray<{ name: string; status: string; ok?: boolean; args?: Record<string, unknown> }> | null | undefined,
+): boolean | null {
+  let out: boolean | null = null;
+  for (const t of tools ?? []) {
+    if (t.name !== LOCAL_ONLY_TOOL || t.status !== "done" || t.ok !== true) continue;
+    const on = t.args?.on;
+    if (on === true || on === false) out = on;
+  }
+  return out;
+}
+
 /** After the user pressed Undo on that card: the state it put back, or null
  *  when the card is another one (or not undone). */
 export function localOnlyAfterUndo(card: ConfigCard | null | undefined): boolean | null {

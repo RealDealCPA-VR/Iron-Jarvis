@@ -405,7 +405,7 @@ import {
   type CloudAsk,
   type LocalOnlyRefusal,
 } from "@/lib/localOnly";
-import { localOnlyAfterUndo, localOnlyFromCards, newChatLocalOnly } from "@/lib/localOnlyChat";
+import { localOnlyAfterUndo, localOnlyFromCards, localOnlyFromTools, newChatLocalOnly } from "@/lib/localOnlyChat";
 import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { readRecentModels } from "@/lib/recentModels";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
@@ -5822,7 +5822,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
    *  next save would put the old value back. A held chat never turns off.
    *  The user's default for new chats is not touched (that is a setting). */
   function followLocalOnlyCards(cards: ConfigCard[] | undefined) {
-    const next = localOnlyFromCards(cards);
+    followLocalOnly(localOnlyFromCards(cards));
+  }
+
+  /** v1.435.0 review: the same, from what the daemon said the switch became
+   *  (a card, or — a turn that failed or was stopped after the step ran — the
+   *  step itself, lib/localOnlyChat `localOnlyFromTools`). */
+  function followLocalOnly(next: boolean | null) {
     if (next === null || next === localOnlyRef.current) return;
     if (!next && localOnlyHeldRef.current.length > 0) return;
     setLocalOnlyNow(next);
@@ -8927,6 +8933,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           // clean `history`, which doesn't include this partial).
           await new Promise<void>((r) => window.setTimeout(r, 0)); // tool flush
           if (chatGenRef.current !== gen) return;
+          // v1.435.0 review: Local only changed from chat before the turn
+          // failed or was stopped — the daemon already wrote the chat, so the
+          // switch follows it BEFORE the save below (no done frame, no card).
+          followLocalOnly(localOnlyFromTools(streamToolsRef.current));
           const partial = (se?.partial ?? "").trim();
           const sources = extractWebSources(streamToolsRef.current);
           const withPartial: ChatMessage[] = partial
@@ -10386,6 +10396,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // empty box; the "Stopped." line stays as the record).
       if (!partial) restoreComposerDraft(messagesRef.current);
       const sources = extractWebSources(stream.tools);
+      // v1.435.0 review: Local only changed from chat before Stop — the
+      // switch follows the daemon's write BEFORE the save below.
+      followLocalOnly(localOnlyFromTools(stream.tools));
       const full: ChatMessage[] = [
         ...messagesRef.current,
         {

@@ -125,7 +125,7 @@ class TurnHandle:
 
     __slots__ = (
         "turn_id", "_stopped", "_steers", "_steer_lock", "_steers_closed",
-        "_wake", "_loop",
+        "_wake", "_loop", "_held_steers",
     )
 
     def __init__(self, turn_id: str) -> None:
@@ -143,6 +143,9 @@ class TurnHandle:
         # v1.287.0: set once the runner has read its LAST note (see
         # :meth:`close_steers`); a note arriving after that is refused.
         self._steers_closed = False
+        # v1.435.0 review: notes queued before :meth:`hold_steers` — never
+        # read by this turn, handed back by :meth:`close_steers`.
+        self._held_steers: list[str] = []
 
     @property
     def stopped(self) -> bool:
@@ -213,9 +216,22 @@ class TurnHandle:
         """
         with self._steer_lock:
             self._steers_closed = True
-            left = self._steers[:]
+            left = self._held_steers + self._steers
+            self._held_steers = []
             self._steers.clear()
         return left
+
+    def hold_steers(self) -> None:
+        """No more notes for THIS turn, and none of the queued ones read by it
+        (v1.435.0 review): Local only was turned on while this (not local)
+        reply runs, and "from your next message" must hold for a note too.
+        A later note is refused (the steer route answers 404, so the words stay
+        in the box); the queued ones come back from :meth:`close_steers` as
+        unread, so the page puts them back in the box."""
+        with self._steer_lock:
+            self._steers_closed = True
+            self._held_steers.extend(self._steers)
+            self._steers.clear()
 
 
 class TurnRegistry:
@@ -292,6 +308,18 @@ class TurnRegistry:
         with self._lock:
             handle = self._turns.get(str(turn_id))
         return handle.take_steers() if handle is not None else []
+
+    def hold_steers(self, turn_id: str) -> bool:
+        """:meth:`TurnHandle.hold_steers` for a running turn (v1.435.0 review).
+        False = unknown or finished (nothing to hold)."""
+        if not turn_id:
+            return False
+        with self._lock:
+            handle = self._turns.get(str(turn_id))
+        if handle is None:
+            return False
+        handle.hold_steers()
+        return True
 
     def release(self, turn_id: str, handle: TurnHandle | None = None) -> None:
         """The runner is done with this id. After this, :meth:`stop` reports it

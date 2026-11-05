@@ -330,10 +330,14 @@ async def test_undo_that_reverses_the_last_change_through_the_undo_route(tmp_pat
     app = create_app(str(tmp_path))
     p = app.state.platform
     cfg = p.config
-    cfg.autonomy_dry_run = False
-    p.router.stream = _calls_stream([("config_set", {"key": "autonomy_dry_run", "value": "on"})])
-    await _drive_stream(app, _body("turn on dry run mode for autonomy"), _never)
-    assert cfg.autonomy_dry_run is True
+    # v1.435.0 review (moved on purpose): an ORDINARY setting. Dry-run mode's
+    # "off" is ask-floor, and config_undo never puts a setting back at a
+    # value that always asks (change_undo cards it; see
+    # tests/test_chat_history_review_v14350.py).
+    cfg.chat_followups = False
+    p.router.stream = _calls_stream([("config_set", {"key": "chat_followups", "value": "on"})])
+    await _drive_stream(app, _body("turn on follow-up questions"), _never)
+    assert cfg.chat_followups is True
     (row,) = [c for c in _ledger(app) if c["tool"] == "config_set"]
     assert row["undoable"] and not row["undone"]
 
@@ -341,7 +345,7 @@ async def test_undo_that_reverses_the_last_change_through_the_undo_route(tmp_pat
     seen: list[str] = []
     frames = await _drive_stream(app, _body("undo that"), await _approve_all(app, seen))
     assert seen == ["config_undo"], "an undo is a change: it asks"
-    assert cfg.autonomy_dry_run is False
+    assert cfg.chat_followups is False
     (row,) = [c for c in _ledger(app) if c["action_id"] == row["action_id"]]
     assert row["undone"] is True and row["undoable"] is False
     (fin,) = _finished(frames, "config_undo")
@@ -497,21 +501,22 @@ async def test_undo_that_takes_the_NEWEST_change_and_then_the_one_before_it(tmp_
     app = create_app(str(tmp_path))
     p = app.state.platform
     cfg = p.config
-    cfg.autonomy_dry_run = False
+    # v1.435.0 review (moved on purpose): an ORDINARY setting, see above.
+    cfg.chat_followups = False
     before_steps = cfg.max_agent_steps
-    p.router.stream = _calls_stream([("config_set", {"key": "autonomy_dry_run", "value": "on"})])
-    await _drive_stream(app, _body("turn on dry run mode for autonomy"), _never)
+    p.router.stream = _calls_stream([("config_set", {"key": "chat_followups", "value": "on"})])
+    await _drive_stream(app, _body("turn on follow-up questions"), _never)
     p.router.stream = _calls_stream([("config_change", {"key": "max_agent_steps", "value": "37"})])
     seen: list[str] = []
     await _drive_stream(app, _body("change the max steps setting to 37"), await _approve_all(app, seen))
-    assert cfg.autonomy_dry_run is True and cfg.max_agent_steps == 37
+    assert cfg.chat_followups is True and cfg.max_agent_steps == 37
 
     p.router.stream = _calls_stream([("config_undo", {})])
     await _drive_stream(app, _body("undo that"), await _approve_all(app, seen))
     assert cfg.max_agent_steps == before_steps, "the newest change is the one undone"
-    assert cfg.autonomy_dry_run is True, "the earlier change is untouched"
+    assert cfg.chat_followups is True, "the earlier change is untouched"
 
     p.router.stream = _calls_stream([("config_undo", {})])
     await _drive_stream(app, _body("undo that"), await _approve_all(app, seen))
-    assert cfg.autonomy_dry_run is False, "an already-undone change is skipped; the one before it goes"
+    assert cfg.chat_followups is False, "an already-undone change is skipped; the one before it goes"
     assert cfg.max_agent_steps == before_steps

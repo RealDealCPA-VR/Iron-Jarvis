@@ -119,8 +119,11 @@ STOP_GRACE_S = 3.0
 #: project's or a plugin's command line, a commit / push on a session's
 #: branch, a page click that pays or sends; v1.407.2: an edit of Git's or
 #: Iron Jarvis's own files ("guarded", core/auto_approve.GUARD_REASON).
+#: v1.435.0 review: turning a chat's Local only OFF ("privacy") and an undo
+#: from chat ("undo", which cannot itself be undone) —
+#: settings/records_history LOCAL_ONLY_REASON / UNDO_REASON.
 #: Never sent to the phone.
-SAFETY_REASONS = frozenset({"command", "git", "page", "guarded"})
+SAFETY_REASONS = frozenset({"command", "git", "page", "guarded", "privacy", "undo"})
 
 
 def now() -> float:

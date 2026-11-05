@@ -16,14 +16,20 @@
  *   Iron Jarvis's own rules (.ironjarvis/**) or Claude Code's (.claude/**) —
  *   src/iron_jarvis/core/auto_approve.py `guarded_edit`. A safety card:
  *   Enter never allows it.
+ * - "privacy" (v1.435.0 review): turning THIS chat's Local only off from chat
+ *   (src/iron_jarvis/settings/records_history.py LOCAL_ONLY_REASON) — what is
+ *   written next may then go to a model off this PC. A safety card.
+ * - "undo" (v1.435.0 review): undoing one of Iron Jarvis's changes from chat
+ *   (records_history UNDO_REASON) — an undo cannot itself be undone. A safety
+ *   card.
  *
  * Kept OUT of lib/useChatStream.ts on purpose: ~50 test files mock that
  * module with a fixed list of exports, and lib/buildHelpers reads this too.
  */
 
-export type OnceReason = "git" | "page" | "command" | "memory" | "guarded";
+export type OnceReason = "git" | "page" | "command" | "memory" | "guarded" | "privacy" | "undo";
 
-const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory", "guarded"]);
+const REASONS: ReadonlySet<string> = new Set(["git", "page", "command", "memory", "guarded", "privacy", "undo"]);
 
 /** The reason as a card reads it, or undefined for anything else. */
 export function onceReasonOf(raw: unknown): OnceReason | undefined {
