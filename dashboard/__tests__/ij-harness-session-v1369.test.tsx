@@ -520,7 +520,8 @@ describe("an account limit", () => {
       expect(api.calls).toContainEqual({
         method: "POST",
         path: "/build/sessions/s1/account",
-        body: { account: "personal", continue: true },
+        // v1.434.0 (Wave 2, F review, moved on purpose): which screen pressed.
+        body: { account: "personal", continue: true, device_id: getDeviceId() },
       }),
     );
     await waitFor(() =>
@@ -558,7 +559,7 @@ describe("an account limit", () => {
       expect(api.calls).toContainEqual({
         method: "POST",
         path: "/build/sessions/s1/account",
-        body: { account: "spare", continue: true, force: true },
+        body: { account: "spare", continue: true, force: true, device_id: getDeviceId() },
       }),
     );
   });
