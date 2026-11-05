@@ -116,6 +116,12 @@ def default_permissions() -> dict[str, str]:
         "skill_search": "allow",
         "skill_load": "allow",
         "delegate": "ask",
+        # v1.433.0 (Wave 1, A17): spelled out so the Permissions screen shows
+        # them and a user can tune them. Both still ASK by default, exactly
+        # as their absence did: `delegate_remote` sends the task to another
+        # computer, and `pixio` (the key of every pixio_* tool) spends credits.
+        "delegate_remote": "ask",
+        "pixio": "ask",
         # Read-only web retrieval — allow-by-default so headless agent runs and
         # scheduled workflows can research (the engine enforces the same tier;
         # an explicit user "deny" always wins).
@@ -364,6 +370,11 @@ def default_permissions() -> dict[str, str]:
         # actions ask. The capability is OFF unless the user enables it.
         "browse": "allow",
         "web_extract": "allow",
+        # v1.433.0 (Wave 1, A17): `web_look` is the read-only sibling of
+        # browse / web_extract (a screenshot read by a vision model), gated by
+        # the same computer-use switch. It had no row, so it asked every time
+        # and the Permissions screen could not show or tune it.
+        "web_look": "allow",
         "computer_use_status": "allow",
         "web_action": "ask",
         # Browser (v1.235.0): the user's OWN Chrome, over the paired add-on.
@@ -476,6 +487,28 @@ class Config(BaseModel):
     #: working at once rings the bell once and asks whether to queue the
     #: extras. 0 = never. Never rings while ``max_concurrent_sessions`` > 0.
     busy_runs_notice_at: int = 4
+    #: v1.433.0 (Wave 1, A12): names the code already read with
+    #: ``getattr(config, name, default)`` but the Config model dropped at
+    #: load (``_load_config`` keeps only ``model_fields``), so config.toml
+    #: could never set them. Typed here with the defaults the readers used.
+    #:
+    #: How many helpers ONE delegating agent may run at the same time
+    #: (``agents/orchestrator.max_concurrent_children``, read at each hand-out;
+    #: <= 0 = no limit, settable only in config.toml). Settings' range is 1–16.
+    max_concurrent_children: int = 4
+    #: The assignment dispatcher (v1.296.0) is armed at boot only while this
+    #: is on (``daemon/app.py``), so a change takes effect after a restart.
+    assignments_enabled: bool = True
+    #: THE SKILL CURATOR (v1.297.0, ``skills/curator.py``) — read live on every
+    #: pass: the loop is armed at boot and skips the sweep while this is off.
+    curator_enabled: bool = True
+    #: An agent-made skill younger than this many days is never archived.
+    curator_min_age_days: int = Field(default=14, ge=0)
+    #: An agent-made skill idle this many days is archived (never deleted).
+    curator_stale_after_days: int = Field(default=30, ge=0)
+    #: Hours between sweeps. At least 1: a 0 would make the loop sweep
+    #: without pause (a hand-edited config.toml with 0 falls back to 24).
+    curator_interval_hours: int = Field(default=24, ge=1)
     #: v1.367.0 (IJ harness Phase 4): how many tool rounds ONE Build session
     #: turn may take before it ends in its own conversation with an answer
     #: (it never hands the work to an agent run).

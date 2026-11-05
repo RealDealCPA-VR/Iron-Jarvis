@@ -337,13 +337,29 @@ class _ConfigChangeBase(Tool):
         except RuntimeError as exc:
             return ToolResult(ok=False, output="", error=str(exc))
         change_id = _CHANGE_ID.get()
+        # v1.433.0 (Wave 1, A2): turning "Run app tools without asking" off
+        # also clears each app's own flag — said, so "was already Off" is
+        # never the whole truth when an app still ran its tools unasked.
+        cleared = list(getattr(change, "cleared_auto_approve", None) or [])
+        apps = ""
+        if cleared:
+            n = len(cleared)
+            apps = (
+                f" {n} {'app that' if n == 1 else 'apps that'} still ran {'its' if n == 1 else 'their'} "
+                "tools without asking will ask first too."
+            )
         if not change.changed:
-            return ToolResult(ok=True, output=f"{d.label} was already {_show(value)}.", data={"config_change": None})
+            restart_now = " This takes full effect after Iron Jarvis restarts." if (cleared and d.restart) else ""
+            return ToolResult(
+                ok=True,
+                output=f"{d.label} was already {_show(value)}.{apps}{restart_now}",
+                data={"config_change": None},
+            )
         c = change.changed[0]
         restart = " It takes full effect after Iron Jarvis restarts." if d.restart else ""
         return ToolResult(
             ok=True,
-            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{restart}",
+            output=f"Changed {c['label']}: {_show(c['old'])} → {_show(c['new'])}.{apps}{restart}",
             data={
                 "config_change": {
                     "key": key,

@@ -57,7 +57,7 @@ from ..media.pixio_http import ext_from_url as _ext_from_url
 from ..media.pixio_http import http_error as _http_error
 from ..media.pixio_http import output_url as _output_url
 from ..media.pixio_http import safe_name as _safe_name
-from .base import Tool, ToolContext, ToolResult
+from .base import Reversibility, Tool, ToolContext, ToolResult
 
 __all__ = [
     "ArtifactSink",
@@ -209,6 +209,9 @@ class _PixioTool(Tool):
 
 class PixioModelsTool(_PixioTool):
     name = "pixio_models"
+    #: v1.433.0 (Wave 1, A17): a read — like the other read tools. The
+    #: ``pixio`` permission still asks first by default.
+    reversibility = Reversibility.READONLY
     description = (
         "List the Pixio generative-media models (image/video/audio) visible to this "
         "account. Always pick a model id from this list — never invent one. Then call "
@@ -243,6 +246,9 @@ class PixioModelsTool(_PixioTool):
 
 class PixioParamsTool(_PixioTool):
     name = "pixio_params"
+    #: v1.433.0 (Wave 1, A17): a read — like the other read tools. The
+    #: ``pixio`` permission still asks first by default.
+    reversibility = Reversibility.READONLY
     description = (
         "Fetch the accepted params (required fields, defaults, allowed values) for one "
         "Pixio model. Call this BEFORE pixio_generate and pass only params it lists — "
@@ -391,6 +397,11 @@ class PixioGenerateTool(_PixioTool):
 
 class PixioStatusTool(_PixioTool):
     name = "pixio_status"
+    #: v1.433.0 (Wave 1, A17): a read of one generation's state. On success it
+    #: saves the result the user already asked for into the run's own folder;
+    #: checking again saves the same result, so a check cut off by a restart
+    #: may run again. The ``pixio`` permission still asks first by default.
+    reversibility = Reversibility.READONLY
     description = (
         "Check one Pixio generation by id (from pixio_generate). On success the output "
         "is downloaded into the session workspace under pixio/; otherwise the current "

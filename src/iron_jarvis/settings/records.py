@@ -549,6 +549,15 @@ def app_waiting_for(platform: Any, connector_id: str) -> list[str]:
             names = [_secret_name(conn.id, f.name), _field_ref(saved, conn, f.name)]
             if not any(n and platform.secrets.get(n) for n in names):
                 missing.append(f.label)
+        # v1.433.0 (Wave 1, A4): an argument the card collects is missing
+        # while the saved row names its vault row and the vault holds nothing.
+        arg_refs = dict(saved.get("arg_secrets") or {})
+        for f in card_arg_fields(conn):
+            if f.optional:
+                continue
+            ref = str(arg_refs.get(str(card_arg_index(conn, f))) or "")
+            if ref and not platform.secrets.get(ref):
+                missing.append(f.label)
         return missing
     except Exception:  # noqa: BLE001 — unknown = try the load
         return []
@@ -562,6 +571,61 @@ def _field_ref(cfg: dict[str, Any], conn: Any, field_name: str) -> str:
     if auth is not None and getattr(conn, "auth_field", "") == field_name and auth.get("secret"):
         return str(auth["secret"])
     return str(dict(cfg.get("env_secrets") or {}).get(field_name) or "")
+
+
+def card_arg_fields(conn: Any) -> list[Any]:
+    """The ARGUMENT fields the secure card collects instead of chat (v1.433.0,
+    Wave 1 A4): an ``arg`` field whose name says it carries a credential
+    (``mcp.secrets.is_secret_key`` — Postgres's ``connection``) and whose
+    template argument is exactly its placeholder, so the vault can hold the
+    whole argument (``arg_secrets``, put back at launch by
+    ``mcp.secrets.resolve_args``). Never raises."""
+    try:
+        from ..mcp.secrets import is_secret_key
+
+        args = list(getattr(conn, "args", None) or [])
+        return [
+            f for f in list(getattr(conn, "fields", None) or [])
+            if f.kind == "arg" and is_secret_key(f.name) and f"<{f.name}>" in args
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def card_arg_index(conn: Any, f: Any) -> int:
+    """The index of ``f``'s placeholder in ``conn``'s argument template."""
+    return list(conn.args).index(f"<{f.name}>")
+
+
+def card_fields(conn: Any) -> list[Any]:
+    """Every field a secure card collects for ``conn``: its secret fields,
+    then its credential-carrying argument fields, in catalog order — the one
+    list ``app_connect`` names its cards from and ``credentials._resolve_app``
+    resolves ``app.<id>[__FIELD]`` against."""
+    cards = {id(f) for f in card_arg_fields(conn)}
+    return [f for f in list(getattr(conn, "fields", None) or []) if f.kind == "secret" or id(f) in cards]
+
+
+#: v1.433.0 (Wave 1, A4): a credential-carrying argument (a Postgres
+#: connection string WITH its password) handed to app_connect.
+CONNECTION_NOT_IN_CHAT = (
+    "{label} for {name} holds a password, so it never goes through chat. Call app_connect for "
+    "{id} again without `{field}` in values: a secure card asks the user for it."
+)
+
+
+def _card_arg_with_password(conn: Any, values: Any) -> Any:
+    """The first card argument field whose value in ``values`` carries a
+    credential (``mcp.secrets.split_args`` would hide it), or None."""
+    if not isinstance(values, dict):
+        return None
+    from ..mcp.secrets import split_args
+
+    for f in card_arg_fields(conn):
+        val = str(values.get(f.name, "") or "").strip()
+        if val and split_args([val])[1]:
+            return f
+    return None
 
 
 def adopt_card_secrets(platform: Any, connector_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -595,6 +659,26 @@ def adopt_card_secrets(platform: Any, connector_id: str, cfg: dict[str, Any]) ->
                 env_secrets = dict(new.get("env_secrets") or {})
                 env_secrets[f.name] = canonical
                 new["env_secrets"] = env_secrets
+            changed = True
+        # v1.433.0 (Wave 1, A4): an argument the card just stored (a Postgres
+        # connection string) — a row connected from the Directory names its
+        # own vault row (``mcp.<id>.arg.<i>``) or holds a plain argument; point
+        # it at the card's row so the pack launches with what was pasted.
+        from ..detections.redact import MASK
+
+        for f in card_arg_fields(conn):
+            canonical = _secret_name(conn.id, f.name)
+            if not platform.secrets.get(canonical):
+                continue
+            idx = card_arg_index(conn, f)
+            arg_refs = dict(new.get("arg_secrets") or {})
+            args = list(new.get("args") or [])
+            if arg_refs.get(str(idx)) == canonical or idx >= len(args):
+                continue
+            args[idx] = MASK
+            arg_refs[str(idx)] = canonical
+            new["args"] = args
+            new["arg_secrets"] = arg_refs
             changed = True
         if not changed:
             return cfg
@@ -1452,11 +1536,59 @@ class ChannelToggleTool(_RecordTool):
 
 #: The non-secret fields each channel type takes from chat; the token comes
 #: through the secure card (vault name ``channel_<name>_token``).
+#: v1.433.0 (Wave 1, A4): Discord takes NOTHING from chat. Its webhook URL IS
+#: its credential (anyone holding it can post as the destination; the
+#: Notifications page never hands it back, routes/comm.HIDDEN_VALUES), and it
+#: was a plain tool argument, so it reached the model and the tool log. It now
+#: comes through the same secure card as a Telegram or Slack token; the card
+#: writes it where the Notifications page keeps it (``webhook_url`` in the
+#: destination's own settings — settings/credentials.CredentialStore), so the
+#: destination works the same whichever door saved it.
 _CHANNEL_FIELDS = {
     "telegram": ("chat_id",),
     "slack": ("channel",),
-    "discord": ("webhook_url",),
+    "discord": (),
 }
+
+#: v1.433.0 (Wave 1, A4): the refusal a call carrying a webhook URL gets —
+#: before any card, and its log row keeps no URL (``redact_args``).
+WEBHOOK_NOT_IN_CHAT = (
+    "A webhook URL works like a password, so it never goes through chat. Call channel_connect "
+    "again without `webhook_url`: a secure card asks the user for it."
+)
+
+#: A Discord or Slack incoming-webhook address anywhere in a value: masked
+#: whole in a log row (the path IS the key).
+_WEBHOOK_URL_RX = re.compile(
+    r"(?i)https?://[^\s\"'<>]*(?:discord(?:app)?\.com/api/webhooks|hooks\.slack\.com)/[^\s\"'<>]*"
+)
+
+
+def masked_args(value: Any, *, full: Any = None) -> Any:
+    """``value`` (a tool call's arguments) safe for the tool log, the approval
+    card and the stream (v1.433.0, Wave 1 A4): every string through
+    ``detections.redact.mask`` (``postgresql://me:***@host``,
+    ``password=***``, ``Bearer ***``…) and any incoming-webhook address
+    replaced whole; a dict key ``full(key)`` answers True for is replaced
+    whole (a token field). Never raises; non-strings pass through."""
+    from ..detections.redact import MASK, mask
+
+    try:
+        if isinstance(value, str):
+            return _WEBHOOK_URL_RX.sub(MASK, mask(value))
+        if isinstance(value, dict):
+            out: dict[Any, Any] = {}
+            for k, v in value.items():
+                if full is not None and v not in (None, "") and full(str(k)):
+                    out[k] = MASK
+                else:
+                    out[k] = masked_args(v, full=full)
+            return out
+        if isinstance(value, list):
+            return [masked_args(v, full=full) for v in value]
+    except Exception:  # noqa: BLE001 — a log row never carries what could not be read
+        return MASK
+    return value
 
 
 class ChannelConnectTool(_RecordTool):
@@ -1464,9 +1596,9 @@ class ChannelConnectTool(_RecordTool):
     RECORD = "channel"
     description = (
         "Add a notification channel so Iron Jarvis can message the user: `type` telegram "
-        "(needs `chat_id`), slack (needs `channel`, e.g. #general) or discord (needs "
-        "`webhook_url`). Never ask for a token in chat — the user pastes it into the secure "
-        "card this shows. The user approves on a card; Undo removes the channel."
+        "(needs `chat_id`), slack (needs `channel`, e.g. #general) or discord (needs nothing "
+        "else). Never ask for a token or a webhook URL in chat — the user pastes it into the "
+        "secure card this shows. The user approves on a card; Undo removes the channel."
     )
     input_schema = {
         "type": "object",
@@ -1475,12 +1607,28 @@ class ChannelConnectTool(_RecordTool):
             "type": {"type": "string", "enum": sorted(_CHANNEL_FIELDS)},
             "chat_id": {"type": "string"},
             "channel": {"type": "string"},
-            "webhook_url": {"type": "string"},
         },
         "required": ["name", "type"],
     }
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """v1.433.0 (Wave 1, A4): never a webhook URL or a token in the log,
+        the approval card or the stream — even one a model passed anyway."""
+        from ..mcp.secrets import is_secret_key
+
+        return masked_args(dict(args or {}), full=is_secret_key)
+
+    async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
+        """A call carrying a webhook URL is refused by ``execute`` and changes
+        nothing, so it is no approval card either (the v1.227.0 rule "an
+        Allow that cannot run is a lie"). Everything else keeps the card."""
+        if str((args or {}).get("webhook_url") or "").strip():
+            return SpendCheck(ask=False, cost_note="changes nothing by itself")
+        return None
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if str(args.get("webhook_url") or "").strip():
+            return ToolResult(ok=False, error=WEBHOOK_NOT_IN_CHAT)
         name = self._target(args)
         ctype = str(args.get("type") or "").strip().lower()
         if not _CHANNEL_NAME.match(name):
@@ -1507,11 +1655,24 @@ class ChannelConnectTool(_RecordTool):
                     "request_id": new_id("seq"),
                 }
             )
+        elif ctype == "discord":
+            # The card writes the URL into this destination's settings, where
+            # the Notifications page keeps it (settings/credentials).
+            requests.append(
+                {
+                    "name": f"channel.{name}",
+                    "label": f"Discord webhook URL for “{name}”",
+                    "help": "In Discord: the channel's settings, then Integrations, then Webhooks, then Copy Webhook URL.",
+                    "why": "to finish connecting Discord",
+                    "request_id": new_id("seq"),
+                }
+            )
         await asyncio.to_thread(apply_channel, self.platform, name, cfg)
-        waiting = " — paste its token into the secure card to finish" if requests else ""
+        what = "webhook URL" if ctype == "discord" else "token"
+        waiting = f" — paste its {what} into the secure card to finish" if requests else ""
         return ToolResult(
             ok=True,
-            output=f"Added the {ctype} channel '{name}'{waiting}. Never ask for the token in chat.",
+            output=f"Added the {ctype} channel '{name}'{waiting}. Never ask for the {what} in chat.",
             data={
                 "record_change": self._card("Channel added", f"Channel “{name}”", None, _describe_channel(cfg), f"channel.{name}"),
                 "secret_requests": requests,
@@ -1594,6 +1755,37 @@ class AppConnectTool(_RecordTool):
     def _target(self, args: dict[str, Any]) -> str:
         return str(args.get("app") or "").strip().lower()
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """v1.433.0 (Wave 1, A4): the log, the approval card and the stream
+        never carry a credential a model put in ``values`` — a token field
+        (the app's own secret fields, or an unknown key named like one) is
+        replaced whole, and every other value goes through the mask
+        (``postgresql://me:***@host/db`` keeps the host the user approves)."""
+        from ..connectors.catalog import get_connector
+        from ..mcp.secrets import is_secret_key
+
+        try:
+            conn = get_connector(self._target(args))
+        except Exception:  # noqa: BLE001
+            conn = None
+        fields = {f.name: f.kind for f in (getattr(conn, "fields", None) or [])}
+
+        def full(key: str) -> bool:
+            kind = fields.get(key)
+            return kind == "secret" if kind is not None else is_secret_key(key)
+
+        from ..detections.redact import MASK
+
+        out: dict[str, Any] = {}
+        for k, v in dict(args or {}).items():
+            if k == "values" and isinstance(v, dict):
+                out[k] = masked_args(v, full=full)
+            elif k != "app" and v not in (None, "") and is_secret_key(str(k)):
+                out[k] = MASK
+            else:
+                out[k] = masked_args(v)
+        return out
+
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """No "connect an app" approval card for a call that CHANGES NOTHING
         (v1.353.0 integrate; the v1.227.0 rule "an Allow that cannot run is a
@@ -1617,6 +1809,10 @@ class AppConnectTool(_RecordTool):
         if conn is None or conn.connect_via in ("oauth", "api_key") or getattr(conn, "locked", ""):
             # v1.428.0: a LOCKED app is set up only from its card — this call
             # answers where, and changes nothing.
+            return SpendCheck(ask=False, cost_note="changes nothing by itself")
+        if _card_arg_with_password(conn, (args or {}).get("values")) is not None:
+            # v1.433.0 (Wave 1, A4): refused by ``execute`` (the secure card
+            # collects a connection string with a password) — no card.
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
         # v1.356.0 integrate (G78): a saved app the user switched off — the
         # call only says so (``execute``), so it is no card either.
@@ -1708,6 +1904,16 @@ class AppConnectTool(_RecordTool):
                 data={"secret_requests": [req]},
             )
         values = args.get("values") if isinstance(args.get("values"), dict) else {}
+        # v1.433.0 (Wave 1, A4): a connection string WITH its password is
+        # never taken from chat — the secure card collects it (below), as it
+        # does a token. Refused before anything is saved; the log row keeps
+        # only the masked text (``redact_args``).
+        _pw = _card_arg_with_password(conn, values)
+        if _pw is not None:
+            return ToolResult(
+                ok=False,
+                error=CONNECTION_NOT_IN_CHAT.format(label=_pw.label, name=conn.name, id=conn.id, field=_pw.name),
+            )
         # v1.356.0 integrate (G78): an app the user SWITCHED OFF is still
         # saved, with its key — "connect my Slack" must not walk into the
         # connect flow and ask for the token again on the secure card. Say it
@@ -1746,6 +1952,10 @@ class AppConnectTool(_RecordTool):
                     f" If its token stopped working, config_secret with name app.{conn.id} "
                     "shows a secure card to replace it."
                     if any(f.kind == "secret" for f in conn.fields)
+                    # v1.433.0 (Wave 1, A4): a connection string comes the same way.
+                    else f" If its {card_arg_fields(conn)[0].label.lower()} changed, config_secret with "
+                    f"name app.{conn.id} shows a secure card to replace it."
+                    if card_arg_fields(conn)
                     else ""
                 )
                 return ToolResult(
@@ -1781,11 +1991,17 @@ class AppConnectTool(_RecordTool):
         env: dict[str, str] = dict(getattr(conn, "env", None) or {})
         env_secrets: dict[str, str] = {}
         requests: list[dict[str, Any]] = []
+        # v1.433.0 (Wave 1, A4): one list of what a secure card collects —
+        # secret fields AND credential-carrying arguments — so the card's name
+        # here (`app.<id>[__FIELD]`) is the one credentials._resolve_app reads.
+        _cards = card_fields(conn)
+        multi = len(_cards) > 1
+        _card_args = {id(g) for g in card_arg_fields(conn)}
+        arg_card: dict[str, str] = {}
         for f in conn.fields:
             if f.kind == "secret":
                 env_secrets[f.name] = _secret_name(conn.id, f.name)
                 if not f.optional:
-                    multi = sum(1 for g in conn.fields if g.kind == "secret") > 1
                     requests.append(
                         {
                             "name": f"app.{conn.id}" + (f"__{f.name}" if multi else ""),
@@ -1797,6 +2013,24 @@ class AppConnectTool(_RecordTool):
                     )
                 continue
             val = str(values.get(f.name, "")).strip()
+            if not val and id(f) in _card_args and not f.optional:
+                # The secure card collects it: the vault holds the whole
+                # argument (``arg_secrets``) and the row a placeholder.
+                from ..detections.redact import MASK
+
+                idx = card_arg_index(conn, f)
+                cfg_args[idx] = MASK
+                arg_card[str(idx)] = _secret_name(conn.id, f.name)
+                requests.append(
+                    {
+                        "name": f"app.{conn.id}" + (f"__{f.name}" if multi else ""),
+                        "label": f.label,
+                        "help": getattr(f, "help", "") or "",
+                        "why": f"to connect {conn.name}",
+                        "request_id": new_id("seq"),
+                    }
+                )
+                continue
             if not val:
                 if not f.optional:
                     return ToolResult(ok=False, error=f"{conn.name} needs `{f.name}` ({f.label}) in values.")
@@ -1838,6 +2072,8 @@ class AppConnectTool(_RecordTool):
                     ok=False,
                     error=f"The vault could not keep {conn.name}'s private setting ({type(exc).__name__}); nothing was connected.",
                 )
+        if arg_card:
+            arg_secrets = {**arg_secrets, **arg_card}
         from ..connectors.catalog import is_remote
 
         if is_remote(conn):

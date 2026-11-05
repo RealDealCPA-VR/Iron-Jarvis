@@ -70,6 +70,7 @@ def _resolve_app(name: str) -> tuple[schema.SecretDef, str, str]:
     the pack launches with (redesign S5)."""
     from ..connectors.catalog import get_connector
     from ..connectors.service import _secret_name
+    from .records import card_fields
 
     sdef = next(s for s in schema.SECRETS if s.name == "app.{name}")
     arg = name[len("app."):]
@@ -77,7 +78,9 @@ def _resolve_app(name: str) -> tuple[schema.SecretDef, str, str]:
         raise CredentialError(f"There is no credential called {name!r}.")
     cid, _, field = arg.partition("__")
     conn = get_connector(cid)
-    secrets = [f for f in (conn.fields if conn else []) if f.kind == "secret"]
+    # v1.433.0 (Wave 1, A4): a credential-carrying ARGUMENT (Postgres's
+    # connection string) is collected by the card too (records.card_fields).
+    secrets = card_fields(conn) if conn else []
     if not secrets:
         raise CredentialError(f"There is no app called {cid!r} that takes a token.")
     chosen = next((f for f in secrets if f.name == field), None) if field else secrets[0]
@@ -100,6 +103,8 @@ class CredentialStore:
         if len(value) > 8192:
             raise CredentialError("That is too long to be a key or token.")
         sdef, arg, vault = resolve_secret(name)
+        if name.startswith("channel.") and self._webhook_channel(arg) is not None:
+            return self._store_webhook(name, arg, value, sdef, actor)
         secrets = self.platform.secrets
         with self._lock:
             change_id = new_id("sec")
@@ -138,6 +143,72 @@ class CredentialStore:
             out.update(self._app_outcome(arg))
         return out
 
+    # ----------------------------------------------------------- webhooks
+    #
+    # v1.433.0 (Wave 1, A4): a Discord destination's webhook URL is its
+    # credential. ``channel_connect`` no longer takes it as an argument; this
+    # card writes it where the Notifications page keeps it — ``webhook_url`` in
+    # the destination's own settings (``config.comm.channels[name]``, which
+    # ``comm.channels.DiscordChannel`` reads) — through ``records.apply_channel``
+    # (persisted, the live destination rebuilt). The prior URL is kept
+    # ENCRYPTED under a backup vault name for the Undo, never in the ledger.
+
+    def _webhook_channel(self, channel: str) -> dict[str, Any] | None:
+        """The stored settings of destination ``channel`` when it takes its
+        credential as a webhook URL (Discord), else None. Never raises."""
+        try:
+            from .records import snap_channel
+
+            cfg = snap_channel(self.platform, channel)
+        except Exception:  # noqa: BLE001
+            return None
+        if isinstance(cfg, dict) and str(cfg.get("type") or "") == "discord":
+            return cfg
+        return None
+
+    def _store_webhook(self, name: str, channel: str, value: str, sdef: Any, actor: str) -> dict[str, Any]:
+        if not value.lower().startswith("https://"):
+            raise CredentialError("A Discord webhook URL starts with https://.")
+        from .records import apply_channel
+
+        secrets = self.platform.secrets
+        with self._lock:
+            cfg = self._webhook_channel(channel)
+            if cfg is None:
+                raise CredentialError(f"There is no Discord destination called {channel!r}.")
+            change_id = new_id("sec")
+            prior = str(cfg.get("webhook_url") or "")
+            backup = ""
+            if prior:
+                backup = f"{BACKUP_PREFIX}{change_id}"
+                secrets.set(backup, prior, kind="password")
+            apply_channel(self.platform, channel, {**cfg, "webhook_url": value})
+            status = "replaced" if prior else "stored"
+            action_id = self._journal(
+                name, "", backup, bool(prior), status, actor, change_id,
+                extra={"channel": channel, "field": "webhook_url"},
+            )
+        return {"secret": name, "label": sdef.label, "status": status, "action_id": action_id}
+
+    def _restore_webhook(self, name: str, channel: str, backup: str) -> str:
+        from .records import apply_channel
+
+        secrets = self.platform.secrets
+        cfg = self._webhook_channel(channel)
+        if cfg is None:
+            return f"undo: the destination {channel} is no longer there"
+        if backup:
+            prior = secrets.get(backup)
+            if prior is None:
+                return f"undo: the earlier value of {name} is no longer kept"
+            apply_channel(self.platform, channel, {**cfg, "webhook_url": prior})
+            secrets.delete(backup)
+            return f"undo: restored the earlier {name}"
+        cfg = dict(cfg)
+        cfg.pop("webhook_url", None)
+        apply_channel(self.platform, channel, cfg)
+        return f"undo: removed {name}"
+
     def _pack_row_prior(self, connector_id: str, vault: str) -> str:
         """The value the saved pack row reads for the field stored at
         ``vault`` when that row names a DIFFERENT vault row (an older pack's
@@ -158,6 +229,23 @@ class CredentialStore:
                 ref = _field_ref(cfg, conn, f.name)
                 if ref and ref != vault:
                     return self.platform.secrets.get(ref) or ""
+            # v1.433.0 (Wave 1, A4): an argument the card collects — the value
+            # the pack launches with now is this change's prior: the vault row
+            # its ``arg_secrets`` names, or the plain argument it holds.
+            from ..detections.redact import MASK
+            from .records import card_arg_fields, card_arg_index
+
+            for f in card_arg_fields(conn):
+                if _secret_name(conn.id, f.name) != vault:
+                    continue
+                idx = card_arg_index(conn, f)
+                ref = str(dict(cfg.get("arg_secrets") or {}).get(str(idx)) or "")
+                if ref:
+                    return (self.platform.secrets.get(ref) or "") if ref != vault else ""
+                args = list(cfg.get("args") or [])
+                shown = str(args[idx]) if idx < len(args) else ""
+                if shown and shown not in (MASK, f"<{f.name}>"):
+                    return shown
         except Exception:  # noqa: BLE001 — a store must not fail on this read
             log.warning("app %s: could not read the pack's older token row", connector_id, exc_info=True)
         return ""
@@ -197,6 +285,10 @@ class CredentialStore:
         backup = str(desc.get("backup") or "")
         secrets = self.platform.secrets
         with self._lock:
+            if desc.get("field") == "webhook_url":
+                # v1.433.0 (Wave 1, A4): a Discord webhook URL lives in the
+                # destination's settings, not the vault (see _store_webhook).
+                return self._restore_webhook(name, str(desc.get("channel") or ""), backup)
             if backup:
                 prior = secrets.get(backup)
                 if prior is None:
@@ -217,7 +309,16 @@ class CredentialStore:
             return f"undo: removed {name}"
 
     def _journal(
-        self, name: str, vault: str, backup: str, had_prior: bool, status: str, actor: str, change_id: str
+        self,
+        name: str,
+        vault: str,
+        backup: str,
+        had_prior: bool,
+        status: str,
+        actor: str,
+        change_id: str,
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> str:
         from ..core.db import session_scope
         from ..core.models import PermissionMode, ToolInvocation, UndoJournal
@@ -253,6 +354,7 @@ class CredentialStore:
                                 "backup": backup,
                                 "had_prior": had_prior,
                                 "change_id": change_id,
+                                **(extra or {}),
                             }
                         ),
                     )

@@ -477,6 +477,21 @@ SETTINGS: tuple[SettingDef, ...] = (
       "When there is no cap and more than this many background runs are going at once, "
       "the bell asks whether to queue the extras. 0 = never ask.",
       tier="allow", check=_range(0, 64), aliases=("busy notice", "busy runs")),
+    # v1.433.0 (Wave 1, A12): read at every hand-out
+    # (agents/orchestrator.max_concurrent_children); it was a name the code
+    # read and the Config model dropped, so nothing could set it.
+    S("max_concurrent_children", "Helpers one agent may run at once", "automation", "number",
+      "When an agent hands pieces of its work to helper agents, how many of them may work at "
+      "the same time. The others wait their turn.",
+      tier="ask", check=_range(1, 16),
+      aliases=("helpers at once", "parallel helpers", "child agents", "helper agents")),
+    # v1.433.0 (Wave 1, A12): the queue of tasks for named agents is started
+    # at boot only while this is on (daemon/app.py), so it needs a restart.
+    S("assignments_enabled", "Start tasks queued for agents", "automation", "bool",
+      "Start the tasks queued for a named agent (from the Agents page, a project, or another "
+      "agent), one at a time, when that agent is free. Off: queued tasks wait.",
+      tier="allow", restart=True, advanced=True,
+      aliases=("queued tasks", "task queue", "assignments", "agent inbox")),
     # v1.367.0 (IJ harness Phase 4): one Build session turn's tool rounds.
     # v1.384.0: 0 = no limit, the default (like Claude Code); a number is
     # still honoured. The safety stop is harness.mode.BUILD_SAFETY_ROUNDS.
@@ -605,6 +620,23 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Propose reusable skills from finished work (you approve each).", tier="ask", section="Skills"),
     S("skill_learning_auto_approve", "Approve learned skills automatically", "automation", "bool",
       "Keep proposed skills without asking.", tier="ask-floor", section="Skills"),
+    # v1.433.0 (Wave 1, A12): the skill curator (skills/curator.py) reads
+    # these on every pass; they were names the Config model dropped.
+    S("curator_enabled", "Tidy away unused skills", "automation", "bool",
+      "Once a day, skills an agent made that nobody has used are moved to the skills archive, "
+      "never deleted. Skills you wrote and skills you pinned are never moved. Off: nothing is "
+      "moved by itself; you can still tidy from the Skills page.",
+      tier="allow", section="Skills", advanced=True,
+      aliases=("skill curator", "curator", "archive unused skills", "tidy skills")),
+    S("curator_min_age_days", "Leave new skills alone for (days)", "automation", "number",
+      "A skill an agent made is never moved to the archive before it is this many days old.",
+      tier="allow", section="Skills", advanced=True, check=_range(1, 365)),
+    S("curator_stale_after_days", "Archive skills unused for (days)", "automation", "number",
+      "A skill an agent made that nobody has used for this many days is moved to the archive.",
+      tier="allow", section="Skills", advanced=True, check=_range(1, 3650)),
+    S("curator_interval_hours", "Tidy skills every (hours)", "automation", "number",
+      "How often the tidy runs. A change applies from the next tidy.",
+      tier="allow", section="Skills", advanced=True, check=_range(1, 720)),
     S("default_skills", "Skills always loaded", "automation", "list",
       "Skills injected into every run.", tier="ask", section="Skills", advanced=True),
     S("extra_skill_paths", "Extra skill folders", "automation", "list",
@@ -701,8 +733,13 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Whether a tool may run without asking (allow), asks first (ask), or never runs (deny). Tools that touch your PC can never be set to allow.",
       options=(("allow", "Run without asking"), ("ask", "Ask first"), ("deny", "Never run")),
       tier="ask-floor", pattern=True, aliases=("tool permission", "always allow", "never allow")),
+    # v1.433.0 (Wave 1, A14): lowering it deletes the ledger, the run records
+    # and the Undo journal past the new limit (core/db.prune_events), so from
+    # chat it asks EVERY time — no grant lifts it. Re-read by the daily sweep
+    # (daemon/app._event_prune_loop), so no restart.
     S("event_retention_days", "Keep activity history (days)", "permissions", "number",
-      "How long the activity log and ledger are kept. 0 = forever.", tier="ask", restart=True,
+      "How long the activity log and ledger are kept. Older entries are removed once a day. "
+      "0 = forever.", tier="ask-floor",
       check=_range(0, 36500)),
     # ---------------------------------------------------------------- system
     S("git_native", "Git-native workspaces", "system", "bool",
