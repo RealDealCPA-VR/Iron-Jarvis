@@ -7330,6 +7330,14 @@ async def chat_stream(
                 # so missed a reply announcing a saved file after only a
                 # scan had run. MIRROR NOTE (lock-step): both lanes.
                 reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
+                # v1.436.0 (Wave 5 group K): and a CLAIMED SETTING OR RECORD
+                # change against what this turn's successful calls and their
+                # cards really changed — a card the user declined, a refused
+                # call, no call at all. MIRROR NOTE (lock-step):
+                # chat_turn.run_chat_turn appends the same call.
+                reply += _chat_turn.claimed_change_note(
+                    reply, tools_used, config_cards, history=body.messages, custom_tools=_custom_ran,
+                )
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did gets the plain note. MIRROR NOTE (lock-step): chat_turn.
         # Only an AGENT-shaped receiver counts (the roster's names, read off
