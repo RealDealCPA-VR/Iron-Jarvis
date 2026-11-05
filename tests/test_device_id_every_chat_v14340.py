@@ -267,3 +267,19 @@ def test_with_a_device_id_the_tool_writes_under_it(app, tmp_path):
     ))
     assert res.ok is True, res.error
     assert app.state.platform.config_writer.current("device.read_aloud", device_id=DEVICE) is True
+
+
+@pytest.mark.parametrize("bad", ["bad id!", "ab", "x" * 65, "../etc", "dev ice"])
+def test_a_device_id_the_app_never_makes_gets_a_plain_refusal(app, tmp_path, bad):
+    # v1.434.0 integration: an API caller's bad id used to reach the store and
+    # come back as its raw ValueError text.
+    from iron_jarvis.settings.tools import BAD_DEVICE_REFUSAL
+
+    reg = app.state.platform.registry
+    res = asyncio.run(reg.get("config_set").execute(
+        {"key": "device.read_aloud", "value": True}, _ctx(app, tmp_path, bad),
+    ))
+    assert res.ok is False
+    assert res.error == BAD_DEVICE_REFUSAL.format(label="Read replies aloud")
+    assert "device id" not in res.error and "ValueError" not in res.error
+    assert app.state.platform.config_writer.current("device.read_aloud", device_id=DEVICE) in (None, False)

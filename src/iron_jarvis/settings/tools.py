@@ -43,6 +43,7 @@ from typing import Any
 from ..core.ids import new_id
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from . import schema
+from .device import valid_device_id
 
 TOOL_FOR_TIER = {"allow": "config_set", "ask": "config_change", "ask-floor": "config_change_protected"}
 CONFIG_TOOLS = ("config_list", "config_set", "config_change", "config_change_protected", "config_secret")
@@ -111,6 +112,12 @@ _RETIRED_OPTION_WORDS: dict[str, dict[str, str]] = {
         "ask for commands": "approve_for_me",
     },
 }
+
+
+BAD_DEVICE_REFUSAL = (
+    "{label} is set per screen, and this chat named a screen Iron Jarvis does not know, "
+    "so nothing was changed. Ask again from a chat in the app."
+)
 
 
 def _coerce(d: schema.SettingDef, value: Any) -> Any:
@@ -342,6 +349,10 @@ class _ConfigChangeBase(Tool):
                     ),
                 )
             return ToolResult(ok=False, output="", error=f"{d.label} is set per device; open this chat in the app to change it.")
+        if d.store == "device" and not valid_device_id(ctx.device_id):
+            # v1.434.0: a device id the app never makes (an API caller's
+            # typo) used to reach the store and come back as its raw error.
+            return ToolResult(ok=False, output="", error=BAD_DEVICE_REFUSAL.format(label=d.label))
         try:
             writer = _writer(self.platform)
             change = await asyncio.to_thread(
