@@ -1733,10 +1733,17 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # Fires on scripting/automation intent AND on "again"-shaped asks ("like
     # last time", "the usual"), which is exactly when prior art exists. Only
     # the read-only pair is armed: worst case the model ignores them.
+    # v1.434.0 (chat-first plan, Wave 2 group E, B1.4): "rename" counts only
+    # beside the things a script renames (files, photos, columns…) —
+    # "rename the Intercom project" and "rename this chat to Smith 2025"
+    # armed the Code Lab readers off the verb alone.
     (
         re.compile(
-            r"\b(script|automate|automation|bulk|batch|rename|convert all|"
+            r"\b(script|automate|automation|bulk|batch|convert all|"
             r"every file|python|powershell|macro)\b|"
+            r"\brename\b(?=[^.!?\n]{0,60}?\b(?:files?|folders?|photos?|pictures?|images?|"
+            r"pdfs?|documents?|scans?|columns?|sheets?|tabs?|variables?|functions?|"
+            r"classes?|methods?|modules?|all|every|them|in\s+bulk)\b)|"
             r"\b(again|like last time|same as before|the usual|as usual)\b",
             re.IGNORECASE,
         ),
@@ -3647,7 +3654,12 @@ _CODE_NAMED_AHEAD = (
 _APP_SETTING_AHEAD = (
     r"(?!make\s+(?:the|this)\s+(?:(?:iron\s+)?jarvis\s+|desktop\s+)?(?:app|application)\s+"
     r"(?:(?:always|never|automatically|just|also|not|to|itself)\s+)?"
-    r"(?:(?:start|open|launch|use|look|show|run|keep|stop|remember|turn)(?:s|es|d|ed|ing)?"
+    r"(?:(?:start|open|launch|use|look|show|run|keep|stop|remember|turn"
+    # v1.434.0 (chat-first plan, Wave 2 group E, B1.4): how the APP behaves
+    # on this PC — "make the app autostart", "make the app minimize to the
+    # tray" — Wave 1 left these offering a coding session.
+    r"|auto-?start|auto-?launch|minimi[sz]e|maximi[sz]e|hide|close|quit|exit|restart|sleep"
+    r"|wake|notify|speak|talk|ask|sit|stay|pin|mute)(?:s|es|d|ed|ing)?"
     r"|dark|darker|light|lighter|bright|brighter|dim|dimmer|big|bigger|small|smaller"
     r"|large|larger|loud|louder|quiet|quieter"
     r"|green|blue|red|purple|black|white|gr[ae]y|pink|orange|yellow)\b"

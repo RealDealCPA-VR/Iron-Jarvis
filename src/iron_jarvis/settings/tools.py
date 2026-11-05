@@ -55,19 +55,19 @@ ALWAYS_CARD_TOOLS = frozenset({"config_change_protected"})
 
 _CHANGE_ID: ContextVar[str] = ContextVar("ij_config_change_id", default="")
 
-_SETTINGS_WORDS = re.compile(
-    r"\b(?:settings?|preferences?|turn (?:on|off)|switch (?:on|off|to)|enable|disable|"
-    r"set (?:my|the|it)|change (?:my|the) (?:default|theme|model|persona)|default model|"
-    r"use (?:the )?(?:local|cloud)|theme|dark mode|light mode|kill switch|emergency stop|"
-    r"autonomy|sentinels?|watchers?|approvals?|notifications?|telegram|slack|iron.?proxy|"
-    r"connect (?:my|to)|api key|token|answer length|shorter answers|undo (?:that|the) setting)\b",
-    re.IGNORECASE,
-)
-
 
 def wants_settings(text: str) -> bool:
-    """Does this message plausibly ask to see or change a setting?"""
-    return bool(_SETTINGS_WORDS.search(text or ""))
+    """Does this message plausibly ask to see or change a setting?
+
+    v1.434.0 (chat-first plan, Wave 2 group E, B1.1): read off the schema's
+    OWN words — every row's label, aliases and option names — by
+    ``settings.trigger``, which replaced the one hand-kept regex that left 29
+    of 57 measured requests unarmed. True means the reader ``config_list`` is
+    armed; whether a WRITER is (a change was asked for, not a question) is
+    ``settings.trigger.settings_ask(text).writers``."""
+    from .trigger import settings_ask
+
+    return settings_ask(text).reader
 
 
 # ------------------------------------------------------------------ helpers

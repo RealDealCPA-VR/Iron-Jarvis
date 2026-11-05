@@ -233,7 +233,8 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("chat_followups", "Suggest follow-up questions", "models", "bool",
       "Show up to three short questions you might ask next under a reply. "
       "This makes one extra short call to the same model after each reply.",
-      tier="allow", aliases=("follow-up questions", "suggested questions", "follow ups")),
+      tier="allow", aliases=("follow-up questions", "suggested questions", "follow ups",
+               "follow-up suggestions")),
     S("strict_model_pin", "Strict model pin", "models", "bool",
       "When on, a chat that explicitly picks a model must be answered by THAT model — never silently substituted. Applies only to explicit picks.",
       tier="ask", advanced=True, section="Routing"),
@@ -269,13 +270,16 @@ SETTINGS: tuple[SettingDef, ...] = (
       section="Local and custom models", advanced=True, placeholder="llama3.1"),
     S("custom_base_url", "Custom endpoint URL", "models", "string",
       "Any OpenAI-compatible endpoint — LM Studio, vLLM, a private gateway. Add its key under Connections.",
-      tier="ask", section="Local and custom models", advanced=True, placeholder="https://…/v1"),
+      tier="ask", section="Local and custom models", advanced=True, placeholder="https://…/v1",
+      # v1.434.0 (chat-first plan, Wave 2 group E): the words people use for
+      # one ("add my LM Studio server at 192.168.1.20:1234").
+      aliases=("lm studio", "vllm", "custom endpoint", "model server", "openai compatible")),
     S("custom_model", "Custom endpoint model", "models", "string",
       "Default model id for that custom endpoint.", tier="allow",
       section="Local and custom models", advanced=True),
     S("prefer_local_when_capable", "Prefer my own hardware", "models", "bool",
       "Route work to your own machines first, and use a cloud model only when a local one can't do it.",
-      tier="allow", section="Local and custom models", advanced=True, aliases=("prefer local",)),
+      tier="allow", section="Local and custom models", advanced=True, aliases=("prefer local", "local model", "local models")),
     S("local_quality_bar", "Quality bar for local models", "models", "number",
       "0–1. Average score a local model must reach on a kind of work before it is preferred for it.",
       tier="allow", section="Local and custom models", advanced=True, check=_range(0, 1)),
@@ -458,7 +462,9 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("max_agent_steps", "Max steps per run", "automation", "number",
       "Safety ceiling on how many steps one agent run may take. Runs you start and watch "
       "(from chat, the Agents page, a project) use “Steps for runs you start” instead.",
-      tier="ask", check=_range(1, 1000)),
+      tier="ask", check=_range(1, 1000),
+      # v1.434.0 (Wave 2 group E): "change the max steps setting to 30".
+      aliases=("max steps",)),
     # v1.402.0: a run a person started and is watching gets its own, larger
     # budget, and carries on ONCE by itself when it spends it.
     S("attended_run_steps", "Steps for runs you start", "automation", "number",
@@ -819,13 +825,22 @@ SETTINGS: tuple[SettingDef, ...] = (
       # v1.406.0 part 2: Auto lets calls through with no card, so turning it
       # on from chat is ask-floor like Don't ask; Accept edits is allow.
       tier="allow", floor_when=("yolo", "auto"), store="device",
-      aliases=("approvals", "approval mode", "permission mode")),
+      aliases=("approvals", "approval mode", "permission mode",
+               # v1.434.0 (Wave 2 group E): "approve tests without asking",
+               # "stop asking me before…". Review: never the bare "stop
+               # asking" / "without asking" — "stop asking clarifying
+               # questions" is about the conversation, and config_set can
+               # lower this posture with no card.
+               "approve without asking", "stop asking before", "stop asking for permission",
+               "stop asking for approval")),
     S("device.chat_persona", "Chat persona", "appearance", "string",
       "The persona new chats start with on this device.", tier="allow", store="device"),
     S("device.auto_tools", "Auto tools in chat", "permissions", "bool",
       "Let chat arm the tools a message needs.", tier="allow", store="device"),
     S("device.read_aloud", "Read replies aloud", "appearance", "bool",
-      "Speak each reply on this device.", tier="allow", store="device", aliases=("text to speech",)),
+      "Speak each reply on this device.", tier="allow", store="device",
+      # v1.434.0 review: "stop reading your replies out loud".
+      aliases=("text to speech", "read out loud")),
 )
 
 SECRETS: tuple[SecretDef, ...] = (

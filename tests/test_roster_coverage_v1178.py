@@ -273,7 +273,10 @@ _OFF_ROSTER_OPEN = {
     # (v1.433.0, Wave 1 A17, moved on purpose: web_look joined the researcher
     # and the automation agent beside browse / web_extract):
     "web_fetch",
-    "delegate_remote", "sentinel_add",
+    "delegate_remote",
+    # v1.434.0 (chat-first plan, Wave 2 group E, B1.3), moved on purpose:
+    # `sentinel_add` joined the Automation agent (a watcher only suggests),
+    # so it left this list.
     # v1.296.0: assign_work hands a job to another agent's queue. The two
     # builtins that coordinate (supervisor, planner) already delegate — a
     # second hand-out door on a coordinator is the fork-bomb shape — and a

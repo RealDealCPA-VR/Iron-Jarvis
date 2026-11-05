@@ -356,6 +356,11 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=(
             _FILE_TOOLS + _SELF_SERVICE_TOOLS + _DOCUMENT_TOOLS + _LEARNING_TOOLS
             + ["notify", "integration_list", "integration_test"]
+            # v1.434.0 (chat-first plan, Wave 2 group E, B1.3): a watcher
+            # (sentinel) was the one automation no agent could make — it
+            # suggests work and never acts, the whole subsystem is off until
+            # Settings turns it on, and a sentinel made by a run has an Undo.
+            + ["sentinel_add"]
             + ["create_agent", "list_agents", "spawn_agent"]
             # v1.433.0 (Wave 1, A17): `web_look` beside its read siblings.
             + ["browse", "web_extract", "web_look", "web_action", "computer_use_status"]

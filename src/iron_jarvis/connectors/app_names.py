@@ -290,7 +290,8 @@ _NOT_THE_APP: dict[str, str] = {
     ),
     "slack": (
         r"(?<![Ss]ome )(?<![Uu]p the )(?<!there is )(?<!there's )(?<!little )(?<!more )"
-        r"\bslack\b(?!\s+off\b)(?!\s+in\s+(?:the|my|our|your|this)\s+"
+        # v1.434.0 (Wave 2 group E): "add slack time to the plan".
+        r"\bslack\b(?!\s+off\b)(?!\s+(?:time|space)\b)(?!\s+in\s+(?:the|my|our|your|this)\s+"
         r"(?:schedule|plan|timeline|budget|rope|line|chain|system|week|day)\b)"
     ),
     "stripe": r"(?<![Aa] )\bstripe\b(?!\s+(?:on|of|across|down|along|pattern|through)\b)",
@@ -542,7 +543,11 @@ _SENTENCE_BREAK_RX = re.compile(r"[.!?\n]")
 _WEB_SEARCH_RX = re.compile(
     r"\bgoogle\b|\bonline\b|\binternet\b|\bweb\s+search\b"
     r"|\bthe\s+web\b(?!\s*(?:pages?|sites?|apps?|address(?:es)?|links?)\b)"
-    r"|(?:\A|[.!?\n]\s*)research\b",
+    # Linear (v1.434.0 review): after the break, only NON-newline space. With
+    # ``\s*`` every newline of a pasted run of blank lines began a scan to its
+    # end — quadratic (0.4 s at 12,000 characters). Same matches: a break
+    # whose following space holds a newline has that newline as its own break.
+    r"|(?:\A|[.!?\n][^\S\n]*)research\b",
     re.IGNORECASE,
 )
 

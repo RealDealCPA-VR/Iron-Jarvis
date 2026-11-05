@@ -4087,6 +4087,119 @@ def arming_kw(grounding) -> "dict[str, Any]":
     return {"apps_on": on} if on else {}
 
 
+def settings_ask_tools(
+    d,
+    text: str,
+    armed: "list[str]",
+    ask_armed: "list[str]",
+    *,
+    workflow_names: "list[str] | tuple[str, ...]" = (),
+) -> "list[str]":
+    """The STREAM lane's settings and record tools for *text* — VISIBLE,
+    never granted (each call renders the ordinary card). Lifted out of the
+    lane (v1.434.0, chat-first plan Wave 2 group E) so the arming table
+    (tests/test_chat_arming_table_v14340.py) drives the very function the
+    lane calls.
+
+    * the ask-tier settings writers (``config_change``,
+      ``config_change_protected``) when the message asks to CHANGE a setting
+      (``settings.trigger.settings_ask(...).writers`` — never for a
+      question);
+    * the record tools the message names (``settings.records.
+      record_tools_for``), with ``workflow_names`` — the saved workflows'
+      names, read off the loop by the lane only when a run verb is there.
+
+    A create tool among them (``records.ASK_FIRST_CREATE_TOOLS``) is
+    allow-tier by itself; the lane writes an "ask" override for it
+    (:func:`ask_first_overrides`), so it still asks first. THE POST LANE
+    NEVER CALLS THIS (it cannot show a card). Returns only names not already
+    in *armed* or *ask_armed* and known to the registry; never raises."""
+    out: list[str] = []
+    try:
+        from ..settings.records import record_tools_for
+        from ..settings.tools import ASK_CONFIG_TOOLS
+        from ..settings.trigger import settings_ask
+
+        reg = d.platform.registry
+        taken = set(armed) | set(ask_armed)
+        names: list[str] = []
+        if settings_ask(text).writers:
+            names += list(ASK_CONFIG_TOOLS)
+        names += record_tools_for(text, workflow_names=workflow_names)
+        for t in names:
+            if t in taken or t in out or reg.get(t) is None:
+                continue
+            out.append(t)
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
+        log.debug("settings ask arming failed", exc_info=True)
+    return out
+
+
+def harness_asked_tools(body, *, plan_mode: bool = False) -> "list[str]":
+    """The settings tools a HARNESS turn (a coding session, Chat › Code /
+    Build › Code's own chat) adds to its coding set for the user's newest
+    message (v1.434.0, chat-first plan Wave 2 group E). A harness turn arms
+    its tools without the chat's "Auto tools" switch (a coding session has
+    none), so a request to CHANGE a setting gets the reader, the allow-tier
+    writer, the credential card and the ask-tier writers; a question gets the
+    reader only; plan mode (read-only) the reader only. Each keeps its own
+    tier (``harness.mode.plan_tools`` ``asked``): the POST lane drops the
+    ask tier, low trust drops them all. Never raises."""
+    try:
+        from ..settings.tools import ASK_CONFIG_TOOLS
+        from ..settings.trigger import settings_ask, settings_tools_for
+
+        text = next(
+            (m.content or "" for m in reversed(getattr(body, "messages", None) or []) if m.role == "user"),
+            "",
+        )
+        if not isinstance(text, str):
+            text = str(text or "")
+        names = settings_tools_for(text, auto_tools=not plan_mode)
+        if names and not plan_mode and settings_ask(text).writers:
+            names += list(ASK_CONFIG_TOOLS)
+        return names
+    except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
+        return []
+
+
+def ask_first_overrides(
+    d, overrides: "dict[str, str]", ask_armed: "list[str]", armed: "list[str]"
+) -> "set[str]":
+    """v1.434.0 (B1.3): a record CREATE tool the sentence ask-armed
+    (``schedule_create``, ``goal_add``, ``webhook_add``, ``sentinel_add``)
+    asks first, though its own tier is allow: an "ask" override, the folder
+    rules' mechanism (``harness.mode.HarnessTurn.narrow``), so the engine and
+    both card predicates read it like any other override. Only ever NARROWS
+    — never over a key that is already denied, never for a tool the turn
+    ARMED (an explicit "+" pick is the user's own consent). In place.
+    Stream lane only (the POST lane never ask-arms).
+
+    FAIL-CLOSED: returns the names it could NOT make ask first (a fault); the
+    lane takes them off ``ask_armed``, so a create tool is never offered
+    without its card."""
+    failed: set[str] = set()
+    try:
+        from ..settings.records import ASK_FIRST_CREATE_TOOLS
+    except Exception:  # noqa: BLE001
+        return {n for n in ask_armed if n in ("schedule_create", "goal_add", "webhook_add", "sentinel_add")}
+    reg = d.platform.registry
+    perms = d.platform.permissions
+    for name in ask_armed:
+        if name not in ASK_FIRST_CREATE_TOOLS or name in armed:
+            continue
+        try:
+            tool = reg.get(name)
+            for key in sorted({name, tool.perm_key() if tool is not None else name}):
+                current = getattr(perms.mode_for(key, overrides), "value", "ask")
+                if current != "deny":
+                    overrides[key] = "ask"
+        except Exception:  # noqa: BLE001 — never raises into the turn
+            log.debug("ask-first override failed for %s", name, exc_info=True)
+            failed.add(name)
+    return failed
+
+
 def _resolve_armed_tools(
     d, body, max_tools: "int | None" = None, *, apps_on: "list[str] | tuple[str, ...] | None" = None
 ) -> "ArmedSelection":
@@ -4213,20 +4326,6 @@ def _resolve_armed_tools(
                 )
                 if d.platform.registry.get(t)
             ]
-            # SETTINGS FROM CHAT (calm UI redesign S3): a message about a
-            # setting arms the read + allow-tier tools (and the credential
-            # card). The ask-tier change tools are armed by the stream lane
-            # only, where a card can be answered. Chat-only: agent runs never
-            # arm these off their task text.
-            from ..settings.tools import wants_settings
-
-            if wants_settings(last_user):
-                free = ceiling - len(explicit) - len(auto)
-                auto += [
-                    t
-                    for t in ("config_list", "config_set", "config_secret")
-                    if t not in explicit and t not in auto and d.platform.registry.get(t)
-                ][: max(0, free)]
         _fill_attachment_pass(auto, ceiling)
         _fill_workspace_pass(auto, ceiling)
         return auto
@@ -4359,6 +4458,48 @@ def _resolve_armed_tools(
     dropped = 0
     if _ceiling < _MAX_ARMED_TOOLS:
         dropped = max(0, len(_fill(_MAX_ARMED_TOOLS)) - len(auto))
+    # SETTINGS FROM CHAT, IN THEIR OWN PLACE (calm UI redesign S3; v1.434.0,
+    # chat-first plan Wave 2 group E, B1.2). A message about a setting arms
+    # the reader, and — when it asks for a change (not a question) and Auto
+    # tools is on — the allow-tier writer and the credential card. They sit
+    # OUTSIDE the six-tool cap and the envelope ceiling, the way the stream
+    # lane's ask tier is never counted against it: a busy sentence used to
+    # fill every slot first ("set the backup folder to D:\Backups and look up
+    # what is in it" armed six file readers and no config_set). Placed after
+    # the drop signal, so the `adapted` disclosure still measures only the
+    # cap. With Auto tools OFF the reader is still armed, so the model can
+    # read the setting and say how to change it; the writers stay off. The
+    # ask-tier change tools are armed by the stream lane only, where a card
+    # can be answered. Chat-only: agent runs never arm these off their task
+    # text. Both lanes call this function (MIRROR NOTE: one implementation).
+    from ..settings.trigger import settings_tools_for
+
+    def _not_denied(name: str) -> bool:
+        # v1.434.0 review: ARMING IS GRANTING — both lanes give an armed tool
+        # an "allow" override, and an override lifts the user's own deny for
+        # any tool off the deny floor. So a SENTENCE armed what the user had
+        # set to "Never run": "turn on follow-up suggestions" changed the
+        # setting with config_set denied, "…save it as a Word document" wrote
+        # the file with write_document denied. No auto pass arms over a deny
+        # (the coding-session plan skips one the same way); an explicit "+"
+        # pick is the user's own word in this chat and is left alone.
+        perms = getattr(d.platform, "permissions", None)
+        if perms is None:
+            return True  # no permission engine at all: nothing is denied
+        try:
+            tool = d.platform.registry.get(name)
+            perm_key = getattr(tool, "perm_key", None)
+            key = perm_key() if callable(perm_key) else name
+            return getattr(perms.mode_for(key), "value", "deny") != "deny"
+        except Exception:  # noqa: BLE001 — an engine that cannot answer: arm nothing
+            return False
+
+    auto += [
+        t
+        for t in settings_tools_for(last_user, auto_tools=bool(getattr(body, "auto_tools", False)))
+        if t not in explicit and t not in auto and d.platform.registry.get(t)
+    ]
+    auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
     # been measured. Last is the whole point: a filter that ran before a fill
@@ -5785,6 +5926,11 @@ async def _build_harness(
         shell_description=shell_words,
         bash_description=bash_words,
         lead=_session_team is not None,
+        # v1.434.0 (chat-first plan, Wave 2 group E): a coding-session turn
+        # about one of the app's settings ("turn on read aloud" typed in
+        # Chat › Code) gets the settings tools too, each on its own tier.
+        # MIRROR NOTE (lock-step): both lanes build the harness here.
+        asked=harness_asked_tools(body, plan_mode=bool(plan_mode)),
     )
     if _session_team is not None and turn.full_plan is not None:
         # The team's own brief stands where the model team's list stood (one

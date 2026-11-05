@@ -31,7 +31,12 @@ rules (update / delete, ``reflex_create``) are ask tier; ``grant_revoke`` is
 allow tier — taking back an "always allow" only narrows what runs unasked —
 and its Undo puts the grant back. ``webhook_add`` / ``sentinel_add`` /
 ``goal_add`` keep their tiers and gain the Undo through
-:func:`capture_create_undo`. A record whose id is minted BY the store
+:func:`capture_create_undo`. v1.434.0 (chat-first plan, Wave 2 group E,
+B1.3): asked for in chat ("make a schedule that runs every weekday at 8am",
+"add a sentinel that watches irs.gov"), the four create tools are offered by
+the STREAM lane and ASK FIRST there (:data:`ASK_FIRST_CREATE_TOOLS`, an
+"ask" override), and "run the triage workflow now" offers ``workflow_run``.
+A record whose id is minted BY the store
 (a goal, a reflex rule) is captured "pending" and named after the write
 (:func:`bind_created`) — the registry journals the descriptor only after a
 successful execute, the same post-execute fill ``finalize_post_hash`` does.
@@ -52,6 +57,7 @@ import json
 import logging
 import re
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import Any
 
 from ..core.ids import new_id
@@ -105,14 +111,43 @@ _PENDING: ContextVar[dict[str, Any] | None] = ContextVar("ij_record_pending", de
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9 _.-]{0,79}$")
 _CHANNEL_NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$")
 
-_SCHEDULE_WORDS = re.compile(
-    r"\b(?:schedules?|scheduled|every (?:day|morning|evening|night|week|month|hour|monday|tuesday|"
-    r"wednesday|thursday|friday|saturday|sunday)|nightly|weekly|daily|cron)\b",
-    re.IGNORECASE,
+#: v1.434.0 (chat-first plan, Wave 2 group E, B1.3): the RECURRING time
+#: shapes people use for a schedule — "every weekday", "each morning",
+#: "every 2 hours", "on Mondays" — beside the ones it always had.
+_DAY_NAMES = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+_RECURRING = (
+    r"(?:every|each)\s+(?:other\s+)?(?:day|morning|afternoon|evening|night|week|weekday|weekend"
+    r"|work\s*day|business\s+day|month|quarter|year|hour|minute|" + _DAY_NAMES + r")s?"
+    r"|every\s+(?:\d+|two|three|four|five|six|ten|twelve|fifteen|thirty|few|couple\s+of)\s+"
+    r"(?:minutes?|hours?|days?|weeks?|months?)"
+    r"|on\s+(?:weekdays|weekends|" + r"|".join(f"{d}s" for d in _DAY_NAMES.split("|")) + r")"
+    r"|nightly|weekly|daily"
 )
+#: "schedule a call with the client" is a meeting on a calendar, never one of
+#: Iron Jarvis's schedules.
+#: LINEAR on purpose (review): the determiner carries its OWN trailing space.
+#: The first cut wrote ``\s+(?:a|…)?\s*``, two whitespace runs side by side,
+#: and "schedule" followed by a pasted run of blank lines was QUADRATIC —
+#: 5 s at 12,000 characters, on the event loop.
+_NOT_OUR_SCHEDULE = (
+    r"(?!\s+(?:(?:a|an|the|my|our|your|some)\s+)?(?:call|meeting|appointment|zoom|interview|visit"
+    r"|demo|lunch|dinner|coffee|chat\s+with|session\s+with|review\s+with)\b)"
+)
+_SCHEDULE_NOUN = re.compile(
+    r"\b(?:schedules?" + _NOT_OUR_SCHEDULE + r"|scheduled|cron)\b", re.IGNORECASE
+)
+_RECURRING_WORDS = re.compile(r"\b(?:" + _RECURRING + r")\b", re.IGNORECASE)
 _WORKFLOW_WORDS = re.compile(r"\bworkflows?\b", re.IGNORECASE)
+#: A notification channel — never the UPDATE channel ("switch updates to the
+#: stable channel" armed the channel tools, v1.434.0 B1.1), a TV channel or
+#: "cut me some slack".
 _CHANNEL_WORDS = re.compile(
-    r"\b(?:notification channels?|channels?|telegram|slack|discord|two.?way)\b", re.IGNORECASE
+    r"\b(?:notification channels?|two.?way|telegram|discord"
+    r"|(?:e-?mail|alert|notification|text|sms)\s+destinations?"
+    r"|(?<!\bsome\s)slack(?!\s+(?:time|off|space|in\s+the\s+schedule)\b)"
+    r"|(?<!\bupdate\s)(?<!\bupdates\s)(?<!\bstable\s)(?<!\bfresh\s)(?<!\brelease\s)(?<!\btv\s)"
+    r"(?<!\bnews\s)(?<!\bsports\s)(?<!\bcable\s)(?<!\byoutube\s)channels?(?!\s*\d))\b",
+    re.IGNORECASE,
 )
 # v1.353.0 integrate (G41): the three drives join the list, so "find my tax
 # files in Google Drive" arms app_connect -- and a Drive that is not set up
@@ -124,17 +159,223 @@ _APP_WORDS = re.compile(
     r"|google drive|onedrive|dropbox|connectors?)\b",
     re.IGNORECASE,
 )
-_WEBHOOK_WORDS = re.compile(r"\bweb ?hooks?\b", re.IGNORECASE)
-_SENTINEL_WORDS = re.compile(r"\b(?:sentinels?|watchers?)\b", re.IGNORECASE)
-_GOAL_WORDS = re.compile(r"\bgoals?\b", re.IGNORECASE)
+#: v1.434.0 review: the code a coding chat WRITES is never one of the app's
+#: records — "create a webhook handler in my Express app", "set up a watcher
+#: in my React code", "add a goal section to my business plan", "make a
+#: goal-setting worksheet". Each record noun is read with these guards.
+_CODE_THING = (
+    r"(?!\s+(?:handler|route|listener|receiver|function|controller|class|test|signature|parser"
+    r"|payload|middleware|callback)s?\b)"
+)
+_CODE_PLACE = (
+    r"(?!\s+(?:in|for|on|inside|into)\s+(?:(?:my|the|this|our|a|an|your)\s+)?(?:[\w'.-]+\s+)?"
+    r"(?:code|codebase|components?|repo|repository|scripts?|functions?|class(?:es)?|programs?"
+    r"|modules?|frontend|backend|react|vue|angular|svelte|express|django|flask)\b)"
+)
+_NOT_A_GOAL_RECORD = (
+    r"(?!-)(?!\s+(?:section|setting|sheet|worksheet|template|tracker|page|slide|list|column|row"
+    r"|statement|chart|table|field|box|card|board|line|keeper|kick|post|area|difference)s?\b)"
+)
+_WEBHOOK_WORDS = re.compile(r"\bweb ?hooks?\b" + _CODE_THING + _CODE_PLACE, re.IGNORECASE)
+_SENTINEL_WORDS = re.compile(
+    r"\b(?:sentinels?|watchers?)\b" + _CODE_THING + _CODE_PLACE + r"|\bstop\s+watching\b",
+    re.IGNORECASE,
+)
+_GOAL_WORDS = re.compile(r"\bgoals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
+#: v1.434.0 (B1.4): "whenever a new email comes in, start an intake session",
+#: "every time a client email arrives, …" — a signal that ARRIVES is a reflex
+#: rule's trigger. The thing that arrives must be something Iron Jarvis can
+#: hear about (an email, a file, a webhook…), so "when the package arrives"
+#: arms nothing.
+_ARRIVING_THING = (
+    r"(?:e-?mails?|mail|messages?|texts?|sms|files?|documents?|pdfs?|invoices?|receipts?"
+    r"|uploads?|attachments?|webhooks?|payments?|orders?|tickets?|issues?|pull\s+requests?"
+    r"|alerts?|forms?|submissions?|leads?|events?|requests?)"
+)
+_REFLEX_TRIGGER = (
+    r"\b(?:when|whenever|every\s+time|each\s+time|any\s*time|as\s+soon\s+as)\b[^.?!\n]{0,60}?\b"
+    + _ARRIVING_THING
+    + r"\b[^.?!\n]{0,40}?\b(?:arrives?|arriving|comes?\s+in|gets?\s+(?:received|added|uploaded|sent)"
+    r"|is\s+(?:received|added|uploaded|created|sent|saved|dropped)|lands?|shows?\s+up|appears?"
+    r"|fires?|happens|is\s+posted|gets?\s+posted|hits?)\b"
+)
 _REFLEX_WORDS = re.compile(
-    r"\b(?:reflex(?:es)?|rules?)\b|\bwhen\b[^.?!\n]{1,80}\bhappens\b", re.IGNORECASE
+    # v1.434.0 (B1.4): "rule" is the app's rule only when something is DONE
+    # to it ("turn off the nightly rule", "make a rule:") — never "use the
+    # Daylight Savings rules for the dates", "the rules of the game".
+    r"\breflex(?:es)?\b"
+    r"|\b(?:turn\s+(?:on|off)|switch\s+(?:on|off)|delete|remove|pause|resume|make|create|add|set\s*up"
+    r"|disable|enable|edit|change|update|stop|rename|drop|cancel)\b[^.?!\n]{0,40}?\brules?\b(?!\s+of\b)"
+    r"|\brules?\s*:"
+    r"|\bwhen\b[^.?!\n]{1,80}\bhappens\b|" + _REFLEX_TRIGGER,
+    re.IGNORECASE,
 )
 _GRANT_WORDS = re.compile(r"\b(?:grants?|always[ -]allow(?:s|ed|ing)?)\b", re.IGNORECASE)
 #: "undo that" (the brief's must-work example) and its close variants.
 _UNDO_WORDS = re.compile(
     r"\bundo (?:that|it|this|the last (?:change|setting)|my last change)\b", re.IGNORECASE
 )
+
+# ---------------------------------------------------- creating and running
+#: v1.434.0 (chat-first plan, Wave 2 group E, B1.3): asking to CREATE one of
+#: these offered only its edit and delete tools — creating needed a hand-off
+#: to an agent, and a watcher could not be made at all. The create tool is
+#: now offered too, in the STREAM lane only and ASKING FIRST: its own tier is
+#: allow (an agent may make one unasked), so the lane writes an "ask"
+#: override for it (``ASK_FIRST_CREATE_TOOLS``, the folder-rule mechanism)
+#: and the user sees the ordinary card. The POST lane offers none of them.
+ASK_FIRST_CREATE_TOOLS = frozenset({"schedule_create", "goal_add", "webhook_add", "sentinel_add"})
+_CREATE_VERB = (
+    r"\b(?:make|create|add|set\s*up|setup|start|build|put\s+(?:in|together)|register|set|give\s+me"
+    r"|i\s+(?:want|need|would\s+like|'d\s+like))"
+    r"\s+(?:me\s+|us\s+)?(?:a|an|new|another|one|one\s+more|some)\s+(?:new\s+)?"
+    r"(?:[\w'-]+\s+){0,2}?"
+)
+_CREATE_SCHEDULE = re.compile(_CREATE_VERB + r"(?:schedules?|scheduled\s+(?:task|job|run)s?|cron(?:\s+job)?)\b", re.IGNORECASE)
+_CREATE_WEBHOOK = re.compile(
+    _CREATE_VERB + r"web\s?hooks?\b" + _CODE_THING + _CODE_PLACE, re.IGNORECASE
+)
+_CREATE_SENTINEL = re.compile(
+    _CREATE_VERB + r"(?:sentinels?|watchers?|folder\s+watchers?)\b" + _CODE_THING + _CODE_PLACE
+    + r"|\b(?:watch|keep\s+an\s+eye\s+on|monitor)\s+(?:my|the|this|that|for)\b[^.?!\n]{0,30}?"
+    r"\b(?:folder|directory|drive|downloads|desktop|documents\s+folder|path)\b",
+    re.IGNORECASE,
+)
+_CREATE_GOAL = re.compile(_CREATE_VERB + r"goals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
+#: "Schedule a weekly backup of my settings" — the verb, at the head of a
+#: request.
+_SCHEDULE_VERB = re.compile(
+    r"(?:\A\s*|[.!?;:]\s*|\b(?:please|can\s+you|could\s+you|and|then|also)\s+)schedule\s+"
+    r"(?:a|an|my|the|some|it|this|that|daily|weekly|nightly|monthly)\b" + _NOT_OUR_SCHEDULE,
+    re.IGNORECASE,
+)
+#: A recurring TIME ("every weekday", "each morning at 7", "every 2 hours",
+#: "on Mondays") — not the adjectives ("the nightly brief"), which name an
+#: existing schedule as often as they ask for a new one.
+_EVERY_WORDS = re.compile(
+    r"\b(?:(?:every|each)\s+(?:other\s+)?(?:day|morning|afternoon|evening|night|week|weekday"
+    r"|weekend|work\s*day|business\s+day|month|quarter|year|hour|minute|" + _DAY_NAMES + r")s?"
+    r"|every\s+(?:\d+|two|three|four|five|six|ten|twelve|fifteen|thirty|few|couple\s+of)\s+"
+    r"(?:minutes?|hours?|days?|weeks?|months?)"
+    r"|on\s+(?:weekdays|weekends|" + r"|".join(f"{d}s" for d in _DAY_NAMES.split("|")) + r"))\b",
+    re.IGNORECASE,
+)
+#: A request that CHANGES an existing schedule ("pause the nightly brief",
+#: "move it to 7am") is never a new one.
+_EDIT_LEAD = re.compile(
+    r"\A\s*(?:please\s+)?(?:pause|stop|delete|remove|cancel|disable|turn\s+off|move|rename"
+    r"|change|edit|update|resume|unpause|reschedule)\b",
+    re.IGNORECASE,
+)
+#: A sentence about oneself ("I go to the gym every morning", "my standup is
+#: every Monday") is not a request for a schedule, unless it says it wants
+#: one.
+_SELF_STATEMENT = re.compile(
+    r"\A\s*(?:(?:ok(?:ay)?|so|but|hey|also|well)\b[,\s]+)?"
+    r"(?:i|i'm|we|we're|my|our|the|it|it's|this|that|there|he|she|they|his|her|their)\b"
+    # v1.434.0 review: "every morning I check the bank feeds" — the time
+    # first, then the person.
+    r"|\A\s*(?:" + _RECURRING + r")\b[^.?!\n]{0,24}?\b(?:i|we)\b",
+    re.IGNORECASE,
+)
+_WANTS = re.compile(
+    # Review: "I need TO pay rent every month" is the person's own chore —
+    # "I need a digest every morning" / "I need you to…" still ask.
+    r"\b(?:please|remind\s+me|can\s+you|could\s+you|would\s+you"
+    r"|i\s+(?:want|need(?!\s+to\b)|would\s+like|'d\s+like)"
+    r"|should|(?<!\bi\s)(?<!\bwe\s)needs?\s+to|make\s+sure|let'?s)\b",
+    re.IGNORECASE,
+)
+#: v1.434.0 review: a calendar EVENT booked on a recurring time ("set up a
+#: meeting every Tuesday", "book a dentist appointment every six months",
+#: "set my alarm every weekday at 6") is the user's calendar, never one of
+#: Iron Jarvis's schedules — unless they ask to be reminded.
+_BOOKS_AN_EVENT = re.compile(
+    r"\b(?:set\s+up|book|arrange|plan|have|hold|host|organi[sz]e|set|make|add|put|attend)\s+"
+    r"(?:(?:a|an|the|my|our|your|some)\s+)?(?:[\w'-]+\s+)?"
+    r"(?:meeting|appointment|call|zoom|interview|alarm|lunch|dinner|coffee|class|lesson|standup"
+    r"|stand-up|haircut|check-?up|reservation)s?\b",
+    re.IGNORECASE,
+)
+_REMIND = re.compile(r"\bremind(?:er)?s?\b", re.IGNORECASE)
+#: B1.4: "run the triage workflow now" — a run verb on a workflow (or on a
+#: SAVED workflow's own name, read by the stream lane off the loop).
+_RUN_VERB = r"(?:run|start|kick\s+off|trigger|launch|execute|fire\s+off|re-?run)"
+_RUN_WORKFLOW = re.compile(
+    # Linear (review): the determiner takes its own space — see
+    # _NOT_OUR_SCHEDULE.
+    r"\b" + _RUN_VERB + r"\s+(?:(?:the|my|our|that|this)\s+)?(?:[\w'-]+\s+){0,3}?workflows?\b",
+    re.IGNORECASE,
+)
+_RUN_VERB_RX = re.compile(r"\b" + _RUN_VERB + r"\b", re.IGNORECASE)
+
+
+def wants_workflow_names(text: str) -> bool:
+    """Is it worth reading the saved workflows' names for *text*? A run verb
+    and no question: the stream lane then reads them OFF THE LOOP (one SQLite
+    read) and hands them to :func:`record_tools_for`."""
+    t = text or ""
+    return bool(_RUN_VERB_RX.search(t)) and not is_question(t)
+
+
+def saved_workflow_names(platform: Any) -> list[str]:
+    """The saved workflows' names (BLOCKING — call through a thread). Never
+    raises: an unreadable store names nothing."""
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..workflows.models import WorkflowRecord
+
+        with session_scope(platform.engine) as db:
+            return [str(n or "") for n in db.exec(select(WorkflowRecord.name).limit(500))]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+_RUN_AT = re.compile(r"\b" + _RUN_VERB + r"\s+", re.IGNORECASE)
+_RUN_DET_AT = re.compile(r"(?:the|my|our)\s+", re.IGNORECASE)
+_NAME_GOES_ON = re.compile(r"[\w-]")
+
+
+@lru_cache(maxsize=8)
+def _workflow_name_table(names: "tuple[str, ...]") -> "tuple[frozenset[str], tuple[tuple[int, frozenset[str]], ...]]":
+    """The saved names (3+ characters), lowercased, grouped by length, and
+    their first characters."""
+    by_len: dict[int, set[str]] = {}
+    for n in names:
+        s = (n or "").strip().lower()
+        if len(s) >= 3:
+            by_len.setdefault(len(s), set()).add(s)
+    firsts = frozenset(s[0] for group in by_len.values() for s in group)
+    return firsts, tuple(sorted((k, frozenset(v)) for k, v in by_len.items()))
+
+
+def _runs_a_named_workflow(t: str, names: "list[str] | tuple[str, ...]") -> bool:
+    """A run verb, then (after "the" / "my" / "our") a saved workflow's
+    whole name. v1.434.0 review: the first cut compiled and ran one regex PER
+    NAME over the whole message — 1.9 s for 500 workflows and a 100 KB pasted
+    text, and one alternation of every name still held the interpreter lock
+    for a third of a second in ONE call. Now each run verb is found once and
+    the words after it are LOOKED UP by length: the same answer as the
+    per-name patterns (pinned), at a cost that grows with the run verbs."""
+    firsts, table = _workflow_name_table(tuple(str(n or "") for n in names or ()))
+    if not table:
+        return False
+    low = (t or "").lower()
+    for m in _RUN_AT.finditer(low):
+        starts = [m.end()]
+        det = _RUN_DET_AT.match(low, m.end())
+        if det is not None:
+            starts.append(det.end())
+        for s in starts:
+            if low[s:s + 1] not in firsts:
+                continue
+            for length, group in table:
+                end = s + length
+                if low[s:end] in group and _NAME_GOES_ON.match(low, end) is None:
+                    return True
+    return False
 
 
 #: A QUESTION IS NOT CONSENT TO A WRITER (v1.344.0, "Jarvis looks after
@@ -190,37 +431,81 @@ def is_question(text: str) -> bool:
     return False
 
 
-def record_tools_for(text: str) -> list[str]:
+def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]" = ()) -> list[str]:
     """The record tools a chat message plausibly asks for, by the record it
     names (chat-only arming, like ``settings.tools.wants_settings``). The
     stream lane arms them VISIBLE, never granted: an ask-tier one renders
-    the card, ``grant_revoke`` (allow) and ``goal_list`` (read) run.
+    the card, ``grant_revoke`` (allow) and ``goal_list`` (read) run; a create
+    tool (:data:`ASK_FIRST_CREATE_TOOLS`) gets an "ask" override from the
+    lane, so it cards too.
+
+    ``workflow_names`` (v1.434.0, B1.4) — the saved workflows' names, read by
+    the stream lane only when :func:`wants_workflow_names` says a run verb is
+    there: "run triage now" names no workflow word.
 
     A QUESTION-shaped message ("what went wrong with my schedule?") keeps only
     the readers — see :data:`_QUESTION_HEAD`."""
     t = text or ""
-    out = _record_tools_named(t)
+    out = _record_tools_named(t, workflow_names=workflow_names)
     if is_question(t):
         return [n for n in out if n in _RECORD_READERS]
     return out
 
 
-def _record_tools_named(t: str) -> list[str]:
+def _schedule_named(t: str) -> bool:
+    """A schedule by its noun, or a RECURRING time in a request ("every
+    weekday at 8am send me a digest") — never a sentence about oneself ("I
+    go to the gym every morning")."""
+    if _SCHEDULE_NOUN.search(t):
+        return True
+    if not _RECURRING_WORDS.search(t):
+        return False
+    if _BOOKS_AN_EVENT.search(t) and not _REMIND.search(t):
+        return False
+    return not _SELF_STATEMENT.search(t) or bool(_WANTS.search(t))
+
+
+def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]" = ()) -> list[str]:
     out: list[str] = []
-    if _SCHEDULE_WORDS.search(t):
+    schedule = _schedule_named(t)
+    if schedule:
         out += ["schedule_update", "schedule_delete", "workflow_schedule"]
+        # B1.3: a NEW schedule — "make a schedule that…", or a recurring time
+        # in a request ("remind me every morning at 7…", "every weekday at
+        # 8am send me a digest").
+        if (
+            _CREATE_SCHEDULE.search(t)
+            or _SCHEDULE_VERB.search(t)
+            or (_EVERY_WORDS.search(t) and not _SCHEDULE_NOUN.search(t) and not _EDIT_LEAD.search(t))
+        ):
+            out.append("schedule_create")
     if _WORKFLOW_WORDS.search(t):
         out += ["workflow_update", "workflow_delete", "workflow_schedule"]
+    # B1.4: running a saved workflow — never inside a rule ("when a webhook
+    # fires, run the triage workflow" is the rule's action).
+    if (_RUN_WORKFLOW.search(t) or _runs_a_named_workflow(t, workflow_names)) and not re.search(
+        _REFLEX_TRIGGER + r"|\b(?:when|whenever|every\s+time|each\s+time)\b[^.?!\n]{1,80}\b(?:fires?|happens)\b",
+        t,
+        re.IGNORECASE,
+    ):
+        out.append("workflow_run")
     if _CHANNEL_WORDS.search(t):
         out += ["channel_toggle", "channel_connect"]
     if _APP_WORDS.search(t) or _names_an_app(t):
         out += ["app_connect"]
     if _WEBHOOK_WORDS.search(t):
         out += ["webhook_update", "webhook_delete"]
-    if _SENTINEL_WORDS.search(t):
+        if _CREATE_WEBHOOK.search(t):
+            out.append("webhook_add")
+    sentinel_new = bool(_CREATE_SENTINEL.search(t))
+    if _SENTINEL_WORDS.search(t) or sentinel_new:
         out += ["sentinel_update", "sentinel_delete"]
+        if sentinel_new:
+            out.append("sentinel_add")
     if _GOAL_WORDS.search(t):
         out += ["goal_list", "goal_update", "goal_delete"]
+        if _CREATE_GOAL.search(t):
+            out.append("goal_add")
     if _REFLEX_WORDS.search(t):
         out += ["reflex_create", "reflex_update", "reflex_delete"]
     if _GRANT_WORDS.search(t):
