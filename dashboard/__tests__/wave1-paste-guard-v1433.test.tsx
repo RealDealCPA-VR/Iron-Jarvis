@@ -40,7 +40,7 @@ describe("held back too (v1.433.0 review)", () => {
     `https://www.discord.com/api/webhooks/123456789012345678/${HOOK_TOKEN}`,
     `discord.com/api/webhooks/123456789012345678/${HOOK_TOKEN}`,
     `canary.discordapp.com/api/webhooks/123456789012345678/${HOOK_TOKEN}`,
-    "mongodb+srv://ledger:s3cret@cluster0.ab12c.mongodb.net/books",
+    "mongodb+srv://ledger:s3cret@cluster0.example.com/books",
     "mongodb://admin:hunter2@10.0.0.7:27017/clients?authSource=admin",
     "mariadb://root:toor@db.local/payroll",
     "redis://:s3cretpw@cache.local:6379/0",

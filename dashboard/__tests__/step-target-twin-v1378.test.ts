@@ -105,7 +105,7 @@ const INPUTS: Array<Omit<Case, "target">> = [
   { name: "page_click", args: { target: "discord.com/api/webhooks/12345/abcdefghij_klmnopqrst" } },
   { name: "page_click", args: { target: "https://ptb.discord.com/api/webhooks/12345/abcdefghij_klmnopqrst" } },
   { name: "page_click", args: { target: "mydiscord.com/api/webhooks/12345/abcdefghij_klmnopqrst" } },
-  { name: "page_click", args: { target: "mongodb+srv://me:s3cret@cluster0.ab.mongodb.net/x" } },
+  { name: "page_click", args: { target: "mongodb+srv://me:s3cret@cluster0.example.com/x" } },
   { name: "page_click", args: { target: "redis://:s3cretpw@cache.local:6379" } },
   { name: "page_click", args: { target: "postgres://app:ab/cd@db.local/x" } },
   { name: "page_click", args: { target: "postgres://db.local:5432/x?u=me@work" } },

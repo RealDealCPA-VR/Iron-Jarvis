@@ -602,7 +602,7 @@
     {
       "name": "page_click",
       "args": {
-        "target": "mongodb+srv://me:s3cret@cluster0.ab.mongodb.net/x"
+        "target": "mongodb+srv://me:s3cret@cluster0.example.com/x"
       },
       "target": null
     },
