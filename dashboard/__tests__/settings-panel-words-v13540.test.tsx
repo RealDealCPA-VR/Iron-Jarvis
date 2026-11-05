@@ -213,7 +213,10 @@ describe("G59: Settings › Maintenance offers 'Restart Iron Jarvis'", () => {
     const { container } = render(<MaintenanceCard />);
     const btn = screen.getByRole("button", { name: "Restart Iron Jarvis" });
     expect(screen.getAllByText("Restart Iron Jarvis")).toHaveLength(2); // the heading and the button
-    expect(btn.getAttribute("title")).toBe(RESTART_WORDS.title);
+    // v1.433.0 (moved on purpose): jsdom has no desktop app, so the title says
+    // what a browser page's press really does (wave1-restart-v1433 pins the
+    // desktop words and the tidy bridge).
+    expect(btn.getAttribute("title")).toBe(RESTART_WORDS.browserTitle);
     expect(container.textContent).not.toMatch(/daemon/i);
     expect(container.innerHTML).not.toMatch(/daemon/i); // titles too
 
@@ -227,7 +230,8 @@ describe("G59: Settings › Maintenance offers 'Restart Iron Jarvis'", () => {
     const legacy = readSrc("components/settings/pages/LegacySettingsForm.tsx");
     expect(legacy).toContain("<SectionLabel>{RESTART_WORDS.label}</SectionLabel>");
     expect(legacy).toContain("label={RESTART_WORDS.label}");
-    expect(legacy).toContain("title={RESTART_WORDS.title}");
+    // v1.433.0 (moved on purpose): the desktop words, or the browser's.
+    expect(legacy).toContain("title={restartDesktop ? RESTART_WORDS.title : RESTART_WORDS.browserTitle}");
     expect(legacy).toContain("{RESTART_WORDS.needed}");
     expect(RESTART_WORDS.label).toBe("Restart Iron Jarvis");
     expect(RESTART_WORDS.title).toContain("Iron Jarvis stops tidily and the desktop app starts it again");

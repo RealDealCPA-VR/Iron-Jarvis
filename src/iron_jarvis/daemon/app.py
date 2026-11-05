@@ -544,6 +544,10 @@ def _remove_gc_watch(watch: "_GcPauseWatch | None") -> None:
 #: How often the event-log retention sweep runs after boot (v1.333.0, D12).
 _EVENT_PRUNE_S = 24 * 3600.0
 
+#: How often the Build terminals' history is written for after a restart
+#: (v1.245.0; a module constant since v1.433.0 so a test can shorten it).
+_TERMINAL_SNAPSHOT_S = 30.0
+
 
 async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> None:
     """Apply ``event_retention_days`` once a day, not only at boot (v1.333.0).
@@ -567,7 +571,10 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
-            log.debug("event-log retention sweep failed", exc_info=True)
+            # v1.433.0 (L2): WARNING, not DEBUG — a sweep that fails every day
+            # lets the event table grow past its own retention setting, and a
+            # DEBUG line is one nobody reads.
+            log.warning("event-log retention sweep failed", exc_info=True)
 
 
 #: How often the daemon reclaims idle REPL namespaces (v1.333.0, D3).
@@ -582,16 +589,26 @@ async def _repl_sweep_loop(repl, *, interval_s: float = _REPL_SWEEP_S) -> None:
     for, so the 15-minute TTL never applied and a chat's interpreter lived as
     long as the daemon. The sweep itself is cheap (a dict scan; a dispose hops
     off the loop to kill). Never lets a failure kill the daemon."""
+    failing = False
     while True:
         await asyncio.sleep(interval_s)
         try:
             gone = await repl.sweep()
+            failing = False
             if gone:
                 log.info("reclaimed %d idle python session(s)", len(gone))
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
-            log.debug("repl idle sweep failed", exc_info=True)
+            # v1.433.0 (L2): WARNING — a sweep that keeps failing leaves idle
+            # Python processes running for as long as Iron Jarvis does. Once
+            # per run of failures (review): every minute would flood the log
+            # and push real problems out of GET /diagnostics/errors.
+            if not failing:
+                log.warning("repl idle sweep failed", exc_info=True)
+            else:
+                log.debug("repl idle sweep still failing", exc_info=True)
+            failing = True
 
 
 async def _fts_backfill_loop(
@@ -1477,8 +1494,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ):
                 bg_tasks["autonomy"] = asyncio.create_task(_autonomy_loop())
                 log.info("autonomy loop (re)armed")
-            elif task is not None:
-                log.info("autonomy loop disarmed")
+            else:
+                # v1.433.0 (A11): a loop the user turned OFF is not failing.
+                # Its last failing row used to stay forever, so the bell and
+                # Status kept saying "isn't working" about something switched off.
+                loop_health.pop("autonomy", None)
+                if task is not None:
+                    log.info("autonomy loop disarmed")
 
         _arm_autonomy()
 
@@ -1547,14 +1569,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # 30 s, IF any pane printed since the last write, write it again (off
         # the loop; at most 64 KB of scrollback per pane).
         async def _terminal_snapshot_loop() -> None:
+            raising = False  # review: warn once per run of failures, not every 30 s
             while True:
-                await asyncio.sleep(30)
+                await asyncio.sleep(_TERMINAL_SNAPSHOT_S)
                 try:
                     await asyncio.to_thread(platform.terminals.snapshot_if_changed)
+                    raising = False
+                    # v1.433.0 (L2): a pane whose history file cannot be
+                    # written is retried every pass — and used to fail at
+                    # DEBUG for ever, so a restart lost that history with no
+                    # word. Each pass now reports its own outcome.
+                    problem = getattr(platform.terminals, "snapshot_problem", None)
+                    err = problem() if callable(problem) else None
+                    _tick("terminal_snapshot", err is None, err)
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 — a snapshot must never kill the daemon
-                    log.debug("periodic terminal snapshot failed", exc_info=True)
+                except Exception as exc:  # noqa: BLE001 — a snapshot must never kill the daemon
+                    if not raising:
+                        log.warning("periodic terminal snapshot failed: %s", exc, exc_info=True)
+                    else:
+                        log.debug("periodic terminal snapshot still failing", exc_info=True)
+                    raising = True
+                    _tick("terminal_snapshot", False, exc)
 
         bg_tasks["terminal_snapshot"] = asyncio.create_task(_terminal_snapshot_loop())
 
@@ -1657,8 +1693,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     pass
                 bg_tasks["sentinels"] = asyncio.create_task(_sentinel_loop())
                 log.info("sentinel loop (re)armed")
-            elif task is not None:
-                log.info("sentinel loop disarmed")
+            else:
+                loop_health.pop("sentinels", None)  # v1.433.0 (A11): off is not failing
+                if task is not None:
+                    log.info("sentinel loop disarmed")
 
         _arm_sentinels()
 
@@ -1693,11 +1731,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # v1.226.0: the enabled() probe reads a secret — a boot-time raise
             # here (mismatched key, bad row) aborted the whole lifespan. Same
             # posture as _arm_fleet: a probe failure disarms, never bricks.
+            cal_probe_error: BaseException | None = None
             try:
                 cal_enabled = bool(calendar_poller.enabled())
-            except Exception:  # noqa: BLE001 — a probe never breaks boot
+            except Exception as exc:  # noqa: BLE001 — a probe never breaks boot
                 log.exception("calendar trigger: enabled() probe failed; not armed")
                 cal_enabled = False
+                cal_probe_error = exc
             if (
                 cal_enabled
                 and os.environ.get("IRONJARVIS_CALENDAR", "on").strip().lower()
@@ -1705,8 +1745,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ):
                 bg_tasks["calendar"] = asyncio.create_task(_calendar_loop())
                 log.info("calendar trigger loop (re)armed")
-            elif task is not None:
-                log.info("calendar trigger loop disarmed")
+            else:
+                if cal_probe_error is not None:
+                    # v1.433.0 review: a probe that RAISED is not "off" — the
+                    # user may have turned it on and it could not start. Say
+                    # so with the reason instead of dropping the row.
+                    _tick("calendar", False, cal_probe_error)
+                else:
+                    loop_health.pop("calendar", None)  # v1.433.0 (A11): off is not failing
+                if task is not None:
+                    log.info("calendar trigger loop disarmed")
 
         _arm_calendar()
 
@@ -1727,7 +1775,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     # each cycle. Ticking ok at arm time read "healthy" over a
                     # loop whose every cycle failed (audit OBS2).
                 else:
-                    bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.stop())
+                    # v1.433.0 (A11): sampling off (or no model server left) is
+                    # not failing — its last failing row goes now, and again
+                    # once the sampler has stopped (a cycle in flight could
+                    # report on its way out).
+                    loop_health.pop("fleet", None)
+
+                    async def _stop_fleet() -> None:
+                        try:
+                            await fleet_sampler.stop()
+                        finally:
+                            loop_health.pop("fleet", None)
+
+                    bg_tasks["fleet"] = asyncio.create_task(_stop_fleet())
             except Exception as exc:  # noqa: BLE001 — telemetry never breaks boot
                 log.debug("fleet sampler arm failed", exc_info=True)
                 _tick("fleet", False, exc)
@@ -1911,6 +1971,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                                 await inbound_poller.poll_once()
                             )
                             _tick("inbound", ok, why)
+                        else:
+                            # v1.433.0 (A11): nothing listens for messages any
+                            # more (the channel was turned off or removed) —
+                            # not a failing poll. Its last failing row goes.
+                            loop_health.pop("inbound", None)
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
@@ -1975,14 +2040,41 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     # old `old_task is not None and` guard let it dial after
                     # the teardown). Boot arms only after "loop" is set.
                     return
+                probe_error: BaseException | None = None
                 try:  # v1.226.0: a secret read in here must never abort boot
                     _socket_enabled = bool(_socket.enabled())
-                except Exception:  # noqa: BLE001 — a probe never breaks boot
+                except Exception as exc:  # noqa: BLE001 — a probe never breaks boot
                     log.exception("slack socket mode: enabled() probe failed; not armed")
                     _socket_enabled = False
+                    probe_error = exc
+                if not _socket_enabled and probe_error is not None:
+                    # v1.433.0 review: a probe that RAISED is not "off" — a
+                    # Slack channel the user turned on could not start. Say so
+                    # with the reason; the old pump (if any) still stops, and
+                    # its own last report never overwrites this one.
+                    _tick("slack_socket", False, probe_error)
+                    if old_task is not None:
+
+                        def _say_after(_t: "asyncio.Task[Any]", _err: BaseException = probe_error) -> None:
+                            if slack_socket["task"] is None:
+                                _tick("slack_socket", False, _err)
+
+                        old_task.add_done_callback(_say_after)
+                    return
                 if not _socket_enabled:
+                    # v1.433.0 (A11): no Slack channel listens any more (turned
+                    # off or removed) — that is not a failing socket. Its last
+                    # failing row goes now, and again when the old pump has
+                    # finished, unless a newer arm started a pump meanwhile.
+                    loop_health.pop("slack_socket", None)
                     if old_task is not None:
                         log.info("slack socket mode disarmed")
+
+                        def _forget_after(_t: "asyncio.Task[Any]") -> None:
+                            if slack_socket["task"] is None:
+                                loop_health.pop("slack_socket", None)
+
+                        old_task.add_done_callback(_forget_after)
                     return
                 stop = asyncio.Event()
 

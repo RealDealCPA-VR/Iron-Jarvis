@@ -113,6 +113,15 @@ contextBridge.exposeInMainWorld("ironjarvis", {
     // would reload this page). Resolves true when a (re)spawn started, false
     // when there was nothing to restart, null when the sender is refused.
     restartDaemon: () => ipcRenderer.invoke("shell:restartDaemon"),
+    // Settings › Maintenance's "Restart Iron Jarvis" (v1.433.0): a TIDY
+    // restart the supervisor knows it asked for, so it is never counted as a
+    // crash. `{stopping: true}` when Iron Jarvis is already stopping itself
+    // (a restore from a backup). Resolves true when a restart is under way,
+    // false when there was nothing to restart, null when refused.
+    restartDaemonTidy: (opts) =>
+      ipcRenderer.invoke("shell:restartDaemonTidy", {
+        stopping: !!(opts && opts.stopping === true),
+      }),
   },
   // Pop-out windows (v1.283.0): a module in its own window — on another screen
   // when the desk has one. `isPopout`/`path` say whether THIS window is one.

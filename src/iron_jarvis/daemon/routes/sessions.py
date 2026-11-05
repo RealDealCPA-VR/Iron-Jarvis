@@ -30,6 +30,7 @@ from ..schemas import (
 #: The origin the mission door stamps (v1.307.0). Starts with "job", so it is
 #: an ATTENDED origin (runtime.ATTENDED_ORIGINS): its asks wait for the user.
 from ...agents.team import MISSION_ORIGIN  # noqa: E402  (one definition)
+from ...core.events import EventType  # noqa: E402  (v1.433.0: review events)
 from ...providers.egress import LocalOnlyRefused  # noqa: E402  (v1.332.0)
 
 #: How many recent missions ``GET /missions`` lists.
@@ -1358,14 +1359,31 @@ def register(app: FastAPI, d) -> None:
         return asdict(review)
 
     @app.post("/reviews/{session_id}/approve")
-    def approve_review(session_id: str) -> dict[str, Any]:
-        if d.orchestrator.get_review(session_id) is None:
+    async def approve_review(session_id: str) -> dict[str, Any]:
+        review = d.orchestrator.get_review(session_id)
+        if review is None:
             raise HTTPException(status_code=404, detail="no review for session")
-        return {"merged": d.orchestrator.approve_review(session_id)}
+        # The merge is git work (blocking): off the loop, like every route here.
+        merged = await asyncio.to_thread(d.orchestrator.approve_review, session_id)
+        # v1.433.0 (A10): say it happened. The bell and the mood orb clear a
+        # review.requested only on a later review.* event for the same session;
+        # with none published they stayed alarmed after the review was answered.
+        await d.platform.event_bus.publish(
+            EventType.REVIEW_APPROVED,
+            {"branch": getattr(review, "branch", ""), "merged": merged},
+            session_id=session_id,
+        )
+        return {"merged": merged}
 
     @app.post("/reviews/{session_id}/reject")
-    def reject_review(session_id: str) -> dict[str, Any]:
-        if d.orchestrator.get_review(session_id) is None:
+    async def reject_review(session_id: str) -> dict[str, Any]:
+        review = d.orchestrator.get_review(session_id)
+        if review is None:
             raise HTTPException(status_code=404, detail="no review for session")
-        d.orchestrator.reject_review(session_id)
+        await asyncio.to_thread(d.orchestrator.reject_review, session_id)
+        await d.platform.event_bus.publish(
+            EventType.REVIEW_REJECTED,
+            {"branch": getattr(review, "branch", "")},
+            session_id=session_id,
+        )
         return {"status": "rejected"}

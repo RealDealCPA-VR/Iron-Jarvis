@@ -20,4 +20,17 @@ export const RESTART_WORDS = {
   needed: "One or more changed settings need a restart to take full effect. After saving, use “Restart Iron Jarvis” under Maintenance.",
   /** The small “restart” tag's hover title on such a setting. */
   tagTitle: "Takes full effect after Iron Jarvis restarts",
+  /** v1.433.0: the note after the press inside the desktop app. */
+  restartingNote: "Restart requested — reconnecting. Watch the status dot in the sidebar.",
+  /** v1.433.0: the desktop app was asked and could not restart it. */
+  refused:
+    "The desktop app couldn’t restart Iron Jarvis from here. Quit Iron Jarvis from the tray menu and open it again.",
+  /** v1.433.0: in a browser tab the same press only STOPS Iron Jarvis — a
+   *  page cannot start it again, so the words say what really happens. */
+  browserBlurb:
+    "Stops Iron Jarvis tidily. A browser page can’t start it again: if the Iron Jarvis desktop app is running, it starts it again; otherwise start Iron Jarvis yourself.",
+  browserTitle: "Iron Jarvis stops tidily. A browser page can’t start it again.",
+  /** v1.433.0: the note after the press in a browser tab. */
+  stoppingNote:
+    "Iron Jarvis is stopping. If the desktop app is running, it starts it again; otherwise start Iron Jarvis yourself.",
 } as const;

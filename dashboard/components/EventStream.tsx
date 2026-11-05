@@ -18,6 +18,9 @@ const TYPE_COLOR: Record<string, string> = {
   "memory.updated": "text-teal-300",
   "workflow.completed": "text-emerald-300",
   "review.requested": "text-amber-300",
+  // v1.433.0 (A10): its answers.
+  "review.approved": "text-emerald-300",
+  "review.rejected": "text-zinc-300",
   "provider.failed": "text-rose-300",
   "provider.downgraded": "text-amber-300",
   // Inbound surfaces: webhooks + two-way comm (received spawns a session;

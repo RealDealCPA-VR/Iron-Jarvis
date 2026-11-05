@@ -2172,9 +2172,23 @@ export function NotificationBell() {
     if (!open) setConflicts((c) => (c.length ? [] : c));
   }, [open]);
 
+  // v1.433.0 (A10): an answered review (review.approved / review.rejected,
+  // published by POST /reviews/{id}/approve|reject) means the polled
+  // /diagnostics count is stale too — the badge reads the LARGER of the live
+  // and the polled counts, so without a re-read it stayed up to 15 s after
+  // the answer. Same idiom as the approval refetch above.
+  const reloadDiag = diag.reload;
+  const prevReviewAnswerId = useRef<string | null>(null);
+  useEffect(() => {
+    const latest = events.find((e) => e.type === "review.approved" || e.type === "review.rejected");
+    if (!latest || prevReviewAnswerId.current === latest.id) return;
+    prevReviewAnswerId.current = latest.id;
+    reloadDiag();
+  }, [events, reloadDiag]);
+
   // Unresolved review.requested events: dedupe by session and drop any whose
-  // review later resolved/approved/rejected (defensive — those types may not
-  // exist yet, in which case every requested review simply stays pending).
+  // review later resolved (review.approved / review.rejected since v1.433.0;
+  // any other review.* the same way).
   const reviews = useMemo(() => {
     const resolved = new Set<string>();
     for (const e of events) {

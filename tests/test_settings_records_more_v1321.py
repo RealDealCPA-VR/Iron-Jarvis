@@ -71,7 +71,7 @@ def _wh_row(p, slug):
 async def test_webhook_update_outbound_asks_applies_and_undo_restores_every_field(tmp_path):
     app = _app(
         tmp_path,
-        [("webhook_update", {"slug": "deploys", "target_url": OTHER, "event_types": ["session.failed"], "enabled": False})],
+        [("webhook_update", {"slug": "deploys", "target_url": OTHER, "event_types": ["workflow.completed"], "enabled": False})],
     )
     p = app.state.platform
     p.outbound_webhooks.register("deploys", PUBLIC, ["session.completed"], secret_name="hook_key")
@@ -80,7 +80,7 @@ async def test_webhook_update_outbound_asks_applies_and_undo_restores_every_fiel
     frames = await _drive_stream(app, _body("send the deploys webhook somewhere else"), await _approve_all(app, seen))
     assert seen == ["webhook_update"], "a webhook change must ask first"
     now = _wh_row(p, "deploys")
-    assert now["target_url"] == OTHER and json.loads(now["event_types_json"]) == ["session.failed"] and now["enabled"] is False
+    assert now["target_url"] == OTHER and json.loads(now["event_types_json"]) == ["workflow.completed"] and now["enabled"] is False
     card = _card(frames, "Webhook changed")
     assert "(paused)" in card["new"]
     await _undo_card(app, card)
@@ -111,7 +111,7 @@ async def test_webhook_pause_inbound_stops_dispatch_and_undo_rearms_it(tmp_path)
 async def test_webhook_delete_undo_recreates_the_same_rows(tmp_path):
     app = _app(tmp_path, [("webhook_delete", {"slug": "deploys"}), ("webhook_delete", {"slug": "gh"})])
     p = app.state.platform
-    p.outbound_webhooks.register("deploys", PUBLIC, ["session.completed", "session.failed"])
+    p.outbound_webhooks.register("deploys", PUBLIC, ["session.completed", "workflow.completed"])
 
     async def handler(body):
         return {"ok": True}
@@ -431,7 +431,7 @@ async def test_webhook_add_from_chat_has_an_undo_and_a_reused_slug_comes_back(tm
         tmp_path,
         [
             ("webhook_add", {"slug": "ingest"}),
-            ("webhook_add", {"slug": "deploys", "direction": "outbound", "target_url": OTHER, "event_types": ["session.failed"]}),
+            ("webhook_add", {"slug": "deploys", "direction": "outbound", "target_url": OTHER, "event_types": ["workflow.completed"]}),
         ],
     )
     p = app.state.platform

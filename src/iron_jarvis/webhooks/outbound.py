@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy import Engine
 from sqlalchemy import event as sa_event
@@ -30,7 +30,7 @@ from sqlalchemy.orm import object_session
 from sqlmodel import select
 
 from ..core.db import session_scope
-from ..core.events import Event
+from ..core.events import Event, known_event_types
 from .models import WebhookRecord
 from .security import canonical_bytes, sign
 from .validate import assert_safe_webhook_url
@@ -42,6 +42,63 @@ EMPTY_EVENT_TYPES = (
     "Pick at least one event type for an outbound webhook, for example "
     "session.completed. With none listed, nothing would ever be sent."
 )
+
+
+def unknown_event_types(event_types: Iterable[Any], known: Iterable[str]) -> list[str]:
+    """The listed names Iron Jarvis never publishes (v1.433.0, W1), in the
+    order given, each once. Delivery matches a type EXACTLY, so one of these
+    would be saved and then never sent anything."""
+    have = set(known)
+    out: list[str] = []
+    for t in event_types:
+        name = str(t).strip()
+        if name and name not in have and name not in out:
+            out.append(name)
+    return out
+
+
+#: the words people use for the end of an event name, mapped to Iron Jarvis's
+#: own ("workflow.finished" → workflow.completed) for the refusal's suggestion.
+_SAME_WORDS = {
+    "finished": "completed",
+    "done": "completed",
+    "complete": "completed",
+    "ended": "completed",
+    "start": "started",
+    "began": "started",
+    "new": "created",
+}
+
+
+def unknown_event_types_sentence(bad: list[str], known: Iterable[str]) -> str:
+    """ONE plain sentence for a refused list, naming the closest real names
+    (v1.433.0, W1). Shown by ``POST /webhooks``, ``webhook_add`` and
+    ``webhook_update``."""
+    import difflib
+
+    pool = sorted(set(known))
+    shown = [b if len(b) <= 60 else b[:57] + "…" for b in bad[:5]]
+    names = " or ".join(f"“{b}”" for b in shown)
+    noun = "an event called" if len(bad) == 1 else "events called"
+    them = "it" if len(bad) == 1 else "them"
+    close: list[str] = []
+    for b in bad[:5]:
+        # A word people use for the one Iron Jarvis uses ("finished" for
+        # "completed") first; then names that are spelt alike.
+        family, _, tail = b.partition(".")
+        same = f"{family}.{_SAME_WORDS.get(tail, tail)}"
+        tries = ([same] if same != b and same in pool else []) + difflib.get_close_matches(
+            b, pool, n=2, cutoff=0.6
+        )
+        for c in tries:
+            if c not in close:
+                close.append(c)
+    tip = (
+        f"Did you mean {' or '.join(close[:3])}?"
+        if close
+        else "Use names like session.completed or workflow.completed."
+    )
+    return f"Iron Jarvis never sends {noun} {names}, so this webhook would never receive {them}. {tip}"
 #: resolves a persisted ``secret_name`` (vault key) to its live secret value.
 SecretResolver = Callable[[str], Optional[str]]
 
@@ -142,6 +199,23 @@ class OutboundWebhooks:
         #: the invalidation note above. None until the first read.
         self._index: "tuple[int, float, dict[str, list[WebhookRecord]]] | None" = None
         self._index_lock = threading.Lock()
+        #: v1.433.0 (W1): event names THIS install publishes beyond
+        #: ``known_event_types()`` — a schedule of kind "event" publishes a
+        #: name of the user's own. Set by ``build_platform`` (reads the
+        #: scheduler); None = the built-in names only. Never trusted to work:
+        #: a raise reads as no extra names.
+        self.extra_event_types: "Callable[[], Iterable[str]] | None" = None
+
+    def known_types(self) -> frozenset[str]:
+        """Every name a webhook here may subscribe to (v1.433.0, W1)."""
+        extra: list[str] = []
+        fn = getattr(self, "extra_event_types", None)
+        if fn is not None:
+            try:
+                extra = [str(x).strip() for x in fn() if str(x).strip()]
+            except Exception:  # noqa: BLE001 — a scheduler read never blocks a save
+                extra = []
+        return known_event_types() | frozenset(extra)
 
     def warm(self) -> None:
         """Read the subscription index now (boot), so the first event does not
@@ -208,9 +282,17 @@ class OutboundWebhooks:
         or if ``event_types`` is empty: ``on_event`` delivers only when the
         event's type is IN the list, so an empty list would match nothing and
         the webhook would silently receive no events (v1.292.0, platform-06).
+        v1.433.0 (W1): or if it names a type Iron Jarvis never publishes
+        (:meth:`known_types`) — matching is exact, so a misspelt name saved
+        fine and then never fired. Names are saved trimmed.
         """
-        if not [t for t in event_types if str(t).strip()]:
+        event_types = [str(t).strip() for t in event_types if str(t).strip()]
+        if not event_types:
             raise ValueError(EMPTY_EVENT_TYPES)
+        known = self.known_types()
+        bad = unknown_event_types(event_types, known)
+        if bad:
+            raise ValueError(unknown_event_types_sentence(bad, known))
         assert_safe_webhook_url(url, allow_internal=self.allow_internal)
         if secret:
             self._secrets[slug] = secret

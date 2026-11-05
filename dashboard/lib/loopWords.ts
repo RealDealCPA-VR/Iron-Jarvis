@@ -135,6 +135,14 @@ const ROWS: Readonly<Record<string, Row>> = {
     href: STATUS_HREF,
   },
   fts_backfill: { label: "Chat search", problem: "Older chats aren't searchable yet", href: STATUS_HREF },
+  // v1.433.0 (L2): the 30-second pass that keeps each Build terminal's
+  // history on disk, so a restart brings it back.
+  terminal_snapshot: {
+    label: "Saving your terminals' history for after a restart",
+    problem: "Your terminals' history isn't being saved for after a restart",
+    href: "/terminals",
+    still: "Your terminals keep working; only their history after a restart is at risk.",
+  },
   // Steps that run once when Iron Jarvis starts.
   requeue_assignments: {
     label: "Queued tasks",

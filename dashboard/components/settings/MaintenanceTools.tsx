@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArchiveRestore, ClipboardCopy, FolderOpen, HardDrive } from "lucide-react";
 import { get, post, put, ApiError } from "@/lib/api";
+import { requestTidyRestart } from "@/lib/desktopShell";
 import { ErrorNote, LoaderInline, SectionLabel } from "@/components/ui";
 
 type OpenLogsResult = { ok: boolean; path: string; error?: string } | null;
@@ -649,6 +650,11 @@ export function MaintenanceTools({
         { name: pickedRow.name },
       );
       setConfirming(false);
+      // v1.433.0 (A8): the restore stops Iron Jarvis itself (half a second
+      // after it answers). Tell the desktop app first that this stop is a
+      // restart it should expect, or its supervisor counts it as a crash. A
+      // browser tab has no bridge: nothing to tell.
+      await requestTidyRestart({ stopping: true });
       await onRestartRequested(
         `Restored ${r.files} file(s) from ${r.restored_from} — Iron Jarvis is restarting on that snapshot.`,
       );

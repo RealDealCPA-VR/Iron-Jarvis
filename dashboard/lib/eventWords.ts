@@ -43,6 +43,9 @@ export const EVENT_WORDS: Record<string, string> = {
   "delegation.started": "Handed work to a teammate",
   "delegation.completed": "Teammate finished",
   "comm.desktop": "Sent a desktop notification",
+  // v1.433.0 (A10): the answers to a review (they now publish an event).
+  "review.approved": "Review approved and merged",
+  "review.rejected": "Review declined",
 };
 
 /** v1.314.0: "agent running→completed" (eval/observability._event_summary
