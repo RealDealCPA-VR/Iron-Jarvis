@@ -213,6 +213,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # a card + Undo where the user is present; pinned by
     # tests/test_apps_destinations_v14350.py.
     "app_switch", "app_disconnect", "app_import", "channel_remove", "channel_alerts",
+    # v1.435.0 (chat-first plan, Wave 3 group I): Local only for THIS chat and
+    # the change history — the same reasoning: the chat that owns the switch,
+    # and the Undo card, are where the user is present. Chat arms them
+    # (settings.records_history.history_tools_for); pinned by
+    # tests/test_chat_history_tools_v14350.py.
+    "chat_local_only", "changes_list", "change_undo",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

@@ -562,12 +562,10 @@ def register(app: FastAPI, d) -> None:
         """Paused → active via the guarded transition; TRIPPED → active via
         ``reopen`` so the breaker is cleared (see the module docstring). Any
         other state gets the transition guard's refusal verbatim as a 409."""
-        record = _record_or_404(goal_id)
+        _record_or_404(goal_id)
         try:
-            if record.state == "tripped":
-                record = _engine().store.reopen(goal_id)
-            else:
-                record = _engine().store.transition(goal_id, "active")
+            # v1.435.0: the engine's door, which chat's goal_update runs too.
+            record = _engine().resume_goal(goal_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         return {"goal": _payload(record)}
@@ -594,20 +592,13 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/goals/{goal_id}")
     def delete_goal_contract(goal_id: str) -> dict[str, Any]:
-        if not _engine().store.remove(goal_id):
-            raise HTTPException(status_code=404, detail="goal not found")
         # v1.299.0 (review fix): a goal's standing grants die with the goal —
         # a goal-scoped row has no other reader, and a "never expires" grant
         # (goal scope only) would otherwise outlive the thing it was for.
-        revoked: list[str] = []
-        store = getattr(d.platform, "grants", None)
-        if store is not None:
-            try:
-                for rec in store.list("goal", goal_id):
-                    store.revoke(rec.id)
-                    revoked.append(rec.id)
-            except Exception:  # noqa: BLE001 — the goal is gone; say what was not revoked
-                log.exception("standing grants of %s not revoked", goal_id)
+        # v1.435.0: lifted into the engine, which chat's goal_delete runs too.
+        revoked = _engine().delete_goal(goal_id)
+        if revoked is None:
+            raise HTTPException(status_code=404, detail="goal not found")
         # Additive ONLY when something was revoked: the pre-v1.299 shape
         # `{"deleted": id}` stays byte-identical for every other goal.
         return {"deleted": goal_id, **({"revoked_grants": revoked} if revoked else {})}

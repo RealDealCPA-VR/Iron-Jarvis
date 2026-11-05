@@ -352,6 +352,10 @@ ASK_WORDS: dict[str, str] = {
     "reflex_update": "change a rule that acts on its own",
     "reflex_delete": "remove a rule that acts on its own",
     "config_undo": "undo your last change",
+    # v1.435.0 (Wave 3 group I): the change history's undo, and Local only
+    # for a chat (its card shows when turning it OFF).
+    "change_undo": "undo one of its changes",
+    "chat_local_only": "change Local only for this chat",
     "approve_plan": "follow this plan",
     # v1.435.0 (chat-first plan Wave 3 group G): projects and the user's own
     # agents from chat (settings.records_projects).
@@ -455,8 +459,11 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "assign_work": ("queued a task for a teammate", "queued task"),
     "batch_documents": ("worked through a folder of documents", "document batch"),
     "capability_propose": ("suggested a new ability for Iron Jarvis", "ability suggestion"),
+    "change_undo": ("undid a change", "undo"),
+    "changes_list": ("listed its recent changes", "change listing"),
     "channel_connect": ("connected a messaging channel", "channel connection"),
     "channel_toggle": ("switched a messaging channel's listening", "channel switch"),
+    "chat_local_only": ("changed Local only for this chat", "Local only change"),
     "code_load": ("opened a saved script", "script read"),
     "code_run": ("ran a saved script", "saved script run"),
     "code_search": ("searched its saved scripts", "script search"),

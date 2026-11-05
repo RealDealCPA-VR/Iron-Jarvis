@@ -39,10 +39,13 @@
     "browser_scroll",
     "browser_type",
     "capability_propose",
+    "change_undo",
+    "changes_list",
     "channel_alerts",
     "channel_connect",
     "channel_remove",
     "channel_toggle",
+    "chat_local_only",
     "code_load",
     "code_run",
     "code_search",
@@ -228,10 +231,13 @@
     "browser_scroll": "act in a browser tab",
     "browser_type": "act in a browser tab",
     "capability_propose": "suggest a new ability for Iron Jarvis",
+    "change_undo": "undo one of its changes",
+    "changes_list": "list its recent changes",
     "channel_alerts": "choose which alerts a destination gets",
     "channel_connect": "add a notification channel",
     "channel_remove": "remove a notification destination",
     "channel_toggle": "turn a channel's two-way messages on or off",
+    "chat_local_only": "change Local only for this chat",
     "code_load": "open a saved script",
     "code_run": "run a saved script",
     "code_search": "search its saved scripts",
@@ -471,6 +477,14 @@
       "Suggested a new ability for Iron Jarvis",
       "Suggesting a new ability for Iron Jarvis"
     ],
+    "change_undo": [
+      "Undid a change",
+      "Undoing a change"
+    ],
+    "changes_list": [
+      "Listed its recent changes",
+      "Listing its recent changes"
+    ],
     "channel_alerts": [
       "Changed which alerts a destination gets",
       "Changing which alerts a destination gets"
@@ -486,6 +500,10 @@
     "channel_toggle": [
       "Switched a messaging channel's listening",
       "Switching a messaging channel's listening"
+    ],
+    "chat_local_only": [
+      "Changed Local only for this chat",
+      "Changing Local only for this chat"
     ],
     "code_load": [
       "Opened a saved script",
@@ -947,10 +965,13 @@
     "browser_scroll": "browser",
     "browser_type": "browser",
     "capability_propose": "",
+    "change_undo": "",
+    "changes_list": "",
     "channel_alerts": "",
     "channel_connect": "",
     "channel_remove": "",
     "channel_toggle": "",
+    "chat_local_only": "",
     "code_load": "",
     "code_run": "",
     "code_search": "",

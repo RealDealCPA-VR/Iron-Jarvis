@@ -140,6 +140,14 @@
       "ok": "suggested a new ability for Iron Jarvis",
       "failed": "tried an ability suggestion and it failed"
     },
+    "change_undo": {
+      "ok": "undid a change",
+      "failed": "tried an undo and it failed"
+    },
+    "changes_list": {
+      "ok": "listed its recent changes",
+      "failed": "tried a change listing and it failed"
+    },
     "channel_alerts": {
       "ok": "changed which alerts a destination gets",
       "failed": "tried an alert choice and it failed"
@@ -155,6 +163,10 @@
     "channel_toggle": {
       "ok": "switched a messaging channel's listening",
       "failed": "tried a channel switch and it failed"
+    },
+    "chat_local_only": {
+      "ok": "changed Local only for this chat",
+      "failed": "tried a Local only change and it failed"
     },
     "code_load": {
       "ok": "opened a saved script",

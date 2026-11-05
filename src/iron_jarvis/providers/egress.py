@@ -861,6 +861,97 @@ def take_pending_holds(turn_id: Any) -> list[str]:
         return sorted(_PENDING_HOLDS.pop(str(turn_id or "").strip()[:80], set()))
 
 
+# v1.435.0 (chat-first plan, Wave 3 group I, decision D3): Local only turned
+# on or off FROM CHAT (``settings.records_history.ChatLocalOnlyTool``). A new
+# chat's first turn has no saved id yet, so its choice waits here — keyed by
+# the turn, under the SAME lock as the holds — and the link route applies it
+# to the chat the page saved (``routes/chat.link_chat_turn``).
+_PENDING_LOCAL: dict[str, bool] = {}
+
+
+def linked_thread(turn_id: Any) -> str:
+    """The saved chat the page linked *turn_id* to ("" when not linked yet)."""
+    tid = str(turn_id or "").strip()[:80]
+    if not tid:
+        return ""
+    with _HOLD_LOCK:
+        return _TURN_THREADS.get(tid, "")
+
+
+def pending_holds_of(turn_id: Any) -> list[str]:
+    """The apps *turn_id* read that hold its (not yet saved) chat Local only —
+    a peek: the link route still takes them."""
+    tid = str(turn_id or "").strip()[:80]
+    if not tid:
+        return []
+    with _HOLD_LOCK:
+        return sorted(_PENDING_HOLDS.get(tid, set()))
+
+
+def note_pending_local_only(turn_id: Any, on: bool) -> str:
+    """A new chat's first turn turned Local only *on* (or off) before the
+    chat had a saved id: when the page has ALREADY linked the turn, answer
+    that chat's id (the caller writes it now); else remember the choice for
+    :func:`take_pending_local_only` and answer ""."""
+    tid = str(turn_id or "").strip()[:80]
+    if not tid:
+        return ""
+    with _HOLD_LOCK:
+        linked = _TURN_THREADS.get(tid, "")
+        if linked:
+            return linked
+        if tid not in _PENDING_LOCAL and len(_PENDING_LOCAL) >= _PENDING_MAX:
+            _PENDING_LOCAL.pop(next(iter(_PENDING_LOCAL)))
+        _PENDING_LOCAL[tid] = on is True
+    return ""
+
+
+def take_pending_local_only(turn_id: Any) -> "bool | None":
+    """The Local only choice a turn made before its chat was saved (None =
+    none). The link route applies it with :func:`set_thread_local_only`."""
+    with _HOLD_LOCK:
+        return _PENDING_LOCAL.pop(str(turn_id or "").strip()[:80], None)
+
+
+def set_thread_local_only(engine: Any, thread_id: Any, on: bool) -> "bool | None":
+    """Switch the saved chat *thread_id* Local only *on* or off (v1.435.0,
+    D3). BLOCKING (one row read + write, under the conversation write lock);
+    never touches ``updated_at`` (the page's save check must not trip on it —
+    the ``hold_local_only`` rule). Off never clears an app's hold: a held
+    chat stays Local only. Answers the state now stored (True / False), or
+    None when there is no such chat or the write failed."""
+    tid = str(thread_id or "").strip()[:80]
+    if not tid or engine is None:
+        return None
+    try:
+        import json
+
+        from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
+        from ..core.models import ChatThreadRecord as T
+
+        with CONVERSATION_WRITE_LOCK, session_scope(engine) as db:
+            row = db.get(T, tid)
+            if row is None:
+                return None
+            try:
+                setup = json.loads(row.setup_json or "{}")
+            except ValueError:
+                setup = {}
+            if not isinstance(setup, dict):
+                setup = {}
+            holds = clean_holds(setup.get(HOLDS_KEY))
+            if on is True or holds:
+                setup["local_only"] = True
+            else:
+                setup.pop("local_only", None)
+            row.setup_json = json.dumps(setup)
+            db.add(row)
+            db.commit()
+            return setup.get("local_only") is True
+    except Exception:  # noqa: BLE001 — the caller says it could not be saved
+        return None
+
+
 def thread_holds(engine: Any, thread_id: Any) -> list[str]:
     """The apps a saved chat is held Local only for ([] = none, or unread).
     Blocking (one row read): call it off the loop."""
@@ -974,12 +1065,15 @@ __all__ = [
     "friendly_name",
     "is_allowed_once",
     "local_ltm",
+    "linked_thread",
     "local_only_scope",
     "local_only_thread_ids",
     "ltm_connector_is_local",
     "may_recall_local_only_chats",
     "make_scope",
     "model_place",
+    "note_pending_local_only",
+    "pending_holds_of",
     "PLACE_CLOUD",
     "PLACE_NETWORK",
     "PLACE_THIS_PC",
@@ -988,7 +1082,9 @@ __all__ = [
     "refusal_of",
     "route_flags",
     "scoped_frames",
+    "set_thread_local_only",
     "setup_says_local_only",
     "stays_on_this_network",
+    "take_pending_local_only",
     "thread_local_only",
 ]

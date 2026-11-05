@@ -235,6 +235,16 @@ SETTINGS: tuple[SettingDef, ...] = (
       "This makes one extra short call to the same model after each reply.",
       tier="allow", aliases=("follow-up questions", "suggested questions", "follow ups",
                "follow-up suggestions")),
+    # v1.435.0 (chat-first plan, Wave 3 group I, D3): the starting point for a
+    # NEW chat's Local only switch (the chat page reads it). Turning it off is
+    # ask-floor: it widens what new chats may send off this network.
+    S("chat_new_local_only", "Start new chats local only", "models", "bool",
+      "New chats on the Chat page start with Local only on: nothing in them goes to a model "
+      "off this PC or your own network without asking you first. You can still turn it off "
+      "in one chat.",
+      tier="allow", floor_when=(False,),
+      aliases=("new chats local only", "local only for new chats", "local only by default",
+               "keep new chats on this pc", "new chats start in local only")),
     S("strict_model_pin", "Strict model pin", "models", "bool",
       "When on, a chat that explicitly picks a model must be answered by THAT model — never silently substituted. Applies only to explicit picks.",
       tier="ask", advanced=True, section="Routing"),

@@ -25,6 +25,9 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "config_change_protected",
       "config_secret",
       "config_undo",
+      // v1.435.0 (Wave 3 group I): any undo, and Local only for a chat.
+      "change_undo",
+      "chat_local_only",
       "secret_set",
     ],
   },

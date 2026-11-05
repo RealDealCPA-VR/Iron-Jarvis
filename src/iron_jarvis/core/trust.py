@@ -77,6 +77,11 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "reflex_update",
         "reflex_delete",
         "config_undo",
+        # v1.435.0 (Wave 3 group I): nor ANY undo (a file edit put back is a
+        # write the user did not ask for), nor Local only for a chat (turning
+        # it off would let what this run read leave the network).
+        "change_undo",
+        "chat_local_only",
         "create_agent",
         "remember_preference",
         "skill_create",

@@ -11,6 +11,7 @@ and operate on ``platform.intent``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
@@ -82,7 +83,10 @@ class GoalListTool(Tool):
     """List the standing goals Iron Jarvis is holding."""
 
     name = "goal_list"
-    description = "List the standing goals Iron Jarvis is currently holding (and their status/dial)."
+    description = (
+        "List the standing goals Iron Jarvis is currently holding (and their status/dial), and "
+        "the goals from chat (each runs as agent work; listed apart, by id)."
+    )
     permission_key = "goal_list"
     input_schema = {
         "type": "object",
@@ -95,7 +99,17 @@ class GoalListTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        goals = self.platform.intent.list_goals(status=args.get("status"))
+        # v1.435.0 (chat-first plan, Wave 3 group I): the GOALS FROM CHAT
+        # (goal contracts, goals/) are listed too — chat could not see them.
+        # Both reads are SQLite: off the event loop.
+        from ..settings.records_history import contract_lines, contract_rows
+
+        status = args.get("status")
+
+        def _read():
+            return self.platform.intent.list_goals(status=status), contract_rows(self.platform, status)
+
+        goals, contracts = await asyncio.to_thread(_read)
         results = [
             {
                 "id": g.id, "text": g.text, "category": g.category,
@@ -104,11 +118,18 @@ class GoalListTool(Tool):
             }
             for g in goals
         ]
-        output = "\n".join(
+        lines = [
             f"- [{r['status']} p{r['priority']} {r['autonomy_level']}] {r['text']}"
             for r in results
-        )
-        return ToolResult(ok=True, output=output, data={"goals": results, "count": len(results)})
+        ]
+        # Additive ONLY when there is one: without goals from chat the output
+        # and the data are exactly what they were.
+        lines += contract_lines(contracts)
+        data: dict[str, Any] = {"goals": results, "count": len(results)}
+        if contracts:
+            data["contracts"] = contracts
+            data["contract_count"] = len(contracts)
+        return ToolResult(ok=True, output="\n".join(lines), data=data)
 
 
 def goal_tools(platform) -> list[Tool]:

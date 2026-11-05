@@ -485,6 +485,17 @@ export function ApprovalCard({
           Edits to Git&apos;s own files and to Iron Jarvis&apos;s or Claude Code&apos;s own rules ask
           you every time, unless approvals are set to Don&apos;t ask.
         </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "privacy" ? (
+        // v1.435.0 review: turning this chat's Local only off from chat
+        // (src/iron_jarvis/settings/records_history.py LOCAL_ONLY_REASON).
+        <p data-testid="approval-privacy-once" className="text-[11px] leading-relaxed text-zinc-400">
+          Turning Local only off for a chat asks you every time, whatever your approval setting.
+        </p>
+      ) : onceOnly && !planAsk && !buildPlanAsk && approval.onceReason === "undo" ? (
+        // v1.435.0 review: an undo from chat (records_history UNDO_REASON).
+        <p data-testid="approval-undo-once" className="text-[11px] leading-relaxed text-zinc-400">
+          An undo from chat asks you every time and names the change. An undo cannot itself be undone.
+        </p>
       ) : onceOnly && !planAsk && !buildPlanAsk ? (
         <p data-testid="approval-local-only" className="text-[11px] leading-relaxed text-zinc-400">
           This chat is local only, so this asks every time.

@@ -111,6 +111,10 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "app_import": "ask",
     "channel_remove": "ask",
     "channel_alerts": "ask",
+    # v1.435.0 (Wave 3 group I, D3): Local only for THIS chat. Turning it on
+    # only narrows (allow); turning it OFF asks every time through the tool's
+    # own once-only check (settings.records_history.ChatLocalOnlyTool).
+    "chat_local_only": "allow",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -200,6 +204,21 @@ _SENTINEL_WORDS = re.compile(
     re.IGNORECASE,
 )
 _GOAL_WORDS = re.compile(r"\bgoals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
+#: v1.435.0 (Wave 3 group I): a goal WRITER (``goal_update`` /
+#: ``goal_delete``) only when something is DONE to a goal — "stop the
+#: bookkeeping goal", "pause my inbox goal", "set the goal to paused". "My
+#: goal this year is to…" names a goal of the user's life, not one of the
+#: app's: the reader ``goal_list`` only. Linear: every repeat is bounded and
+#: a word in the middle may not be a preposition ("stop working on my goal").
+_GOAL_ACT = re.compile(
+    r"\b(?:pause|resume|unpause|stop|halt|cancel|delete|remove|drop|abandon|restart|reopen|change"
+    r"|edit|update|rename|disable|enable|kill|end|archive|re-?prioriti[sz]e|turn\s+(?:on|off)"
+    r"|switch\s+(?:on|off)|put)\s+(?:(?:the|my|our|that|this|your|those|these|all)\s+)?"
+    r"(?:(?!(?:on|of|for|about|toward|towards|with|into|in|at|by|from|to)\b)[\w'-]+\s+){0,3}?"
+    r"goals?\b" + _NOT_A_GOAL_RECORD
+    + r"|\bgoals?\b[^.?!\n]{0,40}?\b(?:to|as|on)\s+(?:paused|hold|stopped|done|active|inactive)\b",
+    re.IGNORECASE,
+)
 #: v1.434.0 (B1.4): "whenever a new email comes in, start an intake session",
 #: "every time a client email arrives, …" — a signal that ARRIVES is a reflex
 #: rule's trigger. The thing that arrives must be something Iron Jarvis can
@@ -472,8 +491,10 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
 
     out += [n for n in apps_tools_for(t) if n not in out]
     if is_question(t):
-        return [n for n in out if n in _RECORD_READERS]
-    return out
+        out = [n for n in out if n in _RECORD_READERS]
+    # v1.435.0 (Wave 3 group I): Local only for this chat and the change
+    # history (settings.records_history) — it keeps its own question guard.
+    return list(dict.fromkeys(out + _hist().history_tools_for(t)))
 
 
 def _schedule_named(t: str) -> bool:
@@ -527,7 +548,9 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         if sentinel_new:
             out.append("sentinel_add")
     if _GOAL_WORDS.search(t):
-        out += ["goal_list", "goal_update", "goal_delete"]
+        out.append("goal_list")
+        if _GOAL_ACT.search(t):
+            out += ["goal_update", "goal_delete"]
         if _CREATE_GOAL.search(t):
             out.append("goal_add")
     if _REFLEX_WORDS.search(t):
@@ -1548,6 +1571,15 @@ def restore_grant(platform: Any, grant_id: str, prior: dict[str, Any] | None) ->
 
 # ---------------------------------------------------------------- dispatch
 
+
+def _hist() -> Any:
+    """``settings.records_history`` (v1.435.0) — imported when used: it
+    imports this module."""
+    from . import records_history
+
+    return records_history
+
+
 _SNAP = {
     "schedule": snap_schedule,
     "workflow": snap_workflow,
@@ -1561,6 +1593,9 @@ _SNAP = {
     "grant": snap_grant,
     "project": lambda p, n: _rp().snap_project(p, n),
     "agent": lambda p, n: _rp().snap_agent(p, n),
+    # v1.435.0 (Wave 3 group I): goals from chat and Local only for a chat.
+    "goal_contract": lambda p, n: _hist().snap_goal_contract(p, n),
+    "chat_local_only": lambda p, n: _hist().snap_chat_local_only(p, n),
 }
 
 
@@ -1618,6 +1653,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         from .records_apps import restore_kind
 
         return restore_kind(platform, record, name, prior, str(desc.get("now") or ""))
+    if record == "goal_contract":
+        return _hist().restore_goal_contract(platform, name, prior)
+    if record == "chat_local_only":
+        return _hist().restore_chat_local_only(platform, name, prior)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -1645,22 +1684,28 @@ class _RecordTool(Tool):
         name) reads the store here; run through ``asyncio.to_thread``."""
         return self._target(args)
 
+    def _which(self, args: dict[str, Any]) -> tuple[str, str]:
+        """``(record kind, key)`` for the snapshot — the tool's own kind
+        unless it serves two (v1.435.0: a goal tool's goal may be a standing
+        goal or a goal from chat). BLOCKING, like :meth:`_resolve`."""
+        return self.RECORD, self._resolve(args)
+
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         _CHANGE_ID.set("")  # never a previous call's id on this card
         _PENDING.set(None)
         try:
-            name = await asyncio.to_thread(self._resolve, args)
+            record, name = await asyncio.to_thread(self._which, args)
         except Exception:  # noqa: BLE001 — no key, no undo row
             return None
         if not name:
             return None
         try:
-            prior = await asyncio.to_thread(_SNAP[self.RECORD], self.platform, name)
+            prior = await asyncio.to_thread(_SNAP[record], self.platform, name)
         except Exception:  # noqa: BLE001 — no snapshot, no undo row
             return None
         change_id = new_id("rec")
         _CHANGE_ID.set(change_id)
-        desc = {"record": self.RECORD, "name": name, "prior": prior, "change_id": change_id}
+        desc = {"record": record, "name": name, "prior": prior, "change_id": change_id}
         now = self._now(args)
         if now:
             desc["now"] = now
@@ -2744,6 +2789,11 @@ class _GoalTool(_RecordTool):
     def _resolve(self, args: dict[str, Any]) -> str:
         return resolve_goal(self.platform, self._target(args))
 
+    def _which(self, args: dict[str, Any]) -> tuple[str, str]:
+        # v1.435.0 (Wave 3 group I): a standing goal, or a goal from chat.
+        kind, gid, _problem = _hist().resolve_goal_kind(self.platform, self._target(args))
+        return (kind or self.RECORD), gid
+
     def _missing(self, args: dict[str, Any]) -> ToolResult:
         return ToolResult(
             ok=False, error=f"There is no goal {self._target(args)!r} — goal_list shows each goal's id."
@@ -2756,13 +2806,15 @@ class GoalUpdateTool(_GoalTool):
         "Change a standing goal (`goal` = its id or its exact words): `status` (active, paused, "
         "done, abandoned), `text`, `category`, `priority` 1-5, its autonomy dial "
         "`autonomy_level` (suggest, act_low, act_all) or its budgets (`action_budget`, "
-        "`spend_budget` tokens). The user approves on a card; the change has an Undo."
+        "`spend_budget` tokens). A GOAL FROM CHAT (goal_list marks it) can only be paused "
+        "(`status` paused), resumed (active) or stopped (stopped). The user approves on a card; "
+        "the change has an Undo."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "goal": {"type": "string"},
-            "status": {"type": "string", "enum": list(GOAL_STATUSES)},
+            "status": {"type": "string", "enum": [*GOAL_STATUSES, "stopped"]},
             "text": {"type": "string"},
             "category": {"type": "string"},
             "priority": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -2776,12 +2828,18 @@ class GoalUpdateTool(_GoalTool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..motivation.models import AUTONOMY_LEVELS
 
-        gid = await asyncio.to_thread(self._resolve, args)
+        kind, gid, problem = await asyncio.to_thread(_hist().resolve_goal_kind, self.platform, self._target(args))
+        if problem:
+            return ToolResult(ok=False, error=problem)
+        if kind == "goal_contract":
+            return await _hist().update_goal_contract(self, gid, args)
         before = await asyncio.to_thread(snap_goal, self.platform, gid) if gid else None
         if before is None:
             return self._missing(args)
         keys = ("status", "text", "category", "priority", "autonomy_level", "action_budget", "spend_budget")
         fields = {k: args[k] for k in keys if args.get(k) is not None}
+        if fields.get("status") == "stopped":
+            fields["status"] = "abandoned"  # a standing goal's word for "no more work on it"
         if not fields:
             return ToolResult(ok=False, error=f"Say what to change: {', '.join(keys)}.")
         if "status" in fields and fields["status"] not in GOAL_STATUSES:
@@ -2814,12 +2872,17 @@ class GoalDeleteTool(_GoalTool):
     description = (
         "Drop a standing goal (`goal` = its id or its exact words). The goal store keeps no "
         "delete, so the goal is marked ABANDONED: it stays listed and the autonomy loop never "
-        "works on it again. The user approves on a card; Undo gives it back its status."
+        "works on it again. A GOAL FROM CHAT (goal_list marks it) is DELETED: its schedule goes "
+        "and its always-allows are taken back. The user approves on a card; Undo gives it back."
     )
     input_schema = {"type": "object", "properties": {"goal": {"type": "string"}}, "required": ["goal"]}
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        gid = await asyncio.to_thread(self._resolve, args)
+        kind, gid, problem = await asyncio.to_thread(_hist().resolve_goal_kind, self.platform, self._target(args))
+        if problem:
+            return ToolResult(ok=False, error=problem)
+        if kind == "goal_contract":
+            return await _hist().delete_goal_contract(self, gid)
         before = await asyncio.to_thread(snap_goal, self.platform, gid) if gid else None
         if before is None:
             return self._missing(args)
@@ -3064,6 +3127,41 @@ def find_undo_target(engine: Any, action_id: str = "") -> dict[str, Any] | None:
     return None
 
 
+def protected_restores(engine: Any, action_id: str) -> list[str]:
+    """The settings an undo of *action_id* would put back at a value that is
+    ASK-FLOOR from chat (``schema.SettingDef.tier_for`` — "Start new chats
+    local only" off, Don't ask, …): their labels, [] when none or when the
+    action is not a settings change. Blocking; never raises (unreadable = [],
+    and ``perform_undo`` still refuses what it cannot do).
+
+    v1.435.0 review: ``config_undo`` is ask tier, so "Don't ask" (or an "allow
+    for this chat") runs it with no card — and undoing a NARROWING (turning
+    "Start new chats local only" on) widens the setting again without the
+    card its own tool must show. ``change_undo`` cards every time."""
+    try:
+        from ..core.db import session_scope
+        from ..core.models import UndoJournal
+        from . import schema as _schema
+
+        with session_scope(engine) as db:
+            j = db.get(UndoJournal, str(action_id or ""))
+            if j is None or j.kind != "setting_restore":
+                return []
+            pre = json.loads(j.pre_inline or "{}")
+        prior = pre.get("prior") if isinstance(pre, dict) else None
+        out: list[str] = []
+        for key, value in (prior or {}).items() if isinstance(prior, dict) else ():
+            try:
+                d = _schema.get(str(key))
+            except KeyError:
+                continue
+            if d.tier_for(value) == "ask-floor":
+                out.append(d.label)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 class ConfigUndoTool(Tool):
     """"undo that" from chat: reverse a configuration change through THE code
     ``POST /undo/{id}`` runs (``routes.undo.perform_undo``), so chat and the
@@ -3076,7 +3174,9 @@ class ConfigUndoTool(Tool):
         "Undo a configuration change — \"undo that\". With no `action_id` it undoes the "
         "newest change that can still be undone (a setting, a credential, a schedule, "
         "workflow, channel, app, webhook, sentinel, goal, rule or always-allow — changed in "
-        "chat or on a page). The user approves on a card. Tell the user what was undone."
+        "chat or on a page). The user approves on a card. Tell the user what was undone. "
+        "For a FILE edit, or to show the user exactly which change will be undone, use "
+        "change_undo instead."
     )
     input_schema = {"type": "object", "properties": {"action_id": {"type": "string"}}}
 
@@ -3100,6 +3200,24 @@ class ConfigUndoTool(Tool):
                     f"There is no configuration change {aid!r} to undo."
                     if aid
                     else "There is no recent change that can still be undone."
+                ),
+            )
+        if target["tool"] == "chat_local_only":
+            # v1.435.0 (D3): undoing a Local only change can let a chat's
+            # messages leave this network, and turning it off always shows a
+            # card — which this ask-tier tool does not promise (Don't ask, an
+            # "allow for this chat"). change_undo cards every time.
+            return ToolResult(
+                ok=False,
+                error="That change is Local only for a chat: undoing it needs the user's OK on a card. Call change_undo for it.",
+            )
+        protected = await asyncio.to_thread(protected_restores, self.platform.engine, target["action_id"])
+        if protected:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"Undoing that puts back {', '.join(protected)} the way it was, which always needs "
+                    "the user's OK on a card. Call change_undo for it."
                 ),
             )
         try:
@@ -3142,6 +3260,8 @@ def record_tools(platform: Any) -> list[Tool]:
         ConfigUndoTool(platform),
         *_rp().project_agent_tools(platform),
         *_apps_record_tools(platform),
+        # v1.435.0 (Wave 3 group I): chat_local_only, changes_list, change_undo.
+        *_hist().history_tools(platform),
     ]
 
 

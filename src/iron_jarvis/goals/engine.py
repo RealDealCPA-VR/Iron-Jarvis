@@ -270,6 +270,38 @@ class GoalEngine:
         await self.p.event_bus.publish(GOAL_STOPPED, {"goal_id": goal_id})
         return record
 
+    def resume_goal(self, goal_id: str) -> GoalContractRecord:
+        """``POST /goals/{id}/resume`` (lifted v1.435.0 so chat's goal tools
+        run the SAME door): paused → active through the guarded transition;
+        TRIPPED → active through ``reopen`` so the breaker is cleared. Any
+        other state raises the transition guard's ``ValueError`` verbatim.
+        Blocking (SQLite)."""
+        record = self.store.get(goal_id)
+        if record is None:
+            raise ValueError(f"no such goal: {goal_id}")
+        if record.state == "tripped":
+            return self.store.reopen(goal_id)
+        return self.store.transition(goal_id, "active")
+
+    def delete_goal(self, goal_id: str) -> list[str] | None:
+        """``DELETE /goals/{id}`` (lifted v1.435.0, the route and chat's
+        ``goal_delete`` both call it): the row and its schedule go, and the
+        goal's standing grants are revoked (v1.299.0 — a goal-scoped grant
+        has no other reader). Returns the revoked grant ids, or None when
+        there is no such goal. Blocking (SQLite)."""
+        if not self.store.remove(goal_id):
+            return None
+        revoked: list[str] = []
+        grants = getattr(self.p, "grants", None)
+        if grants is not None:
+            try:
+                for rec in grants.list("goal", goal_id):
+                    grants.revoke(rec.id)
+                    revoked.append(rec.id)
+            except Exception:  # noqa: BLE001 — the goal is gone; say what was not revoked
+                log.exception("standing grants of %s not revoked", goal_id)
+        return revoked
+
     async def run_iteration(self, goal_id: str) -> dict[str, Any]:
         """ONE iteration: gate → spawn → account → verify → checkpoint.
 
