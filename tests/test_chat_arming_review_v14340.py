@@ -289,6 +289,47 @@ async def test_a_users_deny_on_config_set_holds_through_the_real_lane(tmp_path):
     assert app.state.platform.config.chat_followups is False
 
 
+@pytest.mark.parametrize(
+    ("tool", "text"),
+    [
+        ("web_search", "search the web for the 2026 standard mileage rate"),
+        ("write_document", "write a memo about the audit and save it as a Word document"),
+    ],
+)
+def test_no_sentence_arms_a_tool_the_user_denied(tmp_path, tool, text):
+    """The same hole beside every auto pass (found by this review, older than
+    group E): the sentence armed a tool the user had set to "Never run", and
+    the lanes' allow override for an armed tool lifted the deny. An explicit
+    deny wins (``tools.permissions`` says so for the web tools)."""
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    body = ChatBody(messages=[{"role": "user", "content": text}], auto_tools=True)
+    assert tool in CT._resolve_armed_tools(SimpleNamespace(platform=p), body)[0]  # control
+    p.permissions._base[tool] = "deny"
+    assert tool not in CT._resolve_armed_tools(SimpleNamespace(platform=p), body)[0]
+
+
+async def test_a_denied_tool_the_sentence_names_never_runs_in_the_real_lane(tmp_path):
+    from tests.test_chat_approvals_v1187 import _drive_stream
+    from tests.test_settings_chat_tools_v1321 import _body, _calls_stream
+
+    app = create_app(str(tmp_path / "home"))
+    app.state.platform.permissions._base["write_document"] = "deny"
+    app.state.platform.router.stream = _calls_stream(
+        [("write_document", {"path": "memo.docx", "content": "The audit memo."})]
+    )
+
+    async def never(data):  # pragma: no cover
+        raise AssertionError(data)
+
+    frames = await _drive_stream(
+        app, _body("write a memo about the audit and save it as a Word document"), never
+    )
+    assert not list((tmp_path / "home").rglob("memo.docx"))
+    done = [d for e, d in frames if e == "tool_call" and d.get("status") == "finished"]
+    assert done and done[0]["ok"] is False
+
+
 async def test_the_browser_sidebars_ceiling_keeps_the_settings_tools_out(tmp_path, monkeypatch):
     """The settings tools sit outside the six-tool cap — never outside a
     ceiling the caller set on purpose (the sidebar's browser family)."""

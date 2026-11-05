@@ -4475,23 +4475,31 @@ def _resolve_armed_tools(
     from ..settings.trigger import settings_tools_for
 
     def _not_denied(name: str) -> bool:
-        # v1.434.0 review: ARMING IS GRANTING — an armed tool gets an "allow"
-        # override, which lifts the user's own deny for a tool off the deny
-        # floor ("turn on follow-up suggestions" changed the setting with
-        # config_set denied). This place sits outside every cap, so it never
-        # arms over a deny (the coding-session plan skips one the same way).
+        # v1.434.0 review: ARMING IS GRANTING — both lanes give an armed tool
+        # an "allow" override, and an override lifts the user's own deny for
+        # any tool off the deny floor. So a SENTENCE armed what the user had
+        # set to "Never run": "turn on follow-up suggestions" changed the
+        # setting with config_set denied, "…save it as a Word document" wrote
+        # the file with write_document denied. No auto pass arms over a deny
+        # (the coding-session plan skips one the same way); an explicit "+"
+        # pick is the user's own word in this chat and is left alone.
+        perms = getattr(d.platform, "permissions", None)
+        if perms is None:
+            return True  # no permission engine at all: nothing is denied
         try:
             tool = d.platform.registry.get(name)
-            key = tool.perm_key() if tool is not None else name
-            return getattr(d.platform.permissions.mode_for(key), "value", "deny") != "deny"
-        except Exception:  # noqa: BLE001 — cannot tell: arm nothing
+            perm_key = getattr(tool, "perm_key", None)
+            key = perm_key() if callable(perm_key) else name
+            return getattr(perms.mode_for(key), "value", "deny") != "deny"
+        except Exception:  # noqa: BLE001 — an engine that cannot answer: arm nothing
             return False
 
     auto += [
         t
         for t in settings_tools_for(last_user, auto_tools=bool(getattr(body, "auto_tools", False)))
-        if t not in explicit and t not in auto and d.platform.registry.get(t) and _not_denied(t)
+        if t not in explicit and t not in auto and d.platform.registry.get(t)
     ]
+    auto = [t for t in auto if _not_denied(t)]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
     # been measured. Last is the whole point: a filter that ran before a fill
