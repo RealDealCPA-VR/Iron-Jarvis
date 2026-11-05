@@ -589,18 +589,26 @@ async def _repl_sweep_loop(repl, *, interval_s: float = _REPL_SWEEP_S) -> None:
     for, so the 15-minute TTL never applied and a chat's interpreter lived as
     long as the daemon. The sweep itself is cheap (a dict scan; a dispose hops
     off the loop to kill). Never lets a failure kill the daemon."""
+    failing = False
     while True:
         await asyncio.sleep(interval_s)
         try:
             gone = await repl.sweep()
+            failing = False
             if gone:
                 log.info("reclaimed %d idle python session(s)", len(gone))
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a sweep must never kill the daemon
             # v1.433.0 (L2): WARNING — a sweep that keeps failing leaves idle
-            # Python processes running for as long as Iron Jarvis does.
-            log.warning("repl idle sweep failed", exc_info=True)
+            # Python processes running for as long as Iron Jarvis does. Once
+            # per run of failures (review): every minute would flood the log
+            # and push real problems out of GET /diagnostics/errors.
+            if not failing:
+                log.warning("repl idle sweep failed", exc_info=True)
+            else:
+                log.debug("repl idle sweep still failing", exc_info=True)
+            failing = True
 
 
 async def _fts_backfill_loop(
@@ -1559,10 +1567,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # 30 s, IF any pane printed since the last write, write it again (off
         # the loop; at most 64 KB of scrollback per pane).
         async def _terminal_snapshot_loop() -> None:
+            raising = False  # review: warn once per run of failures, not every 30 s
             while True:
                 await asyncio.sleep(_TERMINAL_SNAPSHOT_S)
                 try:
                     await asyncio.to_thread(platform.terminals.snapshot_if_changed)
+                    raising = False
                     # v1.433.0 (L2): a pane whose history file cannot be
                     # written is retried every pass — and used to fail at
                     # DEBUG for ever, so a restart lost that history with no
@@ -1573,7 +1583,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — a snapshot must never kill the daemon
-                    log.warning("periodic terminal snapshot failed: %s", exc, exc_info=True)
+                    if not raising:
+                        log.warning("periodic terminal snapshot failed: %s", exc, exc_info=True)
+                    else:
+                        log.debug("periodic terminal snapshot still failing", exc_info=True)
+                    raising = True
                     _tick("terminal_snapshot", False, exc)
 
         bg_tasks["terminal_snapshot"] = asyncio.create_task(_terminal_snapshot_loop())
@@ -1715,11 +1729,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # v1.226.0: the enabled() probe reads a secret — a boot-time raise
             # here (mismatched key, bad row) aborted the whole lifespan. Same
             # posture as _arm_fleet: a probe failure disarms, never bricks.
+            cal_probe_error: BaseException | None = None
             try:
                 cal_enabled = bool(calendar_poller.enabled())
-            except Exception:  # noqa: BLE001 — a probe never breaks boot
+            except Exception as exc:  # noqa: BLE001 — a probe never breaks boot
                 log.exception("calendar trigger: enabled() probe failed; not armed")
                 cal_enabled = False
+                cal_probe_error = exc
             if (
                 cal_enabled
                 and os.environ.get("IRONJARVIS_CALENDAR", "on").strip().lower()
@@ -1728,7 +1744,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 bg_tasks["calendar"] = asyncio.create_task(_calendar_loop())
                 log.info("calendar trigger loop (re)armed")
             else:
-                loop_health.pop("calendar", None)  # v1.433.0 (A11): off is not failing
+                if cal_probe_error is not None:
+                    # v1.433.0 review: a probe that RAISED is not "off" — the
+                    # user may have turned it on and it could not start. Say
+                    # so with the reason instead of dropping the row.
+                    _tick("calendar", False, cal_probe_error)
+                else:
+                    loop_health.pop("calendar", None)  # v1.433.0 (A11): off is not failing
                 if task is not None:
                     log.info("calendar trigger loop disarmed")
 
@@ -2016,11 +2038,27 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     # old `old_task is not None and` guard let it dial after
                     # the teardown). Boot arms only after "loop" is set.
                     return
+                probe_error: BaseException | None = None
                 try:  # v1.226.0: a secret read in here must never abort boot
                     _socket_enabled = bool(_socket.enabled())
-                except Exception:  # noqa: BLE001 — a probe never breaks boot
+                except Exception as exc:  # noqa: BLE001 — a probe never breaks boot
                     log.exception("slack socket mode: enabled() probe failed; not armed")
                     _socket_enabled = False
+                    probe_error = exc
+                if not _socket_enabled and probe_error is not None:
+                    # v1.433.0 review: a probe that RAISED is not "off" — a
+                    # Slack channel the user turned on could not start. Say so
+                    # with the reason; the old pump (if any) still stops, and
+                    # its own last report never overwrites this one.
+                    _tick("slack_socket", False, probe_error)
+                    if old_task is not None:
+
+                        def _say_after(_t: "asyncio.Task[Any]", _err: BaseException = probe_error) -> None:
+                            if slack_socket["task"] is None:
+                                _tick("slack_socket", False, _err)
+
+                        old_task.add_done_callback(_say_after)
+                    return
                 if not _socket_enabled:
                     # v1.433.0 (A11): no Slack channel listens any more (turned
                     # off or removed) — that is not a failing socket. Its last

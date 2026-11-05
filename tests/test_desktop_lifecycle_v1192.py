@@ -398,7 +398,9 @@ def test_notify_toast_click_rebuilds_a_destroyed_window():
     """hideToTray() DESTROYS the window; a guarded show() is a no-op there."""
     src = _src()
     m = re.search(
-        r'ipcMain\.handle\("notify:show", \(_e, opts\) => \{(.{0,700}?)\n  \}\);',
+        # v1.433.0 review (moved on purpose): the handler is sender-checked
+        # now, so its first argument is named `event`.
+        r'ipcMain\.handle\("notify:show", \((?:_e|event), opts\) => \{(.{0,900}?)\n  \}\);',
         src,
         re.S,
     )

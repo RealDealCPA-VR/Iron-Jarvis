@@ -1164,15 +1164,17 @@ const TIDY_RESTART_KILL_MS = 20000;
 // backup answers, then stops) — mark it, post nothing. A daemon that has not
 // gone after TIDY_RESTART_KILL_MS is stopped by force, still as a restart.
 // A dead (or capped) daemon has nothing to stop: that is the window's own
-// restart. Returns true when a restart is under way, false when there is
-// nothing here to restart (no record, or an adopted daemon the watchdog owns).
+// restart. An ADOPTED daemon (exit 75) is restarted by restartAdoptedDaemonTidy.
+// Returns true when a restart is under way, false when there is nothing here
+// to restart (no record).
 function restartDaemonTidy(opts) {
   const rec = _services.daemon;
   if (!rec || !rec.spawnFn) return false;
   const child = daemonProc;
   const alive = !!child && child.exitCode === null && child.signalCode === null;
-  if (!alive) return restartDaemonFromShell("on request from Settings");
   const stopping = !!(opts && opts.stopping === true);
+  if (!alive && rec.adopted) return restartAdoptedDaemonTidy(rec, stopping);
+  if (!alive) return restartDaemonFromShell("on request from Settings");
   rec.manualRestart = true; // BEFORE the request: the exit can come at once
   rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending never spawns a second daemon
   if (rec.restartTimer) clearTimeout(rec.restartTimer);
@@ -1192,6 +1194,36 @@ function restartDaemonTidy(opts) {
       killChild(child, "daemon", "restart");
     }
   }, TIDY_RESTART_KILL_MS);
+  return true;
+}
+
+// v1.433.0 review: Settings' restart of an ADOPTED daemon (exit 75: one of ours
+// already held the port, so no child of ours runs and nothing here watches its
+// exit). It used to be refused ("Quit Iron Jarvis from the tray menu…") where
+// the old plain /shutdown had brought it back through the watchdog ~90 s
+// later. Now: ask it to stop as a restart (the code host keeps its coding
+// tools), wait for its port to close, then start our own — the watchdog's own
+// step for an adopted daemon that went away. A port still held after
+// TIDY_RESTART_KILL_MS is swept first, sparing the code host, as the watchdog
+// sweeps a wedged adopted daemon. One at a time: a second press while it runs
+// changes nothing. `stopping`: it is already stopping itself (a restore).
+function restartAdoptedDaemonTidy(rec, stopping) {
+  if (rec.adoptedRestartInFlight) return true;
+  rec.adoptedRestartInFlight = true;
+  fileLogger("daemon")(
+    `[main] ${new Date().toISOString()} restarting the adopted daemon tidily on request from Settings${stopping ? " (it is already stopping)" : ""}\n`
+  );
+  if (!stopping) postDaemonShutdown({ restart: true });
+  Promise.resolve(waitForDaemonPortClosed(TIDY_RESTART_KILL_MS))
+    .catch(() => false)
+    .then((closed) => {
+      rec.adoptedRestartInFlight = false;
+      if (shuttingDown || isQuitting) return;
+      if (!rec.adopted) return; // the watchdog already started our own
+      rec.adopted = false;
+      if (!closed) sweepOrphanDaemons({ spareCodeHost: true });
+      startService("daemon", rec.spawnFn);
+    });
   return true;
 }
 
@@ -2679,7 +2711,11 @@ function installSpotlightIpc() {
   // Native clipboard for the terminal (paste/copy) — never permission-gated.
   // Native toast for the "This PC" notification destination (v1.118.0).
   // Clicking it restores the window — the alert is an invitation back in.
-  ipcMain.handle("notify:show", (_e, opts) => {
+  // v1.433.0 review (D5): sender-checked like the clipboard. A toast titled
+  // "Iron Jarvis" is a voice the user trusts; a frame that is not the
+  // dashboard must not be able to make it say "sign in again at …".
+  ipcMain.handle("notify:show", (event, opts) => {
+    if (!isTrustedDashboardSender(event)) return false;
     try {
       const note = new Notification({
         title: String(opts?.title || "Iron Jarvis"),

@@ -152,7 +152,16 @@ def test_quit_and_the_update_tell_the_host_and_only_the_watchdog_sweep_spares_it
     update = update[:update.index("\n}\n")]
     assert "await quitCodeHost(codeHostHome()" in update, "an update tells the code host first"
     assert update.index("await quitCodeHost") < update.index("quitAndInstall"), "before the installer starts"
-    assert src.count("sweepOrphanDaemons({ spareCodeHost: true })") == 1, "only the restart-type sweep spares it"
+    # v1.433.0 review (moved on purpose): two RESTART-type sweeps spare the
+    # host — the watchdog's for a wedged adopted daemon, and Settings' tidy
+    # restart of an adopted daemon that keeps its port. Never Quit's or an
+    # update's.
+    spare = "sweepOrphanDaemons({ spareCodeHost: true })"
+    assert src.count(spare) == 2, "only the restart-type sweeps spare it"
+    assert spare not in quit_ and spare not in update, "a Quit or an update spared the code host"
+    for fn in ("function daemonWatchdogTick(", "function restartAdoptedDaemonTidy("):
+        body = src[src.index(fn):]
+        assert spare in body[: body.index("\n}\n")], fn
     nsh = (_ROOT / "desktop" / "installer.nsh").read_text(encoding="utf-8")
     assert "taskkill /F /T /IM ironjarvis.exe" in nsh, "the installer still ends a frozen host left behind"
 
