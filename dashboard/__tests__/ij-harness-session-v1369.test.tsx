@@ -74,6 +74,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 }));
 
 import { HarnessSession } from "@/components/harness/HarnessSession";
+import { getDeviceId } from "@/lib/device";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { resetWords } from "@/lib/buildAccounts";
 import { localTime } from "@/lib/ironProxy";
@@ -238,6 +239,11 @@ describe("a message is a turn on the session's own route", () => {
     const body = JSON.parse(String(init.body));
     expect(body.text).toBe("Make it blue");
     expect(body.turn_id).toMatch(/^[A-Za-z0-9_.-]{1,80}$/);
+    // v1.434.0 (Wave 2, F, moved on purpose): which screen asked — the chat
+    // page's field, so a per-device setting changed in a coding session
+    // lands on THIS screen instead of "open this chat in the app".
+    expect(body.device_id).toBe(getDeviceId());
+    expect(String(body.device_id)).toMatch(/^dev_[A-Za-z0-9]{6,32}$/);
     // THE DAEMON WRITES THE TRANSCRIPT: no save of the session's messages.
     expect(api.calls.filter((c) => c.method === "PUT" && c.path === "/chat/threads/s1")).toEqual([]);
     // The session was read again after the turn (adopting what was written).

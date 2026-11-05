@@ -204,6 +204,7 @@ vi.mock("react-markdown", () => ({
 vi.mock("remark-gfm", () => ({ default: () => {} }));
 
 import { PaneChat } from "@/components/terminal/PaneChat";
+import { getDeviceId } from "@/lib/device";
 import {
   engineOptions,
   mergeSetup,
@@ -261,6 +262,11 @@ describe("grounding: every turn carries the pane's folder", () => {
     ]);
     // Default engine = provider OMITTED (the daemon routes), never "".
     expect("provider" in body).toBe(false);
+    // v1.434.0 (Wave 2, F, moved on purpose): which screen asked rides every
+    // turn, the chat page's field, so a per-device setting changed in the
+    // pane's chat lands on THIS screen.
+    expect(body.device_id).toBe(getDeviceId());
+    expect(String(body.device_id)).toMatch(/^dev_[A-Za-z0-9]{6,32}$/);
   });
 });
 

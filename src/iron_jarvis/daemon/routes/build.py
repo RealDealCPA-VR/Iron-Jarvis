@@ -347,6 +347,15 @@ class BuildTurnBody(BaseModel):
     #: daemon writes the hidden continue question). 409 in words when its
     #: rounds are no longer kept.
     continue_turn: str = Field(default="", max_length=80)
+    #: v1.434.0 (Wave 2, F): the app window's device id (``lib/device``,
+    #: localStorage ``ij_device_id``) — the same field, typed the same way, as
+    #: ``ChatBody.device_id`` — so a per-device setting changed from a coding
+    #: session (read aloud, the theme, approvals in chat) lands on the screen
+    #: that asked. It rides the turn's ``ChatBody`` (:func:`start_build_turn`),
+    #: which is where both chat lanes read it into the tool context. Absent
+    #: (an older dashboard, an API caller): exactly as before — the settings
+    #: tool says the setting is per device.
+    device_id: str | None = None
 
 
 #: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing
@@ -2845,7 +2854,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            pressed: bool = False,
                            model_note: str = "",
                            low_trust: str = "",
-                           on_night_note: Any = None) -> Any:
+                           on_night_note: Any = None,
+                           device_id: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2936,7 +2946,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     then :data:`~iron_jarvis.harness.reply_record.FAILED_RESUME_NOTE`. The
     question line says ``continuedFrom``. And EVERY turn that starts forgets
     the session's other failed replies' lists (``reply_record.drop_failed``):
-    once anything else was said, continuing an older failure is moot."""
+    once anything else was said, continuing an older failure is moot.
+
+    v1.434.0 (Wave 2, F): ``device_id`` — the app window's device id, from
+    the person's own message (``BuildTurnBody.device_id``); it rides the
+    turn's ``ChatBody`` so a per-device setting changed in this turn lands on
+    that screen. "" (every turn Iron Jarvis starts by itself, an older
+    dashboard): the ``ChatBody`` carries none, exactly as before."""
     from .chat import _turn_logs
     from ...harness import night as _night
     from ...harness import reply_record as RR
@@ -3301,6 +3317,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             skill_args=(
                 None if resume is not None or not str(skill or "").strip() else text
             ),
+            # v1.434.0 (Wave 2, F): which screen asked — both lanes read it
+            # into the tool context, so a per-device setting changed here
+            # lands on that screen. None when there is none (as before).
+            device_id=str(device_id or "") or None,
         )
         # v1.391.0: every coding-session turn keeps its own conversation (the
         # lane saves it; `recorded_turn` drops it when the turn ends), so a
@@ -5144,7 +5164,7 @@ def register(app: FastAPI, d: Any) -> None:
                 lg = await start_build_turn(
                     d, thread_id, text, turn_id, preview_url=body.preview_url,
                     continuation=True, resume_turn=continue_turn, resume_failed=True,
-                    pressed=True,
+                    pressed=True, device_id=body.device_id or "",
                 )
             except SessionBusy:
                 return JSONResponse(
@@ -5176,7 +5196,8 @@ def register(app: FastAPI, d: Any) -> None:
                                         skill=body.skill,
                                         files=list(body.files or []),
                                         folder_skill=body.folder_skill,
-                                        command=body.command)
+                                        command=body.command,
+                                        device_id=body.device_id or "")
         except SessionBusy:
             return JSONResponse(
                 status_code=409,
