@@ -83,6 +83,7 @@ function iconFor(key: MenuKey, warn: boolean) {
   return Shield;
 }
 import { refreshReadFacts, useReadFacts } from "@/lib/readFacts";
+import { RowHintBox, useRowHint } from "@/components/RowHint";
 import { fitIconChip, fitWords, iconOnlyTitle } from "@/lib/composerChips";
 
 export interface PermissionChipProps {
@@ -125,13 +126,6 @@ export interface PermissionChipProps {
  */
 export const PERMISSION_MENU_W = 224;
 export const PERMISSION_MENU_H = 176;
-/** v1.430.0: how long the pointer (or the keyboard's highlight, or a finger
- *  on a touch screen) rests on a row before the row's meaning shows. */
-export const PERMISSION_HINT_DELAY_MS = 500;
-/** The meaning box's width before it is measured (w-64). */
-export const PERMISSION_HINT_W = 256;
-/** The gap between the menu (or its row) and the meaning box. */
-const HINT_GAP = 6;
 /** Breathing room kept between the menu and the window's edge. */
 const EDGE = 8;
 /** The menu's `max-w-[calc(100vw-2rem)]`: it never gets wider than this. */
@@ -212,48 +206,15 @@ export function permissionMenuPosition(
   return pos;
 }
 
-/** Where a row's meaning box goes (fixed to the window, in window px). */
-export interface HintPlacement {
-  /** Beside the menu (right first, then left), or on a narrow window under
-   *  the row (over the rows below it), or over it when under has no room. */
-  side: "right" | "left" | "under";
-  left: number;
-  top: number;
-}
-
-/**
- * v1.430.0: the meaning box sits BESIDE the menu, level with its row: right
- * of the menu when that fits, else left of it. A phone has no room beside a
- * menu that already fills its width, so the box then hangs just under the
- * row (covering the rows below it while it shows), or just over the row when
- * there is no room under it. It always stays at least 8px inside the window.
- */
-export function permissionHintPlacement(
-  menu: Anchor,
-  row: Anchor,
-  hint: { width: number; height: number },
-  viewport: { width: number; height: number },
-): HintPlacement {
-  const width = Math.min(hint.width, Math.max(0, viewport.width - MENU_GUTTER));
-  const level = Math.round(Math.max(EDGE, Math.min(row.top, viewport.height - hint.height - EDGE)));
-  if (menu.right + HINT_GAP + width <= viewport.width - EDGE)
-    return { side: "right", left: Math.round(menu.right + HINT_GAP), top: level };
-  if (menu.left - HINT_GAP - width >= EDGE)
-    return { side: "left", left: Math.round(menu.left - HINT_GAP - width), top: level };
-  const left = Math.max(EDGE, Math.min(row.left, viewport.width - width - EDGE));
-  const under = row.bottom + HINT_GAP;
-  const top = under + hint.height <= viewport.height - EDGE ? under : Math.max(EDGE, row.top - HINT_GAP - hint.height);
-  return { side: "under", left: Math.round(left), top: Math.round(top) };
-}
-
-function sameHint(a: HintPlacement, b: HintPlacement): boolean {
-  return a.side === b.side && a.left === b.left && a.top === b.top;
-}
-
-function boxOf(el: Element): Anchor {
-  const r = el.getBoundingClientRect();
-  return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
-}
+/* v1.430.0 built the pause-to-explain box here; v1.432.0 lifted it into
+ * components/RowHint so Build › Code's mode menu shares it. The names this
+ * file exported then stay (the tests and any caller read them). */
+export {
+  ROW_HINT_DELAY_MS as PERMISSION_HINT_DELAY_MS,
+  ROW_HINT_W as PERMISSION_HINT_W,
+  rowHintPlacement as permissionHintPlacement,
+  type HintPlacement,
+} from "@/components/RowHint";
 
 function samePlacement(a: MenuPlacement, b: MenuPlacement): boolean {
   return a.side === b.side && a.align === b.align && a.left === b.left && a.maxHeight === b.maxHeight;
@@ -325,45 +286,9 @@ export function PermissionChip({
   const menuId = `${uid}-menu`;
   const itemId = (i: number) => `${uid}-item-${i}`;
   const aboutId = (i: number) => `${uid}-about-${i}`;
-  // v1.430.0: the row whose meaning shows beside the menu (null = none), and
-  // where that box sits once it has been measured.
-  const [hint, setHint] = useState<number | null>(null);
-  const [hintAt, setHintAt] = useState<HintPlacement | null>(null);
-  const hintRef = useRef<HTMLDivElement>(null);
-  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shownRef = useRef<number | null>(null);
-  shownRef.current = hint;
-  /** A finger held a row until its meaning showed: lifting it picks nothing. */
-  const heldRef = useRef(false);
-  /** The last press on a row was a finger, so the browser's own long-press
-   *  menu is kept off the row. */
-  const touchRef = useRef(false);
-
-  function clearHintTimer() {
-    if (hintTimer.current !== null) {
-      clearTimeout(hintTimer.current);
-      hintTimer.current = null;
-    }
-  }
-
-  /** Row i's meaning after the pause, or at once when one is already showing
-   *  (moving down the list then reads each row's meaning without waiting). */
-  function hintAfterPause(i: number) {
-    clearHintTimer();
-    if (shownRef.current !== null) {
-      setHint(i);
-      return;
-    }
-    hintTimer.current = setTimeout(() => {
-      hintTimer.current = null;
-      setHint(i);
-    }, PERMISSION_HINT_DELAY_MS);
-  }
-
-  function hideHint() {
-    clearHintTimer();
-    setHint(null);
-  }
+  // v1.430.0: which row's meaning shows beside the menu, and its timers
+  // (components/RowHint since v1.432.0: the same box as Build › Code's modes).
+  const rowHint = useRowHint<MenuKey>(open);
 
   /** Works the placement out from the chip's box now (and the menu's size, once known). */
   function layout(size?: { width: number; height: number }) {
@@ -405,33 +330,6 @@ export function PermissionChip({
   useEffect(() => {
     if (disabled && open) setOpen(false);
   }, [disabled, open]);
-
-  // A row's meaning goes with the menu, and no timer outlives the chip.
-  useEffect(() => {
-    if (!open) hideHint();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  useEffect(() => () => clearHintTimer(), []);
-
-  // The meaning box is placed from the menu's and its row's real boxes and its
-  // own measured size, before paint (it renders hidden until then), and again
-  // whenever the menu moves or the rows' words change.
-  useLayoutEffect(() => {
-    if (hint === null) {
-      setHintAt(null);
-      return;
-    }
-    const menuEl = menuRef.current;
-    const hintEl = hintRef.current;
-    const rowEl = typeof document !== "undefined" ? document.getElementById(itemId(hint)) : null;
-    if (!menuEl || !hintEl || !rowEl) return;
-    const drawn = hintEl.getBoundingClientRect();
-    const size = { width: drawn.width > 0 ? drawn.width : PERMISSION_HINT_W, height: Math.max(0, drawn.height) };
-    const next = permissionHintPlacement(boxOf(menuEl), boxOf(rowEl), size, layoutViewport());
-    setHintAt((prev) => (prev && sameHint(prev, next) ? prev : next));
-    // `itemId` is a pure function of the stable `uid`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hint, pos, place, readsLine]);
 
   // Keys are read on the menu, so it takes focus when it opens (without
   // scrolling anything to it), once per opening.
@@ -526,7 +424,7 @@ export function PermissionChip({
       setActive(next);
       // v1.430.0: the keyboard's highlight resting on a row shows its meaning
       // too, after the same pause.
-      hintAfterPause(next);
+      rowHint.afterPause(keys[next]);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       pick(keys[active]);
@@ -579,7 +477,7 @@ export function PermissionChip({
         ...pos,
         ...(place.maxHeight !== undefined ? { maxHeight: place.maxHeight, overflowY: "auto" as const } : {}),
       }}
-      onMouseLeave={hideHint}
+      onMouseLeave={rowHint.hide}
       className="z-50 w-56 max-w-[calc(100vw-2rem)] rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-xl shadow-black/30 outline-none backdrop-blur-xl"
     >
       {keys.map((mode, i) => {
@@ -599,38 +497,10 @@ export function PermissionChip({
             data-testid="permission-item"
             data-mode={mode}
             data-active={on ? "true" : undefined}
-            onMouseEnter={() => {
-              setActive(i);
-              hintAfterPause(i);
-            }}
-            onPointerDown={(e) => {
-              heldRef.current = false;
-              touchRef.current = e.pointerType === "touch";
-              if (!touchRef.current) return;
-              // A finger has no hover: holding the row shows its meaning.
-              clearHintTimer();
-              hintTimer.current = setTimeout(() => {
-                hintTimer.current = null;
-                heldRef.current = true;
-                setActive(i);
-                setHint(i);
-              }, PERMISSION_HINT_DELAY_MS);
-            }}
-            onPointerUp={(e) => {
-              if (e.pointerType === "touch" && !heldRef.current) clearHintTimer();
-            }}
-            onPointerCancel={(e) => {
-              if (e.pointerType === "touch" && !heldRef.current) clearHintTimer();
-            }}
-            onContextMenu={(e) => {
-              if (touchRef.current) e.preventDefault();
-            }}
+            {...rowHint.rowProps(mode, () => setActive(i))}
             onClick={() => {
               // The lift after a hold that showed the meaning is not a pick.
-              if (heldRef.current) {
-                heldRef.current = false;
-                return;
-              }
+              if (rowHint.heldClick()) return;
               pick(mode);
             }}
             className={`flex w-full select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors [-webkit-touch-callout:none] ${
@@ -661,25 +531,18 @@ export function PermissionChip({
     </div>
   ) : null;
 
-  const hintKey = hint !== null ? keys[hint] : undefined;
+  const hintKey = rowHint.shown;
+  const hintAt = hintKey !== null ? keys.indexOf(hintKey) : -1;
   const hintBox =
-    open && hintKey !== undefined ? (
-      <div
-        ref={hintRef}
-        aria-hidden="true"
-        data-testid="permission-hint"
-        data-mode={hintKey}
-        data-side={hintAt?.side}
-        style={{
-          position: "fixed",
-          left: hintAt?.left ?? 0,
-          top: hintAt?.top ?? 0,
-          ...(hintAt ? {} : { visibility: "hidden" as const }),
-        }}
-        className="pointer-events-none z-[51] w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-white/10 bg-ink-900/95 px-3 py-2 text-meta leading-snug text-zinc-300 shadow-xl shadow-black/30 backdrop-blur-xl"
-      >
-        {rowFor(hintKey).description}
-      </div>
+    open && hintKey !== null && hintAt >= 0 ? (
+      <RowHintBox
+        text={rowFor(hintKey).description}
+        mode={hintKey}
+        menuRef={menuRef}
+        rowId={itemId(hintAt)}
+        watch={`${pos.top}|${pos.bottom}|${pos.left}|${pos.right}|${place.side}|${readsLine}`}
+        testId="permission-hint"
+      />
     ) : null;
 
   return (
@@ -709,14 +572,9 @@ export function PermissionChip({
         <ChevronDown size={12} aria-hidden="true" className={`shrink-0 opacity-70${phoneHide} ${fitWords("ask")}`} />
       </button>
       {menu && typeof document !== "undefined"
-        ? createPortal(
-            <>
-              {menu}
-              {hintBox}
-            </>,
-            document.body,
-          )
+        ? createPortal(menu, document.body)
         : null}
+      {hintBox}
     </div>
   );
 }

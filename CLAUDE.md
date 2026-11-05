@@ -14455,7 +14455,20 @@ does not need a bump, stop and bump it.
   (`lib/permissionLevels` + `settings/schema.py`, pinned equal; the old name
   is a retired word in `settings/tools._RETIRED_OPTION_WORDS`; its safety
   check moved into `does`). The chip's `title` still holds the description.
-  Build › Code's ModeChip still prints its `about` lines (not changed). Pins:
+  v1.432.0: the timers, the hold and the box moved to
+  `components/RowHint.tsx` (`useRowHint(open)` → `shown`, `afterPause`,
+  `hide`, `rowProps(key, onActive)`, `heldClick()`; `RowHintBox` portals the
+  fixed box; `rowHintPlacement`; PermissionChip re-exports the old names) and
+  Build › Code's `ModeChip` uses it: names only (w-56), meaning = the daemon's
+  `about` or `FULL_ACCESS_ABOUT` (a mode with neither has no description and
+  no box), shown on a pause or on focus; a not-offered mode is a greyed
+  `role="menuitem"` `aria-disabled` row AFTER the offered ones (testid
+  `<id>-hidden-<mode>`, its reason in `<id>-hidden-about-<mode>`), a click
+  picks nothing; Full access's "Press again…" stays printed while armed, and
+  a finger's hold never arms it. Pins: `mode-menu-names-v1432.test.tsx`, the
+  v1.432.0 cases in `e2e/build-app-view.spec.ts` (20 mutations of RowHint and
+  both menus, all red); moved on purpose: `build-app-{view-v1409,grok-v1416,
+  opencode-v1413,pi-v1411}` (the reasons are read from the descriptions). Pins:
   `dashboard/__tests__/permission-menu-names-v1430.test.tsx` (12 mutations,
   all red), e2e `dashboard/e2e/permission-menu-names.spec.ts` (1280 × 800,
   1024 × 640, 390 × 844); moved on purpose: `permission-chip-v1327`,

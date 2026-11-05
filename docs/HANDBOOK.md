@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.431.0 (2026-11-04).*
+holds itself to. Current as of v1.432.0 (2026-11-04).*
 
 ---
 
@@ -2019,6 +2019,23 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Build › Code's mode menu shows names only too (v1.432.0)
+
+The mode menu in Build › Code (the shield chip under the message box, and
+the one on a new session) now lists the modes by name only, the same way as
+the chat's approvals menu. Rest the pointer on a mode for half a second (or
+hold a finger on it on a touch screen) and a small box beside the menu says
+what that mode does.
+
+A mode the coding tool does not offer here (for example Auto edits and Plan
+for Codex on Windows) is now a greyed name below the others instead of a
+block of sentences at the top. Resting on it says why it is not offered;
+pressing it does nothing.
+
+Full access still takes two presses. After the first press, "Press again to
+let it do anything without asking" stays printed under its name. Holding a
+finger on Full access to read what it does never counts as a press.
 
 ## The background glow costs less while the app sits idle (v1.410.1)
 

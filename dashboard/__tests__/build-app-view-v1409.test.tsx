@@ -829,10 +829,13 @@ describe("what the real daemon sends", () => {
     await screen.findByTestId("code-session");
     fireEvent.click(screen.getByTestId("code-mode-chip-button"));
     const menu = screen.getByTestId("code-mode-chip-menu");
-    expect(within(menu).getByTestId("code-mode-chip-hidden-edits").textContent).toBe(
+    // v1.432.0 (moved on purpose): a mode not offered is a greyed name; why is
+    // its accessible description (and the box beside it on a pause).
+    expect(within(menu).getByTestId("code-mode-chip-hidden-edits").textContent).toBe("Auto edits");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-edits").textContent).toBe(
       "Auto edits is not offered here. Codex cannot run commands in its sandbox on Windows.",
     );
-    expect(within(menu).getByTestId("code-mode-chip-hidden-plan").textContent).toContain("Codex has no plan mode.");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-plan").textContent).toContain("Codex has no plan mode.");
     expect(within(menu).queryByTestId("code-mode-chip-option-edits")).toBeNull();
     expect(within(menu).queryByTestId("code-mode-chip-option-plan")).toBeNull();
     expect(within(menu).getAllByRole("menuitemradio").map((b) => b.dataset.testid)).toEqual([

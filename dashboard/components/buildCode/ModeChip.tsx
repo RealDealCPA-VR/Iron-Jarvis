@@ -10,11 +10,38 @@
  * is never disabled for a reply that runs — the mode changes at any time (the
  * daemon applies it live where the tool can; Codex from the next message),
  * and while the tool waits on a card the chip sits beside the card.
+ *
+ * v1.432.0 (the user, after the chat's approvals menu went names-only in
+ * v1.430.0: "give Build › Code's mode menu the same look"): the menu lists
+ * the modes by NAME. What a mode does (the daemon's `about`, or Full access's
+ * own sentence) shows in a box beside its row after the pointer rests on it
+ * (components/RowHint, the chat's box); each row keeps it as its accessible
+ * description. A mode the tool does not offer here is a greyed name AFTER the
+ * offered ones, picking nothing, its reason in the same box (it was a block
+ * of sentences at the top). Full access's "Press again…" stays printed under
+ * its name while armed: that is an instruction, not a description.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Shield, ShieldAlert } from "lucide-react";
-import { isFullAccess, modeLabel, type CodingTool } from "@/lib/buildApp";
+import { RowHintBox, useRowHint } from "@/components/RowHint";
+import { isFullAccess, modeLabel, type CodingTool, type HiddenMode, type ToolMode } from "@/lib/buildApp";
+
+/** What Full access does, said in its pause box (its row says only its name). */
+export const FULL_ACCESS_ABOUT = "Runs everything without asking. Two presses.";
+
+/** What a mode does, for its pause box; "" = nothing to say. */
+function modeMeaning(m: ToolMode): string {
+  return m.dangerous ? FULL_ACCESS_ABOUT : (m.about ?? "");
+}
+
+/** Why a mode is not offered, for its pause box. */
+export function hiddenModeWords(h: HiddenMode): string {
+  return `${h.label} is not offered here. ${h.reason}`;
+}
+
+/** A not-offered mode's row key (never the same as an offered mode's id). */
+const hiddenKey = (id: string) => `hidden:${id}`;
 
 /** Full access: a second press this soon after the first does not count (a
  *  held or doubled Enter must never give full access by itself). */
@@ -49,7 +76,17 @@ export function ModeChip({
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [shift, setShift] = useState(0);
   const modes = tool?.modes ?? [];
+  const hidden = tool?.hiddenModes ?? [];
   const dangerous = isFullAccess(value, tool);
+  // v1.432.0: which row's meaning shows beside the menu (components/RowHint).
+  const uid = useId();
+  const rowId = (key: string) => `${uid}-row-${key}`;
+  const aboutId = (key: string) => `${uid}-about-${key}`;
+  const rowHint = useRowHint<string>(open);
+  const shownKey = rowHint.shown;
+  const shownHidden = shownKey ? hidden.find((h) => hiddenKey(h.id) === shownKey) : undefined;
+  const shownMode = shownKey ? modes.find((m) => m.id === shownKey) : undefined;
+  const hintText = shownHidden ? hiddenModeWords(shownHidden) : shownMode ? modeMeaning(shownMode) : "";
   useEffect(() => {
     if (!open) setArmed(null);
   }, [open]);
@@ -101,7 +138,11 @@ export function ModeChip({
           role="menu"
           data-testid={`${testId}-menu`}
           style={shift ? { transform: `translateX(${shift}px)` } : undefined}
-          className="absolute bottom-full left-0 z-20 mb-1 w-64 max-w-[calc(100vw-2rem)] rounded-xl bg-ink-800 p-1 shadow-card"
+          className="absolute bottom-full left-0 z-20 mb-1 w-56 max-w-[calc(100vw-2rem)] rounded-xl bg-ink-800 p-1 shadow-card"
+          onMouseLeave={rowHint.hide}
+          onBlur={(e) => {
+            if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) rowHint.hide();
+          }}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               e.preventDefault();
@@ -109,30 +150,30 @@ export function ModeChip({
             }
           }}
         >
-          {(tool?.hiddenModes ?? []).length ? (
-            <div data-testid={`${testId}-hidden`} className="border-b border-white/[0.06] px-2.5 pb-1.5 pt-1">
-              {(tool?.hiddenModes ?? []).map((h) => (
-                <p key={h.id} data-testid={`${testId}-hidden-${h.id}`} className="text-[12px] text-zinc-500">
-                  <span className="text-zinc-400">{h.label}</span> is not offered here. {h.reason}
-                </p>
-              ))}
-            </div>
-          ) : null}
           {modes.map((m) => {
             const isArmed = armed === m.id;
+            const meaning = modeMeaning(m);
             return (
               <button
                 key={m.id}
                 type="button"
+                id={rowId(m.id)}
                 role="menuitemradio"
                 aria-checked={m.id === value}
+                aria-describedby={meaning ? aboutId(m.id) : undefined}
                 data-testid={`${testId}-option-${m.id}`}
                 data-armed={isArmed ? "true" : undefined}
+                {...(meaning ? rowHint.rowProps(m.id) : {})}
+                onFocus={() => {
+                  if (meaning) rowHint.afterPause(m.id);
+                }}
                 onKeyDown={(e) => {
                   // A held key repeats its press: never let that be the second.
                   if (e.repeat && (e.key === "Enter" || e.key === " ")) e.preventDefault();
                 }}
                 onClick={() => {
+                  // The lift after a finger's hold that showed the meaning is not a press.
+                  if (rowHint.heldClick()) return;
                   if (m.dangerous && !isArmed) {
                     armedAt.current = Date.now();
                     setArmed(m.id);
@@ -143,27 +184,71 @@ export function ModeChip({
                   setOpen(false);
                   onChange(m.id, m.dangerous);
                 }}
-                className={`flex w-full flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-white/[0.06] ${
+                className={`flex w-full select-none flex-col items-start rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors [-webkit-touch-callout:none] hover:bg-white/[0.06] ${
                   m.dangerous ? "text-tone-warn" : m.id === value ? "text-zinc-100" : "text-zinc-300"
                 }`}
               >
                 <span>{m.label}</span>
                 {isArmed ? (
+                  // An instruction after the first press, not a description: it stays printed.
                   <span className="text-[12px] text-tone-warn">
                     Press again to let it do anything without asking.
-                  </span>
-                ) : m.dangerous ? (
-                  <span className="text-[12px] text-zinc-500">Runs everything without asking. Two presses.</span>
-                ) : m.about ? (
-                  // v1.412.0: what the mode does, in the daemon's words.
-                  <span data-testid={`${testId}-about-${m.id}`} className="text-[12px] text-zinc-500">
-                    {m.about}
                   </span>
                 ) : null}
               </button>
             );
           })}
+          {hidden.map((h) => (
+            // A mode the tool does not offer here: its name, greyed, picking
+            // nothing; why, on a pause (and as its description).
+            <div
+              key={h.id}
+              id={rowId(hiddenKey(h.id))}
+              role="menuitem"
+              aria-disabled="true"
+              tabIndex={0}
+              aria-describedby={aboutId(hiddenKey(h.id))}
+              data-testid={`${testId}-hidden-${h.id}`}
+              {...rowHint.rowProps(hiddenKey(h.id))}
+              onFocus={() => rowHint.afterPause(hiddenKey(h.id))}
+              onClick={() => {
+                rowHint.heldClick();
+              }}
+              className="flex w-full cursor-default select-none items-center rounded-lg px-2.5 py-1.5 text-left text-[13px] text-zinc-600 [-webkit-touch-callout:none] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/50"
+            >
+              {h.label}
+            </div>
+          ))}
+          {/* Each row's meaning for a screen reader (the rows' aria-describedby);
+              the eye reads it in the box beside the menu. */}
+          {modes.map((m) =>
+            modeMeaning(m) ? (
+              <span key={`about-${m.id}`} id={aboutId(m.id)} hidden data-testid={`${testId}-about-${m.id}`}>
+                {modeMeaning(m)}
+              </span>
+            ) : null,
+          )}
+          {hidden.map((h) => (
+            <span
+              key={`about-hidden-${h.id}`}
+              id={aboutId(hiddenKey(h.id))}
+              hidden
+              data-testid={`${testId}-hidden-about-${h.id}`}
+            >
+              {hiddenModeWords(h)}
+            </span>
+          ))}
         </div>
+      ) : null}
+      {open && shownKey && hintText ? (
+        <RowHintBox
+          text={hintText}
+          mode={shownKey}
+          menuRef={menuRef}
+          rowId={rowId(shownKey)}
+          watch={String(shift)}
+          testId={`${testId}-hint`}
+        />
       ) : null}
     </div>
   );

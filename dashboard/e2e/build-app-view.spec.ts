@@ -343,6 +343,46 @@ test("360 px: the mode menu fits inside the stage", async ({ page }) => {
   expect(fit.pan).toBeLessThanOrEqual(0);
 });
 
+// v1.432.0: the mode menu shows names only; a mode's meaning shows in a box
+// beside its row after the pointer rests there, inside the window (beside the
+// menu on a desktop, under the row on a phone), and hovering never arms Full
+// access.
+for (const size of [
+  { width: 1280, height: 800 },
+  { width: 360, height: 780 },
+]) {
+  test(`${size.width} px: the mode menu shows names, and a meaning on a pause`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await stubCodeView(page);
+    await page.goto("/terminals?view=code&code=a3");
+    await expect(page.getByTestId("code-mode-chip-button")).toBeVisible({ timeout: 90_000 });
+    await page.getByTestId("code-mode-chip-button").click();
+    const menu = page.getByTestId("code-mode-chip-menu");
+    await expect(menu.getByRole("menuitemradio")).toHaveText(["Ask first", "Auto edits", "Plan", "Full access"]);
+    const full = page.getByTestId("code-mode-chip-option-full");
+    const f = (await full.boundingBox())!;
+    await page.mouse.move(f.x + 20, f.y + f.height / 2);
+    await page.waitForTimeout(150);
+    await expect(page.getByTestId("code-mode-chip-hint")).toHaveCount(0);
+    const hint = page.getByTestId("code-mode-chip-hint");
+    await expect(hint).toBeVisible({ timeout: 3_000 });
+    await expect(hint).toHaveText("Runs everything without asking. Two presses.");
+    const h = (await hint.boundingBox())!;
+    const m = (await menu.boundingBox())!;
+    expect(h.x).toBeGreaterThanOrEqual(7.5);
+    expect(h.y).toBeGreaterThanOrEqual(7.5);
+    expect(h.x + h.width).toBeLessThanOrEqual(size.width - 7.5);
+    expect(h.y + h.height).toBeLessThanOrEqual(size.height - 7.5);
+    if (size.width >= 1024) {
+      expect(h.x >= m.x + m.width || h.x + h.width <= m.x, "the box covers the menu").toBe(true);
+      expect(Math.abs(h.y - f.y)).toBeLessThan(2);
+    } else {
+      await expect(hint).toHaveAttribute("data-side", "under");
+    }
+    await expect(full).not.toHaveAttribute("data-armed", "true");
+  });
+}
+
 // Against the REAL scratch daemon (nothing stubbed): the list and New session
 // read the daemon's own answers. Nothing here starts Claude Code or Codex
 // (the daemon lists the tools from cached reads; a session's process starts
