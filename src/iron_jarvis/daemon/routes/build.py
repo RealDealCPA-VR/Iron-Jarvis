@@ -284,6 +284,11 @@ class BuildAccountChoice(BaseModel):
     #: usage left; the mark can be Iron Jarvis's own guess). Never one that
     #: must sign in again, is turned off, or is the session's own account.
     force: bool = False
+    #: v1.434.0 (Wave 2, F review): with ``continue``, the app window's
+    #: device id — the person's press on the limit card starts the carried-on
+    #: turn, so a per-device setting it changes lands on THAT screen (the same
+    #: field as ``BuildTurnBody.device_id``). Absent: none, as before.
+    device_id: str | None = None
 
 
 class BuildFolderRename(BaseModel):
@@ -347,6 +352,15 @@ class BuildTurnBody(BaseModel):
     #: daemon writes the hidden continue question). 409 in words when its
     #: rounds are no longer kept.
     continue_turn: str = Field(default="", max_length=80)
+    #: v1.434.0 (Wave 2, F): the app window's device id (``lib/device``,
+    #: localStorage ``ij_device_id``) — the same field, typed the same way, as
+    #: ``ChatBody.device_id`` — so a per-device setting changed from a coding
+    #: session (read aloud, the theme, approvals in chat) lands on the screen
+    #: that asked. It rides the turn's ``ChatBody`` (:func:`start_build_turn`),
+    #: which is where both chat lanes read it into the tool context. Absent
+    #: (an older dashboard, an API caller): exactly as before — the settings
+    #: tool says the setting is per device.
+    device_id: str | None = None
 
 
 #: v1.422.0 (B1): the 409 when "Continue from where it stopped" finds nothing
@@ -2413,6 +2427,10 @@ async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
         # turn low trust (passed only when set: the turn is otherwise started
         # exactly as before).
         low = str(entry.get("low_trust") or "")
+        # v1.434.0 (Wave 2, F review): the screen the plan was asked from
+        # (stamped by `_after_turn_task`) — the act turn carries out that
+        # person's message, so a per-device setting it changes lands there.
+        device = str(entry.get("device_id") or "")
         try:
             lg = await start_build_turn(
                 d, thread_id, PLAN_RUN_TEXT, new_turn, continuation=True,
@@ -2420,6 +2438,7 @@ async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
                 # edits / Auto stay as they chose them.
                 pressed=True,
                 **({"low_trust": low} if low else {}),
+                **({"device_id": device} if device else {}),
             )
         except SessionBusy:
             return None  # the user's own message is starting or running
@@ -2441,12 +2460,15 @@ async def run_approved_plan(d: Any, thread_id: str, from_turn: str) -> Any:
             _PLAN_RUNS.pop(thread_id, None)
 
 
-def _after_turn_task(d: Any, thread_id: str, turn_id: str, task: Any) -> None:
+def _after_turn_task(d: Any, thread_id: str, turn_id: str, task: Any, *, device_id: str = "") -> None:
     """A Build turn's task ENDED (its log is no longer running): start the
     act turn of a plan it approved (:data:`_PLAN_RUNS`), or forget a due plan
     whose turn did not end cleanly after all. Runs on the loop, in the
     context of whoever started the turn (never the turn's own pin / hold).
-    Never raises."""
+    Never raises.
+
+    v1.434.0 (Wave 2, F review): ``device_id`` — the screen the plan turn was
+    asked from; stamped on the due plan so its act turn carries it."""
     try:
         entry = _PLAN_RUNS.get(thread_id)
         if not entry or entry.get("from") != turn_id or entry.get("taken"):
@@ -2457,6 +2479,8 @@ def _after_turn_task(d: Any, thread_id: str, turn_id: str, task: Any) -> None:
         if task.cancelled() or lg is None or lg.status != "done":
             _PLAN_RUNS.pop(thread_id, None)
             return
+        if device_id:
+            entry["device_id"] = device_id
         t = asyncio.ensure_future(run_approved_plan(d, thread_id, turn_id))
         _PLAN_TASKS.add(t)
         t.add_done_callback(_PLAN_TASKS.discard)
@@ -2845,7 +2869,8 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
                            pressed: bool = False,
                            model_note: str = "",
                            low_trust: str = "",
-                           on_night_note: Any = None) -> Any:
+                           on_night_note: Any = None,
+                           device_id: str = "") -> Any:
     """Start ONE named, daemon-owned build turn and return its ``TurnLog``
     (follow it with ``lg.follow()``; nobody has to). The question is written
     when the turn starts, the reply when it ends (:func:`recorded_turn`).
@@ -2936,7 +2961,17 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
     then :data:`~iron_jarvis.harness.reply_record.FAILED_RESUME_NOTE`. The
     question line says ``continuedFrom``. And EVERY turn that starts forgets
     the session's other failed replies' lists (``reply_record.drop_failed``):
-    once anything else was said, continuing an older failure is moot."""
+    once anything else was said, continuing an older failure is moot.
+
+    v1.434.0 (Wave 2, F): ``device_id`` — the app window's device id, from
+    the person's own message (``BuildTurnBody.device_id``); it rides the
+    turn's ``ChatBody`` so a per-device setting changed in this turn lands on
+    that screen. "" (every turn Iron Jarvis starts by itself, an older
+    dashboard): the ``ChatBody`` carries none, exactly as before. The review
+    added the two other presses that start a turn: "Choose account" with
+    ``continue`` (``BuildAccountChoice.device_id``) and Allow on the plan door
+    (the plan turn's id, stamped on the due plan by :func:`_after_turn_task`
+    and handed to its act turn by :func:`run_approved_plan`)."""
     from .chat import _turn_logs
     from ...harness import night as _night
     from ...harness import reply_record as RR
@@ -3301,6 +3336,10 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             skill_args=(
                 None if resume is not None or not str(skill or "").strip() else text
             ),
+            # v1.434.0 (Wave 2, F): which screen asked — both lanes read it
+            # into the tool context, so a per-device setting changed here
+            # lands on that screen. None when there is none (as before).
+            device_id=str(device_id or "") or None,
         )
         # v1.391.0: every coding-session turn keeps its own conversation (the
         # lane saves it; `recorded_turn` drops it when the turn ends), so a
@@ -3520,9 +3559,13 @@ async def start_build_turn(d: Any, thread_id: str, text: str, turn_id: str, *,
             # v1.402.0: when this turn's task ends, an approved plan's act
             # turn starts (or a plan due from a turn that did not end cleanly
             # is forgotten) — in the CALLER's context, not this turn's scope.
+            # v1.434.0 (Wave 2, F review): with the screen the plan was asked
+            # from, so the act turn carries it too.
             with contextlib.suppress(Exception):
                 lg.task.add_done_callback(
-                    lambda _t, _tid=turn_id: _after_turn_task(d, thread_id, _tid, _t),
+                    lambda _t, _tid=turn_id, _dev=str(chat_body.device_id or ""): _after_turn_task(
+                        d, thread_id, _tid, _t, device_id=_dev,
+                    ),
                     context=caller_ctx,
                 )
             # v1.398.0: a turn Iron Jarvis started by itself is listed while
@@ -5144,7 +5187,7 @@ def register(app: FastAPI, d: Any) -> None:
                 lg = await start_build_turn(
                     d, thread_id, text, turn_id, preview_url=body.preview_url,
                     continuation=True, resume_turn=continue_turn, resume_failed=True,
-                    pressed=True,
+                    pressed=True, device_id=body.device_id or "",
                 )
             except SessionBusy:
                 return JSONResponse(
@@ -5176,7 +5219,8 @@ def register(app: FastAPI, d: Any) -> None:
                                         skill=body.skill,
                                         files=list(body.files or []),
                                         folder_skill=body.folder_skill,
-                                        command=body.command)
+                                        command=body.command,
+                                        device_id=body.device_id or "")
         except SessionBusy:
             return JSONResponse(
                 status_code=409,
@@ -5274,7 +5318,8 @@ def register(app: FastAPI, d: Any) -> None:
         if body.continue_:
             turn_id = "bt_" + secrets.token_hex(8)
             try:
-                await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True)
+                await start_build_turn(d, thread_id, CONTINUE_TEXT, turn_id, continuation=True,
+                                       device_id=body.device_id or "")
             except SessionBusy:
                 return JSONResponse(
                     status_code=409,

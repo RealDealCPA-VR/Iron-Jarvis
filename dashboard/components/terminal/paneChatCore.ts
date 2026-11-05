@@ -188,6 +188,10 @@ export type PaneTurnBody = {
   /** v1.339.0: the saved conversation this turn belongs to, so the daemon can
    *  list it under that conversation (`GET /chat/turns?thread_id=`). */
   thread_id?: string;
+  /** v1.434.0 (Wave 2, F): this screen's device id (`lib/device`) — the chat
+   *  page's field, so a per-device setting changed in the pane's chat (read
+   *  aloud, the theme) lands on THIS screen. */
+  device_id?: string;
 };
 
 /** The /chat contract's tool cap (the server truncates at six). */
@@ -222,6 +226,9 @@ export interface PaneTurnArgs {
   turnId?: string;
   /** v1.339.0: see {@link PaneTurnBody.thread_id}. */
   threadId?: string | null;
+  /** v1.434.0: see {@link PaneTurnBody.device_id}. Omitted (a test, a
+   *  caller with no screen) = today's body exactly. */
+  deviceId?: string;
 }
 
 /** v1.339.0: the turn each pane's chat is running, by pane id. Closing a
@@ -268,6 +275,8 @@ export function buildTurnBody(a: PaneTurnArgs): PaneTurnBody {
       : {}),
     ...(a.turnId ? { turn_id: a.turnId } : {}),
     ...(a.threadId ? { thread_id: a.threadId } : {}),
+    // Which screen asked (v1.434.0) — omitted, never "", like pane_id.
+    ...(a.deviceId ? { device_id: a.deviceId } : {}),
   };
 }
 

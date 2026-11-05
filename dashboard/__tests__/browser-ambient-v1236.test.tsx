@@ -169,4 +169,11 @@ describe("buildTurnBody: omitted, never an empty string", () => {
   it("carries the id when there is one", () => {
     expect(buildTurnBody({ history: [], cwd: CWD, paneId: PANE }).pane_id).toBe(PANE);
   });
+
+  // v1.434.0 (Wave 2, F): the screen's device id follows the same rule.
+  it("omits device_id with no screen, never sends a blank one, carries a real one", () => {
+    expect("device_id" in buildTurnBody({ history: [], cwd: CWD })).toBe(false);
+    expect("device_id" in buildTurnBody({ history: [], cwd: CWD, deviceId: "" })).toBe(false);
+    expect(buildTurnBody({ history: [], cwd: CWD, deviceId: "dev_abc123" }).device_id).toBe("dev_abc123");
+  });
 });

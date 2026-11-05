@@ -326,6 +326,21 @@ class _ConfigChangeBase(Tool):
                 error=f"{d.label} needs {right} (it {'always asks first' if tier == 'ask-floor' else 'asks first'}). Call {right} with the same key and value.",
             )
         if d.store == "device" and not ctx.device_id:
+            # v1.434.0 (Wave 2, F): every chat in the app window sends its
+            # device id now (the chat page, a coding session, a Build
+            # terminal's chat). The browser SIDEBAR is the add-on, not a
+            # screen of the app, so it has none — and "open this chat in the
+            # app" is not something the sidebar can do: name the place.
+            from ..providers.failure_words import SURFACE_SIDEBAR, current_surface
+
+            if current_surface() == SURFACE_SIDEBAR:
+                return ToolResult(
+                    ok=False, output="",
+                    error=(
+                        f"{d.label} belongs to one screen of the Iron Jarvis app; change it there "
+                        "(Settings, or a chat in the app)."
+                    ),
+                )
             return ToolResult(ok=False, output="", error=f"{d.label} is set per device; open this chat in the app to change it.")
         try:
             writer = _writer(self.platform)

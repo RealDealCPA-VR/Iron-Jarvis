@@ -43,6 +43,7 @@
  */
 
 import { ApiError, del, get, patch, post } from "@/lib/api";
+import { getDeviceId } from "@/lib/device";
 import { localTime } from "@/lib/ironProxy";
 
 /** The vendors whose CLI accounts a Build session can run on. v1.424.0
@@ -280,10 +281,14 @@ export async function chooseAccountAndContinue(
   account: string,
   force = false,
 ): Promise<{ session: unknown; turnId: string }> {
+  // v1.434.0 (Wave 2, F review): the press starts the carried-on turn, so it
+  // says which screen pressed — a per-device setting that turn changes lands
+  // on THIS screen (the turn route's field).
+  const device_id = getDeviceId();
   const res = rec(
     await post<unknown>(
       `/build/sessions/${encodeURIComponent(sessionId)}/account`,
-      force ? { account, continue: true, force: true } : { account, continue: true },
+      force ? { account, continue: true, force: true, device_id } : { account, continue: true, device_id },
     ),
   );
   return { session: res?.session ?? null, turnId: str(res?.turn_id, 80) };

@@ -54,6 +54,7 @@ import { useModels } from "@/lib/useModels";
 import { answeredModelName } from "@/lib/answeredModel";
 import { useChatStream, StreamError } from "@/lib/useChatStream";
 import { answeringTurn, mintTurnId } from "@/lib/turnRejoin";
+import { getDeviceId } from "@/lib/device";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
 import { DETAILS_WORDS, failureFacts, isRefusal } from "@/lib/failureActions";
 import { TurnClock } from "@/components/chat/TurnClock";
@@ -922,6 +923,9 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           approvalMode: approvalRef.current,
           turnId,
           threadId: saveBox.id,
+          // v1.434.0 (Wave 2, F): which screen asked — the chat page's
+          // field, so a per-device setting changed here lands on THIS screen.
+          deviceId: getDeviceId(),
         }),
         undefined,
         undefined,

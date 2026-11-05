@@ -1416,6 +1416,10 @@ class Plan:
     #: When the attempts turn began (epoch seconds) — the session's time cap
     #: counts from here.
     started_at: float = field(default_factory=time.time)
+    #: v1.434.0 (Wave 2, F): the app window's device id from the person's
+    #: message (``BuildTurnBody.device_id``), so a per-device setting an
+    #: attempt changes lands on that screen ("" = none, as before).
+    device_id: str = ""
 
     def by_id(self, aid: str) -> "Attempt | None":
         return next((a for a in self.attempts if a.id == aid), None)
@@ -1563,6 +1567,7 @@ def _body(plan: Plan, a: Attempt) -> Any:
         turn_id=a.turn_id,
         mcp_cards=False,
         local_only=plan.local_only,
+        device_id=plan.device_id or None,
     )
 
 

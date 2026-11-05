@@ -66,6 +66,7 @@ vi.mock("@/components/terminal/FilesPanel", () => ({
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import type { SessionTerminalApi } from "@/components/harness/HarnessPanes";
 import { CONTINUE_WORDS } from "@/lib/buildRetry";
+import { getDeviceId } from "@/lib/device";
 
 const NET = { timeout: 5000 };
 const terminal: SessionTerminalApi = {
@@ -172,6 +173,8 @@ describe("Continue from where it stopped, on the real session", () => {
     const body = turnBodies()[0];
     expect(body.continue_turn).toBe("t1");
     expect(body.text).toBe("");
+    // v1.434.0 (Wave 2, F): the carried-on reply knows which screen pressed.
+    expect(body.device_id).toBe(getDeviceId());
     expect(body.files).toBeUndefined();
     expect(body.attachments).toBeUndefined();
     feed.frame("done", { reply: "ok" });

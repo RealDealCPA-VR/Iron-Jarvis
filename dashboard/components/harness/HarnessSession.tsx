@@ -65,6 +65,9 @@ import {
 import { useLiveFinish, useLiveThinking } from "@/lib/liveThinking";
 import type { LiveFinish } from "@/lib/useChatStream";
 import { mintTurnId } from "@/lib/turnRejoin";
+// v1.434.0 (Wave 2, F): which screen asked, so a per-device setting changed
+// in this session (read aloud, the theme) lands on THIS screen.
+import { getDeviceId } from "@/lib/device";
 // v1.417.0 (C2.7): a session keeps its half-typed words (the chat's drafts).
 import { clearDraft, readDraft, writeDraft } from "@/lib/chatDrafts";
 import { turnErrorTechnical, turnErrorText } from "@/lib/failureLine";
@@ -1436,6 +1439,10 @@ export function HarnessSession({
                   turn_id: id,
                   continue_turn: extras.continueTurn,
                   ...(preview ? { preview_url: preview } : {}),
+                  // v1.434.0 (Wave 2, F): the chat page's field — this
+                  // screen's device id, so a per-device setting the carried-
+                  // on reply changes lands here.
+                  device_id: getDeviceId(),
                   ids: true,
                 }
               : {
@@ -1451,6 +1458,10 @@ export function HarnessSession({
                 // one attempt per model; the words alone ask the same).
                 ...(extras?.tryOn?.length ? { try_on: tryOnBody(extras.tryOn) } : {}),
                 ...(preview ? { preview_url: preview } : {}),
+                // v1.434.0 (Wave 2, F): which screen asked (the chat page's
+                // field) — a per-device setting changed in this session
+                // lands on THIS screen, never "open this chat in the app".
+                device_id: getDeviceId(),
                 // v1.384.0: every frame tagged with its resume position.
                 ids: true,
               },

@@ -87,6 +87,7 @@ import {
   windowAdjective,
 } from "@/lib/buildAccounts";
 import { localTime } from "@/lib/ironProxy";
+import { getDeviceId } from "@/lib/device";
 import type { BuildSessionView } from "@/lib/buildSessions";
 
 /* ------------------------------------------------------------- fixtures */
@@ -291,7 +292,9 @@ describe("the coding session", () => {
       expect(api.calls).toContainEqual({
         method: "POST",
         path: "/build/sessions/s1/account",
-        body: { account: "spare", continue: true },
+        // v1.434.0 (Wave 2, F review, moved on purpose): the press says which
+        // screen pressed (the carried-on turn lands its device settings there).
+        body: { account: "spare", continue: true, device_id: getDeviceId() },
       }),
     );
   });

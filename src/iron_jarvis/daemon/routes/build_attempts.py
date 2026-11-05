@@ -229,6 +229,8 @@ async def maybe_start(d: Any, thread_id: str, text: str, turn_id: str, body: Any
             setup=setup, project_id=project.id if project is not None else "",
             start=start, attempts=attempts, command_rule=command_rule,
             ceiling=A.ceiling_for(platform), rounds=rounds, local_only=local_only,
+            # v1.434.0 (Wave 2, F): which screen asked (a night task has none).
+            device_id=str(getattr(body, "device_id", "") or ""),
         )
         question: dict[str, Any] = {"role": "user", "content": text or task, "turnId": turn_id}
         saved = await asyncio.to_thread(S.append_lines, platform.engine, thread_id, [question])
