@@ -98,7 +98,7 @@ def unknown_event_types_sentence(bad: list[str], known: Iterable[str]) -> str:
         if close
         else "Use names like session.completed or workflow.completed."
     )
-    return f"Iron Jarvis never sends {noun} {names}, so this webhook would never be sent {them}. {tip}"
+    return f"Iron Jarvis never sends {noun} {names}, so this webhook would never receive {them}. {tip}"
 #: resolves a persisted ``secret_name`` (vault key) to its live secret value.
 SecretResolver = Callable[[str], Optional[str]]
 

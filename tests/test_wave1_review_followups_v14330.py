@@ -294,3 +294,97 @@ def test_a_desktop_notice_is_shown_only_for_the_dashboard(tmp_path):
     assert out["shownByOthers"] == 0, out["shown"]
     # Control: the dashboard still gets its notice.
     assert out["ours"] is True and out["shown"] == [{"title": "Iron Jarvis", "body": "Your task finished"}], out
+
+
+# --------------------------------------------------------------------------
+# 5. W1 — the refusal reads as plain English
+# --------------------------------------------------------------------------
+
+
+def test_the_webhook_refusal_says_the_webhook_would_never_receive_it():
+    """"…so this webhook would never be sent it" is not a sentence a person
+    says; the refusal reads plainly for one name and for several."""
+    from iron_jarvis.core.events import known_event_types
+    from iron_jarvis.webhooks.outbound import unknown_event_types_sentence
+
+    known = known_event_types()
+    one = unknown_event_types_sentence(["sesion.completed"], known)
+    assert one.startswith(
+        "Iron Jarvis never sends an event called “sesion.completed”, so this webhook would never "
+        "receive it. Did you mean session.completed"
+    ), one
+    many = unknown_event_types_sentence(["zzz.qqq", "yyy.ppp"], known)
+    assert "so this webhook would never receive them." in many, many
+    assert "be sent" not in one + many
+
+
+# --------------------------------------------------------------------------
+# 6. A8 — Settings' restart is a fresh start, like the tray's and the window's
+# --------------------------------------------------------------------------
+
+_FRESH = r"""
+__EXTRACT__
+const { EventEmitter } = require("events");
+let shuttingDown = false, isQuitting = false, daemonProc = null, dashboardProc = null, userDataDir = "X";
+let authToken = "t";
+const logs = []; const menus = [];
+let tray = { setToolTip(t) { logs.push("tooltip:" + t); } };
+function desktopLog() {}
+function fileLogger() { return (s) => logs.push(String(s).trim()); }
+class Notification { constructor(o) { this.o = o; } show() {} }
+function adoptOrReplaceExistingDaemon() {}
+function verifyInstallIntegrity() { return { ok: true, checked: 1 }; }
+function handleCorruptInstall() {}
+function refreshTrayMenu() { menus.push(1); }
+function armDashboardReload() {}
+function killChild() {}
+const http = {
+  request(opts, cb) {
+    const req = new EventEmitter();
+    req.setTimeout = () => {};
+    // The daemon answers, then stops by itself.
+    req.end = () => setImmediate(() => { daemonProc.exitCode = 3; daemonProc.emit("close", 3); });
+    return req;
+  },
+};
+for (const d of ["WINDOWS_SHUTDOWN_EXIT_CODES", "WINDOWS_SHUTDOWN_GRACE_MS", "windowsSessionEnding",
+                 "RESTART_BACKOFF_MS", "FAST_DEATH_MS", "FAST_DEATHS_TO_VERIFY", "RESTART_CAP_MAX",
+                 "RESTART_CAP_WINDOW_MS", "DEATHS_DAY_MS", "DEATHS_DAY_TOAST_AT", "_services", "_trayDegraded",
+                 "DAEMON_PORT", "_dwKills", "_dwBreakerTripped", "TIDY_RESTART_KILL_MS"]) eval(decl(d));
+for (const f of ["isWindowsShutdownExit", "markTrayDegraded", "markTrayHealthy", "startService", "notifyCrashLoop",
+                 "restartDaemonFromShell", "postDaemonShutdown", "restartDaemonTidy"]) eval(fnSource(f));
+try { eval(fnSource("restartAdoptedDaemonTidy")); } catch { /* not in this version */ }
+const realSetTimeout = setTimeout;
+global.setTimeout = () => ({}); global.clearTimeout = () => {};
+let spawns = 0;
+const spawnFn = () => {
+  spawns += 1; const c = new EventEmitter(); c.pid = 100 + spawns; c.exitCode = null; c.signalCode = null; return c;
+};
+startService("daemon", spawnFn);
+const rec = _services.daemon;
+// Nine crashes in the last quarter hour, and the watchdog's breaker open.
+const now = Date.now();
+rec.restarts = 3; rec.restartTimes = Array.from({ length: 9 }, (_, i) => now - i * 1000);
+_dwKills = [now, now, now]; _dwBreakerTripped = true;
+markTrayDegraded("daemon", "Iron Jarvis keeps stalling (Restart from the tray)");
+const ret = restartDaemonTidy();
+realSetTimeout(() => {
+  process.stdout.write(JSON.stringify({
+    ret, spawns, restarts: rec.restarts, restartTimes: rec.restartTimes.length,
+    dwKills: _dwKills.length, breaker: _dwBreakerTripped, degraded: Array.from(_trayDegraded),
+  }) + "\n");
+}, 30);
+"""
+
+
+@requires_node
+def test_settings_restart_is_a_fresh_start_like_the_tray_and_the_window(tmp_path):
+    """The tray's and the window's "Restart Iron Jarvis" reset the crash
+    ladder and the watchdog's breaker: the user asked for a fresh start.
+    Settings' tidy restart left them, so one more crash after it hit the
+    10-in-15-minutes cap, and a daemon that stalled again was never killed."""
+    out = _run(_FRESH.replace("__EXTRACT__", _EXTRACT), tmp_path, "fresh")
+    assert out["ret"] is True and out["spawns"] == 2, out
+    assert out["restarts"] == 0 and out["restartTimes"] == 0, out
+    assert out["dwKills"] == 0 and out["breaker"] is False, out
+    assert "daemon" not in out["degraded"], out

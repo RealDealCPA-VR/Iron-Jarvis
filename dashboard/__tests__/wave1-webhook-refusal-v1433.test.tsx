@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const REFUSAL =
-  "Iron Jarvis never sends an event called “sesion.completed”, so this webhook would never be sent it. Did you mean session.completed?";
+  "Iron Jarvis never sends an event called “sesion.completed”, so this webhook would never receive it. Did you mean session.completed?";
 
 const api = vi.hoisted(() => {
   class FakeApiError extends Error {

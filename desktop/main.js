@@ -1179,9 +1179,26 @@ function restartDaemonTidy(opts) {
   rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending never spawns a second daemon
   if (rec.restartTimer) clearTimeout(rec.restartTimer);
   rec.restartTimer = null;
+  // v1.433.0 review: a fresh start, like the tray's and the window's Restart
+  // (restartDaemonFromShell) — the crash ladder and the watchdog's breaker
+  // start over, or one more crash after it hit the cap and a daemon that
+  // stalled again was never killed.
+  rec.restarts = 0;
+  rec.fastDeaths = 0;
+  rec.restartTimes = [];
+  rec.capped = false;
+  rec.stalled = false;
+  rec.swept = false;
+  rec.damaged = false;
+  rec.cappedCrashes = null;
+  rec.cappedWindowMin = null;
+  _dwKills = [];
+  _dwBreakerTripped = false;
+  markTrayHealthy("daemon");
   fileLogger("daemon")(
     `[main] ${new Date().toISOString()} restarting tidily on request from Settings${stopping ? " (it is already stopping)" : ""}\n`
   );
+  refreshTrayMenu();
   if (!stopping && !postDaemonShutdown({ restart: true })) {
     killChild(child, "daemon", "restart"); // onGone respawns at once
     return true;
