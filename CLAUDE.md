@@ -14496,6 +14496,126 @@ does not need a bump, stop and bump it.
   `pnpm install --frozen-lockfile` restored it. If `npx tsc` says "This is not
   the tsc command you are looking for", check that folder first.
 
+- **Wave 1 of the chat-first plan: 17 verified bugs fixed** (v1.433.0;
+  docs/CHAT-FIRST-PLAN-2026-11-04.md, approved "as recommended", D1-D7; four
+  groups, each built then independently reviewed, 24 more defects found by the
+  reviewers, every fix red-then-green and mutation-checked).
+  - DEVICE SETTINGS (D1):
+    - `lib/deviceSettings.ts` + `components/DeviceSettingsBridge.tsx` (mounted
+      once in the layout, `useEvents(10, {types: ["config.changed"]})`) read GET
+      /settings/device at load, on reconnect and on a `config.changed` naming a
+      `device.*` key.
+    - They apply theme (built-in ids only, `applyTheme`), read aloud (every
+      useTTS), persona (new chats) and Auto tools (the chat switch).
+    - Apply only a value changed since this window last knew it
+      (`ij_device_known`). The FIRST sight of a key keeps what the screen already
+      shows and PUTs it up once (update day).
+    - A save not yet answered owns its key: a read meanwhile skips it and reads
+      again. Saves run one at a time, in press order. A refused save puts back
+      the daemon's own last value.
+    - Screen presses (ThemeSwitcher, Ctrl K "Theme:", ThemeMaker, read aloud,
+      persona, Auto tools) PUT the row; a theme you made sets it to null.
+    - `device.theme` is an enum pinned to `lib/theme` THEMES: a NEW built-in theme
+      needs a schema option. Settings > Appearance has ONE theme control
+      (CONTROLLED_IN_SECTION).
+    - Never import `lib/deviceSettings` from `__tests__/setup.ts`; reset through
+      `deviceSettingsState`.
+  - SETTINGS/CONFIG:
+    - The writer clears every app's own `auto_approve` on any Off of
+      `mcp_auto_approve`. It counts only rows `pack_grants_auto` says opened the key.
+    - `active_project_id` is validated in the writer: unknown or archived ids are
+      refused in the activate route's words, "" is allowed, and an unchanged value
+      is not re-checked.
+    - `max_concurrent_children`, `assignments_enabled`, `curator_enabled` and the
+      three curator numbers are real Config fields with schema rows. The curator
+      loop starts at boot and reads its switch every pass.
+    - `event_retention_days` is ask-floor, restart=False.
+    - Permission rows: `web_look` allow (READONLY), `pixio` ask, `delegate_remote`
+      ask. pixio_models/params are READONLY, but `pixio_status` is NOT: it saves
+      files.
+  - A CREDENTIAL IS NEVER A TOOL ARGUMENT:
+    - Discord's webhook URL comes through the secure card into
+      `comm.channels[name].webhook_url` (where the Notifications page reads it). A
+      passed `webhook_url` is refused before any card.
+    - A Postgres connection string with a password is refused in chat and taken on
+      the card into `arg_secrets` (`mcp.postgres.connection`).
+    - `records.masked_args` redacts both tools' log rows, versioned Discord paths
+      included.
+    - The composer's paste guard (lib/configCards SECRET_SHAPES, twinned in
+      harness/step_target.py) holds Discord webhooks (with or without https://)
+      and postgres/mysql/mariadb/mongodb(+srv)/redis/sqlserver URLs carrying a
+      password.
+  - APPROVAL CARD: `quarantined` is decoded in both useChatStream places and drawn
+    as `approvalWords.QUARANTINED_LINE`.
+  - BROWSER SIDEBAR:
+    - `browser/panel.py` reads the done frame's `reply`, never `text`. Same words:
+      nothing. An extension: the tail. Otherwise: reset + the whole reply. The
+      remembered history ends equal to the reply.
+    - PANEL_EVENT_RESET (the panel vocabulary is now 10 actions / 11 events).
+    - Errors read "title. fix", with the technical text folded under Details.
+    - `failure_words.SURFACE_SIDEBAR` (set around `panel._run`) makes the fix words
+      true there: "Send your message again", never "Press Retry". The refusal way
+      out names New conversation. The file notes say the sidebar can't write
+      documents.
+    - A reopened sidebar resets the daemon's record of the bubble from the history
+      frame.
+  - CHAT LANES:
+    - POST /chat always returns `denied_tools` (the harness-off golden moved by that
+      key only).
+    - POST refuses a mistyped "/" skill before any grounding.
+    - `coding_offer` stays silent for "make the (Iron Jarvis/desktop) app
+      <setting>" unless the sentence names code (`_APP_SETTING_AHEAD`;
+      matcher-table rows both ways).
+  - DESKTOP:
+    - Settings' Restart goes through `shell.restartDaemonTidy` → `restartDaemonTidy`:
+      manualRestart first, then POST /shutdown {"restart": true} (keeps the code
+      host). The crash counter and watchdog breaker reset; a 20 s force fallback
+      applies to the OLD child.
+    - An adopted daemon goes through `restartAdoptedDaemonTidy`, which waits for the
+      PORT to be free, never /health.
+    - Restore from backup calls it with `{stopping: true}`. A browser tab's Restart
+      is still a plain Quit, worded so.
+    - `abortUpdateInstall` turns `autoInstallOnAppQuit` off.
+    - `_emitUpdateState` reaches every pop-out.
+    - `update:check`, `clipboard:write`, `clipboard:writeHtml` and `notify:show` are
+      sender-checked.
+    - Every window link goes through `openExternalIfSafe` (http, https, mailto
+      only).
+    - A new desktop surface that stops the daemon on purpose sets manualRestart
+      first.
+  - BACKGROUND:
+    - `review.approved` / `review.rejected` are published by the approve/reject
+      routes (git off the loop). They clear the bell, which re-reads /diagnostics
+      at once, and the orb.
+    - Every `_arm_*` off path pops its loop_health row, while a check that RAISES
+      records a failure. A NEW off branch must pop its row.
+    - `_tick("terminal_snapshot")` has a loopWords row. Prune and sweep failures
+      warn once per run of failures.
+    - Outbound webhooks refuse event names Iron Jarvis never publishes:
+      `known_event_types()` = EventType + `core.events.OTHER_PUBLISHED_TYPES` +
+      this install's event-kind schedule names. A NEW event published outside
+      EventType must join OTHER_PUBLISHED_TYPES.
+  - Pins: `tests/test_wave1_*_v14330.py` (16 files),
+    `dashboard/__tests__/wave1-*-v1433.test.tsx` (9 files), matcher-table rows,
+    sidepanel runtime cases.
+  - Moved on purpose:
+    - `ux-wave2-system-memory-v1314`, `settings-panel-words-v13540`,
+      `step-target-twin-v1378` (+ fixture);
+    - `test_browser_protocol_v1235`, `test_browser_sidepanel_context_v1270`,
+      `test_browser_panel_v1242`;
+    - `test_chat_recovery_v1344`, `test_chat_turn_service`,
+      `harness_off_golden_v1366.json`;
+    - `test_pack_secrets_in_args_v13510`, `test_permission_coverage_v1178`,
+      `test_roster_coverage_v1178`, `test_settings_records_more_v1321`;
+    - `test_desktop_lifecycle_v1192`, `test_code_host_desktop_v14220`.
+  - OPEN (later waves):
+    - web_look's screenshot goes to the default model, and computer-use tools are
+      not in egress's internet list.
+    - A browser tab's Restart counts as a crash.
+    - An add-on not reloaded prints "does not understand (reset)".
+    - The A13 verb list is narrow ("make the app autostart").
+    - The composer misses the JDBC `password=` form.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,

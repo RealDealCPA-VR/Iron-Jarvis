@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.432.0 (2026-11-04).*
+holds itself to. Current as of v1.433.0 (2026-11-04).*
 
 ---
 
@@ -2019,6 +2019,50 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Seventeen fixes from the deep review (v1.433.0)
+
+A deep review of the whole app found 17 bugs. All are fixed in this release:
+
+- **Theme, read aloud, persona and Auto tools now work from chat.** Asking
+  chat to switch to the Daylight theme, turn on read aloud, change your
+  default persona or turn Auto tools on or off now changes the screen right
+  away. Before, chat said "Setting changed" and nothing happened. Settings ›
+  Appearance now has one theme control. A theme you made yourself is picked on
+  the screen only, so chat reports the theme as "not set" while one is on.
+- **Turning off "Run app tools without asking" from chat** now also clears
+  each app's own setting, the same as the Tools page switch.
+- **"Switch to the Smith project"** refuses a project that doesn't exist or is
+  archived, instead of quietly filing new chats under it.
+- **Secrets stay out of chat.** A Discord destination's webhook address and a
+  database connection string with a password are now pasted on the secure
+  card, never typed in chat. The message box holds them back if you paste one.
+- **Approval cards** now say when a tool is new or changed in its app since
+  you added the app.
+- **The browser sidebar** now:
+  - shows the app's own notes at the end of a turn (for example when the
+    model wrote nothing, or said it saved a file that doesn't exist);
+  - no longer shows a rewritten reply twice;
+  - uses plain words for errors, with the technical text folded under Details;
+  - never tells you to press a button it doesn't have.
+- **Settings › Maintenance "Restart Iron Jarvis"** now really restarts it,
+  keeping running coding tools, instead of quitting. It no longer causes a
+  false "keeps crashing" warning.
+- **A failed update install** is no longer run anyway on the next Quit.
+- **Approving or rejecting a review** clears the bell and the orb at once.
+- **Turning a feature off** (Slack, calendar, phone messages, watchers,
+  autonomy, model servers) also clears its "isn't working" alarm.
+- **Settings that did nothing** in config.toml now work and can be changed
+  from chat: "Helpers one agent may run at once", "Start tasks queued for
+  agents", and "Tidy away unused skills" with its three numbers.
+- **Lowering "Keep activity history"** always asks first, because it deletes
+  the record of what Iron Jarvis did.
+- **A webhook** for an event Iron Jarvis never sends is refused when you save
+  it, with the closest real event named.
+- **Links** in the app open in your browser only when they are web or email
+  addresses.
+- Asking chat to "make the app start with Windows" no longer offers to start
+  a coding session.
 
 ## Build › Code's mode menu shows names only too (v1.432.0)
 
