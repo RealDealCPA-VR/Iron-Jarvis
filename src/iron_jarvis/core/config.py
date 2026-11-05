@@ -356,6 +356,14 @@ def default_permissions() -> dict[str, str]:
         "reflex_delete": "ask",
         "grant_revoke": "allow",
         "config_undo": "ask",
+        # v1.435.0 (chat-first plan, Wave 3 group I, D3/D4): Local only for
+        # THIS chat — turning it on only narrows (allow); turning it OFF asks
+        # every time through the tool's own once-only check. The change
+        # history is read-only (allow); undoing one of its changes is itself
+        # a change and always shows a card naming it (ask).
+        "chat_local_only": "allow",
+        "changes_list": "allow",
+        "change_undo": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +
@@ -608,6 +616,12 @@ class Config(BaseModel):
     #: Follow-up questions under a chat reply (v1.323.0): one extra short call
     #: to the same model after each reply. Off by default.
     chat_followups: bool = False
+    #: START NEW CHATS LOCAL ONLY (v1.435.0, chat-first plan Wave 3 group I,
+    #: D3): the chat page reads it when it starts a new chat and turns that
+    #: chat's Local only switch on. The daemon enforces Local only per chat
+    #: (the switch rides every turn); this is the page's starting point.
+    #: Off by default. Turning it off from chat always asks (ask-floor).
+    chat_new_local_only: bool = False
     #: Project folder instructions (AGENTS.md / CLAUDE.md) in every chat
     #: turn (v1.326.0). On by default.
     chat_folder_rules: bool = True

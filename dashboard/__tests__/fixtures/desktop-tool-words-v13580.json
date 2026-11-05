@@ -188,6 +188,18 @@
       "desktop": "undo your last change"
     },
     {
+      "tool": "change_undo",
+      "kind": "table",
+      "card": "undo one of its changes",
+      "desktop": "undo one of its changes"
+    },
+    {
+      "tool": "chat_local_only",
+      "kind": "table",
+      "card": "change Local only for this chat",
+      "desktop": "change Local only for this chat"
+    },
+    {
       "tool": "approve_plan",
       "kind": "table",
       "card": "follow this plan",

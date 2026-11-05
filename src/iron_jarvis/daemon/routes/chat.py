@@ -3092,6 +3092,13 @@ def register(app: FastAPI, d) -> None:
 
         for app_id in link_turn_holds(turn_id, tid):
             await asyncio.to_thread(hold_local_only, d.platform.engine, tid, app_id)
+        # v1.435.0 (D3): a new chat's first turn that switched Local only on
+        # or off from chat (`chat_local_only`) applies it to the chat now named.
+        from ...providers.egress import set_thread_local_only, take_pending_local_only
+
+        _pending_lo = take_pending_local_only(turn_id)
+        if _pending_lo is not None:
+            await asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
         # v1.347.0: a picture/video/song this turn started comes home to the
         # chat now named — and one that FINISHED before the link (a new chat's
         # first question carried no thread id) is delivered here.

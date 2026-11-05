@@ -394,8 +394,11 @@ def test_the_new_record_tools_arm_by_the_record_the_message_names():
     assert rf("delete that reflex") == ["reflex_create", "reflex_update", "reflex_delete"]
     assert "reflex_create" in rf("when a client email happens, start an intake session")
     assert rf("stop always allowing shell") == ["grant_revoke"]
-    assert rf("undo that") == ["config_undo"]
-    assert rf("Undo the last change please") == ["config_undo"]
+    # v1.435.0 (Wave 3 group I), moved on purpose: "undo that" also offers
+    # change_undo — the newest change of ANY kind (a file edit too), named on
+    # its card (tests/test_chat_history_tools_v14350.py).
+    assert rf("undo that") == ["config_undo", "change_undo"]
+    assert rf("Undo the last change please") == ["config_undo", "change_undo"]
     # Negative control: ordinary work arms none of them.
     assert rf("summarize the K-1 I attached") == []
     assert rf("what should I do about the undoing of this contract?") == []

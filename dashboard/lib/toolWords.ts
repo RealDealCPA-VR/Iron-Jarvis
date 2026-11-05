@@ -70,6 +70,10 @@ const WORDS: Record<string, string> = {
   reflex_update: "change a rule that acts on its own",
   reflex_delete: "remove a rule that acts on its own",
   config_undo: "undo your last change",
+  // v1.435.0 (Wave 3 group I): the change history's undo, and Local only for
+  // a chat (its card shows when turning it OFF).
+  change_undo: "undo one of its changes",
+  chat_local_only: "change Local only for this chat",
   // v1.350.0: the daemon's own plan approval (agents/runtime.py
   // PLAN_APPROVAL_TOOL), not a registry tool: its arguments are the plan's
   // steps. No custom tool may take this name (tools/dynamic.py

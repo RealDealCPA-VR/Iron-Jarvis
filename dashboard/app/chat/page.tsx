@@ -405,6 +405,7 @@ import {
   type CloudAsk,
   type LocalOnlyRefusal,
 } from "@/lib/localOnly";
+import { localOnlyAfterUndo, localOnlyFromCards, newChatLocalOnly } from "@/lib/localOnlyChat";
 import { CALM_GHOST_BTN, RetryTurnButton } from "@/components/chat/RetryTurnButton";
 import { readRecentModels } from "@/lib/recentModels";
 import { reasoningDefaultOf } from "@/lib/reasoningChip";
@@ -3959,6 +3960,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
   // v1.323.0: FOLLOW-UP QUESTIONS (setting chat_followups, off by default) —
   // fetched after a finished reply, shown only while that reply is the newest.
   const followupsOnRef = useRef(false);
+  // v1.435.0 (D3): "Start new chats local only" (setting chat_new_local_only),
+  // read with the follow-ups setting; `localOnlyTouchedRef` = the user pressed
+  // the switch in this chat, so a late read never overrides their choice.
+  const newChatsLocalRef = useRef(false);
+  const localOnlyTouchedRef = useRef(false);
   const [followups, setFollowups] = useState<{ forLen: number; items: string[] } | null>(null);
   const [dragging, setDragging] = useState(false);
   // v1.250.0 (S-05): the composer's text/caret/dismissals/highlight live in a
@@ -4988,10 +4994,23 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     } catch {
       /* ignore */
     }
-    get<{ settings: { default_persona?: string; chat_followups?: boolean } }>("/settings")
+    get<{ settings: { default_persona?: string; chat_followups?: boolean; chat_new_local_only?: boolean } }>(
+      "/settings",
+    )
       .then((d) => {
         // v1.323.0: follow-up questions only when the user switched them on.
         followupsOnRef.current = d.settings?.chat_followups === true;
+        // v1.435.0 (D3): a new chat (nothing saved, nothing sent, the switch
+        // untouched) starts Local only when the setting says so.
+        newChatsLocalRef.current = d.settings?.chat_new_local_only === true;
+        if (
+          !cancelled &&
+          newChatsLocalRef.current &&
+          !saveTargetRef.current.id &&
+          messagesRef.current.length === 0 &&
+          !localOnlyTouchedRef.current
+        )
+          setLocalOnlyNow(true);
         if (saved) return;
         const dp = (d.settings?.default_persona || "").trim();
         // Seed only — never over an explicit pick / restored thread persona
@@ -5789,11 +5808,26 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     // v1.428.0: a chat that used an app kept on the user's own models stays
     // Local only (the daemon keeps it on whatever is saved).
     if (!on && localOnlyHeldRef.current.length > 0) return;
+    localOnlyTouchedRef.current = true; // v1.435.0: a late setting read never overrides it
     setLocalOnlyNow(on);
     writeLocalOnlyDefault(on);
     if (!on) setCloudAsk(null);
     markSetupChanged();
     if (!on) void recheckLocalOnlyHeld();
+  }
+
+  /** v1.435.0 (D3): Local only changed FROM CHAT (`chat_local_only`'s card,
+   *  lib/localOnlyChat). The daemon wrote the chat's saved setup; the page's
+   *  switch follows so its saves carry the same value — without this, the
+   *  next save would put the old value back. A held chat never turns off.
+   *  The user's default for new chats is not touched (that is a setting). */
+  function followLocalOnlyCards(cards: ConfigCard[] | undefined) {
+    const next = localOnlyFromCards(cards);
+    if (next === null || next === localOnlyRef.current) return;
+    if (!next && localOnlyHeldRef.current.length > 0) return;
+    setLocalOnlyNow(next);
+    if (!next) setCloudAsk(null);
+    markSetupChanged();
   }
 
   /** v1.428.0: the daemon may have held this chat Local only during a turn
@@ -6107,8 +6141,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       setApprovalMode("approve_for_me");
     }
     approvalPinnedRef.current = false; // v1.353.0: the device default may land
-    // v1.332.0: so does "Local only": the user's last choice.
-    setLocalOnlyNow(readLocalOnlyDefault());
+    // v1.332.0: so does "Local only": the user's last choice — or on, when
+    // new chats start local only (v1.435.0, setting chat_new_local_only).
+    setLocalOnlyNow(newChatLocalOnly(readLocalOnlyDefault(), newChatsLocalRef.current));
+    localOnlyTouchedRef.current = false;
     setLocalOnlyHeld([]);
     threadDocsRef.current = [];
     setThreadDocs([]);
@@ -8692,6 +8728,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           context: ctxUsage,
         } = streamRes;
         if (chatGenRef.current !== gen) return; // torn down mid-stream
+        followLocalOnlyCards(configCards); // v1.435.0 (D3), before this turn's save
         if (ctxUsage) setContextUsage(ctxUsage);
         // v1.287.0: notes the turn ACCEPTED but finished before reading go
         // back in the box — ahead of anything typed since — so Enter sends
@@ -8966,6 +9003,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       const suggestionPost = decodeSuggestion(res.suggestion);
       // Settings cards (redesign S3/S4) — MIRROR NOTE: keep in step.
       const configCardsPost = decodeConfigCards(res.config_cards);
+      followLocalOnlyCards(configCardsPost); // v1.435.0 (D3) — MIRROR NOTE: the stream lane above
       // v1.323.0: the POST lane's copy of the stream lane's reply details.
       const thinkingPost =
         typeof (res as { thinking?: unknown }).thinking === "string"
@@ -10528,8 +10566,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       setApprovalMode("approve_for_me");
     }
     approvalPinnedRef.current = false; // v1.353.0: the device default may land
-    // v1.332.0: a new chat starts local only when the user's last choice was.
-    setLocalOnlyNow(readLocalOnlyDefault());
+    // v1.332.0: a new chat starts local only when the user's last choice was
+    // — or when new chats start local only (v1.435.0, chat_new_local_only).
+    setLocalOnlyNow(newChatLocalOnly(readLocalOnlyDefault(), newChatsLocalRef.current));
+    localOnlyTouchedRef.current = false;
     setLocalOnlyHeld([]);
     setLocalRefusal(null);
     setPreviewPath(null); // a fresh conversation starts without a preview
@@ -11255,6 +11295,13 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // Undo settles the same card again: that never turns the app back on.
       const app = next.kind === "secret" && next.saved && !next.undone ? appIdOf(next.name) : "";
       if (app) turnOnConnectors([app]);
+      // v1.435.0 (D3): an Undo of a "Local only changed" card puts this
+      // chat's switch back (the daemon already did), so later saves agree.
+      const lo = localOnlyAfterUndo(next);
+      if (lo !== null && lo !== localOnlyRef.current && (lo || localOnlyHeldRef.current.length === 0)) {
+        setLocalOnlyNow(lo);
+        markSetupChanged();
+      }
     },
     continueConnected: (index, cardIndex) => {
       // v1.351.0 (G15): "GitHub connected · 26 tools" → Continue. The card

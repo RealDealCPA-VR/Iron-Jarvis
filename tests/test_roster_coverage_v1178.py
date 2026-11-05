@@ -202,6 +202,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # The rest of AUDIT §6.3 + "undo that" — same reasoning: a card + Undo where the user is present.
     "webhook_update", "webhook_delete", "sentinel_update", "sentinel_delete", "goal_update",
     "goal_delete", "reflex_create", "reflex_update", "reflex_delete", "grant_revoke", "config_undo",
+    # v1.435.0 (chat-first plan, Wave 3 group I): Local only for THIS chat and
+    # the change history — the same reasoning: the chat that owns the switch,
+    # and the Undo card, are where the user is present. Chat arms them
+    # (settings.records_history.history_tools_for); pinned by
+    # tests/test_chat_history_tools_v14350.py.
+    "chat_local_only", "changes_list", "change_undo",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py
