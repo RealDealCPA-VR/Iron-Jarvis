@@ -59,6 +59,12 @@ const WORDS: Record<string, string> = {
   channel_toggle: "turn a channel's two-way messages on or off",
   channel_connect: "add a notification channel",
   app_connect: "connect an app",
+  // v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps).
+  app_switch: "turn an app on or off",
+  app_disconnect: "disconnect an app",
+  app_import: "add an app from another program on this PC",
+  channel_remove: "remove a notification destination",
+  channel_alerts: "choose which alerts a destination gets",
   // AUDIT §6.3: the rest of the records, and "undo that".
   webhook_update: "change a webhook",
   webhook_delete: "remove a webhook",

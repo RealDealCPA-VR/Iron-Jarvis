@@ -208,6 +208,11 @@ _OFF_ROSTER_BY_DESIGN = {
     # through record_tools_for); pinned by tests/test_records_projects_v14350.py.
     "project_create", "project_update", "project_archive", "project_focus",
     "agent_create", "agent_update", "agent_pause", "agent_delete",
+    # v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps): an
+    # app's switch / disconnect / import, a destination's removal / alerts —
+    # a card + Undo where the user is present; pinned by
+    # tests/test_apps_destinations_v14350.py.
+    "app_switch", "app_disconnect", "app_import", "channel_remove", "channel_alerts",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

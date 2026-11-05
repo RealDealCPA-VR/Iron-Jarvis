@@ -554,6 +554,53 @@ def run_migrations(engine: Engine) -> int:
     return get_schema_version(engine)
 
 
+#: The vault prefix an Undo's kept key is written under (settings/credentials,
+#: settings/records_apps). Only rows with this prefix are ever reclaimed.
+_UNDO_BACKUP_PREFIX = "__undo__"
+
+
+def _expiring_undo_backups(db: Any, cutoff: Any) -> list[str]:
+    """The ``__undo__`` vault rows named by UndoJournal rows older than
+    ``cutoff`` (v1.435.0 review): a ``secret_restore`` row's ``backup``, and a
+    ``record_restore`` row's kept keys (``settings.records_apps.
+    backups_named``). Never raises — a prune must always finish."""
+    from sqlmodel import select
+
+    from .models import UndoJournal
+
+    names: list[str] = []
+    try:
+        rows = db.exec(
+            select(UndoJournal.kind, UndoJournal.pre_inline).where(
+                UndoJournal.created_at < cutoff,
+                UndoJournal.kind.in_(("secret_restore", "record_restore")),  # type: ignore[attr-defined]
+            )
+        ).all()
+    except Exception:  # noqa: BLE001
+        logger.warning("undo backup prune skipped", exc_info=True)
+        return []
+    try:
+        from ..settings.records_apps import backups_named
+    except Exception:  # noqa: BLE001
+        backups_named = None  # type: ignore[assignment]
+    for kind, inline in rows:
+        try:
+            meta = json.loads(inline or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        found: list[Any] = []
+        if kind == "secret_restore":
+            found = [meta.get("backup")]
+        elif backups_named is not None:
+            found = list(backups_named(str(meta.get("record") or ""), meta.get("prior")))
+        for name in found:
+            if isinstance(name, str) and name.startswith(_UNDO_BACKUP_PREFIX) and name not in names:
+                names.append(name)
+    return names
+
+
 def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> int:
     """Delete EventRecord + the parallel audit tables (ToolInvocation, AgentRun,
     UndoJournal) older than N days (retention parity). Returns the total count.
@@ -615,6 +662,25 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
             except (TypeError, ValueError):
                 continue
             stale_refs += [str(e["ref"]) for e in patch_entries(meta) if e.get("ref")]
+        # v1.435.0 review (Wave 3 group H): an Undo of a disconnected app, a
+        # removed destination or a replaced chat credential keeps the KEYS it
+        # would put back as encrypted ``__undo__`` vault rows. Once the row
+        # that could use them expires, nothing can — and a disconnected app's
+        # key must not outlive its change's history in the vault (and in every
+        # backup). Their names are read here and the rows deleted in this
+        # same transaction. Names only; never a value.
+        stale_backups = _expiring_undo_backups(db, cutoff)
+        if stale_backups:
+            from sqlalchemy import inspect as sa_inspect
+
+            from ..secrets.models import SecretRecord
+
+            # A home whose vault table was never made has nothing to reclaim
+            # (and a failed statement must never stop the prune).
+            if sa_inspect(db.connection()).has_table(SecretRecord.__tablename__):
+                for i in range(0, len(stale_backups), 500):
+                    chunk = stale_backups[i : i + 500]
+                    db.execute(sa_delete(SecretRecord).where(SecretRecord.name.in_(chunk)))  # type: ignore[attr-defined]
         # Drop the history-search docs for the expiring runs BEFORE the bulk
         # delete removes the rows we read them from — the index keys its docs by
         # ``ref``, and a deleted run whose docs survive is an orphan no later

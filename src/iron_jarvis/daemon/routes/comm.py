@@ -484,24 +484,13 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/comm/channels/{name}")
     def delete_comm_channel(name: str) -> dict[str, Any]:
-        removed = d.platform.notifier.remove_channel(name)
-        comm = dict(d.platform.config.comm or {})
-        channels = dict(comm.get("channels") or {})
-        cfg = channels.pop(name, None)
-        if cfg is not None:
-            comm["channels"] = channels
-            d.platform.config.comm = comm
-            d._persist_config(["comm"])
-            # Best-effort: drop any vault secrets this channel owned.
-            for key, val in cfg.items():
-                if key.endswith("_secret") and isinstance(val, str):
-                    try:
-                        d.platform.secrets.delete(val)
-                    except Exception:  # noqa: BLE001
-                        pass
-        # A removed two-way Slack channel stops its Socket Mode pump now.
-        if (cfg or {}).get("type") == "slack":
-            _rearm_slack_socket()
+        # v1.435.0 (Wave 3 group H): THE removal, shared with the chat's
+        # channel_remove (settings/records_apps.remove_destination): the live
+        # destination, its persisted settings, every vault row they name, and
+        # a two-way Slack listener (re-armed off the settings change).
+        from ...settings.records_apps import remove_destination
+
+        removed, cfg = remove_destination(d.platform, name)
         return {"name": name, "removed": removed or cfg is not None}
 
     @app.post("/comm/threads/{thread_id}/send")

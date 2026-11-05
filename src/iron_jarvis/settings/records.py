@@ -103,6 +103,14 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "agent_update": "ask",
     "agent_pause": "ask",
     "agent_delete": "ask",
+    # v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps): an
+    # app's switch, disconnect and import; a destination's removal and
+    # alerts. Each asks on the card, with an Undo.
+    "app_switch": "ask",
+    "app_disconnect": "ask",
+    "app_import": "ask",
+    "channel_remove": "ask",
+    "channel_alerts": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -458,6 +466,11 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
     t = text or ""
     out = _record_tools_named(t, workflow_names=workflow_names)
     out += _rp().projects_tools_for(t)  # v1.435.0 (Wave 3 group G): projects and agents
+    # v1.435.0 (Wave 3 group H): an app's switch / disconnect / import, a
+    # destination's removal / alerts (settings/records_apps).
+    from .records_apps import apps_tools_for
+
+    out += [n for n in apps_tools_for(t) if n not in out]
     if is_question(t):
         return [n for n in out if n in _RECORD_READERS]
     return out
@@ -716,6 +729,50 @@ def apply_channel(platform: Any, name: str, cfg: dict[str, Any] | None) -> None:
 def restore_channel(platform: Any, name: str, prior: dict[str, Any] | None) -> str:
     apply_channel(platform, name, copy.deepcopy(prior) if prior is not None else None)
     return f"undo: {'removed' if prior is None else 'restored'} the channel '{name}'"
+
+
+#: v1.435.0 review (Wave 3 group H, item 7): ``channel_toggle`` snapshotted
+#: the WHOLE destination (``snap_channel``) — a Discord or Slack destination's
+#: webhook address, its credential, landed in the undo journal in plain text —
+#: and its Undo put the whole destination back, re-adding one the user had
+#: removed since. The switch changes two flags, so its record keeps only
+#: those (no credential, nothing to encrypt) and its Undo puts only those
+#: back, on the destination as it is then. Older journal rows keep the
+#: ``channel`` kind and restore as before.
+CHANNEL_MODE_KEYS = ("inbound_enabled", "chat_enabled")
+
+
+def _mode_flags(mode: str) -> dict[str, bool]:
+    return {"inbound_enabled": mode in ("two_way", "chat"), "chat_enabled": mode == "chat"}
+
+
+def snap_channel_mode(platform: Any, name: str) -> dict[str, Any] | None:
+    cfg = snap_channel(platform, name)
+    if cfg is None:
+        return None
+    return {k: cfg[k] for k in CHANNEL_MODE_KEYS if k in cfg}
+
+
+def restore_channel_mode(platform: Any, name: str, prior: dict[str, Any] | None, now: str = "") -> str:
+    if not isinstance(prior, dict):
+        raise RecordError("this change kept nothing to bring back")
+    cfg = snap_channel(platform, name)
+    if cfg is None:
+        raise RecordError(f"The channel {name!r} was removed since, so its two-way setting can't be put back.")
+    if now in ("two_way", "chat", "off") and any(
+        bool(cfg.get(k)) != v for k, v in _mode_flags(now).items()
+    ):
+        raise RecordError(
+            f"The channel {name!r}'s two-way setting was changed since, so this Undo would undo that too: "
+            "change it on the Notifications page."
+        )
+    for k in CHANNEL_MODE_KEYS:
+        if k in prior:
+            cfg[k] = prior[k]
+        else:
+            cfg.pop(k, None)
+    apply_channel(platform, name, cfg)
+    return f"undo: restored the channel '{name}'"
 
 
 def _describe_channel(c: dict[str, Any] | None) -> str | None:
@@ -1495,6 +1552,7 @@ _SNAP = {
     "schedule": snap_schedule,
     "workflow": snap_workflow,
     "channel": snap_channel,
+    "channel_mode": snap_channel_mode,
     "app": snap_app,
     "webhook": snap_webhook,
     "sentinel": snap_sentinel,
@@ -1512,6 +1570,19 @@ def _rp() -> Any:
     from . import records_projects
 
     return records_projects
+def _apps_snap(kind: str) -> Any:
+    def _snap(platform: Any, name: str) -> dict[str, Any] | None:
+        from .records_apps import SNAP
+
+        return SNAP[kind](platform, name)
+
+    return _snap
+
+
+#: v1.435.0 (Wave 3 group H): a removed app, a removed destination, a
+#: destination's alerts (settings/records_apps).
+_APPS_KINDS = ("app_removed", "destination_removed", "destination_alerts", "app_switched")
+_SNAP.update({k: _apps_snap(k) for k in _APPS_KINDS})
 
 
 def restore(platform: Any, desc: dict[str, Any]) -> str:
@@ -1527,6 +1598,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return restore_workflow(platform, name, prior, str(desc.get("now") or ""))
     if record == "channel":
         return restore_channel(platform, name, prior)
+    if record == "channel_mode":
+        return restore_channel_mode(platform, name, prior, str(desc.get("now") or ""))
     if record == "app":
         return restore_app(platform, name, prior)
     if record == "webhook":
@@ -1541,6 +1614,10 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return restore_grant(platform, name, prior)
     if record in ("project", "agent"):
         return getattr(_rp(), f"restore_{record}")(platform, name, prior, desc)
+    if record in _APPS_KINDS:
+        from .records_apps import restore_kind
+
+        return restore_kind(platform, record, name, prior, str(desc.get("now") or ""))
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -1806,7 +1883,7 @@ class WorkflowScheduleTool(_RecordTool):
 
 class ChannelToggleTool(_RecordTool):
     name = "channel_toggle"
-    RECORD = "channel"
+    RECORD = "channel_mode"
     description = (
         "Turn a notification channel's two-way listening on or off: `mode` 'two_way' (people "
         "on the allowlist can message Iron Jarvis), 'chat' (they can chat with it), or 'off' "
@@ -1817,6 +1894,10 @@ class ChannelToggleTool(_RecordTool):
         "properties": {"name": {"type": "string"}, "mode": {"type": "string", "enum": ["two_way", "chat", "off"]}},
         "required": ["name", "mode"],
     }
+
+    def _now(self, args: dict[str, Any]) -> str:
+        """The mode this change sets, so its Undo can tell a change since."""
+        return str(args.get("mode") or "")
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = self._target(args)
@@ -1856,7 +1937,18 @@ _CHANNEL_FIELDS = {
     "telegram": ("chat_id",),
     "slack": ("channel",),
     "discord": (),
+    # v1.435.0 (Wave 3 group H): email — the mail server for sending, From
+    # and Send-to from chat; the password through the secure card. ``port``
+    # (587) and ``username`` (the From address) may be left out.
+    "email": ("host", "from_addr", "to_addr"),
 }
+
+#: v1.435.0: a password (or any secret-named value) handed to channel_connect.
+PASSWORD_NOT_IN_CHAT = (
+    "A password never goes through chat. Call channel_connect again without `{field}`: "
+    "a secure card asks the user for it."
+)
+_EMAIL_ADDRESS = re.compile(r"^[^@\s]{1,64}@[^@\s.]{1,63}(?:\.[^@\s.]{1,63}){1,8}$")
 
 #: v1.433.0 (Wave 1, A4): the refusal a call carrying a webhook URL gets —
 #: before any card, and its log row keeps no URL (``redact_args``).
@@ -1906,9 +1998,11 @@ class ChannelConnectTool(_RecordTool):
     RECORD = "channel"
     description = (
         "Add a notification channel so Iron Jarvis can message the user: `type` telegram "
-        "(needs `chat_id`), slack (needs `channel`, e.g. #general) or discord (needs nothing "
-        "else). Never ask for a token or a webhook URL in chat — the user pastes it into the "
-        "secure card this shows. The user approves on a card; Undo removes the channel."
+        "(needs `chat_id`), slack (needs `channel`, e.g. #general), discord (needs nothing "
+        "else) or email (needs `host`, the mail server for sending such as smtp.gmail.com, "
+        "`from_addr` and `to_addr`; `port` and `username` are optional). Never ask for a token, "
+        "a password or a webhook URL in chat — the user pastes it into the secure card this "
+        "shows. The user approves on a card; Undo removes the channel."
     )
     input_schema = {
         "type": "object",
@@ -1917,9 +2011,26 @@ class ChannelConnectTool(_RecordTool):
             "type": {"type": "string", "enum": sorted(_CHANNEL_FIELDS)},
             "chat_id": {"type": "string"},
             "channel": {"type": "string"},
+            "host": {"type": "string"},
+            "port": {"type": "integer"},
+            "username": {"type": "string"},
+            "from_addr": {"type": "string"},
+            "to_addr": {"type": "string"},
         },
         "required": ["name", "type"],
     }
+
+    @staticmethod
+    def _secret_arg(args: dict[str, Any]) -> str:
+        """v1.435.0: the first secret-named argument a call carries (an email
+        ``password``), or "" — refused before any card, like a webhook URL."""
+        from ..mcp.secrets import is_secret_key
+
+        return next(
+            (str(k) for k, v in dict(args or {}).items()
+             if k != "name" and is_secret_key(str(k)) and str(v or "").strip()),
+            "",
+        )
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """v1.433.0 (Wave 1, A4): never a webhook URL or a token in the log,
@@ -1932,13 +2043,16 @@ class ChannelConnectTool(_RecordTool):
         """A call carrying a webhook URL is refused by ``execute`` and changes
         nothing, so it is no approval card either (the v1.227.0 rule "an
         Allow that cannot run is a lie"). Everything else keeps the card."""
-        if str((args or {}).get("webhook_url") or "").strip():
+        if str((args or {}).get("webhook_url") or "").strip() or self._secret_arg(args):
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
         return None
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if str(args.get("webhook_url") or "").strip():
             return ToolResult(ok=False, error=WEBHOOK_NOT_IN_CHAT)
+        _secret = self._secret_arg(args)
+        if _secret:
+            return ToolResult(ok=False, error=PASSWORD_NOT_IN_CHAT.format(field=_secret))
         name = self._target(args)
         ctype = str(args.get("type") or "").strip().lower()
         if not _CHANNEL_NAME.match(name):
@@ -1953,6 +2067,21 @@ class ChannelConnectTool(_RecordTool):
             if not v:
                 return ToolResult(ok=False, error=f"{ctype} needs `{f}`.")
             cfg[f] = v
+        if ctype == "email":
+            # v1.435.0 (Wave 3 group H): the page's own fields
+            # (comm.channels.EmailChannel reads them), checked here.
+            for f in ("from_addr", "to_addr"):
+                if not _EMAIL_ADDRESS.match(cfg[f]):
+                    return ToolResult(ok=False, error=f"`{f}` must be an email address.")
+            if args.get("port") not in (None, ""):
+                try:
+                    port = int(args["port"])
+                except (TypeError, ValueError):
+                    port = 0
+                if not 0 < port < 65536:
+                    return ToolResult(ok=False, error="`port` must be a number such as 587.")
+                cfg["port"] = port
+            cfg["username"] = str(args.get("username") or "").strip() or cfg["from_addr"]
         requests: list[dict[str, Any]] = []
         if ctype in ("telegram", "slack"):
             cfg["token_secret"] = f"channel_{name}_token"
@@ -1977,8 +2106,22 @@ class ChannelConnectTool(_RecordTool):
                     "request_id": new_id("seq"),
                 }
             )
+        elif ctype == "email":
+            # v1.435.0: the card writes the password to the vault row the
+            # destination reads (`password_secret`; credentials.resolve_secret
+            # answers `channel_<name>_token` for `channel.<name>`).
+            cfg["password_secret"] = f"channel_{name}_token"
+            requests.append(
+                {
+                    "name": f"channel.{name}",
+                    "label": f"Email password for “{name}” ({cfg['username']})",
+                    "help": "For Gmail or Outlook, use an app password from your account's security page, not your sign-in password.",
+                    "why": "to finish connecting email",
+                    "request_id": new_id("seq"),
+                }
+            )
         await asyncio.to_thread(apply_channel, self.platform, name, cfg)
-        what = "webhook URL" if ctype == "discord" else "token"
+        what = {"discord": "webhook URL", "email": "password"}.get(ctype, "token")
         waiting = f" — paste its {what} into the secure card to finish" if requests else ""
         return ToolResult(
             ok=True,
@@ -2998,7 +3141,14 @@ def record_tools(platform: Any) -> list[Tool]:
         GrantRevokeTool(platform),
         ConfigUndoTool(platform),
         *_rp().project_agent_tools(platform),
+        *_apps_record_tools(platform),
     ]
+
+
+def _apps_record_tools(platform: Any) -> list[Tool]:
+    from .records_apps import apps_record_tools
+
+    return apps_record_tools(platform)
 
 
 # ----------------------------------------------- undo for the create tools

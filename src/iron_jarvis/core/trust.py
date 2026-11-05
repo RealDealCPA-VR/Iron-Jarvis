@@ -55,6 +55,13 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         "channel_toggle",
         "channel_connect",
         "app_connect",
+        # v1.435.0 (Wave 3 group H): nor an app switched, disconnected or
+        # brought over, nor a destination removed or its alerts changed.
+        "app_switch",
+        "app_disconnect",
+        "app_import",
+        "channel_remove",
+        "channel_alerts",
         # ...nor a webhook, sentinel, goal or reflex rule (each is unattended
         # work a later signal starts), nor "undo that" — an undo can put back
         # a trigger the user had removed. ``grant_revoke`` stays ALLOWED: it

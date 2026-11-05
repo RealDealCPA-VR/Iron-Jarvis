@@ -341,6 +341,14 @@ def default_permissions() -> dict[str, str]:
         "channel_toggle": "ask",
         "channel_connect": "ask",
         "app_connect": "ask",
+        # v1.435.0 (chat-first plan Wave 3 group H, settings/records_apps):
+        # an app's switch, disconnect and import; a destination's removal
+        # and alerts — ask, with an Undo.
+        "app_switch": "ask",
+        "app_disconnect": "ask",
+        "app_import": "ask",
+        "channel_remove": "ask",
+        "channel_alerts": "ask",
         # The rest of AUDIT §6.3: webhooks, sentinels, goals and reflex rules
         # change unattended work — ask, with an Undo. Taking back an "always
         # allow" only narrows what runs unasked — allow, with an Undo. "Undo

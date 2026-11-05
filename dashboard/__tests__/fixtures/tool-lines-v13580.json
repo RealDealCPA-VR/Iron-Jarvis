@@ -20,9 +20,17 @@
       "ok": "connected an app",
       "failed": "tried an app connection and it failed"
     },
+    "app_disconnect": {
+      "ok": "disconnected an app",
+      "failed": "tried an app disconnect and it failed"
+    },
     "app_health": {
       "ok": "checked how Iron Jarvis is doing",
       "failed": "tried a health check and it failed"
+    },
+    "app_import": {
+      "ok": "added an app from another program",
+      "failed": "tried an app import and it failed"
     },
     "app_search": {
       "ok": "searched your Iron Jarvis setup",
@@ -31,6 +39,10 @@
     "app_status": {
       "ok": "checked your Iron Jarvis setup",
       "failed": "tried a setup check and it failed"
+    },
+    "app_switch": {
+      "ok": "switched an app on or off",
+      "failed": "tried an app switch and it failed"
     },
     "apply_patch": {
       "ok": "applied a patch",
@@ -128,9 +140,17 @@
       "ok": "suggested a new ability for Iron Jarvis",
       "failed": "tried an ability suggestion and it failed"
     },
+    "channel_alerts": {
+      "ok": "changed which alerts a destination gets",
+      "failed": "tried an alert choice and it failed"
+    },
     "channel_connect": {
       "ok": "connected a messaging channel",
       "failed": "tried a channel connection and it failed"
+    },
+    "channel_remove": {
+      "ok": "removed a notification destination",
+      "failed": "tried a destination removal and it failed"
     },
     "channel_toggle": {
       "ok": "switched a messaging channel's listening",

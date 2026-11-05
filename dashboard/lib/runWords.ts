@@ -169,6 +169,12 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   workflow_schedule: { did: "Scheduled a workflow", noun: "workflow schedule" },
   workflow_update: { did: "Changed a workflow", noun: "workflow change" },
   app_connect: { did: "Connected an app", noun: "app connection" },
+  // v1.435.0 (chat-first plan Wave 3 group H; twin: agents/mission.py).
+  app_switch: { did: "Switched an app on or off", noun: "app switch", nouns: "app switches" },
+  app_disconnect: { did: "Disconnected an app", noun: "app disconnect" },
+  app_import: { did: "Added an app from another program", noun: "app import" },
+  channel_remove: { did: "Removed a notification destination", noun: "destination removal" },
+  channel_alerts: { did: "Changed which alerts a destination gets", noun: "alert choice" },
   generate_media: { did: "Made an image, video or sound", noun: "media generation" },
   // v1.364.0 (IJ harness Phase 1): the new coding tools lib/workTarget does
   // not word by kind (agents/mission.py _RUN_TOOL_WORDS is the twin).

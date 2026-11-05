@@ -44,8 +44,10 @@ FAMILIES: dict[str, frozenset[str]] = {
     "workflow": frozenset(
         {"workflow_create", "workflow_update", "workflow_delete", "workflow_schedule", "workflow_run"}
     ),
-    "channel": frozenset({"channel_toggle", "channel_connect"}),
-    "app": frozenset({"app_connect"}),
+    # v1.435.0 (Wave 3 group H, moved on purpose): a destination's removal
+    # and alerts, an app's switch / disconnect / import.
+    "channel": frozenset({"channel_toggle", "channel_connect", "channel_remove", "channel_alerts"}),
+    "app": frozenset({"app_connect", "app_switch", "app_disconnect", "app_import"}),
     "webhook": frozenset({"webhook_add", "webhook_update", "webhook_delete"}),
     "sentinel": frozenset({"sentinel_add", "sentinel_update", "sentinel_delete"}),
     "goal": frozenset({"goal_add", "goal_update", "goal_delete"}),

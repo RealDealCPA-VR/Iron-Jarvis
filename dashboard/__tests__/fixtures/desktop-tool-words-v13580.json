@@ -128,6 +128,36 @@
       "desktop": "connect an app"
     },
     {
+      "tool": "app_switch",
+      "kind": "table",
+      "card": "turn an app on or off",
+      "desktop": "turn an app on or off"
+    },
+    {
+      "tool": "app_disconnect",
+      "kind": "table",
+      "card": "disconnect an app",
+      "desktop": "disconnect an app"
+    },
+    {
+      "tool": "app_import",
+      "kind": "table",
+      "card": "add an app from another program on this PC",
+      "desktop": "add an app from another program on this PC"
+    },
+    {
+      "tool": "channel_remove",
+      "kind": "table",
+      "card": "remove a notification destination",
+      "desktop": "remove a notification destination"
+    },
+    {
+      "tool": "channel_alerts",
+      "kind": "table",
+      "card": "choose which alerts a destination gets",
+      "desktop": "choose which alerts a destination gets"
+    },
+    {
       "tool": "webhook_update",
       "kind": "table",
       "card": "change a webhook",
