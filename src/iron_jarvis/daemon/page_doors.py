@@ -129,7 +129,9 @@ class NotOffered:
 #: sign in. Never the past tense ("I signed in to my bank this morning").
 _ACT = (
     r"\b(?:sign(?:ing)?[\s-]*(?:in(?:to)?|on)|log(?:ging)?[\s-]*(?:in(?:to)?|on)|login"
-    r"|re-?(?:sign|log)[\s-]*in|(?:sign|log)\s+back\s+in|re-?authenticat(?:e|ing))\b"
+    r"|re-?(?:sign|log)[\s-]*in|(?:sign|log)\s+back\s+in|re-?authenticat(?:e|ing)"
+    # Review: "please sign me in to Claude Code".
+    r"|(?:sign|log)\s+(?:me|us)\s+(?:back\s+)?in(?:to)?)\b"
 )
 #: "is not signed in", "logged out", "sign-in expired", "keeps asking me to
 #: log in" — a sign-in that needs doing again.
@@ -137,7 +139,10 @@ _STATE = (
     r"(?:(?:not|n['’]t|never)\s+(?:been\s+)?(?:signed|logged)\s+in|(?:signed|logged)\s+out"
     r"|(?:sign[\s-]*in|log[\s-]*in|login)\s+(?:has\s+|keeps\s+)?(?:expired|failed|failing|broke"
     r"|stopped|isn['’]t\s+working|is\s+not\s+working|doesn['’]t\s+work|won['’]t\s+work)"
-    r"|(?:needs?|wants?|ask(?:s|ing)?|keeps\s+asking)\s+(?:me\s+)?to\s+(?:sign|log)\s+in)"
+    r"|(?:needs?|wants?|ask(?:s|ing)?|keeps\s+asking)\s+(?:me\s+)?to\s+(?:sign|log)\s+in"
+    # Review: Claude Code's and Grok's own words for it ("Please run /login"),
+    # and "the Codex CLI wants me to log in" (the verb is the subject's).
+    r"|(?:please\s+)?run\s+/login\b|\bme\s+to\s+(?:sign|log)\s+(?:back\s+)?in\b)"
 )
 #: A thing that is the subject of a sentence about its sign-in ("Codex says
 #: …", "Claude Code keeps …", "Grok isn't …").
@@ -157,10 +162,16 @@ def _cli_rules(name: str, *, bare: str = "") -> tuple[re.Pattern[str], ...]:
     rules = [
         _ACT + r"(?:\s+again)?\s+" + _PREP + name + r"\b",
         r"\b" + name + _NOUN_SIGNIN,
-        r"\b" + name + _SUBJECT_VERB + _GAP + _STATE,
+        # Review: one noun may sit between ("my Claude Code session says I'm
+        # signed out").
+        r"\b" + name + r"(?:\s+(?:session|terminal|window|app))?" + _SUBJECT_VERB + _GAP + _STATE,
     ]
     if bare:
-        rules.append(_ACT + r"(?:\s+again)?\s+(?:to|into|on|with)\s+(?:(?:my|the|your)\s+)?" + bare + r"\b")
+        # Review: never a person's possessive ("log in with Claude's password
+        # to the client portal" is a colleague named Claude).
+        rules.append(
+            _ACT + r"(?:\s+again)?\s+(?:to|into|on|with)\s+(?:(?:my|the|your)\s+)?" + bare + r"\b(?!['’]s\b)"
+        )
     return tuple(re.compile(r, re.IGNORECASE) for r in rules)
 
 
@@ -193,7 +204,12 @@ _M365 = r"(?:(?:microsoft|office)[\s-]*365|m365)"
 #: for Jarvis ("so you can read my mail") — "how do I log in to Outlook on my
 #: phone" is the user's own Outlook.
 _NOT_ON_A_DEVICE = (
-    r"(?![^.!?\n]{0,30}?\bon\s+(?:my|the|her|his|our)\s+(?:phone|iphone|android|ipad|tablet|mac|macbook)\b)"
+    # Review: a laptop or a work computer is the user's own device too ("sign
+    # in to my Microsoft account on the new laptop"); "on this PC" is not
+    # excluded (Iron Jarvis runs there).
+    r"(?![^.!?\n]{0,30}?\bon\s+(?:my|the|her|his|our|a|another)\s+(?:(?:new|old|work|home|personal|other"
+    r"|second|office)\s+)?(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop|computer|pc|desktop"
+    r"|surface|chromebook)\b)"
 )
 _M365_RULES = tuple(
     re.compile(r, re.IGNORECASE)
@@ -215,7 +231,7 @@ _MS_APPROVAL = re.compile(
     r"\b(?:admin(?:istrator)?\s+(?:consent|approval)|grant\s+(?:admin\s+)?consent"
     r"|app\s+registrations?|register(?:ing)?\s+(?:the|an|our|a|this)\s+app|conditional\s+access"
     r"|assignment\s+required|enterprise\s+applications?"
-    r"|(?:approve|consent\s+to|allow)\s+(?:the\s+|this\s+|our\s+|my\s+)?(?:iron\s+jarvis\s+)?app)\b",
+    r"|(?:approve|consent\s+to|allow)\s+(?:the\s+|this\s+|our\s+|my\s+)?(?:iron\s+jarvis(?:\s+app)?|app))\b",
     re.IGNORECASE,
 )
 _ENTRA = re.compile(r"\bentra\b" + _GAP + r"\b(?:apps?|registration|consent|permissions?|approv\w*)\b", re.IGNORECASE)
@@ -228,8 +244,13 @@ _GOOGLE = re.compile(
     re.IGNORECASE,
 )
 _GOOGLE_SETUP = re.compile(
+    # Review: a CPA's "client ID" is a customer's number ("add a client ID
+    # column to the Google Sheet"), so "client/app ID" counts only as Google's
+    # own (named right before it, or paired with its secret).
     r"\b(?:(?:developer|dev)\s+(?:setup|set[\s-]up|app|project|account|console)|cloud\s+console"
-    r"|client\s+(?:id|secret)|app\s+id|oauth|consent\s+screen|credentials\s+(?:page|screen)"
+    r"|(?:google|gmail|drive|oauth|cloud)\s+(?:oauth\s+)?(?:client|app)\s+(?:id|secret)|client\s+secret"
+    r"|client\s+id\s+and\s+(?:the\s+|a\s+|its\s+)?(?:client\s+)?secret"
+    r"|oauth|consent\s+screen|credentials\s+(?:page|screen)"
     r"|api\s+(?:project|credentials)|one[\s-]time\s+(?:google\s+)?(?:developer\s+)?set[\s-]?up"
     r"|test\s+users?|(?:create|make|register|set\s*up)\s+(?:the|a|an|my|our)\s+google\s+"
     r"(?:(?:developer|cloud)\s+)?(?:app|project|client))\b",
@@ -243,9 +264,15 @@ _GOOGLE_LITERAL = re.compile(
 #: developer words — never "install the Slack app on my laptop").
 _SLACK = re.compile(r"\bslack\b", re.IGNORECASE)
 _SLACK_SETUP = re.compile(
-    r"(?:\b(?:app|bot)\s+tokens?\b|\bapp[\s-]level\s+tokens?\b|\bxox[bp]-|\bxapp-"
+    r"(?:\b(?:app|bot|xapp|xoxb)\s+tokens?\b|\bapp[\s-]level\s+tokens?\b|\bxox[bp]-|\bxapp-"
     r"|\b(?:app|slack|the|its)\s+manifest\b"
-    r"|\bmember\s+id\b|\bsocket\s+mode\b|\bmessages\s+tab\b"
+    # Review: "member ID" alone is also an insurance or a client's number
+    # ("send the member ID to the team on Slack"): only Slack's own, or one
+    # for Jarvis, or the user's own looked up.
+    r"|\bslack\s+member\s+id\b"
+    r"|\bmember\s+id\b(?=[^.!?\n]{0,40}?\bfor\s+(?:you|jarvis|iron\s+jarvis|notifications?)\b)"
+    r"|\b(?:find|get|copy|where['’]s|where\s+is|where\s+do\s+i\s+find)\s+my\s+member\s+id\b"
+    r"|\bsocket\s+mode\b|\bmessages\s+tab\b"
     r"|\b(?:create|make|set\s*up|register)\s+(?:a\s+|an\s+|the\s+|my\s+|our\s+)?(?:new\s+)?slack\s+(?:app|bot)\b"
     r"|\bslack\s+(?:app|bot)\b" + _GAP + r"\b(?:create|make|set\s*up|register)\b)",
     re.IGNORECASE,
@@ -260,7 +287,15 @@ _BROWSER_RULES = tuple(
     re.compile(r, re.IGNORECASE)
     for r in (
         r"\b(?:pair|re-?pair|unpair|link|connect)\w*\s+(?:my|the|your|this|a)\s+" + _BROWSER_NOUN + r"\b"
-        r"(?!\s+(?:to|with)\s+(?:the\s+|my\s+)?(?:internet|wi-?fi|network|vpn|printer|tv|phone|bluetooth)\b)",
+        r"(?!\s+(?:to|with)\s+(?:the\s+|my\s+)?(?:internet|wi-?fi|network|vpn|printer|tv|phone|bluetooth)\b)"
+        # Review: the browser's own things are not the browser ("link my
+        # Chrome bookmarks to the spreadsheet").
+        r"(?!\s+(?:bookmarks?|history|passwords?|tabs?|profiles?|settings|cache|cookies|data|homepage"
+        r"|downloads|windows?)\b)",
+        # Review: "pair the add-on" (a phone extension is never paired).
+        r"\b(?:pair|re-?pair|unpair)\w*\s+(?:the|my|your|this|a|an)\s+(?:(?:browser|chrome|edge)\s+)?"
+        + _ADDON + r"\b"
+        r"|\b(?:connect|link)\w*\s+(?:the|my|your|this)\s+(?:(?:browser|chrome|edge)\s+)?add[\s-]?on\b",
         r"\bbrowser\s+pairing\b|\bpairing\s+(?:code\s+for\s+)?(?:the|my|your)\s+browser\b",
         r"\b(?:install|set\s*up|setup|add|get|load|download|enable|turn\s+on|reinstall|update)\w*\s+"
         r"(?:your|iron\s+jarvis['’]?s?|jarvis['’]?s?|its)\s+(?:(?:browser|chrome|edge)\s+" + _ADDON
@@ -268,8 +303,13 @@ _BROWSER_RULES = tuple(
         r"\b(?:install|set\s*up|setup|add|get|load|download|enable|turn\s+on|reinstall|update)\w*\s+"
         r"(?:the|a|an)\s+(?:browser\s+add[\s-]?on|(?:browser|chrome|edge)\s+" + _ADDON
         + r"\b(?=" + _GAP + r"\b(?:you|jarvis)\b))",
-        r"\bthe\s+(?:browser|chrome|edge)\s+" + _ADDON + r"\b" + _GAP
-        + r"(?:won['’]?t|doesn['’]?t|isn['’]?t|not|can['’]?t|never)\s+(?:pair|connect|work|show|load|install)",
+        # Review: "add-on" is the app's own word; a bare "Chrome extension" is
+        # any extension ("the Chrome extension for Grammarly isn't working")
+        # unless the sentence names Jarvis.
+        r"\bthe\s+(?:browser|chrome|edge)\s+(?:add[\s-]?on\b|extension\b(?=[^.!?\n]{0,60}?\b(?:you|jarvis)\b))"
+        + _GAP
+        + r"(?:(?:won['’]?t|doesn['’]?t|isn['’]?t|not|can['’]?t|never)\s+(?:pair|connect|work|show|load|install)"
+        r"|(?:keeps\s+)?(?:disconnect|dropp)(?:s|ed|ing)\b)",
         r"\b(?:iron\s+)?jarvis\s+(?:browser\s+)?" + _ADDON + r"\b",
     )
 )
@@ -279,12 +319,13 @@ _MODEL_NAMES = r"(?:llama|qwen|gemma|mistral|deepseek|phi|glm|gpt-oss|nemotron|g
 _LOCAL_MODEL_RULES = tuple(
     re.compile(r, re.IGNORECASE)
     for r in (
-        r"\b(?:download|pull|install|get|grab|set\s*up|add)\w*\s+"
+        r"\b(?:download|pull|install|get|grab|set\s*up|add)\w*\s+(?:me\s+|us\s+)?"
         r"(?:(?:a|an|the|some|my|another|new|good|small|free|decent)\s+){0,2}"
         r"(?:local|offline|private|ollama|open[\s-]?source|open[\s-]?weights?)\s+"
         r"(?:ai\s+|llm\s+|language\s+)?(?:models?|llms?)\b",
         r"\bollama\s+(?:pull|run)\s+[a-z0-9]",
-        r"\b(?:download|pull|install|grab)\w*\s+(?:the\s+)?" + _MODEL_NAMES + r"[\s.:-]?\d",
+        # Review: a tag between the name and its number ("deepseek-r1").
+        r"\b(?:download|pull|install|grab)\w*\s+(?:the\s+)?" + _MODEL_NAMES + r"(?:[\s.:-]?[a-z]{1,6})?[\s.:-]?\d",
         r"\b(?:download|pull|install|grab)\w*\s+(?:the\s+)?" + _MODEL_NAMES + r"\b[\w.: -]{0,20}?\bmodel\b",
         r"\b(?:which|what)\s+(?:local\s+|ollama\s+|offline\s+)?(?:ai\s+)?models?\s+(?:should|can|could|do)\s+"
         r"(?:i|we)\s+(?:download|pull|install)\b",
@@ -297,16 +338,24 @@ _DESKTOP_NOUN_GUARD = (
     r"(?!\s*(?:['’]s)?\s*(?:brightness|resolution|time|timeout|saver|size|settings?|wallpaper|background"
     r"|layout|folder|files?|shortcuts?|volume|temperature|name|password|login|account|camera"
     r"|microphone|mic|speakers?|drivers?|protector|recording|control\s+panel|icons?\s+size|reader"
-    r"|readers|app|apps|version|client|notifications?|edition)\b)"
+    r"|readers|app|apps|version|client|notifications?|edition|pads?|wheel|batter(?:y|ies)|cables?"
+    r"|cords?|dongle|sensitivity|speed|doors?)\b)"
 )
 _DESKTOP_RULES = tuple(
     re.compile(r, re.IGNORECASE)
     for r in (
-        r"\b(?:control|operate|take\s+over|takeover|remote[\s-]+control)\s+(?:my|the|this)\s+"
+        r"\b(?:control|operate|take\s+over|takeover|take\s+control\s+of|remote[\s-]+control)\s+(?:my|the|this)\s+"
         r"(?:mouse|cursor|keyboard|desktop|screen|computer|pc|laptop)\b" + _DESKTOP_NOUN_GUARD,
         r"\b(?:move|drive)\s+(?:my|the|this)\s+(?:mouse|cursor)\b",
-        r"\b(?:use|click(?:\s+on)?|type\s+(?:on|into|with))\s+(?:my|the|this)\s+"
+        # Review: "use my keyboard" is asked OF Jarvis, or said to it as an
+        # order at the start of a sentence — "How do I use my keyboard to
+        # select a column in Excel?" is the user's own how-to question.
+        r"\b(?:you|jarvis)\b" + _GAP + r"\b(?:use|click(?:\s+on)?|press|type\s+(?:on|into|with))\s+"
+        r"(?:my|the|this)\s+(?:mouse|cursor|keyboard|desktop|screen)\b" + _DESKTOP_NOUN_GUARD,
+        r"(?:^|[.!?\n])\s*(?:please\s+)?(?:use|click(?:\s+on)?|type\s+(?:on|into|with))\s+(?:my|the|this)\s+"
         r"(?:mouse|cursor|keyboard|desktop|screen)\b" + _DESKTOP_NOUN_GUARD,
+        r"\b(?:you|jarvis)\b" + _GAP + r"\b(?:click|press|tap)\w*\b" + _GAP
+        + r"\bon\s+(?:my|the|this)\s+(?:screen|desktop|monitor)\b" + _DESKTOP_NOUN_GUARD,
         r"\b(?:see|look\s+at|watch|view|read)\s+(?:my|the|this)\s+(?:screen|desktop|monitor)\b"
         + _DESKTOP_NOUN_GUARD,
         r"\bscreen\s*shot\s+of\s+(?:my|the|this)\s+(?:screen|desktop|monitor)\b",
@@ -403,12 +452,31 @@ def _full_default(t: str) -> bool:
 
 _NOT_FOR_THEM = "Iron Jarvis cannot do it for the user, so say so plainly and point there"
 
+#: Where the places are called ON SCREEN today (review): the Settings rows
+#: are named like the pages they hold since v1.354.0 (G67), so "Accounts &
+#: keys" and "Apps & tools" are retired names. Pinned equal to
+#: ``providers/failure_words.ACCOUNTS_PLACE`` and ``connectors/app_names.
+#: APPS_PLACE``, and no line may name a ``formerly:`` row of SettingsHome.
+CONNECTIONS_PLACE = "Settings › Connections"
+DIRECTORY_PLACE = "the Directory in Settings › Connections"
+#: The Iron-Proxy card's own title (``components/connections/IronProxyCard
+#: CARD_TITLE``; pinned equal).
+ACCOUNTS_CARD = "Several accounts (Iron-Proxy)"
+#: The one model Iron Jarvis downloads itself, and the words of the place
+#: that offers it (``dashboard/lib/starterModel.STARTER_MODEL_LABEL`` and the
+#: chat page's "Connect a model for real answers" line; pinned equal).
+STARTER_MODEL_NAME = "Llama 3.2"
+CONNECT_DOORS_WORDS = "Connect a model for real answers"
+
 
 def _cli_line(name: str, inside: str) -> str:
+    # Review: the Sign in button beside a CLI is drawn ONLY while it is not
+    # signed in (ConnectionsPage: `available ? null : signedOut && cli`), so
+    # the line says when it is there instead of promising it always is.
     return (
-        f"Signing in to {name} is done on this PC, in {name} itself: the Sign in button beside {name} in "
-        f"Settings › Connections › Accounts & keys opens it in a terminal, where {inside}. "
-        f"{_NOT_FOR_THEM}."
+        f"Signing in to {name} is done on this PC, in {name} itself, in a terminal: while {name} is not "
+        f"signed in, {CONNECTIONS_PLACE} shows a Sign in button beside it that opens that terminal, where "
+        f"{inside}. {_NOT_FOR_THEM}."
     )
 
 
@@ -418,9 +486,9 @@ def _cli_line(name: str, inside: str) -> str:
 STEPS: tuple[PageStep, ...] = (
     PageStep(
         "accounts", ACCOUNTS_HREF, "Open your accounts in Settings",
-        "Adding a Claude, Codex or Grok account, or signing one in again, is done on the Iron-Proxy card "
-        "(the user's accounts) in Settings › Connections › Accounts & keys: each account signs in with its "
-        f"own Sign in button, in a terminal on this PC. {_NOT_FOR_THEM}.",
+        f"Adding a Claude, Codex or Grok account, or signing one in again, is done on the \"{ACCOUNTS_CARD}\" "
+        f"card in {CONNECTIONS_PLACE} (switched on there first): Add account, then each account signs in "
+        f"with its own Sign in button, in a terminal on this PC. {_NOT_FOR_THEM}.",
     ),
     PageStep(
         "vendor_approval", help_href("handbook", M365_ADMIN_SECTION), "Read the Microsoft 365 setup steps",
@@ -431,7 +499,7 @@ STEPS: tuple[PageStep, ...] = (
     ),
     PageStep(
         "signin_microsoft", _APPS_FIX_HREF, "Sign in to Microsoft 365 in Settings",
-        "Signing in to Microsoft 365 is done on its card in Settings › Connections › Apps & tools: after "
+        f"Signing in to Microsoft 365 is done on its card in {DIRECTORY_PLACE}: after "
         "Connect, its Sign in to Microsoft button opens a terminal with a web address and a code, and the "
         "user signs in there with their main account, in a private browser window. "
         f"{_NOT_FOR_THEM}.",
@@ -469,16 +537,16 @@ STEPS: tuple[PageStep, ...] = (
         "google_setup", ACCOUNTS_HREF, "Open Google's one-time setup in Settings",
         "Google Drive and Gmail need a one-time Google developer setup that the user makes in their own "
         "Google account, in their browser (the Google Cloud console); Iron Jarvis cannot make it for them. "
-        "Google Drive's steps are in Settings › Connections › Accounts & keys (its card's One-time setup), "
-        "and Gmail's card in Settings › Connections › Apps & tools links its own steps; say so plainly and "
-        "point there.",
+        f"Google Drive's steps are on its card in {CONNECTIONS_PLACE} (its One-time setup), and Gmail's "
+        f"card in {DIRECTORY_PLACE} links its own steps; say so plainly and point there.",
     ),
     PageStep(
         "slack_setup", NOTIFICATIONS_HREF, "Set up Slack in Settings",
         "A Slack app (its bot and app tokens, the app manifest, the user's member ID) is made by the user on "
         "Slack's own website, signed in as themselves; Iron Jarvis cannot make it for them. Settings › "
-        "Connections › Notifications has the Slack form, a manifest to copy and the steps; say so plainly "
-        "and point there.",
+        "Connections › Notifications has the Slack form, a manifest to copy and the steps (for Jarvis to "
+        f"message the user there); the Slack card in {DIRECTORY_PLACE}, for reading and posting in their "
+        "channels, takes the bot token of such an app too. Say so plainly and point there.",
     ),
     PageStep(
         "browser_addon", _BROWSER_FIX_HREF, "Set up the browser add-on",
@@ -488,10 +556,14 @@ STEPS: tuple[PageStep, ...] = (
     ),
     PageStep(
         "local_model", help_href("local-models"), "Which local model to download",
-        "Iron Jarvis does not download models by itself (only the small starter model its first-run screen "
-        "offers). A local model is downloaded with Ollama (ollama pull followed by the model's name, which "
-        "can run in a terminal in Build) and then chosen in Settings › Connections. The guide \"Local Models "
-        "by RAM Tier\" (in Help) says which model fits this PC; say so plainly and point there.",
+        # Review: the first-run wizard is gone (an orphan module); the starter
+        # model is offered by a NEW chat's connect doors while no model is set
+        # up (components/onboarding/ConnectDoors, the chat page's own words).
+        f"Iron Jarvis does not download models by itself (only the small starter model, {STARTER_MODEL_NAME}, "
+        f"that a new chat's \"{CONNECT_DOORS_WORDS}\" choices offer while no model is set up). A local model "
+        "is downloaded with Ollama (ollama pull followed by the model's name, which can run in a terminal in "
+        f"Build) and then chosen in {CONNECTIONS_PLACE}. The guide \"Local Models by RAM Tier\" (in Help) says "
+        "which model fits this PC; say so plainly and point there.",
     ),
 )
 
@@ -521,24 +593,38 @@ _STEP_RULES: dict[str, Callable[[str], bool]] = {
 NOT_OFFERED: tuple[NotOffered, ...] = (
     NotOffered(
         "desktop_control",
-        "Iron Jarvis cannot control the Windows desktop: it cannot move the mouse, type on the keyboard, see "
-        "the screen, or click and type in desktop programs. It works in a web browser (through its browser "
-        "add-on or its own browser), with the user's files (it can read and write documents such as Word "
-        "and Excel files), and through connected apps' own tools. Say so plainly; never pretend to act on "
-        "the desktop.",
+        # Review: "of its own" — no built-in tool controls the desktop (the
+        # real registry is pinned for it), but an app the user connected may
+        # offer such tools, and a flat "cannot" would make the model refuse a
+        # tool it holds.
+        "Iron Jarvis has no way of its own to control the Windows desktop: it cannot move the mouse, type "
+        "on the keyboard, watch the screen, or click and type in desktop programs (only an app the user "
+        "connected could, through its own tools in your list). It works in a web browser (through its "
+        "browser add-on or its own browser), with the user's files (it can read and write documents such as "
+        "Word and Excel files), and through connected apps' own tools; the user can paste a screenshot into "
+        "the chat for it to read. Say so plainly; never pretend to act on the desktop.",
     ),
     NotOffered(
         "another_computer",
+        # Review: LAN access opens TWO token-checked doors (daemon/auth
+        # _is_exempt: the task door AND a remote agent's message back), and
+        # only a destination with two-way chat on takes messages (Telegram,
+        # Slack, email; never Discord).
         "Iron Jarvis's screens open only on this PC; another computer cannot open them. Another computer can "
         "run its own copy of Iron Jarvis, with its own settings and data, and the setting \"Let other "
-        "computers on my network reach this Iron Jarvis\" only lets such a copy hand this one tasks. From a phone, the user can chat with Jarvis through a notification "
-        "destination such as Slack or Telegram. Say so plainly.",
+        "computers on my network reach this Iron Jarvis\" only lets such a copy hand this one tasks (and a "
+        "remote agent the user connected send its messages back); it never opens these screens there. From "
+        "a phone, the user can chat with Jarvis through a notification destination with two-way chat "
+        "turned on (Telegram, Slack or email). Say so plainly.",
     ),
     NotOffered(
         "full_access_default",
-        "Full access and \"Don't ask\" cannot be a folder's default: each coding session chooses them itself, "
-        "so a new session never starts without asking. Any other approval level or mode can be a folder's "
-        "default. Say so plainly.",
+        # Review: Auto IS a folder default (harness/folder_defaults
+        # CODE_POSTURES and TOOL_MODES), and Auto runs routine actions without
+        # asking, so "a new session never starts without asking" was false.
+        "Full access and \"Don't ask\" cannot be a folder's default: the user turns either one on in each "
+        "coding session, so a new session never starts in them. Any other approval level or mode, Auto "
+        "included, can be a folder's default. Say so plainly.",
     ),
 )
 
@@ -608,7 +694,13 @@ def prompt_block(text: Any) -> str:
     :data:`BLOCK_HEADING`; ``""`` when nothing matches (the system prompt is
     then byte-identical to before). Never raises."""
     try:
-        lines = [s.line for s in page_steps(text)] + [n.line for n in not_offered(text)]
+        # Review: a "not offered" line is the one that stops the model
+        # pretending, so it is never the line the cap cuts: the steps give up
+        # their places first (the door's own step always keeps one).
+        steps = page_steps(text)
+        nots = not_offered(text)
+        room = max(1 if steps else 0, MAX_LINES - len(nots))
+        lines = [s.line for s in steps[:room]] + [n.line for n in nots]
         if not lines:
             return ""
         return "\n\n" + BLOCK_HEADING + "\n" + "\n".join("- " + ln for ln in lines[:MAX_LINES])
