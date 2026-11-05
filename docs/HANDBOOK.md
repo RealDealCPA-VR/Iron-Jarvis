@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.433.0 (2026-11-04).*
+holds itself to. Current as of v1.434.0 (2026-11-05).*
 
 ---
 
@@ -2019,6 +2019,36 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Chat finds the right tool (v1.434.0)
+
+- **Chat knows every setting by its name.** Ask "turn on follow-up
+  suggestions", "use Ollama by default", "stop asking before every command" or
+  "make the app dark", and chat offers the right setting. It knows each
+  setting by the name Settings shows and by the other words people use. It
+  changes a setting only when you ask for a change; a question such as "what
+  theme am I using?" only looks it up.
+- **Settings work in coding sessions too.** In Chat › Code you can change a
+  setting the same way. While a session is planning, it can only tell you a
+  setting's value.
+- **With Auto tools off,** chat can still tell you what a setting is set to,
+  but it can't change one.
+- **Making a schedule, goal, webhook or watcher from chat asks first.** "Remind
+  me every weekday at 8 to check the bank feeds" now brings up the schedule
+  tool, and you see a card before anything is made, even if you had set that
+  tool to run without asking. "Schedule a call with Dana" is no longer read as
+  one of the app's schedules.
+- **"Run the month-end workflow"** runs your saved workflow by its name, after
+  asking.
+- **A tool you set to Never run stays off.** Before, a sentence that asked for
+  it could still bring it up in chat.
+- **Every chat says which screen it's on.** A screen setting (theme, read
+  aloud, persona, Auto tools) changed from a coding session, a Build
+  terminal's chat, Try on several models, Choose account, or a plan you
+  allowed now lands on the screen you are using.
+- **Fewer false alarms.** "The Daylight Savings rules", "my stable channel",
+  "slack time" and "don't ask me what I want for dinner" no longer bring up
+  setting or rule tools.
 
 ## Seventeen fixes from the deep review (v1.433.0)
 

@@ -11599,7 +11599,7 @@ does not need a bump, stop and bump it.
   `capture_undo` snapshots the record into `record_restore`; the create tools
   gained the same Undo (a card only when an Undo was captured, so direct
   `execute` keeps its old data). All chat-only (`wants_settings` /
-  `record_tools_for` arm them; the POST lane never arms an ask tier), denied
+  `record_tools_for` arm them — since v1.434.0 from `settings/trigger.py`, outside the cap: see the Wave 2 bullet; the POST lane never arms an ask tier), denied
   under low trust, exempt from the roster pin. Both chat lanes put
   `config_cards` on every turn (`chat_turn.config_cards_from_result`, LOCK-
   STEP), the page renders "Setting changed: old → new [Undo]" (Undo =
@@ -14615,6 +14615,103 @@ does not need a bump, stop and bump it.
     - An add-on not reloaded prints "does not understand (reset)".
     - The A13 verb list is narrow ("make the app autostart").
     - The composer misses the JDBC `password=` form.
+
+- **Wave 2 of the chat-first plan: chat finds the right tool, and every chat
+  says which screen it is on** (v1.434.0; groups E and F, each built then
+  independently reviewed; the reviewers found 10 more defects, every fix
+  red-then-green and mutation-checked).
+  - SETTINGS TRIGGER (`settings/trigger.py`, replaces `settings/tools.
+    _SETTINGS_WORDS`; `wants_settings()` keeps its API):
+    - Built from the schema: every row's label, aliases, option names and key,
+      plus the secrets. Built once (`_index`), per-text results cached.
+    - A writer arms only with a change cue within ~10 words of the setting's
+      words; a question arms the reader `config_list` only.
+    - Everyday words (theme, model, persona, browser) count only as
+      "the/my/your <word>" after a cue. A two-word option label ("Don't ask",
+      "Ask first", "Claude Code") counts only beside a word naming its setting,
+      as a switch target, or with "by default". A hyphen-glued word, or a code
+      noun after a setting word, does not count.
+    - Patterns for shapes the schema cannot say: a model name + "by default",
+      "open files in Cursor", "turn off web search", "read your replies out
+      loud", "make the app dark/light".
+    - ADDING A SCHEMA ROW'S LABEL OR ALIAS WIDENS THE TRIGGER: a row with
+      everyday words needs a negative row in the table.
+  - PLACES:
+    - `config_list`/`config_set`/`config_secret` are armed outside the 6-tool
+      cap and the model's tool ceiling, after "adapted" is measured. With Auto
+      tools off only the reader is armed. The browser sidebar's `browser_*`
+      ceiling still keeps them out.
+    - Coding sessions: `_build_harness` (both lanes) passes them as
+      `mode.build(asked=)` / `plan_tools(asked=)`, which keep each tool's own
+      tier (unlike `extra`, which grants). POST drops the ask tier, plan mode
+      and questions get the reader, low trust gets none.
+  - CREATE TOOLS:
+    - `schedule_create`, `goal_add`, `webhook_add`, `sentinel_add` are
+      ask-armed in the STREAM lane only (`ASK_FIRST_CREATE_TOOLS`).
+      `chat_turn.ask_first_overrides` writes an "ask" override: never over a
+      deny or an explicit "+" pick, and a failed write takes the tool off
+      (fail-closed). In chat they always card now, even when set to Run
+      without asking.
+    - `settings_ask_tools` is the one function the stream lane calls; its
+      matching runs off the loop, in the same hop as the saved-workflow-name
+      read (≤ 500 rows).
+    - `workflow_run` is ask-armed for a run verb + "workflow" or a saved
+      name. `records._runs_a_named_workflow` finds each run verb once and looks
+      the following words up by length: never one regex per name.
+    - New recurring-time shapes count for schedules. "Schedule a
+      call/meeting", calendar events, the person's own routine and code nouns
+      (webhook handler, watcher function, goal section) arm nothing.
+      `sentinel_add` is on the Automation roster.
+  - A USER'S DENY HOLDS: `_resolve_armed_tools` drops any tool the user set to
+    Never run from every automatic pass. The armed "allow" override used to
+    beat a base deny: `config_set`, and older, `write_document` and
+    `web_search`. Explicit "+" picks are left alone; no permission engine =
+    nothing denied; an engine that raises = nothing armed.
+  - LINEAR: three quadratic patterns fixed (`records._NOT_OUR_SCHEDULE`,
+    `_RUN_WORKFLOW`, `app_names._WEB_SEARCH_RX`), and `trigger._cue_positions`
+    tokenises once. A new regex over user text gets a pathological-input pin in
+    a child process with a deadline.
+  - DEVICE ID (group F):
+    - `BuildTurnBody.device_id` and `BuildAccountChoice.device_id` →
+      `start_build_turn(device_id=)` → the turn's `ChatBody`.
+    - Try on several models carries it to each attempt (`Plan.device_id`).
+      The approved plan's act turn carries the id of the screen that pressed
+      Allow.
+    - `paneChatCore.buildTurnBody(deviceId)` sends it only when non-empty;
+      HarnessSession and `chooseAccountAndContinue` send `getDeviceId()`.
+    - Turns Iron Jarvis starts by itself carry none, on purpose.
+    - The settings tool refuses a device id the store would reject
+      (`settings/tools.BAD_DEVICE_REFUSAL`, `device.valid_device_id`). In the
+      browser sidebar (unreachable today: its ceiling) it names the app as the
+      place.
+  - GITHUB SECRET SCANNING: the repo is public, and made-up test values shaped
+    like credentials raise alerts the owner reads as leaks.
+    `tests/test_no_secret_shaped_values_v14340.py` fails while a tracked file
+    holds a MongoDB Atlas URI with a password, a Google API key or a Telegram
+    bot token: use an example.com host, or build the value from pieces.
+  - Pins: `tests/test_chat_arming_table_v14340.py` (278 rows + the review's
+    rows), `tests/test_chat_arming_review_v14340.py`,
+    `tests/test_device_id_{every_chat,review}_v14340.py`. The reviewer's 125
+    fresh sentences: requests 65/65 (master 27/65), near-misses arming no
+    writer 49/60 (master 27/60).
+  - Moved on purpose:
+    - `test_roster_coverage_v1178` (sentinel_add left the off-roster list),
+      `test_matcher_tables_v13610` (new CODING rows),
+      `test_claude_setup_review_v14240`;
+    - dashboard exact-body pins: `ij-harness-session-v1369`,
+      `harness-continue-session-v1422-0`, `limits-without-a-press-v1393`,
+      `pane-chat-v1206`, `browser-ambient-v1236`;
+    - `step-target-twin-v1378` (+ fixture), `wave1-paste-guard-v1433`.
+  - OPEN:
+    - 11 of the reviewer's 60 near-misses still arm a writer ("switch my
+      calendar to week view", "make a schedule for my kids' chores", "add my
+      API key to the .env file", a theme "on my iPhone").
+    - An explicit "+" pick still lifts a deny (consent).
+    - `select_ask_tools` and `harness_asked_tools` run on the loop (input
+      capped). A denied automatic pick still takes an automatic slot.
+    - `sentinel_add` on the Automation agent is allow-tier for unattended runs
+      (denied under low trust; watchers stay off until turned on).
+    - Not driven with a real model or in the packaged app.
 
 ## Map (where things live)
 
