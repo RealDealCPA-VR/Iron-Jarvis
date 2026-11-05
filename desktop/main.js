@@ -269,6 +269,50 @@ function isDashboardUrl(url) {
 }
 
 /**
+ * v1.433.0 (D6): the only kinds of address a link in a window may hand to the
+ * operating system — a web page or a new e-mail. `shell.openExternal` opens
+ * ANY scheme with whatever program the system registered for it (`file:` runs
+ * a file, `ms-settings:`, `search-ms:`, a custom app's own scheme…), and the
+ * window's links come from model-written replies and fetched pages. Anything
+ * else is refused quietly (logged by scheme only, never the address).
+ */
+const EXTERNAL_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+
+function isSafeExternalUrl(url) {
+  try {
+    return EXTERNAL_SCHEMES.has(new URL(String(url)).protocol);
+  } catch {
+    return false; // unparseable → never handed to the system
+  }
+}
+
+/** Open `url` in the system browser / mail program when it is safe to; true
+ *  when it was handed over. Never throws (openExternal's rejection is caught). */
+function openExternalIfSafe(url) {
+  if (!isSafeExternalUrl(url)) {
+    let scheme = "unreadable";
+    try {
+      scheme = new URL(String(url)).protocol || scheme;
+    } catch {
+      /* keep "unreadable" */
+    }
+    try {
+      desktopLog("warn", `[links] did not open a ${scheme} link: only web and mail addresses open outside the app`);
+    } catch {
+      /* logging never blocks a click */
+    }
+    return false;
+  }
+  try {
+    const p = shell.openExternal(String(url));
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch {
+    /* no system handler */
+  }
+  return true;
+}
+
+/**
  * True when an IPC message came from a frame still ON the dashboard origin
  * (v1.175.0). The privileged handlers below — reading the user's clipboard,
  * installing an update — used to answer whoever asked, because a handler that
@@ -1105,6 +1149,52 @@ function restartDaemonFromShell(why) {
   return true;
 }
 
+// How long a tidy restart waits for Iron Jarvis to stop by itself before it is
+// stopped by force (still a restart the user asked for, never a crash).
+const TIDY_RESTART_KILL_MS = 20000;
+
+// Settings › Maintenance's "Restart Iron Jarvis" (v1.433.0, A8). The page used
+// to post /shutdown with no body — the daemon's QUIT — and the supervisor then
+// counted that exit as a crash (the 10-in-15-minutes cap, "has crashed N times"
+// toasts, the offline banner's last exit). Now the shell does it: it marks the
+// exit as asked for FIRST (`manualRestart`, read by onGone, which then respawns
+// at once and counts nothing), then posts `{"restart": true}`, which keeps the
+// code host and its coding tools running for the next Iron Jarvis to carry on.
+// `opts.stopping`: the daemon is already stopping itself (a restore from a
+// backup answers, then stops) — mark it, post nothing. A daemon that has not
+// gone after TIDY_RESTART_KILL_MS is stopped by force, still as a restart.
+// A dead (or capped) daemon has nothing to stop: that is the window's own
+// restart. Returns true when a restart is under way, false when there is
+// nothing here to restart (no record, or an adopted daemon the watchdog owns).
+function restartDaemonTidy(opts) {
+  const rec = _services.daemon;
+  if (!rec || !rec.spawnFn) return false;
+  const child = daemonProc;
+  const alive = !!child && child.exitCode === null && child.signalCode === null;
+  if (!alive) return restartDaemonFromShell("on request from Settings");
+  const stopping = !!(opts && opts.stopping === true);
+  rec.manualRestart = true; // BEFORE the request: the exit can come at once
+  rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending never spawns a second daemon
+  if (rec.restartTimer) clearTimeout(rec.restartTimer);
+  rec.restartTimer = null;
+  fileLogger("daemon")(
+    `[main] ${new Date().toISOString()} restarting tidily on request from Settings${stopping ? " (it is already stopping)" : ""}\n`
+  );
+  if (!stopping && !postDaemonShutdown({ restart: true })) {
+    killChild(child, "daemon", "restart"); // onGone respawns at once
+    return true;
+  }
+  setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      fileLogger("daemon")(
+        `[main] ${new Date().toISOString()} did not stop within ${TIDY_RESTART_KILL_MS}ms of a restart — stopping it\n`
+      );
+      killChild(child, "daemon", "restart");
+    }
+  }, TIDY_RESTART_KILL_MS);
+  return true;
+}
+
 // v1.358.0 (G30): a tooltip or a toast names what the user knows, never the
 // code's label. The labels "daemon" / "dashboard" stay ids (logs, the services
 // map, killChild reasons); the program the window talks to is "Iron Jarvis"
@@ -1338,15 +1428,24 @@ function shutdown(reason) {
 // the process tree dead before it returns.
 // POST /shutdown, best-effort; true when the request was issued. A daemon that
 // is not answering is covered by the caller's force-kill fallback.
-function postDaemonShutdown() {
+// v1.433.0: `body` (optional) rides as JSON. `{restart: true}` is the daemon's
+// own word for "I am coming straight back" (routes/system.py): the coding
+// tools the code host runs keep running. No body is a QUIT, as before.
+function postDaemonShutdown(body) {
   try {
+    const data = body && typeof body === "object" ? JSON.stringify(body) : "";
+    const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+    if (data) {
+      headers["Content-Type"] = "application/json";
+      headers["Content-Length"] = Buffer.byteLength(data);
+    }
     const req = http.request(
       {
         host: "127.0.0.1",
         port: DAEMON_PORT,
         path: "/shutdown",
         method: "POST",
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        headers,
       },
       (res) => res.resume()
     );
@@ -1354,7 +1453,8 @@ function postDaemonShutdown() {
       /* daemon not answering — the force-kill fallback covers it */
     });
     req.setTimeout(1000, () => req.destroy(new Error("shutdown request timeout")));
-    req.end();
+    if (data) req.end(data);
+    else req.end();
     return true;
   } catch {
     return false;
@@ -2188,7 +2288,7 @@ function createMainWindow() {
 
   // Open target=_blank / external links in the system browser, not in-app.
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalIfSafe(url);
     return { action: "deny" };
   });
 
@@ -2196,7 +2296,7 @@ function createMainWindow() {
   mainWin.webContents.on("will-navigate", (event, url) => {
     if (!isDashboardUrl(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openExternalIfSafe(url);
     }
   });
   // A server-side redirect never fires will-navigate, so guard it too: without
@@ -2205,7 +2305,7 @@ function createMainWindow() {
   mainWin.webContents.on("will-redirect", (event, url) => {
     if (!isDashboardUrl(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openExternalIfSafe(url);
     }
   });
 
@@ -2646,7 +2746,11 @@ function installSpotlightIpc() {
       height: size.height | 0,
     };
   });
-  ipcMain.handle("clipboard:write", (_e, text) => {
+  // v1.433.0 (D5): sender-checked like clipboard:read. Writing the clipboard is
+  // how a hostile frame would plant a command or an account number for the
+  // user's next paste. Refused = false, never a write.
+  ipcMain.handle("clipboard:write", (event, text) => {
+    if (!isTrustedDashboardSender(event)) return false;
     try {
       clipboard.writeText(String(text ?? ""));
     } catch {
@@ -2662,7 +2766,8 @@ function installSpotlightIpc() {
   // into a plain-text field) falls back to it, and without it that paste is
   // empty. Throws are reported, never swallowed, so the renderer can say
   // "Copied as text" instead of claiming a rich copy that did not happen.
-  ipcMain.handle("clipboard:writeHtml", (_e, html, text) => {
+  ipcMain.handle("clipboard:writeHtml", (event, html, text) => {
+    if (!isTrustedDashboardSender(event)) return false; // v1.433.0 (D5)
     clipboard.write({ text: String(text ?? ""), html: String(html ?? "") });
     return true;
   });
@@ -2746,6 +2851,16 @@ function installSpotlightIpc() {
     if (!isTrustedDashboardSender(event)) return null;
     return restartDaemonFromShell();
   });
+  // Settings › Maintenance's "Restart Iron Jarvis" (v1.433.0, A8): a TIDY
+  // restart — marked as asked for, then `/shutdown {"restart": true}`, so the
+  // exit is never counted as a crash and the coding tools keep running.
+  // `{stopping: true}` = the daemon is already stopping itself (a restore).
+  // Sender-checked like every privileged handler; null when refused.
+  ipcMain.handle("shell:restartDaemonTidy", (event, raw) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    const stopping = !!(raw && typeof raw === "object" && raw.stopping === true);
+    return restartDaemonTidy({ stopping });
+  });
   // v1.412.0: the folder picker (Windows' own). Sender-checked like every
   // privileged handler: a page that is not the dashboard gets nothing and opens
   // no dialog. Parented to the SENDER's window.
@@ -2777,7 +2892,10 @@ function installSpotlightIpc() {
     if (!isTrustedDashboardSender(event)) return null;
     return closePopout(rawPath);
   });
-  ipcMain.handle("update:check", async () => {
+  // v1.433.0 (D5): sender-checked like update:apply — it makes network
+  // requests and starts a download on the user's PC. Refused = null.
+  ipcMain.handle("update:check", async (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
     const au = initUpdater();
     if (!au) {
       _emitUpdateState({ status: "unsupported" });
@@ -4209,6 +4327,22 @@ function _emitUpdateState(patch) {
   } catch {
     /* window gone */
   }
+  // v1.433.0 (D3): every pop-out too — a Settings window popped out onto the
+  // other screen showed no download progress and no "ready to install". Each
+  // window on its own try, so one that is closing never stops the others.
+  let wins = [];
+  try {
+    wins = Array.from(popouts.values());
+  } catch {
+    wins = []; // no pop-out map yet
+  }
+  for (const win of wins) {
+    try {
+      if (win && !win.isDestroyed()) win.webContents.send("update:state", _updateState);
+    } catch {
+      /* window gone */
+    }
+  }
 }
 
 function safeAppVersion() {
@@ -4663,6 +4797,16 @@ function abortUpdateInstall(err) {
   // The update is NOT ready — stop the tray claiming it is. The next 30-min
   // check re-downloads it if it is still available.
   pendingUpdateInfo = null;
+  // v1.433.0 (A9): and stop the NEXT Quit installing it. electron-updater's own
+  // quit handler reads only this flag, so an install that failed here still ran
+  // NSIS on Quit — skipping before-quit's recovery marker and orphan sweep,
+  // which run only `if (pendingUpdateInfo)`. The update-downloaded handler
+  // turns it back on when a download lands again (forgetPendingUpdate's rule).
+  try {
+    if (_autoUpdater) _autoUpdater.autoInstallOnAppQuit = false;
+  } catch {
+    /* updater gone */
+  }
   refreshTrayMenu();
   try {
     if (tray) tray.setToolTip("Iron Jarvis — running");
@@ -6082,19 +6226,19 @@ function openPopout(rawPath) {
   });
   // Links leave for the system browser; the window stays on the dashboard.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalIfSafe(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, url) => {
     if (!isDashboardUrl(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openExternalIfSafe(url);
     }
   });
   win.webContents.on("will-redirect", (event, url) => {
     if (!isDashboardUrl(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openExternalIfSafe(url);
     }
   });
   // A dashboard-child outage must not strand the window on Chromium's error

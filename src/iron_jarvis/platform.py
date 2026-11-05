@@ -2758,6 +2758,25 @@ def build_platform(
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
 
+    # v1.433.0 (W1): a schedule of kind "event" publishes a name of the user's
+    # OWN (`payload.type`, "schedule.fired" by default — see the event branch
+    # of _dispatch_scheduled). An outbound webhook may subscribe to it, so the
+    # webhook store's list of known names includes them. Read at save time.
+    def _scheduled_event_types() -> list[str]:
+        out: list[str] = []
+        for task in platform.scheduler.list():
+            if getattr(task, "kind", "") != "event":
+                continue
+            name = str(task.decoded_payload().get("type") or "schedule.fired").strip()
+            if name:
+                out.append(name)
+        return out
+
+    try:
+        platform.outbound_webhooks.extra_event_types = _scheduled_event_types
+    except Exception:  # noqa: BLE001 — a stand-in store without the seam keeps the built-in names
+        pass
+
     # Dynamic agents (agents that add agents): load persisted + expose tools.
     # THE FOLDER (v1.297.0): every custom agent keeps `<home>/agents/<slug>/`
     # (AGENTS.md = its instructions, mirrored from the row; NOTES.md = its

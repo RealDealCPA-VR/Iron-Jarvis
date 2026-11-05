@@ -350,6 +350,12 @@ class TerminalManager:
         #: over the shutdown snapshot — every pane lost on the next boot.
         #: Taken BEFORE ``_lock`` (never the other way round).
         self._snapshot_lock = threading.RLock()
+        #: v1.433.0 (L2): the last pass's pane-history write failure (None
+        #: when every pane that needed a write got one). A pane that cannot be
+        #: written is retried every pass, so this stays set for as long as it
+        #: keeps failing; the daemon's snapshot loop reports it as the loop's
+        #: health (``loop_health["terminal_snapshot"]``).
+        self._snapshot_error: OSError | None = None
         # --- pane capability tokens (v1.238.0) -------------------------------
         # The manager owns the store because it owns the only two facts a pane
         # token is made of: the pane id (minted here, before the spawn) and the
@@ -921,6 +927,7 @@ class TerminalManager:
         write (its ``output_seq`` moved). Returns how many were written."""
         folder = _scrollback_dir(self.state_path)
         wrote = 0
+        failed: OSError | None = None
         for s in sessions:
             # What the file holds: how far the output got, and WHICH tail (a
             # restore replaces the buffer without printing anything).
@@ -931,12 +938,27 @@ class TerminalManager:
             try:
                 folder.mkdir(parents=True, exist_ok=True)
                 _write_atomic(folder / f"{s.id}.bin", s.scrollback_bytes()[-_SNAPSHOT_SCROLLBACK:])
-            except OSError:  # retried on the next tick: _snap_seq is not advanced
-                log.debug("could not write a pane's scrollback", exc_info=True)
+            except OSError as exc:  # retried on the next tick: _snap_seq is not advanced
+                # v1.433.0 (L2): WARNING the first time a pane fails (DEBUG
+                # while it keeps failing — it is retried every 30 s), and the
+                # failure is kept for the loop's health row.
+                if not getattr(s, "_snap_failing", False):
+                    log.warning("could not save a terminal's history for after a restart: %s", exc)
+                else:
+                    log.debug("could not write a pane's scrollback", exc_info=True)
+                s._snap_failing = True
+                failed = failed or exc
                 continue
             s._snap_seq = seq
+            s._snap_failing = False
             wrote += 1
+        self._snapshot_error = failed
         return wrote
+
+    def snapshot_problem(self) -> OSError | None:
+        """v1.433.0 (L2): why the last pass could not write a terminal's
+        history (None when it could, or nothing needed writing)."""
+        return getattr(self, "_snapshot_error", None)
 
     def _write_index(self, entries: list[dict[str, Any]], text: str) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)

@@ -60,6 +60,29 @@ export interface ShellBridge {
   getState?: () => Promise<unknown>;
   openLogs?: () => Promise<unknown>;
   restartDaemon?: () => Promise<boolean | null>;
+  /** v1.433.0: a TIDY restart the supervisor asked for itself — never counted
+   *  as a crash, and Build › Code's coding tools keep running. `stopping`:
+   *  Iron Jarvis is already stopping itself (a restore from a backup). */
+  restartDaemonTidy?: (opts?: { stopping?: boolean }) => Promise<boolean | null>;
+}
+
+/** What asking the desktop app for a tidy restart came to (v1.433.0).
+ *  `restarting` — the app took it; `refused` — the app is here but could not
+ *  (nothing it can restart, or the window was refused); `no-bridge` — a
+ *  browser tab or an older desktop app: the caller keeps its old way. */
+export type TidyRestart = "restarting" | "refused" | "no-bridge";
+
+/** Ask the desktop app to restart Iron Jarvis tidily (Settings › Maintenance,
+ *  and after a restore). Never throws. */
+export async function requestTidyRestart(opts?: { stopping?: boolean }): Promise<TidyRestart> {
+  const fn = shellBridge()?.restartDaemonTidy;
+  if (typeof fn !== "function") return "no-bridge";
+  try {
+    const took = await fn(opts?.stopping ? { stopping: true } : undefined);
+    return took === true ? "restarting" : "refused";
+  } catch {
+    return "refused";
+  }
 }
 
 /** The bridge, or null in a browser tab or a shell whose preload has none. */

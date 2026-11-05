@@ -144,6 +144,13 @@ class EventType:
     #: hang?" report this app keeps paying for.
     BATCH_FILE_DONE = "batch.file_done"
     REVIEW_REQUESTED = "review.requested"
+    #: v1.433.0 (A10): the person approved (merged) or rejected a review.
+    #: {branch, merged?} — tagged with the session's id, the key the bell and
+    #: the mood orb clear ``review.requested`` by. Before these existed nothing
+    #: was published, so the bell's badge and the orb's "alert" stayed on after
+    #: the review was answered. Not a default alert: the person just did it.
+    REVIEW_APPROVED = "review.approved"
+    REVIEW_REJECTED = "review.rejected"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"
     PROVIDER_DOWNGRADED = "provider.downgraded"
@@ -342,6 +349,50 @@ class EventType:
     #: waits on pack handshakes, so this says when the packs' tools reached
     #: the registry. {packs: [{name, state, tools_loaded}], tools, ms}.
     MCP_LOADED = "mcp.loaded"
+
+
+#: v1.433.0 (W1): event names the daemon publishes OUTSIDE ``EventType`` —
+#: module constants (``goals.engine.GOAL_*``, ``mcp.tools.EVENT_PACK_FAILED``,
+#: ``media.jobs.MEDIA_*``, ``daemon.routes.envelope.PROBE_*``,
+#: ``agents.runtime.ENVELOPE_ADAPTED``, ``comm.compose.EMAIL_COMPOSED``) and a
+#: few literals (``workflow.waiting``, ``comm.desktop``, ``slack.event``,
+#: ``desktop.incident``). With ``EventType`` this is the list an outbound
+#: webhook may subscribe to: delivery matches a type EXACTLY, so a misspelt
+#: name saved fine and never fired. ``tests/test_wave1_webhook_types_v14330.py``
+#: scans every publish call in ``src/`` and fails on a name this list misses.
+OTHER_PUBLISHED_TYPES: frozenset[str] = frozenset(
+    {
+        "workflow.waiting",
+        "comm.desktop",
+        "comm.email_composed",
+        "slack.event",
+        "desktop.incident",
+        "envelope.adapted",
+        "envelope.probe_started",
+        "envelope.probe_completed",
+        "goal.created",
+        "goal.iteration_started",
+        "goal.iteration_completed",
+        "goal.iteration_refused",
+        "goal.satisfied",
+        "goal.tripped",
+        "goal.stopped",
+        "mcp.pack_failed",
+        "media.completed",
+        "media.failed",
+    }
+)
+
+
+def known_event_types() -> frozenset[str]:
+    """Every event name Iron Jarvis publishes by itself (v1.433.0, W1):
+    ``EventType``'s values plus :data:`OTHER_PUBLISHED_TYPES`. A schedule of
+    kind "event" can publish a name of the user's own on top of these; the
+    outbound webhook store adds those (``OutboundWebhooks.extra_event_types``)."""
+    own = {
+        v for k, v in vars(EventType).items() if k.isupper() and isinstance(v, str) and "." in v
+    }
+    return frozenset(own) | OTHER_PUBLISHED_TYPES
 
 
 @dataclass

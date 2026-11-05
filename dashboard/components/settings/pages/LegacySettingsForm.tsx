@@ -29,6 +29,7 @@ import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
 import { RESTART_WORDS } from "@/lib/restartWords";
+import { isDesktopShell, requestTidyRestart } from "@/lib/desktopShell";
 import { PageGrid } from "@/components/PageGrid";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { ThemeMaker } from "@/components/ThemeMaker";
@@ -931,6 +932,10 @@ export default function SettingsPage() {
   // line under it re-reads the outcome of the copy that backup just made.
   const [backupsVersion, setBackupsVersion] = useState(0);
   const [restarting, setRestarting] = useState(false);
+  // v1.433.0: the desktop app restarts Iron Jarvis; a browser tab only stops
+  // it. Read after mount so the server render and the hydrated one agree.
+  const [restartDesktop, setRestartDesktop] = useState(false);
+  useEffect(() => setRestartDesktop(isDesktopShell()), []);
   const [maintOk, setMaintOk] = useState<string | null>(null);
   const [maintErr, setMaintErr] = useState<string | null>(null);
 
@@ -1119,17 +1124,30 @@ export default function SettingsPage() {
     setMaintOk(null);
     setMaintErr(null);
     setRestarting(true);
-    try {
-      await post("/shutdown");
-    } catch {
-      // The connection may reset as the daemon stops — that's expected here.
+    // v1.433.0 (A8): inside the desktop app the SHELL restarts it (never
+    // counted as a crash; Build › Code's coding tools keep running). A plain
+    // POST /shutdown is a QUIT — kept for a browser tab and an older app.
+    const tidy = await requestTidyRestart();
+    if (tidy === "refused") {
+      setRestarting(false);
+      setMaintErr(RESTART_WORDS.refused);
+      return;
+    }
+    if (tidy === "no-bridge") {
+      try {
+        await post("/shutdown");
+      } catch {
+        // The connection may reset as the daemon stops — that's expected here.
+      }
     }
     // The desktop app relaunches the daemon within ~2s; give it a beat, then
     // let the shared /health poll pick the new process back up.
     await new Promise((r) => setTimeout(r, 2500));
     refresh();
     setRestarting(false);
-    setMaintOk("Restart requested — reconnecting. Watch the status dot in the sidebar.");
+    setMaintOk(
+      tidy === "restarting" || restartDesktop ? RESTART_WORDS.restartingNote : RESTART_WORDS.stoppingNote,
+    );
   }
 
   // A restore (Maintenance → Restore from backup…) stops the daemon itself;
@@ -1386,7 +1404,9 @@ export default function SettingsPage() {
 
                 <div className="border-t hairline pt-4">
                   <SectionLabel>{RESTART_WORDS.label}</SectionLabel>
-                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">{RESTART_WORDS.blurb}</p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+                    {restartDesktop ? RESTART_WORDS.blurb : RESTART_WORDS.browserBlurb}
+                  </p>
                   <div className="mt-2.5">
                     {/* v1.356.0 integrate (G80): the restart keeps its deliberate
                         amber outline (the calm default has no border). */}
@@ -1396,7 +1416,7 @@ export default function SettingsPage() {
                       label={RESTART_WORDS.label}
                       confirmLabel={restarting ? "Restarting…" : "Confirm restart"}
                       className="w-full justify-center border-amber-500/30 py-1.5 text-amber-200 hover:border-amber-500/50 hover:text-amber-100"
-                      title={RESTART_WORDS.title}
+                      title={restartDesktop ? RESTART_WORDS.title : RESTART_WORDS.browserTitle}
                     />
                   </div>
                   {restarting && (

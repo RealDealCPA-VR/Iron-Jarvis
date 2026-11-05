@@ -135,6 +135,9 @@ EVENT_WORDS: dict[str, str] = {
     "delegation.started": "Handed work to a teammate",
     "delegation.completed": "Teammate finished",
     "comm.desktop": "Sent a desktop notification",
+    # v1.433.0 (A10): the answers to a review (they now publish an event).
+    "review.approved": "Review approved and merged",
+    "review.rejected": "Review declined",
 }
 
 #: The line for a subscribed type nothing here has words for.
