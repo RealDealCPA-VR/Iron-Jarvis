@@ -376,9 +376,75 @@ NEGATIVE_ROWS: list[str] = [
     "set the monthly budget in the spreadsheet to 5000",
 ]
 
+# ---------------------------------------------------------------------------
+# The independent review's sentences (written fresh, measured on master, on
+# the first cut and on the fix): each one a miss that showed a defect, fixed
+# before it was added. Requests first, then everyday sentences.
+# ---------------------------------------------------------------------------
+REVIEW_ROWS: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+    ("please make the app dark", SET, (S,)),
+    ("make Jarvis light again", SET, (S,)),
+    ("stop reading your replies out loud", SET, (S,)),
+    # A two-word option still counts as a switch's target, beside its row's
+    # word, or with "by default".
+    ("switch to Arc Cyan", SET, (S,)),
+    ("go back to Liquid Glass", SET, (S,)),
+    ("set comm trust to full trust", SET, (S,)),
+    ("let runs from my phone have full trust", SET, (S,)),
+    ("use OpenAI Images for pictures by default", SET, (S,)),
+    ("don't ask me for approval before edits", SET, (S,)),
+    ("stop asking me for permission every time", SET, (S,)),
+    ("stop asking for approval before you run commands", SET, (S,)),
+    # A calendar word is fine when the person asks to be reminded, or when it
+    # is what the schedule READS.
+    ("remind me every Tuesday to prepare for the team meeting", ("schedule_create",), (SC,)),
+    ("every weekday at 9 check my calendar and tell me about meetings", ("schedule_create",), (SC, AP, S)),
+    ("I need a summary of my inbox every morning", ("schedule_create",), (SC, AP)),
+    ("I need you to check the bank feeds every morning", ("schedule_create",), (SC,)),
+    ("create a watcher for my Desktop folder", ("sentinel_add",), (SE, S)),
+    ("make a goal: ship v2 by June", ("goal_add",), (GO,)),
+]
+REVIEW_NEGATIVES: list[str] = [
+    # Two-word options alone (config_set can lower the approval posture).
+    "don't ask me what I want for dinner, just pick something",
+    "don't ask how I know",
+    "I'll ask my boss first and get back to you",
+    "I'll ask Sarah first and then reply",
+    "please stop and tell me what you think",
+    "use Claude Code to refactor my repo",
+    "use claude code style comments in the README",
+    "never run this script on a Friday",
+    "never run with scissors",
+    "make the logo gold and red",
+    "read and act on the reviewer's comments",
+    "stop asking clarifying questions and just write it",
+    # A calendar EVENT on a recurring time; a person's own routine.
+    "set up a meeting every Tuesday with the team",
+    "book a dentist appointment every six months",
+    "set my alarm every weekday at 6",
+    "set up a call every Monday with the client",
+    "plan a team lunch every Friday",
+    "I need to pay rent every month",
+    "I need to file taxes every quarter",
+    "every morning I check the bank feeds",
+    "every Sunday we go to church",
+    # A record noun in the code a coding chat writes.
+    "create a webhook handler in my Express app",
+    "write a webhook route in Flask",
+    "set up a watcher in my React code that re-renders on change",
+    "add a watcher function to my Vue component",
+    "add a goal section to my business plan",
+    "make a goal-setting worksheet for my team",
+    "the goal-setting meeting went well, make a summary",
+    "add a goal line to the chart",
+]
+
 
 def _all_rows():
-    return SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + [(t, (), ()) for t in NEGATIVE_ROWS]
+    return (
+        SETTINGS_ROWS + RECORD_ROWS + SETUP_ROWS + REVIEW_ROWS
+        + [(t, (), ()) for t in NEGATIVE_ROWS + REVIEW_NEGATIVES]
+    )
 
 
 @pytest.fixture(scope="module")
@@ -441,9 +507,13 @@ def test_the_record_and_setup_sentences_arm_the_right_tool(d):
     assert _failures(d, SETUP_ROWS) == []
 
 
+def test_the_reviews_requests_arm_the_right_tool(d):
+    assert _failures(d, REVIEW_ROWS) == []
+
+
 def test_no_ordinary_sentence_arms_a_settings_or_record_writer(d):
     bad = []
-    for text in NEGATIVE_ROWS:
+    for text in NEGATIVE_ROWS + REVIEW_NEGATIVES:
         armed, ask = lanes(d, text)
         stray = sorted((set(armed) | set(ask)) & WRITERS)
         if stray:

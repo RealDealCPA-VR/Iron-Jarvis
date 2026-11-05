@@ -57,6 +57,7 @@ import json
 import logging
 import re
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import Any
 
 from ..core.ids import new_id
@@ -124,8 +125,12 @@ _RECURRING = (
 )
 #: "schedule a call with the client" is a meeting on a calendar, never one of
 #: Iron Jarvis's schedules.
+#: LINEAR on purpose (review): the determiner carries its OWN trailing space.
+#: The first cut wrote ``\s+(?:a|…)?\s*``, two whitespace runs side by side,
+#: and "schedule" followed by a pasted run of blank lines was QUADRATIC —
+#: 5 s at 12,000 characters, on the event loop.
 _NOT_OUR_SCHEDULE = (
-    r"(?!\s+(?:a|an|the|my|our|your|some)?\s*(?:call|meeting|appointment|zoom|interview|visit"
+    r"(?!\s+(?:(?:a|an|the|my|our|your|some)\s+)?(?:call|meeting|appointment|zoom|interview|visit"
     r"|demo|lunch|dinner|coffee|chat\s+with|session\s+with|review\s+with)\b)"
 )
 _SCHEDULE_NOUN = re.compile(
@@ -154,9 +159,29 @@ _APP_WORDS = re.compile(
     r"|google drive|onedrive|dropbox|connectors?)\b",
     re.IGNORECASE,
 )
-_WEBHOOK_WORDS = re.compile(r"\bweb ?hooks?\b", re.IGNORECASE)
-_SENTINEL_WORDS = re.compile(r"\b(?:sentinels?|watchers?|stop\s+watching)\b", re.IGNORECASE)
-_GOAL_WORDS = re.compile(r"\bgoals?\b", re.IGNORECASE)
+#: v1.434.0 review: the code a coding chat WRITES is never one of the app's
+#: records — "create a webhook handler in my Express app", "set up a watcher
+#: in my React code", "add a goal section to my business plan", "make a
+#: goal-setting worksheet". Each record noun is read with these guards.
+_CODE_THING = (
+    r"(?!\s+(?:handler|route|listener|receiver|function|controller|class|test|signature|parser"
+    r"|payload|middleware|callback)s?\b)"
+)
+_CODE_PLACE = (
+    r"(?!\s+(?:in|for|on|inside|into)\s+(?:(?:my|the|this|our|a|an|your)\s+)?(?:[\w'.-]+\s+)?"
+    r"(?:code|codebase|components?|repo|repository|scripts?|functions?|class(?:es)?|programs?"
+    r"|modules?|frontend|backend|react|vue|angular|svelte|express|django|flask)\b)"
+)
+_NOT_A_GOAL_RECORD = (
+    r"(?!-)(?!\s+(?:section|setting|sheet|worksheet|template|tracker|page|slide|list|column|row"
+    r"|statement|chart|table|field|box|card|board|line|keeper|kick|post|area|difference)s?\b)"
+)
+_WEBHOOK_WORDS = re.compile(r"\bweb ?hooks?\b" + _CODE_THING + _CODE_PLACE, re.IGNORECASE)
+_SENTINEL_WORDS = re.compile(
+    r"\b(?:sentinels?|watchers?)\b" + _CODE_THING + _CODE_PLACE + r"|\bstop\s+watching\b",
+    re.IGNORECASE,
+)
+_GOAL_WORDS = re.compile(r"\bgoals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
 #: v1.434.0 (B1.4): "whenever a new email comes in, start an intake session",
 #: "every time a client email arrives, …" — a signal that ARRIVES is a reflex
 #: rule's trigger. The thing that arrives must be something Iron Jarvis can
@@ -207,14 +232,16 @@ _CREATE_VERB = (
     r"(?:[\w'-]+\s+){0,2}?"
 )
 _CREATE_SCHEDULE = re.compile(_CREATE_VERB + r"(?:schedules?|scheduled\s+(?:task|job|run)s?|cron(?:\s+job)?)\b", re.IGNORECASE)
-_CREATE_WEBHOOK = re.compile(_CREATE_VERB + r"web\s?hooks?\b", re.IGNORECASE)
+_CREATE_WEBHOOK = re.compile(
+    _CREATE_VERB + r"web\s?hooks?\b" + _CODE_THING + _CODE_PLACE, re.IGNORECASE
+)
 _CREATE_SENTINEL = re.compile(
-    _CREATE_VERB + r"(?:sentinels?|watchers?|folder\s+watchers?)\b"
-    r"|\b(?:watch|keep\s+an\s+eye\s+on|monitor)\s+(?:my|the|this|that|for)\b[^.?!\n]{0,30}?"
+    _CREATE_VERB + r"(?:sentinels?|watchers?|folder\s+watchers?)\b" + _CODE_THING + _CODE_PLACE
+    + r"|\b(?:watch|keep\s+an\s+eye\s+on|monitor)\s+(?:my|the|this|that|for)\b[^.?!\n]{0,30}?"
     r"\b(?:folder|directory|drive|downloads|desktop|documents\s+folder|path)\b",
     re.IGNORECASE,
 )
-_CREATE_GOAL = re.compile(_CREATE_VERB + r"goals?\b", re.IGNORECASE)
+_CREATE_GOAL = re.compile(_CREATE_VERB + r"goals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
 #: "Schedule a weekly backup of my settings" — the verb, at the head of a
 #: request.
 _SCHEDULE_VERB = re.compile(
@@ -245,19 +272,39 @@ _EDIT_LEAD = re.compile(
 #: one.
 _SELF_STATEMENT = re.compile(
     r"\A\s*(?:(?:ok(?:ay)?|so|but|hey|also|well)\b[,\s]+)?"
-    r"(?:i|i'm|we|we're|my|our|the|it|it's|this|that|there|he|she|they|his|her|their)\b",
+    r"(?:i|i'm|we|we're|my|our|the|it|it's|this|that|there|he|she|they|his|her|their)\b"
+    # v1.434.0 review: "every morning I check the bank feeds" — the time
+    # first, then the person.
+    r"|\A\s*(?:" + _RECURRING + r")\b[^.?!\n]{0,24}?\b(?:i|we)\b",
     re.IGNORECASE,
 )
 _WANTS = re.compile(
-    r"\b(?:please|remind\s+me|can\s+you|could\s+you|would\s+you|i\s+(?:want|need|would\s+like|'d\s+like)"
-    r"|should|needs?\s+to|make\s+sure|let'?s)\b",
+    # Review: "I need TO pay rent every month" is the person's own chore —
+    # "I need a digest every morning" / "I need you to…" still ask.
+    r"\b(?:please|remind\s+me|can\s+you|could\s+you|would\s+you"
+    r"|i\s+(?:want|need(?!\s+to\b)|would\s+like|'d\s+like)"
+    r"|should|(?<!\bi\s)(?<!\bwe\s)needs?\s+to|make\s+sure|let'?s)\b",
     re.IGNORECASE,
 )
+#: v1.434.0 review: a calendar EVENT booked on a recurring time ("set up a
+#: meeting every Tuesday", "book a dentist appointment every six months",
+#: "set my alarm every weekday at 6") is the user's calendar, never one of
+#: Iron Jarvis's schedules — unless they ask to be reminded.
+_BOOKS_AN_EVENT = re.compile(
+    r"\b(?:set\s+up|book|arrange|plan|have|hold|host|organi[sz]e|set|make|add|put|attend)\s+"
+    r"(?:(?:a|an|the|my|our|your|some)\s+)?(?:[\w'-]+\s+)?"
+    r"(?:meeting|appointment|call|zoom|interview|alarm|lunch|dinner|coffee|class|lesson|standup"
+    r"|stand-up|haircut|check-?up|reservation)s?\b",
+    re.IGNORECASE,
+)
+_REMIND = re.compile(r"\bremind(?:er)?s?\b", re.IGNORECASE)
 #: B1.4: "run the triage workflow now" — a run verb on a workflow (or on a
 #: SAVED workflow's own name, read by the stream lane off the loop).
 _RUN_VERB = r"(?:run|start|kick\s+off|trigger|launch|execute|fire\s+off|re-?run)"
 _RUN_WORKFLOW = re.compile(
-    r"\b" + _RUN_VERB + r"\s+(?:the|my|our|that|this)?\s*(?:[\w'-]+\s+){0,3}?workflows?\b",
+    # Linear (review): the determiner takes its own space — see
+    # _NOT_OUR_SCHEDULE.
+    r"\b" + _RUN_VERB + r"\s+(?:(?:the|my|our|that|this)\s+)?(?:[\w'-]+\s+){0,3}?workflows?\b",
     re.IGNORECASE,
 )
 _RUN_VERB_RX = re.compile(r"\b" + _RUN_VERB + r"\b", re.IGNORECASE)
@@ -286,17 +333,48 @@ def saved_workflow_names(platform: Any) -> list[str]:
         return []
 
 
+_RUN_AT = re.compile(r"\b" + _RUN_VERB + r"\s+", re.IGNORECASE)
+_RUN_DET_AT = re.compile(r"(?:the|my|our)\s+", re.IGNORECASE)
+_NAME_GOES_ON = re.compile(r"[\w-]")
+
+
+@lru_cache(maxsize=8)
+def _workflow_name_table(names: "tuple[str, ...]") -> "tuple[frozenset[str], tuple[tuple[int, frozenset[str]], ...]]":
+    """The saved names (3+ characters), lowercased, grouped by length, and
+    their first characters."""
+    by_len: dict[int, set[str]] = {}
+    for n in names:
+        s = (n or "").strip().lower()
+        if len(s) >= 3:
+            by_len.setdefault(len(s), set()).add(s)
+    firsts = frozenset(s[0] for group in by_len.values() for s in group)
+    return firsts, tuple(sorted((k, frozenset(v)) for k, v in by_len.items()))
+
+
 def _runs_a_named_workflow(t: str, names: "list[str] | tuple[str, ...]") -> bool:
-    for name in names or ():
-        n = (name or "").strip()
-        if len(n) < 3:
-            continue
-        rx = re.compile(
-            r"\b" + _RUN_VERB + r"\s+(?:the\s+|my\s+|our\s+)?" + re.escape(n) + r"(?![\w-])",
-            re.IGNORECASE,
-        )
-        if rx.search(t):
-            return True
+    """A run verb, then (after "the" / "my" / "our") a saved workflow's
+    whole name. v1.434.0 review: the first cut compiled and ran one regex PER
+    NAME over the whole message — 1.9 s for 500 workflows and a 100 KB pasted
+    text, and one alternation of every name still held the interpreter lock
+    for a third of a second in ONE call. Now each run verb is found once and
+    the words after it are LOOKED UP by length: the same answer as the
+    per-name patterns (pinned), at a cost that grows with the run verbs."""
+    firsts, table = _workflow_name_table(tuple(str(n or "") for n in names or ()))
+    if not table:
+        return False
+    low = (t or "").lower()
+    for m in _RUN_AT.finditer(low):
+        starts = [m.end()]
+        det = _RUN_DET_AT.match(low, m.end())
+        if det is not None:
+            starts.append(det.end())
+        for s in starts:
+            if low[s:s + 1] not in firsts:
+                continue
+            for length, group in table:
+                end = s + length
+                if low[s:end] in group and _NAME_GOES_ON.match(low, end) is None:
+                    return True
     return False
 
 
@@ -381,6 +459,8 @@ def _schedule_named(t: str) -> bool:
     if _SCHEDULE_NOUN.search(t):
         return True
     if not _RECURRING_WORDS.search(t):
+        return False
+    if _BOOKS_AN_EVENT.search(t) and not _REMIND.search(t):
         return False
     return not _SELF_STATEMENT.search(t) or bool(_WANTS.search(t))
 

@@ -827,14 +827,20 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="allow", floor_when=("yolo", "auto"), store="device",
       aliases=("approvals", "approval mode", "permission mode",
                # v1.434.0 (Wave 2 group E): "approve tests without asking",
-               # "stop asking me before…".
-               "without asking", "stop asking")),
+               # "stop asking me before…". Review: never the bare "stop
+               # asking" / "without asking" — "stop asking clarifying
+               # questions" is about the conversation, and config_set can
+               # lower this posture with no card.
+               "approve without asking", "stop asking before", "stop asking for permission",
+               "stop asking for approval")),
     S("device.chat_persona", "Chat persona", "appearance", "string",
       "The persona new chats start with on this device.", tier="allow", store="device"),
     S("device.auto_tools", "Auto tools in chat", "permissions", "bool",
       "Let chat arm the tools a message needs.", tier="allow", store="device"),
     S("device.read_aloud", "Read replies aloud", "appearance", "bool",
-      "Speak each reply on this device.", tier="allow", store="device", aliases=("text to speech",)),
+      "Speak each reply on this device.", tier="allow", store="device",
+      # v1.434.0 review: "stop reading your replies out loud".
+      aliases=("text to speech", "read out loud")),
 )
 
 SECRETS: tuple[SecretDef, ...] = (

@@ -4367,16 +4367,22 @@ async def chat_stream(
             # webhook or watcher, and RUNNING a saved workflow). VISIBLE but
             # never granted — a call renders the ordinary card. Stream lane
             # only (a card needs someone to answer it). One function, the one
-            # the arming table drives (chat_turn.settings_ask_tools); the
-            # saved workflows' names are read OFF THE LOOP, and only when a
-            # run verb is there.
+            # the arming table drives (chat_turn.settings_ask_tools). The
+            # WHOLE matching runs OFF THE LOOP (v1.434.0 review: it reads the
+            # message, and with a run verb every saved workflow's name, over
+            # the full text — a pasted document is not short), together with
+            # the saved workflows' names (one SQLite read, only when a run
+            # verb is there).
             from ...settings.records import saved_workflow_names, wants_workflow_names
 
-            _wf_names: list[str] = []
-            if wants_workflow_names(_last_user_text(body.messages)):
-                _wf_names = await asyncio.to_thread(saved_workflow_names, d.platform)
-            ask_armed += _chat_turn.settings_ask_tools(
-                d, _last_user_text(body.messages), armed, ask_armed, workflow_names=_wf_names,
+            def _settings_and_records(text: str, armed_now: list, ask_now: list) -> list:
+                names = saved_workflow_names(d.platform) if wants_workflow_names(text) else []
+                return _chat_turn.settings_ask_tools(
+                    d, text, armed_now, ask_now, workflow_names=names,
+                )
+
+            ask_armed += await asyncio.to_thread(
+                _settings_and_records, _last_user_text(body.messages), list(armed), list(ask_armed),
             )
             # APPS BY NAME (v1.354.0, G39): a named app that is connected with
             # tools loaded has them ASK-armed (visible, never granted; the

@@ -36,6 +36,7 @@ Pure and deterministic; never raises (a fault reads as "not about a setting").
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -99,6 +100,10 @@ _EXTENDERS = frozenset(
     {
         "picture", "photo", "pic", "image", "page", "park", "parks", "song", "music", "tune", "car",
         "cars", "railway", "number", "card", "letter", "name", "train", "kit", "home",
+        # v1.434.0 review: the code a coding chat writes ("add a watcher
+        # function to my Vue component").
+        "function", "functions", "handler", "handlers", "callback", "callbacks", "class", "method",
+        "component", "variable",
     }
 )
 #: …unless the thing after it is this app ("the theme in the app").
@@ -151,6 +156,10 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         # "open files in Cursor", "use VS Code for files".
         r"\b(?:open|edit|show)\b[^.?!\n]{0,30}?\b(?:in|with)\s+(?:cursor|vs\s*code|vscode)\b",
         r"\b(?:use|switch\s+to|set|pick|choose)\s+(?:cursor|vs\s*code|vscode)\b",
+        # v1.434.0 review: "make the app dark", "turn Jarvis light" (the theme
+        # with no theme word).
+        r"\b(?:make|turn|switch|set)\s+(?:the\s+)?(?:app|jarvis|iron\s+jarvis|dashboard|screen"
+        r"|interface)\s+(?:look\s+)?(?:dark|darker|light|lighter)\b",
         # "turn off web search", "disable the file search tool", "never run
         # the shell tool" — a tool's permission.
         r"\b(?:turn\s+off|turn\s+on|disable|enable|block|unblock|allow|never\s+(?:run|use)"
@@ -209,6 +218,14 @@ class _Phrase:
     key: str
     words: tuple[frozenset[str], ...]
     kind: str  # "multi" | "distinct" | "generic"
+    #: v1.434.0 review: a TWO-WORD option label ("Don't ask", "Ask first",
+    #: "Never run", "Stop and tell me", "Claude Code", "Gold & Red") is two
+    #: everyday words. It counts only beside a word that names its ROW
+    #: (these forms) or as the target of a switch ("switch to Arc Cyan") —
+    #: "don't ask me what I want for dinner" armed the approval writers, and
+    #: config_set can lower the approval posture with no card. None = no
+    #: such rule (every other phrase).
+    row: "frozenset[str] | None" = None
 
 
 @dataclass(frozen=True)
@@ -259,13 +276,65 @@ def _strip_parens(label: str) -> str:
     return re.sub(r"\([^)]*\)", " ", label)
 
 
+#: Words that never name a row by themselves (v1.434.0 review): the app's own
+#: name, the chat, numbers, and the everyday words labels share.
+_NOT_ROW_NAMES = frozenset(
+    {"chat", "chats", "app", "jarvis", "iron", "default", "new", "mode", "one", "two", "my", "your",
+     "setting", "settings"}
+)
+#: The verbs that make "<verb> … to <option>" a SWITCH ("switch to Arc Cyan",
+#: "change it to Liquid Glass", "go back to Daylight").
+_SWITCH_VERBS = frozenset(
+    {"switch", "switched", "switching", "change", "changed", "changing", "set", "move", "moved",
+     "put", "back", "revert", "reset", "turn", "turned"}
+)
+
+
+def _row_words(d: "schema.SettingDef") -> frozenset[str]:
+    """The words that NAME a row (for its two-word options): its label's and
+    its key's content words and its one-word aliases ("theme", "approvals",
+    "editor"), in every form — never an everyday word (``_NOT_ROW_NAMES``,
+    ``_NEVER_ALONE``) or a change cue ("stop", "use")."""
+    words = list(_phrase_words(_strip_parens(d.label)))
+    if not d.pattern:
+        words += _phrase_words(d.key.split(".")[-1])
+    for a in d.aliases:
+        one = _phrase_words(a)
+        if len(one) == 1:
+            words += one
+    out: set[str] = set()
+    for w in words:
+        if w in _NOT_ROW_NAMES or len(w) < 3 or _forms(w) & _NEVER_ALONE or _CUE.fullmatch(w):
+            continue
+        out |= _forms(w)
+    return frozenset(out)
+
+
+#: "…by default", "from now on": a LASTING change was asked for, so a two-word
+#: option counts by itself ("use OpenAI Images by default").
+_LASTING = re.compile(
+    r"\b(?:by\s+default|from\s+now\s+on|as\s+(?:my|the)\s+default|my\s+default)\b", re.IGNORECASE
+)
+
+
+def _switch_target(toks: list[str], start: int) -> bool:
+    """The phrase at *start* is what something is switched TO: "switch to
+    Arc Cyan", "set it to don't ask", "go back to Liquid Glass"."""
+    i = start - 1
+    if i >= 0 and toks[i] == "the":
+        i -= 1
+    if i < 0 or toks[i] != "to":
+        return False
+    return any(t in _SWITCH_VERBS for t in toks[max(0, i - 4):i])
+
+
 @lru_cache(maxsize=1)
 def _index() -> tuple[_Phrase, ...]:
     """Every phrase of every schema row and secret, built once."""
     out: list[_Phrase] = []
     seen: set[tuple[str, tuple[str, ...]]] = set()
 
-    def add(key: str, raw: str) -> None:
+    def add(key: str, raw: str, row: "frozenset[str] | None" = None) -> None:
         words = _phrase_words(_strip_parens(raw))
         if not words:
             return
@@ -282,7 +351,12 @@ def _index() -> tuple[_Phrase, ...]:
         if sig in seen:
             return
         seen.add(sig)
-        out.append(_Phrase(key, tuple(_forms(w) for w in words), kind))
+        forms = tuple(_forms(w) for w in words)
+        if row is not None and len(words) == 2:
+            own = frozenset().union(*forms)
+            out.append(_Phrase(key, forms, kind, row=frozenset(row - own)))
+        else:
+            out.append(_Phrase(key, forms, kind))
 
     for d in schema.SETTINGS:
         add(d.key, d.label)
@@ -292,8 +366,9 @@ def _index() -> tuple[_Phrase, ...]:
         # the words of each option ("Liquid Glass", "Ask before every action").
         if not d.pattern:
             add(d.key, d.key.split(".")[-1])
+        row = _row_words(d)
         for _value, label in d.options:
-            add(d.key, label)
+            add(d.key, label, row=row)
         # "the Daylight theme", "stable updates": an option's words before
         # the row's own everyday word.
         generic = [a for a in d.aliases if _phrase_words(a) and len(_phrase_words(a)) == 1
@@ -335,16 +410,18 @@ def _match_at(toks: list[str], words: tuple[frozenset[str], ...]) -> "tuple[int,
     return None
 
 
-def _about_something_else(toks: list[str], start: int, end: int) -> bool:
+def _about_something_else(toks: list[str], start: int, end: int, *, before: bool = True) -> bool:
     """Around the phrase: "a model like…", "…of my essay", "…in this
     spreadsheet", "…to look something up", "profile picture" — the words name
-    something other than this app."""
+    something other than this app. ``before`` False reads only what FOLLOWS
+    (a distinct word: "a watcher" is still ours, "a watcher in my React code"
+    is not)."""
     nxt = toks[end + 1] if end + 1 < len(toks) else ""
     after = toks[end + 2] if end + 2 < len(toks) else ""
     third = toks[end + 3] if end + 3 < len(toks) else ""
-    if start > 0 and toks[start - 1] in _NOT_OURS_BEFORE:
+    if before and start > 0 and toks[start - 1] in _NOT_OURS_BEFORE:
         return True
-    if end > 0 and toks[end - 1] in _NOT_OURS_BEFORE:
+    if before and end > 0 and toks[end - 1] in _NOT_OURS_BEFORE:
         return True
     if nxt in _EXTENDERS:
         return True
@@ -384,8 +461,14 @@ def _cue_positions(text: str, toks: list[str]) -> set[int]:
     "on", right before the word it governs)."""
     out: set[int] = set()
     low = (text or "").lower().replace("\u2019", "'")
+    # LINEAR (review): the tokens' start offsets once, then a bisect per cue.
+    # Counting the tokens of ``low[: m.end()]`` per cue was quadratic in the
+    # number of cues ("use use use …": 43 ms at 4,000 characters). Same
+    # count: a token of the prefix is a token of the text that STARTS before
+    # the cue's end (cutting a token never splits it in two).
+    starts = [t.start() for t in _TOKEN.finditer(low)]
     for m in _CUE.finditer(low):
-        before = len(_TOKEN.findall(low[: m.end()]))
+        before = bisect_left(starts, m.end())
         out.add(max(0, before - 1))
     return out
 
@@ -410,6 +493,13 @@ def _settings_ask(text: str) -> SettingsAsk:
     toks = _tokens(text.replace("-", " ").replace("_", " "))
     present = set(toks)
     cue_at = _cue_positions(text.replace("-", " ").replace("_", " "), toks)
+    # v1.434.0 review: a word GLUED to the one before it by a hyphen is part
+    # of a compound ("a goal-setting worksheet"), never a setting's own word.
+    low = text.lower().replace("\u2019", "'")
+    flat = low.replace("-", " ").replace("_", " ")
+    glued = {
+        i for i, m in enumerate(_TOKEN.finditer(flat)) if m.start() > 0 and low[m.start() - 1] in "-_"
+    }
     keys: list[str] = []
     spans: list[tuple[int, int]] = []
     for ph in _index():
@@ -419,6 +509,7 @@ def _settings_ask(text: str) -> SettingsAsk:
             for i, t in enumerate(toks):
                 if (
                     t in ph.words[0]
+                    and i not in glued
                     and _generic_ok(toks, i, cue_at, question)
                     and not _about_something_else(toks, i, i)
                 ):
@@ -429,7 +520,17 @@ def _settings_ask(text: str) -> SettingsAsk:
         at = _match_at(toks, ph.words)
         if at is None:
             continue
-        if ph.kind == "distinct" or not _about_something_else(toks, *at):
+        if (
+            ph.row is not None
+            and present.isdisjoint(ph.row)
+            and not _switch_target(toks, at[0])
+            and not _LASTING.search(text)
+        ):
+            # A two-word option alone ("don't ask me…", "ask my boss first").
+            continue
+        # v1.434.0 review: a DISTINCT word still reads what follows it — "set
+        # up a watcher in my React code" is not the app's watchers.
+        if not _about_something_else(toks, *at, before=ph.kind != "distinct"):
             keys.append(ph.key)
             spans.append(at)
     found = bool(keys)

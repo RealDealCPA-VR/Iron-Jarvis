@@ -4474,10 +4474,23 @@ def _resolve_armed_tools(
     # text. Both lanes call this function (MIRROR NOTE: one implementation).
     from ..settings.trigger import settings_tools_for
 
+    def _not_denied(name: str) -> bool:
+        # v1.434.0 review: ARMING IS GRANTING — an armed tool gets an "allow"
+        # override, which lifts the user's own deny for a tool off the deny
+        # floor ("turn on follow-up suggestions" changed the setting with
+        # config_set denied). This place sits outside every cap, so it never
+        # arms over a deny (the coding-session plan skips one the same way).
+        try:
+            tool = d.platform.registry.get(name)
+            key = tool.perm_key() if tool is not None else name
+            return getattr(d.platform.permissions.mode_for(key), "value", "deny") != "deny"
+        except Exception:  # noqa: BLE001 — cannot tell: arm nothing
+            return False
+
     auto += [
         t
         for t in settings_tools_for(last_user, auto_tools=bool(getattr(body, "auto_tools", False)))
-        if t not in explicit and t not in auto and d.platform.registry.get(t)
+        if t not in explicit and t not in auto and d.platform.registry.get(t) and _not_denied(t)
     ]
     # THE BROWSER CAPABILITY FILTER (v1.236.0, plan 11.2), applied LAST — after
     # the explicit picks, after every fill pass, and after the drop signal has
