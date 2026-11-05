@@ -1,0 +1,121 @@
+{
+  "_comment": "v1.436.0 (Wave 5 group J): every page-step door the daemon can give and the stream lane's real done frame. Written by tests/test_page_doors_v14360.py (IJ_REGEN_PAGE_DOORS=1); read by dashboard/__tests__/page-doors-v1436.test.tsx.",
+  "stream_done": {
+    "doors": [
+      {
+        "href": "/connections",
+        "label": "Sign in to Claude Code",
+        "press": "claude-cli"
+      }
+    ],
+    "reply": "Use the button below."
+  },
+  "table": {
+    "guides": [
+      "handbook",
+      "recommended-settings",
+      "local-models"
+    ],
+    "handbook_section": "microsoft-365-locked-down-for-client-data",
+    "presses": [
+      "claude-cli",
+      "codex-cli",
+      "grok-cli"
+    ],
+    "slug_cases": {
+      "  What's new?? (v1.2) ": "what-s-new-v1-2",
+      "Browser — your own Chrome or Edge": "browser-your-own-chrome-or-edge",
+      "Größe & Ünïcode": "gr-e-n-code",
+      "Microsoft 365, locked down for client data (v1.428.0)": "microsoft-365-locked-down-for-client-data-v1-428-0"
+    },
+    "steps": [
+      {
+        "door": {
+          "href": "/connections",
+          "label": "Open your accounts in Settings"
+        },
+        "id": "accounts"
+      },
+      {
+        "door": {
+          "href": "/help?guide=handbook&section=microsoft-365-locked-down-for-client-data",
+          "label": "Read the Microsoft 365 setup steps"
+        },
+        "id": "vendor_approval"
+      },
+      {
+        "door": {
+          "href": "/settings?section=connections-apps",
+          "label": "Sign in to Microsoft 365 in Settings"
+        },
+        "id": "signin_microsoft"
+      },
+      {
+        "door": {
+          "href": "/connections",
+          "label": "Sign in to Claude Code",
+          "press": "claude-cli"
+        },
+        "id": "signin_claude_code"
+      },
+      {
+        "door": {
+          "href": "/connections",
+          "label": "Sign in to Codex",
+          "press": "codex-cli"
+        },
+        "id": "signin_codex"
+      },
+      {
+        "door": {
+          "href": "/connections",
+          "label": "Sign in to Grok CLI",
+          "press": "grok-cli"
+        },
+        "id": "signin_grok"
+      },
+      {
+        "door": {
+          "href": "/terminals?view=terminal",
+          "label": "Open Build to sign in to Pi"
+        },
+        "id": "signin_pi"
+      },
+      {
+        "door": {
+          "href": "/terminals?view=terminal",
+          "label": "Open Build to sign in to OpenCode"
+        },
+        "id": "signin_opencode"
+      },
+      {
+        "door": {
+          "href": "/connections",
+          "label": "Open Google's one-time setup in Settings"
+        },
+        "id": "google_setup"
+      },
+      {
+        "door": {
+          "href": "/channels",
+          "label": "Set up Slack in Settings"
+        },
+        "id": "slack_setup"
+      },
+      {
+        "door": {
+          "href": "/computeruse",
+          "label": "Set up the browser add-on"
+        },
+        "id": "browser_addon"
+      },
+      {
+        "door": {
+          "href": "/help?guide=local-models",
+          "label": "Which local model to download"
+        },
+        "id": "local_model"
+      }
+    ]
+  }
+}

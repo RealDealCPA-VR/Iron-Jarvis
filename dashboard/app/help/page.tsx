@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -41,6 +41,7 @@ import { STATUS_HREF } from "@/lib/loopWords";
 import { useApi } from "@/lib/useApi";
 import { guideChatPath } from "@/lib/mission";
 import { BUILD_BLURB, CODING_SESSION, CODING_VIEW_NAME } from "@/lib/buildWords";
+import { headingSlug, readGuideLink, sectionMatches, textOf } from "@/lib/helpLinks";
 import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -296,20 +297,28 @@ interface HelpDocBody {
 // Dark-theme element overrides for the guide viewer (the app has no typography
 // plugin — same hand-rolled "prose-invert" approach as the Chat page, sized a
 // notch roomier because a handbook is read top to bottom, not in bubbles).
+// v1.436.0 (Wave 5, B3): every heading carries its slug (lib/helpLinks
+// headingSlug) so a `/help?guide=…&section=…` door from chat can bring it into
+// view. A data attribute, not an id: the Handbook repeats headings ("Also in
+// …"), and duplicate ids would be invalid.
 const GUIDE_MD: Components = {
   h1: ({ children }) => (
-    <h1 className="mb-2 mt-5 text-lg font-semibold text-zinc-100 first:mt-0">{children}</h1>
+    <h1 data-heading={headingSlug(textOf(children))} className="mb-2 mt-5 text-lg font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mb-1.5 mt-4 text-base font-semibold text-zinc-100 first:mt-0">
+    <h2 data-heading={headingSlug(textOf(children))} className="mb-1.5 mt-4 text-base font-semibold text-zinc-100 first:mt-0">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mb-1 mt-3 text-sm font-semibold text-zinc-100 first:mt-0">{children}</h3>
+    <h3 data-heading={headingSlug(textOf(children))} className="mb-1 mt-3 text-sm font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mb-1 mt-2.5 text-[13px] font-semibold text-zinc-200 first:mt-0">
+    <h4 data-heading={headingSlug(textOf(children))} className="mb-1 mt-2.5 text-[13px] font-semibold text-zinc-200 first:mt-0">
       {children}
     </h4>
   ),
@@ -376,6 +385,13 @@ const GUIDE_MD: Components = {
  * clicking the open card again (or the ✕) closes it. Deliberately local state,
  * not a ?doc= search param: useSearchParams forces a Suspense boundary and
  * risks the static build.
+ *
+ * v1.436.0 (Wave 5, B3): a chat door may open the page on one guide and one
+ * of its sections (`/help?guide=handbook&section=…`, lib/helpLinks). The
+ * address is read ONCE, from window.location, when the guides list arrives;
+ * the guide opens as if its card were pressed, and the section's heading is
+ * brought into view when the guide has drawn. After that it is ordinary local
+ * state again.
  */
 function GuidesCard() {
   const { data, error, loading } = useApi<{ docs: HelpDocMeta[] }>("/helpdocs");
@@ -386,6 +402,11 @@ function GuidesCard() {
   // Guards a stale response landing after the user switched guides (or closed
   // the viewer): only the fetch for the CURRENTLY open slug may set state.
   const wanted = useRef<string | null>(null);
+  // The door's guide link, read once (undefined = not read yet, null = none
+  // or already used) and the section still to bring into view.
+  const link = useRef<{ guide: string; section: string } | null | undefined>(undefined);
+  const pendingSection = useRef<string>("");
+  const viewer = useRef<HTMLDivElement | null>(null);
 
   const close = () => {
     wanted.current = null;
@@ -422,6 +443,36 @@ function GuidesCard() {
 
   const docs = data?.docs ?? [];
   const openMeta = docs.find((d) => d.slug === openSlug);
+
+  // v1.436.0: the door's guide opens once the list says the guide exists.
+  useEffect(() => {
+    if (link.current === undefined) {
+      try {
+        link.current = readGuideLink(window.location.search);
+      } catch {
+        link.current = null;
+      }
+    }
+    const l = link.current;
+    if (!l || docs.length === 0) return;
+    link.current = null;
+    if (!docs.some((d) => d.slug === l.guide)) return;
+    pendingSection.current = l.section;
+    openGuide(l.guide);
+    // openGuide is a plain function of this render; the list is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs]);
+
+  // …and its section comes into view when the guide has drawn.
+  useEffect(() => {
+    const section = pendingSection.current;
+    if (!doc || !section || !viewer.current) return;
+    pendingSection.current = "";
+    const heading = Array.from(viewer.current.querySelectorAll<HTMLElement>("[data-heading]")).find((el) =>
+      sectionMatches(el.dataset.heading ?? "", section),
+    );
+    heading?.scrollIntoView?.({ block: "start" });
+  }, [doc]);
 
   return (
     <Card title="Guides" icon={<GraduationCap size={15} />}>
@@ -502,7 +553,11 @@ function GuidesCard() {
               <X size={14} />
             </button>
           </div>
-          <div className="max-h-[36rem] overflow-y-auto px-5 py-4 text-[13px] leading-relaxed text-zinc-300">
+          <div
+            ref={viewer}
+            data-testid="help-guide-viewer"
+            className="max-h-[36rem] overflow-y-auto px-5 py-4 text-[13px] leading-relaxed text-zinc-300"
+          >
             {docLoading ? (
               <LoaderInline label="Loading guide…" />
             ) : docError ? (

@@ -3695,6 +3695,52 @@ def with_coding_offer(
         return base
 
 
+def with_page_door(
+    entries: Any, body: Any, *, harness: Any = None, escalate: bool = False,
+    sidebar: bool = False,
+) -> list[Any]:
+    """The turn's door entries with the PAGE DOOR (v1.436.0, chat-first plan
+    Wave 5, B3): when the user's last message asks for a step only a page or
+    their own vendor account can do — signing in an account, Google's or
+    Slack's one-time developer setup, the browser add-on, downloading a local
+    model, a Microsoft 365 admin's approval — ONE door to the exact place
+    (``daemon/page_doors``). ONLY A DOOR — a link, or the dashboard's own
+    Sign in press; nothing is armed or started by it. The same surfaces as
+    :func:`with_coding_offer` (a plain chat turn only). Added LAST, after
+    ``with_connect_door``, and only while there is room under
+    ``doors.MAX_DOORS``: it never pushes out a door the turn earned. MIRROR
+    NOTE (lock-step): both lanes call it at the same seam. Never raises."""
+    base = list(entries or [])
+    try:
+        if harness is not None or escalate or sidebar or surface_for(body):
+            return base
+        from ..providers.failure_words import SURFACE_CHAT, current_surface
+
+        if current_surface() != SURFACE_CHAT:
+            return base
+        from .page_doors import with_page_door as _with_page_door
+
+        return _with_page_door(base, _last_user_text(getattr(body, "messages", None)))
+    except Exception:  # noqa: BLE001 — no door beats no reply
+        return base
+
+
+def page_steps_block(body: Any) -> str:
+    """The plain lines the model is given for a step only a page can do and
+    for what Iron Jarvis does not offer (v1.436.0, Wave 5 B3 —
+    ``daemon/page_doors.prompt_block``), read from the user's last message;
+    ``""`` when nothing matches, so the system prompt is byte-identical.
+    Joined to the query tail right after the grounding's query sections,
+    BEFORE the planner (its cost is priced). MIRROR NOTE (lock-step): both
+    lanes. Never raises."""
+    try:
+        from .page_doors import prompt_block
+
+        return prompt_block(_last_user_text(getattr(body, "messages", None)))
+    except Exception:  # noqa: BLE001 — no line beats a broken turn
+        return ""
+
+
 def _no_text_reply(
     tools_used: list[str], last_tool_output: str, refusal=None, *, surface: "str | None" = None,
 ) -> str:
@@ -9682,6 +9728,11 @@ async def run_chat_turn(
     # MIRROR NOTE (lock-step): routes/chat.py joins the same object.
     system += _grounding.stable()
     _query_tail += _grounding.query()
+    # v1.436.0 (Wave 5, B3): a step only a page can do, or something Iron
+    # Jarvis does not offer, is said to the model in one plain line ("" when
+    # the message names none — byte-identical). MIRROR NOTE (lock-step):
+    # routes/chat.py adds the same block at the same seam.
+    _query_tail += page_steps_block(body)
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted above attachments): an explicit body choice
@@ -11455,6 +11506,10 @@ async def run_chat_turn(
     # routes/chat.py.
     door_entries = with_coding_offer(door_entries, body, harness=harness, escalate=escalate)
     door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
+    # PAGE DOOR (v1.436.0, Wave 5 B3): a step only a page can do gets ONE
+    # door to the exact place — last, only with room. MIRROR NOTE
+    # (lock-step): routes/chat.py.
+    door_entries = with_page_door(door_entries, body, harness=harness, escalate=escalate)
     out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,
