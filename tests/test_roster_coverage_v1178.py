@@ -269,8 +269,10 @@ _OFF_ROSTER_OPEN = {
     "workflow_run",
     # Skills: agents can search/load (`_KNOWLEDGE_TOOLS`) but not save one:
     "skill_create",
-    # Web: researcher has browse/web_extract/web_search, not these:
-    "web_fetch", "web_look",
+    # Web: researcher has browse/web_extract/web_look/web_search, not this
+    # (v1.433.0, Wave 1 A17, moved on purpose: web_look joined the researcher
+    # and the automation agent beside browse / web_extract):
+    "web_fetch",
     "delegate_remote", "sentinel_add",
     # v1.296.0: assign_work hands a job to another agent's queue. The two
     # builtins that coordinate (supervisor, planner) already delegate — a

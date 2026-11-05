@@ -341,7 +341,13 @@ def test_an_edit_with_a_stray_mask_is_refused_and_changes_nothing(client):
 # The Directory's Postgres connection string, connected from chat.
 # --------------------------------------------------------------------------- #
 def test_app_connect_keeps_a_connection_string_password_in_the_vault(client, monkeypatch):
+    """v1.433.0 (Wave 1, A4, moved on purpose): a connection string WITH its
+    password is no longer taken from chat at all — handed to app_connect it is
+    refused before anything is saved (it went through the model and into the
+    tool log), and the SECURE CARD collects it instead. Still kept in the
+    vault, still out of config.toml, and still what the pack launches with."""
     from iron_jarvis.settings import records
+    from iron_jarvis.settings.credentials import CredentialStore
 
     platform = client.app.state.platform
     launched: list[dict] = []
@@ -349,15 +355,24 @@ def test_app_connect_keeps_a_connection_string_password_in_the_vault(client, mon
     tool = records.AppConnectTool(platform)
     conn = f"postgresql://me:{DB_PASSWORD}@db.example:5432/books"
     out = asyncio.run(tool.execute({"app": "postgres", "values": {"connection": conn}}, None))
+    assert not out.ok and "secure card" in out.error and DB_PASSWORD not in out.error
+    assert records.snap_app(platform, "postgres") is None, "nothing is saved"
+    assert not [r for r in platform.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")]
+    # Without it, the card is shown and the row waits for it.
+    out = asyncio.run(tool.execute({"app": "postgres"}, None))
     assert out.ok, out.error
+    (req,) = out.data["secret_requests"]
+    assert req["name"] == "app.postgres"
     entry = _entry(platform, "postgres")
-    assert entry["args"][-1] == "postgresql://me:***@db.example:5432/books"
-    assert entry["arg_secrets"] == {"2": "mcp.postgres.arg.2"}
-    assert platform.secrets.get("mcp.postgres.arg.2") == conn
+    assert entry["args"][-1] == "***"
+    assert entry["arg_secrets"] == {"2": "mcp.postgres.connection"}
+    assert launched == [], "not launched before the card is saved"
+    res = CredentialStore(client.app.state.d).store("app.postgres", conn)
+    assert res["status"] == "stored" and DB_PASSWORD not in json.dumps(res, default=str)
+    assert platform.secrets.get("mcp.postgres.connection") == conn
     assert DB_PASSWORD not in _toml_text(platform)
-    assert DB_PASSWORD not in json.dumps(out.data, default=str) and DB_PASSWORD not in out.output
     # What the pack launches with is the real string.
-    assert launched and _build_transport(dict(launched[0], command=sys.executable), platform.secrets.get).args[-1] == conn
+    assert launched and _build_transport(dict(launched[-1], command=sys.executable), platform.secrets.get).args[-1] == conn
 
 
 # --------------------------------------------------------------------------- #
@@ -448,13 +463,15 @@ def test_a_split_header_before_a_bare_hidden_key_keeps_each_value_in_its_place(c
 # argument. The undo record is the PRIOR config, whose `arg_secrets` name its
 # vault row; the reconnect used to overwrite that row, so Undo showed the old
 # host (the masked text) and launched the NEW connection string.
+# v1.433.0 (Wave 1, A4): the reconnect is the secure card's now; the same
+# promise — what the Undo leaves is what launches — is pinned on its Undo.
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_undo_of_a_postgres_reconnect_launches_the_connection_it_shows(tmp_path, monkeypatch):
     from iron_jarvis.settings import records
     from tests.test_chat_approvals_v1187 import _drive_stream
-    from tests.test_settings_chat_tools_v1321 import _body, _calls_stream, _undo_card
-    from tests.test_settings_records_v1321 import _approve_all, _card
+    from tests.test_settings_chat_tools_v1321 import _body, _calls_stream, _done
+    from tests.test_settings_records_v1321 import _approve_all
 
     monkeypatch.setattr(records, "load_app", lambda p, cfg: 0)  # no npx launch
     old = f"postgresql://me:{DB_PASSWORD}@old-host:5432/books"
@@ -467,27 +484,34 @@ async def test_undo_of_a_postgres_reconnect_launches_the_connection_it_shows(tmp
         real = _build_transport(dict(entry, command=sys.executable), p.secrets.get).args[-1]
         return entry["args"][-1], real
 
-    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": old}})])
-    await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
-    assert launched() == ("postgresql://me:***@old-host:5432/books", old)
+    # v1.433.0 (Wave 1, A4, moved on purpose): the connection string comes
+    # through the SECURE CARD, never as an app_connect argument, so a
+    # reconnect is a replaced credential — and its Undo is the card's own
+    # (a ``secret_restore`` row holding the prior value encrypted).
+    from fastapi.testclient import TestClient as _TC
 
-    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": new}})])
+    client = _TC(app)
+    p.router.stream = _calls_stream([("app_connect", {"app": "postgres"})])
     frames = await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
-    assert launched() == ("postgresql://me:***@new-host:5432/books", new)
+    secret = next(c for c in _done(frames)["config_cards"] if c["kind"] == "secret")
+    assert secret["name"] == "app.postgres"
+    assert client.post("/config/secret", json={"name": "app.postgres", "value": old}).status_code == 200
+    assert launched() == ("***", old)
 
-    # Undo (the card's own button, the real route): what it SHOWS is what it
-    # LAUNCHES — the old connection, not the new one under the old words.
-    # v1.358.0 (on purpose): the stubbed loader loads nothing, so the card
-    # says "App saved" (it did not start), never "App connected".
-    await _undo_card(app, _card(frames, "App saved"))
-    assert launched() == ("postgresql://me:***@old-host:5432/books", old)
+    res = client.post("/config/secret", json={"name": "app.postgres", "value": new})
+    assert res.status_code == 200 and res.json()["status"] == "replaced"
+    assert "NEWpw-LANE1E-review3" not in res.text and DB_PASSWORD not in res.text
+    assert launched() == ("***", new)
+
+    # Undo (the real route): the pack launches the old connection again.
+    assert client.post(f"/undo/{res.json()['action_id']}").status_code == 200
+    assert launched() == ("***", old)
     text = _toml_text(p)
     assert DB_PASSWORD not in text and "NEWpw-LANE1E-review3" not in text
 
-    # A reconnect with the SAME string reuses its row (no pile of copies).
+    # Saving the SAME string again reuses its row (no pile of copies).
     before = {r["name"] for r in p.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")}
-    p.router.stream = _calls_stream([("app_connect", {"app": "postgres", "values": {"connection": old}})])
-    await _drive_stream(app, _body("connect my Postgres"), await _approve_all(app, []))
+    assert client.post("/config/secret", json={"name": "app.postgres", "value": old}).status_code == 200
     after = {r["name"] for r in p.secrets.list() if str(r.get("name", "")).startswith("mcp.postgres.")}
     assert after == before and launched()[1] == old
 

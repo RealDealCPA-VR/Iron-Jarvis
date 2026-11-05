@@ -50,9 +50,12 @@ log = logging.getLogger("ironjarvis.settings")
 _REARM_GROUPS = ("autonomy", "sentinels", "calendar", "fleet", "browser")
 _LOCAL_ENDPOINT_KEYS = ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
 #: Keys applied by their own service's setter (they persist themselves).
+#: v1.433.0 (Wave 1, A2): ``mcp_auto_approve`` joined them — turning it OFF
+#: also clears every app's own "run without asking" flag (``_mcp_auto_approve``).
 _HOOK_KEYS = frozenset(
     {"iron_proxy_enabled", "profile_share_claude_code", "profile_share_codex",
-     "profile_share_pi", "profile_share_opencode", "agent_browser_enabled"}
+     "profile_share_pi", "profile_share_opencode", "agent_browser_enabled",
+     "mcp_auto_approve"}
 )
 
 
@@ -75,6 +78,11 @@ class ChangeSet:
     updated: list[str] = field(default_factory=list)
     changed: list[dict[str, Any]] = field(default_factory=list)
     action_id: str = ""
+    #: v1.433.0 (Wave 1, A2): the apps whose OWN "run without asking" flag a
+    #: change of ``mcp_auto_approve`` to off cleared (names only). Not in
+    #: :meth:`as_dict` — the answers every route gives keep their shape; the
+    #: chat tool says it in words.
+    cleared_auto_approve: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"updated": self.updated, "changed": self.changed, "action_id": self.action_id}
@@ -190,6 +198,18 @@ class ConfigWriter:
                 problem = read_root_problem(folder, must_exist=not restoring)
                 if problem:
                     raise SettingError(f"{_label('readable_folders')}: {problem}.")
+        if clean.get("active_project_id") and clean["active_project_id"] != self.current("active_project_id"):
+            # v1.433.0 (Wave 1, A3): the focused project must be a real, active
+            # project — the activate route's own rule and words
+            # (routes/projects.activate_project). A dangling id tags every new
+            # chat and run into a project that is not there (daemon/app's boot
+            # check clears one). "" (none) is always allowed; a value equal to
+            # the one already set changes nothing, so it is not re-read (a full
+            # Settings save must not fail on a project archived since). An Undo
+            # back to a project archived or deleted since is refused and skipped.
+            problem = self._project_problem(str(clean["active_project_id"]))
+            if problem:
+                raise SettingError(f"{_label('active_project_id')}: {problem}.")
         if clean.get("account_groups") and not restoring:
             # v1.393.0 (the long-jobs plan's Phase 4): every account a group
             # ADDS is one Iron-Proxy lists now (its CACHED snapshot — never a
@@ -213,6 +233,20 @@ class ConfigWriter:
                         "so there is nothing to share with."
                     )
         return clean
+
+    def _project_problem(self, project_id: str) -> str:
+        """Why ``project_id`` cannot be the focused project, in the activate
+        route's words, or "" when it can. Blocking (one database read)."""
+        from ..core.db import session_scope
+        from ..core.models import Project
+
+        with session_scope(self.platform.engine) as db:
+            project = db.get(Project, project_id)
+        if project is None:
+            return "no such project"
+        if project.status != "active":
+            return "unarchive the project first"
+        return ""
 
     @staticmethod
     def _check_permission(tool: str, mode: Any) -> None:
@@ -256,6 +290,8 @@ class ConfigWriter:
                     self.platform.profile_share.set_on(_SHARE_KEYS[key], bool(value))
                 elif key == "agent_browser_enabled":
                     self._agent_browser(bool(value))
+                elif key == "mcp_auto_approve":
+                    out.cleared_auto_approve = self._mcp_auto_approve(bool(value))
                 elif d.pattern and key.startswith("permissions."):
                     self._permission(schema.pattern_arg(d, key), "" if value is None else str(value))
                 else:
@@ -333,6 +369,40 @@ class ConfigWriter:
             svc.start() if on else svc.stop()
         except Exception:  # noqa: BLE001 — the switch is saved; the card shows status.error
             log.debug("iron-proxy start/stop after a settings change failed", exc_info=True)
+
+    def _mcp_auto_approve(self, on: bool) -> list[str]:
+        """The global "Run app tools without asking" switch. OFF also clears
+        every app's OWN ``auto_approve`` flag: ``mcp_call`` is ONE shared
+        permission key, so any flag left behind keeps the blanket grant alive
+        at the next start (platform.py, ``mcp.tools.pack_grants_auto``) while
+        the switch reads off. This was the Tools page route's own step
+        (v1.127.0); chat's ``config_change_protected`` came through here and
+        skipped it (v1.433.0, Wave 1 A2). Runs on every OFF, changed or not,
+        as the route always did. Returns the names of the apps whose flag
+        really let their tools run unasked (``pack_grants_auto`` — the boot
+        resolver's own rule): a row holding ``auto_approve = false``, or a
+        switched-off app's flag, ran nothing unasked, so it is not counted
+        (v1.433.0 review), though its key is taken away all the same."""
+        from ..mcp.tools import pack_grants_auto
+
+        cfg = self.platform.config
+        cfg.mcp_auto_approve = on
+        values: dict[str, Any] = {"mcp_auto_approve": on}
+        cleared: list[str] = []
+        if not on:
+            servers = list(getattr(cfg, "mcp_servers", None) or [])
+            popped = False
+            for s in servers:
+                if isinstance(s, dict) and "auto_approve" in s:
+                    if pack_grants_auto(s):
+                        cleared.append(str(s.get("name") or ""))
+                    s.pop("auto_approve", None)  # absent == off, the add doors' shape
+                    popped = True
+            if popped:
+                cfg.mcp_servers = servers
+                values["mcp_servers"] = servers
+        persist_config_values(cfg.home, values)
+        return cleared
 
     def _agent_browser(self, on: bool) -> None:
         cfg = self.platform.config

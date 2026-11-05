@@ -41,14 +41,11 @@ _ABSENT_BY_DESIGN = {
     # v1.170.0 pinned this: an entry would make the Settings display imply a
     # configured choice nobody made. See test_workflow_tools_v1170.
     "workflow_run": "P3 pinned design — listing is allowed, running asks",
-    # Sends the task (and its context) to a machine that is not this one. The
-    # local `delegate` is already "ask"; going off-box is not less than that.
-    "delegate_remote": "leaves this machine",
-    # Costs real money per call.
-    "pixio": "paid media generation",
-    # Computer use is opt-in by design (README: gated, DOM-first, human
-    # approval for risky actions).
-    "web_look": "computer-use surface, opt-in by design",
+    # v1.433.0 (Wave 1, A17, moved on purpose): `delegate_remote` and `pixio`
+    # now have rows ("ask", exactly what their absence meant) so the
+    # Permissions screen shows them and the user can tune them; `web_look`
+    # has "allow" beside its read-only siblings browse / web_extract (all
+    # three still need computer use switched on).
 }
 
 #: Tools whose capability is the reason they ask. Pinned so a future "make the

@@ -57,7 +57,7 @@ from ..media.pixio_http import ext_from_url as _ext_from_url
 from ..media.pixio_http import http_error as _http_error
 from ..media.pixio_http import output_url as _output_url
 from ..media.pixio_http import safe_name as _safe_name
-from .base import Tool, ToolContext, ToolResult
+from .base import Reversibility, Tool, ToolContext, ToolResult
 
 __all__ = [
     "ArtifactSink",
@@ -209,6 +209,9 @@ class _PixioTool(Tool):
 
 class PixioModelsTool(_PixioTool):
     name = "pixio_models"
+    #: v1.433.0 (Wave 1, A17): a read — like the other read tools. The
+    #: ``pixio`` permission still asks first by default.
+    reversibility = Reversibility.READONLY
     description = (
         "List the Pixio generative-media models (image/video/audio) visible to this "
         "account. Always pick a model id from this list — never invent one. Then call "
@@ -243,6 +246,9 @@ class PixioModelsTool(_PixioTool):
 
 class PixioParamsTool(_PixioTool):
     name = "pixio_params"
+    #: v1.433.0 (Wave 1, A17): a read — like the other read tools. The
+    #: ``pixio`` permission still asks first by default.
+    reversibility = Reversibility.READONLY
     description = (
         "Fetch the accepted params (required fields, defaults, allowed values) for one "
         "Pixio model. Call this BEFORE pixio_generate and pass only params it lists — "
@@ -391,6 +397,12 @@ class PixioGenerateTool(_PixioTool):
 
 class PixioStatusTool(_PixioTool):
     name = "pixio_status"
+    #: NOT READONLY (v1.433.0 review): on success it SAVES the result into the
+    #: run's folder and the gallery. A READONLY tool is replay-safe after a
+    #: restart, runs headless from a stored workflow without asking, and is
+    #: left out of a rewind's "commands it cannot undo" — none of which is
+    #: true of a tool that writes a file. It keeps the default (the fail-safe
+    #: answer); the file it creates is journaled from ``created_paths``.
     description = (
         "Check one Pixio generation by id (from pixio_generate). On success the output "
         "is downloaded into the session workspace under pixio/; otherwise the current "

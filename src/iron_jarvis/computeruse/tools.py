@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..tools.base import Tool, ToolContext, ToolResult
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from .approvals import ApprovalQueue
 from .base import Action, Browser, PolicyDenied, Selector
 from .harness import ApprovalResolver, ComputerUseHarness
@@ -308,6 +308,9 @@ class WebLookTool(_GatedTool):
     )
     permission_key = "web_look"
     returns_untrusted_content = True
+    #: v1.433.0 (Wave 1, A17): it only looks (a screenshot read by a vision
+    #: model) — a read like the other read tools.
+    reversibility = Reversibility.READONLY
     input_schema = {
         "type": "object",
         "properties": {

@@ -4409,20 +4409,13 @@ def register(app: FastAPI, d) -> None:
                 or any(bool(s.get("auto_approve")) for s in servers),
                 "note": None,
             }
-        # Redesign S2: the global flag through the one writer (ledger + Undo);
-        # the per-server flags it clears are pack records, persisted as before.
+        # Redesign S2: the global flag through the one writer (ledger + Undo).
+        # v1.433.0 (Wave 1, A2): the per-app flags an OFF clears are cleared
+        # BY the writer (settings/writer._mcp_auto_approve), so chat's
+        # protected change and this switch do the same thing.
         from .settings import config_writer
 
         config_writer(d).apply({"mcp_auto_approve": bool(body.auto_approve)}, actor="tools_page")
-        if not body.auto_approve:
-            cleared = False
-            for s in servers:
-                if "auto_approve" in s:
-                    s.pop("auto_approve", None)  # absent == off, matching POST/PATCH
-                    cleared = True
-            if cleared:
-                d.platform.config.mcp_servers = servers
-                d._persist_config(["mcp_servers"])
         return {
             "auto_approve_global": bool(body.auto_approve),
             "auto_approve_effective": bool(body.auto_approve),

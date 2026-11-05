@@ -282,7 +282,8 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             + _BRAIN_TOOLS
             + ["web_search"]
             + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
-            + ["browse", "web_extract", "computer_use_status"] + _COLLAB_TOOLS
+            # v1.433.0 (Wave 1, A17): `web_look` beside its read siblings.
+            + ["browse", "web_extract", "web_look", "computer_use_status"] + _COLLAB_TOOLS
             + _EXTERNAL_TOOLS
         ),
     ),
@@ -356,7 +357,8 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             _FILE_TOOLS + _SELF_SERVICE_TOOLS + _DOCUMENT_TOOLS + _LEARNING_TOOLS
             + ["notify", "integration_list", "integration_test"]
             + ["create_agent", "list_agents", "spawn_agent"]
-            + ["browse", "web_extract", "web_action", "computer_use_status"]
+            # v1.433.0 (Wave 1, A17): `web_look` beside its read siblings.
+            + ["browse", "web_extract", "web_look", "web_action", "computer_use_status"]
             + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),

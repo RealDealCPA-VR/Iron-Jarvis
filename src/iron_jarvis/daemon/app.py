@@ -1525,12 +1525,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # are ARCHIVED (never deleted) on a daily sweep, first run an hour
         # after boot. Same discipline as the dispatcher: a named bg task,
         # `_tick("skill_curator", …)` per pass, its own stop Event set
-        # before the cancel lands. `config.curator_enabled` gates the loop
+        # before the cancel lands. `config.curator_enabled` gates the SWEEP
         # only — a manual sweep from the Skills page still works when off.
+        # v1.433.0 (Wave 1, A12): the loop is armed whatever the switch says
+        # and reads it on every pass (`run_forever` skips the sweep while it
+        # is off), so turning it on from Settings or chat applies without a
+        # restart. It used to be read here once, at boot.
         _curator_stop = asyncio.Event()
-        if getattr(platform, "skill_curator", None) is not None and getattr(
-            platform.config, "curator_enabled", True
-        ):
+        if getattr(platform, "skill_curator", None) is not None:
             bg_tasks["skill_curator"] = asyncio.create_task(
                 platform.skill_curator.run_forever(
                     _curator_stop, lambda ok, exc: _tick("skill_curator", ok, exc)
