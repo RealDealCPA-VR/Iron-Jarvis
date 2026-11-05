@@ -16,7 +16,11 @@
  *   - "row"    — under a row's words (Connections, the welcome card): the
  *                press, then the window's own hint once it opened;
  *   - "inline" — inside one line of text (the chat's warning, the New task
- *                door): a small "Sign in" press, then one short line.
+ *                door): a small "Sign in" press, then one short line;
+ *   - "door"   — v1.436.0 (Wave 5, B3): one of the doors under a chat reply
+ *                that asked to sign in ("Sign in to Claude Code"), drawn as
+ *                a door pill (components/chat/doorStyle) — the SAME press,
+ *                never a second sign-in path.
  *
  * Takes no hook of the daemon (dozens of tests mock lib/daemon wholesale):
  * the caller passes `onLaunched` (Connections and the doors refresh /health,
@@ -28,6 +32,7 @@ import { Loader2, LogIn } from "lucide-react";
 import { codeParts, paneHref, subscriptionCliFor, useCliSignIn } from "@/lib/cliSignIn";
 import { announceBuildTerminalLink } from "@/lib/buildLinks";
 import { CALM_ACTION } from "@/components/connections/endpointChip";
+import { DOOR_PILL } from "@/components/chat/doorStyle";
 
 const ROW_LINK =
   "font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent";
@@ -54,7 +59,7 @@ export function CliSignInPress({
   /** The /health provider id ("claude-cli", "codex-cli"). Anything else
    *  renders nothing — there is no press to offer. */
   provider: string;
-  variant?: "row" | "inline";
+  variant?: "row" | "inline" | "door";
   /** The test-id family (Connections keeps its `cli-sign-in-<provider>`). */
   testIdPrefix?: string;
   onLaunched?: () => void;
@@ -63,6 +68,37 @@ export function CliSignInPress({
   const { signIn, start } = useCliSignIn(() => onLaunched?.());
   if (!cli) return null;
   const si = signIn[cli.cli] ?? {};
+  if (variant === "door") {
+    return (
+      <span data-testid={`${testIdPrefix}-sign-in-${provider}`} className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+        {si.paneId !== undefined ? (
+          <Link
+            href={paneHref(si.paneId)}
+            onClick={() => announceBuildTerminalLink(paneHref(si.paneId))}
+            data-testid={`${testIdPrefix}-pane-hint-${provider}`}
+            className={DOOR_PILL}
+          >
+            <LogIn size={11} className="shrink-0 text-accent-soft/70" aria-hidden />
+            <span className="truncate">Finish signing in to {cli.name} in Build</span>
+          </Link>
+        ) : (
+          <button type="button" onClick={() => void start(cli)} disabled={si.busy} className={`${DOOR_PILL} disabled:opacity-50`}>
+            {si.busy ? (
+              <Loader2 size={11} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : (
+              <LogIn size={11} className="shrink-0 text-accent-soft/70" aria-hidden />
+            )}
+            <span className="truncate">Sign in to {cli.name}</span>
+          </button>
+        )}
+        {si.error && (
+          <span role="alert" className="text-[11px] text-tone-danger">
+            {si.error}
+          </span>
+        )}
+      </span>
+    );
+  }
   if (variant === "inline") {
     return (
       <span data-testid={`${testIdPrefix}-sign-in-${provider}`} className="inline">

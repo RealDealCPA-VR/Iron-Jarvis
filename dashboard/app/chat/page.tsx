@@ -200,7 +200,7 @@ import { atAgentName } from "@/lib/atMenuRows";
 import { chatRefRowParts } from "@/lib/chatRefsRows";
 import { fetchFollowups } from "@/lib/followups";
 import { useLiveThinking } from "@/lib/liveThinking";
-import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
+import { DoorsStrip, decodeDoors, type Door } from "@/components/chat/DoorsStrip";
 import { startCodingFromDoor } from "@/lib/codingStart";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 import { ReplyRating, type ReplyRatingValue } from "@/components/chat/ReplyRating";
@@ -1069,18 +1069,9 @@ function workflowRunFrom(raw: unknown): { runId: string; name: string } | null {
  *  a JSON boundary), never re-derived, sliced, or reordered: which doors a
  *  turn earned is the DAEMON's call (executed-ok tools, deduped, capped). */
 function doorsFrom(raw: unknown): Door[] | null {
-  if (!Array.isArray(raw)) return null;
-  const out: Door[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const d = item as { href?: unknown; label?: unknown };
-    if (typeof d.href !== "string" || !d.href.trim()) continue;
-    out.push({
-      href: d.href,
-      label: typeof d.label === "string" && d.label.trim() ? d.label : d.href,
-    });
-  }
-  return out.length > 0 ? out : null;
+  // v1.436.0: the ONE decoder (components/chat/DoorsStrip) — it also keeps a
+  // page-step door's sign-in `press` when this dashboard has that press.
+  return decodeDoors(raw);
 }
 
 /** Decode the daemon's `adapted` object (v1.202.0) — the envelope's own

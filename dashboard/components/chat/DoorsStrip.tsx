@@ -22,15 +22,57 @@
  * Each click is tallied via `recordDoorOpen` (localStorage, never leaves the
  * machine) so the emergent-surface metric can tell a door-opened subsystem
  * from a nav-opened one — the Sidebar's clicks land in a DIFFERENT key.
+ *
+ * v1.436.0 (Wave 5, B3): a message that asks for a step only a page can do
+ * gets ONE door to the exact place (daemon/page_doors). A sign-in to Claude
+ * Code, Codex or Grok carries `press` — the /health provider id — and is
+ * drawn through the ONE Sign in press (components/connections/
+ * CliSignInPress, variant "door"): the same terminal it opens on Settings ›
+ * Connections, never a second sign-in path. An unknown `press` is dropped
+ * when the door is decoded, so the door is then its plain link.
  */
 
 import Link from "next/link";
 import { DoorOpen } from "lucide-react";
 import { recordDoorOpen } from "@/lib/appTiles";
+import { subscriptionCliFor } from "@/lib/cliSignIn";
+import { CliSignInPress } from "@/components/connections/CliSignInPress";
+import { DOOR_PILL } from "@/components/chat/doorStyle";
 
 export interface Door {
   href: string;
   label: string;
+  /** v1.436.0: a sign-in press this door is drawn through ("claude-cli",
+   *  "codex-cli", "grok-cli"); absent = a link. */
+  press?: string;
+}
+
+/** The sign-in press a door names, when the dashboard has that press. */
+export function doorPress(d: Pick<Door, "press"> | null | undefined): string | undefined {
+  const p = d && typeof d.press === "string" ? d.press : "";
+  return p && subscriptionCliFor(p) ? p : undefined;
+}
+
+/** Decode the daemon's `doors` array (v1.199.0) — server truth carried onto
+ *  the message verbatim. Entries are shape-checked only (the payload crosses
+ *  a JSON boundary), never re-derived, sliced, or reordered: which doors a
+ *  turn earned is the DAEMON's call (executed-ok tools, deduped, capped).
+ *  v1.436.0: `press` is kept only when it names a press this dashboard has. */
+export function decodeDoors(raw: unknown): Door[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Door[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const d = item as { href?: unknown; label?: unknown; press?: unknown };
+    if (typeof d.href !== "string" || !d.href.trim()) continue;
+    const press = doorPress({ press: typeof d.press === "string" ? d.press : undefined });
+    out.push({
+      href: d.href,
+      label: typeof d.label === "string" && d.label.trim() ? d.label : d.href,
+      ...(press ? { press } : {}),
+    });
+  }
+  return out.length > 0 ? out : null;
 }
 
 export interface DoorsStripProps {
@@ -54,22 +96,38 @@ export function DoorsStrip({ doors, onOpen }: DoorsStripProps) {
   if (usable.length === 0) return null;
   return (
     <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-      {usable.map((d) => (
-        <Link
-          key={d.href}
-          href={d.href}
-          // Tally BEFORE navigating, like the Sidebar's recordOpen — the
-          // local counter for the emergent-surface metric, not telemetry.
-          onClick={(e) => {
-            recordDoorOpen(d.href);
-            if (onOpen?.(d)) e.preventDefault();
-          }}
-          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
-        >
-          <DoorOpen size={11} className="shrink-0 text-accent-soft/70" />
-          <span className="truncate">{d.label || d.href}</span>
-        </Link>
-      ))}
+      {usable.map((d) => {
+        const press = doorPress(d);
+        if (press) {
+          // v1.436.0: a sign-in door IS the one Sign in press; the open is
+          // tallied once a terminal opened.
+          return (
+            <CliSignInPress
+              key={d.href}
+              provider={press}
+              variant="door"
+              testIdPrefix="door"
+              onLaunched={() => recordDoorOpen(d.href)}
+            />
+          );
+        }
+        return (
+          <Link
+            key={d.href}
+            href={d.href}
+            // Tally BEFORE navigating, like the Sidebar's recordOpen — the
+            // local counter for the emergent-surface metric, not telemetry.
+            onClick={(e) => {
+              recordDoorOpen(d.href);
+              if (onOpen?.(d)) e.preventDefault();
+            }}
+            className={DOOR_PILL}
+          >
+            <DoorOpen size={11} className="shrink-0 text-accent-soft/70" />
+            <span className="truncate">{d.label || d.href}</span>
+          </Link>
+        );
+      })}
     </div>
   );
 }

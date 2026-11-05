@@ -3887,6 +3887,9 @@ async def chat_stream(
     # (lock-step): chat_turn.run_chat_turn joins the same object.
     system += _grounding.stable()
     _query_tail += _grounding.query()
+    # v1.436.0 (Wave 5, B3): the lock-step copy of chat_turn's page-step and
+    # "not offered" lines ("" when the message names none — byte-identical).
+    _query_tail += _chat_turn.page_steps_block(body)
     conn_tools = _grounding.conn_tools
 
     # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
@@ -7384,6 +7387,11 @@ async def chat_stream(
             door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
         )
         door_entries = with_connect_door(door_entries, _grounding.apps_offer, connect_offered)
+        # PAGE DOOR (v1.436.0, Wave 5 B3): the lock-step copy of chat_turn's —
+        # one door to the place a page-only step is done, last, only with room.
+        door_entries = _chat_turn.with_page_door(
+            door_entries, body, harness=harness, escalate=escalate, sidebar=arm_family is not None,
+        )
         done_frame: dict[str, Any] = {
             "reply": reply,
             "provider": route_provider,
