@@ -1254,11 +1254,20 @@ def test_the_declared_exits_are_narrated_instead_of_dropped(tmp_path, monkeypatc
     turns = PanelTurns(platform=object(), personas={})
     conn = Conn()
 
+    # v1.433.0 (moved on purpose): the lane's REAL done frame — the answer is
+    # `reply`, and for an escalation with no words of the model's own it is
+    # the lane's own "the model returned an empty answer" sentence, which the
+    # sidebar's exit sentence replaces (the turn ended on an exit it cannot
+    # follow, not on an empty answer).
     asyncio.run(
         turns._translate(
             conn,
             "done",
-            {"text": "", "escalate": True, "escalate_reason": "this needs many steps"},
+            {
+                "reply": "The model returned an empty answer — no tool ran and nothing was written.",
+                "escalate": True,
+                "escalate_reason": "this needs many steps",
+            },
         )
     )
     words = " ".join(p.get("text", "") for e, p in sent if e == P.PANEL_EVENT_DELTA)
@@ -1270,7 +1279,7 @@ def test_the_declared_exits_are_narrated_instead_of_dropped(tmp_path, monkeypatc
     sent.clear()
     turns._delta_seen = False
     asyncio.run(
-        turns._translate(conn, "done", {"text": "", "workflow_draft": {"name": "x"}})
+        turns._translate(conn, "done", {"reply": "", "workflow_draft": {"name": "x"}})
     )
     words = " ".join(p.get("text", "") for e, p in sent if e == P.PANEL_EVENT_DELTA)
     assert "workflow" in words.lower() and "Iron Jarvis window" in words, (

@@ -480,6 +480,80 @@ def _opens_as_demo(reply: object) -> bool:
     return bool(DEMO_OPENING) and str(reply or "").lstrip().startswith(DEMO_OPENING)
 
 
+def _lane_demo_notes() -> tuple[str, ...]:
+    """Every note the chat lane can append to a demo answer
+    (``chat_turn.demo_note``), made by CALLING it, so a rewording there is
+    followed here. Never raises (an empty tuple strips nothing)."""
+    try:
+        from ..daemon.chat_turn import _FILE_CHANGING_TOOLS, demo_note
+        from ..providers.adapters.mock import DEMO_OPENING
+    except Exception:  # noqa: BLE001 — wording only
+        return ()
+    try:
+        wrote = sorted(_FILE_CHANGING_TOOLS)[:1]
+        notes = (demo_note([], DEMO_OPENING), demo_note(wrote, ""), demo_note([], ""))
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(n for n in dict.fromkeys(notes) if n)
+
+
+def without_lane_demo_note(reply: str) -> str:
+    """*reply* without the chat lane's demo note (v1.433.0).
+
+    The sidebar says the demo in its OWN line (:meth:`PanelTurns._route_notice`,
+    the accountability line kept visible since v1.267.0). The lane's note says
+    the same thing for the chat page — "Choose a model ABOVE", where the chat's
+    picker is; the sidebar's picker is below the answer. Shown as well, the
+    demo would be named twice (the v1.359.0 "named once" rule)."""
+    text = str(reply or "")
+    for note in _lane_demo_notes():
+        if note in text:
+            return text.replace(note, "", 1)
+    return text
+
+
+def settle_answer(shown: str, final: str) -> tuple[bool, str]:
+    """How the sidebar's answer bubble, now holding *shown*, comes to read the
+    turn's *final* answer (v1.433.0): ``(clear_first, words_to_add)``.
+
+    The lane's ``done`` frame carries the reply the chat page saves. Most of it
+    already streamed as tokens; what follows them (a footnote, a note, the
+    sentence for a model that wrote nothing after its tools) rides ONLY in
+    ``done``. So: the same words add nothing; words that EXTEND what is shown
+    add the missing end; anything else clears the bubble and says the whole
+    reply (a rewrite that was not kept, a reply the lane rebuilt). Space at
+    either end is not a difference worth repainting for. Pure."""
+    shown = str(shown or "")
+    final = str(final or "")
+    if final == shown:
+        return False, ""
+    if final.startswith(shown):
+        return False, final[len(shown):]
+    core = shown.strip()
+    if not core:
+        # Only space on screen: clear it, then the whole answer.
+        return bool(shown), final
+    lead = final.lstrip()
+    if lead.startswith(core):
+        return False, lead[len(core):]
+    return True, final
+
+
+#: How much of an error's technical text the sidebar keeps behind "Details".
+TECHNICAL_CHARS = 1000
+
+
+def failure_sentence(title: object, fix: object) -> str:
+    """"<title>. <fix>" — the chat's failure line (the dashboard's
+    ``lib/failureLine.failureSentence``, the same rule). "" with no title."""
+    t = str(title or "").strip()
+    if not t:
+        return ""
+    f = str(fix or "").strip()
+    head = t if t[-1] in ".!?" else f"{t}."
+    return f"{head} {f}" if f else head
+
+
 class PanelTurns:
     """One panel conversation: start it, narrate it, stop it, answer its asks.
 
@@ -524,6 +598,13 @@ class PanelTurns:
         #: none of them renders as an EMPTY answer unless this module says
         #: something true instead (:meth:`_translate`, the ``done`` branch).
         self._delta_seen = False
+        #: v1.433.0: the words the panel's CURRENT answer bubble holds — the
+        #: delta frames sent since the last frame the panel ends a bubble on
+        #: (a step, a reset, the end of the turn). Kept by :meth:`emit`, which
+        #: sends every one of those frames, so it follows the panel's own
+        #: state machine exactly. The ``done`` branch settles the bubble on the
+        #: lane's reply from it (:func:`settle_answer`).
+        self._segment: list[str] = []
         #: v1.267.0: the model list, cached with the loop time it was read at.
         #: ``open`` is posted on every tab switch now, and the list probes live
         #: providers; a minute is long enough that a switch never re-probes and
@@ -561,6 +642,19 @@ class PanelTurns:
         """Send one ``browser.panel_event``. Never raises — a dead socket is an
         expected outcome mid-turn (the user closed the browser), and an
         exception here would take down the read loop that owns this call."""
+        # v1.433.0: what the panel's current answer bubble holds, by the
+        # panel's own rules (sidepanel.ts): a delta appends to it; a step, a
+        # reset, the end of a turn, an error (not a dictation's: that one
+        # leaves the answer alone) and a not-running state start a new one.
+        body = payload or {}
+        if event == P.PANEL_EVENT_DELTA:
+            self._segment.append(str(body.get("text") or ""))
+        elif event in (P.PANEL_EVENT_TOOL, P.PANEL_EVENT_RESET, P.PANEL_EVENT_DONE):
+            self._segment = []
+        elif event == P.PANEL_EVENT_ERROR and not str(body.get("reason") or "").startswith("voice"):
+            self._segment = []
+        elif event == P.PANEL_EVENT_STATE and body.get("running") is not True:
+            self._segment = []
         if conn is None:
             return
         try:
@@ -1050,6 +1144,7 @@ class PanelTurns:
         self._floor_offered.clear()
         self._delta_seen = False
         self._answer = []
+        self._segment = []
         self._turn_text = text
         self._remembered = False
         await self.emit(conn, P.PANEL_EVENT_STATE, self._state(running=True))
@@ -1520,13 +1615,36 @@ class PanelTurns:
         return "Iron Jarvis finished this turn without an answer."
 
     async def _translate(self, conn: Any, event: str, data: dict[str, Any]) -> None:
-        """One SSE frame -> zero or one ``browser.panel_event``.
+        """One SSE frame -> the ``browser.panel_event`` frames it means (most
+        often one; ``done`` may also settle the answer and add the route line).
 
-        The mapping is deliberately narrow. ``round``, ``reset`` and
-        ``approval_resolved`` are the turn's own bookkeeping and have no panel
-        vocabulary; forwarding them as something else would invent a frame the
-        panel would have to guess the meaning of.
+        The mapping is deliberately narrow. ``round`` and ``approval_resolved``
+        are the turn's own bookkeeping and have no panel vocabulary; forwarding
+        them as something else would invent a frame the panel would have to
+        guess the meaning of.
+
+        ``reset`` DOES have one since v1.433.0: the lane sends it to take back
+        words it streamed — a reply rewritten into the user's language, a tool
+        call the model wrote as text after a cut-off. Ignored, the sidebar
+        showed both versions, or the raw markup, and remembered them.
         """
+        if event == "reset":
+            # The lane's `drop` (a retried round of a coding session takes back
+            # only its own words, counted in code points) keeps the rest; with
+            # no `drop` every word of the answer so far goes, as on the chat
+            # page (`useChatStream`'s reset).
+            drop = data.get("drop")
+            kept_answer = kept_shown = ""
+            if isinstance(drop, int) and not isinstance(drop, bool) and drop > 0:
+                joined = "".join(self._answer)
+                kept_answer = joined[: max(0, len(joined) - drop)]
+                shown = "".join(self._segment)
+                kept_shown = shown[: max(0, len(shown) - drop)]
+            self._answer = [kept_answer] if kept_answer else []
+            await self.emit(conn, P.PANEL_EVENT_RESET, {"reason": str(data.get("reason") or "")})
+            if kept_shown:
+                await self.emit(conn, P.PANEL_EVENT_DELTA, {"text": kept_shown})
+            return
         if event == "token":
             piece = str(data.get("text") or "")
             if piece:
@@ -1595,6 +1713,43 @@ class PanelTurns:
                 await self.emit(conn, P.PANEL_EVENT_STATE, self._state())
             return
         if event == "done":
+            # THE REPLY (v1.433.0). The lane's `done` frame carries the turn's
+            # answer as `reply` — the text the chat page saves. This branch read
+            # a `text` key the frame has never had, so everything that rides
+            # ONLY here never reached the sidebar: the sentence for a model
+            # that wrote nothing after its tools, the refusal footnotes (worded
+            # for the sidebar since v1.387.0, and never once shown in it), the
+            # stopped / language / context notes, the honesty notes about
+            # files, the cut-off end. The panel paints its words from `delta`
+            # frames, so the reply is settled onto the answer bubble AS deltas
+            # (and a `reset` when the bubble shows something the reply does not
+            # extend) — and the conversation remembers the reply itself.
+            route = data.get("route")
+            reply = str(data.get("reply") or "")
+            if isinstance(route, dict) and str(route.get("reason") or "") == "mock":
+                reply = without_lane_demo_note(reply)
+            shown = "".join(self._segment)
+            # NEVER AN EMPTY ANSWER (F5). An `escalate` and a `workflow_draft`
+            # end on an exit the sidebar cannot follow; when nothing of the
+            # model's own is on screen, the lane's reply for that case describes
+            # an empty answer, so the panel's own sentence says what happened.
+            # A turn that ended with no words at all gets one too.
+            exit_taken = bool(data.get("escalate") or data.get("workflow_draft"))
+            if not shown.strip() and (exit_taken or not reply.strip()):
+                final = self._empty_answer(data)
+            elif reply.strip():
+                final = reply
+            else:
+                # No reply, but words on screen: they stay as they are.
+                final = ""
+            if final:
+                clear, add = settle_answer(shown, final)
+                if clear:
+                    await self.emit(conn, P.PANEL_EVENT_RESET, {"reason": "reply"})
+                    add = final
+                if add.strip():
+                    await self.emit(conn, P.PANEL_EVENT_DELTA, {"text": add})
+                self._answer = [final]
             # THE ROUTE, WHEN IT IS NOT WHAT WAS ASKED (v1.267.0). The lane's
             # route disclosure rides this frame; the dashboard renders it as the
             # receipt under every reply. The panel prints nothing for the
@@ -1602,46 +1757,33 @@ class PanelTurns:
             # muted line for the two cases the receipt paints amber: a failover
             # (a different model answered) and the mock (no real model at all).
             # Silence there would be the v1.165.0 accountability hole, one
-            # surface over.
-            notice = self._route_notice(
-                data.get("route"),
-                str(data.get("text") or "") or "".join(self._answer),
-            )
+            # surface over. AFTER the answer (v1.433.0): a `tool` frame ends
+            # the panel's answer bubble, so the reply is settled first.
+            notice = self._route_notice(route, "".join(self._answer))
             if notice:
                 await self.emit(conn, P.PANEL_EVENT_TOOL, {"name": "route", "text": notice})
-            # NEVER AN EMPTY ANSWER. The panel paints its reply from `delta`
-            # frames and ignores this frame's text entirely, so a turn that
-            # streamed nothing renders as a question that vanished. Three
-            # turns end that way and every one used to: an `escalate` and a
-            # `workflow_draft` ride HOME IN THIS PAYLOAD with no token frames
-            # at all (`_translate` had no branch for either, which is F5), and
-            # a model can simply answer with an empty string. Say something
-            # TRUE instead of nothing — and say it as a `delta`, because that
-            # is the only frame the panel renders as words.
-            text = str(data.get("text") or "")
-            if not self._delta_seen and not text:
-                sentence = self._empty_answer(data)
-                self._answer.append(sentence)
-                await self.emit(conn, P.PANEL_EVENT_DELTA, {"text": sentence})
-            elif not self._delta_seen:
-                # A reply that arrived whole (no token frames): the panel paints
-                # nothing from `done`, so the conversation remembers the text.
-                self._answer.append(text)
             # v1.270.0: the exchange is written BEFORE `done` leaves, so an
             # `open` that arrives on that frame replays a complete conversation.
             self._remember_exchange()
-            await self.emit(conn, P.PANEL_EVENT_DONE, {"text": text})
+            await self.emit(conn, P.PANEL_EVENT_DONE, {"text": final})
             return
         if event == "error":
-            await self.emit(
-                conn,
-                P.PANEL_EVENT_ERROR,
-                {
-                    "text": str(
-                        data.get("detail") or "Iron Jarvis could not finish that."
-                    )
-                },
-            )
+            # v1.433.0: the lane's error frame says what went wrong in plain
+            # words — `title` and `fix` (`chat_turn.error_payload`, the chat's
+            # own failure line) — beside the raw `detail`. The sidebar showed
+            # only the raw text. The technical text rides along for the panel
+            # to fold behind "Details"; a frame with no title (an older daemon,
+            # a wording fault) reads exactly as before.
+            sentence = failure_sentence(data.get("title"), data.get("fix"))
+            payload: dict[str, Any] = {
+                "text": sentence or str(data.get("detail") or "Iron Jarvis could not finish that.")
+            }
+            technical = str(data.get("technical") or "").strip()
+            if sentence and technical and technical != sentence:
+                payload["technical"] = technical[:TECHNICAL_CHARS]
+            # What was read is remembered BEFORE the terminal frame leaves.
+            self._remember_exchange()
+            await self.emit(conn, P.PANEL_EVENT_ERROR, payload)
             return
 
 

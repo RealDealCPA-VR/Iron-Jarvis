@@ -9370,6 +9370,19 @@ async def run_chat_turn(
     # checked before anything runs. MIRROR NOTE (lock-step): stream_chat_turn.
     _tool_session = turn_session_id(session_id)
     plan_mode = turn_plan_mode(plan_mode, harness)
+    # An unknown "/" skill is refused HERE, before any work starts (v1.433.0,
+    # C1: it was checked after the grounding, the memory-profile search and
+    # the harness build — each paid for, each a turn that never ran). The
+    # steps further down also run at once, so a later refusal would land after
+    # the bound folder was made, the apps were read and events were published.
+    # The stream lane refuses it before its response opens (`_eager_checks`);
+    # same 404, same words.
+    # v1.417.0 (skill parity): a turn bound to a folder may name a skill of
+    # that FOLDER (``.claude/skills``, ``.agents/skills`` …) as well as the
+    # registry's — ``turn_skill_async``. MIRROR NOTE (lock-step).
+    _skill_early = await turn_skill_async(d.platform, body)
+    if (body.skill or "").strip() and _skill_early is None:
+        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
 
     # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
     # the memory fabric, and toggled connector memory all key off this —
@@ -9552,17 +9565,7 @@ async def run_chat_turn(
     # order, byte for byte, and the first failure met is the serial one.
     # MIRROR NOTE (lock-step): routes/chat.py's stream lane starts the same
     # steps at the same seam.
-    # An unknown "/" skill is refused HERE, before any step starts: the steps
-    # below run at once, so a later refusal would land after the bound folder
-    # was made, the apps were read and events were published for a turn that
-    # never ran. The stream lane refuses it even earlier (`_eager_checks`,
-    # before the response opens); same 404, same words.
-    # v1.417.0 (skill parity): a turn bound to a folder may name a skill of
-    # that FOLDER (``.claude/skills``, ``.agents/skills`` …) as well as the
-    # registry's — ``turn_skill_async``. MIRROR NOTE (lock-step).
-    _skill_early = await turn_skill_async(d.platform, body)
-    if (body.skill or "").strip() and _skill_early is None:
-        raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+    # (The unknown "/" skill was refused at the top of the turn — v1.433.0.)
     _prep = _PREP_GROUP.get() or _PrepGroup()
     # Attachments: text formats extracted inline (scans via OCR), images to
     # VISION. SHARED with POST /chat/stream (v1.174.0) — the two lanes ran
@@ -11411,6 +11414,12 @@ async def run_chat_turn(
         # MIRROR NOTE (lock-step): the stream done-frame carries the
         # identical key, filled from its `approval_resolved` answers.
         "approved": [],
+        # DENIED TOOLS (v1.433.0, A15): one entry per call the permission
+        # engine refused, in order — ALWAYS PRESENT (possibly []). The stream
+        # done-frame has carried it since v1.165.0 and the chat page's POST
+        # fallback reads it; this lane filled the list and never sent it.
+        # MIRROR NOTE (lock-step): routes/chat.py's done frame, same key.
+        "denied_tools": list(denied_tools),
         # One surface (v1.108.0): the turn decided it needs the full agent.
         # The client re-runs the SAME message as a session — the user is
         # never asked to pick a mode.

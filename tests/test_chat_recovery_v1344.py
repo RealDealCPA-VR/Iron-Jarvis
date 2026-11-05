@@ -380,7 +380,8 @@ async def test_post_lane_footnotes_a_not_armed_refusal(tmp_path):
     assert other.calls == [], "the roster gate refused it before execute"
     assert _tool_message(double.seen[1], "c1").startswith("not armed:")
     assert out["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(OTHER)} (not turned on for this chat)._")
-    assert out.get("denied_tools", []) == [], "the permission-denied list keeps its old contract"
+    # v1.433.0 (A15, moved on purpose): the POST response carries the key.
+    assert out["denied_tools"] == [], "the permission-denied list keeps its old contract"
     assert out["tools_used"] == []
 
 
@@ -416,7 +417,7 @@ async def test_post_lane_footnotes_a_low_trust_refusal(tmp_path):
     assert out["trust"] == "low", out
     assert _tool_message(double.seen[2], "c2").startswith("low trust:")
     assert out["reply"].endswith(f"\n\n_Note: Jarvis couldn't {ask_words(KEPT_AWAY)} (blocked under low trust)._")
-    assert out.get("denied_tools", []) == []
+    assert out["denied_tools"] == []
     assert out["tools_used"] == [READER]
 
 
@@ -451,7 +452,10 @@ async def test_post_lane_keeps_the_permission_denied_footnote_one_line_deduped(t
     footnote = f"\n\n_Note: Jarvis couldn't {ask_words(DENIED)} (permission denied)._"
     assert out["reply"].endswith(footnote)
     assert out["reply"].count("Jarvis couldn't") == 1
-    assert out.get("denied_tools", [DENIED, DENIED]) == [DENIED, DENIED]
+    # v1.433.0 (A15, moved on purpose): no default — the POST response really
+    # carries the list now (the old `.get(..., [DENIED, DENIED])` hid that it
+    # never did).
+    assert out["denied_tools"] == [DENIED, DENIED]
 
 
 async def test_stream_lane_keeps_the_permission_denied_footnote_one_line_deduped(tmp_path):

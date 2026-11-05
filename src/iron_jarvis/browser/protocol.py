@@ -292,6 +292,14 @@ PANEL_EVENT_TRANSCRIPT = "transcript"
 #: (``started`` | ``finished``) and ``ok`` so the panel can fold a step's start
 #: and end into one line.
 PANEL_EVENT_HISTORY = "history"
+#: v1.433.0: ``{reason}`` — the words of the answer being written are taken
+#: back; the panel empties its current answer bubble, and the deltas that
+#: follow fill it again. The chat lane sends it when it replaces streamed text
+#: (a reply rewritten into the user's language, a tool call written as text
+#: after a cut-off), and the daemon sends it when the turn's final reply does
+#: not continue what was shown. Not the ``reset`` ACTION, which forgets the
+#: whole conversation: the two travel in opposite directions.
+PANEL_EVENT_RESET = "reset"
 
 ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_STATE,
@@ -304,6 +312,7 @@ ALL_PANEL_EVENTS: tuple[str, ...] = (
     PANEL_EVENT_MODELS,
     PANEL_EVENT_TRANSCRIPT,
     PANEL_EVENT_HISTORY,
+    PANEL_EVENT_RESET,
 )
 
 # --------------------------------------------------------------------------- #
@@ -1846,6 +1855,7 @@ __all__ = [
     "PANEL_EVENT_ERROR",
     "PANEL_EVENT_HISTORY",
     "PANEL_EVENT_MODELS",
+    "PANEL_EVENT_RESET",
     "PANEL_EVENT_STATE",
     "PANEL_EVENT_STEERED",
     "PANEL_EVENT_TOOL",

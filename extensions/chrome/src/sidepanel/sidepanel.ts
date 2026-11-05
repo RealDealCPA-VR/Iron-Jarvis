@@ -38,6 +38,7 @@ import {
   PANEL_EVENT_ERROR,
   PANEL_EVENT_HISTORY,
   PANEL_EVENT_MODELS,
+  PANEL_EVENT_RESET,
   PANEL_EVENT_STATE,
   PANEL_EVENT_STEERED,
   PANEL_EVENT_TOOL,
@@ -359,6 +360,26 @@ function finishWork(): void {
   stepCount = 0;
 }
 
+/**
+ * v1.433.0: the technical text behind a failure, folded under "Details" — the
+ * same quiet fold the steps use. The error line above it says what happened in
+ * plain words; this is for whoever wants the exact message.
+ */
+function technicalDetails(text: string): HTMLDetailsElement {
+  const block = document.createElement("details");
+  block.className = "work";
+  block.dataset["kind"] = "technical";
+  const summary = document.createElement("summary");
+  summary.textContent = "Details";
+  block.appendChild(summary);
+  const body = document.createElement("div");
+  body.className = "technical";
+  body.textContent = text;
+  block.appendChild(body);
+  el.transcript?.appendChild(block);
+  return block;
+}
+
 /** Empty the transcript (a new conversation); the off-state line stays. */
 function clearTranscript(): void {
   for (const node of Array.from(el.transcript?.querySelectorAll(".turn, .work") ?? [])) {
@@ -640,6 +661,15 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       el.transcript?.scrollTo({ top: el.transcript.scrollHeight });
       return;
     }
+    case PANEL_EVENT_RESET: {
+      // v1.433.0: the daemon took back the words of the answer being written (a
+      // reply rewritten into your language, a tool call the model wrote as
+      // text, a final reply that does not continue what was shown). The bubble
+      // goes; the deltas that follow start a new one in its place.
+      streaming?.remove();
+      streaming = null;
+      return;
+    }
     case PANEL_EVENT_TOOL: {
       setTurn(true);
       const name = typeof payload["name"] === "string" ? (payload["name"] as string) : "a tool";
@@ -702,6 +732,13 @@ export function applyPanelEvent(event: string, payload: Record<string, unknown>)
       clearApproval();
       finishWork();
       say("error", text || "Iron Jarvis could not finish that.");
+      // v1.433.0: the line says it in plain words; the exact message, when the
+      // daemon sent one, is folded beneath it.
+      const technical = typeof payload["technical"] === "string" ? (payload["technical"] as string) : "";
+      if (technical) {
+        technicalDetails(technical);
+        el.transcript?.scrollTo({ top: el.transcript.scrollHeight });
+      }
       return;
     }
     default:

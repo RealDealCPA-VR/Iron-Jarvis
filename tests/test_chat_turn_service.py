@@ -469,6 +469,11 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
         # lane — it never cards). Same keys in the SSE done frame;
         # tests/test_chat_receipts_v13550.py.
         "refit", "approved",
+        # v1.433.0 (A15, moved on purpose): one more — "denied_tools" ([str],
+        # always present): the calls the permission engine refused. The SSE
+        # done frame has carried it since v1.165.0; the chat page's POST
+        # fallback reads it. tests/test_wave1_chat_post_v14330.py.
+        "denied_tools",
     }
     assert body["refit"] is None and body["approved"] == []
     assert body["thread_refs"] == []
