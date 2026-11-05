@@ -300,7 +300,9 @@ describe("the view", () => {
       "code-mode-chip-option-plan",
       "code-mode-chip-option-full",
     ]);
-    expect(within(menu).getByTestId("code-mode-chip-hidden-auto").textContent).toContain("no mode that decides");
+    // v1.432.0 (moved on purpose): a mode not offered is a greyed name; why is
+    // its accessible description (and the box beside it on a pause).
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-auto").textContent).toContain("no mode that decides");
   });
 
   it("New session for OpenCode: no account to choose, and Send sends exactly that", async () => {

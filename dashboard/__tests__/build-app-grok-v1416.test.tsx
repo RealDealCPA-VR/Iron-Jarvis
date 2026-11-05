@@ -282,8 +282,10 @@ describe("the view", () => {
       "code-mode-chip-option-auto",
       "code-mode-chip-option-full",
     ]);
-    expect(within(menu).getByTestId("code-mode-chip-hidden-edits").textContent).toContain("no setting");
-    expect(within(menu).getByTestId("code-mode-chip-hidden-plan").textContent).toContain("plan mode");
+    // v1.432.0 (moved on purpose): a mode not offered is a greyed name; why is
+    // its accessible description (and the box beside it on a pause).
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-edits").textContent).toContain("no setting");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-plan").textContent).toContain("plan mode");
   });
 
   it("a command card offers no Allow for this session", async () => {

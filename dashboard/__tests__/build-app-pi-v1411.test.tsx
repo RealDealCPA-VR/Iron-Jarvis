@@ -309,11 +309,13 @@ describe("the view", () => {
     fireEvent.click(screen.getByTestId("code-mode-chip-button"));
     const menu = screen.getByTestId("code-mode-chip-menu");
     expect(within(menu).getAllByRole("menuitemradio").map((b) => b.dataset.testid)).toEqual(["code-mode-chip-option-own"]);
-    expect(within(menu).getByTestId("code-mode-chip-hidden-ask").textContent).toContain(
+    // v1.432.0 (moved on purpose): a mode not offered is a greyed name; why is
+    // its accessible description (and the box beside it on a pause).
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-ask").textContent).toContain(
       "Pi does not ask before it runs a tool",
     );
-    expect(within(menu).getByTestId("code-mode-chip-hidden-full").textContent).toContain("without asking");
-    expect(within(menu).getByTestId("code-mode-chip-hidden-plan").textContent).toContain("/plan");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-full").textContent).toContain("without asking");
+    expect(within(menu).getByTestId("code-mode-chip-hidden-about-plan").textContent).toContain("/plan");
   });
 
   // v1.412.0 (moved on purpose): the start composer's chips, not a form.
