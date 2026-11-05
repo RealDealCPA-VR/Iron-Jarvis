@@ -113,6 +113,7 @@ import {
   askerSubject,
   DENY,
   PLAN_RUN_SENTENCE,
+  QUARANTINED_LINE,
   scopeLabel,
   scopeNoun,
   undoLine,
@@ -360,6 +361,18 @@ export function ApprovalCard({
         // instead of widening the card past a phone's 390 px.
         <p data-testid="approval-cost" className="text-[11px] leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">
           {approval.costNote}
+        </p>
+      )}
+
+      {approval.quarantined === true && (
+        // v1.433.0 (A16): the daemon's `quarantined` — a tool new (or
+        // changed) in its app since the user added it. One plain line, in
+        // both layouts; a card without it is unchanged byte for byte.
+        <p
+          data-testid="approval-quarantined"
+          className="text-[12px] leading-relaxed text-tone-warn [overflow-wrap:anywhere]"
+        >
+          {QUARANTINED_LINE}
         </p>
       )}
 

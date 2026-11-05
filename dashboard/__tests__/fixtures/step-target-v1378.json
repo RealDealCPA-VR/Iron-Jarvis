@@ -535,6 +535,48 @@
         "path": "x.txt"
       },
       "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "postgres://books:s3cretpw@db.local/ledger"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "mysql://me:hunter2@db/x"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "postgres://db.local/ledger"
+      },
+      "target": "postgres://db.local/ledger"
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "mysql://me@db/x"
+      },
+      "target": "mysql://me@db/x"
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "https://discord.com/api/webhooks/1234567890/AbCdEfGhIjKlMnOpQrSt"
+      },
+      "target": null
+    },
+    {
+      "name": "page_click",
+      "args": {
+        "target": "https://discord.com/channels/123/456"
+      },
+      "target": "https://discord.com/channels/123/456"
     }
   ]
 }

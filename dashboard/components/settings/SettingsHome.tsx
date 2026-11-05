@@ -191,6 +191,9 @@ const SUBSECTIONS: Record<string, Sub[]> = Object.fromEntries(
   ]),
 );
 
+/** The Appearance group's own Theme card (not a folded section). */
+const APPEARANCE_SECTION = "appearance";
+
 /** v1.405.0 review: settings whose ONE control on this page lives in one of
  *  its sections (the schema row still serves chat and the config tools). A
  *  second, plain control beside it would disagree with it until a reload. A
@@ -198,6 +201,9 @@ const SUBSECTIONS: Record<string, Sub[]> = Object.fromEntries(
 export const CONTROLLED_IN_SECTION: Record<string, string> = {
   update_channel: "system-updates",
   brain_profile: "memory-brain-profile",
+  // v1.433.0 (D1): the Appearance card's theme switcher IS this row (it
+  // saves it, lib/deviceSettings) — a plain field beside it disagreed with it.
+  "device.theme": APPEARANCE_SECTION,
 };
 
 function readSection(): { section: string; focus: string } {
@@ -357,6 +363,8 @@ export function SettingsHome() {
   const viaControlled = q
     ? defs.filter((d) => d.key in CONTROLLED_IN_SECTION && matches(d, q)).map((d) => CONTROLLED_IN_SECTION[d.key])
     : [];
+  // v1.433.0: a search that finds the theme row shows the Theme card itself.
+  const themeCard = q ? viaControlled.includes(APPEARANCE_SECTION) : active === APPEARANCE_SECTION;
   const declared = (s: Sub) => !s.requiresKey || defs.some((d) => d.key === s.requiresKey);
   const subsShown = (
     q
@@ -472,7 +480,7 @@ export function SettingsHome() {
           {!q && active === "permissions" && groups !== null && (
             <AccessSummary values={original} defs={defs} onGo={goTo} />
           )}
-          {q && shown.length === 0 && subsShown.length === 0 && (
+          {q && shown.length === 0 && subsShown.length === 0 && !themeCard && (
             <p className="text-[13px] text-zinc-400">Nothing matches “{q}”. Ctrl K also searches pages and chats.</p>
           )}
           {groups === null && !loadError ? (
@@ -513,7 +521,7 @@ export function SettingsHome() {
             })
           )}
 
-          {!q && active === "appearance" && (
+          {themeCard && (
             <div id="appearance" data-testid="settings-appearance" className="scroll-mt-20">
               <Card title="Theme" icon={<Palette size={15} />}>
                 <p className="mb-3 text-[12px] leading-relaxed text-zinc-500">

@@ -270,6 +270,15 @@ import {
 import { PermissionChip } from "@/components/chat/PermissionChip";
 import { asPermissionMode, type PermissionMode } from "@/lib/permissionLevels";
 import { readDeviceApproval, writeDeviceApproval } from "@/lib/approvalDefault";
+// v1.433.0 (D1): the persona and Auto tools rows of this device, both ways.
+import {
+  AUTO_TOOLS_STORAGE_KEY,
+  DEVICE_AUTO_TOOLS_KEY,
+  DEVICE_PERSONA_KEY,
+  PERSONA_STORAGE_KEY,
+  onDeviceSetting,
+  writeDeviceSetting,
+} from "@/lib/deviceSettings";
 import {
   COMPOSER_CARD_EDGE,
   COMPOSER_ICON_BUTTON,
@@ -1583,8 +1592,9 @@ function conversationRecap(msgs: ChatMessage[]): string {
   return `Conversation so far:\n${lines.join("\n")}`;
 }
 
-// Persona persistence (chat mode only).
-const PERSONA_KEY = "ij_chat_persona";
+// Persona persistence (chat mode only). v1.433.0: the same value is this
+// device's "Chat persona" row (lib/deviceSettings keeps the two in step).
+const PERSONA_KEY = PERSONA_STORAGE_KEY;
 // Sentinel select value for the "+ New persona" entry (opens a blank editor).
 const NEW_PERSONA = "__new__";
 
@@ -1656,7 +1666,8 @@ function forgetOpenThread(): void {
   }
 }
 // Auto tools: "0" = the user turned the seamless arming off (default on).
-const AUTO_TOOLS_KEY = "ij_chat_auto_tools";
+// v1.433.0: also this device's "Auto tools in chat" row (lib/deviceSettings).
+const AUTO_TOOLS_KEY = AUTO_TOOLS_STORAGE_KEY;
 // Selecting a project with a live folder auto-arms the file essentials (find,
 // extract, create) — 4 of the 6 tool slots, so the Web chip still fits beside
 // them (the server truncates body.tools at six; nothing may be silently
@@ -5125,6 +5136,9 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     } catch {
       /* ignore */
     }
+    // v1.433.0: the stored default is this device's "Chat persona" row too,
+    // so chat's settings tools report the persona the screen starts with.
+    if (value.trim()) void writeDeviceSetting(DEVICE_PERSONA_KEY, value);
   }
 
   /** Select a persona for THIS conversation without touching the stored
@@ -5137,6 +5151,24 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
     prevPersonaRef.current = value;
     personaTouchedRef.current = true;
   }
+
+  // v1.433.0 (D1): this device's "Chat persona" and "Auto tools in chat"
+  // rows changed (from chat's settings tools, the Settings rows or another
+  // window). lib/deviceSettings has already saved them where this page reads
+  // them; here they reach the open page. A listener hears a REAL change only,
+  // so no event re-renders the page by itself. The persona is the DEFAULT
+  // for new chats: a new, empty chat starts with it now, and an open
+  // conversation keeps the persona it has (the next new chat reads it).
+  useEffect(() => {
+    const offPersona = onDeviceSetting(DEVICE_PERSONA_KEY, (value) => {
+      if (messagesRef.current.length === 0 && !saveTargetRef.current.id) selectPersonaLocal(value);
+    });
+    const offAutoTools = onDeviceSetting(DEVICE_AUTO_TOOLS_KEY, (on) => setAutoTools(on));
+    return () => {
+      offPersona();
+      offAutoTools();
+    };
+  }, []);
 
   // ------------------------------------------------------------------ personas
 
@@ -7295,15 +7327,16 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
 
   /** AUTO TOOLS toggle — a persisted preference, not thread setup. */
   function toggleAutoTools() {
-    setAutoTools((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(AUTO_TOOLS_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+    // v1.433.0: read the value this render shows (never inside the state
+    // updater — the press also saves this device's row, a side effect).
+    const next = !autoTools;
+    setAutoTools(next);
+    try {
+      window.localStorage.setItem(AUTO_TOOLS_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    void writeDeviceSetting(DEVICE_AUTO_TOOLS_KEY, next);
   }
 
   /** The page's half of picking a skill: arm the chip and persist it with the

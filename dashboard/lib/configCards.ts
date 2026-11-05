@@ -100,6 +100,14 @@ const SECRET_SHAPES: RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/,
   /\bBearer\s+[A-Za-z0-9._-]{20,}/,
   /\b\d{8,10}:[A-Za-z0-9_-]{30,}\b/, // a Telegram bot token
+  // v1.433.0 (A4): a Discord webhook address IS its secret — anyone holding
+  // it can post as the hook (discord.com, the older discordapp.com, the
+  // ptb/canary hosts, an /api/v10 path).
+  /\bhttps?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d{5,}\/[A-Za-z0-9_-]{20,}/i,
+  // v1.433.0 (A4): a database connection string that carries a password
+  // (postgres://user:pass@host, postgresql+driver://…, mysql://user:pass@…).
+  // One with no password ("postgres://host/db", "mysql://me@host") is not.
+  /\b(?:postgres(?:ql)?|mysql)(?:\+[a-z0-9]+)?:\/\/[^\s:/@]*:[^\s@/]+@[^\s/]/i,
 ];
 
 export function looksLikeSecret(text: string): boolean {

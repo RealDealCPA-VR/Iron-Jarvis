@@ -43,7 +43,9 @@ import { normalizeIso } from "@/lib/format";
 import { recordOpen } from "@/lib/appTiles";
 import { useDaemon } from "@/lib/daemon";
 import { DocPreview } from "@/components/chat/DocPreview";
-import { allThemes, applyTheme, isLightTheme } from "@/lib/theme";
+import { allThemes, isLightTheme } from "@/lib/theme";
+// v1.433.0: a "Theme:" command is a screen pick, so it saves this device's row.
+import { chooseTheme } from "@/lib/deviceSettings";
 import {
   ABOUT_PAGE_HREF,
   capturePageContext,
@@ -328,7 +330,7 @@ function themeItems(): PaletteRow[] {
     ],
     icon: Palette,
     run: () => {
-      applyTheme(t.id);
+      chooseTheme(t.id);
     },
   }));
   rows.push({

@@ -9,6 +9,7 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/inter/wght-italic.css";
 import "./globals.css";
 import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
+import { DeviceSettingsBridge } from "@/components/DeviceSettingsBridge";
 import { RouteVisitBeacon } from "@/components/RouteVisitBeacon";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
@@ -144,6 +145,10 @@ export default function RootLayout({
           {/* "This PC" notifications: comm.desktop events → native OS toast
               via the Electron preload (no-op in a plain browser). */}
           <DesktopNotifyBridge />
+          {/* v1.433.0 (D1): this device's theme, persona, Auto tools and read
+              aloud, applied when the window opens and whenever chat or the
+              Settings rows change one (lib/deviceSettings). */}
+          <DeviceSettingsBridge />
           {/* Redesign S0: one POST /ui/visit per page change (usage counts). */}
           <RouteVisitBeacon />
           <ModelMenuBridge />

@@ -431,8 +431,13 @@ describe("Settings — Appearance row and the title bar share ONE theme store", 
         within(appearance).getByRole("button", { name: /Gold & Red/ }).getAttribute("aria-pressed"),
       ).toBe("true"),
     );
-    // A per-device choice: it never rides the daemon's Save.
-    expect(S.puts).toEqual([]);
+    // A per-device choice: it never rides the daemon's Save. v1.433.0 (D1,
+    // moved on purpose): each press saves THIS DEVICE's theme row instead
+    // (PUT /settings/device), so chat's settings tools report the screen.
+    expect(S.puts.filter((p) => p.path !== "/settings/device")).toEqual([]);
+    expect(
+      S.puts.map((p) => (p.body as { values?: Record<string, unknown> }).values?.["device.theme"]),
+    ).toEqual(["mark1", "mark23"]);
   });
 });
 

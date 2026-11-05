@@ -2,13 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { plainText } from "@/components/Markdown";
+import {
+  DEVICE_READ_ALOUD_KEY,
+  READ_ALOUD_STORAGE_KEY,
+  onDeviceSetting,
+  writeDeviceSetting,
+} from "@/lib/deviceSettings";
 
 /* -------------------------------------------------------------------------- */
 /*  Voice output (Web Speech Synthesis) — hear Iron Jarvis reply               */
 /* -------------------------------------------------------------------------- */
 
-/** localStorage key that remembers the user's voice-output preference. */
-const PREF_KEY = "ironjarvis.tts.enabled";
+/** localStorage key that remembers the user's voice-output preference.
+ *  v1.433.0: also this device's "Read replies aloud" row
+ *  (`device.read_aloud`, lib/deviceSettings): a change made there — from
+ *  chat or the Settings row — turns voice on or off here, live, and a press
+ *  on the toggle saves the row. */
+const PREF_KEY = READ_ALOUD_STORAGE_KEY;
 
 /**
  * Iron Jarvis's spoken persona — a warm, plain-spoken teammate (mirrors the
@@ -239,6 +249,8 @@ export function useTTS(): UseTTS {
     enabledRef.current = true;
     setEnabled(true);
     persist(true);
+    // v1.433.0: the press is this device's "Read replies aloud" too.
+    void writeDeviceSetting(DEVICE_READ_ALOUD_KEY, true);
   }, [persist]);
 
   const disable = useCallback(() => {
@@ -246,7 +258,23 @@ export function useTTS(): UseTTS {
     setEnabled(false);
     persist(false);
     cancel();
+    void writeDeviceSetting(DEVICE_READ_ALOUD_KEY, false);
   }, [persist, cancel]);
+
+  // v1.433.0: "Read replies aloud" changed for this device (from chat, the
+  // Settings row or another window): follow it. lib/deviceSettings has
+  // already saved it in PREF_KEY; this only updates the hook. Turning it off
+  // stops anything speaking, as the toggle does.
+  useEffect(
+    () =>
+      onDeviceSetting(DEVICE_READ_ALOUD_KEY, (on) => {
+        if (on && !synth()) return;
+        enabledRef.current = on;
+        setEnabled(on);
+        if (!on) cancel();
+      }),
+    [cancel],
+  );
 
   const toggle = useCallback(() => {
     if (enabledRef.current) disable();

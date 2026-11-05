@@ -151,6 +151,10 @@ export type SSEEvent =
       /** v1.417.0 (C1.7): who asks — the model, or Iron Jarvis itself (its
        *  own finish-check re-run, a project checker). */
       asker?: "model" | "iron_jarvis";
+      /** v1.433.0 (A16): the tool is NEW in its app (or changed) since the
+       *  user added the app — the daemon never offers "Always" for it, and
+       *  the card says so in one line. A real `true` only. */
+      quarantined?: boolean;
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -725,6 +729,9 @@ export function sseEventFrom(
       // non-empty string (cut), and only the two known askers.
       if (typeof data.why === "string" && data.why.trim()) ev.why = data.why.trim().slice(0, 400);
       if (data.asker === "model" || data.asker === "iron_jarvis") ev.asker = data.asker;
+      // v1.433.0 (A16): sent since v1.299.0 and dropped here until now, so the
+      // card never said the tool was new in its app. A real `true` only.
+      if (data.quarantined === true) ev.quarantined = true;
       return ev;
     }
     case "approval_resolved": {
@@ -1377,6 +1384,10 @@ export interface PendingApproval {
   why?: string;
   /** v1.417.0 (C1.7): who asks; "iron_jarvis" = Iron Jarvis's own check. */
   asker?: "model" | "iron_jarvis";
+  /** v1.433.0 (A16): the tool is new (or changed) in its app since the user
+   *  added the app; the card says so. Absent = not said (an older daemon,
+   *  a listing row). */
+  quarantined?: boolean;
 }
 
 /**
@@ -2043,6 +2054,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
                 ...(typeof ev.reversible === "boolean" ? { reversible: ev.reversible } : {}),
                 ...(ev.why ? { why: ev.why } : {}),
                 ...(ev.asker ? { asker: ev.asker } : {}),
+                ...(ev.quarantined === true ? { quarantined: true } : {}),
               };
               if (!replaying) setApproval(pending);
               break;

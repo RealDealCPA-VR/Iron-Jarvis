@@ -751,8 +751,17 @@ SETTINGS: tuple[SettingDef, ...] = (
     S("opencode_data_dir", "OpenCode data folder", "system", "string", "Where OpenCode keeps its data.",
       tier="ask", advanced=True),
     # ----------------------------------------------------- device preferences
-    S("device.theme", "Theme", "appearance", "string",
-      "The theme on this device (a built-in Mark or one of your own).", tier="allow", store="device",
+    # v1.433.0 (Wave 1 B, decision D1): the screen applies this row live
+    # (dashboard/lib/deviceSettings.ts) and the theme switcher saves it. Its
+    # options are the BUILT-IN themes of dashboard/lib/theme.ts THEMES, id and
+    # name, pinned equal by tests/test_wave1_device_theme_v14330.py. A theme
+    # the user made is kept on that screen only, so the row says "not set".
+    S("device.theme", "Theme", "appearance", "enum",
+      "The theme on this device. A theme you made yourself is picked on the screen only, "
+      "so this shows as not set while one is on.",
+      options=(("mark1", "Daylight"), ("mark2", "Arc Cyan"), ("mark8", "Liquid Glass"),
+               ("mark23", "Gold & Red"), ("mark29", "Silver & Red")),
+      tier="allow", store="device",
       aliases=("theme", "colors", "dark mode", "light mode")),
     # v1.406.0 part 2: five levels (Ask before every action / Ask first /
     # Accept edits / Auto / Don't ask) — the chip's words, pinned equal.

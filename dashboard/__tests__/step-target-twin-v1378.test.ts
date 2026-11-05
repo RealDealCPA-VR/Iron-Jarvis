@@ -88,6 +88,16 @@ const INPUTS: Array<Omit<Case, "target">> = [
   { name: "browser_click", args: { target: "Buy" } },
   { name: "mcp__gmail__search_messages", args: { query: "invoice" } },
   { name: "unknown_tool", args: { path: "x.txt" } },
+  // v1.433.0 (A4): a Discord webhook address and a database connection string
+  // carrying a password are dropped whole; the same string with no password,
+  // and an ordinary address, are not.
+  // (page_click says its target's words as they are, so the shape decides.)
+  { name: "page_click", args: { target: "postgres://books:s3cretpw@db.local/ledger" } },
+  { name: "page_click", args: { target: "mysql://me:hunter2@db/x" } },
+  { name: "page_click", args: { target: "postgres://db.local/ledger" } },
+  { name: "page_click", args: { target: "mysql://me@db/x" } },
+  { name: "page_click", args: { target: "https://discord.com/api/webhooks/1234567890/AbCdEfGhIjKlMnOpQrSt" } },
+  { name: "page_click", args: { target: "https://discord.com/channels/123/456" } },
 ];
 
 function computed(): Case[] {

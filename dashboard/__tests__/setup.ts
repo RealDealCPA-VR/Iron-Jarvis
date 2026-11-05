@@ -13,9 +13,14 @@ import { resetTurnCache } from "@/lib/turnCache";
 // v1.406.0 part 7: the Code view's split (two sessions side by side) is this
 // window's module state too.
 import { __resetSplitMemory } from "@/lib/codeSplit";
+// v1.433.0: what this window knew of its device settings, and who listens.
+// The import-free state module, never lib/deviceSettings itself: a module
+// imported here is cached before a test file's vi.mock("@/lib/api") applies.
+import { __resetDeviceSettings } from "@/lib/deviceSettingsState";
 
 afterEach(() => {
   __resetApiCache();
   resetTurnCache();
   __resetSplitMemory();
+  __resetDeviceSettings();
 });

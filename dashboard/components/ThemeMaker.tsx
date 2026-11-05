@@ -21,7 +21,11 @@ import { ConfirmButton, Field } from "@/components/ui";
 import { BackgroundPicker, DownloadedBackgrounds } from "@/components/BackgroundPicker";
 import { backgroundEntry } from "@/lib/backgroundCatalog";
 import { parseHex } from "@/lib/color";
-import { DEFAULT_THEME, applyTheme } from "@/lib/theme";
+import { DEFAULT_THEME } from "@/lib/theme";
+// v1.433.0: every pick here is a screen pick; chooseTheme also saves this
+// device's "Theme" row (a theme of your own clears it: the row holds only
+// built-in themes).
+import { chooseTheme } from "@/lib/deviceSettings";
 import {
   MAX_NAME,
   MAX_PALETTES,
@@ -272,7 +276,7 @@ function Editor({
       setError(`You can keep up to ${MAX_PALETTES} themes on this PC — delete one first.`);
       return;
     }
-    applyTheme(p.id);
+    chooseTheme(p.id);
     onDone(p);
   };
 
@@ -410,7 +414,7 @@ export function ThemeMaker() {
   }, []);
 
   const remove = (p: CustomPalette) => {
-    if (active === p.id) applyTheme(DEFAULT_THEME);
+    if (active === p.id) chooseTheme(DEFAULT_THEME);
     deletePalette(p.id);
   };
 
@@ -470,7 +474,7 @@ export function ThemeMaker() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => applyTheme(p.id)}
+                    onClick={() => chooseTheme(p.id)}
                     className="rounded-lg border border-white/10 px-2 py-0.5 text-[12px] text-zinc-300 hover:border-white/20"
                   >
                     Use

@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
-import { THEMES, DEFAULT_THEME as DEFAULT, allThemes, applyTheme, currentScheme, isCustomTheme, type Mark } from "@/lib/theme";
+import { THEMES, DEFAULT_THEME as DEFAULT, allThemes, currentScheme, isCustomTheme, type Mark } from "@/lib/theme";
+import { chooseTheme } from "@/lib/deviceSettings";
 import { PALETTES_EVENT, PALETTES_KEY } from "@/lib/themePalette";
 
 /** How many of the user's own palettes the title bar shows beside the Marks
@@ -223,7 +224,9 @@ export function ThemeSwitcher({ variant = "bar" }: { variant?: "bar" | "drawer" 
   );
 
   function apply(m: Mark) {
-    applyTheme(m.id); // the one setter (lib/theme.ts) — every row follows
+    // v1.433.0: chooseTheme = the one setter (lib/theme applyTheme) + this
+    // device's "Theme" row, so chat's settings tools report the screen.
+    chooseTheme(m.id); // every row follows
     setActive(m.id);
     setLight(currentScheme() === "light"); // now, not on the observer's tick
     setReveal(m);

@@ -44,6 +44,12 @@ export const ALLOW_TAB = "Allow for this tab";
 /** A standing grant on the EXACT arguments (offered only by the daemon). */
 export const ALWAYS_EXACT = "Always allow exactly this";
 
+/** v1.433.0 (A16): the one line on a card for a tool that is new (or
+ *  changed) in its app since the user added the app — the daemon's
+ *  `quarantined: true`. Such a card never offers "Always". */
+export const QUARANTINED_LINE =
+  "This tool is new in its app since you added it. Check it before you allow it.";
+
 /** Where the wider answer applies: the open chat, or the agent run that
  *  asked (the session page, a project's task, the mission screen, the bell). */
 export type ApprovalScope = "chat" | "run" | "session";
