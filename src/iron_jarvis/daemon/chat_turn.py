@@ -96,6 +96,10 @@ from .mcp_turn import read_turn_resources as _read_turn_resources
 from ..harness.helpers import HELPER_TOOLS as _HELPER_TOOLS
 from ..harness.helpers import invoke_helper as _invoke_helper
 from .chat_refs import read_thread_refs as _read_thread_refs
+# v1.436.0 (chat-first plan Wave 5 group K): a reply that CLAIMS a setting or a
+# record changed is checked against this turn's record. MIRROR NOTE
+# (lock-step): both lanes append it right after `_claimed_write_note`.
+from .change_claims import claimed_change_note
 
 log = logging.getLogger(__name__)
 
@@ -11401,6 +11405,14 @@ async def run_chat_turn(
             # so missed a reply announcing a saved file after only a
             # scan had run. MIRROR NOTE (lock-step): both lanes.
             reply += _claimed_write_note(reply, tools_used, custom_tools=_custom_ran, ran_writer=_ran_writer)
+            # v1.436.0 (Wave 5 group K): and a CLAIMED SETTING OR RECORD change
+            # ("read aloud is now on", "I paused the bookkeeper agent",
+            # "Undone.") against what this turn's successful calls and their
+            # cards really changed — the record decides. MIRROR NOTE
+            # (lock-step): routes/chat.py appends the same call.
+            reply += claimed_change_note(
+                reply, tools_used, config_cards, history=body.messages, custom_tools=_custom_ran,
+            )
         # v1.330.0: a TEXT-ONLY turn cannot hand anything off, so a reply that
         # says it did ("I'm passing this to builder") gets the plain note.
         # MIRROR NOTE (lock-step): routes/chat.py appends the same helper.
