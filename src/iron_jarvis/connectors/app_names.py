@@ -290,7 +290,8 @@ _NOT_THE_APP: dict[str, str] = {
     ),
     "slack": (
         r"(?<![Ss]ome )(?<![Uu]p the )(?<!there is )(?<!there's )(?<!little )(?<!more )"
-        r"\bslack\b(?!\s+off\b)(?!\s+in\s+(?:the|my|our|your|this)\s+"
+        # v1.434.0 (Wave 2 group E): "add slack time to the plan".
+        r"\bslack\b(?!\s+off\b)(?!\s+(?:time|space)\b)(?!\s+in\s+(?:the|my|our|your|this)\s+"
         r"(?:schedule|plan|timeline|budget|rope|line|chain|system|week|day)\b)"
     ),
     "stripe": r"(?<![Aa] )\bstripe\b(?!\s+(?:on|of|across|down|along|pattern|through)\b)",

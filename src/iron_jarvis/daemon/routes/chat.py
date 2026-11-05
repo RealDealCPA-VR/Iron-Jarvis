@@ -4359,25 +4359,25 @@ async def chat_stream(
                 t for t in select_ask_tools(_last_user_text(body.messages))
                 if t not in armed
             ]
-            # SETTINGS FROM CHAT (redesign S3): the ask-tier change tools,
-            # VISIBLE but never granted — a call renders the ordinary card.
-            # Stream lane only (a card needs someone to answer it).
-            from ...settings.tools import ASK_CONFIG_TOOLS, wants_settings
+            # SETTINGS FROM CHAT (redesign S3) and RECORDS FROM CHAT (S5): the
+            # ask-tier change tools for a setting the message asks to change,
+            # and the record tools it names (changing or removing a schedule /
+            # workflow, a channel's two-way switch, connecting a channel or an
+            # app; v1.434.0, Wave 2 group E: CREATING a schedule, goal,
+            # webhook or watcher, and RUNNING a saved workflow). VISIBLE but
+            # never granted — a call renders the ordinary card. Stream lane
+            # only (a card needs someone to answer it). One function, the one
+            # the arming table drives (chat_turn.settings_ask_tools); the
+            # saved workflows' names are read OFF THE LOOP, and only when a
+            # run verb is there.
+            from ...settings.records import saved_workflow_names, wants_workflow_names
 
-            if wants_settings(_last_user_text(body.messages)):
-                ask_armed += [
-                    t for t in ASK_CONFIG_TOOLS
-                    if t not in armed and t not in ask_armed and d.platform.registry.get(t)
-                ]
-            # RECORDS FROM CHAT (redesign S5): changing or removing a
-            # schedule / workflow, a channel's two-way switch, connecting a
-            # channel or an app — ask tier, visible, never granted.
-            from ...settings.records import record_tools_for
-
-            ask_armed += [
-                t for t in record_tools_for(_last_user_text(body.messages))
-                if t not in armed and t not in ask_armed and d.platform.registry.get(t)
-            ]
+            _wf_names: list[str] = []
+            if wants_workflow_names(_last_user_text(body.messages)):
+                _wf_names = await asyncio.to_thread(saved_workflow_names, d.platform)
+            ask_armed += _chat_turn.settings_ask_tools(
+                d, _last_user_text(body.messages), armed, ask_armed, workflow_names=_wf_names,
+            )
             # APPS BY NAME (v1.354.0, G39): a named app that is connected with
             # tools loaded has them ASK-armed (visible, never granted; the
             # `mcp_call` key cards each call), before the ceiling and the
@@ -4713,6 +4713,18 @@ async def chat_stream(
         _tool = d.platform.registry.get(_name)
         if _tool is not None:
             overrides[_tool.perm_key()] = "allow"
+    # ASK FIRST (v1.434.0, chat-first plan Wave 2 group E, B1.3): a record
+    # CREATE tool the sentence ask-armed (schedule_create, goal_add,
+    # webhook_add, sentinel_add) is allow-tier by itself, so without an
+    # override it would run with no card. The "ask" override makes it card
+    # like the rest of the ask tier; a fault takes it off the model's list
+    # (fail-closed). Stream lane only — the POST lane never ask-arms.
+    _not_ask_first = _chat_turn.ask_first_overrides(d, overrides, ask_armed, armed)
+    if _not_ask_first:
+        ask_armed = [t for t in ask_armed if t not in _not_ask_first]
+        tool_specs = [
+            s for s in tool_specs if not (isinstance(s, dict) and s.get("name") in _not_ask_first)
+        ]
     # IJ HARNESS (v1.366.0): a folder's rules (ask / deny) narrow the
     # overrides (nothing widens) — an "ask" rule is what makes the card
     # appear for an allow-tier tool. MIRROR NOTE (lock-step): chat_turn.

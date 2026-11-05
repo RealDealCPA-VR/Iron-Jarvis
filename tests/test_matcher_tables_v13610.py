@@ -1131,6 +1131,18 @@ CODING = [
     ('make the app use my OpenAI API key', False),
     ('make the app use Docker for commands', False),
     ('make the app use the DGX node for chat', False),
+    # --- v1.434.0 (chat-first plan, Wave 2 group E, B1.4): how the APP
+    # behaves on this PC is a setting too ("autostart", "minimize to the
+    # tray"); the user's own app with the same words keeps the door.
+    ('make the app autostart', False),
+    ('make the app auto-start with Windows', False),
+    ('make the app minimize to the tray', False),
+    ('make the app hide in the tray when I close it', False),
+    ('make the app close to the tray', False),
+    ('make the app stay on top', False),
+    ('make me an app that minimizes to the tray', True),
+    ('make my app minimize faster', True),
+    ('build me an app that hides in the tray', True),
 ]
 
 

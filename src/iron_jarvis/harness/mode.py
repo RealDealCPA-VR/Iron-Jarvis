@@ -249,6 +249,7 @@ def plan_tools(
     plan_mode: bool = False,
     ask_user: bool = False,
     lead: bool = False,
+    asked: Iterable[str] = (),
 ) -> ToolPlan:
     """The harness turn's tools. Every filter the lanes apply later (the
     ceiling, low trust, Local only) is applied here too, so what the system
@@ -264,7 +265,14 @@ def plan_tools(
     ``extra`` — an app's tool may change things), plus ``exit_plan_mode`` in
     the stream lane. ``ask_user``: the stream lane's client draws the
     question card, so ``ask_user`` joins. The POST lane (``stream`` False)
-    gets neither: it can ask nobody."""
+    gets neither: it can ask nobody.
+
+    ``asked`` (v1.434.0, chat-first plan Wave 2 group E): tools the
+    MESSAGE asked for — the settings tools for a request about one of the
+    app's settings (``chat_turn.harness_asked_tools``). Unlike ``extra``
+    (a connector the user switched on, so granted) each keeps its OWN tier:
+    an allow-tier one is armed, an ask-tier one is ask-armed (the stream
+    lane cards it; the POST lane drops it). Every other filter applies."""
     from ..core.trust import LOW_TRUST_DENY
     from ..providers import egress
 
@@ -277,7 +285,7 @@ def plan_tools(
         base.append(ASK_USER_TOOL)
     if plan_mode:
         extra = ()
-    for name in [*base, *extra]:
+    for name in [*base, *extra, *asked]:
         if name in candidates or registry.get(name) is None:
             continue
         if name in _MCP_RESOURCE_TOOLS and not have_apps:
@@ -1476,6 +1484,7 @@ def build(
     shell_description: str = "",
     bash_description: str = "",
     lead: bool = False,
+    asked: Iterable[str] = (),
 ) -> HarnessTurn:
     """Plan the tools, compose the tree and render it. Pure apart from the
     registry / permission reads (no I/O): the project layer is read by the
@@ -1496,7 +1505,7 @@ def build(
     plan = plan_tools(
         registry, permissions, dialect, family=family, stream=stream,
         low_trust=low_trust, local_only=local_only, tool_ceiling=tool_ceiling,
-        extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user,
+        extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user, asked=asked,
     )
     full_plan: "ToolPlan | None" = None
     if lead and not plan_mode and plan.gate & HELPER_TARGETS:
@@ -1505,6 +1514,7 @@ def build(
             registry, permissions, dialect, family=family, stream=stream,
             low_trust=low_trust, local_only=local_only, tool_ceiling=tool_ceiling,
             extra=extra, plugins=plugins, plan_mode=plan_mode, ask_user=ask_user, lead=True,
+            asked=asked,
         )
     section = dialect_section(plan, ask_words=ask_sentence(
         plan, approval_mode=approval_mode, local_only=local_only, registry=registry,
