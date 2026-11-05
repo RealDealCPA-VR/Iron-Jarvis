@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.434.0 (2026-11-05).*
+holds itself to. Current as of v1.435.0 (2026-11-05).*
 
 ---
 
@@ -2019,6 +2019,45 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Projects, agents, apps and more from chat (v1.435.0)
+
+Each of these shows a card before anything changes, and each change has an
+Undo. An Undo puts back only what that change did; if you changed the same
+thing again since, it says so and leaves your newer work alone.
+
+- **Projects.** "Make a project for the Johnson audit in
+  D:\Clients\Johnson", "rename it", "archive the Smith project", "switch to
+  the Smith project". The folder must already exist; nothing on your disk is
+  made or moved. Undoing a new project that already has chats or work filed
+  in it archives it instead of removing it.
+- **Agents.** "Create an agent called reviewer on GPT that only reads", "give
+  the bookkeeper agent a $20 monthly limit", "pause the intake agent", "delete
+  it". Only agents you made can be changed. A deleted agent's folder goes to
+  the trash, and Undo brings it back.
+- **Apps.** "Turn off the GitHub app", "disconnect Notion", "add the QuickBooks
+  server I use in Claude Desktop". Disconnecting keeps an encrypted copy of
+  the app's keys, only for the Undo; the copy is deleted with the Undo record
+  (after 90 days by default). Bringing a server over shows what it will start,
+  and its keys go straight from that program's settings into the vault —
+  never through chat.
+- **Where notifications go.** "Stop sending to Slack", "only send me
+  failures", "add an email destination" (you type the password on the secure
+  card). A finished task is one alert whether it worked or not, so "only
+  failures" cannot leave out the tasks that worked; and schedule results and
+  workflow notices reach every destination whatever you choose. Chat says
+  both when you ask.
+- **Goals made in chat.** Chat can now see them, and pause, resume, stop or
+  delete one. Stopping a goal that is running stops that run too.
+- **Local only.** "Keep this chat on my PC" turns it on at once. Turning it off
+  always shows a card you must click (Enter does not answer it). A chat that
+  Microsoft 365 holds stays local only. Either way it applies from your next
+  message. Settings › Models › "Start new chats local only" makes every new
+  chat start that way.
+- **What changed, and Undo.** "What did you change today?" lists Iron Jarvis's
+  recent changes by name only — never values, passwords or file contents.
+  "Undo that" shows a card naming the exact change before it undoes it (click
+  only; Enter does not answer it).
 
 ## Chat finds the right tool (v1.434.0)
 

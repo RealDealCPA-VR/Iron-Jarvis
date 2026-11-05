@@ -14713,6 +14713,103 @@ does not need a bump, stop and bump it.
       (denied under low trust; watchers stay off until turned on).
     - Not driven with a real model or in the packaged app.
 
+- **Wave 3 of the chat-first plan: projects, agents, apps, destinations,
+  goals from Chat, Local only and Undo from chat** (v1.435.0; groups G, H, I,
+  each built then independently reviewed; the reviewers found 29 more
+  defects, every fix red-then-green and mutation-checked). Every new tool is a
+  RECORD tool (`settings/records.py` pattern: ask tier, approval card,
+  `record_restore` Undo), lives in its own module, and reaches the lists in
+  `records.py` by small additions (`RECORD_TOOL_TIERS`, `_SNAP`, `restore()`,
+  `record_tools()`, one arming call in `record_tools_for`).
+  - THE UNDO RULE (all three groups): an Undo puts back ONLY what its change
+    did; it REFUSES in words (409) when the record was changed again, deleted,
+    or re-created since, and never destroys newer work; the card shows the
+    daemon's own words about what the Undo did (`ConfigCards` `undoAnswerNote`
+    / `undoRefusalWords`). A new record tool keeps a `prior` and the row it
+    left (`after` / `_now`) and checks both at restore.
+  - PROJECTS + AGENTS (group G, `settings/records_projects.py`, kinds
+    `project`, `agent`): `project_create/update/archive/focus`,
+    `agent_create/update/pause/delete`. Only through the routes' own bodies,
+    lifted to module level (`routes/projects.create/update/delete_project_
+    record`, `routes/agents.create/update/pause/resume/delete_custom_agent`,
+    `employee_fields`): a reader of these routes calls them, never a copy.
+    `project_focus` goes through `ConfigWriter.apply` (its `_project_problem`
+    is the one focus rule). A `\\host` folder is refused by its TEXT before
+    any disk check. Undoing a `project_create` ARCHIVES the project when
+    anything is bound to it (every table with a `project_id`, schedule
+    payloads). `agent_delete` records the trash folder in its Undo entry so
+    Undo moves the folder back. Built-in agents are refused.
+  - APPS + DESTINATIONS (group H, `settings/records_apps.py`, kinds
+    `app_removed`, `destination_removed`, `destination_alerts`,
+    `app_switched`, and `channel_mode` in `records.py`): `app_switch`,
+    `app_disconnect`, `app_import`, `channel_remove`, `channel_alerts`, and an
+    email type for `channel_connect` (password on the secure card; a
+    `password` argument is refused before any card).
+    - A removal keeps an encrypted copy of every key it deletes
+      (`__undo__bak_*`, names only in the journal); Undo never writes a key
+      over a newer one; `core/db.prune_events` deletes the backups named by
+      expiring `record_restore`/`secret_restore` rows (only `__undo__`
+      names) — older credential-card backups now expire too.
+    - `channel_toggle`'s Undo keeps only the two switches (`channel_mode`):
+      no webhook address in the journal any more (old `channel` rows still
+      hold one until retention).
+    - `app_import` reads other programs' configs (`mcp/import_sources`,
+      known source keys only, a network path refused by its text) and adds
+      through `routes/agents._apply_specs`; its card is once-only and shows
+      the command line (masked) it will start. A server with a placeholder is
+      refused and pointed at Settings › Tools.
+    - `channel_alerts` says that schedule result lines and workflow notify
+      steps reach every destination whatever its alert list.
+    - `DELETE /comm/channels/{name}` and the chat share `remove_destination`.
+  - GOALS FROM CHAT, LOCAL ONLY, HISTORY (group I, `settings/records_history.
+    py`, kinds `goal_contract`, `chat_local_only`):
+    - `goal_list` shows goals from Chat; `goal_update`/`goal_delete` act on
+      them through `goals/engine.resume_goal`/`delete_goal` (the routes call
+      them too). Undo restores the state (and the breaker if tripped), never
+      the spend or a finished run; grants come back only for a delete.
+    - `chat_local_only` (D3): ON allowed with no card; OFF only through a
+      once-only card, `once_reason` "privacy", in every posture and past every
+      grant, refused without it; a held chat is never turned off; it applies
+      "from your next message" and holds later steer notes
+      (`TurnHandle.hold_steers`); a new chat's pick rides
+      `egress.note_pending_local_only` until the link route. Setting
+      `chat_new_local_only` is read by the chat page only.
+    - `changes_list` (names only; a Local only chat's file names withheld
+      from cloud turns, `local_only_rows`, fail-closed) and `change_undo`
+      (always a once-only card, `once_reason` "undo", then the same
+      `perform_undo`; it undoes the change its card named, `_pick_held`).
+    - "privacy" and "undo" are SAFETY reasons (`stall.SAFETY_REASONS`,
+      `lib/onceReason.ts`): Enter never allows them and they never go to the
+      phone. Both tools work only for session "chat" on the chat's own
+      surface (`_chat_page_problem`): an agent run, the phone or the browser
+      sidebar is refused in words. `config_undo` refuses to undo an ask-floor
+      setting (`protected_restores`) and points at `change_undo`.
+  - Pins: `tests/test_records_projects{,_review}_v14350.py`,
+    `tests/test_apps_destinations{,_review}_v14350.py`,
+    `tests/test_chat_history_{tools,review}_v14350.py`,
+    `dashboard/__tests__/{record-undo-words-v1435-0,local-only-from-chat-v1435,
+    local-only-from-chat-review-v1435}.test.tsx`.
+  - Moved on purpose: `test_roster_coverage_v1178` (off-roster list),
+    `test_permission_coverage_v1178`, `test_chat_arming_table_v14340`
+    (FAMILIES), `test_settings_records_more_v1321` ("undo that" offers
+    `change_undo`; two pins moved off Dry-run), `trust-posture-v1298` (the
+    low-trust sentence), and the regenerated word tables and fixtures.
+  - OPEN:
+    - A tool picked by hand in the chat's "+" Tools menu runs with NO card
+      (the old "arming is granting" design): `app_disconnect`,
+      `channel_remove`, the project and agent tools included; only
+      `app_import` forces its card. The owner's call.
+    - An agent run's once-only safety cards (git guard, guarded edits) still
+      go to the phone as `approval.requested` (Build sessions keep them off
+      the phone through `stall.phone_may_ask`; agent runs do not).
+    - `config_undo` under Don't ask still re-grants a revoked always-allow and
+      undoes record changes with no card (older).
+    - Disconnecting an app still deletes a vault row another app shares; the
+      Tools page shows a value after a space-separated `--api-key`.
+    - Card words for `agent_pause` / `project_archive` do not say which way.
+    - Two windows on one chat can overwrite a Local only change.
+    - Not tried on a phone or in the packaged app.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
