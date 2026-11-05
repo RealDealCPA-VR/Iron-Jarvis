@@ -315,6 +315,7 @@ describe("Build › Code's start composer", () => {
     });
     render(<StartComposer tools={TOOLS} toolsError={null} startFolder={FOLDER} onStarted={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+    await act(async () => {}); // v1.431.0: the tool's reset step runs first (see build-code-start-v1412)
     fireEvent.change(screen.getByTestId("code-start-model"), { target: { value: "claude-opus-5-5" } });
     fireEvent.change(screen.getByTestId("code-start-effort"), { target: { value: "low" } });
     await act(async () => {

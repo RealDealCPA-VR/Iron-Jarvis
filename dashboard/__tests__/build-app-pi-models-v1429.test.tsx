@@ -14,7 +14,7 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const H = vi.hoisted(() => ({
   gets: {} as Record<string, unknown>,
@@ -155,6 +155,10 @@ describe("Pi's row from the real daemon", () => {
 async function startStage() {
   render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
   await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Pi"));
+  // v1.431.0 (the release gate): the chip is drawn in the same commit that
+  // queues the composer's "new tool: reset its choices" step, which React
+  // runs later; a pick made before it runs is wiped. Let React finish first.
+  await act(async () => {});
 }
 
 describe("starting a Pi session", () => {

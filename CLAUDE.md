@@ -4742,6 +4742,20 @@ does not need a bump, stop and bump it.
   daemon with the real Pi (the argv is pinned with the fake, Pi's answer
   to the flag with the real Pi); Open in terminal's Pi asks its own
   question there.
+  v1.431.0 WAS NOT PUBLISHED (its Release gate went red, Tests green;
+  v1.431.1 ships it): `build-code-start-v1412` "the chosen model and effort
+  ride the make" picked a model right after the start composer's tool chip
+  appeared, but that chip is drawn in the same commit that QUEUES the
+  composer's "new tool: reset its choices" effect, which React runs later
+  (a passive effect; it flushes before the next discrete update) — so on the
+  loaded runner the reset ran inside the model change's update and wiped the
+  pick, while the effort chosen after it survived (the gate's exact diff).
+  Reproduced by acting inside the DOM observer's microtask, right after that
+  commit; `await act(async () => {})` after the wait fixes it. Applied to the
+  same shape in `build-code-start-review-v1412`, `build-app-pi-models-v1429`
+  and `folder-defaults-v1426-0`. A test that interacts right after a
+  `waitFor` on something drawn by the SAME commit that queues an effect must
+  let React finish that effect first.
 - **Build › Code: "Allow all commands this session" is Iron Jarvis's OWN
   whole-tool session rule; the plan is on its card; a failure names the tool
   and has Retry; cards reach the autonomy metrics** (v1.417.0, fix plan wave

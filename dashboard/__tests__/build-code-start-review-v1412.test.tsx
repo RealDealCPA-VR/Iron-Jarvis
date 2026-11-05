@@ -149,6 +149,10 @@ afterEach(() => {
 async function ready() {
   render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
   await waitFor(() => expect(screen.getByTestId("code-start-tool").textContent).toContain("Claude Code"));
+  // v1.431.0 (the release gate): the chip is drawn in the same commit that
+  // queues the composer's "new tool: reset its choices" step, which React
+  // runs later; a pick made before it runs is wiped. Let React finish first.
+  await act(async () => {});
 }
 
 function type(words: string) {
