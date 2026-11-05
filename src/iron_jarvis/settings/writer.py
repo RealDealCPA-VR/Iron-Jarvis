@@ -378,18 +378,27 @@ class ConfigWriter:
         the switch reads off. This was the Tools page route's own step
         (v1.127.0); chat's ``config_change_protected`` came through here and
         skipped it (v1.433.0, Wave 1 A2). Runs on every OFF, changed or not,
-        as the route always did. Returns the names it cleared."""
+        as the route always did. Returns the names of the apps whose flag
+        really let their tools run unasked (``pack_grants_auto`` — the boot
+        resolver's own rule): a row holding ``auto_approve = false``, or a
+        switched-off app's flag, ran nothing unasked, so it is not counted
+        (v1.433.0 review), though its key is taken away all the same."""
+        from ..mcp.tools import pack_grants_auto
+
         cfg = self.platform.config
         cfg.mcp_auto_approve = on
         values: dict[str, Any] = {"mcp_auto_approve": on}
         cleared: list[str] = []
         if not on:
             servers = list(getattr(cfg, "mcp_servers", None) or [])
+            popped = False
             for s in servers:
                 if isinstance(s, dict) and "auto_approve" in s:
+                    if pack_grants_auto(s):
+                        cleared.append(str(s.get("name") or ""))
                     s.pop("auto_approve", None)  # absent == off, the add doors' shape
-                    cleared.append(str(s.get("name") or ""))
-            if cleared:
+                    popped = True
+            if popped:
                 cfg.mcp_servers = servers
                 values["mcp_servers"] = servers
         persist_config_values(cfg.home, values)

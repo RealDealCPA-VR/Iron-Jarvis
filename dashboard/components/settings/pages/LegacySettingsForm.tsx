@@ -181,7 +181,6 @@ const FIELDS: FieldDef[] = [
     label: "Keep activity history",
     type: "number",
     section: "models",
-    restart: true,
     hint: "How long the activity log is kept, in days. Use 0 to keep everything forever.",
   },
 

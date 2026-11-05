@@ -82,7 +82,9 @@ async def test_chat_turning_it_off_clears_every_apps_own_flag(tmp_path):
     (card,) = _done(frames)["config_cards"]
     assert card["key"] == "mcp_auto_approve" and card["old"] is True and card["new"] is False
     (done,) = _finished(frames, "config_change_protected")
-    assert "2 apps that still ran their tools without asking will ask first too" in done.get("output", "")
+    # Only "brave" really ran unasked: "files" held auto_approve = false
+    # (v1.433.0 review — the first cut counted it too).
+    assert "1 app that still ran its tools without asking will ask first too" in done.get("output", "")
 
 
 @pytest.mark.asyncio
@@ -113,7 +115,7 @@ def test_the_writer_clears_on_every_off_and_leaves_rows_alone_on_on(tmp_path):
     assert out.cleared_auto_approve == []
     assert p.config.mcp_servers[0]["auto_approve"] is True, "turning it ON touches no row"
     out = w.apply({"mcp_auto_approve": False}, actor="test")
-    assert sorted(out.cleared_auto_approve) == ["brave", "files"]
+    assert out.cleared_auto_approve == ["brave"], "files held false: it ran nothing unasked"
     assert "cleared_auto_approve" not in out.as_dict(), "every route's answer keeps its shape"
     assert all("auto_approve" not in s for s in p.config.mcp_servers)
 

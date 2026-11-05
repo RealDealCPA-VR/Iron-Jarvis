@@ -1558,9 +1558,11 @@ WEBHOOK_NOT_IN_CHAT = (
 )
 
 #: A Discord or Slack incoming-webhook address anywhere in a value: masked
-#: whole in a log row (the path IS the key).
+#: whole in a log row (the path IS the key). Discord's API takes an optional
+#: version in the path (``/api/v10/webhooks/…``, the form its own docs show) —
+#: matched too (v1.433.0 review).
 _WEBHOOK_URL_RX = re.compile(
-    r"(?i)https?://[^\s\"'<>]*(?:discord(?:app)?\.com/api/webhooks|hooks\.slack\.com)/[^\s\"'<>]*"
+    r"(?i)https?://[^\s\"'<>]*(?:discord(?:app)?\.com/api(?:/v\d+)?/webhooks|hooks\.slack\.com)/[^\s\"'<>]*"
 )
 
 

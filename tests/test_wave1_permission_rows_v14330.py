@@ -9,7 +9,7 @@ Permissions screen (which renders that table) could not show or change them.
 need computer use switched on), so it is "allow" and sits on the same agent
 rosters; pixio and delegate_remote keep "ask" — exactly what their absence
 meant — but are now rows a user can tune. The read-only tools say so
-(READONLY), like the other read tools.
+(READONLY), like the other read tools; pixio_status saves a file, so it does not.
 """
 
 from __future__ import annotations
@@ -59,10 +59,11 @@ def test_every_registered_tool_resolves_to_a_row(platform):
 
 
 def test_the_read_tools_say_they_only_read(platform):
-    for name in ("web_look", "pixio_models", "pixio_params", "pixio_status"):
+    for name in ("web_look", "pixio_models", "pixio_params"):
         assert platform.registry.get(name).reversibility == Reversibility.READONLY, name
-    # The two that make or send something do not.
-    for name in ("pixio_generate", "pixio_upload"):
+    # The ones that make, send or SAVE something do not (v1.433.0 review:
+    # pixio_status saves the finished result into the run's folder).
+    for name in ("pixio_generate", "pixio_upload", "pixio_status"):
         assert platform.registry.get(name).reversibility != Reversibility.READONLY, name
 
 

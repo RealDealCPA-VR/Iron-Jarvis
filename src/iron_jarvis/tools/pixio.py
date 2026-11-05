@@ -397,11 +397,12 @@ class PixioGenerateTool(_PixioTool):
 
 class PixioStatusTool(_PixioTool):
     name = "pixio_status"
-    #: v1.433.0 (Wave 1, A17): a read of one generation's state. On success it
-    #: saves the result the user already asked for into the run's own folder;
-    #: checking again saves the same result, so a check cut off by a restart
-    #: may run again. The ``pixio`` permission still asks first by default.
-    reversibility = Reversibility.READONLY
+    #: NOT READONLY (v1.433.0 review): on success it SAVES the result into the
+    #: run's folder and the gallery. A READONLY tool is replay-safe after a
+    #: restart, runs headless from a stored workflow without asking, and is
+    #: left out of a rewind's "commands it cannot undo" — none of which is
+    #: true of a tool that writes a file. It keeps the default (the fail-safe
+    #: answer); the file it creates is journaled from ``created_paths``.
     description = (
         "Check one Pixio generation by id (from pixio_generate). On success the output "
         "is downloaded into the session workspace under pixio/; otherwise the current "
