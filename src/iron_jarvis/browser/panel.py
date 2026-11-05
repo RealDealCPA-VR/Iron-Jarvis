@@ -655,6 +655,15 @@ class PanelTurns:
             self._segment = []
         elif event == P.PANEL_EVENT_STATE and body.get("running") is not True:
             self._segment = []
+        elif event == P.PANEL_EVENT_HISTORY and isinstance(body.get("live"), dict):
+            # v1.433.0 review: a panel opened mid-turn paints the turn's whole
+            # answer so far as the bubble being written (``paintHistory``) —
+            # every round's words, not only the current one's. From here the
+            # daemon reads that bubble the same way, so the final reply is
+            # settled onto what the panel really holds (never glued on). A
+            # panel that was already showing the turn ignores the frame; for
+            # it the worst case is one repaint of its last bubble at the end.
+            self._segment = [str(body["live"].get("answer") or "")]
         if conn is None:
             return
         try:
@@ -1530,6 +1539,15 @@ class PanelTurns:
         if not wants_new_tab(text):
             ceiling = frozenset(ceiling - {"browser_create_tab"})
         emitted_done = False
+        # v1.433.0 review: THE SIDEBAR'S OWN WORDS. Since the sidebar shows the
+        # lane's end-of-turn words and its failure line, they are worded for
+        # the sidebar (``failure_words.SURFACE_SIDEBAR``): it has no Retry
+        # button and no Edit, so "Press Retry" and "edit an earlier message"
+        # would name presses that are not there. This turn is its own task, and
+        # every task the lane starts inside it copies this context.
+        from ..providers.failure_words import reset_surface, set_sidebar_surface
+
+        surface_token = set_sidebar_surface()
         try:
             gen = await stream_chat_turn(
                 self.platform,
@@ -1565,6 +1583,7 @@ class PanelTurns:
             )
             emitted_done = True
         finally:
+            reset_surface(surface_token)
             self._task = None
             self._turn_id = ""
             # v1.270.0: a STOPPED turn reaches here with no `done` frame sent

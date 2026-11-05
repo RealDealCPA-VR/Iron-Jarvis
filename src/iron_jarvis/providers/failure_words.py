@@ -73,6 +73,14 @@ SURFACE_BUILD = "build"
 #: new terminal IS a new conversation.
 SURFACE_PHONE = "phone"
 SURFACE_PANE = "pane"
+#: v1.433.0 review: the browser add-on's SIDEBAR (``browser/panel.py`` arms it
+#: around its turn, :func:`set_sidebar_surface`). Since the sidebar shows the
+#: chat lane's own end-of-turn words and its failure line, every sentence
+#: reads as the chat's except where the chat names a press the sidebar does
+#: not have: no Retry button (the user sends the message again,
+#: :func:`press_retry`) and no Edit or New chat on its messages (the header's
+#: New conversation button starts again).
+SURFACE_SIDEBAR = "sidebar"
 _SURFACE: ContextVar[str] = ContextVar("ij_failure_surface", default=SURFACE_CHAT)
 #: Where a run's model is chosen (the default model lives in Settings).
 RUN_MODEL_PLACE = "Settings"
@@ -109,8 +117,16 @@ def set_build_surface() -> Any:
     return _SURFACE.set(SURFACE_BUILD)
 
 
+def set_sidebar_surface() -> Any:
+    """Word failures as the browser sidebar's from here (v1.433.0 review);
+    returns the token for :func:`reset_surface`. ``browser/panel.PanelTurns``
+    arms it for the length of its turn (the turn is its own task, and every
+    task the chat lane starts inside it copies the context)."""
+    return _SURFACE.set(SURFACE_SIDEBAR)
+
+
 def reset_surface(token: Any) -> None:
-    """Undo :func:`set_build_surface`. Never raises."""
+    """Undo :func:`set_build_surface` / :func:`set_sidebar_surface`. Never raises."""
     try:
         _SURFACE.reset(token)
     except Exception:  # noqa: BLE001
@@ -119,11 +135,14 @@ def reset_surface(token: Any) -> None:
 
 def current_surface() -> str:
     """"run" inside :func:`run_surface`, "build" inside a Build turn
-    (:func:`set_build_surface`), "phone" inside :func:`phone_surface`, else
-    "chat". Never raises."""
+    (:func:`set_build_surface`), "phone" inside :func:`phone_surface`,
+    "sidebar" inside the browser sidebar's turn (:func:`set_sidebar_surface`),
+    else "chat". Never raises."""
     try:
         value = _SURFACE.get()
-        return value if value in (SURFACE_RUN, SURFACE_BUILD, SURFACE_PHONE) else SURFACE_CHAT
+        return value if value in (
+            SURFACE_RUN, SURFACE_BUILD, SURFACE_PHONE, SURFACE_SIDEBAR,
+        ) else SURFACE_CHAT
     except Exception:  # noqa: BLE001
         return SURFACE_CHAT
 
@@ -211,6 +230,8 @@ REFUSAL_WAY_OUT: dict[str, str] = {
     # v1.378.0 review: a way out each surface can really take.
     SURFACE_PHONE: "Send /new to start a new conversation.",
     SURFACE_PANE: "Open a new terminal to start a new conversation.",
+    # v1.433.0 review: the sidebar's messages have no Edit; its header does.
+    SURFACE_SIDEBAR: "Start a new conversation with the New conversation button at the top of the sidebar.",
 }
 
 #: ``"<provider> API error <status>: <detail>"`` — the one message shape
@@ -608,6 +629,7 @@ def classify(
         else f"pick another model for {this_place(surface)}"
     )
     again = "run it again" if run else "retry"
+    retry = press_retry(surface)
 
     if kind == "refusal":
         return refusal_words(exc, name=name, surface=surface)
@@ -642,7 +664,7 @@ def classify(
         elif run:
             fix = f"Run it again, or {other}."
         else:
-            fix = f"Press Retry, or {other}."
+            fix = f"{retry}, or {other}."
         return (f"{Name} didn't answer in time", fix)
     if transport == "interrupted":
         if f.partial:
@@ -650,11 +672,11 @@ def classify(
                 f"The connection to {name} dropped mid-answer",
                 "Its answer is incomplete. Run it again."
                 if run
-                else "The reply above is incomplete. Press Retry.",
+                else f"The reply above is incomplete. {retry}.",
             )
         return (
             f"The connection to {name} dropped",
-            ("Run it again." if run else "Press Retry.")
+            ("Run it again." if run else f"{retry}.")
             + f" If it keeps happening, check your internet connection or {other}.",
         )
     if transport == "unreachable":
@@ -694,6 +716,34 @@ GENERIC_FIX = "Press Retry. If it happens again, pick another model for this cha
 #: v1.389.0: the same words in a CODING SESSION (Build), which is not a chat —
 #: its model is picked in the session's own box.
 GENERIC_FIX_BUILD = "Press Retry. If it happens again, pick another model for this session."
+#: v1.433.0 review: the same words in the browser SIDEBAR, which has no Retry
+#: button: the user sends the message again.
+GENERIC_FIX_SIDEBAR = "Send your message again. If it happens again, pick another model for this chat."
+
+
+def press_retry(surface: str | None = None) -> str:
+    """The chat's "Press Retry", said for WHERE it is read (v1.433.0 review):
+    "Send your message again" in the browser sidebar, which has no Retry
+    button; "Press Retry" everywhere else (byte for byte as before). *surface*
+    None reads :func:`current_surface`. Never raises."""
+    try:
+        if (surface or current_surface()) == SURFACE_SIDEBAR:
+            return "Send your message again"
+    except Exception:  # noqa: BLE001 — wording only
+        pass
+    return "Press Retry"
+
+
+def _generic_fix(surface: str | None = None) -> str:
+    """The generic fix of a failure read in a chat-like place: a coding
+    session's (:data:`GENERIC_FIX_BUILD`), the sidebar's
+    (:data:`GENERIC_FIX_SIDEBAR`), else the chat's (:data:`GENERIC_FIX`)."""
+    where = surface or current_surface()
+    if where == SURFACE_BUILD:
+        return GENERIC_FIX_BUILD
+    if where == SURFACE_SIDEBAR:
+        return GENERIC_FIX_SIDEBAR
+    return GENERIC_FIX
 
 
 def this_place(surface: str | None = None) -> str:
@@ -885,8 +935,7 @@ def friendly_error(
         # names where the accounts are.
         title = worded
         fix = ACCOUNTS_FIX if _about_accounts(worded) else (
-            GENERIC_FIX_RUN if run else
-            GENERIC_FIX_BUILD if this_place(surface) == "this session" else GENERIC_FIX
+            GENERIC_FIX_RUN if run else _generic_fix(surface)
         )
     elif run:
         # Readiness 12A (G28): the run's own generic words (see
@@ -895,7 +944,7 @@ def friendly_error(
         title, fix = _run_generic_words(exc, provider, manager)
     else:
         title = generic_title(_generic_name(exc, provider, manager))
-        fix = GENERIC_FIX_BUILD if this_place(surface) == "this session" else GENERIC_FIX
+        fix = _generic_fix(surface)
     # v1.424.0 (decision D1): a failover that left pay-per-use models out
     # says so, after the fix, in one sentence. Byte-identical otherwise.
     fix = _with_not_moved(fix, exc, manager)

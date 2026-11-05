@@ -3726,9 +3726,17 @@ def _no_text_reply(
             "The model finished without writing an answer. "
             f"Here is what {ran} returned:\n{snippet}"
         )
+    # v1.433.0 review: "Press Retry" where there is a Retry button; the
+    # browser sidebar has none (``failure_words.press_retry``).
+    try:
+        from ..providers.failure_words import press_retry
+
+        retry = press_retry(surface)
+    except Exception:  # noqa: BLE001 — wording only
+        retry = "Press Retry"
     return (
         "The model returned an empty answer — no tool ran and nothing was "
-        "written. Press Retry, or pick a different model."
+        f"written. {retry}, or pick a different model."
     )
 
 
@@ -7306,12 +7314,34 @@ def _claimed_write_note(reply: str, tools_used: list[str], *, custom_tools=(), r
             f" The reply says it changed {shown}, but no tool that changes files"
             f" succeeded this turn — so {which} did not change."
         )
+    if _in_the_sidebar():
+        # v1.433.0 review: the browser sidebar has no Tools menu, and its turn
+        # never arms a document tool (its ceiling is the browser tools).
+        return f"\n\n_Note: nothing was written to disk this turn.{said} {SIDEBAR_NO_FILES}_"
     return (
         # v1.358.0 (integrate): the place is the chat's Tools menu (the wrench
         # chip); it said "the “+” menu", a different button.
         f"\n\n_Note: nothing was written to disk this turn.{said} Ask again with"
         f" Auto tools on, or a document tool turned on, in the chat's Tools menu._"
     )
+
+
+#: v1.433.0 review: what the honesty notes say in the browser SIDEBAR, which
+#: shows them since it reads the lane's whole reply: it has no Tools menu, and
+#: a sidebar turn can never arm a document tool (its ceiling is the browser
+#: tools, ``browser/panel.browser_tool_ceiling``).
+SIDEBAR_NO_FILES = "The browser sidebar can't write documents; ask in the Iron Jarvis window."
+
+
+def _in_the_sidebar() -> bool:
+    """True inside the browser sidebar's turn (``failure_words.SURFACE_SIDEBAR``,
+    armed by ``browser/panel``). Never raises."""
+    try:
+        from ..providers.failure_words import SURFACE_SIDEBAR, current_surface
+
+        return current_surface() == SURFACE_SIDEBAR
+    except Exception:  # noqa: BLE001 — wording only
+        return False
 
 
 def _asked_for_a_file(body) -> bool:
@@ -7407,6 +7437,9 @@ def _creation_honesty_note(body, armed: list[str], tools_used: list[str], *, cus
         return ""
     if _ran_writer(ran_writer, tools_used, custom_tools):
         return ""
+    if _in_the_sidebar() and not set(armed) & _FILE_WRITING_TOOLS:
+        # v1.433.0 review: no Tools menu there to turn a writer on in.
+        return f"\n\n_Note: no file was actually created this turn. {SIDEBAR_NO_FILES}_"
     if set(armed) & _FILE_WRITING_TOOLS:
         return (
             "\n\n_Note: no file was actually written this turn — the model "

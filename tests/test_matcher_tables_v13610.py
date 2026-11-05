@@ -1117,6 +1117,20 @@ CODING = [
     ('make me a dark mode app', True),
     ('build the app that we planned', True),
     ('write the app in Python', True),
+    # --- v1.433.0 review: "the Iron Jarvis / Jarvis / desktop app" is this
+    # app too; and a causative "make the app <do>" that names the code it is
+    # written in is the user's own software, so the door stays.
+    ('make the Iron Jarvis app start with Windows', False),
+    ('make the Jarvis app open when my computer starts', False),
+    ('make the desktop app start with Windows', False),
+    ('make the app use React and TypeScript', True),
+    ("make the app look good, it's a react todo app I am writing", True),
+    ('make the app use a postgres database', True),
+    ('make the app run on Next.js', True),
+    # ... and never on one of this app's own settings words.
+    ('make the app use my OpenAI API key', False),
+    ('make the app use Docker for commands', False),
+    ('make the app use the DGX node for chat', False),
 ]
 
 
