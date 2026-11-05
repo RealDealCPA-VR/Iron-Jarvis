@@ -1219,11 +1219,15 @@ function restartDaemonTidy(opts) {
 // exit). It used to be refused ("Quit Iron Jarvis from the tray menu…") where
 // the old plain /shutdown had brought it back through the watchdog ~90 s
 // later. Now: ask it to stop as a restart (the code host keeps its coding
-// tools), wait for its port to close, then start our own — the watchdog's own
-// step for an adopted daemon that went away. A port still held after
+// tools), wait for its PORT to be free, then start our own — the watchdog's
+// own step for an adopted daemon that went away. The port, not /health: a
+// wedged daemon answers nothing and still holds it, and our daemon would then
+// exit 1 on the held port and the ladder loop. A port still held after
 // TIDY_RESTART_KILL_MS is swept first, sparing the code host, as the watchdog
-// sweeps a wedged adopted daemon. One at a time: a second press while it runs
-// changes nothing. `stopping`: it is already stopping itself (a restore).
+// sweeps a wedged adopted daemon (one that closed its port and is still
+// finishing its stop is waited for by the new daemon's home lock). One at a
+// time: a second press while it runs changes nothing. `stopping`: it is
+// already stopping itself (a restore).
 function restartAdoptedDaemonTidy(rec, stopping) {
   if (rec.adoptedRestartInFlight) return true;
   rec.adoptedRestartInFlight = true;
@@ -1231,17 +1235,57 @@ function restartAdoptedDaemonTidy(rec, stopping) {
     `[main] ${new Date().toISOString()} restarting the adopted daemon tidily on request from Settings${stopping ? " (it is already stopping)" : ""}\n`
   );
   if (!stopping) postDaemonShutdown({ restart: true });
-  Promise.resolve(waitForDaemonPortClosed(TIDY_RESTART_KILL_MS))
+  Promise.resolve(waitForDaemonPortFree(TIDY_RESTART_KILL_MS))
     .catch(() => false)
-    .then((closed) => {
+    .then((free) => {
       rec.adoptedRestartInFlight = false;
       if (shuttingDown || isQuitting) return;
       if (!rec.adopted) return; // the watchdog already started our own
       rec.adopted = false;
-      if (!closed) sweepOrphanDaemons({ spareCodeHost: true });
+      if (!free) sweepOrphanDaemons({ spareCodeHost: true });
       startService("daemon", rec.spawnFn);
     });
   return true;
+}
+
+// True while something LISTENS on the daemon's port (v1.433.0 review). A
+// listen probe, not a connect: on Windows a connect to a closed loopback port
+// takes about two seconds to be refused; a listen answers at once
+// (EADDRINUSE). Any other error is "not known" and reads as free, so a guess
+// never sweeps.
+function daemonPortHeld() {
+  return new Promise((resolve) => {
+    let srv;
+    try {
+      srv = net.createServer();
+    } catch {
+      resolve(false);
+      return;
+    }
+    srv.once("error", (err) => resolve(!!err && err.code === "EADDRINUSE"));
+    try {
+      srv.listen({ host: "127.0.0.1", port: DAEMON_PORT, exclusive: true }, () => {
+        srv.close(() => resolve(false));
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+// Poll until the daemon's port is free (true) or the budget runs out (false).
+function waitForDaemonPortFree(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const poll = () => {
+      daemonPortHeld().then((held) => {
+        if (!held) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 250);
+      });
+    };
+    poll();
+  });
 }
 
 // v1.358.0 (G30): a tooltip or a toast names what the user knows, never the

@@ -66,9 +66,15 @@ function refreshTrayMenu() {}
 function armDashboardReload() {}
 function killChild(child, label, reason) { killed.push(`${label}:${reason}`); }
 function sweepOrphanDaemons(opts) { sweeps.push(opts || null); }
+// /health goes silent both when it stopped AND when it is wedged ("wedged":
+// it never answers but still holds the port) — only the port tells them apart.
 function waitForDaemonPortClosed(ms) {
   waits.push(ms);
   return Promise.resolve(scenario !== "portheld");
+}
+function waitForDaemonPortFree(ms) {
+  waits.push(ms);
+  return Promise.resolve(scenario !== "portheld" && scenario !== "wedged");
 }
 const http = {
   request(opts, cb) {
@@ -131,6 +137,17 @@ def test_an_adopted_daemon_already_stopping_itself_is_not_asked_twice(tmp_path):
 @requires_node
 def test_an_adopted_daemon_that_keeps_the_port_is_swept_sparing_the_code_host(tmp_path):
     out = _adopted("portheld", tmp_path)
+    assert out["ret"] is True, out
+    assert out["sweeps"] == [{"spareCodeHost": True}], out["sweeps"]
+    assert out["spawns"] == 2, out
+
+
+@requires_node
+def test_a_wedged_adopted_daemon_that_holds_the_port_is_swept_before_ours_starts(tmp_path):
+    """/health silent is not "stopped": a wedged daemon answers nothing and
+    still holds the port, and our daemon then exits 1 on the held port and
+    the crash ladder loops (the watchdog's own note). The port decides."""
+    out = _adopted("wedged", tmp_path)
     assert out["ret"] is True, out
     assert out["sweeps"] == [{"spareCodeHost": True}], out["sweeps"]
     assert out["spawns"] == 2, out
@@ -388,3 +405,34 @@ def test_settings_restart_is_a_fresh_start_like_the_tray_and_the_window(tmp_path
     assert out["restarts"] == 0 and out["restartTimes"] == 0, out
     assert out["dwKills"] == 0 and out["breaker"] is False, out
     assert "daemon" not in out["degraded"], out
+
+
+_PORT = r"""
+__EXTRACT__
+const net = require("net");
+eval(fnSource("daemonPortHeld"));
+eval(fnSource("waitForDaemonPortFree"));
+var DAEMON_PORT = 0;
+(async () => {
+  const holder = net.createServer();
+  await new Promise((r) => holder.listen({ host: "127.0.0.1", port: 0 }, r));
+  DAEMON_PORT = holder.address().port;  // a free port of our own, never 8787
+  const out = {};
+  out.heldWhileListening = await daemonPortHeld();
+  const t0 = Date.now();
+  out.freedWhileHeld = await waitForDaemonPortFree(600);
+  out.waitedMs = Date.now() - t0;
+  await new Promise((r) => holder.close(r));
+  out.heldAfterClose = await daemonPortHeld();
+  out.freedAfterClose = await waitForDaemonPortFree(2000);
+  process.stdout.write(JSON.stringify(out) + "\n");
+})().catch((e) => { process.stderr.write(String(e && e.stack)); process.exit(1); });
+"""
+
+
+@requires_node
+def test_the_port_probe_tells_a_held_port_from_a_free_one(tmp_path):
+    out = _run(_PORT.replace("__EXTRACT__", _EXTRACT), tmp_path, "port")
+    assert out["heldWhileListening"] is True, out
+    assert out["freedWhileHeld"] is False and out["waitedMs"] >= 500, out
+    assert out["heldAfterClose"] is False and out["freedAfterClose"] is True, out
