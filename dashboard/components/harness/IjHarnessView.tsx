@@ -505,7 +505,8 @@ export function IjHarnessView({
   }
 
   /** v1.418.0 (C2.6): Send in the start composer — ONE create carrying the
-   *  folder, branch, model, posture and Local only; the create's own answer
+   *  folder, branch, model, posture and Local only (v1.437.0: and the
+   *  account, the effort, Plan and the team); the create's own answer
    *  is the session's first view (no second read) and the words go to it as
    *  its first message. */
   async function startFromComposer(req: StartRequest): Promise<string | null> {
@@ -518,7 +519,12 @@ export function IjHarnessView({
     if (!made) return "The session could not be started.";
     keepView(made.id, made);
     startedRef.current.set(made.id, req);
-    setFirst({ id: made.id, view: made, message: { text: req.text, files: req.files } });
+    // v1.437.0: the box's "Try on…" picks ride the first message.
+    setFirst({
+      id: made.id,
+      view: made,
+      message: { text: req.text, files: req.files, ...(req.tryOn?.length ? { tryOn: req.tryOn } : {}) },
+    });
     setMiddle("session");
     open(made.id);
     void refresh();

@@ -101,6 +101,18 @@ const MODELS = {
 vi.mock("@/lib/useModels", () => ({ useModels: () => MODELS }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => null }));
 
+/** v1.437.0 (moved on purpose): the start box's model chip is the SESSION's
+ *  model menu (components/chat/ModelMenu with the accounts), never a select —
+ *  a row is picked by typing its name and pressing Enter; the pick is read off
+ *  the chip's wrapper (`data-choice`). */
+function pickStartModel(name: string) {
+  fireEvent.click(within(screen.getByTestId("harness-new-model")).getByRole("button"));
+  const filter = screen.getByTestId("model-filter");
+  fireEvent.change(filter, { target: { value: name } });
+  fireEvent.keyDown(filter, { key: "Enter" });
+}
+const startModel = () => screen.getByTestId("harness-new-model").getAttribute("data-choice");
+
 import { HarnessStartComposer, startCreateBody, type StartRequest } from "@/components/harness/HarnessStartComposer";
 import { StartComposer } from "@/components/buildCode/StartComposer";
 import { FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
@@ -221,15 +233,14 @@ describe("a save made elsewhere in the window reaches the open start composer", 
         />
       </>,
     );
-    const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("ollama::qwen3:8b"));
+    await waitFor(() => expect(startModel()).toBe("ollama::qwen3:8b"));
     api.putReply = { folder: FOLDER, defaults: {} };
     fireEvent.click(await screen.findByTestId("p-clear"));
     // The words go in one render and the untouched chip follows in the next
     // (its effect): wait for the thing asserted, never a proxy that lands first.
     await waitFor(() => {
       expect(screen.queryByTestId("harness-new-folder-defaults-words")).toBeNull();
-      expect(select.value).toBe("");
+      expect(startModel()).toBe("");
     });
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
@@ -246,7 +257,7 @@ describe("a save made elsewhere in the window reaches the open start composer", 
         <FolderDefaultsPanel folder={FOLDER} view="code" describe={(d) => codeDefaultsWords(d, () => "Opus 5.5")} current={null} testId="p" />
       </>,
     );
-    fireEvent.change(screen.getByTestId("harness-new-model"), { target: { value: "claude-cli::opus" } });
+    pickStartModel("Opus 5.5");
     api.putReply = { folder: FOLDER, defaults: { code: { provider: "claude-cli", model: "opus" } } };
     fireEvent.click(await screen.findByTestId("harness-new-save-defaults"));
     await waitFor(() =>
@@ -315,7 +326,7 @@ describe("Chat › Code: a folder's model that cannot answer is never picked", (
         "cannot answer right now, so the default model does.",
       ),
     );
-    expect((screen.getByTestId("harness-new-model") as HTMLSelectElement).value).toBe("");
+    expect(startModel()).toBe("");
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(got).toHaveLength(1));
@@ -354,11 +365,10 @@ describe("Chat › Code: Local only and a folder's model that leaves this PC", (
       };
       const got: StartRequest[] = [];
       render(<HarnessStartComposer initialFolder={FOLDER} onStart={async (req) => (got.push(req), null)} />);
-      const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
-      await waitFor(() => expect(select.value).toBe("claude-cli::opus"));
+      await waitFor(() => expect(startModel()).toBe("claude-cli::opus"));
       fireEvent.click(screen.getByTestId("harness-new-local-only"));
       await waitFor(() => {
-        expect(select.value).toBe("");
+        expect(startModel()).toBe("");
         expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toContain(
           "Opus 5.5 leaves this PC, so it is not used while Local only is on.",
         );
@@ -375,7 +385,7 @@ describe("Chat › Code: Local only and a folder's model that leaves this PC", (
       api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: { code: { provider: "ollama", model: "qwen3:8b" } } };
       render(<HarnessStartComposer initialFolder={FOLDER} onStart={async () => null} />);
       fireEvent.click(screen.getByTestId("harness-new-local-only"));
-      await waitFor(() => expect((screen.getByTestId("harness-new-model") as HTMLSelectElement).value).toBe("ollama::qwen3:8b"));
+      await waitFor(() => expect(startModel()).toBe("ollama::qwen3:8b"));
     } finally {
       delete (MODELS.usable[0] as { on_this_network?: boolean }).on_this_network;
       delete (MODELS.usable[1] as { on_this_network?: boolean }).on_this_network;

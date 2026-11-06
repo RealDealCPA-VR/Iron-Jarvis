@@ -437,6 +437,9 @@ function LiveText({
 export interface FirstMessage {
   text: string;
   files: HarnessFile[];
+  /** v1.437.0: the models the new-session box's "Try on…" picked — the
+   *  first message is tried on them (as a waiting message keeps its picks). */
+  tryOn?: TryOnPick[];
 }
 
 /** What a send into an archived session says (the daemon's own sentence). */
@@ -1611,7 +1614,11 @@ export function HarnessSession({
         // v1.418.0 review: until its turn starts (or the send ends some other
         // way — a "/" command, a refusal), a refusal goes back to the start.
         firstPendingRef.current = true;
-        void send({ text: firstMessage.text, attachments: firstMessage.files }).finally(() => {
+        void send({
+          text: firstMessage.text,
+          attachments: firstMessage.files,
+          ...(firstMessage.tryOn?.length ? { tryOn: firstMessage.tryOn } : {}),
+        }).finally(() => {
           firstPendingRef.current = false;
         });
         return;

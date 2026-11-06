@@ -69,6 +69,17 @@ pixels of jitter never flickers the chips' words), the user's case at 125 % and
 the IJ harness's box measuring nothing either.
 `IJ_ROW_OUT=<folder>` writes each case's measurements and a screenshot.
 
+`e2e/start-box-v1437.spec.ts` (v1.437.0, Chat › Code's new-session box
+carries the session composer's own row) stubs `/models` (a Claude Code model
+with reasoning levels, a local one with levels, one of 50 characters) and
+`/build/accounts` (two Claude Code accounts), opens `/chat?view=code` and
+measures the start box's toolbar — the permission chip, Try on, Team, the
+effort chip, the model chip naming the account a model was picked under, and
+Send — at 1440 × 900, 1280 × 720, 1024 × 640 and 390 × 844: never a sideways
+pan, every control inside the card and none over another; from a 640 px card
+up, one vertical centre and Send right-most. Try on with no folder says why
+when pressed, inside the window.
+
 `e2e/model-team-fit.spec.ts` (v1.394.0 review) opens Settings › Model team
 with GET /team, /build/accounts and /team/starter stubbed to members and
 accounts with long names, at 390 × 844 and 1280 × 720: every part of a

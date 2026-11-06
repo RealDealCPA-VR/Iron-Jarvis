@@ -72,6 +72,18 @@ vi.mock("@/lib/useModels", () => ({ useModels: () => MODELS }));
 vi.mock("@/components/terminal/FilesPanel", () => ({ FilesPanel: () => <div data-testid="files-panel" /> }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => <div data-testid="tree" /> }));
 
+/** v1.437.0 (moved on purpose): the start box's model chip is the SESSION's
+ *  model menu (components/chat/ModelMenu with the accounts), never a select —
+ *  a row is picked by typing its name and pressing Enter; the pick is read off
+ *  the chip's wrapper (`data-choice`). */
+function pickStartModel(name: string) {
+  fireEvent.click(within(screen.getByTestId("harness-new-model")).getByRole("button"));
+  const filter = screen.getByTestId("model-filter");
+  fireEvent.change(filter, { target: { value: name } });
+  fireEvent.keyDown(filter, { key: "Enter" });
+}
+const startModel = () => screen.getByTestId("harness-new-model").getAttribute("data-choice");
+
 import { IjHarnessView } from "@/components/harness/IjHarnessView";
 import { HarnessSession } from "@/components/harness/HarnessSession";
 import { startCreateBody } from "@/components/harness/HarnessStartComposer";
@@ -220,21 +232,33 @@ describe("C2.6 the empty view is a composer with the caret in it", () => {
     // can start a branch.
     const sw = await screen.findByTestId("harness-new-branch-switch");
     expect(sw).toBeChecked();
-    fireEvent.change(screen.getByTestId("harness-new-model"), { target: { value: "claude-cli::opus" } });
-    fireEvent.click(screen.getByTestId("harness-new-local-only"));
-    fireEvent.change(box, { target: { value: "Fix the cart" } });
-    fireEvent.click(screen.getByTestId("harness-new-send"));
-    await waitFor(() => expect(count("POST", "/build/sessions")).toBe(1));
-    const created = api.calls.find((c) => c.method === "POST" && c.path === "/build/sessions");
-    expect(created?.body).toEqual({
-      folder: "C:\\work\\shop",
-      branch: true,
-      provider: "claude-cli",
-      model: "opus",
-      local_only: true,
-    });
-    await waitFor(() => expect(turnFetched()).toBe(true), { timeout: 10_000 });
-    expect(api.calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    // v1.437.0 (moved on purpose): under Local only the start box's model
+    // menu offers only models that stay on this PC or your network (a cloud
+    // pick would only be refused at the first message), so the model picked
+    // here is a local one; Local only first.
+    const local = { provider: "ollama", model: "qwen3:8b", label: "Qwen3 8B", available: true, on_this_network: true };
+    MODELS.models.push(local);
+    MODELS.usable.push(local);
+    try {
+      fireEvent.click(screen.getByTestId("harness-new-local-only"));
+      pickStartModel("Qwen3 8B");
+      fireEvent.change(box, { target: { value: "Fix the cart" } });
+      fireEvent.click(screen.getByTestId("harness-new-send"));
+      await waitFor(() => expect(count("POST", "/build/sessions")).toBe(1));
+      const created = api.calls.find((c) => c.method === "POST" && c.path === "/build/sessions");
+      expect(created?.body).toEqual({
+        folder: "C:\\work\\shop",
+        branch: true,
+        provider: "ollama",
+        model: "qwen3:8b",
+        local_only: true,
+      });
+      await waitFor(() => expect(turnFetched()).toBe(true), { timeout: 10_000 });
+      expect(api.calls.filter((c) => c.method === "DELETE")).toEqual([]);
+    } finally {
+      MODELS.models.pop();
+      MODELS.usable.pop();
+    }
   });
 
   it("a folder outside a repository shows no branch switch", async () => {

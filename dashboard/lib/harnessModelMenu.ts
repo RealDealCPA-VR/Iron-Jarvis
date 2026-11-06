@@ -89,6 +89,16 @@ const COMPANY_OF: Record<string, Company> = Object.fromEntries(
   ]),
 );
 
+/** v1.437.0: the account list's vendor for a SUBSCRIPTION CLI ("claude-cli"
+ *  → "claude"), null for anything else — an API key, a local model, the
+ *  default. A pick in the harness menu always spells a keyless API under its
+ *  CLI (`foldKeylessApis`), so this is the vendor whose accounts a pick of
+ *  that provider runs on. Pure. */
+export function cliVendorOf(provider: string): AccountVendor | null {
+  const co = COMPANY_OF[provider];
+  return co && co.cli === provider ? co.vendor : null;
+}
+
 /** What a way to reach a company is called inside its group: the CLI by its
  *  own name ("Claude Code", "Codex"), the API by the company's ("Anthropic
  *  API", "OpenAI API") — "Anthropic" alone under "Claude (Anthropic)" says

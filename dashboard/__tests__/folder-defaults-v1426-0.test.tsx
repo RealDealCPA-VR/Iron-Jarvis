@@ -88,6 +88,18 @@ const MODELS = {
 vi.mock("@/lib/useModels", () => ({ useModels: () => MODELS }));
 vi.mock("@/components/terminal/DirectoryTree", () => ({ DirectoryTree: () => null }));
 
+/** v1.437.0 (moved on purpose): the start box's model chip is the SESSION's
+ *  model menu (components/chat/ModelMenu with the accounts), never a select —
+ *  a row is picked by typing its name and pressing Enter; the pick is read off
+ *  the chip's wrapper (`data-choice`). */
+function pickStartModel(name: string) {
+  fireEvent.click(within(screen.getByTestId("harness-new-model")).getByRole("button"));
+  const filter = screen.getByTestId("model-filter");
+  fireEvent.change(filter, { target: { value: name } });
+  fireEvent.keyDown(filter, { key: "Enter" });
+}
+const startModel = () => screen.getByTestId("harness-new-model").getAttribute("data-choice");
+
 import { HarnessStartComposer, startCreateBody, type StartRequest } from "@/components/harness/HarnessStartComposer";
 import { StartComposer } from "@/components/buildCode/StartComposer";
 import { FolderDefaultsPanel } from "@/components/folders/FolderDefaultsPanel";
@@ -196,7 +208,7 @@ describe("Chat › Code's start composer", () => {
         }}
       />,
     );
-    await waitFor(() => expect((screen.getByTestId("harness-new-model") as HTMLSelectElement).value).toBe("ollama::qwen3:8b"));
+    await waitFor(() => expect(startModel()).toBe("ollama::qwen3:8b"));
     expect(screen.getByTestId("harness-new-folder-defaults-words").textContent).toBe(
       "New sessions in shop start with: Qwen3 8B · reasoning high · Accept edits.",
     );
@@ -219,9 +231,8 @@ describe("Chat › Code's start composer", () => {
     };
     const got: StartRequest[] = [];
     render(<HarnessStartComposer initialFolder={FOLDER} onStart={async (req) => (got.push(req), null)} />);
-    const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("ollama::qwen3:8b"));
-    fireEvent.change(select, { target: { value: "claude-cli::opus" } });
+    await waitFor(() => expect(startModel()).toBe("ollama::qwen3:8b"));
+    pickStartModel("Opus 5.5");
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(got).toHaveLength(1));
@@ -237,13 +248,12 @@ describe("Chat › Code's start composer", () => {
     });
     const got: StartRequest[] = [];
     render(<HarnessStartComposer initialFolder={FOLDER} onStart={async (req) => (got.push(req), null)} />);
-    const select = screen.getByTestId("harness-new-model") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "claude-cli::opus" } });
+    pickStartModel("Opus 5.5");
     await act(async () => {
       answer({ folder: FOLDER, defaults: { code: { provider: "ollama", model: "qwen3:8b", approval_mode: "auto" } } });
     });
     await waitFor(() => expect(screen.getByTestId("harness-new-folder-defaults-words")).toBeTruthy());
-    expect(select.value).toBe("claude-cli::opus");
+    expect(startModel()).toBe("claude-cli::opus");
     fireEvent.change(screen.getByTestId("harness-new-box"), { target: { value: "go" } });
     fireEvent.click(screen.getByTestId("harness-new-send"));
     await waitFor(() => expect(got).toHaveLength(1));
@@ -254,7 +264,7 @@ describe("Chat › Code's start composer", () => {
     api.gets[DEFAULTS_PATH] = { folder: FOLDER, defaults: {} };
     api.putReply = { folder: FOLDER, defaults: { code: { provider: "claude-cli", model: "opus" } } };
     render(<HarnessStartComposer initialFolder={FOLDER} onStart={async () => null} />);
-    fireEvent.change(screen.getByTestId("harness-new-model"), { target: { value: "claude-cli::opus" } });
+    pickStartModel("Opus 5.5");
     fireEvent.click(await screen.findByTestId("harness-new-save-defaults"));
     await waitFor(() => expect(api.puts).toHaveLength(1));
     expect(api.puts[0]).toEqual({
