@@ -204,6 +204,10 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // v1.433.0 (D1): the Appearance card's theme switcher IS this row (it
   // saves it, lib/deviceSettings) — a plain field beside it disagreed with it.
   "device.theme": APPEARANCE_SECTION,
+  // v1.442.0 (Wave 7 group C): "Your own theme colours" is the theme
+  // maker's picks; the maker on the Appearance card is its control (picking
+  // or editing the chat theme there saves the row, lib/deviceSettings).
+  "device.theme_colors": APPEARANCE_SECTION,
 };
 
 function readSection(): { section: string; focus: string } {

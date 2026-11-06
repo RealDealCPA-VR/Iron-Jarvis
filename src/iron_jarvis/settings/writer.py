@@ -123,6 +123,28 @@ class ConfigWriter:
             return (getattr(cfg, outer, {}) or {}).get(inner)
         return getattr(cfg, d.field_name, None)
 
+    def linked_keys(self, values: dict[str, Any], *, device_id: str = "") -> list[str]:
+        """v1.442.0 (Wave 7 group C): the rows this change also CLEARS.
+        ``device.theme`` and ``device.theme_colors`` name the same thing (the
+        theme on this device) two ways: a value for one clears the other, so
+        the one set last is what the screen shows, and an Undo (which
+        snapshots both — ``settings.tools`` ``capture_undo``) puts both back.
+        Only a partner that holds a value and is not itself in ``values``."""
+        from .theme_colors import LINKED
+
+        out: list[str] = []
+        for key, value in values.items():
+            partner = LINKED.get(key)
+            if partner is None or value is None or partner in values or partner in out:
+                continue
+            try:
+                held = self.current(partner, device_id=device_id)
+            except Exception:  # noqa: BLE001 — an unreadable partner is left alone
+                continue
+            if held is not None:
+                out.append(partner)
+        return out
+
     # ------------------------------------------------------------- validate
     def _validate(self, values: dict[str, Any], *, restoring: bool = False) -> dict[str, Any]:
         """Every value checked before anything changes; returns the cleaned set.
@@ -173,6 +195,11 @@ class ConfigWriter:
             if d.check is not None:
                 try:
                     d.check(value)
+                except ValueError as exc:
+                    raise SettingError(f"{d.label} {exc}.") from None
+            if d.normalize is not None:
+                try:
+                    value = d.normalize(value)
                 except ValueError as exc:
                     raise SettingError(f"{d.label} {exc}.") from None
             if d.pattern and key.startswith("permissions."):
@@ -275,6 +302,8 @@ class ConfigWriter:
         ``restoring`` is :meth:`restore`'s (see :meth:`_validate`)."""
         with self._lock:
             clean = self._validate(values, restoring=restoring)
+            for partner in self.linked_keys(clean, device_id=device_id):
+                clean[partner] = None
             prior = {k: self.current(k, device_id=device_id) for k in clean}
             out = ChangeSet()
             plain: dict[str, Any] = {}

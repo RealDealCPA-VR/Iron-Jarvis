@@ -40,6 +40,7 @@ import {
   generatePalette,
   loadPalettes,
   makePalette,
+  ownPaletteCount,
   readabilityProblems,
   upsertPalette,
   type CustomPalette,
@@ -427,7 +428,7 @@ export function ThemeMaker() {
             type="button"
             data-testid="theme-maker-new"
             onClick={() => setEditing({ ...BLANK })}
-            disabled={palettes.length >= MAX_PALETTES}
+            disabled={ownPaletteCount(palettes) >= MAX_PALETTES}
             className="inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-[12px] font-medium text-accent-soft hover:bg-accent/[0.14] disabled:opacity-50"
           >
             <Plus size={13} aria-hidden /> Make your own

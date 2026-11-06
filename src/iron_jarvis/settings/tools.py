@@ -44,6 +44,10 @@ from ..core.ids import new_id
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from . import schema
 from .device import valid_device_id
+#: v1.442.0 (Wave 7 group C): how chat writes ``device.theme_colors`` (the
+#: value has a shape; config_list tells the model what it is), and its words.
+from .theme_colors import HOW as THEME_COLORS_HOW
+from .theme_colors import describe as describe_theme_colors
 
 TOOL_FOR_TIER = {"allow": "config_set", "ask": "config_change", "ask-floor": "config_change_protected"}
 CONFIG_TOOLS = ("config_list", "config_set", "config_change", "config_change_protected", "config_secret")
@@ -217,6 +221,9 @@ def _show(value: Any) -> str:
         return "(not set)"
     if isinstance(value, bool):
         return "On" if value else "Off"
+    if isinstance(value, dict) and "accent" in value:
+        # v1.442.0 (Wave 7 group C): a theme of your own colours, in words.
+        return describe_theme_colors(value)
     return str(value)
 
 
@@ -295,6 +302,7 @@ class ConfigListTool(Tool):
         lines = [
             f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}"
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
+            + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
             for r in rows
         ]
         lines += [f"{s['label']} ({s['key']}) → config_secret (a secure card; never ask for the value)" for s in secrets]
@@ -334,8 +342,17 @@ class _ConfigChangeBase(Tool):
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         try:
-            d, key, _value = self._resolve(args)
-            prior = await asyncio.to_thread(_writer(self.platform).current, key, device_id=ctx.device_id)
+            d, key, value = self._resolve(args)
+            writer = _writer(self.platform)
+
+            def _snapshot() -> dict[str, Any]:
+                # v1.442.0 (Wave 7 group C): a row this change also clears
+                # (``device.theme`` <-> ``device.theme_colors``) is part of
+                # what the Undo puts back.
+                keys = [key, *writer.linked_keys({key: value}, device_id=ctx.device_id)]
+                return {k: writer.current(k, device_id=ctx.device_id) for k in keys}
+
+            prior = await asyncio.to_thread(_snapshot)
         except Exception:  # noqa: BLE001 — no snapshot, no undo row; execute says why
             return None
         change_id = new_id("cfg")
@@ -343,7 +360,7 @@ class _ConfigChangeBase(Tool):
         return {
             "kind": "setting_restore",
             "pre_inline": json.dumps(
-                {"prior": {key: prior}, "device_id": ctx.device_id, "change_id": change_id}, default=str
+                {"prior": prior, "device_id": ctx.device_id, "change_id": change_id}, default=str
             ),
         }
 

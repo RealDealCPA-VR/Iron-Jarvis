@@ -48,6 +48,21 @@ export const PALETTES_KEY = "ij_palettes";
 /** Fired on window whenever the saved list changes (this tab). */
 export const PALETTES_EVENT = "ij-palettes-change";
 export const MAX_PALETTES = 12;
+/** v1.442.0 (Wave 7 group C): the ONE palette chat's "Your own theme
+ *  colours" setting (`device.theme_colors`) keeps — replaced, never piled up
+ *  (lib/deviceSettings). It never takes one of the user's own places: the
+ *  list holds up to MAX_PALETTES of theirs plus this one. */
+export const CHAT_PALETTE_ID = "custom-chat";
+
+/** How many entries `list` may hold: the user's own cap, plus the chat one. */
+function capFor(list: { id: string }[]): number {
+  return list.some((p) => p.id === CHAT_PALETTE_ID) ? MAX_PALETTES + 1 : MAX_PALETTES;
+}
+
+/** The user's OWN palettes in `list` (the chat one left out). */
+export function ownPaletteCount(list: { id: string }[]): number {
+  return list.filter((p) => p.id !== CHAT_PALETTE_ID).length;
+}
 export const MAX_NAME = 40;
 
 export type Surface = "neutral" | "cool" | "warm" | "tinted";
@@ -467,7 +482,7 @@ export function loadPalettes(): CustomPalette[] {
         out.push(p);
       }
     }
-    return out.slice(0, MAX_PALETTES);
+    return out.slice(0, capFor(out));
   } catch {
     return [];
   }
@@ -475,7 +490,7 @@ export function loadPalettes(): CustomPalette[] {
 
 export function savePalettes(list: CustomPalette[]): boolean {
   try {
-    localStorage.setItem(PALETTES_KEY, JSON.stringify(list.slice(0, MAX_PALETTES)));
+    localStorage.setItem(PALETTES_KEY, JSON.stringify(list.slice(0, capFor(list))));
   } catch {
     return false;
   } finally {
@@ -514,7 +529,7 @@ export function upsertPalette(p: CustomPalette): boolean {
   const list = loadPalettes();
   const i = list.findIndex((x) => x.id === p.id);
   if (i >= 0) list[i] = p;
-  else if (list.length >= MAX_PALETTES) return false;
+  else if (p.id !== CHAT_PALETTE_ID && ownPaletteCount(list) >= MAX_PALETTES) return false;
   else list.push(p);
   return savePalettes(list);
 }

@@ -8,7 +8,8 @@
  * would keep the real api and reach for a real daemon.
  */
 
-export type DeviceValue = string | boolean | null;
+/** v1.442.0: an object for `device.theme_colors` (the theme maker's picks). */
+export type DeviceValue = string | boolean | null | object;
 
 export interface DeviceSettingsState {
   /** The last value this window knew for each key; null = not loaded yet. */

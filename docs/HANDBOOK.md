@@ -1662,6 +1662,18 @@ nothing was taken away.
   delete them later (up to 12, kept on this PC like the theme choice). The
   workflow canvas's wires now take the theme's main colour, and pop-out
   windows' minimise/close buttons follow a light theme too.
+  - **From chat** (v1.442.0). Ask for it in words: "change the theme to
+    something green and calm", "make the app purple", "use a dark blue
+    theme". Chat picks the colours (a main colour, an optional second one,
+    the background feel, dark or light) and they are applied at once on the
+    screen you asked from, with an **Undo** on the reply. It is the same
+    theme maker underneath, so every word stays readable; the theme appears
+    among your themes as one entry (named as chat named it, or "Theme from
+    chat") and a later chat change replaces it rather than adding another —
+    it never takes one of your 12 places. The last one set wins: asking for
+    a built-in theme (or picking one on screen) replaces chat's colours, and
+    asking for colours replaces the built-in theme. Undo goes back to what
+    the screen showed before.
 - **Phones.** Pages no longer slide sideways, the title bar's buttons no
   longer overlap, and search icons sit inside their boxes.
 - **Plain words.** Sessions say who started them in words ("Schedule ·
