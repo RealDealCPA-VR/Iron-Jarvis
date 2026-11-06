@@ -183,16 +183,31 @@ async def test_resolve_where_answers_only_the_matching_session_and_tools():
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_conversation_grant_on_one_parallel_ask_releases_its_siblings(rt, monkeypatch):
-    monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 1.0)
-    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 1.0)  # v1.247.0: attended asks wait; bound this one
+    # v1.440.0: the asks wait a LONG time and the other session's ask is
+    # answered by hand once this session's grant has landed. With a 1 s clock
+    # a loaded GitHub runner timed out a sibling before the grant reached it
+    # ("the approval request timed out" for d2) — the test measured the
+    # runner. "The grant does not release another session's ask" is now read
+    # off the registry while that ask still waits.
+    monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 60.0)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 60.0)  # v1.247.0: attended asks wait; bound this one
     allow: set = set()
     agent_def = get_agent_definition(AgentType.BUILDER)
+    still_waiting: dict = {}
 
     async def answer_first_with_conversation():
-        ok = await _wait_for(lambda: len(_events(rt, "approval.requested")) >= 3)
+        ok = await _wait_for(lambda: len(_events(rt, "approval.requested")) >= 3, tries=3000)
         assert ok, "the asks never got filed"
         first = _events(rt, "approval.requested", "session_test")[0]
         assert rt.platform.approvals.resolve(first["payload"]["approval_id"], "conversation")
+        ok = await _wait_for(lambda: len(_events(rt, "approval.resolved", "session_test")) >= 2, tries=3000)
+        assert ok, "the grant never released this session's other ask"
+        other = _events(rt, "approval.requested", "session_other")[0]["payload"]["approval_id"]
+        # This session's grant must NOT have answered the other session's ask.
+        still_waiting["other"] = rt.platform.approvals.pending_count() == 1 and not _events(
+            rt, "approval.resolved", "session_other"
+        )
+        assert rt.platform.approvals.resolve(other, "deny")
 
     answerer = asyncio.create_task(answer_first_with_conversation())
     other_allow: set = set()
@@ -200,7 +215,7 @@ async def test_conversation_grant_on_one_parallel_ask_releases_its_siblings(rt, 
         rt.runtime._pause_for_approval(_session(), _tc("mv a b"), agent_def, allow),
         rt.runtime._pause_for_approval(_session(), _tc("mv c d"), agent_def, allow),
         # ANOTHER session's ask for the same tool must NOT be released by this
-        # session's grant — it runs out its (short) clock.
+        # session's grant — it waits until the user answers it.
         rt.runtime._pause_for_approval(
             _session("session_other"), _tc("mv e f"), agent_def, other_allow
         ),
@@ -208,14 +223,15 @@ async def test_conversation_grant_on_one_parallel_ask_releases_its_siblings(rt, 
     await answerer
     assert "shell" in allow
     assert d1 == "" and d2 == "", (d1, d2)
-    assert d3 == PAUSE_TIMEOUT_REASON and "shell" not in other_allow
+    assert still_waiting.get("other") is True, "this session's grant answered another session's ask"
+    assert d3 != "" and "shell" not in other_allow, d3
     decisions = [
         p["payload"]["decision"] for p in _events(rt, "approval.resolved", "session_test")
     ]
     assert decisions == ["conversation", "conversation"], decisions
     assert [
         p["payload"]["decision"] for p in _events(rt, "approval.resolved", "session_other")
-    ] == ["timeout"]
+    ] == ["deny"]
     # Every id was popped: nothing is left dangling in the registry.
     assert rt.platform.approvals.pending_count() == 0
 
