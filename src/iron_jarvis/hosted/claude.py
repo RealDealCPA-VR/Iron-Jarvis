@@ -874,9 +874,14 @@ class ClaudeDriver(Driver):
 
     def answered(self, ask: Ask, decision: str) -> None:
         """The answer reached Claude Code: a session-wide allow that set a mode
-        is now this session's mode."""
+        is now this session's mode. v1.439.0 (review): so is the mode an
+        approved plan goes back to (Claude Code leaves Plan for it)."""
         if decision == "allow_session" and ask.data.get("sets_mode"):
             self.mode = ask.data["sets_mode"]
+            self.pre_plan_mode = ""
+        elif decision in ("allow", "allow_session") and ask.data.get("leaves_plan_to") and self.mode == "plan":
+            self.mode = ask.data["leaves_plan_to"]
+            self.pre_plan_mode = ""
 
     def prepare_answer(self, ask: Ask, decision: str, message: str, answers: Any) -> dict[str, Any]:
         """The ``control_response`` for the user's answer — or AskRefused,
@@ -1084,6 +1089,7 @@ class ClaudeDriver(Driver):
         # v1.439.0: on the plan card the session-wide allow names the mode it
         # leaves the session in, so that mode switch is not said again.
         plan_sets = suggested_mode(sugg) if name == "ExitPlanMode" else ""
+        leaves_plan_to = ""
         if plan_sets == "plan":
             plan_sets = ""
         said = [x for x in sugg if x.get("type") != "setMode"] if plan_sets else sugg
@@ -1106,6 +1112,10 @@ class ClaudeDriver(Driver):
             then = self.pre_plan_mode if self.mode == "plan" else self.mode
             if then in MODE_LABELS and then != "plan":
                 ev["then_mode"] = then
+                if self.mode == "plan":
+                    # v1.439.0 (review): Allow once leaves Plan for it, so
+                    # the driver and the session row follow (``answered``).
+                    leaves_plan_to = then
             if plan_sets:
                 ev["sets_mode"] = plan_sets
         if not sugg:
@@ -1128,6 +1138,8 @@ class ClaudeDriver(Driver):
         mode = suggested_mode(sugg)
         if mode:
             data["sets_mode"] = mode
+        if leaves_plan_to:
+            data["leaves_plan_to"] = leaves_plan_to
         self.raise_ask(Ask(ask_id, "approval", name, rid, data, ev, ev["at"], bool(sugg)))
 
     async def _refuse_control(self, rid: Any, why: str) -> None:
