@@ -101,6 +101,12 @@ NONE = {"fork": False, "fork_at": False, "rewind": False}
 
 REFS_NAME = "refs.json"
 PENDING_NAME = "branch.json"
+#: Review (v1.441.0): when a rewind was made. The tool's own file can still
+#: hold what it dropped (Claude Code keeps the old branch; Iron Jarvis's Codex
+#: reader does not read a revert), so a transcript merged in later (the
+#: conversation went outside the view again, or the log is empty) leaves out
+#: every entry from before it — what was kept is in the log already.
+REWOUND_NAME = "rewound.json"
 #: How many sent messages' references a session keeps (the newest).
 MAX_REFS = 500
 #: How many per-message ids a view lists.
@@ -133,6 +139,13 @@ TOOL_REFUSED = "{label} refused: {said}"
 NO_NEW_ID = "{label} did not say the new conversation's id, so nothing was made."
 PENDING_TERMINAL = ("Send a message here first: {label} makes this branch with your next message, so the "
                     "terminal has nothing to open yet.")
+#: Review: a Claude Code rewind not yet sent — a plain ``claude --resume``
+#: in a terminal would open the conversation as it was BEFORE the rewind
+#: (re-measured on 2.1.316: the model got the rewound-away message back).
+PENDING_REWIND_TERMINAL = ("This conversation was rewound here: send a message first, so {label} goes back "
+                           "with it. A terminal now would open it as it was before the rewind.")
+NOT_KEPT = "Iron Jarvis could not keep a copy of this conversation's log first, so nothing was changed."
+NO_ANSWER = "{label} did not answer, so Iron Jarvis stopped it. Try again."
 
 FILES_SAME = "Your files were not changed: put a file back with Revert in the Changes pane."
 FORK_MADE = "A branch of this conversation, on the same tool, model and account."
@@ -218,6 +231,37 @@ def write_pending(home: Any, sid: str, pending: dict[str, Any] | None) -> None:
 
 def pending_fork(home: Any, sid: str) -> bool:
     return bool(read_pending(home, sid).get("from"))
+
+
+def pending_rewind(home: Any, sid: str) -> bool:
+    """Review: a Claude Code rewind waiting for its next message."""
+    p = read_pending(home, sid)
+    return bool(p.get("at")) and not p.get("from")
+
+
+def note_rewound(home: Any, sid: str, at: str | None = None) -> None:
+    _write_json(_path(home, sid, REWOUND_NAME),
+                {"at": at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")})
+
+
+def rewound_at(home: Any, sid: str) -> str:
+    """BLOCKING (one small read): when this session was last rewound ("")."""
+    return str(_read_json(_path(home, sid, REWOUND_NAME)).get("at") or "")
+
+
+def without_rewound(home: Any, sid: str, imported: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """BLOCKING: the tool's transcript entries, minus every one from before
+    the session's last rewind (those the rewind kept are in the log)."""
+    cut = HIST._parse_at(rewound_at(home, sid))
+    if cut is None or not imported:
+        return imported
+    out = []
+    for ev in imported:
+        at = HIST._parse_at(ev.get("at"))
+        if at is not None and at <= cut:
+            continue
+        out.append(ev)
+    return out
 
 
 # -- around a message ----------------------------------------------------------
@@ -469,6 +513,29 @@ async def _running_driver(svc: Any, row: Any, live: Any) -> Any:
     return live, live.driver
 
 
+async def _programs_of(live: Any) -> list[Any]:
+    """Review (v1.422.0 B4): what a stop of ``live`` ends that serves (a dev
+    server), read before the stop so it can be said after."""
+    from . import programs as PG
+
+    if live is None or not getattr(live, "running", False) or not hasattr(live, "sid"):
+        return []
+    try:
+        return PG.known_programs((await PG.read_many([live])).get(live.sid), live)
+    except Exception:  # noqa: BLE001 — a read never stops a branch
+        log.debug("could not read a Code-view session's programs", exc_info=True)
+        return []
+
+
+async def _keep_log_first(svc: Any, row: Any) -> None:
+    """Review: the whole old log is in Iron Jarvis's trash BEFORE anything is
+    changed — when it cannot be, nothing is."""
+    from .service import Refused
+
+    if not await asyncio.to_thread(_trash_log, svc.home, row.id):
+        raise Refused(NOT_KEPT)
+
+
 def _said(exc: BaseException) -> str:
     return clip(exc.args[0] if exc.args else type(exc).__name__, 300)
 
@@ -479,6 +546,7 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
     mode and account, holding the conversation before message ``at`` (its
     words come back for the box) or all of it. The original stays as it was."""
     from .driver import ControlRefused
+    from .process import HarnessGone
     from .service import Refused
 
     at = str(at or "").strip()
@@ -529,13 +597,18 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
                 notes.append(FORK_CLAUDE_LATER)
         else:
             live2, drv = await _running_driver(svc, row, live)
+            asked = False  # a forking request went out: the process is stopped after
+            ended: list[Any] = []
             try:
+                if row.harness in (CODEX, PI):
+                    ended = await _programs_of(live2)
                 if row.harness == CODEX:
                     params: dict[str, Any] = {"threadId": row.harness_session_id, "excludeTurns": True}
                     if row.folder:
                         params["cwd"] = row.folder
                     if at:
                         params["beforeTurnId"] = await asyncio.to_thread(_ref_for, svc, row, at)
+                    asked = True
                     res = await drv.request("thread/fork", params)
                     thread = (res or {}).get("thread") if isinstance(res, dict) else None
                     new_hid = str((thread or {}).get("id") or "")
@@ -548,14 +621,15 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
                         # CODEX_HOME): even unsubscribed, the process that made
                         # the fork stays its WRITER, and the branch's own start
                         # was refused ("thread … already has an active
-                        # writer"). It goes; the original reopens with its next
-                        # message.
-                        await svc._stop_process(live2, why="branched")
+                        # writer"). It goes (below); the original reopens with
+                        # its next message.
                 elif row.harness == PI:
                     if at:
                         entry = await _pi_entry(svc, row, drv, at)
+                        asked = True
                         res = await drv.request("fork", entryId=entry)
                     else:
+                        asked = True
                         res = await drv.request("clone")
                     if isinstance(res, dict) and res.get("cancelled"):
                         raise Refused(PI_EXTENSION_STOPPED)
@@ -563,9 +637,8 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
                     new_hid = str((state or {}).get("sessionId") or "") if isinstance(state, dict) else ""
                     if new_hid == row.harness_session_id:
                         new_hid = ""
-                    # The process now runs the NEW session: it goes, and the
-                    # next message here starts on the original again.
-                    await svc._stop_process(live2, why="branched")
+                    # The process now runs the NEW session: it goes (below), and
+                    # the next message here starts on the original again.
                 elif row.harness == OPENCODE:
                     drv._loading = True  # the new session's own updates are not this one's
                     try:
@@ -583,6 +656,17 @@ async def fork(svc: Any, sid: str, at: str = "") -> dict[str, Any]:
                         drv._loading = False
             except ControlRefused as exc:
                 raise Refused(TOOL_REFUSED.format(label=lab, said=_said(exc))) from None
+            except (TimeoutError, HarnessGone):
+                raise Refused(NO_ANSWER.format(label=lab)) from None
+            finally:
+                if asked:
+                    # Review: ALWAYS once a fork went out — Pi switched its
+                    # process to the fork (a failure after it used to leave
+                    # the next message going into the wrong conversation), and
+                    # Codex stays the fork's writer.
+                    await svc._stop_process(live2, why="branched")
+                    if ended:
+                        svc._said_stopped(live2, ended, why="branch")
             if not new_hid:
                 raise Refused(NO_NEW_ID.format(label=lab))
         if whole_only:
@@ -618,6 +702,11 @@ def _make_row(svc: Any, row: Any, new_hid: str, kept: list[dict[str, Any]], drop
                     if uid in ids and r.get("hid") == row.harness_session_id}
             _write_refs(svc.home, made.id, refs)
     write_pending(svc.home, made.id, pending)
+    when = rewound_at(svc.home, row.id)
+    if when:
+        # Review: the branch's tool file may hold what the original's rewind
+        # dropped (a Codex fork copies its rollout): never merged in either.
+        note_rewound(svc.home, made.id, when)
     return made
 
 
@@ -633,6 +722,7 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
     after it, through the tool's own way; files are not touched. Its words
     come back for the box."""
     from .driver import ControlRefused
+    from .process import HarnessGone
     from .service import Refused
 
     to = str(to or "").strip()
@@ -650,6 +740,7 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
     live = live or svc._live(row)
     svc._claim(live, "being rewound")
     notes = [REWIND_DONE]
+    ended: list[Any] = []
     try:
         new_hid = row.harness_session_id
         pending: dict[str, Any] | None = None
@@ -658,7 +749,10 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
             found, parent = await asyncio.to_thread(_claude_parent, svc, row, mid)
             if not found:
                 raise Refused(NOT_IN_TRANSCRIPT.format(label=lab))
+            # Review: the old log is kept BEFORE anything changes.
+            await _keep_log_first(svc, row)
             if live.running:
+                ended = await _programs_of(live)
                 await svc._stop_process(live, why="rewound")
             if parent:
                 pending = {"from": "", "at": parent, "fork": False}
@@ -668,13 +762,20 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
                 notes.append(REWIND_FIRST)
         else:
             live2, drv = await _running_driver(svc, row, live)
+            ended = await _programs_of(live2)
+            asked = False  # a request that changes the conversation went out
             try:
                 if row.harness == CODEX:
                     turn = await asyncio.to_thread(_ref_for, svc, row, to)
+                    # Review: the old log is kept BEFORE the tool drops anything.
+                    await _keep_log_first(svc, row)
+                    asked = True
                     await drv.request("thread/revert", {"threadId": row.harness_session_id, "beforeTurnId": turn})
                     notes.append(REWIND_CODEX_KEPT)
                 elif row.harness == PI:
                     entry = await _pi_entry(svc, row, drv, to)
+                    await _keep_log_first(svc, row)
+                    asked = True
                     res = await drv.request("fork", entryId=entry)
                     if isinstance(res, dict) and res.get("cancelled"):
                         raise Refused(PI_EXTENSION_STOPPED)
@@ -686,7 +787,15 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
                     notes.append(REWIND_PI_KEPT)
             except ControlRefused as exc:
                 raise Refused(TOOL_REFUSED.format(label=lab, said=_said(exc))) from None
-            await svc._stop_process(live2, why="rewound")
+            except (TimeoutError, HarnessGone):
+                raise Refused(NO_ANSWER.format(label=lab)) from None
+            finally:
+                # Review: ALWAYS once it acted — Pi switched to its fork even
+                # when reading the new id failed afterwards.
+                if asked:
+                    await svc._stop_process(live2, why="rewound")
+                else:
+                    ended = []
         notes.append(FILES_SAME)
         await asyncio.to_thread(_cut_log, svc, row, live, kept, dropped, merged, new_hid, pending)
         if new_hid != row.harness_session_id:
@@ -696,6 +805,10 @@ async def rewind(svc: Any, sid: str, to: str) -> dict[str, Any]:
     # A fresh LiveSession (its log read again) for the cut log.
     svc.live.pop(row.id, None)
     made = await asyncio.to_thread(store.get, svc.engine, row.id)
+    if ended:
+        # Review (the v1.422.0 B4 rule): a stop that ended programs the tool
+        # served is said, in the conversation as it now is.
+        svc._said_stopped(svc._live(made), ended, why="rewind")
     view = svc._with_live(store.view(made))
     return {"session": svc._with_root(view), "text": text, "files": files, "note": " ".join(notes)}
 
@@ -709,8 +822,9 @@ def _cut_log(svc: Any, row: Any, live: Any, kept: list[dict[str, Any]], dropped:
         live.log.close()
     except Exception:  # noqa: BLE001
         log.debug("could not close a Code-view session's log", exc_info=True)
-    _trash_log(svc.home, row.id)
+    # (The whole old log went to the trash first: _keep_log_first.)
     _write_events(svc.home, row.id, list(kept), dropped)
+    note_rewound(svc.home, row.id)
     ids = {e.get("at") for e in kept if e.get("type") == "user" and e.get("at")}
     with _LOCK:
         refs = {uid: ({**r, "hid": new_hid} if r.get("hid") == row.harness_session_id else r)

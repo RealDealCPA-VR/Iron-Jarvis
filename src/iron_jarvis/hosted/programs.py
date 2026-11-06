@@ -559,6 +559,12 @@ def stopped_words(tool: str, programs: list[Program] | tuple[Program, ...], *, w
     elif why == "account":
         # v1.422.0 review: "Continue on the next account" stops it first.
         head = f"Iron Jarvis closed {tool} to move this conversation to another account."
+    elif why == "branch":
+        # v1.441.0 review: Branch from here stops a tool whose fork switched
+        # (Pi) or holds the fork (Codex).
+        head = f"Iron Jarvis closed {tool} here to branch this conversation."
+    elif why == "rewind":
+        head = f"Iron Jarvis closed {tool} to rewind this conversation."
     elif why == "bound":
         head = f"Iron Jarvis closed {tool} after {_duration(after_s)} with nothing new."
     else:

@@ -174,3 +174,90 @@ What each tool supports:
 | Grok, Antigravity | Neither. |
 
 Not while a reply runs, and not while the conversation is open in a terminal.
+
+## Review (independent reviewer)
+
+Each defect below is pinned in `tests/test_build_app_branch_review_v14410.py` (14 tests). Every pin was red on f7f9a7bf first, then green.
+
+1. **A Claude Code rewind not yet sent could be opened in a terminal.**
+   - What went wrong: a plain `claude --resume H` there opens the conversation as it was BEFORE the rewind. The draft bullet says "Until then Open in terminal is refused", but that held only for a branch: `pending_fork` reads `from`, and a rewind has none.
+   - Proof, re-measured on real claude 2.1.316 with the builder's stand-in and a scratch home: after two messages, `-p --resume H` plus a new message sent the model `alpha, reply 1, beta, reply 2, delta`, so the rewound-away message came back.
+   - Fix: `branching.pending_rewind` and `PENDING_REWIND_TERMINAL`, refused in `open_terminal`.
+   - Pin: `test_a_claude_rewind_not_yet_sent_is_not_opened_in_a_terminal`.
+2. **What a rewind dropped came back whenever the transcript was merged again.**
+   - When: the conversation lives outside the view again (`mark_outside` on Open in terminal), or the log is empty after a rewind to the first message.
+   - Why it happened:
+     - Claude Code keeps the old branch in its file, and `history._claude_events` reads that file linearly.
+     - Iron Jarvis's Codex reader has no revert handling.
+     - Removing `outside.json` only held until the next `mark_outside`.
+   - The first pin passed vacuously: two turns a few milliseconds apart sit inside the merge's 2 s `EDGE_S` of the kept turn. It now waits past that edge.
+   - Fix: `rewound.json` (`note_rewound`), written by `_cut_log` and copied into a branch of a rewound session. `_with_transcript` drops the transcript entries dated at or before it (`without_rewound`).
+   - Pins: `test_what_a_rewind_dropped_never_comes_back_when_the_conversation_goes_outside`, `test_a_codex_rewind_to_the_first_message_shows_an_empty_conversation`, `test_a_branch_of_a_rewound_session_never_merges_what_the_rewind_dropped`.
+3. **A message whose send raised was recorded as sent** (`_note_sent` ran in a `finally`).
+   - Effect: it was offered for a branch. For Pi it also broke the text match of every later branch or rewind: a refused `PiStillWorking` send stays in Pi's list forever.
+   - Fix: the reference is noted only after `send_user` returns. On an exception, the reply-end future is still set.
+   - Pin: `test_a_message_the_tool_never_received_is_not_recorded_as_sent`.
+4. **A Pi fork or clone could leave the process switched to the fork.**
+   - When: the fork went through but its new id could not be read (`get_state` refused).
+   - Why: the stop came after that read. The next message then went into the wrong conversation.
+   - Fix: fork and rewind stop the process in a `finally` once a request that changes the conversation went out (`asked`). A refusal before that point (the lists differ) still stops nothing.
+   - Pin: `test_a_pi_fork_whose_new_id_cannot_be_read_still_stops_the_switched_process[fork, rewind]`.
+5. **A rewind cut the log even when the copy to the trash failed.**
+   - `_trash_log` answered `""` and the answer was ignored.
+   - The copy came AFTER the tool had already dropped the turns (Codex `thread/revert`), so nothing was kept anywhere.
+   - Fix: `_keep_log_first` makes the copy before the tool acts. If it fails, `NOT_KEPT` and nothing changes.
+   - Pin: `test_a_rewind_whose_log_cannot_be_kept_changes_nothing`.
+6. **Stopping the tool for a branch or rewind ended programs it served with no word** (the v1.422.0 B4 rule).
+   - On a rewind, the old LiveSession and its `stopped_note` were also thrown away.
+   - Fix:
+     - the programs are read before the stop (`_programs_of`);
+     - `_said_stopped` runs after the stop: into the original session on a branch, into the fresh LiveSession on a rewind;
+     - `programs.stopped_words` gains the words `branch` and `rewind`.
+   - Pin: `test_a_branch_that_stops_the_tool_names_the_program_it_served`.
+7. **A tool that did not answer was a 500.**
+   - When: the tool did not answer, or its process died (`TimeoutError`, `HarnessGone`). The answer read "internal error [err_…]: TimeoutError".
+   - Found by accident: a scenario one turn short waited 60 s, then answered 500.
+   - Fix: `NO_ANSWER`, a 409 in words. The process is stopped (as in item 4).
+   - Pin: `test_a_tool_that_does_not_answer_is_said_in_words_never_a_500` (4 cases).
+
+Checked and found right:
+
+- The reply-end wait (`ref_save`) is bounded by `ID_SAVE_WAIT_S` (2.0 s, shielded).
+  - `note_sent` never raises, and the future is always set.
+  - No `send_user` waits for its turn: ACP and Pi write and return, and Codex awaits only `turn/start`. So there is no self-wait.
+- Pi with two identical messages maps them by position in the tail.
+- A Codex fork stops only that session's own app-server.
+- Both routes are found by master's `test_wave6_dead_code_v14390._route_called` caller scan, run against this tree.
+- Re-measured: the fork entry is usually an `attachment` record, not the assistant record (the `parentUuid` of the second message). `--resume H --fork-session --session-id N --resume-session-at <that attachment uuid>` sent exactly `alpha, reply 1, gamma`.
+
+Mutations, 11, all red:
+
+| Mutation | What it breaks |
+|---|---|
+| R1 | the terminal check removed |
+| R2 | the filter returns everything (red only once the pin was made non-vacuous) |
+| R3 | the message is noted on a failed send |
+| R4 | the Pi fork is not stopped |
+| R4b | the Pi rewind is not stopped |
+| R5 | a failed trash copy is ignored |
+| R6 | the programs are not said |
+| R7 | the no-answer `except` removed |
+| R8 | a branch does not copy `rewound.json` |
+| B18 (builder's, re-run) | the reply's end does not wait |
+| B6 (builder's, re-run) | no terminal check |
+
+Run green:
+
+- the lane and review files: 34;
+- 16 Build › Code files: 288;
+- the five vocabulary scans: 157;
+- ruff (E9, F) on the touched files.
+
+### Still OPEN after review
+
+- A held queue (C4.8) survives a rewind and is taken back into the box beside the rewound message's words. Nothing is lost, but the box gets both.
+- The message's ⋯ menu does not close on Escape or on an outside click. On a hover device its button fades while the menu stays open.
+- `_running_driver` starts an idle Codex or Pi session for a branch. With the pool full, that can wait up to `POOL_WAIT_S` (15 min) inside the HTTP request.
+- `_write_events` still rewrites `meta.json` in place (not temp + replace). A crash there leaves only a stale `dropped` count.
+- If the daemon dies between Pi's fork and `store.update`, the row stays on the old Pi session while the log is cut. Nothing is lost: the old log is in the trash, and Pi's original file is untouched.
+- Codex `thread/revert` and its rollout were not re-measured. The builder's measurement stands, and fix 2 does not depend on how the rollout looks.

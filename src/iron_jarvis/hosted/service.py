@@ -1766,6 +1766,10 @@ class HostedService:
         imported = await asyncio.to_thread(
             HIST.transcript_events, row.harness, home, row.folder or "", hid, allow_stale=running,
         )
+        if imported:
+            # v1.441.0 review: what a rewind dropped is still in the tool's own
+            # file; nothing from before the rewind is merged in again.
+            imported = await asyncio.to_thread(BR.without_rewound, self.home, row.id, imported)
         return HIST.merge_transcript(events, imported, cut=cut) if imported else events
 
     async def events_page(self, sid: str, before: str, limit: int = 500) -> dict[str, Any]:
@@ -3166,11 +3170,17 @@ class HostedService:
                     await asyncio.to_thread(store.update, self.engine, live.sid, title=clip(builtin[1], 120))
             else:
                 before = BR.ref_before(live.driver)
-                live.ref_save = asyncio.get_running_loop().create_future()
+                live.ref_save = saving = asyncio.get_running_loop().create_future()
                 try:
                     await live.driver.send_user(text, files)
-                finally:
-                    await self._note_sent(live, row, user, before, text)
+                except BaseException:
+                    # Review: a message the tool never received is never
+                    # recorded as sent (it was offered for a branch, and for
+                    # Pi it broke the text match of every later one).
+                    if not saving.done():
+                        saving.set_result(None)
+                    raise
+                await self._note_sent(live, row, user, before, text)
             if turn.running:
                 await turn.finished.wait()
         except Refused as r:
@@ -3590,6 +3600,10 @@ class HostedService:
             if row.harness == CLAUDE and await asyncio.to_thread(BR.pending_fork, self.home, sid):
                 # v1.441.0: the branch is made with its first message here.
                 raise Refused(BR.PENDING_TERMINAL.format(label=W.label(row.harness)))
+            if row.harness == CLAUDE and await asyncio.to_thread(BR.pending_rewind, self.home, sid):
+                # v1.441.0 review: a plain ``claude --resume`` would open the
+                # conversation as it was before the rewind (re-measured).
+                raise Refused(BR.PENDING_REWIND_TERMINAL.format(label=W.label(row.harness)))
             if not typable_sid(row.harness, hid):
                 raise Refused("That session's id is not one Iron Jarvis types into a terminal.", 409)
             # v1.426.0 (Wave 6, E3): pressed again after it opened (or the
