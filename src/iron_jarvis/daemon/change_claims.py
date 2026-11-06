@@ -159,11 +159,12 @@ _CARD_SETTINGS: dict[str, tuple[str, ...]] = {
     "model_default.": ("default_model", "default_provider"),
     "memory_profile.": ("brain_profile",),
 }
-_APP_CONNECTORS = frozenset(
-    {"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle",
-     # v1.438.0: "I connected Notion as your memory" — a memory base.
-     "memory_base_add"}
-)
+_APP_CONNECTORS = frozenset({"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle"})
+#: v1.438.0 review: ``memory_base_add`` connects ONE app — Notion (a notes
+#: folder is no app) — so it backs "I connected your Notion" and nothing
+#: else; in :data:`_APP_CONNECTORS` it backed every app ("I connected your
+#: Gmail" after a memory base was added got no note).
+_MEMORY_BASE_APPS = frozenset({"notion"})
 _APP_REMOVERS = frozenset({"app_disconnect", "app_switch", "app_import", "channel_remove", "channel_toggle"})
 _LOCAL_ONLY_TOOL = "chat_local_only"
 _LOCAL_ONLY_NEW_KEY = "chat_new_local_only"
@@ -342,6 +343,8 @@ _CONTENT = _CONTENT_HEAD | frozenset(
         "template", "templates", "queue", "ticket", "tickets", "account", "accounts",
         "workspace", "org", "organization", "company", "portal", "crm", "config",
         "configuration", "server", "campaign", "board",
+        # v1.438.0 review: "I added the GPU box to the asset inventory".
+        "inventory", "inventories",
     }
 )
 #: Review (Wave 5 group K): "to", "with" and "using" too — "I've added three
@@ -1407,6 +1410,8 @@ class TurnRecord:
                 return True
             if not removing:
                 if self.used & (_APP_CONNECTORS - {"app_connect"}):
+                    return True
+                if "memory_base_add" in self.used and all(a in _MEMORY_BASE_APPS for a in claim.apps):
                     return True
                 for a in claim.apps:
                     if (a and a in self.app_good) or (not a and self.app_good):

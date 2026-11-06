@@ -169,6 +169,14 @@ def _shown_value(platform: Any, key: str, value: Any) -> Any:
         groups = _coerce(schema.get(key), value)
         if not isinstance(groups, dict):
             return value
+        # v1.438.0 review: the card shows what will be SAVED — the user's
+        # other groups kept, the named accounts moved (records_connections.
+        # chat_account_groups, the same function execute uses).
+        from .records_connections import chat_account_groups
+
+        merged, _problem = chat_account_groups(platform, groups)
+        if isinstance(merged, dict):
+            groups = merged
         if not groups:
             return "no groups"
         svc = getattr(platform, "iron_proxy", None)

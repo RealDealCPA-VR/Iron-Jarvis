@@ -159,14 +159,68 @@ def _q(text: Any) -> str:
     return f"“{' '.join(str(text or '').split())[:60]}”"
 
 
+#: The arguments these tools declare (never a credential — ``needs_key`` is
+#: a yes/no). Review: every OTHER argument whose name reads like a credential
+#: ("access_token", "apiKey", "notion_token") is one, refused and never
+#: logged — a fixed list of five names let the rest through to the card and
+#: the ledger.
+_DECLARED_ARGS = frozenset({
+    "address", "name", "needs_key", "protocol", "make_default", "model", "server", "vendor", "kind",
+    "folder", "database", "use_as_memory",
+})
+_SECRET_ARG_NAME = re.compile(r"(?i)key|token|secret|passw|pwd|auth|bearer|credential|cookie")
+
+
+def _secret_args(args: dict[str, Any]) -> list[str]:
+    """The arguments that carry (or may carry) a credential."""
+    out: list[str] = []
+    for k, v in (args or {}).items():
+        if not isinstance(k, str) or k in _DECLARED_ARGS:
+            continue
+        if k in _KEY_ARGS or _SECRET_ARG_NAME.search(k):
+            if v is not None and v is not False and v is not True and str(v).strip():
+                out.append(k)
+    return out
+
+
 def _key_passed(args: dict[str, Any]) -> bool:
-    """A credential passed as an argument (any of :data:`_KEY_ARGS` with a
-    value that is not a plain yes/no)."""
-    for k in _KEY_ARGS:
-        v = (args or {}).get(k)
-        if isinstance(v, str) and v.strip():
-            return True
-    return False
+    """A credential passed as an argument (:func:`_secret_args`)."""
+    return bool(_secret_args(args))
+
+
+def _shown_address(raw: Any) -> Any:
+    """An address as the card, the stream and the ledger may show it: a
+    password, a query and a fragment are left out (review: an address the
+    tool REFUSES for its password was still written to the ledger whole).
+    Never raises."""
+    if not isinstance(raw, str):
+        return raw
+    text = raw.strip()
+    try:
+        probe = text if "://" in text else "http://" + text
+        parts = urlsplit(probe)
+        host = parts.hostname or ""
+        if parts.username or parts.password or parts.query or parts.fragment:
+            port = f":{parts.port}" if parts.port else ""
+            shown = f"{parts.scheme}://{host}{port}{parts.path}" + " (part left out)"
+            return shown if "://" in text else shown.split("://", 1)[1]
+    except ValueError:
+        return "(an address Iron Jarvis cannot read)"
+    try:
+        from ..detections.redact import mask
+
+        return mask(text)
+    except Exception:  # noqa: BLE001
+        return text
+
+
+def _redacted(args: dict[str, Any]) -> dict[str, Any]:
+    """What the card, the stream and the ledger show of a call's arguments."""
+    drop = set(_secret_args(args)) | set(_KEY_ARGS)
+    out = {k: v for k, v in (args or {}).items() if k not in drop}
+    if "address" in out:
+        out["address"] = _shown_address(out["address"])
+    return out
 
 
 def _http_problem(exc: Any) -> str:
@@ -209,6 +263,21 @@ def place_words(address: str) -> str:
     if private_host(address):
         return "on this PC or your own network"
     return "on the internet, so what is sent to it leaves this PC"
+
+
+def _leaves_a_local_only_chat(address: str = "", *, cloud: bool = False) -> bool:
+    """Review: in a Local only chat, a call that reaches past this network
+    (an internet server's address, a cloud memory base) keeps its card in
+    EVERY posture — "Don't ask" included: the chat's promise is that nothing
+    leaves this network without the user's OK. Never raises (a fault asks)."""
+    try:
+        from ..providers.egress import current_scope, private_host
+
+        if not current_scope().on:
+            return False
+        return cloud or (bool(address) and not private_host(address))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _top_nodes(d: Any) -> list[Any]:
@@ -501,7 +570,7 @@ class ModelServerAddTool(R._RecordTool):
     }
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in (args or {}).items() if k not in _KEY_ARGS}
+        return _redacted(args)
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """No card for a call that is refused anyway (a key passed, a bad
@@ -514,11 +583,11 @@ class ModelServerAddTool(R._RecordTool):
         d = _d(self.platform)
         if d is not None and await asyncio.to_thread(_already_added, d, address):
             return _NOTHING
-        return SpendCheck(
-            ask=True,
-            words=f"Adds the model server {address} — {place_words(address)}.",
-            dont_ask_skips=True,
-        )
+        words = f"Adds the model server {address} — {place_words(address)}."
+        if (args or {}).get("make_default") is True:
+            model = " ".join(str((args or {}).get("model") or "").split())[:80]
+            words += f" It also makes {model + ' on it' if model else 'one of its models'} the default model."
+        return SpendCheck(ask=True, words=words, dont_ask_skips=not _leaves_a_local_only_chat(address))
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         _DESC.set(None)
@@ -527,7 +596,7 @@ class ModelServerAddTool(R._RecordTool):
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from fastapi import HTTPException
 
-        from ..daemon.routes.fleet import FleetNodeBody, _derive_id, add_fleet_node
+        from ..daemon.routes.fleet import FleetNodeBody, add_fleet_node
 
         if _key_passed(args):
             return ToolResult(ok=False, error=KEY_NOT_IN_CHAT)
@@ -542,8 +611,16 @@ class ModelServerAddTool(R._RecordTool):
             return ToolResult(ok=False, error=f"That server is already added as {_q(same)}.")
         label = " ".join(str(args.get("name") or "").split())[:60]
         protocol = str(args.get("protocol") or "openai").strip().lower() or "openai"
-        node_id = _derive_id(d.fleet, address, label)
-        key_name = f"endpoint_{node_id}_key" if args.get("needs_key") is True else ""
+        keyed = args.get("needs_key") is True
+        # Review: the id is fresh against the VAULT too when the server takes
+        # a key. The Fleet page's Remove keeps ``endpoint_<id>_key`` (an Undo
+        # of a removal needs it), so a new server under an old server's name
+        # used to get that key name — and that key, sent to the NEW address
+        # by the add's own detection and probe before the user pasted one.
+        node_id = await asyncio.to_thread(_fresh_node_id, d, self.platform, address, label, keyed)
+        if not node_id:
+            return ToolResult(ok=False, error="Iron Jarvis could not choose a name for that server; give it another name.")
+        key_name = f"endpoint_{node_id}_key" if keyed else ""
         body = FleetNodeBody(
             base_url=address, label=label, id=node_id, api_key_name=key_name, routable=True, protocol=protocol
         )
@@ -596,6 +673,34 @@ class ModelServerAddTool(R._RecordTool):
         return ToolResult(ok=True, output=" ".join(lines), data=data)
 
 
+def _key_row_free(platform: Any, node_id: str) -> bool:
+    """No vault row ``endpoint_<id>_key`` exists yet (a read that fails reads
+    as taken: never reuse a key that might be there). BLOCKING."""
+    try:
+        return not platform.secrets.get(f"endpoint_{node_id}_key")
+    except Exception:  # noqa: BLE001 — fail closed
+        return False
+
+
+def _fresh_node_id(d: Any, platform: Any, address: str, label: str, keyed: bool) -> str:
+    """The new server's id: the Fleet page's own rule (``_derive_id``), and —
+    for a server that takes a key — one whose key row is EMPTY, so a key
+    saved for an earlier server of that name is never sent to this one.
+    "" when none is free. BLOCKING (a vault read)."""
+    from ..daemon.routes.fleet import _derive_id
+
+    node_id = _derive_id(d.fleet, address, label)
+    if not keyed or _key_row_free(platform, node_id):
+        return node_id
+    taken = {getattr(n, "id", "") for n in d.fleet.nodes()}
+    base = node_id[:27].rstrip("-") or "node"
+    for n in range(2, 100):
+        cand = f"{base}-{n}"
+        if cand not in taken and _key_row_free(platform, cand):
+            return cand
+    return ""
+
+
 def _already_added(d: Any, address: str) -> str:
     """The name of an added server at the same address ("" when none)."""
     from ..fleet.endpoint_auth import root_key
@@ -646,10 +751,30 @@ class ModelServerDefaultTool(R._RecordTool):
         node, _p = find_server(d, (args or {}).get("server")) if d is not None else (None, "")
         if node is None:
             return _NOTHING
+        model = str(args.get("model")).strip()
         current = await asyncio.to_thread(_defaults, self.platform)
-        if current == {"default_provider": _provider_of(node), "default_model": str(args.get("model")).strip()}:
+        if current == {"default_provider": _provider_of(node), "default_model": model}:
             return _NOTHING
-        return None
+        # Review: the card says where THAT model answers — judged per model
+        # (a LiteLLM gateway on this network can pass a name to a cloud
+        # service), by the Local only lock's own reading.
+        local = await asyncio.to_thread(self._stays, _provider_of(node), model)
+        where = "on this PC or your own network" if local else "on the internet, so what is sent to it leaves this PC"
+        return SpendCheck(
+            ask=True,
+            words=f"Makes {' '.join(model.split())[:80]} on {_node_label(node)} the default model — it answers {where}.",
+            dont_ask_skips=not _leaves_a_local_only_chat(cloud=not local),
+        )
+
+    def _stays(self, provider: str, model: str) -> bool:
+        try:
+            from ..providers.egress import stays_on_this_network
+
+            return bool(stays_on_this_network(
+                provider, getattr(self.platform, "providers", None), getattr(self.platform, "config", None), model=model
+            ))
+        except Exception:  # noqa: BLE001 — unsure reads as leaving
+            return False
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         _DESC.set(None)
@@ -818,6 +943,23 @@ def restore_account(platform: Any, account_id: str, meta: dict[str, Any]) -> str
     state = (states or {}).get(account_id) if isinstance(states, dict) else None
     if not needs_sign_in(state):
         raise R.RecordError(ACCOUNT_SIGNED_IN.format(name=name))
+    # Review: Iron-Proxy's state can still read "unauthenticated" after the
+    # login LANDED — it is told to re-check, it never notices by itself
+    # (v1.303.3). So it is asked to re-check NOW, and only its fresh answer
+    # may let the Undo remove the account; a re-check that fails keeps it.
+    from ..iron_proxy.service import REFRESH_TIMEOUT_S
+
+    try:
+        rechecked = client.refresh(account_id, timeout=REFRESH_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 — not checked: never sign a login out
+        raise R.RecordError(ACCOUNT_SIGNED_IN.format(name=name)) from None
+    fresh = next(
+        (x for x in (rechecked if isinstance(rechecked, list) else [])
+         if isinstance(x, dict) and x.get("profileId") == account_id),
+        None,
+    )
+    if not needs_sign_in(fresh):
+        raise R.RecordError(ACCOUNT_SIGNED_IN.format(name=name))
     try:
         client.delete_profile(account_id)
     except IronProxyError as exc:
@@ -849,7 +991,7 @@ class AccountAddTool(R._RecordTool):
     }
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in (args or {}).items() if k not in _KEY_ARGS}
+        return _redacted(args)
 
     def _problem(self, args: dict[str, Any]) -> str:
         """Why the call is refused before anything is asked ("" when not)."""
@@ -1020,6 +1162,15 @@ def _record_view(rec: Any) -> dict[str, Any] | None:
     return {k: getattr(rec, k, None) for k in ("kind", "path", "database_id", "token_secret", "roles_json")}
 
 
+def _secret_exists(platform: Any, name: str) -> bool:
+    """A vault row *name* holds a value (a read that fails reads as there:
+    the Undo then keeps it). BLOCKING."""
+    try:
+        return bool(platform.secrets.get(name))
+    except Exception:  # noqa: BLE001 — fail closed
+        return True
+
+
 def snap_memory_base(platform: Any, name: str) -> dict[str, Any] | None:
     from ..ltm.sources import CustomSourceStore
 
@@ -1082,7 +1233,7 @@ def restore_memory_base(platform: Any, name: str, meta: dict[str, Any]) -> str:
             said = " and its memory profile"
     remove_ltm_source_record(d, name)
     token = str(getattr(rec, "token_secret", "") or "")
-    if token and token == f"ltm_{name}_notion":
+    if token and token == f"ltm_{name}_notion" and meta.get("token_existed") is not True:
         try:
             platform.secrets.delete(token)
             said += "; its saved token was removed too"
@@ -1115,7 +1266,7 @@ class MemoryBaseAddTool(R._RecordTool):
     }
 
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in (args or {}).items() if k not in _KEY_ARGS}
+        return _redacted(args)
 
     def _plan(self, args: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
         """``(what to add, problem)``. BLOCKING (a folder is looked at)."""
@@ -1165,7 +1316,8 @@ class MemoryBaseAddTool(R._RecordTool):
             words = f"Adds the folder {plan['path']} on this PC as a memory base."
         if (args or {}).get("use_as_memory") is True:
             words += " It also becomes where Jarvis saves what it learns (a new memory profile, chosen now)."
-        return SpendCheck(ask=True, words=words, dont_ask_skips=True)
+        return SpendCheck(ask=True, words=words,
+                          dont_ask_skips=not _leaves_a_local_only_chat(cloud=plan["kind"] == "notion"))
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any] | None:
         _DESC.set(None)
@@ -1185,6 +1337,10 @@ class MemoryBaseAddTool(R._RecordTool):
         if plan is None:
             return ToolResult(ok=False, error=problem)
         slug = plan["name"]
+        # Review: a token row this change did not make (a base of that name
+        # removed earlier keeps its token) is never deleted by its Undo.
+        token_name = plan.get("token_secret", "")
+        token_existed = bool(token_name) and await asyncio.to_thread(_secret_exists, self.platform, token_name)
         body = LTMSourceBody(
             name=slug, kind=plan["kind"], path=plan.get("path", ""), database_id=plan.get("database_id", ""),
             token_secret=plan.get("token_secret", ""),
@@ -1224,7 +1380,8 @@ class MemoryBaseAddTool(R._RecordTool):
                 "in the chat), and shares the database with that integration in Notion. It works as soon as "
                 "the token is saved."
             )
-        _note(after=_record_view(rec), profile=made, profile_prior=prior_choice if made else None)
+        _note(after=_record_view(rec), profile=made, profile_prior=prior_choice if made else None,
+              token_existed=token_existed)
         key = f"memory_profile.{slug}" if made else f"{MEMORY_BASE}.{slug}"
         card = R.create_card(MEMORY_BASE, slug, what + (" · your memory profile's base" if made else ""),
                              label=f"Memory base {_q(slug)}")
@@ -1281,6 +1438,56 @@ def profile_id_for(platform: Any, value: Any) -> tuple[Any, str]:
         return value, ""
 
 
+def merged_account_groups(current: Any, new: Any) -> Any:
+    """Review: chat's ``account_groups`` value read as a CHANGE to the user's
+    groups, never a replacement of all of them. "Put TSI in a group called
+    Firm" sends ``{"Firm": [TSI]}``; written as it was, it silently deleted
+    every other group the user had. Now: a group the value names is set to
+    its list (an EMPTY list removes it); a group it does not name is kept,
+    minus the accounts the value puts elsewhere (one group per account — a
+    group left with none is dropped, and the card shows the result); an empty
+    value ``{}`` still clears them all. Group names match case-blind (the
+    value's spelling wins). Pure; anything not a dict of lists is returned as
+    sent (the writer's own check words it)."""
+    if not isinstance(new, dict) or not isinstance(current, dict):
+        return new
+    if not new:
+        return {}
+    if any(not isinstance(v, list) for v in new.values()):
+        return new
+    named = {_fold(g) for g in new}
+    moved = {str(i) for ids in new.values() for i in ids}
+    out: dict[str, Any] = {}
+    for group, ids in current.items():
+        if _fold(group) in named:
+            continue
+        if not isinstance(ids, list):
+            out[group] = ids
+            continue
+        kept = [i for i in ids if str(i) not in moved]
+        if kept:
+            out[group] = kept
+    for group, ids in new.items():
+        if ids:
+            out[group] = ids
+    return out
+
+
+def chat_account_groups(platform: Any, value: Any) -> tuple[Any, str]:
+    """``account_groups`` as chat sends it → the value to save: names turned
+    into ids (:func:`account_group_ids`), then merged into the user's groups
+    (:func:`merged_account_groups`). Reads the CACHED snapshot and the live
+    config only. Never raises."""
+    ids, problem = account_group_ids(platform, value)
+    if problem:
+        return value, problem
+    try:
+        current = getattr(platform.config, "account_groups", None) or {}
+    except Exception:  # noqa: BLE001
+        current = {}
+    return merged_account_groups(current, ids), ""
+
+
 def named_setting_value(platform: Any, key: str, value: Any) -> tuple[Any, str]:
     """The settings tools' value with the things the user NAMED turned into
     their ids (``account_groups``, ``brain_profile``). BLOCKING; never raises."""
@@ -1288,7 +1495,7 @@ def named_setting_value(platform: Any, key: str, value: Any) -> tuple[Any, str]:
         from .tools import _coerce
         from . import schema
 
-        return account_group_ids(platform, _coerce(schema.get(key), value))
+        return chat_account_groups(platform, _coerce(schema.get(key), value))
     if key == "brain_profile":
         return profile_id_for(platform, value)
     return value, ""
@@ -1344,6 +1551,13 @@ _BRAND = (
     r"|text[\s-]generation[\s-]inference|tabbyapi)"
 )
 _SERVER_NOUN = r"(?:servers?|box(?:es)?|machines?|endpoints?|gateway|instance|rig)"
+#: Review: words after a server's name that make it someone's CONTENT ("the
+#: AI server costs", "the Ollama server docs", "the GPU box specs").
+_NOT_AFTER_SERVER = (
+    r"(?!\s+(?:costs?|prices?|pricing|market|markets|rack|racks|room|rooms|cabinet|specs?|"
+    r"specifications|quotes?|budget|names?|address(?:es)?|info|information|details|logs?|docs?|"
+    r"documentation|diagram|manual|guide|invoice|bill|warranty|purchase|order)\b)"
+)
 _QUALIFIED = (
     r"(?:(?:model|inference|llm|ai|gpu|local[\s-]model|openai[\s-]compatible|anthropic[\s-]compatible)\s+"
     + _SERVER_NOUN + r")"
@@ -1356,12 +1570,16 @@ _NOT_A_MODEL_SERVER = (
     r"|nas|valheim|terraria|ark|rust|radius|ldap|proxy|time|ntp|sftp|ssh|jenkins|sharepoint|wordpress"
     r"|application|app|api|test|home|license|sync|print)"
 )
+#: Review: a server's name may be two or three words ("the DGX Spark
+#: server"); every word is checked against the other kinds of server.
 _NAMED_SERVER = (
-    r"\b(?:the|my|our|that)\s+(?!" + _NOT_A_MODEL_SERVER + r"\b)[a-z][\w.-]{1,30}\s+(?:servers?|box|machine|node)\b"
+    r"\b(?:the|my|our|that)\s+(?:(?!" + _NOT_A_MODEL_SERVER + r"\b)[a-z][\w.-]{1,30}\s+){1,3}"
+    r"(?:servers?|box|machine|node)\b"
 )
 _SERVER_CTX = re.compile(r"\b" + _BRAND + r"\b|\b" + _QUALIFIED + r"\b|" + _NAMED_SERVER, re.IGNORECASE)
 _BRAND_THING = re.compile(
-    r"\b" + _BRAND + r"(?:\s+(?:server|box|machine|endpoint|instance|gateway|node|rig))?\b", re.IGNORECASE
+    r"\b" + _BRAND + r"(?:\s+(?:server|box|machine|endpoint|instance|gateway|node|rig))?\b" + _NOT_AFTER_SERVER,
+    re.IGNORECASE,
 )
 _ADDRESS_RX = re.compile(_ADDRESS, re.IGNORECASE)
 _ADD_VERB = re.compile(
@@ -1369,13 +1587,50 @@ _ADD_VERB = re.compile(
     re.IGNORECASE,
 )
 _SERVER_THING = re.compile(
-    r"\b(?:" + _BRAND + r")\s+(?:server|box|machine|endpoint|instance|gateway|node|rig)\b|\b" + _QUALIFIED + r"\b",
+    r"(?:\b(?:" + _BRAND + r")\s+(?:server|box|machine|endpoint|instance|gateway|node|rig)\b|\b" + _QUALIFIED
+    + r"\b)" + _NOT_AFTER_SERVER,
+    re.IGNORECASE,
+)
+#: Review: with an address in the clause, a server noun counts only when the
+#: word before it is not another kind of server ("set up the Plex server at …").
+_PLAIN_SERVER = re.compile(
+    r"\b(?!" + _NOT_A_MODEL_SERVER + r"\b)[a-z][\w.-]*\s+(?:servers?|endpoints?|gateway)\b" + _NOT_AFTER_SERVER
+    + r"|^\s*(?:servers?|endpoints?|gateway)\b|\bmodels?\b",
+    re.IGNORECASE,
+)
+#: Review: a verb that also means a CABLE ("connect the GPU box to the
+#: monitor") counts for a model server only with a program's name or an
+#: address in the clause.
+_CABLE_VERB = re.compile(r"\b(?:connect|hook\s+up|plug\s+in)\b", re.IGNORECASE)
+#: …and never when it joins the thing to a DEVICE ("…to the network switch").
+_TO_A_DEVICE = re.compile(
+    r"\b(?:to|into)\s+(?:the|my|our|a|an|this|that)\s+(?:[\w-]+\s+)?(?:monitors?|screens?|tvs?|printers?|"
+    r"switch(?:es)?|routers?|network|wi-?fi|ups|power|outlets?|keyboards?|mouse|docks?|hubs?|cables?|"
+    r"internet|vpn|domain|nas|projector|speakers?|camera)\b",
+    re.IGNORECASE,
+)
+#: Review: the clause puts the thing INTO the user's content ("…to the
+#: budget", "…in the asset list"), never a change to Iron Jarvis.
+_INTO_CONTENT = re.compile(
+    r"\b(?:to|into|in|on|onto|from)\s+(?:the|my|our|a|an|this|that|your)\s+(?:[\w-]+\s+){0,2}?"
+    r"(?:budget|list(?!\s+of\s+(?:model\s+)?(?:servers|models|endpoints))|checklist|inventory|spreadsheet|sheet|doc|document|diagram|invoice|report|e-?mail|"
+    r"letter|slides?|deck|notes|proposal|quote|readme|file|wiki|page|requirements|bookmarks|agenda|"
+    r"minutes|memo|newsletter|presentation)\b",
+    re.IGNORECASE,
+)
+#: Review: a writing task ABOUT these things ("draft an email to set up a
+#: Codex account trial") is the user's content.
+_WRITING_TASK = re.compile(
+    r"\b(?:draft|write|compose|summari[sz]e|explain|describe|compare)\b[^.?!\n]{0,40}?"
+    r"\b(?:e-?mails?|letters?|memos?|notes?|messages?|posts?|docs?|documents?|paragraphs?|"
+    r"guides?|summar(?:y|ies)|reports?|slides?|tables?|lists?)\b",
     re.IGNORECASE,
 )
 _USE_AT = re.compile(r"\buse\b[^.?!\n]{0,60}?\b(?:at|on)\s+" + _ADDRESS, re.IGNORECASE)
 _DEFAULT_CUE = re.compile(
     r"\b(?:make|set|use|switch\s+to|choose|pick)\b[^.?!\n]{0,80}?\b(?:(?:my|the|your|as)\s+)?default\b"
-    r"|\bby\s+default\b",
+    r"|\bby\s+default\b"
+    r"|\b(?:switch|change|set|move)\s+(?:my|the|your)\s+default(?:\s+model)?\s+(?:to|over\s+to)\b",
     re.IGNORECASE,
 )
 _REMOVE_VERB = re.compile(
@@ -1389,6 +1644,19 @@ _ACCOUNT_ADD = re.compile(
     r"\b(?:(?:a|an|another|my|one\s+more|a\s+second|second|third|new|work|personal|other|extra|separate"
     r"|spare|backup)\s+){0,3}" + _VENDOR + r"\s+(?:max\s+|pro\s+|plus\s+|team\s+)?"
     r"(?:accounts?|logins?|subscriptions?|plans?)\b"
+    # Review: …never a thing ABOUT the account ("the Claude account
+    # details", "a ChatGPT plan comparison", "a Codex account trial")…
+    r"(?!\s+(?:details?|info(?:rmation)?|comparisons?|summar(?:y|ies)|numbers?|pages?|pric(?:e|es|ing)|"
+    r"costs?|invoices?|bills?|billing|receipts?|settings|trials?|passwords?|e-?mails?|letters?|docs?|"
+    r"documents?|notes|reviews?|reports?|overviews?|guides?|features?|benefits|tiers?|limits?|usage|"
+    r"statements?|sections?|instructions|steps|questions?|options|types|charges?|fees?|renewals?|"
+    r"cancellations?|tables?|lists?|managers?|roles?|reps?|representatives?|executives?|holders?|owners?|"
+    r"teams?|ids?|codes?)\b)"
+    # …nor one for someone else ("for my daughter's school project")…
+    r"(?!\s+for\s+(?:each|every|all)\b)"
+    r"(?!\s+for\s+(?:(?:my|his|her|their|our|the|a|an)\s+)?(?:daughter|son|kids?|children|child|wife|"
+    r"husband|partner|mom|mother|dad|father|friend|clients?|interns?|employees?|staff|students?|"
+    r"school|class|niece|nephew|brother|sister|grandma|grandpa|parents?)\b)"
     # …never into another product ("add my ChatGPT account TO Zapier").
     r"(?!\s+(?:to|into|in|on|with|inside)\s+(?!(?:iron\s+)?jarvis\b|you\b|this\s+(?:pc|app|computer)\b"
     r"|here\b|several\b|iron[\s-]proxy\b))",
@@ -1397,10 +1665,13 @@ _ACCOUNT_ADD = re.compile(
 _GROUP_VERB = re.compile(
     r"\b(?:put|add|move|place|group|split|separate|keep)\b[^.?!\n]{0,80}?\b(?:in|into|to|as)\s+"
     r"(?:(?:a|an|the|one|its\s+own|their\s+own|separate|different|new|two)\s+){0,2}groups?\b"
-    r"(?!\s+(?:chats?|texts?|messages?|calls?|threads?|emails?|photos?|projects?|lessons?|trips?)\b)",
+    r"(?!\s+(?:chats?|texts?|messages?|calls?|threads?|emails?|photos?|projects?|lessons?|trips?|albums?"
+    r"|plans?|discounts?|rates?|bookings?|tours?|sessions?|therapy|polic(?:y|ies))\b)",
     re.IGNORECASE,
 )
-_ACCOUNT_WORDS = re.compile(r"\b(?:accounts?|logins?|subscriptions?)\b|\b" + _VENDOR + r"\b", re.IGNORECASE)
+#: Review: the words "accounts" / "logins" / "subscriptions" themselves — a
+#: vendor's name alone is not one ("put my Claude notes in a group").
+_ACCOUNT_WORDS = re.compile(r"\b(?:accounts?|logins?|subscriptions?)\b", re.IGNORECASE)
 _ACCOUNT_GROUPS = re.compile(r"\baccount\s+groups?\b|\bgroups?\s+(?:of|for)\s+(?:my\s+)?accounts\b", re.IGNORECASE)
 
 #: A memory base (Notion / a notes folder) as Jarvis's memory.
@@ -1418,7 +1689,9 @@ _MEMORY_RULES = (
     re.compile(r"\b(?:add|connect|set\s+up|create|register|use)\b[^.?!\n]{0,60}?\bmemory\s+bases?\b(?!\s+(?:class|code|file|schema|table))", re.IGNORECASE),
     re.compile(
         r"\b(?:remember|save|keep|store|put)\b[^.?!\n]{0,20}?\b(?:things|everything|what\s+you\s+learn|"
-        r"what\s+you\s+remember|your\s+(?:notes|memories)|memories|long[\s-]term\s+memory)\b[^.?!\n]{0,30}?"
+        r"what\s+you\s+remember|your\s+(?:notes|memories)|memories|long[\s-]term\s+memory)\b"
+        # Review: "save everything ABOUT the Smith audit in Notion" is content.
+        r"(?!\s+(?:about|on|regarding|concerning|from|related|relating|of)\b)[^.?!\n]{0,30}?"
         r"\b(?:in|to|into)\s+(?:my\s+)?(?:notion|obsidian)\b",
         re.IGNORECASE,
     ),
@@ -1476,29 +1749,48 @@ def _connections_tools_for(t: str, names: tuple[str, ...]) -> tuple[str, ...]:
 
 def _clause_tools(c: str, names: tuple[str, ...]) -> list[str]:
     out: list[str] = []
+    if _WRITING_TASK.search(c):
+        return out  # review: writing ABOUT a server or an account is content
     ctx = bool(_SERVER_CTX.search(c))
     address = bool(_ADDRESS_RX.search(c))
-    server_thing = bool(_SERVER_THING.search(c)) or bool(re.search(_NAMED_SERVER, c, re.IGNORECASE))
+    server_thing = bool(_SERVER_THING.search(c)) or bool(
+        re.search(_NAMED_SERVER + _NOT_AFTER_SERVER, c, re.IGNORECASE)
+    )
     brand = bool(_BRAND_THING.search(c))
-    if _ADD_VERB.search(c) and (server_thing or (brand and address) or (address and re.search(
-        r"\b(?:server|endpoint|gateway|model)\b", c, re.IGNORECASE
-    ))):
+    into_content = bool(_INTO_CONTENT.search(c))
+    add = _ADD_VERB.search(c)
+    if add and _CABLE_VERB.fullmatch(add.group(0)) and (not (brand or address) or _TO_A_DEVICE.search(c)):
+        add = None  # review: "connect the GPU box to the monitor" is a cable
+    if into_content:
+        add = None  # review: "add the AI server to the asset list"
+    if add and (server_thing or (brand and address) or (address and _PLAIN_SERVER.search(c))):
         out += ["model_server_add", "model_server_default"]
-    elif _USE_AT.search(c) and (brand or server_thing):
+    elif not into_content and _USE_AT.search(c) and (brand or server_thing):
         out += ["model_server_add", "model_server_default"]
     if _DEFAULT_CUE.search(c) and (ctx or address):
         out.append("model_server_default")
-    if _REMOVE_VERB.search(c) and (server_thing or (brand and address)):
+    if not into_content and _REMOVE_VERB.search(c) and (server_thing or (brand and address)):
         out.append("model_server_remove")
     if _ACCOUNT_ADD.search(c):
         out.append("account_add")
     grouped = bool(_ACCOUNT_GROUPS.search(c))
-    if not grouped and _GROUP_VERB.search(c):
+    if not grouped and not into_content and _GROUP_VERB.search(c):
         if _ACCOUNT_WORDS.search(c):
             grouped = True
         elif names:
+            # Review: an account's NAME counts only where it stands as the
+            # thing moved ("put TSI and VR2 in…", "move Personal into…") —
+            # never as a word inside another noun phrase ("the Work files",
+            # "the personal photos", "the TSI invoices").
             low = c.lower()
-            grouped = any(re.search(r"\b" + re.escape(n.lower()) + r"\b", low) for n in names if len(n) >= 2)
+            grouped = any(
+                re.search(
+                    r"\b" + re.escape(n.lower())
+                    + r"(?:\s+(?:accounts?|logins?))?\s*(?:,|&|\band\b|\bor\b|\b(?:in|into|to|as|together)\b|$)",
+                    low,
+                )
+                for n in names if len(n) >= 2
+            )
     if grouped:
         out.append("config_change_protected")
     if any(rx.search(c) for rx in _MEMORY_RULES):

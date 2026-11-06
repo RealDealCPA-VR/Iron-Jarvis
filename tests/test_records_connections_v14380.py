@@ -119,6 +119,10 @@ class _ProxyClient:
     def login_command(self, pid):
         return {"binary": "claude", "args": ["/login"], "env": {"CLAUDE_CONFIG_DIR": f"C:\\homes\\{pid}"}}
 
+    def refresh(self, pid=None, timeout=None):
+        # POST /iron/refresh: the re-checked states (the stand-in's own).
+        return [dict(self.o.states[pid])] if pid in self.o.states else []
+
     def delete_profile(self, pid):
         self.o.profiles = [p for p in self.o.profiles if p["id"] != pid]
         self.o.states.pop(pid, None)
