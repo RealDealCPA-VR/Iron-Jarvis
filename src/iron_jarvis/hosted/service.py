@@ -2950,6 +2950,8 @@ class HostedService:
         name, args = typed
         if name in P.TERMINAL_ONLY:
             raise Refused(P.TERMINAL_ONLY[name], 400)
+        if name in P.SHELL_BUILTINS and not args:
+            raise Refused(P.SHELL_NEEDS_COMMAND, 400)  # v1.441.0
         if files:
             raise Refused("Pi's own commands take no files — send the files in a message of their own.", 400)
         if name == "model":

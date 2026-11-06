@@ -108,7 +108,9 @@ async def test_a_session_whose_tool_never_said_says_not_yet(app, work, tmp_path,
         await c.aclose()
         await stop_all(app)
     assert claude == {"known": False, "servers": [], "note": T.NOT_YET.format(tool="Claude Code")}
-    assert pi == {"known": False, "servers": [], "note": "Pi does not report its own MCP servers here."}
+    # v1.441.0 (moved on purpose): Pi says their state when /mcp is typed.
+    assert pi == {"known": False, "servers": [],
+                  "note": "Pi does not report its own MCP servers here. " + T.NOT_REPORTED_HOW["pi"]}
 
 
 def test_an_init_frame_without_the_key_is_not_known_never_no_servers():

@@ -568,7 +568,9 @@ export function jarvisToolHint(key: keyof JarvisTools, toolName: string, tool: s
 /** v1.414.0: the "Share my profile with" switch (profile/share.CLIS) of a
  *  coding tool. */
 export function shareCliOf(tool: string): string {
-  return tool === "claude-code" || tool === "codex" || tool === "pi" || tool === "opencode" ? tool : "";
+  return tool === "claude-code" || tool === "codex" || tool === "pi" || tool === "opencode" || tool === "grok"
+    ? tool
+    : "";
 }
 
 /** localStorage: the share offer was dismissed for good, per tool. */

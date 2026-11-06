@@ -1,0 +1,63 @@
+{
+ "recorded": "pi 1.3.0 --mode rpc --no-session --offline, scratch PI_CODING_AGENT_DIR, no model call",
+ "frames": [
+  {
+   "type": "bash_execution_update",
+   "id": "b1",
+   "delta": "hello-bash\ntwo\n"
+  },
+  {
+   "id": "b1",
+   "type": "response",
+   "command": "bash",
+   "success": true,
+   "data": {
+    "output": "hello-bash\ntwo\n",
+    "exitCode": 0,
+    "cancelled": false,
+    "truncated": false
+   }
+  },
+  {
+   "id": "b3",
+   "type": "response",
+   "command": "bash",
+   "success": true,
+   "data": {
+    "output": "",
+    "exitCode": 3,
+    "cancelled": false,
+    "truncated": false
+   }
+  },
+  {
+   "id": "m",
+   "type": "response",
+   "command": "get_messages",
+   "success": true,
+   "data": {
+    "messages": [
+     {
+      "role": "bashExecution",
+      "command": "echo hello-bash; echo two",
+      "output": "hello-bash\ntwo\n",
+      "exitCode": 0,
+      "cancelled": false,
+      "truncated": false,
+      "timestamp": 1793996214997
+     },
+     {
+      "role": "bashExecution",
+      "command": "echo secret-out",
+      "output": "secret-out\n",
+      "exitCode": 0,
+      "cancelled": false,
+      "truncated": false,
+      "timestamp": 1793996218094,
+      "excludeFromContext": true
+     }
+    ]
+   }
+  }
+ ]
+}

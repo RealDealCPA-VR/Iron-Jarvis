@@ -27,7 +27,10 @@ one-word prompts on grok-4.5 effort low; masked recordings in
   ``grok.com``). Grok also pushes many ``_x.ai/...`` notifications of its own
   (models, settings, announcements, MCP status — ``_x.ai/mcp/servers_updated``
   carries the user's MCP config, URLs with keys included): NONE is drawn,
-  logged or kept here.
+  logged or kept here — except (v1.441.0) each MCP server's NAME and state,
+  read from ``servers_updated`` and ``_x.ai/mcp/server_status`` for the
+  Session tab (``hosted.tool_setup.grok_servers`` / ``grok_status``; never a
+  URL, a command or Grok's ``detail``).
 * ``session/new`` {cwd, mcpServers: [], _meta} answers ``sessionId`` (a
   UUIDv7), ``models`` {currentModelId, availableModels [{modelId, name,
   _meta: {totalContextTokens, reasoningEffort, reasoningEfforts [{value}]}}]}.
@@ -407,6 +410,9 @@ class GrokDriver(AcpDriver):
         #: closes the process and ends the command (read before the cancel)
         #: before the turn's done.
         self.close_after_stop = False
+        #: v1.441.0: Grok's OWN MCP servers as it reported them (names and
+        #: states only, ``hosted.tool_setup``); None = it has not said.
+        self.reported_mcp: list[dict[str, str]] | None = None
 
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
         # The folder is the process's own working folder; the session is
@@ -651,9 +657,21 @@ class GrokDriver(AcpDriver):
 
     # -- Grok's side (ON THE LOOP) -----------------------------------------------------
     def on_extension(self, method: str, params: dict[str, Any]) -> None:
-        # Only the two things the Code view needs; every other ``_x.ai/...``
+        # Only the things the Code view needs; every other ``_x.ai/...``
         # notification (some carry the user's MCP config) is dropped unread.
-        if method == "_x.ai/session/interjection":
+        if method in ("_x.ai/mcp/servers_updated", "_x.ai/mcp/server_status"):
+            # v1.441.0: each server's NAME and state for the Session tab —
+            # never its URL, command, arguments or Grok's ``detail``.
+            from .tool_setup import grok_servers, grok_status, note_servers
+
+            sid = str(params.get("sessionId") or "")
+            if sid and self.session_id and sid != self.session_id:
+                return
+            fold = grok_servers if method.endswith("servers_updated") else grok_status
+            # NOT ``self.mcp_servers``: on an ACP driver that is the list of
+            # servers Iron Jarvis hands Grok (its own tools, ``acp_servers``).
+            note_servers(self, fold(self.reported_mcp, params), attr="reported_mcp")
+        elif method == "_x.ai/session/interjection":
             text = str(params.get("text") or "")
             for i, (ref, sent) in enumerate(self._notes):
                 if sent == text:

@@ -182,6 +182,15 @@ CLIS: dict[str, CliSpec] = {
         "", ("AGENTS.md",), "", "profile_share_opencode",
         home_fn=_opencode_home, create_guard=_opencode_create_guard,
     ),
+    # v1.441.0. Grok 1.0.70 reads EVERY one of ``Agents.md`` / ``Claude.md`` /
+    # ``CLAUDE.md`` / ``CLAUDE.local.md`` / ``AGENT.md`` / ``AGENTS.md`` in its
+    # home (``$GROK_HOME``, else ``~/.grok``) plus every ``rules/*.md`` there
+    # as "global" instructions — measured with ``grok inspect --json`` on a
+    # scratch GROK_HOME and USERPROFILE (no sign-in, no model call). Our block
+    # goes into ``AGENTS.md``; an Iron-Proxy xAI account is its own GROK_HOME.
+    "grok": CliSpec(
+        "grok", "Grok", "xAI", "grok", "GROK_HOME", ".grok", ("AGENTS.md",), "xai", "profile_share_grok",
+    ),
 }
 
 _current: "ProfileShare | None" = None

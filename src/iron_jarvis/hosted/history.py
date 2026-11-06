@@ -24,7 +24,8 @@ Three pieces, each read-only on everything it reads:
 
 * :func:`transcript_events` — the coding tool's OWN saved conversation (Claude
   Code's session jsonl, Codex's rollout, Pi's session file, OpenCode's
-  database opened ``mode=ro``) as the view's normalized events (``user``,
+  database opened ``mode=ro``, and (v1.441.0) Grok's ``chat_history.jsonl``
+  and Antigravity's ``transcript.jsonl``) as the view's normalized events (``user``,
   ``text_done``, ``tool``), masked, bounded to the newest
   :data:`TRANSCRIPT_EVENTS`. A conversation opened from disk shows what was
   said before; after "Open in terminal" and back, what the user did in the
@@ -581,7 +582,26 @@ def _pi_events(path: Path) -> list[dict[str, Any]]:
             elif role == "toolResult":
                 _settle(pending.pop(str(msg.get("toolCallId") or ""), None),
                         P.result_text(msg), bool(msg.get("isError")))
+            elif role == "bashExecution" and str(msg.get("command") or "").strip():
+                # v1.441.0: a command the user ran with ``!`` / ``!!`` (Pi's
+                # ``bash`` RPC records it so, measured on pi 1.3.0).
+                n += 1
+                out.append(_bash_event(f"imp-{n}", at, msg))
     return out
+
+
+def _bash_event(item: str, at: str, msg: dict[str, Any]) -> dict[str, Any]:
+    """One of Pi's ``bashExecution`` records as a finished command step."""
+    from . import pi as P
+
+    command = str(msg.get("command") or "")
+    code = msg.get("exitCode")
+    failed = bool(msg.get("cancelled")) or (isinstance(code, int) and not isinstance(code, bool) and code != 0)
+    ev = _tool_event(item, at, kind="command", name="bash", title=P.tool_title("bash", {"command": command}),
+                     inp=command, status="failed" if failed else "done", output=str(msg.get("output") or ""))
+    if msg.get("excludeFromContext"):
+        ev["kept_out"] = True
+    return ev
 
 
 #: OpenCode parts read at most (newest).
@@ -640,6 +660,215 @@ def _opencode_events(db: Path, hid: str) -> list[dict[str, Any]]:
     return out
 
 
+def _later(a: str, b: str) -> str:
+    """The later of two of the log's ``…Z`` times ("" when neither is known)."""
+    da, db_ = _parse_at(a), _parse_at(b)
+    if da is None:
+        return b if db_ is not None else a
+    if db_ is None:
+        return a
+    return b if db_ > da else a
+
+
+def _grok_user_text(content: Any) -> str:
+    """A Grok user record's own words: the ``<user_query>`` Grok wraps them in
+    (measured), else the text with Grok's ``<image_files>`` note taken out."""
+    import re
+
+    blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+    texts = [str(b.get("text") or "") for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+    joined = "\n".join(texts)
+    found = re.findall(r"<user_query>\n?(.*?)\n?</user_query>", joined, re.S)
+    if found:
+        return "\n".join(x.strip() for x in found).strip()
+    joined = re.sub(r"<image_files>.*?</image_files>", "", joined, flags=re.S).strip()
+    if not joined and any(isinstance(b, dict) and b.get("type") == "image" for b in blocks):
+        return "(a picture)"
+    return joined
+
+
+def _grok_times(folder: Path) -> tuple[dict[int, str], dict[str, str]]:
+    """``(each prompt's start, each tool call's end)`` from Grok's own
+    ``events.jsonl`` (``turn_started`` {turn_number, ts}, ``tool_completed``
+    {tool_call_id, ts}), else ``rewind_points.jsonl`` {prompt_index,
+    created_at}. ONLY those fields are read: the same file names every MCP
+    server with its address (keys in URLs), which is never kept."""
+    from ..history.index import _records
+
+    starts: dict[int, str] = {}
+    done: dict[str, str] = {}
+    events = folder / "events.jsonl"
+    try:
+        if events.is_file():
+            for _n, rec in _records(events, []):
+                kind = rec.get("type")
+                num = rec.get("turn_number")
+                if kind == "turn_started" and isinstance(num, int) and not isinstance(num, bool):
+                    starts.setdefault(num, _iso(rec.get("ts")))
+                elif kind == "tool_completed" and rec.get("tool_call_id"):
+                    done[str(rec["tool_call_id"])] = _iso(rec.get("ts"))
+    except OSError:
+        pass
+    rewind = folder / "rewind_points.jsonl"
+    try:
+        if not starts and rewind.is_file():
+            for _n, rec in _records(rewind, []):
+                num = rec.get("prompt_index")
+                if isinstance(num, int) and not isinstance(num, bool):
+                    starts.setdefault(num, _iso(rec.get("created_at")))
+    except OSError:
+        pass
+    return starts, done
+
+
+def _grok_failed(text: str) -> bool:
+    import re
+
+    return bool(re.match(r"\s*(?:Error\b|Tool execution was halted)", text)
+                or re.match(r"\s*exit: (?!0\b)-?\d+", text))
+
+
+def _grok_events(path: Path) -> list[dict[str, Any]]:
+    """Grok's ``chat_history.jsonl`` (v1.441.0; grok 1.0.70, measured on the
+    sessions it saved for Iron Jarvis's own recordings): ``user`` (the user's
+    words carry ``prompt_index``; ``synthetic_reason`` "system_reminder"
+    records and the first workspace note are Grok's own, an "interjection" is
+    a note the user sent while it worked), ``assistant`` {content,
+    tool_calls [{id, name, arguments: JSON text}]}, ``tool_result``
+    {tool_call_id, content}, ``reasoning`` (encrypted: never read),
+    ``system`` (Grok's own prompt: never read). The file holds no times:
+    they come from the session's ``events.jsonl`` (:func:`_grok_times`)."""
+    from ..history.index import _records
+    from . import acp as AC
+    from . import grok as G
+
+    starts, done = _grok_times(path.parent)
+    out: list[dict[str, Any]] = []
+    pending: dict[str, dict[str, Any]] = {}
+    n = 0
+    last = ""
+    for _line, rec in _records(path, []):
+        kind = rec.get("type")
+        if kind == "user":
+            num = rec.get("prompt_index")
+            if isinstance(num, int) and not isinstance(num, bool):
+                last = _later(last, starts.get(num, ""))
+            elif rec.get("synthetic_reason") != "interjection":
+                continue  # Grok's own reminders and its workspace note
+            text = _grok_user_text(rec.get("content"))
+            if text:
+                out.append(_user(last, text))
+        elif kind == "assistant":
+            text = rec.get("content")
+            if isinstance(text, str) and text.strip():
+                n += 1
+                out.append(_answer(f"imp-{n}", last, text))
+            for call in rec.get("tool_calls") or []:
+                if not isinstance(call, dict) or not call.get("name"):
+                    continue
+                n += 1
+                name = str(call["name"])
+                try:
+                    args = json.loads(call.get("arguments") or "{}")
+                except (TypeError, ValueError):
+                    args = {}
+                args = args if isinstance(args, dict) else {}
+                tkind = G._BY_NAME.get(name.lower()) or ("mcp" if "__" in name else "other")
+                ev = _tool_event(f"imp-{n}", last, kind=tkind, name=name, title=AC.tool_title(name, tkind, args),
+                                 inp=args, path=AC._path_of(args))
+                out.append(ev)
+                if call.get("id"):
+                    pending[str(call["id"])] = ev
+        elif kind == "tool_result":
+            cid = str(rec.get("tool_call_id") or "")
+            content = rec.get("content")
+            text = content if isinstance(content, str) else "\n".join(
+                str(b.get("text") or "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+            _settle(pending.pop(cid, None), text, _grok_failed(text))
+            last = _later(last, done.get(cid, ""))
+    return out
+
+
+def _agy_args(raw: Any) -> dict[str, Any]:
+    """Antigravity writes each tool argument as JSON TEXT (``"Path":
+    "\\"C:/x\\""``, measured); read back to its value, named the shared way."""
+    from . import antigravity as A
+
+    args: dict[str, Any] = {}
+    for k, v in (raw.items() if isinstance(raw, dict) else []):
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                pass
+        args[str(k)] = v
+    if isinstance(args.get("CommandLine"), str):
+        args["command"] = args["CommandLine"]
+    if isinstance(args.get("Path"), str):
+        args["path"] = A._fix_path(args["Path"])
+    return args
+
+
+def _agy_text(content: Any, tag: str) -> str:
+    import re
+
+    text = str(content or "")
+    found = re.search(rf"<{tag}>\n?(.*?)\n?</{tag}>", text, re.S)
+    return (found.group(1) if found else text).strip()
+
+
+def _antigravity_events(path: Path) -> list[dict[str, Any]]:
+    """Antigravity's own ``brain/<id>/.system_generated/logs/transcript.jsonl``
+    (v1.441.0; agy 1.5.2, measured under a scratch USERPROFILE with the
+    stand-in model server): one step a line {step_index, source, type,
+    status, created_at, content, tool_calls [{name, args}], thinking,
+    error}. ``USER_INPUT`` (source USER_EXPLICIT) holds the user's words in
+    ``<USER_REQUEST>``; ``PLANNER_RESPONSE`` is the model's answer and its
+    tool calls; each ``GENERIC`` step after it is one call's result, in order
+    ("Created At … Completed At …" first; status ERROR = it failed).
+    ``CHECKPOINT``, ``SYSTEM_MESSAGE`` and ``ERROR_MESSAGE`` are Antigravity's
+    own, and the thinking is never shown."""
+    import re
+
+    from ..history.index import _records
+    from . import acp as AC
+    from . import antigravity as A
+
+    out: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    n = 0
+    for _line, rec in _records(path, []):
+        kind = rec.get("type")
+        at = _iso(rec.get("created_at"))
+        if kind == "USER_INPUT" and rec.get("source") == "USER_EXPLICIT":
+            text = _agy_text(rec.get("content"), "USER_REQUEST")
+            if text:
+                out.append(_user(at, text))
+            pending.clear()
+        elif kind == "PLANNER_RESPONSE":
+            text = rec.get("content")
+            if isinstance(text, str) and text.strip():
+                n += 1
+                out.append(_answer(f"imp-{n}", at, text))
+            for call in rec.get("tool_calls") or []:
+                if not isinstance(call, dict) or not call.get("name"):
+                    continue
+                n += 1
+                name = str(call["name"])
+                args = _agy_args(call.get("args"))
+                low = name.lower()
+                tkind = A._BY_NAME.get(low) or ("mcp" if "__" in low or low.startswith("mcp_") else "other")
+                title = "Ask you a question" if low == "ask_question" else AC.tool_title(name, tkind, args)
+                ev = _tool_event(f"imp-{n}", at, kind=tkind, name=name, title=title, inp=args,
+                                 path=str(args.get("path") or ""))
+                out.append(ev)
+                pending.append(ev)
+        elif kind == "GENERIC" and pending:
+            body = re.sub(r"^Created At:[^\n]*\n(?:Completed At:[^\n]*\n)?", "", str(rec.get("content") or ""))
+            _settle(pending.pop(0), body, str(rec.get("status") or "") == "ERROR")
+    return out
+
+
 def transcript_source(harness: str, home: str, folder: str, hid: str) -> Path | None:
     """BLOCKING: the file holding the tool's own saved conversation ``hid``
     (matched by NAME or id, never a path joined from it), else None."""
@@ -679,6 +908,26 @@ def transcript_source(harness: str, home: str, folder: str, hid: str) -> Path | 
         if harness == "opencode":
             db = root / "opencode.db"
             return db if db.is_file() and O.SESSION_ID_RX.match(hid) else None
+        if harness == "grok":
+            # ``<GROK_HOME>/sessions/<the folder, URL-encoded>/<id>/``: the
+            # session folder is found by its NAME among each folder's own
+            # (never a path joined from the id; the encoded folder name is
+            # never recomputed).
+            for d in (root / "sessions").iterdir():
+                if not d.is_dir():
+                    continue
+                for s in d.iterdir():
+                    if s.name == hid and s.is_dir():
+                        f = s / "chat_history.jsonl"
+                        return f if f.is_file() else None
+            return None
+        if harness == "antigravity":
+            # ``<~/.gemini/antigravity-cli>/brain/<id>/.system_generated/logs/``
+            for d in (root / "brain").iterdir():
+                if d.name == hid and d.is_dir():
+                    f = d / ".system_generated" / "logs" / "transcript.jsonl"
+                    return f if f.is_file() else None
+            return None
     except OSError:
         return None
     return None
@@ -743,6 +992,10 @@ def transcript_events(harness: str, home: str, folder: str, hid: str, *,
             events = _pi_events(path)
         elif harness == "opencode":
             events = _opencode_events(path, hid)
+        elif harness == "grok":
+            events = _grok_events(path)
+        elif harness == "antigravity":
+            events = _antigravity_events(path)
         else:
             events = []
         events = events[-max(1, TRANSCRIPT_EVENTS):]

@@ -43,6 +43,10 @@ the host's answer: a JSON-RPC response's ``result.action`` (Codex's
 "session"``. Codex goes on differently for each (it runs the tool, or reports
 ``user rejected MCP tool call``), so the fake does too; an answer with no branch
 plays ``on["*"]`` when there is one.
+
+v1.441.0: ``id_of_command`` — the frame's id is the host's oldest unanswered
+Pi command of that type, which stays unanswered (a ``bash_execution_update``
+before the ``bash`` answer).
 """
 
 import json
@@ -228,6 +232,11 @@ def emit(step):
     cmd = step.get("reply_to_command")
     if cmd and commands.get(cmd):
         obj["id"] = commands[cmd].pop(0)
+    # v1.441.0: a frame that NAMES the host's command without answering it
+    # (Pi's ``bash_execution_update {id, delta}``): its id, kept for the answer.
+    named = step.get("id_of_command")
+    if named and commands.get(named):
+        obj["id"] = commands[named][0]
     out(obj)
 
 

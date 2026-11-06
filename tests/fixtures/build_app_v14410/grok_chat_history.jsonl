@@ -1,0 +1,14 @@
+{"type": "system", "content": "You are Grok 4.5 released by xAI. (Grok's own prompt, cut.)"}
+{"type": "user", "content": [{"type": "text", "text": "<user_info>\nOS Version: windows\nShell: pwsh\nWorkspace Path: C:\\work\n</user_info>"}]}
+{"type": "user", "content": [{"type": "text", "text": "<system-reminder>\nThe following skills are available for use:\n</system-reminder>"}], "synthetic_reason": "system_reminder"}
+{"type": "user", "content": [{"type": "text", "text": "<user_query>\nRead hello.txt and run the tests\n</user_query>"}], "prompt_index": 0}
+{"type": "user", "content": [{"type": "text", "text": "<system-reminder>\nMCP servers currently connecting: Accounting\n</system-reminder>"}], "synthetic_reason": "system_reminder"}
+{"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "ENCRYPTED-NOT-READ", "status": "completed"}
+{"type": "assistant", "content": "I will read it first.", "tool_calls": [{"id": "call-a-0", "name": "read_file", "arguments": "{\"target_file\":\"hello.txt\"}"}], "model_id": "grok-4.5-build", "model_fingerprint": "fp_x", "reasoning_effort": "low"}
+{"type": "tool_result", "tool_call_id": "call-a-0", "content": "1→apple pie\n"}
+{"type": "assistant", "content": "", "tool_calls": [{"id": "call-b-0", "name": "run_terminal_command", "arguments": "{\"command\":\"pytest -q\",\"description\":\"Run the tests\"}"}], "model_id": "grok-4.5-build", "model_fingerprint": "fp_x", "reasoning_effort": "low"}
+{"type": "tool_result", "tool_call_id": "call-b-0", "content": "exit: 1\n\n1 failed"}
+{"type": "user", "content": [{"type": "text", "text": "The user sent a message while you were working:\n<user_query>\nAlso end with BANANA.\n</user_query>\nIf it changes your plan, adapt."}], "synthetic_reason": "interjection"}
+{"type": "assistant", "content": "One test fails.\nBANANA", "model_id": "grok-4.5-build", "model_fingerprint": "fp_x", "reasoning_effort": "low"}
+{"type": "user", "content": [{"type": "text", "text": "<image_files>\nThe following images were provided by the user:\n1. C:\\x.png\n</image_files>\n\n<user_query>\nWhat word is in the picture?\n</user_query>"}, {"type": "image", "url": ""}], "prompt_index": 1}
+{"type": "assistant", "content": "ZEBRA", "model_id": "grok-4.7-build", "model_fingerprint": "fp_y", "reasoning_effort": "low"}

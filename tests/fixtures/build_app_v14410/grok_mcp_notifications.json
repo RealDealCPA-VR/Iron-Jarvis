@@ -1,0 +1,73 @@
+{
+ "recorded": "grok 1.0.70 agent --no-leader stdio, scratch GROK_HOME, no sign-in, no model call",
+ "frames": [
+  {
+   "jsonrpc": "2.0",
+   "method": "_x.ai/mcp/servers_updated",
+   "params": {
+    "mcpServers": [
+     {
+      "name": "deadhttp",
+      "source": "local",
+      "type": "http",
+      "url": "http://127.0.0.1:9/mcp?api_key=FAKE-KEY-123"
+     },
+     {
+      "name": "okserver",
+      "source": "local",
+      "type": "stdio",
+      "command": "python",
+      "args": [
+       "C:/scratch/tinymcp.py",
+       "--token",
+       "FAKE-ARG-TOKEN"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "_x.ai/mcp/init_progress",
+   "params": {
+    "total": 2,
+    "connected": 0,
+    "sessionId": "SID"
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "_x.ai/mcp/server_status",
+   "params": {
+    "sessionId": "SID",
+    "name": "okserver",
+    "source": "local",
+    "status": "ready",
+    "reason": "initialized",
+    "tools": null
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "_x.ai/mcp_initialized",
+   "params": {
+    "sessionId": "SID",
+    "mcpToolCount": 1,
+    "elapsedMs": 2033
+   }
+  },
+  {
+   "jsonrpc": "2.0",
+   "method": "_x.ai/mcp/server_status",
+   "params": {
+    "sessionId": "SID",
+    "name": "deadhttp",
+    "source": "local",
+    "status": "unavailable",
+    "reason": "handshake_failed",
+    "detail": "MCP server 'deadhttp' handshake failed: error sending request for url (http://127.0.0.1:9/mcp?api_key=FAKE-KEY-123)",
+    "tools": null
+   }
+  }
+ ]
+}
