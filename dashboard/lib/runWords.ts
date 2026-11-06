@@ -212,6 +212,17 @@ const AGENT_TOOLS: Readonly<Record<string, AgentToolWords>> = {
   agent_update: { did: "Changed an agent", noun: "agent change" },
   agent_pause: { did: "Switched an agent on or off", noun: "agent switch" },
   agent_delete: { did: "Removed an agent", noun: "agent removal" },
+  // v1.438.0 (chat-first plan Wave 4 group A): the night shift and a folder's
+  // coding settings from chat (agents/mission.py _RUN_TOOL_WORDS is the twin).
+  night_task_add: { did: "Queued a coding task for tonight", noun: "night task" },
+  night_task_list: { did: "Listed tonight's tasks", noun: "night list" },
+  night_task_cancel: { did: "Cancelled a task queued for tonight", noun: "night task cancel" },
+  night_task_move: { did: "Changed the order of tonight's tasks", noun: "night order" },
+  build_folder_show: { did: "Looked up a folder's coding settings", noun: "folder settings lookup" },
+  build_defaults_set: { did: "Set a folder's defaults for new coding sessions", noun: "folder defaults" },
+  build_defaults_clear: { did: "Cleared a folder's defaults for new coding sessions", noun: "folder defaults" },
+  build_team_set: { did: "Set a folder's coding team", noun: "folder team" },
+  build_team_clear: { did: "Stopped using a coding team in a folder", noun: "folder team" },
 };
 
 /** One failed call of a KNOWN step kind (lib/stepWords), as a noun. A kind

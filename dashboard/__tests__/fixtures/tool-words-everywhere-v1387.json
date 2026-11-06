@@ -38,6 +38,11 @@
     "browser_screenshot",
     "browser_scroll",
     "browser_type",
+    "build_defaults_clear",
+    "build_defaults_set",
+    "build_folder_show",
+    "build_team_clear",
+    "build_team_set",
     "capability_propose",
     "change_undo",
     "changes_list",
@@ -105,6 +110,10 @@
     "memory_write",
     "message_agent",
     "multi_edit",
+    "night_task_add",
+    "night_task_cancel",
+    "night_task_list",
+    "night_task_move",
     "notebook",
     "notebook_edit",
     "notify",
@@ -230,6 +239,11 @@
     "browser_screenshot": "act in a browser tab",
     "browser_scroll": "act in a browser tab",
     "browser_type": "act in a browser tab",
+    "build_defaults_clear": "clear a folder's defaults for new coding sessions",
+    "build_defaults_set": "set a folder's defaults for new coding sessions",
+    "build_folder_show": "look up a folder's coding settings",
+    "build_team_clear": "stop using a coding team in a folder",
+    "build_team_set": "set a folder's coding team",
     "capability_propose": "suggest a new ability for Iron Jarvis",
     "change_undo": "undo one of its changes",
     "changes_list": "list its recent changes",
@@ -297,6 +311,10 @@
     "memory_write": "save to its memory",
     "message_agent": "message a teammate",
     "multi_edit": "change a file",
+    "night_task_add": "queue a coding task for tonight",
+    "night_task_cancel": "cancel a task queued for tonight",
+    "night_task_list": "list tonight's tasks",
+    "night_task_move": "change the order of tonight's tasks",
     "notebook": "update its notebook",
     "notebook_edit": "change a notebook",
     "notify": "send a notification",
@@ -472,6 +490,26 @@
     "browse": [
       "Opened a web page",
       "Opening a web page"
+    ],
+    "build_defaults_clear": [
+      "Cleared a folder's defaults for new coding sessions",
+      "Clearing a folder's defaults for new coding sessions"
+    ],
+    "build_defaults_set": [
+      "Set a folder's defaults for new coding sessions",
+      "Setting a folder's defaults for new coding sessions"
+    ],
+    "build_folder_show": [
+      "Looked up a folder's coding settings",
+      "Looking up a folder's coding settings"
+    ],
+    "build_team_clear": [
+      "Stopped using a coding team in a folder",
+      "Stopping using a coding team in a folder"
+    ],
+    "build_team_set": [
+      "Set a folder's coding team",
+      "Setting a folder's coding team"
     ],
     "capability_propose": [
       "Suggested a new ability for Iron Jarvis",
@@ -676,6 +714,22 @@
     "message_agent": [
       "Messaged a teammate",
       "Messaging a teammate"
+    ],
+    "night_task_add": [
+      "Queued a coding task for tonight",
+      "Queuing a coding task for tonight"
+    ],
+    "night_task_cancel": [
+      "Cancelled a task queued for tonight",
+      "Cancelling a task queued for tonight"
+    ],
+    "night_task_list": [
+      "Listed tonight's tasks",
+      "Listing tonight's tasks"
+    ],
+    "night_task_move": [
+      "Changed the order of tonight's tasks",
+      "Changing the order of tonight's tasks"
     ],
     "notebook": [
       "Updated its notebook",
@@ -964,6 +1018,11 @@
     "browser_screenshot": "browser",
     "browser_scroll": "browser",
     "browser_type": "browser",
+    "build_defaults_clear": "",
+    "build_defaults_set": "",
+    "build_folder_show": "",
+    "build_team_clear": "",
+    "build_team_set": "",
     "capability_propose": "",
     "change_undo": "",
     "changes_list": "",
@@ -1031,6 +1090,10 @@
     "memory_write": "",
     "message_agent": "",
     "multi_edit": "change",
+    "night_task_add": "",
+    "night_task_cancel": "",
+    "night_task_list": "",
+    "night_task_move": "",
     "notebook": "",
     "notebook_edit": "change",
     "notify": "",

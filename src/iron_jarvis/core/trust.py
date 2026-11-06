@@ -82,6 +82,16 @@ LOW_TRUST_DENY: frozenset[str] = frozenset(
         # it off would let what this run read leave the network).
         "change_undo",
         "chat_local_only",
+        # v1.438.0 (Wave 4 group A): nor a night task queued, cancelled or
+        # moved (unattended work a later night starts), nor a folder's
+        # defaults or coding team for new coding sessions.
+        "night_task_add",
+        "night_task_cancel",
+        "night_task_move",
+        "build_defaults_set",
+        "build_defaults_clear",
+        "build_team_set",
+        "build_team_clear",
         "create_agent",
         "remember_preference",
         "skill_create",

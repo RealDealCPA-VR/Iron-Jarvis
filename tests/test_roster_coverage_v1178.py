@@ -219,6 +219,13 @@ _OFF_ROSTER_BY_DESIGN = {
     # (settings.records_history.history_tools_for); pinned by
     # tests/test_chat_history_tools_v14350.py.
     "chat_local_only", "changes_list", "change_undo",
+    # v1.438.0 (chat-first plan Wave 4 group A, settings/records_build): the
+    # night shift and a folder's coding-session defaults and team — a card +
+    # Undo where the user is present (a night task then runs unattended on
+    # the user's own say-so). Chat arms them (records_build.build_tools_for);
+    # pinned by tests/test_records_build_v14380.py.
+    "night_task_add", "night_task_list", "night_task_cancel", "night_task_move",
+    "build_folder_show", "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
     # SELF-CARE (v1.344.0): chat arms the readers via autoselect.AUTO_SAFE_TOOLS
     # and the repairers via ASK_TIER_TOOLS; pinned by
     # tests/test_autoselect_failure_vocab_v1344.py

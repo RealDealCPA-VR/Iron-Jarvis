@@ -193,6 +193,35 @@ def team_view(platform: Any) -> dict[str, Any]:
         }
 
 
+def member_for_model(d: Any, *, provider: str, model: str, role: str, local_only: bool = False,
+                     thread_id: str = "") -> dict[str, Any]:
+    """``POST /team/members/from-model``'s body, lifted (v1.438.0, chat-first
+    plan Wave 4 group A; chat's ``build_team_set`` calls it): the member that
+    runs on ``provider`` / ``model`` for a coding session's ``role``
+    (``harness.team.member_from_model`` over the model menu). ``local_only``
+    — or the Build session ``thread_id`` names being Local only — refuses a
+    cloud model. BLOCKING; raises ``harness.team.TeamRefused`` in words (503
+    when the model list cannot be read — said, never a guess)."""
+    from ...harness import team as HT
+    from .connections import selectable_models
+
+    local_only = bool(local_only)
+    if not local_only and str(thread_id or "").strip():
+        from ...harness import sessions as S
+
+        row = S.get_row(d.platform.engine, str(thread_id).strip())
+        if row is not None:
+            setup = S._setup(row)
+            local_only = setup.get("local_only") is True
+    try:
+        catalog = selectable_models(d)
+    except Exception as exc:  # noqa: BLE001 — said, never a guess
+        raise HT.TeamRefused(f"The model list could not be read: {type(exc).__name__}", status=503) from None
+    return HT.member_from_model(
+        d.platform, catalog, provider=provider, model=model, role=role, local_only=local_only,
+    )
+
+
 def register(app: FastAPI, d) -> None:
     @app.get("/team")
     def get_team() -> dict[str, Any]:
@@ -247,26 +276,11 @@ def register(app: FastAPI, d) -> None:
         one sentence for the demo model, a model Iron Jarvis cannot use or
         reach now, and a cloud model in a Local only session."""
         from ...harness import team as HT
-        from .connections import selectable_models
 
-        local_only = bool(body.local_only)
-        if not local_only and body.thread_id.strip():
-            from ...harness import sessions as S
-
-            row = S.get_row(d.platform.engine, body.thread_id.strip())
-            if row is not None:
-                setup = S._setup(row)
-                local_only = setup.get("local_only") is True
         try:
-            catalog = selectable_models(d)
-        except Exception as exc:  # noqa: BLE001 — said, never a guess
-            raise HTTPException(
-                status_code=503, detail=f"The model list could not be read: {type(exc).__name__}"
-            ) from None
-        try:
-            return HT.member_from_model(
-                d.platform, catalog, provider=body.provider, model=body.model, role=body.role,
-                local_only=local_only,
+            return member_for_model(
+                d, provider=body.provider, model=body.model, role=body.role,
+                local_only=bool(body.local_only), thread_id=body.thread_id,
             )
         except HT.TeamRefused as refused:
             raise HTTPException(status_code=refused.status, detail=str(refused)) from None

@@ -29,6 +29,12 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "change_undo",
       "chat_local_only",
       "secret_set",
+      // v1.438.0 (Wave 4 group A): a folder's defaults and coding team for
+      // new coding sessions.
+      "build_defaults_set",
+      "build_defaults_clear",
+      "build_team_set",
+      "build_team_clear",
     ],
   },
   {
@@ -44,6 +50,11 @@ export const LOW_TRUST_FAMILIES: ReadonlyArray<{ words: string; tools: readonly 
       "workflow_run",
       "worklist_add",
       "assign_work",
+      // v1.438.0 (Wave 4 group A): a night task queued, cancelled or moved —
+      // unattended work a later night starts.
+      "night_task_add",
+      "night_task_cancel",
+      "night_task_move",
     ],
   },
   {

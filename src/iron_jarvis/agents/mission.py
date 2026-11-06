@@ -367,6 +367,15 @@ ASK_WORDS: dict[str, str] = {
     "agent_update": "change an agent",
     "agent_pause": "pause or resume an agent",
     "agent_delete": "remove an agent",
+    # v1.438.0 (chat-first plan Wave 4 group A): the night shift and a
+    # folder's coding-session defaults and team (settings.records_build).
+    "night_task_add": "queue a coding task for tonight",
+    "night_task_cancel": "cancel a task queued for tonight",
+    "night_task_move": "change the order of tonight's tasks",
+    "build_defaults_set": "set a folder's defaults for new coding sessions",
+    "build_defaults_clear": "clear a folder's defaults for new coding sessions",
+    "build_team_set": "set a folder's coding team",
+    "build_team_clear": "stop using a coding team in a folder",
 }
 
 
@@ -571,6 +580,17 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "agent_update": ("changed an agent", "agent change"),
     "agent_pause": ("switched an agent on or off", "agent switch"),
     "agent_delete": ("removed an agent", "agent removal"),
+    # v1.438.0 (chat-first plan Wave 4 group A): the night shift and a
+    # folder's coding settings. Twin: lib/runWords.ts AGENT_TOOLS.
+    "night_task_add": ("queued a coding task for tonight", "night task"),
+    "night_task_list": ("listed tonight's tasks", "night list"),
+    "night_task_cancel": ("cancelled a task queued for tonight", "night task cancel"),
+    "night_task_move": ("changed the order of tonight's tasks", "night order"),
+    "build_folder_show": ("looked up a folder's coding settings", "folder settings lookup"),
+    "build_defaults_set": ("set a folder's defaults for new coding sessions", "folder defaults"),
+    "build_defaults_clear": ("cleared a folder's defaults for new coding sessions", "folder defaults"),
+    "build_team_set": ("set a folder's coding team", "folder team"),
+    "build_team_clear": ("stopped using a coding team in a folder", "folder team"),
 }
 
 #: browser/tools.py's 15 built-in browser tools, by EXACT name (the
@@ -782,6 +802,9 @@ _PRESENT: dict[str, str] = {
     "clicked": "click",
     # v1.435.0 (Wave 3 group H).
     "disconnected": "disconnect",
+    # v1.438.0 (Wave 4 group A).
+    "cancelled": "cancel",
+    "cleared": "clear",
 }
 
 
@@ -882,7 +905,7 @@ _ING: dict[str, str] = {
     "switched": "switching", "tested": "testing", "took": "taking", "typed": "typing",
     "undid": "undoing", "waited": "waiting", "worked": "working", "applied": "applying",
     "stopped": "stopping", "presented": "presenting", "clicked": "clicking",
-    "disconnected": "disconnecting",
+    "disconnected": "disconnecting", "cancelled": "cancelling", "cleared": "clearing",
 }
 
 

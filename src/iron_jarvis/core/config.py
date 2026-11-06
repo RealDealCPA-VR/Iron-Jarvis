@@ -383,6 +383,20 @@ def default_permissions() -> dict[str, str]:
         "chat_local_only": "allow",
         "changes_list": "allow",
         "change_undo": "ask",
+        # v1.438.0 (chat-first plan Wave 4 group A, settings/records_build):
+        # the night shift and a folder's coding-session defaults and team.
+        # Queuing, cancelling and moving a night task and changing a folder's
+        # defaults or team ask on the card (each with an Undo); reading
+        # tonight's list or a folder's settings is allowed.
+        "night_task_add": "ask",
+        "night_task_list": "allow",
+        "night_task_cancel": "ask",
+        "night_task_move": "ask",
+        "build_folder_show": "allow",
+        "build_defaults_set": "ask",
+        "build_defaults_clear": "ask",
+        "build_team_set": "ask",
+        "build_team_clear": "ask",
         "recall_lessons": "allow",
         # Motivation Layer: recording a standing goal is local + reversible and
         # never acts on its own (acting is gated by the autonomy dial + budget +
