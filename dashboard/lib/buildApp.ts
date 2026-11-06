@@ -319,6 +319,10 @@ export interface CodingTool {
   accounts: ToolAccount[];
   /** The tool's own `/` commands, when the daemon lists them. */
   commands: ToolCommand[];
+  /** v1.441.0 (g1): an effort change reaches the RUNNING tool at once (Claude
+   *  Code's own apply_flag_settings) — the chip stays open while a reply
+   *  runs. Absent (an older Iron Jarvis) = the old rule. */
+  effortLive?: boolean;
 }
 
 /** The plain name of a coding tool id (the daemon's label wins). */
@@ -443,6 +447,7 @@ export function decodeCodingTools(raw: unknown): CodingTool[] {
       ...(modelsNote ? { modelsNote } : {}),
       accounts,
       commands,
+      ...(r.effort_live === true ? { effortLive: true } : {}),
     });
   }
   return out;

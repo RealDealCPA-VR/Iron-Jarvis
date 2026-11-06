@@ -137,6 +137,25 @@ ALL_COMMANDS_RULE: dict[str, Any] = {
 ALL_COMMANDS_NOT_IN: frozenset[str] = frozenset({"full", "auto", "plan"})
 #: v1.417.0 (C4.1): the longest plan an ExitPlanMode card shows.
 PLAN_CHARS = 20_000
+#: v1.441.0 (g1): the Session tab's list of open tasks — at most this many
+#: rows, each title cut to this.
+BACKGROUND_WORK_MAX = 50
+TASK_TITLE_CHARS = 200
+#: A task's kind as the Session tab says it when Claude Code gave no
+#: description (helpers are agents/workflows/teammates — ``is_helper_task`` —,
+#: a ``local_bash`` is a command; anything else is a task).
+TASK_KIND_TITLES = {"helper": "A helper", "command": "A command", "task": "A task"}
+TASK_ALREADY_ENDED = "That task already ended."
+MCP_ACTION_VERBS = {"reconnect": "reconnect", "off": "turn off", "on": "turn on"}
+#: v1.441.0 (g1): an effort Claude Code took live.
+EFFORT_NOW_WORDS = "Claude Code now works at {level} effort."
+
+
+def task_kind(task_type: str) -> str:
+    """``helper`` | ``command`` | ``task`` for one of Claude Code's task types."""
+    if is_helper_task(task_type):
+        return "helper"
+    return "command" if task_type == "local_bash" else "task"
 
 
 def all_commands_rule() -> dict[str, Any]:
@@ -731,6 +750,14 @@ class ClaudeDriver(Driver):
         #: from the 2.1.316 binary): helper agents and background commands
         #: that outlive the reply which started them. task_id -> task_type.
         self._tasks: dict[str, str] = {}
+        #: v1.441.0 (g1): what each open task IS, in Claude Code's own words
+        #: (``task_started`` / ``background_tasks_changed`` ``description``),
+        #: for the Session tab's list. task_id -> description.
+        self._task_titles: dict[str, str] = {}
+        #: v1.441.0 (g1): the tasks the USER stopped from the Session tab —
+        #: their ``task_notification`` (status stopped) is not said again (the
+        #: service already said what was stopped) and wakes nothing.
+        self._stopping: set[str] = set()
         #: v1.417.0: Claude Code is writing a reply NO message of the user's
         #: owns — it woke itself when a background task ended (measured:
         #: task_notification -> a second system init -> a new assistant reply
@@ -1010,6 +1037,118 @@ class ClaudeDriver(Driver):
             return None
         return claude_breakdown(res)
 
+    # -- v1.441.0 (g1): the Session tab's controls --------------------------------
+    #: The MCP actions this driver offers (``hosted/session_controls``):
+    #: Claude Code's own ``mcp_reconnect`` and ``mcp_toggle``.
+    mcp_actions: frozenset[str] = frozenset({"reconnect", "off", "on"})
+    #: v1.441.0 (g1): an effort change reaches the RUNNING process
+    #: (:meth:`set_effort`); the harness row says so (``effort_live``).
+    effort_live = True
+
+    def _note_task_title(self, tid: str, description: Any) -> None:
+        text = one_line(description or "", TASK_TITLE_CHARS)
+        if text:
+            self._task_titles[tid] = text
+        while len(self._task_titles) > BACKGROUND_WORK_MAX * 4:
+            self._task_titles.pop(next(iter(self._task_titles)))
+
+    async def set_effort(self, effort: str) -> str:
+        """v1.441.0 (g1): a new effort for the RUNNING process — Claude Code's
+        own ``apply_flag_settings`` ``{"effortLevel": …}`` (``None`` = back to
+        the model's own default), MEASURED on 2.1.316 (scratch home, a stand-in
+        model server): the next request to the model carried the new
+        ``output_config.effort``, and ``get_settings`` answered it as
+        ``applied.effort`` (``max`` included; a value it does not know is
+        dropped silently). The read-back is the proof: anything but the level
+        asked for (an older Claude Code, a refusal, no answer) answers
+        ``"next"`` — the old way, a restart before the next message. Never
+        raises."""
+        self.effort = effort
+        try:
+            await self.control("apply_flag_settings", settings={"effortLevel": effort or None})
+            res = await self.control("get_settings")
+        except Exception:  # noqa: BLE001 — not taken live: the restart applies it
+            return "next"
+        applied = res.get("applied") if isinstance(res, dict) else None
+        got = str(applied.get("effort") or "") if isinstance(applied, dict) else ""
+        if (effort and got != effort) or not got:
+            return "next"
+        self.emit(make("notice", text=EFFORT_NOW_WORDS.format(level=effort or f"its default ({got})")))
+        return "now"
+
+    async def background_work(self) -> list[dict[str, Any]] | None:
+        """v1.441.0 (g1): the open tasks (``task_started`` .. its
+        ``task_notification``), each one Claude Code's own ``stop_task``
+        stops."""
+        rows: list[dict[str, Any]] = []
+        for tid, kind in list(self._tasks.copy().items())[:BACKGROUND_WORK_MAX]:
+            rows.append({
+                "id": tid,
+                "title": self._task_title(tid),
+                "kind": task_kind(kind),
+                "can_stop": True,
+            })
+        return rows
+
+    def _task_title(self, tid: str) -> str:
+        return self._task_titles.get(tid) or TASK_KIND_TITLES[task_kind(self._tasks.get(tid, ""))]
+
+    async def stop_background(self, work_id: str) -> str:
+        """v1.441.0 (g1): Claude Code's own ``stop_task {task_id}`` — MEASURED
+        on 2.1.316 (a stand-in model server started a background ``Bash``):
+        it answers ``{}``, then ``task_updated`` (killed), ``task_notification``
+        (status stopped) and ``background_tasks_changed`` follow, the command's
+        process is gone, and no model request comes after it (the reply, if
+        one runs, goes on). An unknown id is answered ``{}`` too, so the id is
+        checked here first. Answers the task's title."""
+        tid = str(work_id or "")
+        if tid not in self._tasks:
+            raise ControlRefused(TASK_ALREADY_ENDED)
+        title = self._task_title(tid)
+        self._stopping.add(tid)
+        try:
+            await self.control("stop_task", task_id=tid)
+        except ControlRefused as exc:
+            self._stopping.discard(tid)
+            raise ControlRefused(f"Claude Code did not stop it: {exc}") from None
+        except BaseException:
+            self._stopping.discard(tid)
+            raise
+        return title
+
+    async def mcp_action(self, server: str, action: str) -> dict[str, Any]:
+        """v1.441.0 (g1): Claude Code's own ``mcp_reconnect {serverName}`` and
+        ``mcp_toggle {serverName, enabled}`` — MEASURED on 2.1.316 (scratch
+        home, ``--mcp-config`` with a working and an exiting stdio server):
+        both answer success or Claude Code's own error ("Connection closed");
+        a server turned off reads ``disabled`` in ``mcp_status`` and Claude
+        Code REMEMBERS it in its account's ``.claude.json`` for this folder
+        (``projects[<folder>].disabledMcpServers``) — the same as ``/mcp`` in
+        its own terminal. The list is read again (``mcp_status``) after
+        either, so the Session tab shows the new state at once."""
+        from .tool_setup import claude_servers, note_servers
+
+        name = str(server or "")
+        if action == "reconnect":
+            subtype, req = "mcp_reconnect", {"serverName": name}
+        elif action in ("off", "on"):
+            subtype, req = "mcp_toggle", {"serverName": name, "enabled": action == "on"}
+        else:
+            raise ControlRefused("Claude Code cannot do that to one of its MCP servers here.")
+        failed = ""
+        try:
+            await self.control(subtype, **req)
+        except ControlRefused as exc:
+            failed = str(exc)
+        try:
+            res = await self.control("mcp_status")
+            note_servers(self, claude_servers(res.get("mcpServers") if isinstance(res, dict) else None))
+        except Exception:  # noqa: BLE001 — the list shows the new state after the next start
+            pass
+        if failed:
+            raise ControlRefused(f"Claude Code could not {MCP_ACTION_VERBS[action]} {name}: {failed}")
+        return {}
+
     def on_exit(self) -> None:
         from .process import HarnessGone
 
@@ -1019,6 +1158,8 @@ class ClaudeDriver(Driver):
             self._hold_timer = None
         self._held = None
         self._tasks.clear()
+        self._task_titles.clear()
+        self._stopping.clear()
         self._alone = False
 
     # -- the harness's side (ON THE LOOP) ---------------------------------------
@@ -1205,19 +1346,36 @@ class ClaudeDriver(Driver):
             tid = str(obj.get("task_id") or "")
             if tid:
                 self._tasks[tid] = str(obj.get("task_type") or "")
+                self._note_task_title(tid, obj.get("description"))
             # v1.418.0 (C4.3): the start is said too (a backgrounded task with
             # no row of its own) — the bookkeeping above never swallows it.
             text = system_notice(obj)
             if text:
                 self.emit(make("notice", text=text))
         elif sub == "task_notification":
-            self._tasks.pop(str(obj.get("task_id") or ""), None)
+            tid = str(obj.get("task_id") or "")
+            self._tasks.pop(tid, None)
+            self._task_titles.pop(tid, None)
+            if tid and tid in self._stopping:
+                # v1.441.0 (g1): stopped from the Session tab — said already,
+                # and Claude Code does not wake for a task the host stopped
+                # (measured: no model request after it).
+                self._stopping.discard(tid)
+                return
             if not self.turn_open:
                 # Claude Code wakes itself to report what the task did.
                 self._alone = True
             text = system_notice(obj)
             if text:
                 self.emit(make("notice", text=text))
+        elif sub == "background_tasks_changed":
+            # v1.441.0 (g1): Claude Code's LEVEL signal (every live background
+            # task after a change; READ from 2.1.316's schema). Only the titles
+            # are taken: the count stays the task_started .. task_notification
+            # bookends (v1.417.0), which also hold the foreground tasks.
+            for t in (obj.get("tasks") or [])[:BACKGROUND_WORK_MAX]:
+                if isinstance(t, dict) and str(t.get("task_id") or "") in self._tasks:
+                    self._note_task_title(str(t["task_id"]), t.get("description"))
         elif sub == "compact_boundary":
             self._compacting = False
             self.emit(make("notice", text="Claude Code compacted the conversation to make room."))
