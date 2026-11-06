@@ -952,6 +952,12 @@ type CodeEventBody =
       /** v1.417.0 (C1.7): WHY a once-only card asks every time
        *  (lib/onceReason); a safety reason keeps Enter from allowing it. */
       onceReason: string;
+      /** v1.439.0: on Claude Code's plan card, the mode Allow once leaves
+       *  the session in (absent = not known). */
+      thenMode?: string;
+      /** v1.439.0: on Claude Code's plan card, the mode the session-wide
+       *  allow switches to (absent = it sets none). */
+      setsMode?: string;
     }
   | { type: "question"; at: string; requestId: string; questions: QuestionItem[] }
   | { type: "resolved"; at: string; requestId: string; decision: string }
@@ -1078,6 +1084,8 @@ function decodeEventBody(raw: unknown, hint: string): CodeEventBody | null {
         canAllCommands: r.can_all_commands === true,
         plan: str(r.plan, 20_000),
         onceReason: str(r.once_reason, 40),
+        ...(PLAN_MODES.includes(r.then_mode as string) ? { thenMode: r.then_mode as string } : {}),
+        ...(PLAN_MODES.includes(r.sets_mode as string) ? { setsMode: r.sets_mode as string } : {}),
       };
     }
     case "question": {
@@ -1843,6 +1851,108 @@ export function codeAskKeyHint(ask: OpenAsk | null | undefined, dangerousMode: b
   if (!ask) return "";
   if (ask.type === "question") return "Enter to send · Esc to skip";
   return enterAllowsCodeAsk(ask, dangerousMode) ? "Enter to allow once · Esc to deny" : CODE_CLICK_TO_ALLOW_HINT;
+}
+
+/** v1.439.0: the modes a plan card's allow can leave the session in. */
+const PLAN_MODES: readonly string[] = ["ask", "edits", "auto", "full"];
+
+/** v1.439.0: a plan card's allow button, named by the mode it leaves the
+ *  session in ("" = not known: the button keeps its usual words). */
+export function planApproveWords(mode: string | undefined): string {
+  switch (mode) {
+    case "ask":
+      return "Approve, then ask first";
+    case "edits":
+      return "Approve and edit freely";
+    case "auto":
+      return "Approve, then Auto";
+    case "full":
+      return "Approve, then full access";
+    default:
+      return "";
+  }
+}
+
+/** v1.439.0: the two allow buttons of Claude Code's plan card — `once` for
+ *  Allow once, `session` for the session-wide allow ("" = the usual words).
+ *  When both leave the same mode, Allow once says only that it approves. */
+export function planAllowLabels(a: Pick<ApprovalEvent, "thenMode" | "setsMode">): {
+  once: string;
+  session: string;
+} {
+  const session = planApproveWords(a.setsMode);
+  const thenWords = planApproveWords(a.thenMode);
+  const once = thenWords && thenWords === session ? "Approve the plan" : thenWords;
+  return { once, session };
+}
+
+/** A step's words when the tool sent no title (the conversation's rows and
+ *  the Markdown export share them). */
+export function toolStepWords(t: ToolEvent): string {
+  if (t.title) return t.title;
+  const name = t.name || "a tool";
+  switch (t.kind) {
+    case "read":
+      return t.path ? `Read ${t.path}` : "Read a file";
+    case "edit":
+      return t.path ? `Changed ${t.path}` : "Changed a file";
+    case "write":
+      return t.path ? `Wrote ${t.path}` : "Wrote a file";
+    case "command":
+      return "Ran a command";
+    case "search":
+      return "Searched";
+    case "web":
+      return "Looked on the web";
+    default:
+      return `Used ${name}`;
+  }
+}
+
+/** v1.439.0: a session as Markdown, from the events this window already
+ *  holds: the user's messages, the replies, and each step by its title —
+ *  never a step's input or output, never thinking. */
+export function conversationMarkdown(title: string, events: readonly CodeEvent[], toolName: string): string {
+  const { items } = foldConversation(events);
+  const out: string[] = [`# ${title.trim() || "Coding session"}`];
+  let speaker: "user" | "tool" | "" = "";
+  const head = (who: "user" | "tool") => {
+    if (speaker !== who) out.push(`## ${who === "user" ? "You" : toolName || "Assistant"}`);
+    speaker = who;
+  };
+  for (const it of items) {
+    if (it.kind === "user") {
+      if (it.carry) continue;
+      head("user");
+      if (it.text.trim()) out.push(it.text.trim());
+      if (it.files.length) out.push(`Attached: ${it.files.map((f) => f.split(/[\\/]/).pop() || f).join(", ")}`);
+      speaker = "user";
+    } else if (it.kind === "steer") {
+      head("user");
+      if (it.text.trim()) out.push(`> Note: ${it.text.trim()}`);
+    } else if (it.kind === "text") {
+      if (!it.text.trim()) continue;
+      head("tool");
+      out.push(it.text.trim());
+    } else if (it.kind === "tool") {
+      head("tool");
+      out.push(`- ${toolStepWords(it.tool).replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  return `${out.join("\n\n")}\n`;
+}
+
+/** v1.439.0: the export's file name — the session's title, made safe for
+ *  every file system, ending ".md". */
+export function exportFileName(title: string): string {
+  const base = title
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .slice(0, 80)
+    .trim();
+  return `${base || "coding-session"}.md`;
 }
 
 /** What an approval is about, in a title line. */

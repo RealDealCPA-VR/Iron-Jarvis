@@ -660,6 +660,13 @@ class ClaudeDriver(Driver):
         super().__init__(**kw)
         self._controls = ControlWaiter()
         self._n = 0
+        #: v1.439.0: the mode Claude Code goes back to when its plan is
+        #: approved without a mode of its own (its ExitPlanMode returns to
+        #: ``prePlanMode ?? "default"``, read from 2.1.316's bundle): the
+        #: mode the session left for Plan, "ask" for a process started in
+        #: Plan, "" when not known (Auto: Claude Code may fall back to
+        #: default). Only the plan card's words read it.
+        self.pre_plan_mode = ""
         self._interrupting = False
         self._errored = False
         #: message id -> stream text items in order / how many are settled.
@@ -750,6 +757,10 @@ class ClaudeDriver(Driver):
 
     # -- the command line ------------------------------------------------------
     def argv(self, *, session_id: str, resume: bool) -> list[str]:
+        if self.mode == "plan":
+            # Started in Plan: Claude Code has no mode to go back to, so an
+            # approved plan leaves it in its default (Ask first).
+            self.pre_plan_mode = "ask"
         out = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--include-partial-messages",
@@ -923,6 +934,10 @@ class ClaudeDriver(Driver):
             await self.control("set_permission_mode", mode=MODES[mode])
         except ControlRefused as exc:
             raise ControlRefused(f"Claude Code did not change its mode: {exc}") from None
+        if mode == "plan" and self.mode != "plan":
+            self.pre_plan_mode = "" if self.mode == "auto" else self.mode
+        elif mode != "plan":
+            self.pre_plan_mode = ""
         self.mode = mode
         return "now"
 
@@ -1066,7 +1081,13 @@ class ClaudeDriver(Driver):
             # v1.418.0 (C4.4): a command's title IS its description now —
             # never said twice on the card.
             detail = ""
-        effect = suggestion_words(sugg, W.ALLOW_SIMILAR if all_commands else "Allow for this session")
+        # v1.439.0: on the plan card the session-wide allow names the mode it
+        # leaves the session in, so that mode switch is not said again.
+        plan_sets = suggested_mode(sugg) if name == "ExitPlanMode" else ""
+        if plan_sets == "plan":
+            plan_sets = ""
+        said = [x for x in sugg if x.get("type") != "setMode"] if plan_sets else sugg
+        effect = suggestion_words(said, W.ALLOW_SIMILAR if all_commands else "Allow for this session") if said else ""
         if effect:
             detail = f"{detail}\n\n{effect}" if detail else effect
         ev = make(
@@ -1078,6 +1099,15 @@ class ClaudeDriver(Driver):
         if name == "ExitPlanMode" and str(inp.get("plan") or "").strip():
             # v1.417.0 (C4.1): the plan itself, read before the answer.
             ev["plan"] = clip(inp.get("plan"), PLAN_CHARS)
+        if name == "ExitPlanMode":
+            # v1.439.0: the mode each allow leaves the session in, so the
+            # card names it ("Approve, then ask first" / "Approve and edit
+            # freely"); a key is absent when it is not known.
+            then = self.pre_plan_mode if self.mode == "plan" else self.mode
+            if then in MODE_LABELS and then != "plan":
+                ev["then_mode"] = then
+            if plan_sets:
+                ev["sets_mode"] = plan_sets
         if not sugg:
             # No session-wide allow offered: the card answers this one call.
             ev["once_only"] = True

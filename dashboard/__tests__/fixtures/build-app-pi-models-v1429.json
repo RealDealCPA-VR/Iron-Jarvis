@@ -224,7 +224,7 @@
     "name": "copy",
     "description": "Only in Pi's own terminal",
     "source": "pi",
-    "note": "Use the copy button under a reply."
+    "note": "Point at a finished reply and press its copy icon (Copy reply) to copy its text."
    },
    {
     "name": "share",
