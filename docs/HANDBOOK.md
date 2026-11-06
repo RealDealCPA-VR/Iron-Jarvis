@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.438.0 (2026-11-06).*
+holds itself to. Current as of v1.439.0 (2026-11-06).*
 
 ---
 
@@ -2019,6 +2019,80 @@ the current level's full description when you rest the pointer on it.
 
 Nothing about what each level does changed, and "Auto (its own safety
 check)" typed in chat still finds Auto.
+
+## Antigravity in the Code view, and usage you can check now (v1.439.0)
+
+**Google Antigravity is the sixth tool in Build › Code.** If Google's
+Antigravity CLI (`agy`) is installed on this PC, the Code view offers it
+beside Claude Code, Codex, Pi, OpenCode and Grok. It runs with all of its own
+tools, skills and settings; Iron Jarvis starts it, draws it, and answers its
+questions as cards.
+
+- **Sign in once, in Antigravity.** Antigravity uses its own sign-in, not
+  your Iron-Proxy accounts. If it is not signed in, the reply says so: open a
+  terminal (Build › Terminal can start `agy`) and sign in there.
+- **Modes.** "Antigravity's own rules" is Antigravity's Default: it asks
+  before every command, and file changes follow your own Antigravity
+  permission settings. Out of the box, it changes files without asking,
+  inside and outside the folder. Auto edits and Plan are Antigravity's own
+  (Plan is not read-only). Full access lets it act without any card and
+  starts a new Antigravity before your next message. To be asked before
+  every file change, set `"toolPermission": "strict"` in Antigravity's own
+  settings file (`~/.gemini/antigravity-cli/settings.json`). Iron Jarvis
+  never changes that file for you.
+- **Cards and questions.** Antigravity offers only Allow once or Deny, never
+  "for this session". Denying ends its reply. When it asks you a question,
+  the choices appear as a card, and you can type your own answer.
+- **Models and thinking.** The model chip lists Antigravity's models, and
+  the thinking chip lists only the levels that model has. Both change
+  without a restart.
+- **A message while it works** reaches the reply it is working on, as with
+  the other tools. **Stop** ends it.
+- **Your saved Antigravity conversations** for the folder appear in the list.
+  "Open in terminal" reopens one with `agy --conversation <id>`.
+
+**Check an account's usage now.** Next to an account's usage, a small refresh
+icon ("Check usage now") asks that account's own Claude Code or Codex how much
+of its windows is used. The icon is on the Iron-Proxy card in Settings ›
+Connections, on the account cards in Chat › Code, and on the Usage tab in
+Build › Code. The check is not a model call and uses none of your usage. The
+new number reaches every place that shows it, including the model menu.
+
+- While a reply runs on an account, Iron Jarvis checks it again by itself
+  about every three minutes. When nothing runs, it checks nothing.
+- One account is checked at most once every 20 seconds, so a second press
+  shows the last answer.
+- Claude Code sometimes has no usage answer ready; the line then says "try
+  again in a minute".
+- Grok and other accounts have no such check, so they show no icon.
+- The Connections card now also shows each account's percent used, for
+  example "13% of the 7-day window used".
+
+**Smaller things in Build › Code:**
+
+- **Copy a reply:** hover over a finished reply (or move to it with the
+  keyboard) for a copy icon.
+- **Export as Markdown:** the session's ⋯ menu saves your messages, the
+  replies and the step titles to a `.md` file.
+- **Claude Code's plan card** names its buttons by the mode each leaves you
+  in, for example "Approve, then ask first" or "Approve and edit freely".
+- **Typed settings:** `/model <name>` and `/effort <level>`, typed for Claude
+  Code or Grok, set the model and effort chips.
+- **Terminal-only commands:** Claude Code commands that only work in its own
+  terminal, such as `/login` or `/permissions`, show in the `/` menu with a
+  note saying so.
+- **Grok's always-approve commands** (`/always-approve`, `/auto`) are not
+  offered: use the mode chip.
+- **Commands for this project only:** OpenCode's `/` list shows the commands
+  of this project, never another project's, and shows each command's
+  argument hint.
+- **Codex warnings** about your config and failed hooks appear as one line
+  each.
+- **Renaming reaches the tool itself:** a renamed session is also renamed
+  in Claude Code or Codex, so their own resume lists show the same name.
+
+The full comparison of Build › Code against each tool's own terminal is in
+`docs/BUILD-CODE-PARITY-2026-11-06.md`.
 
 ## More setup from chat (v1.438.0)
 

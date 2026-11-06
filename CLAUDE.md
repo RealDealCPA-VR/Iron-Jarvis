@@ -15003,6 +15003,122 @@ does not need a bump, stop and bump it.
     at the hospital starts at 7" arms `config_set` (Wave 2 trigger); never
     driven with a real model, Iron-Proxy, Notion or the packaged app.
 
+- **Antigravity is the SIXTH tool in Build › Code; an account's usage is READ
+  from its own CLI on a press or while it is in use; the parity table is
+  written down** (v1.439.0; four lanes, each a builder + an independent
+  mutation-checking reviewer; the reviewers found 16 more defects).
+  - **ANTIGRAVITY (`hosted/antigravity.py`, on `hosted/acp.AcpDriver`).**
+    Every fact was MEASURED on Google's signed `agy` 1.5.2, run from a
+    scratch home against a local stand-in Gemini API
+    (`GOOGLE_GEMINI_BASE_URL`); nothing reached Google, and nothing was
+    signed in. See the module docstring and
+    `tests/fixtures/build_app_v1439/a_*`.
+    - Start: argv `agy acp --disable-telemetry --log-file
+      <home>/hosted/<sid>/agy-acp.log`. The log is trimmed to its last
+      256 KB (`trim_log`, off the loop) when it passes 2 MB.
+    - Install and sign-in: listed only when installed (`ONLY_WHEN_INSTALLED`;
+      found on PATH, else `%LOCALAPPDATA%\agy\bin\agy.exe`). It signs in on
+      its own (`OWN_SIGN_IN`; no Iron-Proxy accounts), and it is NOT a
+      `subscription_clis` row.
+    - NEVER call ACP `authenticate`: agy KEEPS the chosen method in
+      `cache/acp-auth-state.json` for later starts, which would change the
+      user's own sign-in. A `-32000 "Authentication required"` says to run
+      `agy` and sign in.
+    - Modes: agy `default` is "Antigravity's own rules", and it asks before
+      COMMANDS ONLY. Measured: with no settings file, writes ran uncarded
+      inside and outside the folder; only the user's own `toolPermission:
+      "strict"` asks before writes. `accept-edits` is Auto edits; `plan` is
+      Plan, which is NOT read-only. Full access is
+      `--dangerously-skip-permissions`, a new process with two presses. Ask
+      first and Auto are hidden, with reasons. Iron Jarvis never writes
+      `~/.gemini/antigravity-cli/settings.json`.
+    - Cards are Allow once / Deny only. A Deny ends agy's reply.
+    - Questions: `elicitation/create` forms (`qN` with oneOf const +
+      `qN_other`) are answered `{action: accept, content}` or decline. The
+      client MUST declare `elicitation`, or agy prints the question and
+      ends the turn.
+    - STEER differs from OpenCode: a second `session/prompt` makes the FIRST
+      prompt answer `end_turn` at once, and the latest prompt's answer ends
+      the turn. A note is read on its own `user_message_chunk` echo (never
+      on the message's echo).
+    - FAILURES ARE TEXT: "⚠ Agent execution terminated due to error." fails
+      the reply, with the reason taken from the session's own log;
+      "⚠ API error (attempt N)" is a notice.
+    - Models: the base ids, with thinking levels per model (from
+      `<base>-<level>` ids), set live through `session/set_config_option`
+      and kept in `<home>/hosted/antigravity_models.json`.
+    - Saved conversations: `conversation_summaries.db` read-only
+      (`nesting_depth` 0, `file:///` workspace URIs). Resume with
+      `session/resume`, else `session/load` with the replay hidden. "Open in
+      terminal" runs `agy --conversation <id>`.
+    - Tests read only `IRONJARVIS_ANTIGRAVITY_HOME` (a conftest session
+      fixture).
+    - Shared fix: a tool whose `open()` failed now ends FAILED with its
+      refusal (`_stop_process(end_turn=False)`), never "the coding tool was
+      closed".
+  - **USAGE (`iron_proxy/usage_read.py`, route `POST
+    /build/accounts/{id}/usage/refresh`).** Before this, nothing ever asked a
+    vendor; windows only arrived with finished calls.
+    - Sources, measured, neither a model call: Claude Code's control request
+      `get_usage {skip_behaviors: true}` after `initialize` (0.15 s), and
+      Codex's `account/rateLimits/read` on `codex app-server` (0.7 s). The
+      Claude request is EXPERIMENTAL in Claude Code's own schema, and it
+      sometimes answers `rate_limits: null`; that is said as "try again in a
+      minute" and nothing is stored.
+    - How the CLI runs: as the account (`make_lease`), with `child_env`,
+      `--setting-sources "" --strict-mcp-config`, a private empty folder,
+      `core/procs`, 15 s, a 3 s grace to exit, then a tree kill.
+    - It is REFUSED for: an account with no home (it would read this PC's
+      login into the wrong account), signed out, off, Grok/other vendors, and
+      Iron-Proxy off.
+    - The reading is told to Iron-Proxy as `/signal` `status: 200` + headers
+      / `rateLimits`, which STORES the windows (`recordLimits`) without
+      parking and without counting a request. This needs the `plan-usage`
+      feature and is pinned against the real vendored bundle. The snapshot
+      is then refreshed, so menus, router floors and the Usage tab see it.
+    - Limits: 20 s per account; "as of" = the last read that WORKED.
+    - Loop `account_usage`: every 60 s, it re-reads only accounts IN USE (a
+      Build › Code live turn running, or a Chat › Code running turn's
+      `setup.account`) whose last read is over 180 s old. Nothing in use =
+      no read. Iron-Proxy off = the row is popped (`on_off`).
+    - Screen: one component, `components/accounts/UsageRefresh.tsx`, on the
+      Connections Iron-Proxy card (which now also shows "N% of the 7-day
+      window used"), Chat › Code's account cards and Build › Code's Usage
+      tab. Model menu rows get no button.
+  - **PARITY (`docs/BUILD-CODE-PARITY-2026-11-06.md`: 207 rows, what
+    changed, what is left).**
+    - New `hosted/typed.py`: `/model x` and `/effort x` typed for Claude Code
+      or Grok go through the service's patch. Claude Code's terminal-only
+      built-ins become note rows, ONLY for names missing from its own
+      `initialize` list, which was measured.
+    - Grok's `/always-approve` and `/auto` are dropped and refused typed.
+    - ACP command argument hints are kept. OpenCode's command list is kept
+      per folder; it is read through a copy, because the sync route races
+      the loop. OpenCode model rows are grouped.
+    - Codex warnings and failed hooks show as one masked notice each. The
+      deprecation about Iron Jarvis's own resume call is logged only.
+    - Rename reaches the tool (`rename_session`, `thread/name/set`) only
+      AFTER the PATCH is saved, in the background.
+    - A Grok sign-in failure gets the Sign in press.
+    - Copy icon on each finished reply. "Export as Markdown" in the row's ⋯
+      menu (events already loaded; no tool output).
+    - Claude Code's plan card names its buttons by the mode Claude Code
+      returns to (`pre_plan_mode` → `then_mode`/`sets_mode`). The row and
+      chip follow that mode after approval: Claude Code restores its
+      pre-Plan mode, Full access included, without a new two-press.
+  - **OPEN:**
+    - Never driven with a real Google sign-in, and never in the packaged
+      app.
+    - `rename_session` in headless mode was not tried live.
+    - A picture-only Antigravity note can be handed back after agy read it.
+    - Antigravity's transcript and usage windows are not read.
+    - The left-for-later list is in the parity doc.
+  - **Pins:** `tests/test_build_app_antigravity{,_review,_live}_v1439.py`,
+    `tests/test_account_usage_{read,routes}_v1439.py`,
+    `tests/test_build_app_parity{,_review}_v1439.py`,
+    `tests/test_build_code_plan_card{,_review}_v1439.py`, and
+    `dashboard/__tests__/{build-app-antigravity,usage-refresh,build-app-parity,build-code-parity,build-code-parity-review}-v1439.test.tsx`.
+
 ## Map (where things live)
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
