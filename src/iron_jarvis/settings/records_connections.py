@@ -1734,13 +1734,21 @@ def connections_tools_for(text: str) -> tuple[str, ...]:
     return _connections_tools_for(str(text or "")[:_MAX_TEXT], _account_names())
 
 
+#: A request cut into clauses. v1.438.0 (Wave 4 merge): a joining word is
+#: looked for only at the START of a run of spaces, which is read once
+#: (``(?<!\s)\s++``). Written as ``\s+(?:…)`` every position inside a long
+#: run re-read the rest of it: 50,000 spaces took 1.2 s here, 15.8 s for the
+#: suite's pathological inputs on GitHub's runner.
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?;\n])\s+|(?<!\s)\s++(?:and\s+then|then|but)\s+")
+
+
 @lru_cache(maxsize=256)
 def _connections_tools_for(t: str, names: tuple[str, ...]) -> tuple[str, ...]:
     if not t.strip():
         return ()
     out: list[str] = []
     try:
-        for clause in re.split(r"(?<=[.!?;\n])\s+|\s+(?:and\s+then|then|but)\s+", t)[:40]:
+        for clause in _CLAUSE_SPLIT.split(t)[:40]:
             out += _clause_tools(clause, names)
     except Exception:  # noqa: BLE001 — a matcher fault arms nothing new
         return ()

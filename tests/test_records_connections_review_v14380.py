@@ -486,3 +486,26 @@ def test_config_list_tells_the_model_how_account_groups_merge(tmp_path):
     line = next(x for x in out.output.splitlines() if "(account_groups)" in x)
     assert "empty list [] removes that group" in line, line
     assert "groups you leave out are kept" in line, line
+
+
+def test_the_clause_splitter_reads_a_long_run_of_spaces_once():
+    """v1.438.0 (Wave 4 merge, from the GitHub Tests gate): ``\s+(?:and…)``
+    re-read the rest of a long run of spaces from every position — 50,000
+    spaces took ~1.2 s per message and Wave 3's pathological-input pin went
+    past its bound on the runner. Run in a child with a deadline; the old
+    pattern takes ~10 s here."""
+    import subprocess
+    import sys
+
+    code = (
+        "import time\n"
+        "from iron_jarvis.settings import records_connections as C\n"
+        "bad = [w + ' ' * 50000 + 'x' for w in ('stop', 'undo', 'add', 'show me', 'goal', 'keep', 'what', 'a b')]\n"
+        "t = time.perf_counter()\n"
+        "for s in bad:\n"
+        "    C._connections_tools_for(s, ())\n"
+        "print(round(time.perf_counter() - t, 3))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert float(out.stdout.strip()) < 3.0, out.stdout
