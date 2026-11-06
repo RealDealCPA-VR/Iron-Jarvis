@@ -9,7 +9,7 @@
  * and the thinking disclosure. Nothing here talks to Iron Jarvis.
  */
 
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
   Check,
@@ -41,6 +41,7 @@ import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/h
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
 import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 import { ConfirmButton } from "@/components/ui";
+import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
 import {
   BRANCH_FROM_HERE,
   BRANCH_FROM_HERE_TITLE,
@@ -210,18 +211,26 @@ export interface MessageActions {
  *  Rewind to here (two presses). Only what the tool can do is listed. */
 function MessageMenu({ at, actions }: { at: string; actions: MessageActions }) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  const button = useRef<HTMLButtonElement | null>(null);
+  const close = useCallback(() => setOpen(false), []);
+  // v1.441.0 (integration I6): Escape and a press outside close it.
+  useMenuClose(open, box, close, button);
   const { facts, busy } = actions;
   if (!facts.forkAt && !facts.rewind) return null;
   return (
-    <div className="relative">
+    <div ref={box} className="relative">
       <button
+        ref={button}
         type="button"
         aria-label={MESSAGE_MENU_LABEL}
         aria-haspopup="menu"
         aria-expanded={open}
         data-testid="code-user-more"
         onClick={() => setOpen((v) => !v)}
-        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/user:opacity-100 focus-visible:opacity-100"
+        className={`grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 ${
+          open ? "" : `${MENU_BUTTON_HOVER_FADE} [@media(hover:hover)]:group-hover/user:opacity-100`
+        } focus-visible:opacity-100`}
       >
         <MoreHorizontal size={13} />
       </button>

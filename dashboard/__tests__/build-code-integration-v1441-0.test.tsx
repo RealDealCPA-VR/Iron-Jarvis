@@ -75,6 +75,8 @@ vi.mock("@/components/terminal/DirectoryTree", () => ({
 }));
 
 import { BuildCodeView } from "@/components/buildCode/BuildCodeView";
+import { CodeConversation, type MessageActions } from "@/components/buildCode/CodeConversation";
+import { decodeBranch } from "@/lib/buildAppBranch";
 import {
   codeAskKeyHint,
   decodeCodeEvent,
@@ -248,5 +250,83 @@ describe("I4: Shift+Tab never steps into an OpenCode agent mode", () => {
     expect(nextMode(opencode, "agent:yolo")).toBe("ask");
     expect(nextMode(opencode, "agent:review")).toBe("ask");
     expect(nextMode(opencode, "full")).toBe("ask");
+  });
+});
+
+/* =============================================== I6. the two ⋯ menus close */
+
+const HOVER_FADE = "[@media(hover:hover)]:opacity-0";
+
+describe("I6: the message ⋯ and the row ⋯ close on Escape and an outside click, and stay shown while open", () => {
+  const AT = "2026-11-06T10:00:00.100000Z";
+  const USER_EVENTS = [
+    { type: "user", at: AT, text: "first one", files: [] },
+    { type: "text_done", at: "2026-11-06T10:00:01Z", item: "a", text: "reply one" },
+    { type: "done", at: "2026-11-06T10:00:02Z", stop: "completed" },
+  ];
+  const facts = decodeBranch({ branch: { fork: true, fork_at: true, rewind: true, at: [AT] } })!;
+  const actions: MessageActions = { facts, busy: false, onBranch: vi.fn(), onRewind: vi.fn() };
+  const renderMessage = () =>
+    render(
+      <div>
+        <CodeConversation
+          items={foldConversation(decoded(USER_EVENTS)).items}
+          folder="C:\work"
+          tool="claude-code"
+          messageActions={actions}
+        />
+        <p data-testid="outside">elsewhere</p>
+      </div>,
+    );
+
+  it("the message ⋯: Escape closes it and gives the button back its focus", () => {
+    renderMessage();
+    const more = screen.getByTestId("code-user-more");
+    fireEvent.click(more);
+    expect(screen.getByTestId("code-user-branch")).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId("code-user-branch"), { key: "Escape" });
+    expect(screen.queryByTestId("code-user-branch")).toBeNull();
+    expect(document.activeElement).toBe(more);
+  });
+
+  it("the message ⋯: a click outside closes it; a click inside does not", () => {
+    renderMessage();
+    fireEvent.click(screen.getByTestId("code-user-more"));
+    fireEvent.mouseDown(screen.getByTestId("code-user-rewind"));
+    expect(screen.getByTestId("code-user-branch")).toBeTruthy();
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+    expect(screen.queryByTestId("code-user-branch")).toBeNull();
+  });
+
+  it("the message ⋯: its button never fades on a mouse device while the menu is open", () => {
+    renderMessage();
+    const more = screen.getByTestId("code-user-more");
+    expect(more.className).toContain(HOVER_FADE);
+    fireEvent.click(more);
+    expect(more.className).not.toContain(HOVER_FADE);
+  });
+
+  const openRows = () => {
+    H.gets = {
+      "/build/app/harnesses": TOOLS,
+      "/build/app/sessions": { sessions: [DAEMON.before.session] },
+      "/editor/options": { editors: [], preferred: "" },
+    };
+    render(<BuildCodeView initialSession={null} onOpenedTerminal={() => {}} />);
+    return String(DAEMON.before.session.id);
+  };
+
+  it("the row ⋯: Escape and an outside click close it; its button stays shown while open", async () => {
+    const sid = openRows();
+    const more = await screen.findByTestId(`code-row-more-${sid}`, {}, { timeout: 10_000 });
+    fireEvent.click(more);
+    expect(more.className).not.toContain(HOVER_FADE);
+    expect(screen.getByTestId(`code-row-rename-${sid}`)).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId(`code-row-rename-${sid}`), { key: "Escape" });
+    expect(screen.queryByTestId(`code-row-rename-${sid}`)).toBeNull();
+    expect(more.className).toContain(HOVER_FADE);
+    fireEvent.click(more);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId(`code-row-rename-${sid}`)).toBeNull();
   });
 });

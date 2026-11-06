@@ -96,6 +96,7 @@ import {
 } from "@/lib/buildAppBranch";
 import { CodePanes } from "@/components/buildCode/CodePanes";
 import { CodeAskCard, type CodeAnswer } from "@/components/buildCode/CodeAskCard";
+import { MENU_BUTTON_HOVER_FADE, useMenuClose } from "@/components/buildCode/useMenuClose";
 import {
   AttachButton,
   AttachmentChips,
@@ -2095,6 +2096,12 @@ export function BuildCodeView({
   const [openId, setOpenId] = useState<string | null>(initialSession);
   const [creating, setCreating] = useState(false);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
+  // v1.441.0 (integration I6): the open row's ⋯ (its button and its list)
+  // closes on Escape and on a press outside, like every other small menu.
+  const rowMenuBox = useRef<HTMLDivElement | null>(null);
+  const rowMenuButton = useRef<HTMLButtonElement | null>(null);
+  const closeRowMenu = useCallback(() => setRowMenu(null), []);
+  useMenuClose(rowMenu !== null, rowMenuBox, closeRowMenu, rowMenuButton);
   /** v1.439.0: the open session's loaded events (its pane fills it). */
   const exportRef = useRef<ExportSource | null>(null);
   // v1.441.0 review: the export reads up to 200 pages one after another, so
@@ -2519,14 +2526,18 @@ export function BuildCodeView({
         </span>
       </button>
       )}
+      <div ref={rowMenu === s.id ? rowMenuBox : undefined} className="contents">
       <button
+        ref={rowMenu === s.id ? rowMenuButton : undefined}
         type="button"
         aria-label={`More for ${sessionTitle(s, tools)}`}
         aria-haspopup="menu"
         aria-expanded={rowMenu === s.id}
         data-testid={`code-row-more-${s.id}`}
         onClick={() => setRowMenu((cur) => (cur === s.id ? null : s.id))}
-        className="absolute right-1 top-1.5 grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
+        className={`absolute right-1 top-1.5 grid h-6 w-6 place-items-center rounded-md text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200 ${
+          rowMenu === s.id ? "" : `${MENU_BUTTON_HOVER_FADE} [@media(hover:hover)]:group-hover:opacity-100`
+        } focus-visible:opacity-100`}
       >
         <MoreHorizontal size={13} />
       </button>
@@ -2609,6 +2620,7 @@ export function BuildCodeView({
           </div>
         </div>
       ) : null}
+      </div>
     </li>
   );
 
