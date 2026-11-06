@@ -350,7 +350,9 @@ describe("Iron-Proxy card: one look per account row", () => {
     await mountIron();
     const parked = accountRow("c");
     const buttons = within(parked).getAllByRole("button");
-    // Sign in, Open in Build, Unpark, up, down, Disable, Remove.
+    // Sign in, Open in Build, Unpark, up, down, Disable, Sign out, Remove.
+    // v1.440.0 (Wave 6 group D): a signed-in CLI account's row gains Sign out
+    // (two presses), before Remove — moved on purpose.
     expect(buttons.map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())).toEqual([
       "Sign in",
       "Open in Build",
@@ -358,6 +360,7 @@ describe("Iron-Proxy card: one look per account row", () => {
       "Move Second Claude up",
       "Move Second Claude down",
       "Disable",
+      "Sign out",
       "Remove",
     ]);
     for (const b of buttons) expect(borders(b), b.textContent ?? "").toEqual([]);
