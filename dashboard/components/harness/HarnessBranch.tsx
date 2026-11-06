@@ -165,11 +165,16 @@ export function BranchView({
       /* keep what was shown */
     }
   }, [sessionId]);
+  // Review (v1.439.0): a MERGED session's watch is over — the daemon's pass
+  // skips any session whose facts carry `merged_at` (`_tend`), so its record
+  // stays frozen at whatever it last said ("watching", "starts a fix…"),
+  // which would read as a promise nobody keeps. No read, no line.
+  const ciLive = !!prUrl && !removed && !git.merged && !merged;
   useEffect(() => {
-    if (prUrl && !removed) void readCi();
-  }, [prUrl, removed, readCi, refreshKey]);
-  useVisibleInterval(() => void readCi(), PR_POLL_MS, !!prUrl && !removed);
-  const ciWords = ci ? ciWatchWords(ci) : "";
+    if (ciLive) void readCi();
+  }, [ciLive, readCi, refreshKey]);
+  useVisibleInterval(() => void readCi(), PR_POLL_MS, ciLive);
+  const ciWords = ci && ciLive ? ciWatchWords(ci) : "";
 
   async function act(name: string, fn: () => Promise<string | null>) {
     setBusy(name);
@@ -493,7 +498,7 @@ export function BranchView({
             data-testid="branch-pr-check"
             onClick={() => {
               void readPr();
-              void readCi();
+              if (ciLive) void readCi();
             }}
             className={ACTION}
           >
@@ -501,7 +506,7 @@ export function BranchView({
           </button>
         </div>
       ) : null}
-      {prUrl && ciWords && ci?.watch ? (
+      {ciLive && ciWords && ci?.watch ? (
         <p
           data-testid="branch-ci-watch"
           data-state={ci.watch.state}

@@ -930,8 +930,11 @@ function AccountRow({
 /** v1.439.0: what Sign out does, said before the press (the tooltip). The
  *  existing login (`home_adopted`) is this PC's own sign-in, so it says so. */
 export function signOutTitle(a: Pick<IronProxyAccount, "home_adopted">): string {
+  // Review (v1.439.0): Iron-Proxy's logout runs the CLI's own logout in the
+  // account's folder, which removes the sign-in a terminal or a coding session
+  // already running on that account reads too — say so before the press.
   const base =
-    "Sign this account out of its CLI (press twice). The account stays here and needs a new sign-in before it is used again.";
+    "Sign this account out of its CLI (press twice). The account stays here and needs a new sign-in before it is used again. A terminal or coding session running on this account now may stop being able to answer.";
   return a.home_adopted
     ? `${base} This is this PC's own login, so the CLI is signed out on this PC too.`
     : base;
