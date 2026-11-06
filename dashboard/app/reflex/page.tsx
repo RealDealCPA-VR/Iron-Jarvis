@@ -159,11 +159,37 @@ const SOURCE_META: Record<ReflexSource, SourceMeta> = {
   },
 };
 
-/** GET /triggers — world-trigger status. Tolerate missing fields. */
-interface TriggersStatus {
-  email?: { active?: boolean };
+/** GET /triggers — world-trigger status. Tolerate missing fields.
+ *  v1.439.0: the daemon answers `{triggers: {email, calendar, slack}}`
+ *  (routes/triggers.py `_status`), and email/Slack say `enabled` +
+ *  `credentialed`, never `active` — the card read the top level and an
+ *  `active` key, so a saved calendar link, an on switch and a working
+ *  email/Slack source all read as off. `triggersOf` reads both shapes. */
+interface TriggerSource {
+  active?: boolean;
+  enabled?: boolean;
+  credentialed?: boolean;
+}
+interface TriggersParts {
+  email?: TriggerSource;
   calendar?: { enabled?: boolean; has_url?: boolean; lead_minutes?: number };
-  slack?: { active?: boolean };
+  slack?: TriggerSource;
+}
+interface TriggersStatus extends TriggersParts {
+  triggers?: TriggersParts;
+}
+
+function triggersOf(data: TriggersStatus | null | undefined): TriggersParts {
+  if (!data) return {};
+  return data.triggers && typeof data.triggers === "object" ? data.triggers : data;
+}
+
+/** A source can start work: it is on AND can receive (or an older shape's
+ *  own `active`). */
+function sourceActive(s: TriggerSource | undefined): boolean {
+  if (!s) return false;
+  if (typeof s.active === "boolean") return s.active;
+  return !!s.enabled && !!s.credentialed;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -947,9 +973,10 @@ function templateShownFor(r: ReflexRule): boolean {
 function TriggersCard() {
   const fid = useId(); // v1.316.0: ties the calendar labels
   const { data, reload } = useApi<TriggersStatus>("/triggers");
-  const cal = data?.calendar;
-  const emailActive = !!data?.email?.active;
-  const slackActive = !!data?.slack?.active;
+  const parts = triggersOf(data);
+  const cal = parts.calendar;
+  const emailActive = sourceActive(parts.email);
+  const slackActive = sourceActive(parts.slack);
 
   // Calendar form (POST is one Save; ICS URL is write-only — never shown back).
   const [enabled, setEnabled] = useState(false);
@@ -964,8 +991,9 @@ function TriggersCard() {
   useEffect(() => {
     if (data && !seeded.current) {
       seeded.current = true;
-      setEnabled(!!data.calendar?.enabled);
-      if (data.calendar?.lead_minutes != null) setLead(String(data.calendar.lead_minutes));
+      const seed = triggersOf(data).calendar;
+      setEnabled(!!seed?.enabled);
+      if (seed?.lead_minutes != null) setLead(String(seed.lead_minutes));
     }
   }, [data]);
 
@@ -993,6 +1021,24 @@ function TriggersCard() {
     }
   }
 
+  /** v1.439.0: DELETE /triggers/calendar/url — the daemon says whether a
+   *  saved link was really there (`removed`). */
+  async function removeCalendarUrl() {
+    setErr(null);
+    setOk(null);
+    try {
+      const res = await del<{ removed?: boolean }>("/triggers/calendar/url");
+      setOk(
+        res?.removed
+          ? "The saved calendar link was removed. Calendar events no longer start reflexes until you paste a new link."
+          : "There was no saved calendar link to remove.",
+      );
+      reload();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
   return (
     <Card title="Triggers" icon={<Antenna size={15} />}>
       <p className="mb-4 text-[12px] text-zinc-500">
@@ -1007,7 +1053,22 @@ function TriggersCard() {
               <CalendarClock size={15} className="text-amber-300" />
               <span className="text-sm font-medium text-zinc-100">Calendar</span>
               <Badge value={cal?.enabled ? "on" : "off"} tone={cal?.enabled ? "green" : "slate"} />
-              {cal?.has_url && <span className="text-[11px] text-zinc-500">URL saved</span>}
+              {cal?.has_url && (
+                <>
+                  <span className="text-[11px] text-zinc-500">URL saved</span>
+                  {/* v1.439.0 (chat-first Wave 6): DELETE /triggers/calendar/url
+                      had no door. Two presses, calm; the switch is left alone. */}
+                  <span data-testid="calendar-url-remove">
+                    <ConfirmButton
+                      variant="calm"
+                      onConfirm={removeCalendarUrl}
+                      label="Remove"
+                      confirmLabel="Remove the link?"
+                      title="Forget the saved calendar link (press twice). Calendar events stop starting reflexes until you paste a new one."
+                    />
+                  </span>
+                </>
+              )}
             </div>
             <Toggle enabled={enabled} busy={busy} onChange={() => setEnabled((v) => !v)} />
           </div>

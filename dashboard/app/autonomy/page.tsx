@@ -177,6 +177,13 @@ function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
 }
 
+/** What a deleted goal-from-chat took with it (v1.439.0). The daemon answers
+ *  `{deleted, revoked_grants?}`; the count is its own, never guessed. */
+function goalDeletedWords(name: string, revoked: number): string {
+  if (revoked <= 0) return `"${name}" deleted.`;
+  return `"${name}" deleted, and ${revoked} action${revoked === 1 ? "" : "s"} it could take without asking ${revoked === 1 ? "was" : "were"} revoked.`;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1160,6 +1167,28 @@ function GoalsSection() {
     }
   }
 
+  /** v1.439.0: DELETE /goals/{id} — the route chat's goal_delete shares
+   *  (`goals/engine.delete_goal`). The answer names what was revoked; a
+   *  refusal shows the daemon's own words. */
+  async function removeGoal(g: GoalRecord) {
+    setBusy(`${g.id}:delete`);
+    setOk(null);
+    setWarn(null);
+    setError(null);
+    try {
+      const res = await api<{ deleted?: string; revoked_grants?: string[] }>(
+        `/goals/${encodeURIComponent(g.id)}`,
+        { method: "DELETE" },
+      );
+      setOk(goalDeletedWords(g.name, res?.revoked_grants?.length ?? 0));
+      goals.reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const smallBtn =
     "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50";
 
@@ -1526,6 +1555,19 @@ function GoalsSection() {
                         title={`Stop "${g.name}" for good`}
                       />
                     )}
+                    {/* v1.439.0 (chat-first Wave 6): DELETE /goals/{id} had
+                        no door on any screen — only chat's goal_delete. Two
+                        presses, calm, in every state: the row, its schedule
+                        and its standing grants go (the engine's own rule). */}
+                    <span data-testid={`goal-delete-${g.id}`}>
+                      <ConfirmButton
+                        variant="calm"
+                        onConfirm={() => removeGoal(g)}
+                        label="Delete"
+                        confirmLabel="Delete it?"
+                        title={`Delete "${g.name}" — its schedule and the actions it may take without asking go too`}
+                      />
+                    </span>
                   </div>
                 </div>
               </div>
