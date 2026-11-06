@@ -554,7 +554,9 @@ class ModelServerAddTool(R._RecordTool):
         "192.168.1.20:1234\"): `address` is its address, `name` what to call it. If it needs a key, set "
         "`needs_key` true — NEVER pass the key: the user pastes it on a secure card. With `make_default`, "
         "its own model list is read and the default model is set from it: pass `model` (one of that "
-        "list), or leave it out and you are told the list. The user approves on a card; Undo removes it."
+        "list), or leave it out and you are told the list. With no address given for Ollama or LM Studio "
+        "running on this PC, use its own address here (Ollama http://localhost:11434, LM Studio "
+        "http://localhost:1234). The user approves on a card; Undo removes it."
     )
     input_schema = {
         "type": "object",
@@ -1586,6 +1588,30 @@ _ADD_VERB = re.compile(
     r"\b(?:add|connect|register|hook\s+up|set\s+up|plug\s+in|point\s+(?:you|jarvis|iron\s+jarvis)\s+(?:at|to))\b",
     re.IGNORECASE,
 )
+#: v1.442.0 (chat-first plan Wave 7, group A): "Add my local Ollama model and
+#: make it my default" names the PROGRAM as the thing added, with no address
+#: and no "server": an add verb whose object is a model server's program
+#: (`_BRAND`). The tool's description gives Ollama's and LM Studio's own
+#: addresses on this PC for that case. Never "add Ollama to the comparison sheet"
+#: (`_INTO_CONTENT`), never one set up on another device.
+_ADD_BRAND = re.compile(
+    r"\b(?:add|connect|register|hook\s+up|set\s+up|plug\s+in)\s+(?:(?:my|the|a|an|our|your|this)\s+)?"
+    r"(?:(?:local|own|new)\s+)?" + _BRAND + r"\b" + _NOT_AFTER_SERVER
+    + r"(?![^.!?\n]{0,30}?\bon\s+(?:my|the|her|his|our|a|another)\s+(?:(?:new|old|work|home|other)\s+)?"
+    r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop)\b)"
+    # Review (v1.442.0): the program as part of SOMETHING ELSE — "add Ollama
+    # support to our Python app", "connect Ollama to Open WebUI" (another
+    # program; "to Jarvis" / "to you" is still this app), "set up LM Studio
+    # for my brother".
+    r"(?!\s+(?:support|integration|plugins?|plug-ins?|sdk|client|library|package|extension|example|tutorial"
+    r"|section|chapter|paragraph|instructions|docs?|bindings?)\b)"
+    r"(?!\s+(?:to|into|with)\s+(?!(?:jarvis|iron\s+jarvis|you|me|this\s+(?:pc|app|computer)|the\s+app"
+    r"|my\s+(?:models?|default|pc|computer))\b)[\w-]+)"
+    r"(?![^.!?\n]{0,30}?\bfor\s+(?:my|her|his|their|our|a|an)\s+(?:(?:new|little|older|younger)\s+)?"
+    r"(?:brother|sister|mom|mother|dad|father|wife|husband|son|daughter|kids?|friends?|clients?|colleagues?"
+    r"|coworkers?|co-workers?|boss|team|parents?|family|students?|class)\b)",
+    re.IGNORECASE,
+)
 _SERVER_THING = re.compile(
     r"(?:\b(?:" + _BRAND + r")\s+(?:server|box|machine|endpoint|instance|gateway|node|rig)\b|\b" + _QUALIFIED
     + r"\b)" + _NOT_AFTER_SERVER,
@@ -1772,6 +1798,10 @@ def _clause_tools(c: str, names: tuple[str, ...]) -> list[str]:
     if into_content:
         add = None  # review: "add the AI server to the asset list"
     if add and (server_thing or (brand and address) or (address and _PLAIN_SERVER.search(c))):
+        out += ["model_server_add", "model_server_default"]
+    elif not into_content and (m := _ADD_BRAND.search(c)) is not None and not (
+        _CABLE_VERB.match(m.group(0)) and _TO_A_DEVICE.search(c)
+    ):
         out += ["model_server_add", "model_server_default"]
     elif not into_content and _USE_AT.search(c) and (brand or server_thing):
         out += ["model_server_add", "model_server_default"]

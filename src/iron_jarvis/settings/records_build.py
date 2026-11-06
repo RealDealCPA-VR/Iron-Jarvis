@@ -1504,7 +1504,14 @@ _DEFAULTS_SET = re.compile(
     + r"|(?:new\s+)?(?:coding\s+)?sessions?\s+(?:in|for)\s+" + _FOLDER_REF + r"\s+(?:should|will|must|to|always)\s+"
     r"(?:start|begin|open|run|use|be)"
     + r"|(?:start|open|begin)\s+(?:new\s+)?(?:coding\s+)?sessions?\s+(?:in|for)\s+" + _FOLDER_REF + r"\s+(?:with|on|in)\b"
-    + r"|(?:in|for)\s+" + _FOLDER_REF + r"\s*,?\s+(?:use|start\s+with|default\s+to)\s+" + _MODEL + r"\b",
+    + r"|(?:in|for)\s+" + _FOLDER_REF + r"\s*,?\s+(?:use|start\s+with|default\s+to)\s+" + _MODEL + r"\b"
+    # v1.442.0 (chat-first plan Wave 7, group A): the VIEW named as what
+    # starts with the model — "Make Build › Code use Codex on my work account
+    # in Full access for this repo" (the tool keeps the account out and
+    # refuses Full access, each in its own words).
+    + r"|(?:make|set|have|let|configure)\s+(?:build\s*(?:›|>|-)?\s*code|chat\s*(?:›|>)\s*code|the\s+code\s+view"
+    r"|(?:my\s+|the\s+)?(?:new\s+)?(?:coding\s+)?sessions?)\s+(?:always\s+)?(?:use|start\s+with|default\s+to"
+    r"|run(?:\s+on)?|open\s+(?:with|in))\s+" + _MODEL + r"\b[^\n]{0,120}?\b(?:for|in|on)\s+" + _FOLDER_REF,
     re.IGNORECASE,
 )
 _DEFAULTS_CLEAR = re.compile(

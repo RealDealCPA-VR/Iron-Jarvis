@@ -62,6 +62,7 @@ from typing import Any
 
 from ..core.ids import new_id
 from ..tools.base import Reversibility, SpendCheck, Tool, ToolContext, ToolResult
+from . import setup_words as _SETUP_WORDS
 
 log = logging.getLogger("ironjarvis.settings")
 
@@ -302,8 +303,10 @@ _CREATE_WEBHOOK = re.compile(
 )
 _CREATE_SENTINEL = re.compile(
     _CREATE_VERB + r"(?:sentinels?|watchers?|folder\s+watchers?)\b" + _CODE_THING + _CODE_PLACE
-    + r"|\b(?:watch|keep\s+an\s+eye\s+on|monitor)\s+(?:my|the|this|that|for)\b[^.?!\n]{0,30}?"
-    r"\b(?:folder|directory|drive|downloads|desktop|documents\s+folder|path)\b",
+    # v1.442.0 (chat-first plan Wave 7, group A): the watched folder is ONE
+    # definition (settings.setup_words.WATCH_FOLDER), which never reads "watch
+    # the Downloads movie" or "monitor my desktop usage" as a folder.
+    + r"|" + _SETUP_WORDS.WATCH_FOLDER.pattern,
     re.IGNORECASE,
 )
 _CREATE_GOAL = re.compile(_CREATE_VERB + r"goals?\b" + _NOT_A_GOAL_RECORD, re.IGNORECASE)
@@ -553,8 +556,17 @@ def _schedule_named(t: str) -> bool:
 
 
 def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]" = ()) -> list[str]:
+    W = _SETUP_WORDS
     out: list[str] = []
-    schedule = _schedule_named(t)
+    # v1.442.0 (chat-first plan Wave 7, group A): a sentence about Iron
+    # Jarvis's OWN backup ("schedule a weekly backup of my settings to my
+    # OneDrive folder") is never one of its schedules — a schedule runs a
+    # task, it does not back the app up (backups run by themselves once a
+    # day; daemon.page_doors says so) — so the schedule words are read
+    # without it. Its folder is the "Backup copy folder" setting
+    # (settings.trigger), and the drive named as that folder is the synced
+    # folder on this PC, never the app (connectors.app_names).
+    schedule = _schedule_named(W.without_backup_sentences(t) if W.jarvis_backup(t) else t)
     if schedule:
         out += ["schedule_update", "schedule_delete", "workflow_schedule"]
         # B1.3: a NEW schedule — "make a schedule that…", or a recurring time
@@ -576,11 +588,27 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
         re.IGNORECASE,
     ):
         out.append("workflow_run")
-    if _CHANNEL_WORDS.search(t):
+    # v1.442.0 (Wave 7): "…and send it to my phone" — the phone is reached
+    # through a notification destination (Telegram, Slack, email), so the
+    # destination tools are offered; and a rule that hears new EMAIL hears it
+    # only through an email destination with two-way listening on.
+    # Review (v1.442.0): "set up email so you can message me" names the
+    # destination TYPE as where Jarvis messages the user.
+    if (
+        _CHANNEL_WORDS.search(t) or W.TO_MY_PHONE.search(t) or W.SET_UP_TO_MESSAGE_ME.search(t)
+        or W.every_new_email(t)
+    ):
         out += ["channel_toggle", "channel_connect"]
-    if _APP_WORDS.search(t) or _names_an_app(t):
+    if _APP_WORDS.search(_blank_not_the_app(t)) or _names_an_app(t):
         out += ["app_connect"]
-    if _WEBHOOK_WORDS.search(t):
+    # v1.442.0 (Wave 7): a web service on the internet asked to reach INTO
+    # Iron Jarvis ("…so Zapier can start a task") cannot: an incoming webhook
+    # is reached only from this PC (or the user's own network) and needs the
+    # private access token. No webhook tool is offered as that way in (the
+    # model is told so, daemon.page_doors); sending Iron Jarvis's events OUT
+    # to such a service is a webhook it has, and stays offered.
+    calls_in = W.internet_calls_in(t) and not W.asks_outbound(t)
+    if _WEBHOOK_WORDS.search(t) and not calls_in:
         out += ["webhook_update", "webhook_delete"]
         if _CREATE_WEBHOOK.search(t):
             out.append("webhook_add")
@@ -595,13 +623,27 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
             out += ["goal_update", "goal_delete"]
         if _CREATE_GOAL.search(t):
             out.append("goal_add")
-    if _REFLEX_WORDS.search(t):
+    # v1.442.0 (Wave 7): "a workflow that drafts a reply to EVERY NEW EMAIL
+    # from a client" — a standing request about every new arrival is a rule's
+    # trigger (a workflow alone never starts by itself).
+    if _REFLEX_WORDS.search(t) or W.every_new_arrival(t):
         out += ["reflex_create", "reflex_update", "reflex_delete"]
     if _GRANT_WORDS.search(t):
         out += ["grant_revoke"]
     if _UNDO_WORDS.search(t):
         out += ["config_undo"]
     return list(dict.fromkeys(out))
+
+
+def _blank_not_the_app(t: str) -> str:
+    """*t* with an app's name blanked where it is not the app (v1.442.0,
+    ``connectors.app_names.blank_not_the_app``): "…to my OneDrive folder"."""
+    try:
+        from ..connectors.app_names import blank_not_the_app
+
+        return blank_not_the_app(t)
+    except Exception:  # noqa: BLE001 - a matcher fault keeps the words
+        return t
 
 
 def _names_an_app(t: str) -> bool:
@@ -2049,6 +2091,11 @@ class ChannelToggleTool(_RecordTool):
                 ok=False,
                 error=f"The channel {name!r} has no allowlist yet — add who may message it on the Notifications page first.",
             )
+        if (
+            cfg["inbound_enabled"] and cfg.get("type") == "email"
+            and not (cfg.get("imap_host") and cfg.get("password_secret"))
+        ):
+            return ToolResult(ok=False, error=EMAIL_TWO_WAY_NEEDS_IMAP.format(name=name))
         await asyncio.to_thread(apply_channel, self.platform, name, cfg)
         return ToolResult(
             ok=True,
@@ -2076,6 +2123,24 @@ _CHANNEL_FIELDS = {
     # (587) and ``username`` (the From address) may be left out.
     "email": ("host", "from_addr", "to_addr"),
 }
+
+#: Review (v1.442.0): an email destination's mail servers are NAMES ("smtp.gmail.com"):
+#: letters, digits, dots and dashes, starting with a letter or digit — never a
+#: ``user:password@``, a path or a URL (the port goes in its own field).
+_MAIL_SERVER = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+MAIL_SERVER_NAME = (
+    "`{field}` must be a mail server name such as smtp.gmail.com or imap.gmail.com: letters, digits, "
+    "dots and dashes only, with the port in its own field. A password never goes in it: the secure card "
+    "asks for that."
+)
+#: Review (v1.442.0): two-way email READS a mailbox, so it needs its mail
+#: server for reading - the Notifications page refuses it the same way
+#: (daemon.routes.comm._channel_config_problem).
+EMAIL_TWO_WAY_NEEDS_IMAP = (
+    "The email destination {name!r} has no mail server for reading (IMAP host) yet, so it cannot listen. "
+    "Add its IMAP host, such as imap.gmail.com, on that destination in Settings › Connections › "
+    "Notifications first."
+)
 
 #: v1.435.0: a password (or any secret-named value) handed to channel_connect.
 PASSWORD_NOT_IN_CHAT = (
@@ -2134,7 +2199,9 @@ class ChannelConnectTool(_RecordTool):
         "Add a notification channel so Iron Jarvis can message the user: `type` telegram "
         "(needs `chat_id`), slack (needs `channel`, e.g. #general), discord (needs nothing "
         "else) or email (needs `host`, the mail server for sending such as smtp.gmail.com, "
-        "`from_addr` and `to_addr`; `port` and `username` are optional). Never ask for a token, "
+        "`from_addr` and `to_addr`; `port` and `username` are optional, and `imap_host` (the mail server "
+        "for READING, such as imap.gmail.com) is needed only for two-way listening, so a rule can act on new "
+        "mail). Never ask for a token, "
         "a password or a webhook URL in chat — the user pastes it into the secure card this "
         "shows. The user approves on a card; Undo removes the channel."
     )
@@ -2150,6 +2217,8 @@ class ChannelConnectTool(_RecordTool):
             "username": {"type": "string"},
             "from_addr": {"type": "string"},
             "to_addr": {"type": "string"},
+            "imap_host": {"type": "string"},
+            "imap_port": {"type": "integer"},
         },
         "required": ["name", "type"],
     }
@@ -2166,18 +2235,41 @@ class ChannelConnectTool(_RecordTool):
             "",
         )
 
+    @staticmethod
+    def _bad_server(args: dict[str, Any]) -> str:
+        """Review (v1.442.0): the first mail-server field that is not a server
+        NAME (a ``user:password@`` in it, a path, a URL), or "". An email
+        destination's servers are names; anything else is refused before any
+        card, and is never shown or logged as written."""
+        for f in ("host", "imap_host"):
+            v = str((args or {}).get(f) or "").strip()
+            if v and not _MAIL_SERVER.fullmatch(v):
+                return f
+        return ""
+
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """v1.433.0 (Wave 1, A4): never a webhook URL or a token in the log,
-        the approval card or the stream — even one a model passed anyway."""
+        the approval card or the stream — even one a model passed anyway.
+        Review (v1.442.0): nor a mail server that is not a server name (it can
+        carry a ``user:password@``, which ``mask`` does not read without a
+        scheme)."""
         from ..mcp.secrets import is_secret_key
 
-        return masked_args(dict(args or {}), full=is_secret_key)
+        out = masked_args(dict(args or {}), full=is_secret_key)
+        if isinstance(out, dict):
+            from ..detections.redact import MASK
+
+            for f in ("host", "imap_host"):
+                v = str(out.get(f) or "").strip()
+                if v and not _MAIL_SERVER.fullmatch(v):
+                    out[f] = MASK
+        return out
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """A call carrying a webhook URL is refused by ``execute`` and changes
         nothing, so it is no approval card either (the v1.227.0 rule "an
         Allow that cannot run is a lie"). Everything else keeps the card."""
-        if str((args or {}).get("webhook_url") or "").strip() or self._secret_arg(args):
+        if str((args or {}).get("webhook_url") or "").strip() or self._secret_arg(args) or self._bad_server(args):
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
         return None
 
@@ -2187,6 +2279,10 @@ class ChannelConnectTool(_RecordTool):
         _secret = self._secret_arg(args)
         if _secret:
             return ToolResult(ok=False, error=PASSWORD_NOT_IN_CHAT.format(field=_secret))
+        _bad = self._bad_server(args)
+        if _bad:
+            # Never echoes the value (it may carry a password).
+            return ToolResult(ok=False, error=MAIL_SERVER_NAME.format(field=_bad))
         name = self._target(args)
         ctype = str(args.get("type") or "").strip().lower()
         if not _CHANNEL_NAME.match(name):
@@ -2216,6 +2312,20 @@ class ChannelConnectTool(_RecordTool):
                     return ToolResult(ok=False, error="`port` must be a number such as 587.")
                 cfg["port"] = port
             cfg["username"] = str(args.get("username") or "").strip() or cfg["from_addr"]
+            # v1.442.0 (chat-first plan Wave 7, group A): the mail server for
+            # READING (comm.channels.EmailChannel.poll; supports_inbound needs
+            # it) — so a rule on new mail can hear it once two-way is on.
+            imap = str(args.get("imap_host") or "").strip()
+            if imap:
+                cfg["imap_host"] = imap  # a server name (checked above, _bad_server)
+                if args.get("imap_port") not in (None, ""):
+                    try:
+                        iport = int(args["imap_port"])
+                    except (TypeError, ValueError):
+                        iport = 0
+                    if not 0 < iport < 65536:
+                        return ToolResult(ok=False, error="`imap_port` must be a number such as 993.")
+                    cfg["imap_port"] = iport
         requests: list[dict[str, Any]] = []
         if ctype in ("telegram", "slack"):
             cfg["token_secret"] = f"channel_{name}_token"
@@ -2733,6 +2843,11 @@ class AppConnectTool(_RecordTool):
                     conn.name, "connected" if before else None, state, f"app.{conn.id}",
                 ),
                 "secret_requests": requests,
+                # v1.442.0 (chat-first plan Wave 7, group A): a saved app that
+                # did not start leaves the button to its card
+                # (daemon.doors.door_for), where its setup is — Gmail's
+                # one-time Google developer setup.
+                **({"app": conn.id, "not_started": True, "needs_setup": bool(_needs)} if not_started else {}),
             },
         )
 
@@ -3013,8 +3128,10 @@ class ReflexCreateTool(_ReflexTool):
         "(webhook, comm, email, calendar, slack) whose `match` is the webhook's slug or a "
         "keyword in the message (empty = every message of that source) starts `action` "
         "(workflow, remote_agent or session) on `target` (the workflow or agent name), with an "
-        "optional `task_template` ({body}, {text}, {slug} are filled in). The user approves on "
-        "a card; Undo removes the rule."
+        "optional `task_template` ({body}, {text}, {slug} are filled in). An `email` rule hears only "
+        "mail that reaches an email destination with two-way listening on (channel_connect with "
+        "`imap_host`, then channel_toggle), from a sender on that destination's Allowed senders "
+        "list. The user approves on a card; Undo removes the rule."
     )
     input_schema = {
         "type": "object",

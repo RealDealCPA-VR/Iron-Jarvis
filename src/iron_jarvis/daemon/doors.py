@@ -159,6 +159,26 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
             return {"href": href, "label": label} if (ok and label) else None
         except Exception:  # noqa: BLE001 — no door beats no reply
             return None
+    if tool_name == "app_connect":
+        # v1.442.0 (chat-first plan Wave 7, group A): an app app_connect SAVED
+        # that did not start ("Saved Gmail, but it did not start") leaves the
+        # button to its card in the Directory, where what is left is — Gmail's
+        # one-time Google developer setup. Named from the CATALOG by the id the
+        # tool carried, never the model's text; an app that started has none.
+        try:
+            data = getattr(result, "data", None)
+            if not isinstance(data, dict) or data.get("not_started") is not True:
+                return None
+            from ..connectors.catalog import get_connector
+
+            conn = get_connector(str(data.get("app") or ""))
+            if conn is None:
+                return None
+            name = _clean_name(conn.name)
+            label = f"Finish setting up {name} in Settings" if data.get("needs_setup") else f"See why {name} did not start"
+            return {"href": _APPS_FIX_HREF, "label": label}
+        except Exception:  # noqa: BLE001 — no door beats no reply
+            return None
     spec = _CATALOG.get(tool_name)
     if spec is None:
         return None

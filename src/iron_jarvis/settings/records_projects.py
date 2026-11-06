@@ -772,6 +772,14 @@ def resolve_agent(platform: Any, ref: str) -> tuple[str, str]:
         return "", (
             f"The {bare.lower()} is one of Iron Jarvis's own agents; only agents you made can be "
             "changed, paused or removed."
+            # v1.442.0 (chat-first plan Wave 7, group A): "Set a monthly
+            # spending limit for my builder agent" — say what CAN be done.
+            " Iron Jarvis's own agents have no monthly limit; an agent you make can have one "
+            + (
+                f"(agent_create, working like the {bare.lower()}, with a monthly limit)."
+                if bare.lower() in WORKS_LIKE
+                else "(agent_create, with a monthly limit)."
+            )
         )
     if not names:
         return "", f"There is no agent {_q(raw)} that you made; you have not made any agents yet."
