@@ -51,6 +51,7 @@ bases) and must be called OFF the loop. Neither ever raises.
 
 from __future__ import annotations
 
+import bisect
 import re
 from functools import lru_cache
 from typing import Any
@@ -313,68 +314,136 @@ _NOT_THE_APP: dict[str, str] = {
 #:   me on slack?" and "remind me on slack" (the user's own Slack) still name
 #:   the app, and so does a sentence that also reads or posts there.
 #:
-#: Both LINEAR: one bounded gap each, every repeat bounded.
+#: Both LINEAR: one bounded gap each, every repeat bounded, and READ ONCE per
+#: text (review, v1.442.0): the first cut scanned the whole text again for
+#: every app-name hit, so 128,000 characters of ordinary prose that mention
+#: OneDrive and Slack took ~7.6 s on the interpreter lock (master: 0.07 s).
+#: :class:`_NotTheApp` runs each pattern once and answers each hit by bisect.
 _DRIVE_IDS = frozenset({"onedrive", "dropbox", "google_drive"})
 _SYNCED_FOLDER_DEST = re.compile(
-    r"\b(?:back(?:ing)?\s+(?:(?:it|them|this|that|everything|(?:my|the|your|all)\s+[\w-]{1,20})\s+)?up"
-    r"|backups?|cop(?:y|ies|ying)|mirror(?:s|ing)?|sav(?:e|es|ing)|stor(?:e|es|ing)|put)\b"
+    r"\b(?:back(?:s|ed|ing)?\s+(?:(?:it|them|this|that|everything|(?:my|the|your|all)\s+[\w-]{1,20})\s+)?up"
+    r"|backups?|cop(?:y|ies|ied|ying)|mirror(?:s|ed|ing)?|sav(?:e|es|ed|ing)|stor(?:e|es|ed|ing)|put(?:s|ting)?)\b"
     r"[^.!?\n]{0,60}?\b(?:to|into|in|onto)\s+(?:my|the|our|your)\s+"
     r"(?:onedrive|one\s+drive|dropbox|google\s+drive)\s+(?:folder|directory)\b",
     re.IGNORECASE,
 )
-#: Jarvis asked to message the user ("so you can message me", "message me on
-#: Slack when…" at a sentence's start) — the destination's words.
+#: ...but a sentence that SHARES it ("...and share it with Ann") is the app's
+#: (review: sharing happens in the drive's own service, never in the folder).
+_DRIVE_APP_ACTS = re.compile(
+    r"\b(?:shar(?:e|es|ed|ing)|invite|permissions?|send\s+(?:a|the|them\s+a)\s+link)\b", re.IGNORECASE
+)
+#: Jarvis asked to message the user ("so you can message me") - the
+#: destination's words (``daemon.page_doors`` reads this one too).
 ASKS_TO_MESSAGE_ME = re.compile(
     r"\b(?:you|jarvis|iron\s+jarvis)\s+(?:can\s+|could\s+|will\s+|would\s+|to\s+|should\s+)?(?:always\s+)?"
     r"(?:message|notify|ping|alert|dm|text|tell|reach|contact|update)\s+me\b"
     r"|(?:^|[.!?\n])\s{0,4}(?:please\s+)?(?:message|notify|ping|alert|dm|text)\s+me\s+(?:on|in|via|through|over)\s+slack\b",
     re.IGNORECASE,
 )
-#: …but a sentence that also READS or POSTS in the user's Slack is the app's.
+#: Slack as the PLACE Jarvis messages the user (review, v1.442.0: the first
+#: cut took ANY "you can tell me / update me" in the sentence, so "Can you
+#: tell me who posted in Slack today?" stopped naming the user's own Slack).
+#: The match must COVER the Slack name:
+#: * "message me on Slack..." said as Jarvis's job: at a sentence's start
+#:   (after "please" or "Jarvis,"), after "and / then / also / to", or with
+#:   "you can..." before it; never "did anyone message me on slack?";
+#: * "set up Slack so you can message me...", "set up Slack for my alerts";
+#: * "send my alerts to Slack".
+_TO_ME = r"(?:message|notify|ping|alert|dm|text)\s+me\s+(?:on|in|via|through|over|using)\s+(?:my\s+)?slack\b"
+_SLACK_PLACE = re.compile(
+    r"(?:(?:^|(?<=[.!?\n]))\s{0,4}(?:(?:please|jarvis|hey\s+jarvis)[,\s]+)?"
+    r"|\b(?:and|then|also|just|to|(?:you|jarvis)\s+(?:can|could|will|would|should)(?:\s+always)?)\s+)"
+    + _TO_ME
+    + r"|\b(?:set\s*up|setup|connect|add|hook\s+up|link|configure|enable|turn\s+on|use)\s+(?:(?:my|the|a|an|our)\s+)?"
+    r"slack\b(?=[^.!?\n]{0,60}?\b(?:(?:you|jarvis|iron\s+jarvis)\s+(?:can\s+|could\s+|will\s+|would\s+|to\s+"
+    r"|should\s+)?(?:always\s+)?(?:message|notify|ping|alert|dm|text|tell|reach|contact|update)\s+me\b"
+    r"|(?:for|as)\s+(?:my\s+|the\s+)?(?:alerts?|notifications?)\b))"
+    r"|\b(?:alerts?|notifications?)\s+(?:to|on|in|via|through|over)\s+(?:my\s+)?slack\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+#: ...but a sentence that also READS or POSTS in the user's Slack, or is about
+#: what happens there, is the app's.
 _SLACK_CONTENT = re.compile(
-    r"\b(?:read|search|summari[sz]e|catch\s+up|post\s+(?:in|to|on)|reply|respond"
+    r"\b(?:read|search|summari[sz]e|catch\s+up|post\s+(?:in|to|on)|reply|respond|mentions?|mentioned|posted"
+    r"|someone|anyone|unread|threads?|what(?:['’]s|\s+is|\s+was)\s+new|happened"
     r"|my\s+(?:channels?|messages|dms|workspace|threads))\b",
     re.IGNORECASE,
 )
+_SENTENCE_END = re.compile(r"[.!?\n]")
 
 
-def _sentence_bounds(t: str, start: int, end: int) -> tuple[int, int]:
-    """The sentence around ``t[start:end]`` (linear: two bounded scans)."""
-    lo = max(t.rfind(ch, 0, start) for ch in ".!?\n") + 1
-    his = [i for i in (t.find(ch, end) for ch in ".!?\n") if i >= 0]
-    return lo, (min(his) if his else len(t))
+class _NotTheApp:
+    """The readings above for ONE text, each pattern run once (linear)."""
+
+    def __init__(self, t: str) -> None:
+        self.t = t
+        self._ends: "list[int] | None" = None
+        self._spans: dict[str, tuple[list[int], list[int]]] = {}
+        self._said: dict[tuple[str, int], bool] = {}
+
+    def _bounds(self, start: int, end: int) -> tuple[int, int]:
+        """The sentence around ``t[start:end]`` (the ends are found once)."""
+        if self._ends is None:
+            self._ends = [m.start() for m in _SENTENCE_END.finditer(self.t)]
+        ends = self._ends
+        i = bisect.bisect_left(ends, start)
+        lo = ends[i - 1] + 1 if i > 0 else 0
+        j = bisect.bisect_left(ends, end)
+        return lo, (ends[j] if j < len(ends) else len(self.t))
+
+    def _covered(self, name: str, rx: "re.Pattern[str]", start: int, end: int) -> bool:
+        """Does one match of *rx* (non-overlapping, so sorted) cover the hit?"""
+        if name not in self._spans:
+            ms = [(m.start(), m.end()) for m in rx.finditer(self.t)]
+            self._spans[name] = ([s for s, _ in ms], [e for _, e in ms])
+        starts, stops = self._spans[name]
+        i = bisect.bisect_right(starts, start) - 1
+        return i >= 0 and end <= stops[i]
+
+    def _sentence_says(self, name: str, rx: "re.Pattern[str]", start: int, end: int) -> bool:
+        lo, hi = self._bounds(start, end)
+        key = (name, lo)
+        if key not in self._said:
+            self._said[key] = rx.search(self.t, lo, hi) is not None
+        return self._said[key]
+
+    def here(self, cid: str, start: int, end: int) -> bool:
+        """Is this place where the text names app *cid* NOT the app? Never raises."""
+        try:
+            if cid in _DRIVE_IDS:
+                return self._covered("drive", _SYNCED_FOLDER_DEST, start, end) and not self._sentence_says(
+                    "drive_acts", _DRIVE_APP_ACTS, start, end
+                )
+            if cid == "slack":
+                return self._covered("slack", _SLACK_PLACE, start, end) and not self._sentence_says(
+                    "slack_content", _SLACK_CONTENT, start, end
+                )
+        except Exception:  # noqa: BLE001 - a fault keeps the old reading
+            return False
+        return False
 
 
 def _not_the_app_here(cid: str, start: int, end: int, t: str) -> bool:
-    """Is this place where *t* names app *cid* one of the readings above that
-    is NOT the app? Never raises."""
-    try:
-        if cid in _DRIVE_IDS:
-            return any(m.start() <= start and end <= m.end() for m in _SYNCED_FOLDER_DEST.finditer(t))
-        if cid == "slack":
-            lo, hi = _sentence_bounds(t, start, end)
-            s = t[lo:hi]
-            return ASKS_TO_MESSAGE_ME.search(s) is not None and _SLACK_CONTENT.search(s) is None
-    except Exception:  # noqa: BLE001 — a fault keeps the old reading
-        return False
-    return False
+    """One hit's reading (a fresh :class:`_NotTheApp`; callers with many hits
+    keep one per text). Never raises."""
+    return _NotTheApp(t).here(cid, start, end)
 
 
 def blank_not_the_app(text: str) -> str:
     """*text* with every place that names an app only in a reading that is not
-    the app (above) blanked out, offsets kept — for the record arming's own
+    the app (above) blanked out, offsets kept - for the record arming's own
     literal word list (``settings.records._APP_WORDS``). Never raises."""
     t = str(text or "")
     try:
+        ctx = _NotTheApp(t)
         chars: "list[str] | None" = None
         for cid, rx in _compiled():
             if cid not in _DRIVE_IDS and cid != "slack":
                 continue
             for m in rx.finditer(t):
-                if _not_the_app_here(cid, m.start(), m.end(), t):
+                if ctx.here(cid, m.start(), m.end()):
                     chars = chars if chars is not None else list(t)
-                    for i in range(m.start(), m.end()):
-                        chars[i] = " "
+                    chars[m.start():m.end()] = " " * (m.end() - m.start())
         return "".join(chars) if chars is not None else t
     except Exception:  # noqa: BLE001
         return t
@@ -428,6 +497,7 @@ def apps_named(text: str) -> list[str]:
     if not t.strip():
         return []
     out: list[str] = []
+    ctx = _NotTheApp(t)
     try:
         for cid, rx in _compiled():
             if cid == "gmail" and _OTHER_MAIL.search(t) and not re.search(
@@ -437,7 +507,7 @@ def apps_named(text: str) -> list[str]:
             if cid == "gmail":
                 if _mail_hits(rx, t):
                     out.append(cid)
-            elif any(not _not_the_app_here(cid, m.start(), m.end(), t) for m in rx.finditer(t)):
+            elif any(not ctx.here(cid, m.start(), m.end()) for m in rx.finditer(t)):
                 out.append(cid)
     except Exception:  # noqa: BLE001 — a matcher fault names nothing
         return []
@@ -451,6 +521,7 @@ def app_name_hits(text: str) -> list[tuple[str, int, int]]:
     raises."""
     t = str(text or "")[:_MAX_TEXT]
     hits: list[tuple[str, int, int]] = []
+    ctx = _NotTheApp(t)
     try:
         for cid, rx in _compiled():
             if cid == "gmail" and _OTHER_MAIL.search(t) and not re.search(
@@ -460,7 +531,7 @@ def app_name_hits(text: str) -> list[tuple[str, int, int]]:
             found = _mail_hits(rx, t) if cid == "gmail" else rx.finditer(t)
             hits += [
                 (cid, m.start(), m.end()) for m in found
-                if not _not_the_app_here(cid, m.start(), m.end(), t)
+                if not ctx.here(cid, m.start(), m.end())
             ]
     except Exception:  # noqa: BLE001
         return []

@@ -468,8 +468,12 @@ def _slack_setup(t: str) -> bool:
 #: never the user's own mail program ("connect my Gmail to Outlook on my
 #: phone"), never "google it".
 _GMAIL_CONNECT = re.compile(
-    r"\b(?:connect|set\s*up|setup|add|link|hook\s+up|turn\s+on|enable)\s+(?:(?:my|the|a|our|your)\s+)?"
-    r"g-?mail\b(?!\s+(?:filters?|labels?|signatures?|forwarding|rules?|vacation|folders?)\b)"
+    # Review (v1.442.0): only the USER's Gmail ("my", "our", "your" or none):
+    # "set up a Gmail account for my new assistant" makes a Google account;
+    # and never one of Gmail's own settings ("turn on Gmail's spam filter").
+    r"\b(?:connect|set\s*up|setup|add|link|hook\s+up|turn\s+on|enable)\s+(?:(?:my|our|your)\s+)?"
+    r"g-?mail\b(?!['’]s\b)(?!\s+(?:filters?|labels?|signatures?|forwarding|rules?|vacation|folders?"
+    r"|spam|settings?|tabs?|themes?)\b)"
     r"(?![^.!?\n]{0,40}?\b(?:to|on|with)\s+(?:my|the|her|his|our|a)\s+(?:(?:new|old|work|home|other)\s+)?"
     r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop|outlook|apple\s+mail|thunderbird)\b)",
     re.IGNORECASE,
@@ -632,7 +636,9 @@ STEPS: tuple[PageStep, ...] = (
         "A rule on new emails (reflex_create, when it is offered) hears only mail that reaches an email "
         "destination of Iron Jarvis's with two-way listening on, and only from senders on that destination's "
         "Allowed senders list (an empty list lets nobody in). So the inbox the clients write to must be that "
-        "destination's, its mail server for reading must be set (channel_connect's imap_host), and each "
+        "destination's, its mail server for reading must be set (channel_connect's imap_host for a new "
+        "destination; for a destination that already exists, on the Notifications page, because "
+        "channel_connect refuses a name that exists), and each "
         "client's address must be on its Allowed senders list, which is set on the destination in Settings › "
         "Connections › Notifications: Iron Jarvis cannot fill that list from chat. Say so plainly and point "
         "there.",

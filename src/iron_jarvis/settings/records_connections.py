@@ -1598,7 +1598,18 @@ _ADD_BRAND = re.compile(
     r"\b(?:add|connect|register|hook\s+up|set\s+up|plug\s+in)\s+(?:(?:my|the|a|an|our|your|this)\s+)?"
     r"(?:(?:local|own|new)\s+)?" + _BRAND + r"\b" + _NOT_AFTER_SERVER
     + r"(?![^.!?\n]{0,30}?\bon\s+(?:my|the|her|his|our|a|another)\s+(?:(?:new|old|work|home|other)\s+)?"
-    r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop)\b)",
+    r"(?:phone|iphone|android|ipad|tablet|mac|macbook|laptop)\b)"
+    # Review (v1.442.0): the program as part of SOMETHING ELSE — "add Ollama
+    # support to our Python app", "connect Ollama to Open WebUI" (another
+    # program; "to Jarvis" / "to you" is still this app), "set up LM Studio
+    # for my brother".
+    r"(?!\s+(?:support|integration|plugins?|plug-ins?|sdk|client|library|package|extension|example|tutorial"
+    r"|section|chapter|paragraph|instructions|docs?|bindings?)\b)"
+    r"(?!\s+(?:to|into|with)\s+(?!(?:jarvis|iron\s+jarvis|you|me|this\s+(?:pc|app|computer)|the\s+app"
+    r"|my\s+(?:models?|default|pc|computer))\b)[\w-]+)"
+    r"(?![^.!?\n]{0,30}?\bfor\s+(?:my|her|his|their|our|a|an)\s+(?:(?:new|little|older|younger)\s+)?"
+    r"(?:brother|sister|mom|mother|dad|father|wife|husband|son|daughter|kids?|friends?|clients?|colleagues?"
+    r"|coworkers?|co-workers?|boss|team|parents?|family|students?|class)\b)",
     re.IGNORECASE,
 )
 _SERVER_THING = re.compile(

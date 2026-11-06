@@ -592,7 +592,12 @@ def _record_tools_named(t: str, *, workflow_names: "list[str] | tuple[str, ...]"
     # through a notification destination (Telegram, Slack, email), so the
     # destination tools are offered; and a rule that hears new EMAIL hears it
     # only through an email destination with two-way listening on.
-    if _CHANNEL_WORDS.search(t) or W.TO_MY_PHONE.search(t) or W.every_new_email(t):
+    # Review (v1.442.0): "set up email so you can message me" names the
+    # destination TYPE as where Jarvis messages the user.
+    if (
+        _CHANNEL_WORDS.search(t) or W.TO_MY_PHONE.search(t) or W.SET_UP_TO_MESSAGE_ME.search(t)
+        or W.every_new_email(t)
+    ):
         out += ["channel_toggle", "channel_connect"]
     if _APP_WORDS.search(_blank_not_the_app(t)) or _names_an_app(t):
         out += ["app_connect"]
@@ -2086,6 +2091,11 @@ class ChannelToggleTool(_RecordTool):
                 ok=False,
                 error=f"The channel {name!r} has no allowlist yet — add who may message it on the Notifications page first.",
             )
+        if (
+            cfg["inbound_enabled"] and cfg.get("type") == "email"
+            and not (cfg.get("imap_host") and cfg.get("password_secret"))
+        ):
+            return ToolResult(ok=False, error=EMAIL_TWO_WAY_NEEDS_IMAP.format(name=name))
         await asyncio.to_thread(apply_channel, self.platform, name, cfg)
         return ToolResult(
             ok=True,
@@ -2113,6 +2123,24 @@ _CHANNEL_FIELDS = {
     # (587) and ``username`` (the From address) may be left out.
     "email": ("host", "from_addr", "to_addr"),
 }
+
+#: Review (v1.442.0): an email destination's mail servers are NAMES ("smtp.gmail.com"):
+#: letters, digits, dots and dashes, starting with a letter or digit — never a
+#: ``user:password@``, a path or a URL (the port goes in its own field).
+_MAIL_SERVER = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+MAIL_SERVER_NAME = (
+    "`{field}` must be a mail server name such as smtp.gmail.com or imap.gmail.com: letters, digits, "
+    "dots and dashes only, with the port in its own field. A password never goes in it: the secure card "
+    "asks for that."
+)
+#: Review (v1.442.0): two-way email READS a mailbox, so it needs its mail
+#: server for reading - the Notifications page refuses it the same way
+#: (daemon.routes.comm._channel_config_problem).
+EMAIL_TWO_WAY_NEEDS_IMAP = (
+    "The email destination {name!r} has no mail server for reading (IMAP host) yet, so it cannot listen. "
+    "Add its IMAP host, such as imap.gmail.com, on that destination in Settings › Connections › "
+    "Notifications first."
+)
 
 #: v1.435.0: a password (or any secret-named value) handed to channel_connect.
 PASSWORD_NOT_IN_CHAT = (
@@ -2207,18 +2235,41 @@ class ChannelConnectTool(_RecordTool):
             "",
         )
 
+    @staticmethod
+    def _bad_server(args: dict[str, Any]) -> str:
+        """Review (v1.442.0): the first mail-server field that is not a server
+        NAME (a ``user:password@`` in it, a path, a URL), or "". An email
+        destination's servers are names; anything else is refused before any
+        card, and is never shown or logged as written."""
+        for f in ("host", "imap_host"):
+            v = str((args or {}).get(f) or "").strip()
+            if v and not _MAIL_SERVER.fullmatch(v):
+                return f
+        return ""
+
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """v1.433.0 (Wave 1, A4): never a webhook URL or a token in the log,
-        the approval card or the stream — even one a model passed anyway."""
+        the approval card or the stream — even one a model passed anyway.
+        Review (v1.442.0): nor a mail server that is not a server name (it can
+        carry a ``user:password@``, which ``mask`` does not read without a
+        scheme)."""
         from ..mcp.secrets import is_secret_key
 
-        return masked_args(dict(args or {}), full=is_secret_key)
+        out = masked_args(dict(args or {}), full=is_secret_key)
+        if isinstance(out, dict):
+            from ..detections.redact import MASK
+
+            for f in ("host", "imap_host"):
+                v = str(out.get(f) or "").strip()
+                if v and not _MAIL_SERVER.fullmatch(v):
+                    out[f] = MASK
+        return out
 
     async def spend_check(self, args: dict[str, Any], ctx: ToolContext) -> SpendCheck | None:
         """A call carrying a webhook URL is refused by ``execute`` and changes
         nothing, so it is no approval card either (the v1.227.0 rule "an
         Allow that cannot run is a lie"). Everything else keeps the card."""
-        if str((args or {}).get("webhook_url") or "").strip() or self._secret_arg(args):
+        if str((args or {}).get("webhook_url") or "").strip() or self._secret_arg(args) or self._bad_server(args):
             return SpendCheck(ask=False, cost_note="changes nothing by itself")
         return None
 
@@ -2228,6 +2279,10 @@ class ChannelConnectTool(_RecordTool):
         _secret = self._secret_arg(args)
         if _secret:
             return ToolResult(ok=False, error=PASSWORD_NOT_IN_CHAT.format(field=_secret))
+        _bad = self._bad_server(args)
+        if _bad:
+            # Never echoes the value (it may carry a password).
+            return ToolResult(ok=False, error=MAIL_SERVER_NAME.format(field=_bad))
         name = self._target(args)
         ctype = str(args.get("type") or "").strip().lower()
         if not _CHANNEL_NAME.match(name):
@@ -2262,9 +2317,7 @@ class ChannelConnectTool(_RecordTool):
             # it) — so a rule on new mail can hear it once two-way is on.
             imap = str(args.get("imap_host") or "").strip()
             if imap:
-                if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", imap):
-                    return ToolResult(ok=False, error="`imap_host` must be a mail server name such as imap.gmail.com.")
-                cfg["imap_host"] = imap
+                cfg["imap_host"] = imap  # a server name (checked above, _bad_server)
                 if args.get("imap_port") not in (None, ""):
                     try:
                         iport = int(args["imap_port"])

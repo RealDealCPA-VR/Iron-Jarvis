@@ -105,6 +105,18 @@ _EXTENDERS = frozenset(
         # function to my Vue component").
         "function", "functions", "handler", "handlers", "callback", "callbacks", "class", "method",
         "component", "variable",
+        # Review (v1.442.0): "my voice MEMO app", "voice mail", "a voice
+        # recorder" are other programs, never the app's voice.
+        "memo", "memos", "mail", "recorder", "recording", "recordings",
+    }
+)
+#: Review (v1.442.0): "add Ollama to the comparison SHEET" puts the words into
+#: the user's own content (``_about_something_else``).
+_CONTENT_NOUNS = frozenset(
+    {
+        "sheet", "sheets", "spreadsheet", "spreadsheets", "doc", "docs", "document", "documents", "deck",
+        "slide", "slides", "report", "reports", "readme", "page", "email", "memo", "notes", "budget",
+        "presentation", "proposal", "agenda", "checklist", "table", "chart", "letter", "newsletter", "wiki",
     }
 )
 #: v1.438.0 (Wave 4 group C): after "…windows", a word that names one of
@@ -504,6 +516,12 @@ def _about_something_else(toks: list[str], start: int, end: int, *, before: bool
     if before and end > 0 and toks[end - 1] in _NOT_OURS_BEFORE:
         return True
     if nxt in _EXTENDERS:
+        return True
+    if (
+        nxt in ("to", "into", "onto")
+        and after in _ELSEWHERE_DETS | {"my", "our", "your"}
+        and _CONTENT_NOUNS.intersection(toks[end + 3: end + 6])
+    ):
         return True
     if toks[end] in ("windows", "window's") and nxt in _WINDOWS_THINGS:
         return True
