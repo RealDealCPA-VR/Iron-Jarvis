@@ -1309,8 +1309,7 @@ def account_usage(platform: Any, row: Any) -> dict[str, Any] | None:
     # account from its own CLI, and whether one can be made (in memory).
     from ..iron_proxy import usage_read as U
 
-    got = U.last_read(account)
-    out["usage_read_at"] = got["at"] if got else None
+    out["usage_read_at"] = U.last_ok_at(account)
     out["can_refresh"] = U.can_refresh(acc)
     return out
 

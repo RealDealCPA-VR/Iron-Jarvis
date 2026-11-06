@@ -15,6 +15,9 @@ Codex mode when ``app-server`` is in argv, else Claude mode. Environment:
 * ``FAKE_USAGE_LOG`` — a file; one JSON line per start: argv, cwd, what the
   cwd held, the env names the test checks, the frames it read, and (hang)
   the pid of the grandchild it started.
+* ``FAKE_USAGE_EOF`` — a file; when stdin ends the fake takes 0.3 s (a CLI
+  saving its own settings on the way out) and then writes one line there:
+  it was let exit BY ITSELF, never killed mid-write.
 * ``FAKE_USAGE_MODE`` — ``ok`` (default) | ``error`` (the CLI refuses) |
   ``shape`` (an answer with no windows) | ``hang`` (never answers; starts a
   sleeping grandchild first) | ``exit`` (stops before answering).
@@ -120,6 +123,11 @@ def main() -> int:
                     }}})
     if not flushed:
         flush_log()
+    eof_path = os.environ.get("FAKE_USAGE_EOF")
+    if eof_path:
+        time.sleep(0.3)
+        with open(eof_path, "a", encoding="utf-8") as fh:
+            fh.write("exited by itself\n")
     return 0
 
 

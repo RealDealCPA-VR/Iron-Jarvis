@@ -67,6 +67,11 @@ log = logging.getLogger(__name__)
 
 #: One read's whole bound (spawn, handshake, answer).
 READ_TIMEOUT_S = 15.0
+#: After its answer, the CLI gets this long to exit BY ITSELF once its stdin
+#: closes (review: Claude Code killed while it saves ``.claude.json`` can cut
+#: the user's own file short — an adopted account's home IS ``~/.claude``).
+#: Only one that lingers past it is killed.
+EXIT_GRACE_S = 3.0
 #: At most one read per account this often; a second press returns the last.
 THROTTLE_S = 20.0
 #: The in-use loop: one pass this often ...
@@ -84,6 +89,7 @@ PROXY_OFF = "Iron-Proxy is off; turn it on in Connections first."
 PROXY_UPDATE = "Iron-Proxy needs an update to keep usage numbers."
 PROXY_NOT_ANSWERING = "Iron-Proxy is not answering, so the usage could not be kept."
 UNKNOWN_ACCOUNT = "Iron-Proxy does not list that account."
+NO_HOME_WORDS = "Iron-Proxy does not say where this account's sign-in is kept, so its usage cannot be read."
 
 _LABEL = {"claude": "Claude Code", "codex": "Codex"}
 _BINARY = {"claude": "claude", "codex": "codex"}
@@ -91,7 +97,8 @@ _BINARY = {"claude": "claude", "codex": "codex"}
 
 class Refused(Exception):
     """A read that is not made at all. ``code``: ``unknown`` (404) |
-    ``not_supported`` | ``off`` | ``sign_in`` | ``proxy_off`` (409)."""
+    ``not_supported`` | ``off`` | ``sign_in`` | ``proxy_off`` | ``no_home``
+    (409)."""
 
     def __init__(self, code: str, words: str) -> None:
         super().__init__(words)
@@ -104,6 +111,9 @@ class Refused(Exception):
 # --------------------------------------------------------------------------- #
 _READS: dict[str, dict[str, Any]] = {}
 _READ_MONO: dict[str, float] = {}
+#: Review (v1.439.0): when each account's usage was last read SUCCESSFULLY.
+#: "as of" speaks for the number shown, and a failed read read no number.
+_OK_AT: dict[str, str] = {}
 _LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCK = threading.Lock()
 
@@ -113,6 +123,7 @@ def reset() -> None:
     with _STATE_LOCK:
         _READS.clear()
         _READ_MONO.clear()
+        _OK_AT.clear()
         _LOCKS.clear()
 
 
@@ -131,6 +142,13 @@ def last_read(account_id: str) -> dict[str, Any] | None:
         return dict(got) if got else None
 
 
+def last_ok_at(account_id: str) -> str | None:
+    """When ``account_id``'s usage was last read SUCCESSFULLY (ISO), or None
+    — the time the "as of" words speak for (a failed read never moves it)."""
+    with _STATE_LOCK:
+        return _OK_AT.get(str(account_id or ""))
+
+
 def _age_s(account_id: str) -> float | None:
     with _STATE_LOCK:
         at = _READ_MONO.get(account_id)
@@ -146,6 +164,8 @@ def _remember(account_id: str, ok: bool, words: str) -> dict[str, Any]:
     with _STATE_LOCK:
         _READS[account_id] = read
         _READ_MONO[account_id] = time.monotonic()
+        if read["ok"]:
+            _OK_AT[account_id] = read["at"]
     return dict(read)
 
 
@@ -164,11 +184,10 @@ def can_refresh(row: Mapping[str, Any] | None) -> bool:
 
 
 def decorate(row: dict[str, Any]) -> dict[str, Any]:
-    """``row`` with ``usage_read_at`` (the last read's time, or None) and
-    ``can_refresh`` added. Mutates and returns it; never raises."""
+    """``row`` with ``usage_read_at`` (the last SUCCESSFUL read's time, or
+    None) and ``can_refresh`` added. Mutates and returns it; never raises."""
     try:
-        got = last_read(str(row.get("id") or ""))
-        row["usage_read_at"] = got["at"] if got else None
+        row["usage_read_at"] = last_ok_at(str(row.get("id") or ""))
         row["can_refresh"] = can_refresh(row)
     except Exception:  # noqa: BLE001 — a list never breaks over a decoration
         row.setdefault("usage_read_at", None)
@@ -225,13 +244,15 @@ def _exchange(
 ) -> dict[str, Any]:
     """Start ``argv`` in a private empty folder, write ``frames`` (one JSON
     line each), and return the first stdout object ``is_answer`` accepts.
-    The tree is killed at the end, whatever happened. Raises
+    After an answer, stdin closes and the CLI gets :data:`EXIT_GRACE_S` to
+    exit by itself; the tree is killed at the end, whatever happened. Raises
     ``TimeoutError`` (no answer in time), ``EOFError`` (it stopped first) or
     ``OSError`` (it could not start)."""
     from ..core import procs
 
     deadline = time.monotonic() + timeout
     lines: queue.Queue = queue.Queue()
+    answered = False
     with tempfile.TemporaryDirectory(prefix="ij-usage-read-", ignore_cleanup_errors=True) as cwd:
         proc = procs.spawn(
             argv,
@@ -276,6 +297,7 @@ def _exchange(
                 except ValueError:
                     continue
                 if isinstance(obj, dict) and is_answer(obj):
+                    answered = True
                     return obj
         finally:
             try:
@@ -283,6 +305,11 @@ def _exchange(
                     proc.stdin.close()
             except Exception:  # noqa: BLE001
                 pass
+            if answered:
+                try:
+                    proc.wait(timeout=EXIT_GRACE_S)
+                except Exception:  # noqa: BLE001 — it lingers: the kill below ends it
+                    pass
             procs.kill_tree(proc)
             try:
                 proc.wait(timeout=5)
@@ -453,8 +480,15 @@ def _row_and_lease(svc: Any, account_id: str) -> tuple[dict[str, Any], Any]:
         raise Refused("off", OFF_WORDS)
     if row.get("status") == BA.NEEDS_SIGN_IN:
         raise Refused("sign_in", SIGN_IN_WORDS)
+    home = BA.home_of(snap, account_id)
+    if not home:
+        # Review (v1.439.0): every other lease caller refuses an account with
+        # no home ("an answer with no account home"). Its home variable set
+        # to "" would run the CLI on whatever login this PC has and store
+        # THAT usage under this account.
+        raise Refused("no_home", NO_HOME_WORDS)
     spec = A.PROVIDERS[BA.VENDORS[vendor]["provider"]]
-    lease = A.make_lease(spec, account_id, str(row.get("name") or account_id), BA.home_of(snap, account_id), [])
+    lease = A.make_lease(spec, account_id, str(row.get("name") or account_id), home, [])
     return row, lease
 
 
@@ -600,6 +634,7 @@ async def usage_loop(platform: Any, on_tick: Any, *, interval: float | None = No
 
 
 __all__ = [
+    "EXIT_GRACE_S",
     "IN_USE_EVERY_S",
     "POLL_S",
     "READ_TIMEOUT_S",
@@ -611,6 +646,7 @@ __all__ = [
     "codex_rate_limits",
     "decorate",
     "in_use_accounts",
+    "last_ok_at",
     "last_read",
     "poll_in_use",
     "read_usage",

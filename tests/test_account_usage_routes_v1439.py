@@ -104,6 +104,7 @@ def test_the_route_reads_answers_the_row_and_throttles(fake, client, tmp_path):
     card = next(a for a in client.get("/iron-proxy?discover=0").json()["accounts"] if a["id"] == "c-work")
     assert card["state"]["window"]["percent"] == 64 and card["state"]["window"]["window"] == "7 days"
     assert card["usage_read"]["ok"] is True and card["can_refresh"] is True
+    assert card["usage_read_at"] == body["read"]["at"]
     assert card["state"]["status"] == "ready"
     # A second press inside 20 s starts nothing.
     second = client.post("/build/accounts/c-work/usage/refresh").json()
@@ -135,6 +136,11 @@ def test_a_failed_read_is_a_200_with_its_words(fake, client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["read"] == {"at": r.json()["read"]["at"], "ok": False, "throttled": False,
                                 "words": "Codex could not say: not signed in."}
+    # Review: a failed read read no number, so no list says "as of" it.
+    row = next(r for r in client.get("/build/accounts").json()["codex"] if r["id"] == "x-plus")
+    assert row["usage_read_at"] is None
+    card = next(a for a in client.get("/iron-proxy?discover=0").json()["accounts"] if a["id"] == "x-plus")
+    assert card["usage_read"]["ok"] is False and card["usage_read_at"] is None
 
 
 def test_the_lifespan_runs_the_in_use_loop(fake, tmp_path, monkeypatch):

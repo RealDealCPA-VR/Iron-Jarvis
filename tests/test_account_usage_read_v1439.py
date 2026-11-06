@@ -412,3 +412,70 @@ def test_the_loop_reports_each_pass(monkeypatch):
 
     asyncio.run(run())
     assert ticks[:3] == [True, False, True] and calls[0] == "P"
+
+
+# --------------------------------------------------------------------------- #
+# review (v1.439.0): an account whose home Iron-Proxy does not say
+# --------------------------------------------------------------------------- #
+def test_an_account_with_no_home_is_refused_and_never_read_as_this_pcs_login(fake, tmp_path, monkeypatch):
+    """Every other lease caller refuses an account with no ``cli.home``
+    (``accounts.lease``: "an answer with no account home"). A read with the
+    home variable set to "" would run the CLI on whatever login this PC has
+    and store THAT usage under this account."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "this-pc"))
+    acct = fake.add_profile("anthropic", "Homeless")
+    fake.profiles[acct["id"]]["cli"] = {"home": ""}
+    svc = _Svc(fake)
+    with pytest.raises(U.Refused) as got:
+        U.read_usage(svc, acct["id"])
+    assert got.value.code == "no_home" and got.value.words == U.NO_HOME_WORDS
+    assert _starts(tmp_path) == [] and _signals(fake) == []
+
+
+def test_as_of_is_the_last_read_that_worked_never_a_failed_one(fake, monkeypatch):
+    """``usage_read_at`` says when the NUMBER shown was read. A read that
+    failed read no number: a page drawn after it must not say "as of just
+    now" beside an older number."""
+    from iron_jarvis.harness import build_accounts as BA
+
+    acct = fake.add_profile("anthropic", "Work")
+    svc = _Svc(fake)
+    monkeypatch.setenv("FAKE_USAGE_MODE", "error")
+    failed = U.read_usage(svc, acct["id"])
+    assert failed["ok"] is False
+    assert U.decorate(BA.find(svc, acct["id"]))["usage_read_at"] is None
+    assert U.last_ok_at(acct["id"]) is None
+    monkeypatch.setenv("FAKE_USAGE_MODE", "ok")
+    good = U.read_usage(svc, acct["id"], force=True)
+    assert good["ok"] is True
+    assert U.decorate(BA.find(svc, acct["id"]))["usage_read_at"] == good["at"]
+    monkeypatch.setenv("FAKE_USAGE_MODE", "error")
+    U._remember(acct["id"], False, "later failure")
+    U._READS[acct["id"]]["at"] = "2999-01-01T00:00:00Z"
+    assert U.decorate(BA.find(svc, acct["id"]))["usage_read_at"] == good["at"]
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_after_its_answer_the_cli_is_let_exit_by_itself(fake, tmp_path, monkeypatch, provider):
+    """A Claude Code that is killed while it saves ``.claude.json`` can leave
+    the user's own file cut short (an adopted account's home IS the user's
+    ``~/.claude``). After the answer, stdin closes and the CLI gets a moment
+    to exit on its own (the picker handshake's way); only one that lingers
+    past the grace is killed."""
+    eof = tmp_path / "eof.txt"
+    monkeypatch.setenv("FAKE_USAGE_EOF", str(eof))
+    acct = fake.add_profile(provider, "Work")
+    assert U.read_usage(_Svc(fake), acct["id"])["ok"] is True
+    assert eof.exists() and eof.read_text(encoding="utf-8").strip() == "exited by itself"
+
+
+def test_a_cli_that_lingers_after_its_answer_is_still_killed(fake, tmp_path, monkeypatch):
+    eof = tmp_path / "eof.txt"
+    monkeypatch.setenv("FAKE_USAGE_EOF", str(eof))
+    monkeypatch.setattr(U, "EXIT_GRACE_S", 0.05)
+    acct = fake.add_profile("anthropic", "Work")
+    t0 = time.monotonic()
+    assert U.read_usage(_Svc(fake), acct["id"])["ok"] is True
+    assert time.monotonic() - t0 < 10
+    time.sleep(0.6)
+    assert not eof.exists()

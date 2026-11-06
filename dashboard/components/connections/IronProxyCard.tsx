@@ -835,7 +835,7 @@ function AccountRow({
               <UsageRefresh
                 accountId={a.id}
                 accountName={a.title}
-                readAt={a.usage_read?.at ?? null}
+                readAt={a.usage_read_at ?? null}
                 onRead={() => onUsageRead?.()}
               />
             ) : null}

@@ -205,6 +205,8 @@ def _account_view(
     from ...iron_proxy import usage_read as _ur
 
     out["usage_read"] = _ur.last_read(str(profile.get("id") or ""))
+    # Review: the time the shown number was read (a failed read read none).
+    out["usage_read_at"] = _ur.last_ok_at(str(profile.get("id") or ""))
     vendor = _ba.VENDOR_OF_PROXY.get(str(profile.get("provider") or ""))
     row = {"vendor": vendor, **_ba.status_of(profile, state)}
     out["can_refresh"] = (profile.get("lane") or "cli") == "cli" and _ur.can_refresh(row)

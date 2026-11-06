@@ -9,7 +9,8 @@
  * button, so a screen reader hears the answer (a region mounted WITH its
  * words is often not announced).
  *
- * The caller passes `readAt` (the row's `usage_read_at`) and gets the answer
+ * The caller passes `readAt` (the row's `usage_read_at`: the last read that
+ * WORKED — a failed read never moves "as of") and gets the answer
  * through `onRead` (the fresh account row, raw) to redraw its numbers.
  */
 
@@ -34,14 +35,22 @@ export function UsageRefresh({
   const [reading, setReading] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [at, setAt] = useState<string | null>(readAt);
-  useEffect(() => setAt((mine) => (readAt && (!mine || readAt > mine) ? readAt : mine)), [readAt]);
+  // A newer good read (the list's own time: the in-use loop read it since)
+  // replaces the time — and the words of a press that failed before it.
+  useEffect(() => {
+    if (!readAt) return;
+    setAt((mine) => (!mine || readAt > mine ? readAt : mine));
+    setProblem((p) => (p !== null && (!at || readAt > at) ? null : p));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readAt]);
   const press = async () => {
     if (reading) return;
     setReading(true);
     setProblem(null);
     try {
       const res = await refreshAccountUsage(accountId);
-      if (res.read.at) setAt(res.read.at);
+      // "as of" speaks for the number shown: a read that failed read none.
+      if (res.read.ok && res.read.at) setAt(res.read.at);
       setProblem(res.read.ok ? null : res.read.words || "The usage could not be read.");
       onRead?.(res);
     } catch (e) {

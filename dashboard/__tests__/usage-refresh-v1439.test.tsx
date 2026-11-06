@@ -146,6 +146,21 @@ describe("the shared control", () => {
     expect(screen.getByTestId("usage-refresh-note-x").textContent).toBe("as of 4 min ago");
   });
 
+  it("a failed read never moves the as-of time; a newer good read replaces its words", async () => {
+    // Review: "as of" speaks for the NUMBER shown, and a failed read read none.
+    const four = new Date(Date.now() - 4 * 60_000).toISOString();
+    hooks.answer = { account: null, read: { at: NOW_ISO(), ok: false, words: "Codex did not answer in 15 seconds.", throttled: false } };
+    const { rerender } = render(<UsageRefresh accountId="x" accountName="Codex" readAt={four} />);
+    const note = screen.getByTestId("usage-refresh-note-x");
+    fireEvent.click(screen.getByTestId("usage-refresh-x"));
+    await waitFor(() => expect(note.textContent).toBe("Codex did not answer in 15 seconds."));
+    // The in-use loop read it since: the list hands a newer good time.
+    const two = new Date(Date.now() - 2 * 60_000).toISOString();
+    rerender(<UsageRefresh accountId="x" accountName="Codex" readAt={two} />);
+    await waitFor(() => expect(note.textContent).toBe("as of 2 min ago"));
+    expect(note.className).not.toContain("text-tone-warn");
+  });
+
   it("words and decoders", () => {
     const now = Date.parse("2026-11-06T12:00:00Z");
     expect(asOfWords("2026-11-06T11:59:30Z", now)).toBe("as of just now");
@@ -203,6 +218,13 @@ describe("the Connections card", () => {
           can_refresh: true, usage_read: null,
         },
         {
+          // Review: its last read FAILED — no "as of" beside an older number.
+          id: "c-fail", title: "Failed Claude", provider: "anthropic", lane: "cli", order: 1, enabled: true,
+          state: { status: "ready", served: 0, window: { percent: 50, window: "5 hours" } },
+          can_refresh: true, usage_read: { at: new Date().toISOString(), ok: false, words: "Claude Code stopped before it answered." },
+          usage_read_at: null,
+        },
+        {
           id: "x-out", title: "Old Codex", provider: "openai", lane: "cli", order: 0, enabled: true,
           state: { status: "unauthenticated", served: 0, window: { percent: 20, window: "5 hours" } },
           can_refresh: false,
@@ -220,6 +242,7 @@ describe("the Connections card", () => {
     expect(screen.getByTestId("usage-refresh-c-work").getAttribute("aria-label")).toBe(
       "Check usage now for Work Claude",
     );
+    expect(screen.getByTestId("usage-refresh-note-c-fail").textContent).toBe("");
     // The signed-out account's row is drawn — with no button.
     expect(screen.getByTestId("iron-proxy-window-x-out").textContent).toBe("20% of the 5-hour window used");
     expect(screen.queryByTestId("usage-refresh-x-out")).toBeNull();

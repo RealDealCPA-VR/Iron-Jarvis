@@ -67,6 +67,9 @@ export interface IronProxyAccount {
   home?: string | null;
   /** v1.439.0: the last "Check usage now" read ({at, ok, words}), or null. */
   usage_read?: { at: string; ok: boolean; words: string } | null;
+  /** v1.439.0 review: when the number shown was read (the last read that
+   *  WORKED; ISO), or null. A failed read never moves it. */
+  usage_read_at?: string | null;
   /** v1.439.0: its usage can be read now (a Claude Code / Codex login that is
    *  on and signed in). Absent from an older Iron Jarvis = no button. */
   can_refresh?: boolean;
