@@ -1019,7 +1019,7 @@ def register(app: FastAPI, d) -> None:
         """Detect + probe an UNSAVED base_url for the add-node form.
 
         Probe-only: nothing is persisted. Always 200 (mirroring
-        ``/providers/endpoint-models``) — an unreachable endpoint returns its
+        ``/connections/endpoints/models``) — an unreachable endpoint returns its
         honest snapshot with the error so the form can show it and still let
         the user save the node.
         """

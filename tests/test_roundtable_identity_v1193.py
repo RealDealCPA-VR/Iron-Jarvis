@@ -26,6 +26,7 @@ from iron_jarvis.agents.threads import PANEL_NO_TOOLS
 from iron_jarvis.agents.types import _DEFINITIONS
 from iron_jarvis.core.models import AgentType
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.rooms import rooms
 
 
 @pytest.fixture()
@@ -59,9 +60,9 @@ def _spy_systems(platform) -> list[str]:
 
 
 def _round(client, participants, message="what do you think?") -> None:
-    r = client.post("/agents/threads", json={"participants": participants})
+    r = rooms(client).post("/agents/threads", json={"participants": participants})
     assert r.status_code == 200, r.text
-    say = client.post(
+    say = rooms(client).post(
         f"/agents/threads/{r.json()['id']}/say", json={"message": message}
     )
     assert say.status_code == 200, say.text
@@ -140,11 +141,11 @@ def test_an_unknown_builtin_name_is_not_silently_the_builder(app):
 def test_a_vanished_dynamic_agent_is_still_an_honest_error(app):
     """The prompt path changed; the honest-failure path must not have."""
     client = TestClient(app)
-    r = client.post(
+    r = rooms(client).post(
         "/agents/threads",
         json={"participants": [{"source": "dynamic", "name": "ghost", "role": "lead"}]},
     )
-    say = client.post(
+    say = rooms(client).post(
         f"/agents/threads/{r.json()['id']}/say", json={"message": "hello"}
     )
     entry = say.json()["entries"][-1]

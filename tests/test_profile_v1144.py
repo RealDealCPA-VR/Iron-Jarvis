@@ -48,6 +48,7 @@ from iron_jarvis.profile import ProfileStore, render
 from iron_jarvis.profile.block import HOW_HEADER, MAX_BLOCK_CHARS, VOICE_HEADER, WHO_HEADER
 from iron_jarvis.profile.language import detect_leak, strip_code
 from iron_jarvis.profile.models import UserProfileRecord
+from tests._fakes.rooms import rooms
 
 CHINESE = "这是一个测试句子，用来检查语言泄漏的检测器是否有效。"
 
@@ -354,7 +355,7 @@ async def test_profile_reaches_every_prompt_seam(tmp_path, monkeypatch):
 
     # (e) The round table takes the PREFERENCES slice (see render's `include`).
     seen["systems"].clear()
-    r = client.post(
+    r = rooms(client).post(
         "/agents/threads",
         json={
             "title": "panel",
@@ -366,7 +367,7 @@ async def test_profile_reaches_every_prompt_seam(tmp_path, monkeypatch):
     )
     assert r.status_code == 200, r.text
     tid = r.json()["id"]
-    say = client.post(f"/agents/threads/{tid}/say", json={"message": "what do you think?"})
+    say = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "what do you think?"})
     assert say.status_code == 200, say.text
     panel = [s for s in seen.get("systems", [])]
     assert panel, "round table produced no completion"

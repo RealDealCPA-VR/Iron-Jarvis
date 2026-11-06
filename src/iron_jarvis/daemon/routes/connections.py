@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from typing import Any, Callable
 
 from ...core import http as _http
-from ..schemas import ConnectionKeyBody, EndpointModelsBody, OAuthCompleteBody
+from ..schemas import ConnectionKeyBody, OAuthCompleteBody
 
 
 # --------------------------------------------------------------------------- #
@@ -1342,10 +1342,6 @@ async def fetch_endpoint_models(d: Any, base_url: str, protocol: str = "openai",
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
-    @app.get("/providers")
-    def providers() -> dict[str, Any]:
-        return {"providers": d._visible_providers()}
-
     @app.get("/connections")
     def connections() -> dict[str, Any]:
         # Hide the internal offline 'mock' provider — it's an engine fallback,
@@ -1592,24 +1588,6 @@ def register(app: FastAPI, d) -> None:
         ``provider_rescan`` tool calls too — one rescan.
         """
         return rescan_providers(d)
-
-    @app.post("/providers/endpoint-models")
-    def endpoint_models(body: EndpointModelsBody) -> dict[str, Any]:
-        """List the models a user-entered OpenAI-compatible endpoint actually
-        serves (``/v1/models``, falling back to Ollama's native ``/api/tags``)
-        — so the setup form offers a picker instead of a blank model-id field.
-        Probe-only: nothing is saved. Always 200; a failed probe returns an
-        honest ``error`` (the form shows it and keeps manual entry)."""
-        from ...providers.discovery import list_endpoint_models
-
-        key, ollama_ok = _saved_endpoint_auth(d, body.base_url, body.api_key.strip())
-        try:
-            models = list_endpoint_models(body.base_url, key, ollama_ok=ollama_ok)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:  # noqa: BLE001 — unreachable/odd server, be honest
-            return {"models": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
-        return {"models": models}
 
     @app.post("/connections/endpoints/models")
     async def endpoint_models_probe(body: EndpointModelsProbeBody) -> dict[str, Any]:

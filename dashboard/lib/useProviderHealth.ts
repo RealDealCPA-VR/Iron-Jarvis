@@ -46,8 +46,8 @@ export interface ProviderHealthState {
  * Per-provider availability from GET /health.
  *
  * v1.230.0: inside a `DaemonProvider` (the whole app) this hook READS the
- * shared /health poll — the same payload the topbar ModelSwitcher's amber dot
- * and the offline banner use, so the three can never disagree and the window
+ * shared /health poll — the same payload the offline banner and the Overview
+ * use, so they can never disagree and the window
  * carries ONE /health poll. It polls for itself ONLY when mounted outside a
  * provider (`provided === false`), at `intervalMs` (default 5 s).
  *

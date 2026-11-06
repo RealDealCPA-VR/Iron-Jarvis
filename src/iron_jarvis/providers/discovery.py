@@ -154,25 +154,6 @@ def _ollama_host(base_url: str) -> str:
     return host
 
 
-def list_endpoint_models(base_url: str, key: str = "", *, ollama_ok: bool | None = None) -> list[str]:
-    """UNCACHED model listing for a user-entered endpoint (the setup form's
-    probe — the user shouldn't have to know their server's model ids by
-    heart). Tries the OpenAI-compatible ``/v1/models`` first, then Ollama's
-    native ``/api/tags``; raises the original error when both fail so the
-    caller can surface it honestly. The gateway-key fix: never Ollama's
-    address for a server known not to be Ollama (``ollama_ok`` False), nor
-    after an auth refusal (401/403 — Ollama has no keys)."""
-    if not (base_url or "").strip():
-        raise ValueError("base_url is required")
-    try:
-        return _openai_compatible_models(base_url, key)
-    except Exception as exc:
-        if ollama_ok is False or _status_of(exc) in (401, 403):
-            raise
-        # Bare Ollama hosts may predate the /v1 shim — try the native API.
-        return _ollama_models(_ollama_host(base_url))
-
-
 _ANTHROPIC_VERSION = "2023-06-01"
 #: Rows per page and the most pages followed for an Anthropic-compatible
 #: listing (the same 1,000-id ceiling the Connections form's probe keeps).

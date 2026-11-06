@@ -213,7 +213,7 @@ def test_shell_state_reports_a_daemon_that_is_still_being_restarted(tmp_path):
     assert d["damaged"] is False, d
     # A backoff is pending: this restart really is under way (review round).
     assert d["restarting"] is True, d
-    # What was already there stays (PowerTips reads it).
+    # What was already there stays (the shell's registered hotkeys).
     assert out["state"]["hotkeys"]["window"] == "Ctrl+Shift+J", out["state"]
 
 

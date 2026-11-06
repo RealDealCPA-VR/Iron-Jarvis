@@ -35,6 +35,7 @@ from iron_jarvis.daemon.routes.agents import (
     _sniff_image,
     _thread_activity,
 )
+from tests._fakes.rooms import rooms
 
 
 def _client(tmp_path, **kw):
@@ -267,7 +268,7 @@ def test_roster_rows_carry_honest_nulls_when_nothing_happened(tmp_path):
 def test_roster_joins_the_newest_thread_entry_per_participant(tmp_path):
     with _client(tmp_path) as client:
         _make_agent(client, "analyst")
-        r = client.post(
+        r = rooms(client).post(
             "/agents/threads",
             json={
                 "title": "panel",
@@ -279,7 +280,7 @@ def test_roster_joins_the_newest_thread_entry_per_participant(tmp_path):
         )
         assert r.status_code == 200, r.text
         tid = r.json()["id"]
-        r = client.post(f"/agents/threads/{tid}/say", json={"message": "hello team"})
+        r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello team"})
         assert r.status_code == 200, r.text
 
         msgs = client.get(f"/agents/threads/{tid}").json()["messages"]
@@ -303,7 +304,7 @@ def test_roster_joins_the_newest_thread_entry_per_participant(tmp_path):
 
 def test_roster_newest_round_wins(tmp_path):
     with _client(tmp_path) as client:
-        r = client.post(
+        r = rooms(client).post(
             "/agents/threads",
             json={
                 "title": "panel",
@@ -313,9 +314,9 @@ def test_roster_newest_round_wins(tmp_path):
             },
         )
         tid = r.json()["id"]
-        client.post(f"/agents/threads/{tid}/say", json={"message": "round one"})
+        rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "round one"})
         first = _roster(client)["builder"]["last_active"]
-        client.post(f"/agents/threads/{tid}/say", json={"message": "round two"})
+        rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "round two"})
         second = _roster(client)["builder"]["last_active"]
         assert first is not None and second is not None
         assert second > first  # strictly newer — the join tracks the max

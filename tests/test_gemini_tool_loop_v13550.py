@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from pathlib import Path
 
 import httpx
@@ -345,19 +344,6 @@ def test_the_model_menu_lists_only_current_geminis():
     google = {m["model"] for m in available_models() if m["provider"] == "google"}
     assert google == _CURRENT
     assert GEMINI_DEFAULT_MODEL in google
-
-
-def test_the_quality_dial_names_current_geminis():
-    src = _read(DASH / "components" / "ModelSwitcher.tsx")
-    block = re.search(r"\n  google: \{\n(.*?)\n  \},", src, re.S)
-    assert block, "the dial's google tiers"
-    tiers = dict(re.findall(r'(\w+): "([^"]+)"', block.group(1)))
-    assert tiers == {
-        "fast": "gemini-3.5-flash-lite",
-        "balanced": GEMINI_DEFAULT_MODEL,
-        "best": GEMINI_DEFAULT_MODEL,
-    }
-    assert not re.search(r'"gemini-(1|2)\.', src)
 
 
 # --------------------------------------------------------------------------- #

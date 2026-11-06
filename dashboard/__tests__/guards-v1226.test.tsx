@@ -1,9 +1,7 @@
 /**
  * v1.226.0 (F-F-6) — one unguarded field in one card must not take down the
- * whole Overview. `/metrics` -> `{}` crashed HealthCard on
- * `m.sessions_evaluated.toLocaleString()`; `/onboarding` -> `{}` crashed
- * OnboardingWelcome on `data.checklist.map`. Both now render with a
- * partial/empty payload.
+ * whole Overview. `/onboarding` -> `{}` crashed OnboardingWelcome on
+ * `data.checklist.map`; it now renders with a partial/empty payload.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
@@ -50,41 +48,12 @@ vi.mock("framer-motion", async () => {
   };
 });
 
-import { HealthCard, type OverviewMetrics } from "@/components/overview/HealthCard";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 
 afterEach(() => cleanup());
 
-describe("HealthCard with a partial /metrics payload (v1.226.0)", () => {
-  it("renders {} without throwing and shows zero counters", () => {
-    const { container } = render(
-      <HealthCard metrics={{} as unknown as OverviewMetrics} loading={false} />,
-    );
-    const txt = container.textContent || "";
-    expect(txt).toContain("Tasks reviewed");
-    expect(txt).toContain("0 events");
-    expect(txt).toContain("0 tool calls");
-  });
-
-  it("still formats a full payload", () => {
-    const { container } = render(
-      <HealthCard
-        metrics={{
-          sessions_evaluated: 1234,
-          avg_completion: 0.5,
-          avg_tool_success_rate: 0.75,
-          avg_latency_s: 2,
-          total_tool_invocations: 1,
-          event_count: 5,
-        } as unknown as OverviewMetrics}
-        loading={false}
-      />,
-    );
-    const txt = container.textContent || "";
-    expect(txt).toContain("1,234");
-    expect(txt).toContain("1 tool call");
-  });
-});
+// The HealthCard half of this file left with HealthCard itself (v1.439.0,
+// Wave 6: the card had not been on any screen since v1.334.0).
 
 describe("OnboardingWelcome with a partial /onboarding payload (v1.226.0)", () => {
   it("renders {} (no checklist field) without throwing", () => {

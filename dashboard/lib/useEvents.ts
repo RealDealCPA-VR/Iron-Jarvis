@@ -187,7 +187,7 @@ export interface UseEventsOptions {
   /** Only these event types reach the caller's window. An entry ending in
    *  `.*` matches by prefix (`"review.*"` takes `review.requested` and
    *  `review.approved`, never `reviewer.assigned`); every other entry is an
-   *  exact type. Omitted = every frame (EventStream, TimeTravelFeed). */
+   *  exact type. Omitted = every frame (TimeTravelFeed). */
   types?: readonly string[];
 }
 

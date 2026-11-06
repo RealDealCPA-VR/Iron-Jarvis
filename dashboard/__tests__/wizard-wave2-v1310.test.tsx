@@ -4,6 +4,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 /**
  * Wave 2 (v1.310.0) — THE FIRST FIVE MINUTES, track B (wizard + connect doors).
  *
+ * v1.439.0 (Wave 6, D6): the first-run wizard was removed (unmounted since the
+ * calm redesign, v1.321.0). Its own pins (the step-3 gate, the first task's
+ * provider pin, the celebration) left with it. The doors are the shared
+ * `ConnectDoors` the chat's empty state still shows, so the subscription
+ * door's three states, the explicit 'Use it for answers' press and the
+ * Ollama door below now render ConnectDoors directly.
+ *
  * WHAT THESE TESTS GUARD (findings wizard-first-task-claims-real-on-mock,
  * subscription-door-dead-end, mock-default-trap-cli-ollama; the verifier's
  * fix_adjustment wins over the proposal):
@@ -177,7 +184,7 @@ vi.mock("framer-motion", async () => {
   };
 });
 
-import { FirstRunWizard } from "@/components/FirstRunWizard";
+import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
 
 /* ------------------------------------------------------------- fixtures --- */
 
@@ -274,43 +281,13 @@ function setState(providers: Row[], defaultProvider = "mock") {
   hooks.api["/onboarding"] = onboarding(providers, defaultProvider);
 }
 
-const SUGGESTION = "Write a short haiku about an iron AI assistant";
 const DOOR_SUB = /I already pay/;
 const DOOR_LOCAL = /Free & private/;
 const DOOR_KEY = /API key/;
 
-const dialog = () => screen.getByRole("dialog");
-const sessionPosts = () => hooks.posts.filter((p) => p.path === "/sessions");
+/** The doors render on their own now (v1.439.0); the whole page is their box. */
+const dialog = () => document.body;
 const useModelPosts = () => hooks.posts.filter((p) => p.path === "/onboarding/use-model");
-
-/** Step 3 through the stepper (the jump the old wizard never gated). */
-function goToFirstTask() {
-  fireEvent.click(screen.getByRole("button", { name: /First task/ }));
-}
-
-/** A completed run waiting at the polled endpoint, answered by `provider`. */
-function completedRun(provider: string, summary: string, files: string[] = []) {
-  hooks.api["/sessions/s-1"] = {
-    session: {
-      id: "s-1",
-      status: "completed",
-      provider,
-      model: provider === "mock" ? "claude-opus-4-8" : "claude-opus-4-8",
-      summary,
-      workspace_path: "C:\\Users\\me\\ws\\s-1",
-    },
-    transcript: { tools: [] },
-  };
-  hooks.api["/sessions/s-1/result"] = {
-    found: true,
-    session_id: "s-1",
-    files_created: files,
-    files_changed: [],
-    files_created_total: files.length,
-    files_changed_total: 0,
-    documents: files.map((f) => `C:\\Users\\me\\ws\\s-1\\${f}`),
-  };
-}
 
 beforeEach(() => {
   hooks.api = { "/voice/status": { available: false, backend: null, hint: "" } };
@@ -327,210 +304,11 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-/* ======================================================= 1. step-3 gate === */
-
-describe("step 3 never runs on the offline demo", () => {
-  it("with no model connected, Continue → Continue lands on the connect doors, not the task box", async () => {
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-    const d = dialog();
-    // The doors are offered where the task box used to be…
-    expect(within(d).getByRole("button", { name: DOOR_SUB })).toBeTruthy();
-    expect(within(d).getByRole("button", { name: DOOR_LOCAL })).toBeTruthy();
-    expect(within(d).getByRole("button", { name: DOOR_KEY })).toBeTruthy();
-    // …and nothing here can start a run on the mock.
-    expect(within(d).queryByRole("button", { name: SUGGESTION })).toBeNull();
-    expect(within(d).queryByRole("button", { name: /Run it/ })).toBeNull();
-    expect(within(d).queryByPlaceholderText(/type your own first task/)).toBeNull();
-  });
-
-  it("jumping to 'First task' on the stepper is gated the same way", async () => {
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    expect(within(dialog()).getByRole("button", { name: DOOR_SUB })).toBeTruthy();
-    expect(within(dialog()).queryByRole("button", { name: SUGGESTION })).toBeNull();
-    expect(sessionPosts()).toEqual([]);
-  });
-
-  it("CONTROL: with a model ready, step 3 offers the task box (the gate is not a wall)", async () => {
-    setState(CLAUDE_SIGNED_IN);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    expect(within(dialog()).getByRole("button", { name: SUGGESTION })).toBeTruthy();
-  });
-});
-
-/* ============================================ 2. explicit provider pin === */
-
-describe("the first task carries the provider the user just enabled", () => {
-  it("signed-in Claude Code: POST /sessions names the INHERITED API provider (anthropic), not claude-cli and not the mock default", async () => {
-    setState(CLAUDE_SIGNED_IN);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await waitFor(() => expect(sessionPosts().length).toBe(1));
-    expect((sessionPosts()[0].body as Record<string, unknown>).provider).toBe("anthropic");
-  });
-
-  it("Ollama the only model: POST /sessions names ollama", async () => {
-    setState(OLLAMA_UP);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await waitFor(() => expect(sessionPosts().length).toBe(1));
-    expect((sessionPosts()[0].body as Record<string, unknown>).provider).toBe("ollama");
-  });
-
-  it("CONTROL: a real default the user chose (ollama) is never overridden by a higher-ranked connected provider", async () => {
-    /* Review fix (v1.310.0): the first cut used default "openai" — which ALSO
-       ranks first among the candidates (a pasted key is rank 0), so deleting
-       the "never override a real default" guard still sent "openai" and this
-       control stayed green (mutation M7). The user's default here is the
-       LOWEST-ranked one (a local server), with a pasted OpenAI key and a
-       signed-in Claude Code beside it: a guardless pin would send "openai". */
-    const rows = withRows({
-      openai: { available: true },
-      "claude-cli": { available: true, installed: true, signed_in: true },
-      anthropic: { available: true, inherited_from: "claude-cli" },
-      ollama: { available: true },
-    });
-    setState(rows, "ollama");
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await waitFor(() => expect(sessionPosts().length).toBe(1));
-    const p = (sessionPosts()[0].body as Record<string, unknown>).provider;
-    expect(p).not.toBe("openai");
-    expect(p).not.toBe("anthropic");
-    expect(p === undefined || p === "" || p === "ollama").toBe(true);
-  });
-});
-
-/* ======================================= 3. celebration = who answered === */
-
-describe("the celebration reads the provider that ACTUALLY answered", () => {
-  it("a run the MOCK answered is the amber offline demo — never 'output is real'", async () => {
-    // Health says a model is ready, but the session row says the mock ran —
-    // the ROW is the truth (e.g. a pin the daemon could not honour).
-    setState(CLAUDE_SIGNED_IN);
-    completedRun("mock", "Done. Wrote RESULT.md summarizing the task.");
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    // Wait for the run's VERDICT to render (either wording), THEN judge it.
-    // v1.318.0: the wait used to read the whole dialog — whose step text
-    // already says "chat keeps the offline demo…" BEFORE the run — so it
-    // passed at once and the verdict was looked up before it existed (red
-    // on a loaded CI runner). Wait on the verdict element itself.
-    const verdict = await waitFor(
-      () => {
-        const v = screen.getByTestId("first-task-verdict");
-        expect(v.textContent).toMatch(/Demo answer|output is real/i);
-        return v;
-      },
-      { timeout: 8000 },
-    );
-    expect(dialog().textContent).not.toMatch(/output is real/i);
-    expect(verdict.textContent).toMatch(/Demo answer/i);
-    expect(verdict.textContent).toMatch(/no AI model ran/i);
-    expect(verdict.className).toMatch(/amber/);
-  });
-
-  it("a run a REAL model answered names it and lists the files it wrote", async () => {
-    setState(CLAUDE_SIGNED_IN);
-    completedRun("anthropic", "Iron hums in the dark / a quiet mind that answers / sparks become the words", ["haiku.md"]);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await screen.findByRole("button", { name: /Start using Iron Jarvis/ });
-    // Named: who answered, read off the session row.
-    expect(dialog().textContent).toMatch(/anthropic/i);
-    expect(dialog().textContent).not.toMatch(/Demo answer/i);
-    expect(screen.getByTestId("first-task-verdict").textContent).toMatch(/anthropic/i);
-    // Handed over: the file the run wrote (SessionFiles pattern) — the
-    // summary deliberately does not mention it, so only a file list can.
-    await waitFor(() => expect(dialog().textContent).toContain("haiku.md"));
-  });
-
-  it("a real answer on a DEMO default: the finale offers the explicit 'Use it for answers' press and never navigates by itself", async () => {
-    /* Review fix (v1.310.0): the pinned first task answers for real, but every
-       chat after the wizard still goes to the demo default — "It worked" then
-       a chat full of scripted replies is the mock-default trap again. */
-    setState(CLAUDE_SIGNED_IN);
-    completedRun("anthropic", "Iron hums in the dark", []);
-    hooks.useModelAnswer = {
-      promoted: { provider: "anthropic", model: "claude-opus-4-8" },
-      reason: "",
-    };
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    const press = await within(dialog()).findByRole("button", { name: /for answers/i });
-    // Said, not done: no promotion and no navigation until the user presses.
-    expect(useModelPosts()).toEqual([]);
-    expect(hooks.routerPush).not.toHaveBeenCalled();
-    expect(screen.getByTestId("first-task-use-for-answers").textContent).toMatch(/not real answers/i);
-    hooks.refreshHealth.mockClear();
-    fireEvent.click(press);
-    // v1.353.0 (G35): the confirmation names what was PRESSED, not the
-    // promoted API row and its raw ids.
-    await waitFor(() =>
-      expect(within(dialog()).getByRole("status").textContent).toMatch(
-        /Done — Claude.* answers you now\./,
-      ),
-    );
-    expect(useModelPosts()).toHaveLength(1);
-    expect(["claude-cli", "anthropic"]).toContain(
-      (useModelPosts()[0].body as Record<string, unknown>).provider,
-    );
-    expect(hooks.refreshHealth).toHaveBeenCalled();
-    // The press decided the default; leaving is still the user's own click.
-    expect(hooks.routerPush).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Start using Iron Jarvis/ })).toBeTruthy();
-  });
-
-  it("CONTROL: a real answer on the user's OWN default has no promotion press on the finale", async () => {
-    setState(OLLAMA_UP, "ollama");
-    completedRun("ollama", "Iron hums in the dark", []);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await screen.findByRole("button", { name: /Start using Iron Jarvis/ });
-    expect(within(dialog()).queryByRole("button", { name: /for answers/i })).toBeNull();
-    expect(screen.queryByTestId("first-task-use-for-answers")).toBeNull();
-  });
-
-  it("a real run that wrote nothing SAYS so instead of an empty box", async () => {
-    setState(CLAUDE_SIGNED_IN);
-    completedRun("anthropic", "Iron hums in the dark", []);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
-    goToFirstTask();
-    fireEvent.click(within(dialog()).getByRole("button", { name: SUGGESTION }));
-    await screen.findByRole("button", { name: /Start using Iron Jarvis/ });
-    await waitFor(() =>
-      expect(dialog().textContent).toMatch(/no files|didn.t write any files|did not write any files/i),
-    );
-  });
-});
-
 /* =========================== 4. the subscription door's three states === */
 
 describe("the subscription door tells the truth in three states (W2-3 rows)", () => {
   it("NOT INSTALLED: a web/desktop subscription can't be used here + vendor links; no irm|iex, no false 'turns green' promise", async () => {
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     const text = dialog().textContent ?? "";
     expect(text).toContain("Claude Code (the command-line tool)");
@@ -551,8 +329,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
 
   it("INSTALLED, SIGNED OUT: shows the CLI's own sign_in_fix and a Sign in press → POST /terminals/launch {cli: 'claude'}", async () => {
     setState(CLAUDE_SIGNED_OUT);
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     // v1.353.0 (G33): the door says to press Sign in and what the window it
     // opens asks for — never the CLI's terminal sentence above its own button.
@@ -579,8 +356,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
         "codex-cli": { available: false, installed: true, signed_in: false, detail: "not signed in" },
       }),
     );
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     // v1.353.0 (G33): Codex's own screen, said before the press.
     expect(dialog().textContent).toMatch(
@@ -603,8 +379,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
         "claude-cli": { available: false, installed: true, signed_in: null, detail: "" },
       }),
     );
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_SUB }));
     const text = dialog().textContent ?? "";
     expect(text).toMatch(/checking whether it.s signed in/i);
@@ -620,8 +395,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
       promoted: { provider: "anthropic", model: "claude-opus-4-8" },
       reason: "",
     };
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     // The mock-default trap: a connected CLI is NOT "answers are real" while
     // the default that chat uses is still the offline demo.
     expect(dialog().textContent).not.toMatch(/answers are real/i);
@@ -644,8 +418,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
     setState(CLAUDE_SIGNED_IN);
     const reason = "You already chose OpenAI for answers, so nothing changed.";
     hooks.useModelAnswer = { promoted: null, reason };
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(within(dialog()).getByRole("button", { name: /for answers/i }));
     await waitFor(() => expect(dialog().textContent).toContain(reason));
   });
@@ -653,8 +426,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
   it("the press SAYS a 409 refusal sentence (unknown/unavailable provider)", async () => {
     setState(CLAUDE_SIGNED_IN);
     hooks.useModelAnswer = new Error("anthropic is not available right now.");
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     fireEvent.click(within(dialog()).getByRole("button", { name: /for answers/i }));
     await waitFor(() =>
       expect(within(dialog()).getByRole("alert").textContent).toContain(
@@ -670,8 +442,7 @@ describe("the subscription door tells the truth in three states (W2-3 rows)", ()
       anthropic: { available: true, inherited_from: "claude-cli" },
     });
     setState(rows, "openai");
-    render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    render(<ConnectDoors />);
     expect(within(dialog()).queryByRole("button", { name: /for answers/i })).toBeNull();
   });
 });
@@ -708,14 +479,13 @@ describe("ConnectDoors never offers promotion over the user's own choice", () =>
 describe("the Ollama door ends in the same explicit press", () => {
   it("saved URL + Ollama reachable → 'Use it for answers' posts {provider: 'ollama'}", async () => {
     hooks.useModelAnswer = { promoted: { provider: "ollama", model: "llama3.2" }, reason: "" };
-    const { rerender } = render(<FirstRunWizard />);
-    await waitFor(() => expect(dialog()).toBeTruthy());
+    const { rerender } = render(<ConnectDoors />);
     fireEvent.click(screen.getByRole("button", { name: DOOR_LOCAL }));
     fireEvent.click(screen.getByRole("button", { name: "Connect to Ollama on this PC" }));
     await waitFor(() => expect(hooks.puts.some((p) => p.path === "/settings")).toBe(true));
     // The health poll now proves Ollama is reachable.
     setState(OLLAMA_UP);
-    rerender(<FirstRunWizard />);
+    rerender(<ConnectDoors />);
     const press = await within(dialog()).findByRole("button", { name: /for answers/i });
     fireEvent.click(press);
     await waitFor(() =>

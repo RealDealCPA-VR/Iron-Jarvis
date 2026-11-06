@@ -11,8 +11,9 @@
  *    and hand it to the TurnReceipt, which says ONE quiet line —
  *    "cached 97% · ~$0.03 list" — and nothing when there is nothing to say;
  *  - /models rows carry `label` ("Opus 5.5"), `context_window`, and
- *    `usage_credits`: both pickers show the label, a "1M" chip and a muted
- *    "uses credits" note, and the composer's filter matches id AND label;
+ *    `usage_credits`: the composer's picker shows the label, a "1M" chip and
+ *    a muted "uses credits" note, and its filter matches id AND label (the
+ *    title-bar switcher and its quality dial were removed in v1.439.0);
  *  - the Usage page says a flagged claude-cli row's cost as
  *    "~$x list-price equivalent", never as a bill.
  *
@@ -141,7 +142,6 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 import ChatPage from "@/app/chat/page";
 import UsagePage from "@/app/usage/page";
 import { PaneChat } from "@/components/terminal/PaneChat";
-import { ModelSwitcher, resolveTiers } from "@/components/ModelSwitcher";
 import { TurnReceipt, usageWords } from "@/components/chat/TurnReceipt";
 import { LIST_PRICE_TITLE, turnUsageFrom } from "@/lib/types";
 import { matchModels } from "@/lib/recentModels";
@@ -539,71 +539,6 @@ describe("the composer's model menu shows the picker's label, the 1M chip and th
     const rows = CATALOG.models;
     expect(matchModels(rows, "Haiku 4.5", 10).map((r) => r.model)).toEqual(["claude-haiku-4-5-20251001"]);
     expect(matchModels(rows, "gpt", 10).map((r) => r.model)).toEqual(["gpt-5"]);
-  });
-});
-
-describe("the title-bar ModelSwitcher shows the same facts", () => {
-  it("label on the trigger and the rows, 1M chip, credits note", async () => {
-    render(<ModelSwitcher />);
-    const trigger = await screen.findByRole("button", { name: /switch the active model/i });
-    await waitFor(() => expect(trigger.textContent).toContain("Opus 5.5"));
-    fireEvent.click(trigger);
-    const list = await screen.findByTestId("ij-model-list");
-    const active = within(list).getByTestId("ij-active-model-row");
-    expect(active.textContent).toContain("Opus 5.5");
-    expect(within(active).getByTestId("model-1m")).toBeInTheDocument();
-    const fable = rowFor(list, "Fable 5.1");
-    expect(within(fable).getByTestId("model-credits")).toBeInTheDocument();
-    expect(within(list).getAllByTestId("model-credits")).toHaveLength(1);
-    expect(within(rowFor(list, "gpt-5")).queryByTestId("model-1m")).toBeNull();
-  });
-});
-
-describe("the quality dial resolves Claude tiers from the live rows", () => {
-  const NEW_ONLY = {
-    models: [
-      { provider: "claude-cli", model: "subscription", name: "Claude", kind: "cli", available: true },
-      { provider: "claude-cli", model: "claude-opus-4-8", label: "Opus 4.8", name: "Claude", kind: "cli", available: true },
-      { provider: "claude-cli", model: "claude-opus-5-5", label: "Opus 5.5", name: "Claude", kind: "cli", available: true },
-      { provider: "claude-cli", model: "claude-sonnet-5-5", label: "Sonnet 5.5", name: "Claude", kind: "cli", available: true },
-      { provider: "claude-cli", model: "claude-haiku-4-5-20251001", label: "Haiku 4.5", name: "Claude", kind: "cli", available: true },
-      { provider: "anthropic", model: "claude-opus-5-5", name: "Anthropic", kind: "api", available: true },
-      { provider: "anthropic", model: "claude-sonnet-5-5", name: "Anthropic", kind: "api", available: true },
-      { provider: "anthropic", model: "claude-haiku-4-5-20251001", name: "Anthropic", kind: "api", available: true },
-    ],
-  };
-
-  it("by family, newest version first — label or id", () => {
-    const rows = NEW_ONLY.models as Parameters<typeof resolveTiers>[1];
-    const want = {
-      fast: "claude-haiku-4-5-20251001",
-      balanced: "claude-sonnet-5-5",
-      best: "claude-opus-5-5",
-    };
-    expect(resolveTiers("claude-cli", rows)).toEqual(want); // labels
-    expect(resolveTiers("anthropic", rows)).toEqual(want); // ids only
-    // A provider outside the Claude pair keeps its static table; claude-cli
-    // with no family rows gets no dial.
-    expect(resolveTiers("openai", rows)?.best).toBe("gpt-5.5");
-    expect(resolveTiers("claude-cli", [rows[0]])).toBeUndefined();
-  });
-
-  it("on the switcher every tier resolves and none reads n/a (anti-vacuity)", async () => {
-    H.api.getResponses["/models"] = NEW_ONLY;
-    render(<ModelSwitcher />);
-    fireEvent.click(await screen.findByRole("button", { name: /switch the active model/i }));
-    const best = await screen.findByRole("button", { name: /^Best/ });
-    await waitFor(() => expect(best).toBeEnabled());
-    for (const name of [/^Fast/, /^Balanced/, /^Best/]) {
-      const b = screen.getByRole("button", { name });
-      expect(b).toBeEnabled();
-      expect(b.textContent).not.toContain("n/a");
-    }
-    expect(best).toHaveAttribute("title", "claude-opus-5-5");
-    expect(screen.getByRole("button", { name: /^Fast/ })).toHaveAttribute(
-      "title",
-      "claude-haiku-4-5-20251001",
-    );
   });
 });
 

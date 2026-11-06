@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 
 from iron_jarvis.agents.threads import parse_mentions
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.rooms import rooms
 
 
 def _client(tmp_path):
@@ -159,7 +160,7 @@ def test_the_panel_appears_in_the_agents_module(tmp_path):
         json={"message": "@builder @reviewer draft the form", "chat_thread_id": "c1"},
     ).json()
 
-    threads = client.get("/agents/threads").json()["threads"]
+    threads = rooms(client).get("/agents/threads").json()["threads"]
     assert len(threads) == 1
     thread = threads[0]
     assert thread["id"] == body["thread_id"]
@@ -202,7 +203,7 @@ def test_separate_chat_threads_get_separate_panels(tmp_path):
         "/chat/panel", json={"message": "@builder two", "chat_thread_id": "c2"}
     ).json()
     assert a["thread_id"] != b["thread_id"]
-    assert len(client.get("/agents/threads").json()["threads"]) == 2
+    assert len(rooms(client).get("/agents/threads").json()["threads"]) == 2
 
 
 def test_an_unsaved_chat_still_gets_a_panel(tmp_path):
@@ -217,7 +218,7 @@ def test_a_panel_started_on_the_agents_page_is_unaffected(tmp_path):
     """chat_thread_id is additive: threads made the old way keep working and are
     never adopted by a chat conversation."""
     client = _client(tmp_path)
-    made = client.post(
+    made = rooms(client).post(
         "/agents/threads",
         json={
             "title": "manual panel",
@@ -228,7 +229,7 @@ def test_a_panel_started_on_the_agents_page_is_unaffected(tmp_path):
         "/chat/panel", json={"message": "@builder hi", "chat_thread_id": "c1"}
     ).json()
     assert from_chat["thread_id"] != made["id"]
-    assert len(client.get("/agents/threads").json()["threads"]) == 2
+    assert len(rooms(client).get("/agents/threads").json()["threads"]) == 2
 
 
 # --------------------------------------------------------------------------- #

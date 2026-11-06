@@ -45,6 +45,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.learning.engine import _LESSONS_HEADING
 from iron_jarvis.platform import build_platform
 from iron_jarvis.tools.base import ToolContext
+from tests._fakes.rooms import rooms
 
 _MARK = "MARKER-LESSON-V1200: always cite the depreciation schedule by name"
 _HEADING = _LESSONS_HEADING.strip()  # "# What I've learned about working with you"
@@ -83,9 +84,9 @@ def _spy_systems(platform) -> list[str]:
 
 
 def _round(client, participants, message="what do you think?") -> dict:
-    r = client.post("/agents/threads", json={"participants": participants})
+    r = rooms(client).post("/agents/threads", json={"participants": participants})
     assert r.status_code == 200, r.text
-    say = client.post(
+    say = rooms(client).post(
         f"/agents/threads/{r.json()['id']}/say", json={"message": message}
     )
     assert say.status_code == 200, say.text

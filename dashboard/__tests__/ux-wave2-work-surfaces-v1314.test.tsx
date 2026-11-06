@@ -147,7 +147,6 @@ import KanbanPage from "@/components/sessions/SessionBoard";
 import SessionDetailPage from "@/app/sessions/[id]/page";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { NewSessionForm } from "@/components/NewSessionForm";
-import { EventStream } from "@/components/EventStream";
 import { originLabel } from "@/components/sessions/OriginChip";
 import { shortId } from "@/lib/format";
 import type { Review, SessionView } from "@/lib/types";
@@ -477,19 +476,5 @@ describe("New-session form: no 'mock' in the model picker", () => {
     render(<NewSessionForm />);
     expect(screen.getByText(/Running on the built-in demo model/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Connect a real model/ }).getAttribute("href")).toBe("/connections");
-  });
-});
-
-/* ========================================================================== */
-/*  Live events card (Overview → Advanced)                                     */
-/* ========================================================================== */
-
-describe("Live events card: no route path in front of a user", () => {
-  it("the disconnected empty state does not print '/events'", () => {
-    hooks.connected = false;
-    render(<EventStream />);
-    const empty = screen.getByTestId("empty-state");
-    expect(empty.textContent ?? "").not.toContain("/events");
-    expect((empty.textContent ?? "").trim().length).toBeGreaterThan(0);
   });
 });

@@ -6,10 +6,11 @@
  *    refetches ONCE on the hidden->visible edge; `DaemonProvider` stretches
  *    its /health cadence to 30 s while hidden (a minimised window polled at
  *    full rate for 6.5 minutes in the audit).
- *  - shared /health: the layout's ModelSwitcher and the Overview read the
- *    DaemonProvider's poll instead of running their own (three pollers of one
- *    endpoint in one window); `useProviderHealth` reads the same context and
- *    polls for itself only outside a provider.
+ *  - shared /health: the Overview reads the DaemonProvider's poll instead of
+ *    running its own (three pollers of one endpoint in one window, one of
+ *    them the title bar's ModelSwitcher — removed in v1.439.0);
+ *    `useProviderHealth` reads the same context and polls for itself only
+ *    outside a provider.
  *  - FP3: the Overview polls `/sessions?limit=50`; once a response carried an
  *    ETag the hook sends `If-None-Match` and keeps its data on a 304.
  *
@@ -29,7 +30,6 @@ vi.mock("next/navigation", () => ({
 import { DaemonProvider, HIDDEN_HEALTH_INTERVAL_MS } from "@/lib/daemon";
 import { usePolledApi } from "@/lib/useApi";
 import { useProviderHealth } from "@/lib/useProviderHealth";
-import { ModelSwitcher } from "@/components/ModelSwitcher";
 import OverviewPage from "@/components/overview/StatusOverview";
 
 type FetchCall = { url: string; init: RequestInit };
@@ -192,19 +192,16 @@ describe("FP2 — polling pauses while the document is hidden", () => {
 });
 
 describe("one /health poll per window", () => {
-  it("layout (DaemonProvider + ModelSwitcher) + Overview: 12/min after the first, i.e. 13 in 60 s", async () => {
+  it("layout (DaemonProvider) + Overview: 12/min after the first, i.e. 13 in 60 s", async () => {
     stubFetch();
     localStorage.setItem("ij_nav_advanced", "1"); // the Advanced health tile reads /health too
     render(
       <DaemonProvider>
-        <ModelSwitcher />
         <OverviewPage />
       </DaemonProvider>,
     );
     await advance(10);
-    // Both consumers rendered from the SHARED payload: the switcher's trigger
-    // (it renders null until /health is known) and the Overview's version chip.
-    expect(screen.getByRole("button", { name: /switch the active model/i })).toBeTruthy();
+    // Rendered from the SHARED payload: the Overview's version chip.
     expect(screen.getAllByText(/v1\.230\.0/).length).toBeGreaterThan(0);
     // v1.334.0: the Status view's one read is the system map; it no longer
     // polls the session list at all.

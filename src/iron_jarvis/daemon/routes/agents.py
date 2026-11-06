@@ -3924,10 +3924,13 @@ def register(app: FastAPI, d) -> None:
         delete_custom_agent(d.platform, name)
         return {"removed": name}
 
-    # --- Agent threads: cross-source panels with roles (the Agents page) -----
-    # IMPORTANT: registered BEFORE the {name} catch-alls above would matter,
-    # but "/agents/threads/..." never collides because those routes were
-    # declared first in this file; keep new thread routes below explicit paths.
+    # --- Agent threads: the rooms behind chat @-mentions, the phone and remote
+    # inbound. The round table's own doors (list, create, participants,
+    # delete, say, remember) left with the round table: it went from the
+    # dashboard in v1.308.0 and its routes in v1.439.0 (Wave 6, decision D6;
+    # docs/ROUTES-WITHOUT-A-SCREEN.md). ONE room is still read here (the chat
+    # page mirrors a room's inbound lines; the mission screen shows a room's
+    # transcript), and the rooms themselves live on in agents/threads.py.
 
     def _threads():
         from ...agents.threads import AgentThreads
@@ -3940,61 +3943,6 @@ def register(app: FastAPI, d) -> None:
         from ...agents.threads import thread_view
 
         return thread_view(rec)
-
-    @app.get("/agents/threads")
-    def list_agent_threads(project_id: str = "") -> dict[str, Any]:
-        """The rooms of ONE world (v1.304.0). No ``project_id`` (or an empty
-        one) = the GENERAL world: rooms bound to no project — the Agents page
-        exactly as it was, chat-bound panels included. ``?project_id=<id>`` =
-        that project's rooms. A project room never shows up in General: its
-        world is where it lives."""
-        out = []
-        for rec in _threads().list(project_id=(project_id or "").strip()):
-            view = _thread_view(rec)
-            view.pop("messages")  # list rows stay light; GET one for the transcript
-            out.append(view)
-        return {"threads": out}
-
-    def _room_project(raw: Any) -> str:
-        """``project_id`` on a new room: "" (general) or an existing ACTIVE
-        project's id — else a 400 in plain words (v1.304.0)."""
-        pid = str(raw or "").strip()
-        if not pid:
-            return ""
-        from ...core.db import session_scope
-        from ...core.models import Project
-
-        with session_scope(d.platform.engine) as db:
-            project = db.get(Project, pid)
-        if project is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"there is no project with id {pid} — pick one from the Projects page",
-            )
-        if (project.status or "active") != "active":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{project.name} is archived — unarchive it before starting a "
-                    "round table there"
-                ),
-            )
-        return pid
-
-    @app.post("/agents/threads")
-    def create_agent_thread(body: dict) -> dict[str, Any]:
-        """A new room. ``project_id`` (v1.304.0, optional) binds it to that
-        project's world — its rounds are grounded in the project and its
-        jobs carry the project; absent = a general room, as before."""
-        from ...agents.threads import clean_participants
-
-        try:
-            participants = clean_participants(body.get("participants"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        project_id = _room_project(body.get("project_id"))
-        rec = _threads().create(str(body.get("title") or ""), participants, project_id=project_id)
-        return _thread_view(rec)
 
     @app.get("/agents/worlds")
     async def agent_worlds() -> dict[str, Any]:
@@ -4030,99 +3978,6 @@ def register(app: FastAPI, d) -> None:
         if rec is None:
             raise HTTPException(status_code=404, detail="no such thread")
         return _thread_view(rec)
-
-    @app.put("/agents/threads/{thread_id}/participants")
-    def set_agent_thread_participants(thread_id: str, body: dict) -> dict[str, Any]:
-        from ...agents.threads import clean_participants
-
-        try:
-            participants = clean_participants(body.get("participants"))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        rec = _threads().update_participants(thread_id, participants)
-        if rec is None:
-            raise HTTPException(status_code=404, detail="no such thread")
-        return _thread_view(rec)
-
-    @app.delete("/agents/threads/{thread_id}")
-    def delete_agent_thread(thread_id: str) -> dict[str, Any]:
-        if not _threads().delete(thread_id):
-            raise HTTPException(status_code=404, detail="no such thread")
-        return {"deleted": thread_id}
-
-    @app.post("/agents/threads/{thread_id}/say")
-    async def agent_thread_say(thread_id: str, body: dict) -> dict[str, Any]:
-        """One speaking round: the user's message (optional — empty continues
-        the panel), then every participant answers in order, each seeing the
-        replies before it. Failures are honest per-participant entries.
-
-        LIVE + DIRECTED (v1.140.0): entries persist one-by-one and each
-        publishes AGENT_THREAD_UPDATED {thread_id, who, entries} so the UI can
-        follow along; @-mentions in the message (name / role / key's name
-        part, case-insensitive) restrict who speaks this round — see
-        AgentThreads.run_round for the exact rule. Response is additive:
-        {"entries": [the full round], "spoke": [keys that answered, honest
-        errors included], "skipped": [remote keys skipped as offline]}."""
-        try:
-            return await _threads().run_round(
-                thread_id, str(body.get("message") or ""), d
-            )
-        except KeyError:
-            raise HTTPException(status_code=404, detail="no such thread")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    @app.post("/agents/threads/{thread_id}/remember")
-    async def remember_agent_thread(thread_id: str, body: dict) -> dict[str, Any]:
-        """Commit a round table to LONG-TERM MEMORY (v1.178.0) — the agent-side
-        twin of ``POST /chat/threads/{id}/remember``. Without it a decision the
-        panel reached dies with the thread.
-
-        Body (all optional): ``mode`` distill|full, ``source`` (an LTM store,
-        "" = the default brain), ``provider``/``model`` (distill override), and
-        ``preview``.
-
-        ``preview`` DEFAULTS TO TRUE and that is the point: the default call
-        writes nothing and returns ``items`` (the extracted claims) plus the
-        exact ``content`` that would land, so the user reviews agent-written
-        text before the app can quote it back as fact. Send ``preview: false``
-        to commit — the explicit call. With no real model connected, distill
-        degrades to a verbatim excerpt and says so (``distilled: false`` +
-        ``note``); a mock must never fabricate a memory of a real conversation.
-        The ladder lives in ``AgentThreads.remember``; errors map the same way
-        ``/say`` maps them."""
-        body = body or {}
-        # ONLY AN EXPLICIT FALSE MAY DEFEAT THE PREVIEW. ``bool(body.get(
-        # "preview", True))`` reads right and is not: every falsy JSON value
-        # resolves to False, so ``{"preview": null}`` — what a client sends for
-        # a field it has not decided yet — COMMITTED. Measured: that exact body
-        # wrote the panel into the brain and answered ``"preview": false``,
-        # which is the suggest-don't-act default failing silently in the one
-        # direction that cannot be undone. Anything not recognisable as a
-        # "false" previews; the caller that means to write says so.
-        _pv = body.get("preview", True)
-        try:
-            return await _threads().remember(
-                thread_id,
-                d,
-                mode=str(body.get("mode") or "distill"),
-                source=str(body.get("source") or ""),
-                provider=str(body.get("provider") or ""),
-                model=str(body.get("model") or ""),
-                preview=_pv is None
-                or str(_pv).strip().lower() not in ("false", "0", "no"),
-                # The body the preview returned, sent back on the commit so what
-                # the user approved is what lands (v1.178.0 review finding).
-                # Optional: a caller that never previewed omits it and the
-                # ladder runs exactly as before.
-                approved_content=str(body.get("content") or ""),
-            )
-        except KeyError:
-            raise HTTPException(status_code=404, detail="no such thread")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except RuntimeError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
 
     # Custom (agent/user-authored) reusable tools.
     @app.get("/tools/custom")

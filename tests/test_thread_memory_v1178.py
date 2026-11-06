@@ -1,7 +1,10 @@
 """v1.178.0: an agent thread's worth outlives the thread.
 
-``POST /agents/threads/{id}/remember`` is the agent-side twin of
-``POST /chat/threads/{id}/remember``. A panel could argue its way to a decision
+``AgentThreads.remember`` is the agent-side twin of
+``POST /chat/threads/{id}/remember``. (v1.439.0: its HTTP door, ``POST
+/agents/threads/{id}/remember``, left with the round table; these pins
+drive the backend through ``tests/_fakes/rooms.py``, and the door's own
+``{"preview": null}`` parse left with it.) A panel could argue its way to a decision
 and the decision died with the thread — rounds were persisted and searchable,
 but nothing ever crossed into the long-term memory the app reads back on later
 turns.
@@ -39,6 +42,7 @@ from iron_jarvis.agents.threads import (
 )
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse
+from tests._fakes.rooms import rooms
 
 _PANEL = [
     {"source": "builtin", "name": "planner", "role": "lead"},
@@ -94,7 +98,7 @@ def _client(tmp_path):
 
 
 def _seed(client, msgs=None) -> str:
-    tid = client.post(
+    tid = rooms(client).post(
         "/agents/threads", json={"title": "Extension call", "participants": _PANEL}
     ).json()["id"]
     entries = _ROUND if msgs is None else msgs
@@ -126,7 +130,7 @@ def test_commit_writes_the_distilled_panel_into_memory(tmp_path):
     fake = _FakeAdapter()
     client.app.state.platform.providers.get = lambda p, m=None: fake
 
-    r = client.post(
+    r = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"provider": "anthropic", "preview": False},
     )
@@ -162,7 +166,7 @@ def test_mock_only_refuses_to_distill_and_stores_the_verbatim_panel(tmp_path):
     client = _client(tmp_path)
     tid = _seed(client)
 
-    r = client.post(
+    r = rooms(client).post(
         f"/agents/threads/{tid}/remember", json={"mode": "distill", "preview": False}
     )
     assert r.status_code == 200
@@ -188,7 +192,7 @@ def test_preview_is_the_default_and_writes_nothing(tmp_path):
     client.app.state.platform.providers.get = lambda p, m=None: fake
     before = _notes(_brain(tmp_path))
 
-    r = client.post(f"/agents/threads/{tid}/remember", json={"provider": "anthropic"})
+    r = rooms(client).post(f"/agents/threads/{tid}/remember", json={"provider": "anthropic"})
     assert r.status_code == 200
     out = r.json()
     assert out["preview"] is True and out["ref"] == ""
@@ -200,7 +204,7 @@ def test_preview_is_the_default_and_writes_nothing(tmp_path):
     assert "March 16" not in _notes(_brain(tmp_path))
 
     # The commit is the EXPLICIT call, and only then does the brain grow.
-    r2 = client.post(
+    r2 = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"provider": "anthropic", "preview": False},
     )
@@ -215,20 +219,20 @@ def test_unknown_thread_404s_and_bad_input_400s(tmp_path):
     client = _client(tmp_path)
     tid = _seed(client)
     assert (
-        client.post("/agents/threads/athr_nope/remember", json={}).status_code == 404
+        rooms(client).post("/agents/threads/athr_nope/remember", json={}).status_code == 404
     )
     assert (
-        client.post(f"/agents/threads/{tid}/remember", json={"mode": "summarize"})
+        rooms(client).post(f"/agents/threads/{tid}/remember", json={"mode": "summarize"})
         .status_code
         == 400
     )
     assert (
-        client.post(f"/agents/threads/{tid}/remember", json={"source": "ghost"})
+        rooms(client).post(f"/agents/threads/{tid}/remember", json={"source": "ghost"})
         .status_code
         == 400
     )
     empty = _seed(client, msgs=[])
-    assert client.post(f"/agents/threads/{empty}/remember", json={}).status_code == 400
+    assert rooms(client).post(f"/agents/threads/{empty}/remember", json={}).status_code == 400
 
 
 def test_full_mode_reaches_a_custom_source(tmp_path):
@@ -240,7 +244,7 @@ def test_full_mode_reaches_a_custom_source(tmp_path):
         "/ltm/sources",
         json={"name": "panel_vault", "kind": "markdown", "path": str(vault)},
     )
-    r = client.post(
+    r = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"mode": "full", "source": "panel_vault", "preview": False},
     )
@@ -275,39 +279,6 @@ def test_review_items_falls_back_when_there_are_no_bullets():
 # --- review findings (adversarial pass) --------------------------------------
 
 
-def test_only_an_explicit_false_defeats_the_preview(tmp_path):
-    """A body that has not DECIDED must not commit.
-
-    ``bool(body.get("preview", True))`` maps every falsy JSON value onto False,
-    so ``{"preview": null}`` — the shape a client sends for a field it has not
-    set — wrote the panel into the brain and reported ``"preview": false``.
-    That is suggest-don't-act failing in the one direction nothing can undo, so
-    only a recognisable false commits.
-    """
-    client = _client(tmp_path)
-    tid = _seed(client)
-    fake = _FakeAdapter()
-    client.app.state.platform.providers.get = lambda p, m=None: fake
-
-    for undecided in (None, "", {}):
-        r = client.post(
-            f"/agents/threads/{tid}/remember",
-            json={"provider": "anthropic", "preview": undecided},
-        )
-        assert r.status_code == 200
-        assert r.json()["preview"] is True, undecided
-        assert r.json()["ref"] == ""
-        assert _notes(_brain(tmp_path)) == ""
-
-    # …and the ways a client really does spell "false" all still commit.
-    for yes in (False, "false", "0"):
-        r = client.post(
-            f"/agents/threads/{tid}/remember",
-            json={"provider": "anthropic", "preview": yes},
-        )
-        assert r.json()["preview"] is False and r.json()["ref"], yes
-
-
 def test_the_verbatim_excerpt_is_clipped_to_CHATS_budget(tmp_path):
     """The ONE piece genuinely shared with chat is the pair of budgets, and the
     clip is what makes sharing them mean anything.
@@ -333,7 +304,7 @@ def test_the_verbatim_excerpt_is_clipped_to_CHATS_budget(tmp_path):
         for i in range(120)
     ]
     tid = _seed(client, msgs=long_round)
-    r = client.post(
+    r = rooms(client).post(
         f"/agents/threads/{tid}/remember", json={"mode": "full", "preview": False}
     )
     assert r.status_code == 200
@@ -448,13 +419,13 @@ def test_the_commit_writes_the_TEXT_THE_USER_APPROVED(tmp_path):
     fake = _CountingAdapter()
     client.app.state.platform.providers.get = lambda p, m=None: fake
 
-    preview = client.post(
+    preview = rooms(client).post(
         f"/agents/threads/{tid}/remember", json={"provider": "anthropic"}
     ).json()
     assert preview["preview"] is True and fake.calls == 1
     assert "distillation number 1" in preview["content"]
 
-    committed = client.post(
+    committed = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"provider": "anthropic", "preview": False, "content": preview["content"]},
     ).json()
@@ -476,7 +447,7 @@ def test_a_commit_without_approved_content_still_runs_the_ladder(tmp_path):
     fake = _CountingAdapter()
     client.app.state.platform.providers.get = lambda p, m=None: fake
 
-    out = client.post(
+    out = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"provider": "anthropic", "preview": False},
     ).json()
@@ -493,12 +464,12 @@ def test_the_preview_and_the_commit_share_one_header(tmp_path):
     fake = _CountingAdapter()
     client.app.state.platform.providers.get = lambda p, m=None: fake
 
-    preview = client.post(
+    preview = rooms(client).post(
         f"/agents/threads/{tid}/remember", json={"provider": "anthropic"}
     ).json()
     header = preview["content"].split(chr(10) + chr(10), 1)[0]
     assert "Committed from the agent panel" in header
-    committed = client.post(
+    committed = rooms(client).post(
         f"/agents/threads/{tid}/remember",
         json={"provider": "anthropic", "preview": False, "content": preview["content"]},
     ).json()

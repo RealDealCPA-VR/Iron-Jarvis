@@ -24,6 +24,7 @@ from iron_jarvis.agents.remote import RemoteAgentRegistry
 from iron_jarvis.agents.threads import AgentThreads
 from iron_jarvis.core.events import EventType
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.rooms import rooms
 
 
 @pytest.fixture()
@@ -57,7 +58,7 @@ def _canned(monkeypatch):
 
 
 def _mk_thread(client, participants):
-    return client.post("/agents/threads", json={"participants": participants}).json()[
+    return rooms(client).post("/agents/threads", json={"participants": participants}).json()[
         "id"
     ]
 
@@ -76,7 +77,7 @@ def test_event_published_per_entry_including_the_user_turn(app, client, monkeypa
         lambda ev: seen.append(ev) if ev.type == "agent_thread.updated" else None
     )
     tid = _mk_thread(client, _panel())
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": "hello panel"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello panel"})
     assert r.status_code == 200
     assert [e.payload["who"] for e in seen] == [
         "user",
@@ -96,7 +97,7 @@ def test_bus_failure_never_breaks_the_round(app, client, monkeypatch):
         raise RuntimeError("bus down")
 
     monkeypatch.setattr(app.state.platform.event_bus, "publish", boom)
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": "still works?"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "still works?"})
     assert r.status_code == 200
     entries = r.json()["entries"]
     assert [e["who"] for e in entries] == [
@@ -126,7 +127,7 @@ def test_each_entry_is_persisted_before_the_next_speaker_runs(client, monkeypatc
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_local", spy)
     holder["tid"] = _mk_thread(client, _panel())
-    client.post(f"/agents/threads/{holder['tid']}/say", json={"message": "go"})
+    rooms(client).post(f"/agents/threads/{holder['tid']}/say", json={"message": "go"})
     assert seen_db[0] == ("planner", ["user"])  # user turn already durable
     assert seen_db[1] == ("reviewer", ["user", "builtin:planner"])
 
@@ -155,7 +156,7 @@ def test_concurrent_say_rounds_keep_the_json_blob_intact(app, monkeypatch):
     tid = _mk_thread(c1, _panel3())
     with ThreadPoolExecutor(max_workers=2) as ex:
         futs = [
-            ex.submit(c.post, f"/agents/threads/{tid}/say", json={"message": m})
+            ex.submit(rooms(c).post, f"/agents/threads/{tid}/say", json={"message": m})
             for c, m in ((c1, "round A"), (c2, "round B"))
         ]
         results = [f.result() for f in futs]
@@ -228,7 +229,7 @@ def test_concurrent_say_rounds_keep_the_json_blob_intact(app, monkeypatch):
 def test_directed_rounds_pick_the_speakers(client, monkeypatch, message, expected):
     _canned(monkeypatch)
     tid = _mk_thread(client, _panel3())
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": message})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": message})
     body = r.json()
     speakers = [e["who"] for e in body["entries"] if e["who"] != "user"]
     assert speakers == expected
@@ -238,7 +239,7 @@ def test_directed_rounds_pick_the_speakers(client, monkeypatch, message, expecte
 def test_mentioned_message_stays_verbatim_in_the_transcript(client, monkeypatch):
     _canned(monkeypatch)
     tid = _mk_thread(client, _panel())
-    client.post(f"/agents/threads/{tid}/say", json={"message": "@planner ship it"})
+    rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "@planner ship it"})
     got = client.get(f"/agents/threads/{tid}").json()
     assert got["messages"][0]["content"] == "@planner ship it"
 
@@ -246,8 +247,8 @@ def test_mentioned_message_stays_verbatim_in_the_transcript(client, monkeypatch)
 def test_empty_continue_message_still_means_everyone(client, monkeypatch):
     _canned(monkeypatch)
     tid = _mk_thread(client, _panel())
-    client.post(f"/agents/threads/{tid}/say", json={"message": "@planner solo"})
-    r = client.post(f"/agents/threads/{tid}/say", json={"message": ""})
+    rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "@planner solo"})
+    r = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": ""})
     assert [e["who"] for e in r.json()["entries"]] == [
         "builtin:planner",
         "builtin:reviewer",
@@ -275,7 +276,7 @@ def test_disabled_remote_is_skipped_before_any_network_call(app, client, monkeyp
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_remote", never)
     tid = _mk_thread(client, _remote_panel())
-    body = client.post(
+    body = rooms(client).post(
         f"/agents/threads/{tid}/say", json={"message": "check in"}
     ).json()
     entry = next(e for e in body["entries"] if e["who"] == "remote:mini")
@@ -293,7 +294,7 @@ def test_unregistered_remote_is_skipped_too(client, monkeypatch):
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_remote", never)
     tid = _mk_thread(client, [{"source": "remote", "name": "ghost", "role": "scout"}])
-    body = client.post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
+    body = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
     entry = body["entries"][-1]
     assert entry["error"] == "ghost is offline (not registered) — skipped."
     assert body["skipped"] == ["remote:ghost"]
@@ -317,7 +318,7 @@ def test_enabled_but_failing_remote_keeps_the_honest_error_path(
 
     monkeypatch.setattr(threads_mod.AgentThreads, "_speak_remote", fail)
     tid = _mk_thread(client, _remote_panel())
-    body = client.post(f"/agents/threads/{tid}/say", json={"message": "go"}).json()
+    body = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "go"}).json()
     entry = next(e for e in body["entries"] if e["who"] == "remote:mini")
     assert "mini couldn't answer: endpoint exploded" in entry["error"]
     assert body["skipped"] == []  # it TRIED — that's spoke, not skipped
@@ -330,7 +331,7 @@ def test_enabled_but_failing_remote_keeps_the_honest_error_path(
 def test_say_response_contract_entries_spoke_skipped(client, monkeypatch):
     _canned(monkeypatch)
     tid = _mk_thread(client, _panel())
-    body = client.post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
+    body = rooms(client).post(f"/agents/threads/{tid}/say", json={"message": "hello"}).json()
     assert set(body) >= {"entries", "spoke", "skipped"}
     assert [e["who"] for e in body["entries"]] == [
         "user",

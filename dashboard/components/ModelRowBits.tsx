@@ -2,8 +2,9 @@
 
 /**
  * The small facts a model-menu row can carry (v1.300.0) — ONE renderer shared
- * by the composer's model menu (app/chat/page.tsx) and the title bar's
- * ModelSwitcher, so the two pickers cannot describe the same model two ways.
+ * by the model menus (the composer's, app/chat/page.tsx, and a coding
+ * session's), so two pickers cannot describe the same model two ways. (The
+ * title bar's ModelSwitcher, the first sharer, was removed in v1.439.0.)
  *
  * The Claude subscription's live picker gives each row a human `label`
  * ("Opus 5.5"), a `context_window`, and whether it draws from pay-as-you-go

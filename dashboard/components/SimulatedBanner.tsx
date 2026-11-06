@@ -83,7 +83,8 @@ export function SimulatedBanner() {
 
   if (!visible) return null;
 
-  // The ModelSwitcher listens for this (the Ctrl K palette uses it too).
+  // The chat page's model menu listens for this (ModelMenuBridge brings the
+  // chat forward first on other pages; the Ctrl K palette uses it too).
   const openModelMenu = () => window.dispatchEvent(new CustomEvent("ij:open-switcher"));
 
   return (

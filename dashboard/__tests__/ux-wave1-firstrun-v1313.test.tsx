@@ -46,9 +46,7 @@
  *     version (the header chip keeps it). Tiles: "Problems today" (title
  *     carries "Failures 24h") and "Disk space free" (title carries "Free
  *     disk").
- *  8. HealthCard labels: "Tasks reviewed", "Finished", "Tools worked",
- *     "Typical reply time", each with its raw metric name in a `title`.
- *     (components/overview/HealthCard.tsx — ownership to be granted.)
+ *  8. (HealthCard's plain labels — the card was removed in v1.439.0.)
  *  9. ConnectDoors (chat empty state / wizard): a provider the one-press
  *     route refuses (opencode-cli, grok-cli — readiness.USE_MODEL_CLIS is
  *     claude-cli + codex-cli) gets NO press; it is named in plain words
@@ -56,8 +54,7 @@
  *     press that remains has a non-empty where-line. claude-cli/codex-cli
  *     presses use checklist.py's labels, so Chat and the Overview say the
  *     same words.
- * 10. AppGrid doors: no corner number bubble; the count is a caption
- *     "<n> modules" (components/overview/AppGrid.tsx — ownership to be granted).
+ * 10. (AppGrid's door captions — the grid was removed in v1.439.0.)
  *
  * Harness: lifted from overview-wave2-v1310 — `@/lib/api` is a PARTIAL mock
  * (network verbs replaced), `useApi` and DaemonProvider are REAL over it.
@@ -162,8 +159,6 @@ import { __resetApiCache } from "@/lib/apiCache";
 import OverviewPage from "@/components/overview/StatusOverview";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { ConnectDoors } from "@/components/onboarding/ConnectDoors";
-import { AppGrid } from "@/components/overview/AppGrid";
-import { HealthCard } from "@/components/overview/HealthCard";
 import { DaemonProvider } from "@/lib/daemon";
 
 // ------------------------------------------------------------------ fixtures
@@ -592,36 +587,6 @@ describe("Overview hero: never 'nominal' while the demo answers", () => {
   });
 });
 
-describe("HealthCard speaks plainly (raw metric names kept in titles)", () => {
-  it("labels read as a daily tool, not a server console", () => {
-    render(
-      <HealthCard
-        loading={false}
-        metrics={{
-          sessions_evaluated: 5,
-          avg_completion: 0.8,
-          avg_tool_success_rate: 0.9,
-          avg_latency_s: 0.1,
-          total_tool_invocations: 12,
-          event_count: 55,
-        } as never}
-      />,
-    );
-    for (const label of ["Tasks reviewed", "Finished", "Tools worked", "Typical reply time"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
-    for (const raw of ["Sessions evaluated", "Avg completion", "Tool success", "Avg latency"]) {
-      expect(screen.queryByText(raw)).toBeNull();
-      expect(document.querySelector(`[title*="${raw}"]`), `title carrying ${raw}`).not.toBeNull();
-    }
-    // Control: every number is still on the card.
-    expect(screen.getByText("5")).toBeInTheDocument();
-    expect(screen.getByText("80%")).toBeInTheDocument();
-    expect(screen.getByText("90%")).toBeInTheDocument();
-    expect(screen.getByText("0.1s")).toBeInTheDocument();
-  });
-});
-
 // ======================================= 5. the doors: no press the route refuses
 
 type Row = Record<string, unknown>;
@@ -756,35 +721,5 @@ describe("ConnectDoors: a CLI the one-press route refuses gets a link, not a bro
     await waitFor(() =>
       expect(useModelPosts()).toEqual([{ path: "/onboarding/use-model", body: { provider: "claude-cli" } }]),
     );
-  });
-});
-
-// ======================================= 6. the doors' count is a caption
-
-describe("Overview doors: the module count is a caption, not an unread badge", () => {
-  it("each door says '<n> modules' and carries no bare-number bubble", () => {
-    render(<AppGrid />);
-    const doors = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="group-"]')).filter(
-      (d) => d.tagName === "BUTTON" && d.getAttribute("data-testid") !== "group-back",
-    );
-    expect(doors.length).toBeGreaterThanOrEqual(3);
-    for (const door of doors) {
-      // The caption is its own element ("10 modules"); textContent of the whole
-      // door runs words together ("Office10 modules"), so find the element.
-      const caption = Array.from(door.querySelectorAll("*")).filter(
-        (el) => el.children.length === 0 && /^\d+ modules?$/.test((el.textContent ?? "").trim()),
-      );
-      expect(caption, `no '<n> modules' caption in ${door.getAttribute("data-testid")}`).toHaveLength(1);
-      const bare = Array.from(door.querySelectorAll("*")).filter(
-        (el) => el.children.length === 0 && /^\d+$/.test((el.textContent ?? "").trim()),
-      );
-      expect(bare, `bare number bubble in ${door.getAttribute("data-testid")}`).toEqual([]);
-    }
-  });
-
-  it("control: a door still opens its group", () => {
-    render(<AppGrid />);
-    fireEvent.click(screen.getByTestId("group-office"));
-    expect(screen.getByTestId("group-back")).toBeInTheDocument();
   });
 });

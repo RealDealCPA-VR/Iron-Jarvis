@@ -9,9 +9,8 @@
  *     floor; the "/ Page" crumb and the "Iron Jarvis" wordmark hide below
  *     `sm` (still in the DOM); the brand link keeps an accessible name when
  *     its words are hidden; every bar control shares ONE height.
- *  2. The model chip never names a model while replies are a scripted demo
- *     (U1-1 `noModelChosen`): amber dot + "Demo replies", the dropdown still
- *     lists every model, a pick flips the chip at once.
+ *  2. `noModelChosen` is the one rule for "replies are a scripted demo" (the
+ *     model chip it first drove, ModelSwitcher, was removed in v1.439.0).
  *  3. SimulatedBanner also shows when a provider IS connected but the default
  *     is still the demo — and then it must not claim nothing is connected.
  *  4. Theme dots are legible on the light Marks (computed contrast against
@@ -124,7 +123,6 @@ vi.mock("framer-motion", () => {
 });
 
 import { TitleBar } from "@/components/TitleBar";
-import { ModelSwitcher } from "@/components/ModelSwitcher";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { MoodOrb } from "@/components/MoodOrb";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -275,12 +273,6 @@ async function renderWithDaemon(node: React.ReactNode) {
   return r;
 }
 
-/** The switcher's trigger: the only button it renders before it opens. */
-async function trigger(): Promise<HTMLButtonElement> {
-  await waitFor(() => expect(document.querySelectorAll("button").length).toBeGreaterThan(0));
-  return document.querySelectorAll("button")[0] as HTMLButtonElement;
-}
-
 /* ---------------------------------------------------------------- set-up */
 
 beforeEach(() => {
@@ -367,16 +359,13 @@ describe("phone title bar — nothing overlaps at 390 px", () => {
     expect((link.style as unknown as Record<string, string>).WebkitAppRegion).toBe("no-drag");
   });
 
-  it("every bar control shares ONE height (hamburger, search, model chip, mood orb, bell)", async () => {
+  // v1.439.0: the model chip (ModelSwitcher) left the title bar in v1.321.0
+  // and its module was removed in Wave 6; the bar's other controls keep one height.
+  it("every bar control shares ONE height (hamburger, search, mood orb, bell)", async () => {
     mockDaemon(health("anthropic"));
     render(<TitleBar />);
     const nav = screen.getByLabelText("Open navigation");
     const search = screen.getByRole("button", { name: /search iron jarvis/i });
-    cleanup();
-
-    await renderWithDaemon(<ModelSwitcher />);
-    const chip = await trigger();
-    const chipCls = chip.getAttribute("class") ?? "";
     cleanup();
 
     const orb = render(<MoodOrb />).container.firstElementChild as HTMLElement;
@@ -393,7 +382,6 @@ describe("phone title bar — nothing overlaps at 390 px", () => {
     const heights = {
       hamburger: heightTokens(nav.getAttribute("class") ?? ""),
       search: heightTokens(search.getAttribute("class") ?? ""),
-      model: heightTokens(chipCls),
       orb: heightTokens(orbCls),
       bell: heightTokens(bellCls),
     };
@@ -463,91 +451,8 @@ describe("U1-1 — noModelChosen is the one truth for 'replies are a scripted de
   });
 });
 
-describe("the model chip never names a model while replies are a scripted demo", () => {
-  it.each([["mock"], [""]])(
-    "default_provider %j: the chip says 'Demo replies' and never 'claude-opus-4-8'",
-    async (dp) => {
-      mockDaemon(health(dp));
-      await renderWithDaemon(<ModelSwitcher />);
-      const btn = await trigger();
-      // RED today: the chip prints the stored default_model in mono.
-      expect(btn.outerHTML).not.toContain("claude-opus-4-8");
-      expect(btn.textContent).toContain("Demo replies");
-      const name = btn.getAttribute("aria-label") ?? "";
-      expect(name).toMatch(/demo replies/i);
-      expect(name).toMatch(/no model chosen/i);
-    },
-  );
-
-  it("on a phone (chip words hidden below sm) an amber dot alone still says it", async () => {
-    mockDaemon(health("mock"));
-    await renderWithDaemon(<ModelSwitcher />);
-    const btn = await trigger();
-    // RED today: no demo dot exists.
-    const dot = btn.querySelector('[data-testid="ij-model-demo-dot"]');
-    expect(dot).not.toBeNull();
-    expect(visibleAtEveryWidth(dot!, btn)).toBe(true);
-    expect(tokens(dot).some((t) => /amber/.test(t))).toBe(true);
-  });
-
-  it("the menu still lists every model, and does not pin the stored id as 'active'", async () => {
-    mockDaemon(health("mock"));
-    await renderWithDaemon(<ModelSwitcher />);
-    fireEvent.click(await trigger());
-    const list = await screen.findByTestId("ij-model-list");
-    // v1.359.0 (lane 9B, changed on purpose): an unlabelled Claude id reads
-    // in words ("Opus 4.8"), the raw id is the row's hover.
-    for (const id of ["Opus 4.8", "Sonnet 4.6", "gpt-5.5"]) {
-      expect(list.textContent).toContain(id);
-    }
-    // The real Anthropic row stays selectable in its group…
-    expect(within(list).getByTestId("ij-model-group-anthropic").textContent).toContain("Opus 4.8");
-    // …and nothing else claims it (RED today: a pinned "active" row reads
-    // claude-opus-4-8 under the mock provider, so the id appears twice).
-    expect(within(list).getAllByText("Opus 4.8")).toHaveLength(1);
-    expect(within(list).getByText("Opus 4.8")).toHaveAttribute("title", "claude-opus-4-8");
-    const pinned = within(list).queryByTestId("ij-active-model-row");
-    if (pinned) expect(pinned.textContent).not.toContain("Opus 4.8");
-  });
-
-  it("a pick flips the chip at once (optimistic), with no wait for /health", async () => {
-    mockDaemon(health("mock"));
-    await renderWithDaemon(<ModelSwitcher />);
-    const btn = await trigger();
-    expect(btn.textContent).toContain("Demo replies"); // RED today
-    fireEvent.click(btn);
-    const list = await screen.findByTestId("ij-model-list");
-    // v1.359.0 (lane 9B, changed on purpose): the row reads "Sonnet 4.6".
-    fireEvent.click(within(list).getByText("Sonnet 4.6").closest("button")!);
-    await waitFor(() =>
-      expect(putMock).toHaveBeenCalledWith("/settings", {
-        values: { default_provider: "anthropic", default_model: "claude-sonnet-4-6" },
-      }),
-    );
-    // /health still answers "mock" — the chip follows the pick anyway.
-    await waitFor(() => expect(btn.textContent).toContain("Sonnet 4.6"));
-    expect(btn.textContent).not.toContain("Demo replies");
-    expect(btn.querySelector('[data-testid="ij-model-demo-dot"]')).toBeNull();
-  });
-
-  it("CONTROL: a real chosen model IS still named on the chip", async () => {
-    mockDaemon(health("anthropic"));
-    await renderWithDaemon(<ModelSwitcher />);
-    const btn = await trigger();
-    // v1.359.0 (lane 9B, changed on purpose): the chip says the row's words.
-    await waitFor(() => expect(btn.textContent).toContain("Opus 4.8"));
-    expect(btn.textContent).not.toContain("Demo replies");
-    expect(btn.querySelector('[data-testid="ij-model-demo-dot"]')).toBeNull();
-  });
-
-  it("CONTROL: Auto still says Auto, never 'Demo replies'", async () => {
-    mockDaemon(health("auto"));
-    await renderWithDaemon(<ModelSwitcher />);
-    const btn = await trigger();
-    expect(btn.textContent).toContain("Auto");
-    expect(btn.textContent).not.toContain("Demo replies");
-  });
-});
+// The model chip's own demo pins left with ModelSwitcher (v1.439.0); the
+// shared rule (`noModelChosen`, above) and the demo strip (below) stay pinned.
 
 /* ============================== 3. SimulatedBanner — the connected demo */
 

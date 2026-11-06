@@ -27,7 +27,8 @@ def test_mock_hidden_from_connections(tmp_path):
 def test_mock_hidden_from_health_and_providers(tmp_path):
     client = _client(tmp_path)
     assert not any(p["provider"] == "mock" for p in client.get("/health").json()["providers"])
-    assert not any(p["provider"] == "mock" for p in client.get("/providers").json()["providers"])
+    # v1.439.0: GET /providers (an older copy of /health's list) was removed.
+    assert client.get("/providers").status_code in (404, 405)
 
 
 def test_mock_still_works_as_engine_fallback(tmp_path):

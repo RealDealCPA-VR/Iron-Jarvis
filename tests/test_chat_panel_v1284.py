@@ -41,6 +41,7 @@ from iron_jarvis.agents.threads import (
     needs_hands,
 )
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.rooms import rooms
 
 ROOT = Path(__file__).resolve().parents[1]
 CHAT_PAGE = ROOT / "dashboard" / "app" / "chat" / "page.tsx"
@@ -237,7 +238,7 @@ def test_a_new_chats_first_two_rounds_share_one_room(app):
         },
     ).json()
     assert second["thread_id"] == room, "the orphan must be adopted, not duplicated"
-    threads = client.get("/agents/threads").json()["threads"]
+    threads = rooms(client).get("/agents/threads").json()["threads"]
     assert len(threads) == 1
     detail = client.get(f"/agents/threads/{room}").json()
     assert [m["who"] for m in detail["messages"]] == [
@@ -273,7 +274,7 @@ def test_a_still_unsaved_chat_keeps_using_the_same_orphan(app):
         "/chat/panel", json={"message": "@builder b", "panel_thread_id": first}
     ).json()["thread_id"]
     assert second == first
-    assert len(client.get("/agents/threads").json()["threads"]) == 1
+    assert len(rooms(client).get("/agents/threads").json()["threads"]) == 1
 
 
 def test_for_chat_adopt_is_a_pure_store_rule(tmp_path):
@@ -408,7 +409,7 @@ def test_a_work_ask_to_one_local_agent_becomes_a_session_hand_off(app):
     assert "builder" in body["reason"]
     # NOTHING ran as a round: no model call, no room, nothing persisted.
     assert calls == []
-    assert client.get("/agents/threads").json()["threads"] == []
+    assert rooms(client).get("/agents/threads").json()["threads"] == []
 
 
 def test_a_dynamic_agent_hands_off_to_its_own_spawn_target(app):
