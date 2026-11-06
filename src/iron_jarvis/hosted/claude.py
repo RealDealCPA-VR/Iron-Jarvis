@@ -944,13 +944,17 @@ class ClaudeDriver(Driver):
         self.mode = mode
         return "now"
 
+    #: v1.439.0 (review): off while a typed ``/model`` sets the model — that
+    #: path says the switch itself, in one line (never two).
+    say_model_switch = True
+
     async def set_model(self, model: str) -> str:
         try:
             res = await self.control("set_model", model=model)
         except ControlRefused as exc:
             raise ControlRefused(f"Claude Code did not switch models: {exc}") from None
         self.model = model
-        if isinstance(res, dict) and res.get("model"):
+        if self.say_model_switch and isinstance(res, dict) and res.get("model"):
             self.emit(make("notice", text=f"Claude Code now answers with {clip(res['model'], 80)}."))
         return "now"
 

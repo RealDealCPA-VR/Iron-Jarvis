@@ -378,7 +378,7 @@ async def test_a_typed_built_in_is_never_a_note_while_claude_code_works(app, wor
         s = await new_session(c, work)
         task = asyncio.ensure_future(_say(c, s["id"], "x", "t1"))
         await until(lambda: svc.live.get(s["id"]) and svc.live[s["id"]].asks)
-        for text in ("/model haiku", "/login"):
+        for text in ("/model haiku",):
             r = await c.post(f"/build/app/sessions/{s['id']}/steer", json={"text": text})
             assert r.status_code == 400, text
             assert r.json()["detail"] == T.NOT_A_NOTE.format(label="Claude Code")

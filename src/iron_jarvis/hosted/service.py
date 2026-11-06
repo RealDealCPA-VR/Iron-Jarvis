@@ -381,7 +381,10 @@ def _kept_commands(harness: str, folder: str = "") -> list[dict[str, Any]]:
         if own:
             return list(own)
     prefix = f"{harness}@"
-    lists = [v for k, v in LAST_COMMANDS.items() if k.startswith(prefix) and v]
+    # (review) a COPY: the harnesses listing reads this on a worker thread
+    # while the loop may keep another folder's list (a dict that changes size
+    # during iteration raises).
+    lists = [v for k, v in LAST_COMMANDS.copy().items() if k.startswith(prefix) and v]
     if len(lists) < 2:
         return []
     common = set.intersection(*({str(c.get("name") or "") for c in v} for v in lists))
@@ -1882,14 +1885,17 @@ class HostedService:
         applied: dict[str, str] = {}
         live = self.live.get(sid)
         running_turn = bool(live and live.turn and live.turn.running)
+        tell_title = ""
         if "title" in body and body["title"] is not None:
             fields["title"] = clip(body["title"], 120)
-            if (live is not None and live.running and live.driver is not None
-                    and fields["title"].strip() and fields["title"] != (row.title or "")):
+            if fields["title"].strip() and fields["title"] != (row.title or ""):
                 # v1.439.0: the name reaches the tool too (Claude Code's
                 # rename_session, Codex's thread/name/set), in the
-                # background, never failing or delaying the rename.
-                self._tell_rename(live.driver, fields["title"].strip())
+                # background, never failing or delaying the rename — and
+                # (review) only once the rename is SAVED: a PATCH a later
+                # field refuses (Full access with no confirm, a mode the
+                # tool refused) renames nothing, the tool included.
+                tell_title = fields["title"].strip()
         if body.get("mode") is not None:
             mode = check_mode(row.harness, body["mode"], bool(body.get("confirm")))
             if live and live.running and live.driver:
@@ -2008,6 +2014,8 @@ class HostedService:
             applied["load_folder_resources"] = "next"
         if fields:
             row = await asyncio.to_thread(store.update, self.engine, sid, **fields)
+        if tell_title and live is not None and live.running and live.driver is not None:
+            self._tell_rename(live.driver, tell_title)
         out: dict[str, Any] = {"session": self._with_live(store.view(row)), "applied": applied}
         if row.harness in LISTED_MODELS:
             out["keeps_last"] = await asyncio.to_thread(pi_keeps_last, row)
@@ -2699,7 +2707,10 @@ class HostedService:
             # v1.439.0: Grok's approval commands are never sent (as a note
             # either); a setting or a terminal-only built-in is a message of
             # its own.
-            why = T.refusal(row.harness, typed[0]) if row.harness == GROK else ""
+            # (review) a command done nowhere — Grok's approval commands, a
+            # Claude Code built-in that needs its terminal — says its OWN
+            # words: "send it once it has finished" would only be refused then.
+            why = T.refusal(row.harness, typed[0])
             raise Refused(why or T.NOT_A_NOTE.format(label=label), 400)
         problems = await asyncio.to_thread(self._file_problems, files, row.folder or "")
         if problems:
@@ -2932,12 +2943,21 @@ class HostedService:
         """v1.439.0: a typed ``/model`` or ``/effort`` through the chips' own
         path (``patch``), said in one line; no turn of the tool's."""
         label = W.label(row.harness)
+        # (review) Claude Code's own "now answers with …" line is held while
+        # the typed /model switches it: the switch is said ONCE, below.
+        drv = live.driver
+        quiet = name == "model" and drv is not None and getattr(drv, "say_model_switch", None) is True
+        if quiet:
+            drv.say_model_switch = False
         try:
             out = await self.patch(live.sid, {"model": value} if name == "model" else {"effort": value})
         except Refused as r:
             self._emit(live, W.error(r.sentence, "", ""))
             await self._end_turn(live, "failed")
             return
+        finally:
+            if quiet:
+                drv.say_model_switch = True
         when = (out.get("applied") or {}).get(name)
         later = " from your next message" if when == "next" and live.running else ""
         if name == "model":
