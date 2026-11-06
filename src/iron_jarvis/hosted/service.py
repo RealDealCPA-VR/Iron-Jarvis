@@ -3238,6 +3238,13 @@ class HostedService:
         if new_mode:
             self._emit(live, make("notice", text=W.MODE_FROM_SESSION_ALLOW.format(
                 label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
+        elif decision in ("allow", "allow_session") and ask.data.get("leaves_plan_to") in MODE_LABELS:
+            # v1.439.0 (review): an approved plan leaves Plan for the mode the
+            # card named ("Approve, then ask first"): the row and the chip
+            # follow, so the next process does not start in Plan again.
+            new_mode = ask.data["leaves_plan_to"]
+            self._emit(live, make("notice", text=W.MODE_AFTER_PLAN.format(
+                label=W.label(live.harness), mode=MODE_LABELS[new_mode])))
         if payload is not None:
             try:
                 await driver.write(payload)

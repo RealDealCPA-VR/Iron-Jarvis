@@ -337,6 +337,9 @@ CODEX_MODE_NEXT = (
     "next message."
 )
 MODE_FROM_SESSION_ALLOW = "{label} now runs in {mode} for the rest of this session (you chose Allow for this session)."
+#: v1.439.0 (review): an approved plan leaves Plan for the mode it was in
+#: before (Claude Code's own rule); the row and the chip follow.
+MODE_AFTER_PLAN = "{label} left Plan for your approved plan and now runs in {mode}."
 NO_CONVERSATION_FILE = (
     "The conversation's file is not in this account's folder, so it cannot move to another "
     "account — nothing was changed."

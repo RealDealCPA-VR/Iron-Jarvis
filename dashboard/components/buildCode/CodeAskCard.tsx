@@ -40,6 +40,7 @@ import {
   approvalHeading,
   codeAskKeyHint,
   enterAllowsCodeAsk,
+  planAllowLabels,
   questionAnswers,
   type ApprovalEvent,
   type OpenAsk,
@@ -95,6 +96,9 @@ function ApprovalBody({
     const words = (redirect ?? "").trim();
     if (words) onAnswer({ decision: "deny", message: words });
   };
+  // v1.439.0: Claude Code's plan card names each allow by the mode it leaves
+  // the session in (the answers sent are the same as ever).
+  const planLabels = planAllowLabels(ask);
   return (
     <div data-testid="code-ask-approval" data-kind={ask.kind} className="space-y-2.5 px-4 pb-4 pt-3">
       <p className="text-[13px] font-medium text-zinc-100">{approvalHeading(ask, toolName)}</p>
@@ -139,7 +143,7 @@ function ApprovalBody({
           onClick={() => onAnswer({ decision: "allow" })}
           data-dock-primary=""
         >
-          {ALLOW_ONCE}
+          {planLabels.once || ALLOW_ONCE}
         </Button>
         {ask.canAllCommands ? (
           <Button
@@ -160,7 +164,7 @@ function ApprovalBody({
             disabled={busy}
             onClick={() => onAnswer({ decision: "allow_session" })}
           >
-            {ask.canAllCommands ? ALLOW_SIMILAR : "Allow for this session"}
+            {planLabels.session || (ask.canAllCommands ? ALLOW_SIMILAR : "Allow for this session")}
           </Button>
         ) : null}
         <Button

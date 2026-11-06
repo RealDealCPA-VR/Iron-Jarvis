@@ -1774,6 +1774,7 @@
     "detail": "Exit plan mode?",
     "can_session": false,
     "plan": "# Plan\n\n1. Read `a.txt`.\n2. Write `b.txt` with its words reversed.\n",
+    "then_mode": "ask",
     "once_only": true,
     "tool": "ExitPlanMode",
     "turn": "turn-1"

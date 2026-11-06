@@ -9,9 +9,11 @@
  * and the thinking disclosure. Nothing here talks to Iron Jarvis.
  */
 
-import { memo, useId, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
+  Check,
+  Copy,
   RotateCcw,
   CheckSquare,
   FileText,
@@ -36,6 +38,7 @@ import { friendlyModelName } from "@/lib/friendlyModelName";
 import { CliSignInPress } from "@/components/connections/CliSignInPress";
 import { HARNESS_REPLY_PROSE, HARNESS_USER_BUBBLE } from "@/components/harness/harnessLook";
 import { SentAttachments } from "@/components/harness/HarnessAttachments";
+import { REPLY_ACTION_BTN } from "@/components/chat/replyActions";
 import {
   CANCEL_WAIT,
   CANCEL_WAIT_TITLE,
@@ -65,6 +68,7 @@ import {
   helperSummary,
   showAllWords,
   STEP_STOPPED_WORDS,
+  toolStepWords,
   type ItemText,
   type ConvItem,
   type ToolKind,
@@ -84,26 +88,64 @@ const TOOL_ICON: Record<ToolKind, LucideIcon> = {
   other: Wrench,
 };
 
-/** A step's words when the tool sent no title. */
-function toolWords(t: ToolEvent): string {
-  if (t.title) return t.title;
-  const name = t.name || "a tool";
-  switch (t.kind) {
-    case "read":
-      return t.path ? `Read ${t.path}` : "Read a file";
-    case "edit":
-      return t.path ? `Changed ${t.path}` : "Changed a file";
-    case "write":
-      return t.path ? `Wrote ${t.path}` : "Wrote a file";
-    case "command":
-      return "Ran a command";
-    case "search":
-      return "Searched";
-    case "web":
-      return "Looked on the web";
-    default:
-      return `Used ${name}`;
-  }
+/** v1.439.0: the copy icon's own name (its tooltip and accessible name). */
+export const COPY_REPLY_LABEL = "Copy reply";
+/** v1.439.0: said for a moment after the reply went to the clipboard. */
+export const COPIED_WORDS = "Copied";
+/** v1.439.0: said when nothing could take the text. */
+export const COPY_FAILED_WORDS = "Couldn't copy";
+/** v1.439.0: how long "Copied" stays. */
+export const COPIED_MS = 1500;
+
+/** v1.439.0: a quiet copy icon under a finished reply — shown on hover and
+ *  keyboard focus, always on a touch screen. It copies the reply's text as
+ *  plain text through the app's own copy path (copyPlain: the desktop
+ *  bridge first, then the browser's clipboard) and says "Copied". */
+function ReplyCopy({ text }: { text: string }) {
+  const [said, setSaid] = useState<"" | "copied" | "failed">("");
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  const copy = async () => {
+    let outcome: "copied" | "unavailable" = "unavailable";
+    try {
+      const { copyPlain } = await import("@/components/settings/MaintenanceTools");
+      outcome = await copyPlain(text);
+    } catch {
+      outcome = "unavailable";
+    }
+    setSaid(outcome === "copied" ? "copied" : "failed");
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setSaid(""), COPIED_MS);
+  };
+  return (
+    <div
+      data-testid="code-reply-actions"
+      className={`-ml-1.5 mt-1 flex items-center gap-1 text-zinc-500 ${
+        said
+          ? ""
+          : "opacity-0 transition-opacity focus-within:opacity-100 group-hover/reply:opacity-100 [@media(hover:none)]:opacity-100"
+      }`}
+    >
+      <button
+        type="button"
+        data-testid="code-reply-copy"
+        title={COPY_REPLY_LABEL}
+        aria-label={COPY_REPLY_LABEL}
+        onClick={() => void copy()}
+        className={REPLY_ACTION_BTN}
+      >
+        {said === "copied" ? <Check size={13} className="text-tone-success" /> : <Copy size={13} />}
+      </button>
+      <span role="status" data-testid="code-reply-copied" className="text-[11px] text-zinc-500">
+        {said === "copied" ? COPIED_WORDS : said === "failed" ? COPY_FAILED_WORDS : ""}
+      </span>
+    </div>
+  );
 }
 
 /** How many times a row drew (tests count these; never read by the app). */
@@ -138,7 +180,7 @@ const ToolStep = memo(function ToolStep({
   // Inside the session's folder only (never a share, never `..` out of it).
   const path = tool.path && folder ? resolveInFolder(folder, tool.path, { confine: true }) : null;
   const helper = hasKids ? helperSummary(kids) : null;
-  const words = toolWords(tool);
+  const words = toolStepWords(tool);
   // v1.418.0 (C4.4): a title the tool's own description had to cut says so.
   const cut = words.endsWith("…");
   const meta: ReactNode[] = [];
@@ -351,8 +393,11 @@ const Item = memo(function Item({
       );
     case "text":
       return (
-        <div data-testid="code-text" data-done={item.done ? "true" : "false"} className={HARNESS_REPLY_PROSE}>
-          <MemoMarkdown content={item.text} />
+        <div className="group/reply">
+          <div data-testid="code-text" data-done={item.done ? "true" : "false"} className={HARNESS_REPLY_PROSE}>
+            <MemoMarkdown content={item.text} />
+          </div>
+          {item.done && item.text.trim() ? <ReplyCopy text={item.text} /> : null}
         </div>
       );
     case "thinking":
