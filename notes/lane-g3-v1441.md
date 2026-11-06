@@ -36,6 +36,29 @@ Codex measurements (codex 0.157.0):
   - `test_build_app_opencode_v1413` and `test_build_app_opencode_rules_v1420`: `task` is deny outside Full access.
 - conftest: `_no_real_opencode_catalog_read` (the reader is off for the suite).
 
+## Mutations (each break, its pins, then restore)
+
+All 18 went red. M15 survived the first time: only the second of two guards had been removed. The stronger mutation, removing both guards, is red.
+
+- M1: Plan never sends collaborationMode.
+- M2: the thread's collab mode is not remembered.
+- M3: a file change in Plan becomes a card.
+- M4: no plan card before done.
+- M5: Allow does not start the implement turn.
+- M6: Stop is not known to the plan card.
+- M7: the service never calls `answer_here`.
+- M8: `task` is allowed again.
+- M9: `OPENCODE_ENABLE_QUESTION_TOOL` reaches OpenCode.
+- M10: another session's update is drawn.
+- M11: no agent rows in the menu.
+- M12: any agent name is accepted.
+- M13: an unlisted agent is set anyway.
+- M14: the reader may fetch models.dev.
+- M15: the reader is not single-flight.
+- M16: the background read never reaches the menu.
+- M17: OpenCode's files are not watched.
+- M18: an agent mode is not Ask first.
+
 ## OPEN
 
 - Codex Plan is not kept across a code-host restart. A plan card that is waiting when the daemon restarts is lost, and the reply is closed as cut off.
