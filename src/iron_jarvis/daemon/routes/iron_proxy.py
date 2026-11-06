@@ -147,6 +147,14 @@ def _state_view(state: dict[str, Any] | None) -> dict[str, Any]:
             out["parkedReason"]["message"] = reason["message"]
     if st.get("lastUsedAt"):
         out["lastUsedAt"] = st["lastUsedAt"]
+    # v1.439.0: the window NEAREST its limit, as the account lists word it
+    # ({percent, window, window_mins, resets_at}) — the card says "N% of the
+    # 7-day window used". Only a number the vendor sent; none = no key.
+    from ...harness.build_accounts import peak_usage
+
+    window = peak_usage(st)
+    if window is not None:
+        out["window"] = window
     return out
 
 
@@ -190,6 +198,16 @@ def _account_view(
     u = _usage_view(usage)
     if u is not None:
         out["usage"] = u
+    # v1.439.0: "Check usage now" — when this account's usage was last read
+    # from its own CLI, and whether it can be (a Claude Code / Codex login
+    # that is on and signed in). In memory; never a call.
+    from ...harness import build_accounts as _ba
+    from ...iron_proxy import usage_read as _ur
+
+    out["usage_read"] = _ur.last_read(str(profile.get("id") or ""))
+    vendor = _ba.VENDOR_OF_PROXY.get(str(profile.get("provider") or ""))
+    row = {"vendor": vendor, **_ba.status_of(profile, state)}
+    out["can_refresh"] = (profile.get("lane") or "cli") == "cli" and _ur.can_refresh(row)
     return out
 
 

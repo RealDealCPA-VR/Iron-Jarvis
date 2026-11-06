@@ -95,6 +95,12 @@ export interface BuildAccount {
   limitKind: string;
   /** The window nearest its limit, when the vendor sent a percent. */
   usage: AccountUsage | null;
+  /** v1.439.0: when its usage was last read now ("Check usage now"; ISO).
+   *  Absent from an older Iron Jarvis. */
+  usageReadAt?: string | null;
+  /** v1.439.0: the account's usage can be read now (a Claude Code / Codex
+   *  login that is on and signed in). Absent = no button. */
+  canRefresh?: boolean;
 }
 
 export type AccountGroups = Record<AccountVendor, BuildAccount[]>;
@@ -206,6 +212,8 @@ export function decodeAccount(raw: unknown, vendorHint?: AccountVendor | null): 
     resetsAt: isoOrNull(r.resets_at),
     limitKind: str(r.limit_kind, 20),
     usage: decodeUsage(r.usage),
+    ...(r.can_refresh === true ? { canRefresh: true } : {}),
+    ...(isoOrNull(r.usage_read_at) ? { usageReadAt: isoOrNull(r.usage_read_at) } : {}),
   };
 }
 

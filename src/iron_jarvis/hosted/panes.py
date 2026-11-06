@@ -1305,6 +1305,13 @@ def account_usage(platform: Any, row: Any) -> dict[str, Any] | None:
     seen = [w["at"] for w in out["windows"] if w["at"]]
     # The account's age is its OLDEST number's: never younger than any shown.
     out["at"] = min(seen, key=lambda a: BA._parse(a)) if seen else None
+    # v1.439.0: "Check usage now" on the Usage tab — the last read of this
+    # account from its own CLI, and whether one can be made (in memory).
+    from ..iron_proxy import usage_read as U
+
+    got = U.last_read(account)
+    out["usage_read_at"] = got["at"] if got else None
+    out["can_refresh"] = U.can_refresh(acc)
     return out
 
 

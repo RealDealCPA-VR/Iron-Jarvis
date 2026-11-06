@@ -32,6 +32,17 @@ export interface IronProxyAccountState {
   parkedReason?: { kind: string; message?: string | null } | null;
   lastUsedAt?: string | null;
   served?: number;
+  /** v1.439.0: the usage window nearest its limit (the vendor's own number;
+   *  absent when none was sent). */
+  window?: IronProxyWindow | null;
+}
+
+export interface IronProxyWindow {
+  percent: number;
+  /** "7 days" / "5 hours" ("" when the length is not known). */
+  window?: string | null;
+  window_mins?: number | null;
+  resets_at?: string | null;
 }
 
 export interface IronProxyUsage {
@@ -54,6 +65,11 @@ export interface IronProxyAccount {
   home_adopted?: boolean;
   /** Optional: the account's CLI home, when the daemon passes it through. */
   home?: string | null;
+  /** v1.439.0: the last "Check usage now" read ({at, ok, words}), or null. */
+  usage_read?: { at: string; ok: boolean; words: string } | null;
+  /** v1.439.0: its usage can be read now (a Claude Code / Codex login that is
+   *  on and signed in). Absent from an older Iron Jarvis = no button. */
+  can_refresh?: boolean;
 }
 
 export interface IronProxyDiscovered {
@@ -310,6 +326,16 @@ function fmtMinutes(m: number): string {
   const h = Math.floor(mins / 60);
   const r = mins % 60;
   return r ? `${h} h ${r} min` : `${h} h`;
+}
+
+/** v1.439.0: "38% of the 7-day window used", or null when the vendor sent
+ *  no number. */
+export function windowUsedLine(w: IronProxyWindow | null | undefined): string | null {
+  if (!w || typeof w.percent !== "number" || !Number.isFinite(w.percent)) return null;
+  const pct = `${Math.round(w.percent)}%`;
+  const m = /^(\d+)\s+(minute|hour|day)s?$/i.exec(String(w.window ?? "").trim());
+  const kind = m ? `${m[1]}-${m[2].toLowerCase()}` : String(w.window ?? "").trim();
+  return kind ? `${pct} of the ${kind} window used` : `${pct} used`;
 }
 
 /** One usage line, or null when the daemon sent no usage. */

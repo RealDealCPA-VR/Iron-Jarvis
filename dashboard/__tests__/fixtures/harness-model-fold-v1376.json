@@ -413,7 +413,9 @@
           "window": "7 days",
           "window_mins": 10080,
           "resets_at": "2030-01-01T16:12:00Z"
-        }
+        },
+        "usage_read_at": null,
+        "can_refresh": true
       },
       {
         "id": "c-spare",
@@ -424,7 +426,9 @@
         "default": false,
         "plan": null,
         "plan_label": null,
-        "status": "ready"
+        "status": "ready",
+        "usage_read_at": null,
+        "can_refresh": true
       },
       {
         "id": "c-gone",
@@ -435,7 +439,9 @@
         "default": false,
         "plan": null,
         "plan_label": null,
-        "status": "needs_sign_in"
+        "status": "needs_sign_in",
+        "usage_read_at": null,
+        "can_refresh": false
       }
     ],
     "codex": [
@@ -454,7 +460,9 @@
           "window": "5 hours",
           "window_mins": 300,
           "resets_at": "2030-01-01T16:12:00Z"
-        }
+        },
+        "usage_read_at": null,
+        "can_refresh": true
       },
       {
         "id": "x-team",
@@ -465,7 +473,9 @@
         "default": false,
         "plan": null,
         "plan_label": null,
-        "status": "ready"
+        "status": "ready",
+        "usage_read_at": null,
+        "can_refresh": true
       }
     ],
     "grok": [],
@@ -511,8 +521,11 @@
     "account_limit": null,
     "account_wait": null,
     "compaction": null,
+    "branched_from": null,
     "queued": [],
     "turn_id": "",
+    "compacting": false,
+    "plan_run": false,
     "account": {
       "id": "c-work",
       "name": "Work Max",
@@ -554,8 +567,11 @@
     "account_limit": null,
     "account_wait": null,
     "compaction": null,
+    "branched_from": null,
     "queued": [],
     "turn_id": "",
+    "compacting": false,
+    "plan_run": false,
     "account": null,
     "account_vendor": "claude"
   },
