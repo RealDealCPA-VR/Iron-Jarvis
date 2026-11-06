@@ -145,6 +145,7 @@ import {
   conversationMarkdown,
   EXPORT_NOTHING,
   EXPORT_NOT_READ,
+  EXPORT_READING,
   exportGapWords,
   hasExportableItems,
   exportFileName,
@@ -1991,27 +1992,50 @@ export function BuildCodeView({
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   /** v1.439.0: the open session's loaded events (its pane fills it). */
   const exportRef = useRef<ExportSource | null>(null);
+  // v1.441.0 review: the export reads up to 200 pages one after another, so
+  // it SAYS it is reading, takes one press at a time, and stops (no more
+  // pages, no file) when the view goes away.
+  const exportingRef = useRef(false);
+  const [exporting, setExporting] = useState(false);
+  const viewAliveRef = useRef(true);
+  useEffect(() => {
+    viewAliveRef.current = true;
+    return () => {
+      viewAliveRef.current = false;
+    };
+  }, []);
   const exportMarkdown = async (s: CodeSession) => {
     setRowMenu(null);
+    if (exportingRef.current) return;
     const src = exportRef.current;
     if (!src || src.id !== s.id) {
       setRowNote(EXPORT_NOT_READ);
       return;
     }
-    // v1.441.0 (review D1): the WHOLE conversation — every page before what
-    // the pane holds, read through the same route "Load earlier" reads.
-    const got = await collectAllEvents(src.events(), src.older().cursor, async (cursor) =>
-      decodeEventsPage(await get<unknown>(eventsPagePath(SESSIONS, s.id, cursor, EXPORT_PAGE_LIMIT))),
-    );
-    if (!hasExportableItems(got.events)) {
-      setRowNote(EXPORT_NOTHING);
-      return;
+    exportingRef.current = true;
+    setExporting(true);
+    setRowNote(null);
+    try {
+      // v1.441.0 (review D1): the WHOLE conversation — every page before what
+      // the pane holds, read through the same route "Load earlier" reads.
+      const got = await collectAllEvents(src.events(), src.older().cursor, async (cursor) => {
+        if (!viewAliveRef.current) throw new Error("left");
+        return decodeEventsPage(await get<unknown>(eventsPagePath(SESSIONS, s.id, cursor, EXPORT_PAGE_LIMIT)));
+      });
+      if (!viewAliveRef.current) return;
+      if (!hasExportableItems(got.events)) {
+        setRowNote(EXPORT_NOTHING);
+        return;
+      }
+      const title = sessionTitle(s, tools);
+      downloadText(
+        exportFileName(title),
+        conversationMarkdown(title, got.events, toolLabel(s.tool, tools), exportGapWords(src.dropped(), got.unread)),
+      );
+    } finally {
+      exportingRef.current = false;
+      if (viewAliveRef.current) setExporting(false);
     }
-    const title = sessionTitle(s, tools);
-    downloadText(
-      exportFileName(title),
-      conversationMarkdown(title, got.events, toolLabel(s.tool, tools), exportGapWords(src.dropped(), got.unread)),
-    );
   };
   // v1.426.0 (E5): the folder whose defaults panel is open under its heading.
   const [defaultsFor, setDefaultsFor] = useState<string | null>(null);
@@ -2628,6 +2652,11 @@ export function BuildCodeView({
               </section>
             ))
           )}
+          {exporting ? (
+            <p role="status" data-testid="code-export-status" className="px-2 pt-2 text-[12px] text-zinc-500">
+              {EXPORT_READING}
+            </p>
+          ) : null}
           {rowNote ? (
             <p role="alert" data-testid="code-row-note" className="px-2 pt-2 text-[12px] text-tone-danger">
               {rowNote}

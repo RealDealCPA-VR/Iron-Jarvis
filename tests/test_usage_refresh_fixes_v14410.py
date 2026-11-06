@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -145,6 +146,7 @@ class _Pane:
     def __init__(self, accounts, state, cli=None, alive=True):
         self.accounts = accounts
         self.alive = alive
+        self.last_output_at = time.monotonic()  # printed just now (review)
         self._act = SimpleNamespace(state=SimpleNamespace(value=state), cli=cli)
 
     def activity(self):
@@ -174,7 +176,8 @@ def test_a_working_build_terminal_on_an_account_is_in_use():
     ]
     platform = SimpleNamespace(hosted=None, terminals=SimpleNamespace(sessions=lambda: panes),
                                turn_logs=None, engine=None)
-    assert U.in_use_accounts(platform) == ["acct_claude", "acct_unknown_cli"]
+    # Review (moved on purpose): a pane whose CLI is not known counts nothing.
+    assert U.in_use_accounts(platform) == ["acct_claude"]
 
 
 def test_a_real_terminal_manager_is_read_through_its_public_list(tmp_path):
@@ -182,6 +185,7 @@ def test_a_real_terminal_manager_is_read_through_its_public_list(tmp_path):
 
     m = TerminalManager()
     pane = SimpleNamespace(accounts={"anthropic": {"id": "acct_t"}}, alive=True,
+                           last_output_at=time.monotonic(),
                            activity=lambda: SimpleNamespace(state=SimpleNamespace(value="working"), cli="claude"))
     m._sessions["p1"] = pane  # type: ignore[assignment]
     assert m.sessions() == [pane]

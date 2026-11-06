@@ -663,9 +663,11 @@ def in_use_accounts(platform: Any) -> list[str]:
       a question (review U2: a reply waiting on the user spends no usage, and
       a night of a waiting card read the account every three minutes).
     * Build TERMINALS (review U3) started on an Iron-Proxy account (the pane's
-      recorded ``accounts`` row) whose activity is ``working``; the pane's CLI
-      picks the row (Claude Code -> anthropic, Codex -> openai), a pane whose
-      CLI is not known counts every account it recorded.
+      recorded ``accounts`` row) whose activity is ``working`` AND that printed
+      within :data:`IN_USE_EVERY_S` (review: a frozen screen keeps reading
+      ``working``); the pane's CLI picks the row (Claude Code -> anthropic,
+      Codex -> openai), and a pane whose CLI is not known counts nothing (a
+      plain "+" terminal records every provider's first free account).
 
     Chat › Code is NOT read here (v1.441.0, review U3): its claude-cli and
     Codex adapters already hand Iron-Proxy the vendor's own usage windows
@@ -698,15 +700,27 @@ def in_use_accounts(platform: Any) -> list[str]:
             recorded = getattr(pane, "accounts", None)
             if not recorded or not getattr(pane, "alive", False):
                 continue
+            # Review (v1.441.0): the classifier reads the pane's TAIL, which
+            # stands still while the pane prints nothing — a screen frozen on
+            # a working line read "working" for as long as the pane lived. A
+            # CLI that works repaints its status line about once a second.
+            printed = getattr(pane, "last_output_at", 0.0) or 0.0
+            if not printed or time.monotonic() - float(printed) > IN_USE_EVERY_S:
+                continue
             try:
                 act = pane.activity()
             except Exception:  # noqa: BLE001 — a pane we cannot read is not in use
                 continue
             if str(getattr(getattr(act, "state", None), "value", "")) != "working":
                 continue
+            # Review: only a pane running Claude Code or Codex. A plain "+"
+            # terminal records the first free account of EVERY provider, and
+            # a dev server in it reads "working" — it runs no vendor CLI.
             wanted = _PANE_CLI_PROVIDER.get(str(getattr(act, "cli", "") or "").lower())
+            if wanted is None:
+                continue
             for provider, rec in recorded.items():
-                if wanted is not None and provider != wanted:
+                if provider != wanted:
                     continue
                 if isinstance(rec, Mapping):
                     add(rec.get("id"))

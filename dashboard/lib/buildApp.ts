@@ -1987,6 +1987,9 @@ export function exportGapWords(dropped: number, unread: boolean): string[] {
 /** v1.441.0 (review D2): the export, refused in words. */
 export const EXPORT_NOT_READ = "This session has not been read yet, so there is nothing to export.";
 export const EXPORT_NOTHING = "There is nothing in this session to export yet.";
+/** v1.441.0 review: said while the export reads the session's earlier pages
+ *  (up to 200 of them, one after another). */
+export const EXPORT_READING = "Reading the whole session for the export…";
 
 /** Does a session hold anything the export would write (a message, a reply
  *  or a step)? */

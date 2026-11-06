@@ -165,3 +165,65 @@ Full access; the line under the card names the button Enter presses.
 
 **Copy reply** copies the whole reply, including the words before and after its
 steps.
+
+## Review (independent reviewer)
+
+Every claim checked against the code; the builder's pins mutation-checked
+(Python 9 + dashboard 5, all RED; `_no_plan`'s first branch alone survives
+because its second branch covers the measured shape too — the whole check
+mutated is RED).
+
+Re-measured: X1 on the real Claude Code 2.1.316 through `usage_read._ask_claude`,
+scratch `CLAUDE_CONFIG_DIR`/`USERPROFILE`/`HOME`, every `CLAUDE*`/`ANTHROPIC*`
+name removed, proxy `http://127.0.0.1:9` (no network, no model call): the read
+answers `NO_PLAN_WORDS` with `empty=16`. X5 re-read in the same binary: the
+three account variables seed `oauthAccount` only (`oss`) and feed OTEL
+attributes; they are set by a host Claude Code, not a user setting, so
+dropping them loses nothing a user sets.
+
+Defects found and fixed (each pin red first):
+
+1. **A Build terminal stuck at "working" was read forever (U3).** The
+   classifier reads the pane's tail, which stands still while the pane prints
+   nothing, so a screen frozen on a working line (a hung CLI) counted as in use
+   for the pane's whole life: the account's CLI was started every 3 min all
+   night. Now a pane counts only when it printed within `IN_USE_EVERY_S`
+   (`TerminalSession.last_output_at`; a working TUI repaints about once a
+   second). Pins: `tests/test_usage_refresh_review_v14410.py`
+   (`…printed_nothing_for_minutes…`, `…no_output_time…`).
+2. **A plain "+" terminal counted every provider (U3).** With Iron-Proxy on,
+   `pane_accounts.resolve` records the first free account of EVERY provider for
+   a plain pane; a dev server or test watcher printing "Server running…" read
+   `working`, and an unknown CLI counted every recorded account, so Claude
+   Code AND Codex were started for a shell that runs neither. Now only a pane
+   whose CLI is Claude Code or Codex counts, and only its own provider
+   (`…plain_shell_on_every_providers…`; the builder's unknown-CLI expectation
+   in `test_usage_refresh_fixes_v14410` moved on purpose, its doubles gained
+   `last_output_at`).
+3. **Export as Markdown said nothing while it read (D1).** The menu closed at
+   once and up to 200 sequential page reads followed in silence; a second
+   press read every page again and wrote a second file; leaving the view kept
+   reading and dropped a file after the user left. Now a quiet
+   `code-export-status` line says `EXPORT_READING` while it reads, a press while
+   one runs does nothing, and an unmounted view reads no further page and
+   writes no file. Pins: `dashboard/__tests__/build-code-export-review-v1441-0.test.tsx`
+   (2; mutations of the guard, the two "left" checks and the status line all RED).
+
+Checked and fine: the back-off is per account (`_EMPTY` keyed by account),
+reset by a read that works, in memory only (`reset()` clears it); a press is
+never held back. A "this PC" pane (`id: None`) adds nothing. The export's
+cursor is taken once at the press (the pane's `older` and its held events), so
+events written during the read are simply not in the file, never doubled. D4: a
+steer note does not end a reply (its words before and after join); a carry-on
+user message does not either; helper rows render without `copyText`.
+
+OPEN (review):
+
+- The export's pages are joined with a copy per page and folded on the main
+  thread: a 400,000-event record can freeze the page for seconds at the end.
+- `CLAUDE_CODE_OAUTH_SCOPES` / `CLAUDE_CODE_SUBSCRIPTION_TYPE` /
+  `CLAUDE_CODE_RATE_LIMIT_TIER` (also host-injected; this shell has the first)
+  are still passed on; they matter only beside `CLAUDE_CODE_OAUTH_TOKEN`.
+- A pane whose Claude Code the classifier cannot name (the welcome box
+  scrolled out of the 32 KB tail and no Launch hint) is no longer counted.
+- A read that times out (not an empty answer) is still retried every 3 min.
