@@ -688,9 +688,17 @@ function desktopSwitchSetting(tomlText, key) {
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("[")) break;
-    const m = /^("[^"\n]{0,80}"|'[^'\n]{0,80}'|[A-Za-z0-9_-]{1,80})\s*=\s*([^#]*?)\s*(?:#.*)?$/.exec(line);
-    if (!m || !names.includes(m[1])) continue;
-    return m[2] === "true" ? true : m[2] === "false" ? false : null;
+    // Review (v1.438.0): plain index cuts, never a backtracking pattern —
+    // this runs on the main process every 15 seconds over EVERY top-level
+    // line, and a lazy `([^#]*?)\s*` took 1.4 s on one line holding a long
+    // run of spaces (the window froze while it ran).
+    const eq = line.indexOf("=");
+    if (eq < 0 || !names.includes(line.slice(0, eq).trim())) continue;
+    let value = line.slice(eq + 1);
+    const hash = value.indexOf("#");
+    if (hash >= 0) value = value.slice(0, hash);
+    value = value.trim();
+    return value === "true" ? true : value === "false" ? false : null;
   }
   return null;
 }
@@ -724,7 +732,12 @@ function readDesktopAppSettings(homeDir, globalFile = globalConfigFile()) {
 //:   "push"    the waiting press has not reached the daemon: send it again;
 //:   "adopt"   never set, never seen: write this shell's own choice up once;
 //:   "keep"    nothing to do.
-function desktopSwitchDecision(setting, seen, pending) {
+//:   "revert"  (review, v1.438.0) the setting went back to NOT SET — an Undo of
+//:             the chat change that set it — and this shell still knows what
+//:             its own switch was before it applied that change (`before`):
+//:             put that back. Without it an Undo of "start with Windows"
+//:             left the app starting with Windows.
+function desktopSwitchDecision(setting, seen, pending, before) {
   const set = setting === true || setting === false;
   if (pending === true || pending === false) {
     if (setting === pending) return "confirm";
@@ -733,7 +746,33 @@ function desktopSwitchDecision(setting, seen, pending) {
   }
   if (set && setting !== seen) return "apply";
   if (!set && seen === undefined) return "adopt";
+  if (!set && (seen === true || seen === false) && before !== undefined) return "revert";
   return "keep";
+}
+
+//: This shell's own switch as it is (review, v1.438.0) — kept before a value
+//: from Iron Jarvis's settings is first applied, so an Undo back to "not set"
+//: can put it back: the login item (true/false; null off the installed app)
+//: and the close choice (true/false, or null = ask when the window closes).
+function rawDesktopSwitch(key) {
+  if (key === START_WITH_WINDOWS_KEY) {
+    return IS_PACKAGED && process.platform === "win32" ? !!getStartAtLogin() : null;
+  }
+  return typeof keepRunningPref === "boolean" ? keepRunningPref : null;
+}
+
+//: Put back what `rawDesktopSwitch` kept. Never written back to the daemon.
+function revertDesktopSwitch(key, before) {
+  if (key === START_WITH_WINDOWS_KEY) {
+    if (IS_PACKAGED && process.platform === "win32" && (before === true || before === false)) {
+      setStartAtLogin(before);
+    }
+  } else {
+    keepRunningPref = before === true || before === false ? before : null;
+    writeDesktopSetting("keepRunningInBackground", keepRunningPref);
+    refreshMenus();
+  }
+  desktopLog("info", `[settings] ${key} is not set any more: put back what it was before`);
 }
 
 function readAppSwitchState() {
@@ -744,13 +783,18 @@ function readAppSwitchState() {
     raw = null;
   }
   const pick = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
-  return { seen: { ...pick(raw && raw.appSwitchesSeen) }, pending: { ...pick(raw && raw.appSwitchesPending) } };
+  return {
+    seen: { ...pick(raw && raw.appSwitchesSeen) },
+    pending: { ...pick(raw && raw.appSwitchesPending) },
+    before: { ...pick(raw && raw.appSwitchesBefore) },
+  };
 }
 
-//: Merge (or, with `undefined`, drop) one switch in one of the two maps.
+//: Merge (or, with `undefined`, drop) one switch in one of the three maps.
 function writeAppSwitch(field, key, value) {
   const state = readAppSwitchState();
-  const map = field === "appSwitchesSeen" ? state.seen : state.pending;
+  const map =
+    field === "appSwitchesSeen" ? state.seen : field === "appSwitchesBefore" ? state.before : state.pending;
   if (value === undefined) delete map[key];
   else map[key] = value;
   writeDesktopSetting(field, map);
@@ -818,13 +862,25 @@ function putDesktopSwitch(key, value, timeoutMs = 3000) {
 
 //: Send a switch and, once the daemon has it, note it as seen (and drop the
 //: waiting press when it is still this one). Never throws.
+//: Review (v1.438.0): one write per switch at a time, in press order — two
+//: quick tray presses (on, then off) sent as two parallel requests could
+//: land in the other order and leave the setting on under an unticked tray.
+const desktopSwitchQueue = {};
+
 function pushDesktopSwitch(key, value) {
   try {
-    putDesktopSwitch(key, value).then((ok) => {
-      if (!ok) return; // still waiting: the next check sends it again
-      writeAppSwitch("appSwitchesSeen", key, !!value);
-      if (readAppSwitchState().pending[key] === !!value) writeAppSwitch("appSwitchesPending", key, undefined);
-    });
+    const prev = desktopSwitchQueue[key] || Promise.resolve();
+    const next = prev
+      .then(() => putDesktopSwitch(key, value))
+      .then((ok) => {
+        if (!ok) return; // still waiting: the next check sends it again
+        writeAppSwitch("appSwitchesSeen", key, !!value);
+        if (readAppSwitchState().pending[key] === !!value) writeAppSwitch("appSwitchesPending", key, undefined);
+      })
+      .catch(() => {
+        /* the next check sends it again */
+      });
+    desktopSwitchQueue[key] = next;
   } catch {
     /* the next check sends it again */
   }
@@ -834,6 +890,9 @@ function pushDesktopSwitch(key, value) {
 //: answer): Iron Jarvis's setting is told. Never throws.
 function noteDesktopSwitchByUser(key, value) {
   try {
+    // Review (v1.438.0): the user's own press is the newer choice — an Undo
+    // back to "not set" later never puts back what was there before it.
+    writeAppSwitch("appSwitchesBefore", key, undefined);
     writeAppSwitch("appSwitchesPending", key, !!value);
     pushDesktopSwitch(key, !!value);
   } catch {
@@ -849,14 +908,23 @@ function syncDesktopSwitches({ push = true } = {}) {
     const state = readAppSwitchState();
     for (const key of DESKTOP_SWITCH_KEYS) {
       const setting = settings[key];
-      const decision = desktopSwitchDecision(setting, state.seen[key], state.pending[key]);
+      const decision = desktopSwitchDecision(setting, state.seen[key], state.pending[key], state.before[key]);
       if (decision === "apply") {
+        // Review (v1.438.0): the first value from settings since "not set" —
+        // keep what this shell's switch was, for an Undo back to "not set".
+        if (state.seen[key] === undefined && state.pending[key] === undefined) {
+          writeAppSwitch("appSwitchesBefore", key, rawDesktopSwitch(key));
+        }
         applyDesktopSwitch(key, setting);
         writeAppSwitch("appSwitchesSeen", key, setting);
         if (state.pending[key] !== undefined) writeAppSwitch("appSwitchesPending", key, undefined);
       } else if (decision === "confirm") {
         writeAppSwitch("appSwitchesSeen", key, setting);
         writeAppSwitch("appSwitchesPending", key, undefined);
+      } else if (decision === "revert") {
+        revertDesktopSwitch(key, state.before[key]);
+        writeAppSwitch("appSwitchesSeen", key, undefined);
+        writeAppSwitch("appSwitchesBefore", key, undefined);
       } else if (decision === "push" && push) {
         pushDesktopSwitch(key, state.pending[key]);
       } else if (decision === "adopt" && push) {

@@ -275,6 +275,11 @@ def restore_preference(platform: Any, pref_id: str, prior: dict[str, Any] | None
             if _same_words(current.get("text"), prior.get("text")):
                 return "undo: the preference was already back"
             raise R.RecordError("A different preference was saved in its place since, so Undo would overwrite it.")
+        # Review (v1.438.0): the user said it AGAIN since (a new row, a new
+        # id) — bringing the old row back would keep the same words twice.
+        if any(_same_words(str(p["text"]).casefold(), str(prior.get("text") or "").casefold())
+               for p in kept_preferences(platform)):
+            return f"undo: the preference {_q(prior.get('text'))} is already kept again"
         _write_preference(platform, pref_id, prior, create=True)
         return f"undo: the preference {_q(prior.get('text'))} is kept again"
     # The change REWORDED it.
@@ -381,6 +386,16 @@ def restore_persona(platform: Any, slug: str, prior: dict[str, Any] | None, meta
             raise R.RecordError(
                 f"The persona {_q(current.get('title') or slug)} was changed after this change, so Undo "
                 "would take that change with it; change or remove it in the chat's persona menu instead."
+            )
+        # Review (v1.438.0): made the DEFAULT persona since — removing it
+        # would leave every chat without a persona reading its name as plain
+        # instructions. A built-in only loses your version (its own words
+        # stay), so that is still fine.
+        default = str(getattr(getattr(platform, "config", None), "default_persona", "") or "").strip()
+        if not builtin and default == slug:
+            raise R.RecordError(
+                f"The persona {_q(current.get('title') or slug)} is your default persona now, so Undo would "
+                "leave chats with no persona; change the default persona first."
             )
         store.delete(slug)
         if builtin:
@@ -846,6 +861,11 @@ _NOT_OURS_AFTER = re.compile(
     r"(?:browser|account|profile|app|course|class|calendar|deck|slides?|doc|document|notebook|file|form|survey"
     r"|spreadsheet|report|plan|syllabus|curriculum|booking|reservation|order|lms|website|site)\b"
     r"|in\s+(?:chrome|edge|firefox|safari|outlook|gmail|word|excel|windows|teams|zoom|canvas|moodle|notion)\b"
+    # Review (v1.438.0): the noun is a MODIFIER of the thing that follows
+    # ("the preference cookie banner", "the lesson column"), or a numbered
+    # course unit ("lesson 3 slides").
+    r"|\d|(?:cookies?|banners?|links?|columns?|fields?|rows?|forms?|surveys?|toggles?|checkbox(?:es)?"
+    r"|tabs?|cards?|boxes|box|sections?|headers?|footers?|buttons?|options?|polls?|titles?|headings?)\b"
     r"|['’]s\b)",
     re.IGNORECASE,
 )
@@ -872,6 +892,17 @@ _P_ADD_LESSON = re.compile(
     r"(?:add|make|create|save|write|record|note|keep|store|remember)\s+(?:down\s+)?"
     r"(?:(?:this|that|it)\s+(?:as\s+)?)?(?:a|an|another|the|this|one|my|as\s+a)?\s*(?:new\s+)?lessons?(?![\w-])"
     + _TAIL,
+    re.IGNORECASE,
+)
+#: Review (v1.438.0): a course, a class or teaching material ANYWHERE in the
+#: bounded tail ("add a lesson about depreciation to my CPE course", "a new
+#: lesson to our onboarding course") — the lesson is a teacher's.
+_LESSON_FOR_A_COURSE = re.compile(
+    r"\b(?:to|for|in|into|on)\s+(?:my|the|our|this|a|an|his|her|their|your|tomorrow'?s|next|each|every)\s+"
+    r"(?:[\w'’&-]+\s+){0,3}?(?:course|courses|class|classes|curriculum|syllabus|module|unit|workshop"
+    r"|webinar|seminar|training|binder|workbook|cpe|lms|onboarding|students?|kids|children|homeschool"
+    r"|tutoring|lecture|outline|slides?|deck|textbook|lesson\s+plan|interns?|trainees?|hires?|staff"
+    r"|employees?|associates?|apprentices?|juniors?)\b",
     re.IGNORECASE,
 )
 #: After "add a lesson": a teacher's lesson, not one for Jarvis.
@@ -917,10 +948,14 @@ _NOT_OUR_PERSONA_BEFORE = frozenset(
 )
 _NOT_OUR_PERSONA_AFTER = re.compile(
     r"\s*(?:of\b|-|templates?\b|cards?\b|docs?\b|documents?\b|sheets?\b|maps?\b|research\b|interviews?\b"
-    r"|for\s+(?:my|our|the|a|an|this|his|her|their)?\s*(?:marketing|campaign|product|brand|business|company"
+    r"|(?:columns?|fields?|rows?|photos?|pictures?|images?|sections?|slides?|names?\s+tags?|boxes|box"
+    r"|headers?|tabs?|labels?|icons?|avatars?\s+files?)\b"
+    r"|from\s+(?:the|my|our|this|a|an|his|her|their)\s+(?!(?:chat|chats|menu|list|app|jarvis|iron|personas?)\b)"
+    r"|for\s+(?:(?:my|our|the|a|an|this|his|her|their|each|every|your|all)\s+(?:[\w'’&-]+\s+){0,3}?)?"
+    r"(?:marketing|campaign|product|brand|business|company"
     r"|startup|website|site|app|novel|story|book|game|pitch|deck|ux|research|study|survey|ad|ads|newsletter"
     r"|blog|course|class|presentation|report|client|customers?|audience|launch|funnel|screenplay|script|play"
-    r"|podcast|channel|dnd|d&d|campaign)\b"
+    r"|podcast|channel|dnd|d&d|campaign|segments?|markets?|personas?|demographics?|niches?)\b"
     r"|in\s+(?:my|the|this|our|his|her|their|a|an)\s+(?:deck|slides?|document|doc|file|report|novel|story|book"
     r"|script|screenplay|presentation|draft|brief|pitch|game|marketing|campaign|plan)\b)",
     re.IGNORECASE,
@@ -945,16 +980,28 @@ def _last_word(span: str) -> str:
     return words[-1].strip("'.&-’").lower() if words else ""
 
 
+#: Review (v1.438.0): a possessive among the words before the noun makes it
+#: SOMEONE ELSE's ("forget the client's preference for paper statements",
+#: "update Mrs. Lopez's mailing preference") — never the user's own kept one.
+_POSSESSIVE = re.compile(r"[a-z0-9]['’]s?(?=\s|$)", re.IGNORECASE)
+_OURS_POSSESSIVE = re.compile(r"\b(?:jarvis|iron\s+jarvis)['’]s?(?=\s|$)", re.IGNORECASE)
+
+
+def _someone_elses(span: str) -> bool:
+    return _POSSESSIVE.search(_OURS_POSSESSIVE.sub(" ", span or "")) is not None
+
+
 def _pref_ok(span: str, tail: str) -> bool:
-    if _last_word(span) in _NOT_OURS_BEFORE:
+    if _last_word(span) in _NOT_OURS_BEFORE or _someone_elses(span):
         return False
     if _PRE_PREP.search(re.sub(r"\ball\s+of\b", " ", span or "", flags=re.IGNORECASE)):
         return False
-    return _NOT_OURS_AFTER.match(tail or "") is None
+    # Review (v1.438.0): "change the lesson title in the Canvas course".
+    return _NOT_OURS_AFTER.match(tail or "") is None and _LESSON_FOR_A_COURSE.search(tail or "") is None
 
 
 def _persona_ok(span: str, tail: str) -> bool:
-    if _last_word(span) in _NOT_OUR_PERSONA_BEFORE:
+    if _last_word(span) in _NOT_OUR_PERSONA_BEFORE or _someone_elses(span):
         return False
     if _PRE_PREP.search(span or ""):
         return False
@@ -979,8 +1026,12 @@ def _pref_writer_clause(c: str) -> bool:
 
 def _lesson_add_clause(c: str) -> bool:
     m = _P_ADD_LESSON.match(c)
-    return m is not None and _LESSON_FOR_PEOPLE.match(m.group("tail") or "") is None and (
-        _NOT_OURS_AFTER.match(m.group("tail") or "") is None
+    tail = m.group("tail") or "" if m is not None else ""
+    return (
+        m is not None
+        and _LESSON_FOR_PEOPLE.match(tail) is None
+        and _NOT_OURS_AFTER.match(tail) is None
+        and _LESSON_FOR_A_COURSE.search(tail) is None
     )
 
 

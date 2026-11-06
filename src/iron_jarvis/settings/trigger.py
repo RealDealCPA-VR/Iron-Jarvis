@@ -119,6 +119,14 @@ _WINDOWS_THINGS = frozenset(
         "mail", "calendar", "hello", "ink", "insider", "safe", "settings", "control", "registry",
     }
 )
+#: v1.438.0 review: a machine named right before "…start with Windows".
+_DEVICES = frozenset(
+    {
+        "laptop", "laptops", "pc", "pcs", "computer", "computers", "machine", "machines",
+        "workstation", "server", "servers", "printer", "scanner", "tablet", "surface", "vm",
+        "monitor", "dell", "lenovo", "thinkpad",
+    }
+)
 #: …unless the thing after it is this app ("the theme in the app").
 _APP_WORDS = frozenset(
     {"app", "jarvis", "iron", "chat", "chats", "settings", "setting", "dashboard", "build", "code"}
@@ -210,6 +218,11 @@ _EXTRA_REFERENCES: tuple[re.Pattern[str], ...] = tuple(
         + _FORMATS + r"\b[^.?!\n]{0,30}?\b" + _LASTING_WORDS,
         _ASKS_AT + r"(?:from\s+now\s+on|going\s+forward|always)\s*,?\s+(?:please\s+)?(?:use|answer\s+(?:with|in)"
         r"|reply\s+(?:with|in)|write\s+(?:with|in))\s+" + _FORMATS + r"\b",
+        # v1.438.0 review: the app named, then it starting by itself at
+        # sign-in — "make Jarvis open automatically when I log in".
+        r"\b(?:iron\s+jarvis|jarvis|the\s+desktop\s+app)\s+(?:to\s+)?(?:open|start|launch|run)s?\b"
+        r"[^.?!\n]{0,24}?\b(?:when\s+i\s+(?:log|sign)\s+(?:in|on)|at\s+(?:login|log\s*in|sign\s*in|startup)"
+        r"|on\s+startup|with\s+windows)\b",
         # "open files in Cursor", "use VS Code for files".
         r"\b(?:open|edit|show)\b[^.?!\n]{0,30}?\b(?:in|with)\s+(?:cursor|vs\s*code|vscode)\b",
         r"\b(?:use|switch\s+to|set|pick|choose)\s+(?:cursor|vs\s*code|vscode)\b",
@@ -483,6 +496,13 @@ def _about_something_else(toks: list[str], start: int, end: int, *, before: bool
     if nxt in _EXTENDERS:
         return True
     if toks[end] in ("windows", "window's") and nxt in _WINDOWS_THINGS:
+        return True
+    if toks[end] in ("windows", "window's", "login", "startup") and _DEVICES.intersection(
+        toks[max(0, start - 4): start]
+    ):
+        # Review (v1.438.0): a MACHINE that starts with Windows — "my laptop
+        # doesn't start with Windows anymore" — is a PC problem, never the
+        # app's Start with Windows switch.
         return True
     if (
         nxt in ("of", "in", "inside", "into")

@@ -747,6 +747,12 @@ _NOT_OUR_PREFERENCE_BEFORE = frozenset(
      "guitar", "piano", "music", "driving", "tennis", "swimming", "online", "private", "first", "next",
      "spanish", "french", "math", "history", "science", "student", "students", "valuable", "important"}
 )
+#: v1.438.0 review: teaching material a lesson is added to.
+_COURSE_WORDS = frozenset(
+    {"course", "courses", "class", "classes", "curriculum", "syllabus", "module", "workshop", "webinar",
+     "seminar", "training", "binder", "workbook", "cpe", "lms", "onboarding", "students", "slides", "deck",
+     "outline", "intern", "interns", "staff", "trainees", "textbook", "lecture"}
+)
 _NOT_OUR_PERSONA_BEFORE = frozenset(
     {"buyer", "customer", "user", "marketing", "target", "audience", "brand", "ideal", "client",
      "shopper", "fictional", "character", "ux", "player", "public", "online", "social", "stage",
@@ -804,7 +810,14 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
     if head in ("preference", "preferences", "lesson", "lessons"):
         # v1.438.0 (Wave 4 group C): a kept preference or lesson — never a
         # seat's, a browser's, a cookie's, a guitar lesson.
-        return "" if (prv in _NOT_OUR_PREFERENCE_BEFORE or nxt in ("plan", "plans", "learned")) else "preference"
+        if prv in _NOT_OUR_PREFERENCE_BEFORE or nxt in ("plan", "plans", "learned") or prv.endswith(("'s", "’s")):
+            return ""
+        # Review (v1.438.0): a lesson added TO a course, a class or a deck
+        # ("I added a lesson about depreciation to your CPE course") is a
+        # teacher's, never a kept lesson.
+        if head.startswith("lesson") and _COURSE_WORDS.intersection(rest[:14]):
+            return ""
+        return "preference"
     if head in ("persona", "personas"):
         if prv in _NOT_OUR_PERSONA_BEFORE:
             return ""
@@ -1109,10 +1122,22 @@ _PROMISE_TRAY_OFF = re.compile(
 )
 
 
+#: Review (v1.438.0): words that make a promise an offer or a condition.
+_PROMISE_CONDITION = re.compile(
+    r"\b(?:if|unless|once|confirm|confirmed|would\s+you|do\s+you\s+want|want\s+me\s+to|shall\s+i|should\s+i"
+    r"|let\s+me\s+know|just\s+say|say\s+the\s+word)\b"
+)
+
+
 def _promise_claims(sentence: str) -> list[Claim]:
     """The lasting promises one sentence makes (see :data:`_LASTING_RX`)."""
     low = sentence.lower()
     out: list[Claim] = []
+    if _PROMISE_CONDITION.search(low):
+        # Review (v1.438.0): an OFFER or a condition ("If you want, I'll
+        # always reply in German — confirm and I'll set it", "Once you
+        # confirm, I will answer in Spanish from now on") promises nothing.
+        return out
     if _LASTING_RX.search(low):
         if _PROMISE_LANGUAGE.search(low):
             out.append(Claim(verb=CHANGE, word="changed", phrase=["answer", "language"],
