@@ -356,10 +356,12 @@ async def _adopt_one(svc: Any, link: HL.HostLink, t: dict[str, Any]) -> bool:
     proc = HL.RemoteProcess([], env={}, cwd=row.folder or "", name=f"hosted-{row.id}", home=svc.home,
                             sid=row.id, tool_id=tool)
     held: dict[str, Any] = {}
+    from .service import heard_from
 
     def on_message(obj: dict[str, Any]) -> None:
-        live.last_heard = svc.clock()
         drv = held.get("driver")
+        if heard_from(drv, obj):
+            live.last_heard = svc.clock()
         if drv is None:
             return
         try:

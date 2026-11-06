@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from ...hosted import panes as PN
 from ...hosted import service as S
+from ...hosted import session_controls as SC
 from ...hosted.events import EventLog
 
 #: How many of the newest events the panes read (the log's own bound is 20k).
@@ -35,6 +36,12 @@ class RevertBody(BaseModel):
     old_rel: str = Field(default="", max_length=1_000)
     scope: str = Field(default=PN.SCOPE_SESSION, max_length=20)
     turn: str = Field(default="", max_length=120)
+
+
+class McpActionBody(BaseModel):
+    """v1.441.0 (g1): ``reconnect`` | ``off`` | ``on`` | ``sign_in``."""
+
+    action: str = Field(min_length=1, max_length=20)
 
 
 def _turn_running(live: Any) -> bool:
@@ -122,8 +129,33 @@ def register(app: FastAPI, d: Any) -> None:
     @app.get("/build/app/sessions/{sid}/overview")
     async def app_overview(sid: str) -> dict[str, Any]:
         """The Session tab's facts the page cannot hold: the branch, the
-        instruction files, how full (as the tool said), what runs under it."""
+        instruction files, how full (as the tool said), what runs under it.
+        v1.441.0 (g1): plus the tool's own background work it can stop
+        (``background_work``, only when the tool offers it) and each MCP
+        row's ``actions``."""
         row, events, live = await _session(sid)
         running = bool(live is not None and live.running)
         pid = live.proc.pid if running and live.proc is not None else None
-        return await asyncio.to_thread(PN.session_view, row, events, pid, running)
+        view = await asyncio.to_thread(PN.session_view, row, events, pid, running)
+        return await SC.decorate_overview(view, live)
+
+    @app.post("/build/app/sessions/{sid}/background/{work_id}/stop")
+    async def app_background_stop(sid: str, work_id: str) -> dict[str, Any]:
+        """v1.441.0 (g1): stop ONE of the tool's background tasks through the
+        tool's own stop (Claude Code's ``stop_task``, Codex's background
+        terminal ``terminate``). The reply, if one runs, goes on; what was
+        stopped is said in the conversation."""
+        try:
+            return await SC.stop_background(svc(), sid, work_id[:80])
+        except S.Refused as r:
+            raise HTTPException(status_code=r.status, detail=r.sentence) from None
+
+    @app.post("/build/app/sessions/{sid}/mcp/{server}")
+    async def app_mcp_action(sid: str, server: str, body: McpActionBody) -> dict[str, Any]:
+        """v1.441.0 (g1): one of the tool's own MCP actions (reconnect, turn
+        off or on, sign in) — only those the tool offers. A sign-in answers
+        the page to open in the user's browser; Iron Jarvis never signs in."""
+        try:
+            return await SC.mcp_action(svc(), sid, server, body.action)
+        except S.Refused as r:
+            raise HTTPException(status_code=r.status, detail=r.sentence) from None

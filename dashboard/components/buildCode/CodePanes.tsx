@@ -41,6 +41,7 @@ import { Row, Section } from "@/components/harness/HarnessSessionRail";
 import { UsageRefresh } from "@/components/accounts/UsageRefresh";
 import { ContextBreakdown } from "@/components/harness/ContextBreakdown";
 import { decodeCodeContext, totalReading, type CodeContext } from "@/lib/contextBreakdown";
+import { BackgroundWorkList, McpRowMenu } from "@/components/buildCode/SessionControls";
 import { isThumbImage, localMediaSrc } from "@/lib/mediaLightbox";
 import { baseName, openablePath } from "@/lib/sessionRail";
 import {
@@ -651,7 +652,9 @@ function SessionPaneTab({
         ) : null}
       </Section>
 
-      {o?.mcp ? <ToolMcpSection mcp={o.mcp} toolName={toolName} /> : null}
+      {o?.mcp ? (
+        <ToolMcpSection mcp={o.mcp} toolName={toolName} sessionId={session.id} tool={session.tool} onChanged={over.again} />
+      ) : null}
 
       <CodeContextSection
         cctx={cctx.data}
@@ -770,6 +773,10 @@ function SessionPaneTab({
             ) : null}
           </>
         )}
+        {/* v1.441.0 (g1): the tool's OWN background work, each with Stop. */}
+        {o?.toolRunning && o.backgroundWork?.length ? (
+          <BackgroundWorkList sessionId={session.id} work={o.backgroundWork} toolName={toolName} onChanged={over.again} />
+        ) : null}
       </Section>
     </div>
   );
@@ -779,7 +786,19 @@ function SessionPaneTab({
  *  last started (Claude Code's init frame, Codex's startup statuses): each
  *  one's state in words, and for one waiting for a sign-in, the tool's own
  *  way to sign in. A tool that never said (or never reports) says so. */
-function ToolMcpSection({ mcp, toolName }: { mcp: CodeMcp; toolName: string }) {
+function ToolMcpSection({
+  mcp,
+  toolName,
+  sessionId,
+  tool,
+  onChanged,
+}: {
+  mcp: CodeMcp;
+  toolName: string;
+  sessionId: string;
+  tool: string;
+  onChanged: () => void;
+}) {
   const at = mcp.at ? agoWords(mcp.at) : "";
   return (
     <Section id="mcp" title="Its own MCP servers">
@@ -792,7 +811,7 @@ function ToolMcpSection({ mcp, toolName }: { mcp: CodeMcp; toolName: string }) {
           <ul data-testid="code-session-mcp" className="space-y-1.5">
             {mcp.servers.map((s) => (
               <li key={s.name} data-testid={`code-session-mcp-${s.name}`} data-state={s.state} className="min-w-0">
-                <p className="flex min-w-0 items-baseline gap-2 text-[13px] text-zinc-300">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-[13px] text-zinc-300">
                   <span className="min-w-0 truncate">{s.name}</span>
                   <span
                     className={`shrink-0 text-[12px] ${
@@ -805,7 +824,10 @@ function ToolMcpSection({ mcp, toolName }: { mcp: CodeMcp; toolName: string }) {
                   >
                     {s.words}
                   </span>
-                </p>
+                  {s.actions?.length ? (
+                    <McpRowMenu sessionId={sessionId} server={s} tool={tool} toolName={toolName} onChanged={onChanged} />
+                  ) : null}
+                </div>
                 {s.error ? (
                   <p className="truncate font-mono text-[11px] text-zinc-500" title={s.error}>
                     {s.error}

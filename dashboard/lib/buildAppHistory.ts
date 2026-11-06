@@ -270,8 +270,15 @@ export function modelWhileRunning(tool: string, toolName: string, running: boole
   };
 }
 
-export function effortWhileRunning(tool: string, toolName: string, running: boolean): LiveChange {
-  if (!running) return { held: false, defaultHeld: false, title: "" };
+export function effortWhileRunning(
+  tool: string,
+  toolName: string,
+  running: boolean,
+  /** v1.441.0 (g1): the daemon says this tool takes a new effort live
+   *  (`effort_live`, Claude Code's apply_flag_settings) — nothing is held. */
+  effortLive = false,
+): LiveChange {
+  if (!running || effortLive) return { held: false, defaultHeld: false, title: "" };
   if (RESTART_FOR_EFFORT.has(tool)) {
     return {
       held: true,

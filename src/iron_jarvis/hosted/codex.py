@@ -408,6 +408,54 @@ def codex_notice(method: str, p: Any, thread: str = "") -> str:
     return ""
 
 
+#: v1.441.0 (g1): how often the background terminals are read again while any
+#: runs, at most how many are listed, and the words.
+TERMINALS_POLL_S = 30.0
+TERMINALS_MAX = 50
+TERMINAL_ALREADY_ENDED = "That command already ended."
+SIGNED_IN_WORDS = "Signed in to {name}. Codex starts it again now."
+SIGN_IN_FAILED_WORDS = "Signing in to {name} did not finish: {why}"
+
+
+def terminal_rows(result: Any) -> list[dict[str, Any]]:
+    """``thread/backgroundTerminals/list``'s answer (``{data: [{itemId,
+    processId, command, cwd, osPid?, cpuPercent?, rssKb?}], nextCursor}``) as
+    the Session tab's rows — the command shown the way a program's line is
+    (a secret-named flag's value hidden, known shapes masked, then cut)."""
+    from ..harness.process import _shown_command
+
+    rows: list[dict[str, Any]] = []
+    data = result.get("data") if isinstance(result, dict) else None
+    for t in data or []:
+        if not isinstance(t, dict):
+            continue
+        pid = str(t.get("processId") or "").strip()
+        if not pid or len(pid) > 40:
+            continue
+        rows.append({"id": pid, "title": _shown_command(str(t.get("command") or "")) or "A command",
+                     "kind": "command", "can_stop": True})
+        if len(rows) >= TERMINALS_MAX:
+            break
+    return rows
+
+
+def safe_sign_in_url(raw: Any) -> str:
+    """The sign-in address Codex gave, only when it is one a browser may open:
+    http(s), a host, no user name or password in it, not absurdly long."""
+    from urllib.parse import urlsplit
+
+    url = str(raw or "").strip()
+    if not url or len(url) > 4_000 or any(ch.isspace() for ch in url):
+        return ""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+        return ""
+    return url
+
+
 class CodexDriver(Driver):
     harness = HARNESS
 
@@ -428,12 +476,141 @@ class CodexDriver(Driver):
         #: v1.426.0 (E4): the background reads this driver started (a task
         #: is kept here until it ends, never dropped by the garbage collector).
         self._bg: set[asyncio.Task] = set()
+        #: v1.441.0 (g1): Codex's own background terminals (commands the model
+        #: left running — ``thread/backgroundTerminals/list``) as last read:
+        #: the rows, and how many (the reaper's ``background_tasks``).
+        self._terminals: list[dict[str, Any]] = []
+        self._terminal_count = 0
+        #: The read that follows them while any runs (not kept: re-armed).
+        self._terminal_poll: asyncio.Task | None = None
+        #: v1.441.0 review: the ids of terminal reads in flight — their answers
+        #: are Iron Jarvis's own, never "the tool was heard from".
+        self._quiet_ids: set[int] = set()
+
+    # -- v1.441.0 (g1): the Session tab's controls --------------------------------
+    #: Codex's own ``mcpServer/oauth/login`` (``hosted/session_controls``).
+    mcp_actions: frozenset[str] = frozenset({"sign_in"})
+
+    def quiet_frame(self, obj: dict[str, Any]) -> bool:
+        return "method" not in obj and obj.get("id") in self._quiet_ids
+
+    @property
+    def background_tasks(self) -> int:
+        """v1.441.0 (g1): the background terminals Codex still runs — the
+        service's reaper and pool keep a session that has any (the v1.418.0
+        ``keeps_working`` rule), as Claude Code's open tasks do."""
+        return int(self._terminal_count or 0)
+
+    def _arm_terminal_poll(self) -> None:
+        """Read the terminals now and every :data:`TERMINALS_POLL_S` while any
+        runs (Codex says nothing when one ends by itself — measured). Never
+        while a turn is open (the newest request must stay the turn's — see
+        :meth:`after_restore`). One at a time."""
+        if self._terminal_poll is not None and not self._terminal_poll.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def follow() -> None:
+            while True:
+                if not self.turn_open:
+                    rows = await self._read_terminals()
+                    if rows is None or not rows:
+                        return
+                await asyncio.sleep(TERMINALS_POLL_S)
+
+        task = loop.create_task(follow())
+        self._terminal_poll = task
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    async def _read_terminals(self) -> list[dict[str, Any]] | None:
+        """``thread/backgroundTerminals/list {threadId}`` (experimental; this
+        driver asks for the experimental API) as rows. None = not read."""
+        if not self.session_id:
+            return None
+        rid = self._n + 1  # request() takes exactly this id, before any await
+        self._quiet_ids.add(rid)
+        try:
+            res = await self.request("thread/backgroundTerminals/list",
+                                     {"threadId": self.session_id, "limit": TERMINALS_MAX})
+        except Exception:  # noqa: BLE001 — a gone process or an older Codex: not known
+            return None
+        finally:
+            self._quiet_ids.discard(rid)
+        rows = terminal_rows(res)
+        self._terminals = rows
+        self._terminal_count = len(rows)
+        return rows
+
+    async def background_work(self) -> list[dict[str, Any]] | None:
+        """v1.441.0 (g1): Codex's background terminals, each one its own
+        ``thread/backgroundTerminals/terminate`` stops. While a turn runs the
+        last reading is answered (no request is written mid-turn)."""
+        if self.turn_open:
+            return [dict(r) for r in self._terminals]
+        rows = await self._read_terminals()
+        if rows is None:
+            return [dict(r) for r in self._terminals] if self._terminals else None
+        if rows:
+            self._arm_terminal_poll()
+        return rows
+
+    async def stop_background(self, work_id: str) -> str:
+        """``thread/backgroundTerminals/terminate {threadId, processId}`` —
+        MEASURED on 0.157.0 (a stand-in model server had the model start
+        ``ping -n 120`` with ``exec_command``): ``{"terminated": true}`` and the
+        list is empty after; an unknown id is an error ("invalid background
+        terminal process id"). Answers the command."""
+        pid = str(work_id or "")
+        known = next((r for r in self._terminals if r.get("id") == pid), None)
+        try:
+            res = await self.request("thread/backgroundTerminals/terminate",
+                                     {"threadId": self.session_id, "processId": pid})
+        except ControlRefused as exc:
+            if "invalid background terminal" in str(exc).lower():
+                # v1.441.0 review: Codex's own words for a stale id (measured).
+                raise ControlRefused(TERMINAL_ALREADY_ENDED) from None
+            raise ControlRefused(f"Codex did not stop it: {exc}") from None
+        if not (isinstance(res, dict) and res.get("terminated")):
+            raise ControlRefused(TERMINAL_ALREADY_ENDED)
+        self._terminals = [r for r in self._terminals if r.get("id") != pid]
+        self._terminal_count = len(self._terminals)
+        if not self.turn_open:
+            await self._read_terminals()
+        return str((known or {}).get("title") or "A command")
+
+    async def mcp_action(self, server: str, action: str) -> dict[str, Any]:
+        """v1.441.0 (g1): ``mcpServer/oauth/login {name, threadId}`` — MEASURED
+        on 0.157.0 against a stand-in OAuth server (scratch ``CODEX_HOME``,
+        ``mcp_oauth_credentials_store = "file"``): it answers
+        ``{authorizationUrl}`` and waits on a loopback callback of its own;
+        once the browser comes back, ``mcpServer/oauthLogin/completed {name,
+        success, error}`` and Codex starts the server again in the same thread
+        (``startupStatus`` starting -> ready). A stdio server is refused
+        ("only supported for streamable HTTP servers"). Iron Jarvis only hands
+        the address to the user's browser — it never signs in."""
+        if action != "sign_in":
+            raise ControlRefused("Codex cannot do that to one of its MCP servers here.")
+        try:
+            res = await self.request("mcpServer/oauth/login",
+                                     {"name": str(server or ""), "threadId": self.session_id or None})
+        except ControlRefused as exc:
+            raise ControlRefused(f"Codex could not start signing in to {clip(server, 120)}: {exc}") from None
+        url = safe_sign_in_url(res.get("authorizationUrl") if isinstance(res, dict) else None)
+        if not url:
+            raise ControlRefused("Codex did not give a sign-in page Iron Jarvis can open.")
+        return {"url": url}
 
     def after_restore(self) -> None:
         """v1.422.0 (kept across a restart): ``turn/start``'s answer names
         the turn (Stop and a note need its id) and settles a waiter that has
         no kept form — while a turn is open, the newest request waits again,
         and an answer naming a turn is taken."""
+        if self._terminal_count:
+            self._arm_terminal_poll()
         if not (self.turn_open and self._n):
             return
         fut = self._replies.make(self._n)
@@ -698,6 +875,9 @@ class CodexDriver(Driver):
         from .process import HarnessGone
 
         self._replies.fail_all(HarnessGone("Codex stopped"))
+        # v1.441.0 (g1): its background terminals ended with it.
+        self._terminals = []
+        self._terminal_count = 0
 
     # -- the harness's side (ON THE LOOP) ---------------------------------------
     def on_message(self, obj: dict[str, Any]) -> None:
@@ -855,6 +1035,16 @@ class CodexDriver(Driver):
             if (self.turn_open and isinstance(turn, dict) and turn.get("id")
                     and (not thread or not self.session_id or thread == self.session_id)):
                 self.turn_id = str(turn["id"])
+        elif method == "mcpServer/oauthLogin/completed":
+            # v1.441.0 (g1): a sign-in started from the Session tab ended.
+            thread = str(p.get("threadId") or "")
+            if not thread or not self.session_id or thread == self.session_id:
+                name = clip(str(p.get("name") or "the server"), 120)
+                if p.get("success"):
+                    self.emit(make("notice", text=SIGNED_IN_WORDS.format(name=name)))
+                else:
+                    why = one_line(p.get("error") or "no reason given", 300)
+                    self.emit(make("notice", text=SIGN_IN_FAILED_WORDS.format(name=name, why=why)))
         elif method == "mcpServer/startupStatus/updated":
             # v1.426.0 (E4): its own MCP servers starting, as it says them.
             from .tool_setup import codex_update, note_servers
@@ -1028,3 +1218,6 @@ class CodexDriver(Driver):
         self._interrupting = False
         self.turn_open = False
         self.emit(make("done", stop=stop))
+        # v1.441.0 (g1): a command the model left running is a background
+        # terminal now — read them (and follow them while any runs).
+        self._arm_terminal_poll()

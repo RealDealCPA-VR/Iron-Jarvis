@@ -1441,7 +1441,7 @@ function SessionPane({
   const accountName = accountWords(session, tools);
   // v1.418.0 (C4.8): which chip changes wait for the reply to end.
   const modelLive = modelWhileRunning(session.tool, toolName, running);
-  const effortLive = effortWhileRunning(session.tool, toolName, running);
+  const effortLive = effortWhileRunning(session.tool, toolName, running, tool?.effortLive === true);
   return (
     <SessionEditorProvider folder={session.folder}>
       {/* v1.414.0: the conversation and, to its right, the panes (Changes,

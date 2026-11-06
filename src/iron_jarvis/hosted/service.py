@@ -1070,6 +1070,16 @@ def _stoppable(lv: "LiveSession", now: float) -> bool:
 # --------------------------------------------------------------------------- #
 # The service
 # --------------------------------------------------------------------------- #
+def heard_from(driver: Any, obj: dict[str, Any]) -> bool:
+    """v1.441.0 review: does this frame count as hearing from the tool (the
+    two-silent-hours rule)? Not the answer to Iron Jarvis's own background
+    read. Never raises."""
+    try:
+        return not (driver is not None and driver.quiet_frame(obj))
+    except Exception:  # noqa: BLE001 — a driver's check must never drop a frame
+        return True
+
+
 class HostedService:
     def __init__(self, platform: Any, *, clock: Any = time.monotonic) -> None:
         self.platform = platform
@@ -1195,6 +1205,10 @@ class HostedService:
                 "hidden_modes": hidden_mode_rows(h),
                 "models": self._models_with_efforts(h),
                 "efforts": list(EFFORTS[h]),
+                # v1.441.0 (g1): an effort change reaches the running tool at
+                # once (Claude Code's own apply_flag_settings), so the chip
+                # stays open while a reply runs.
+                "effort_live": h == CLAUDE and ClaudeDriver.effort_live,
                 "accounts": accounts,
                 "own_sign_in": h in OWN_SIGN_IN,
                 # v1.416.0: a tool the page lists only when it is installed.
@@ -2015,9 +2029,12 @@ class HostedService:
                     raise Refused(str(exc)) from None
             elif live and live.driver:
                 live.driver.effort = effort
-            if (row.harness == CLAUDE or (row.harness in LISTED_MODELS and not effort)) and live and live.running:
-                # --effort is read at start only; Pi's own default (no
-                # --thinking) applies only to a process started without one.
+            if ((row.harness == CLAUDE and applied["effort"] != "now")
+                    or (row.harness in LISTED_MODELS and not effort)) and live and live.running:
+                # --effort is read at start only (v1.441.0: unless Claude Code
+                # took it live — ClaudeDriver.set_effort reads it back); Pi's
+                # own default (no --thinking) applies only to a process
+                # started without one.
                 live.restart = True
             fields["effort"] = effort
         if isinstance(body.get("capabilities"), dict):
@@ -2371,7 +2388,8 @@ class HostedService:
             self._on_exit(live, proc, code)
 
         def on_message(obj: dict[str, Any]) -> None:
-            live.last_heard = self.clock()
+            if heard_from(driver, obj):
+                live.last_heard = self.clock()
             # A frame the parser cannot read must never end the session.
             try:
                 driver.on_message(obj)

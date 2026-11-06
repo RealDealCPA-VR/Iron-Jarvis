@@ -295,6 +295,68 @@ export interface CodeOverview {
   /** v1.426.0 (E4): the tool's OWN MCP servers as it reported them; null =
    *  an older Iron Jarvis that does not say. */
   mcp: CodeMcp | null;
+  /** v1.441.0 (g1): the tool's own background work it can stop (Claude Code's
+   *  open tasks, Codex's background terminals); null = the tool offers no list
+   *  (or an older Iron Jarvis): the tab shows what it showed before. */
+  backgroundWork: BackgroundWork[] | null;
+}
+
+/** v1.441.0 (g1): one piece of background work the tool runs. */
+export interface BackgroundWork {
+  id: string;
+  title: string;
+  /** helper | command | task */
+  kind: string;
+  canStop: boolean;
+}
+
+export const BACKGROUND_KINDS: readonly string[] = ["helper", "command", "task"];
+export const BACKGROUND_KIND_WORDS: Record<string, string> = {
+  helper: "Helper",
+  command: "Command",
+  task: "Task",
+};
+
+/** v1.441.0 (g1): the MCP actions a row may offer, and their words. */
+export const MCP_ACTIONS: readonly string[] = ["reconnect", "off", "on", "sign_in"];
+export const MCP_ACTION_WORDS: Record<string, string> = {
+  reconnect: "Reconnect",
+  off: "Turn off",
+  on: "Turn on",
+  sign_in: "Sign in…",
+};
+/** What an action does, beyond its name (the menu item's title), per tool. */
+export function mcpActionTitle(action: string, tool: string, toolName: string): string {
+  if (action === "off" && tool === "claude-code") return "Claude Code remembers this for this folder, as /mcp does.";
+  if (action === "sign_in") return `Opens ${toolName}'s sign-in page for it in your browser; Iron Jarvis never signs in for you.`;
+  if (action === "reconnect") return `Asks ${toolName} to start it again.`;
+  return "";
+}
+
+function mcpActionsOf(raw: unknown): { actions?: string[] } {
+  const acts = (Array.isArray(raw) ? raw : []).filter(
+    (a, i, all): a is string => typeof a === "string" && MCP_ACTIONS.includes(a) && all.indexOf(a) === i,
+  );
+  return acts.length ? { actions: acts } : {};
+}
+
+export function decodeBackgroundWork(raw: unknown): BackgroundWork[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: BackgroundWork[] = [];
+  for (const item of raw) {
+    const w = obj(item);
+    const id = w ? str(w.id, 80).trim() : "";
+    if (!w || !id) continue;
+    const kind = str(w.kind, 20);
+    out.push({
+      id,
+      title: str(w.title, 300).trim() || "A task",
+      kind: BACKGROUND_KINDS.includes(kind) ? kind : "task",
+      canStop: w.can_stop === true,
+    });
+    if (out.length >= 50) break;
+  }
+  return out;
 }
 
 /** v1.426.0 (E4): one of the tool's own MCP servers, in the daemon's words
@@ -307,6 +369,9 @@ export interface CodeMcpServer {
   error: string;
   /** The tool's OWN way to sign in ("" = none needed). */
   signIn: string;
+  /** v1.441.0 (g1): what the running tool can do to it from here (only the
+   *  actions that fit its state); absent = none (the row shows no menu). */
+  actions?: string[];
 }
 
 export interface CodeMcp {
@@ -334,6 +399,7 @@ export function decodeCodeMcp(raw: unknown): CodeMcp | null {
       words: str(s.words, 80) || "Did not start",
       error: str(s.error, 300),
       signIn: str(s.sign_in, 400),
+      ...mcpActionsOf(s.actions),
     });
     if (servers.length >= 50) break;
   }
@@ -363,6 +429,7 @@ export function decodeCodeOverview(raw: unknown): CodeOverview | null {
     programsKnown: r.programs_known !== false,
     programsMore: r.programs_more === true,
     mcp: decodeCodeMcp(r.mcp),
+    backgroundWork: decodeBackgroundWork(r.background_work),
   };
 }
 

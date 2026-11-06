@@ -195,7 +195,12 @@ def claude_servers(raw: Any) -> list[dict[str, str]] | None:
         if not name:
             continue
         status = str(item.get("status") or "").strip().lower()
-        out.append(_row(name, CLAUDE_STATUS.get(status, FAILED), "",
+        state = CLAUDE_STATUS.get(status, FAILED)
+        # v1.441.0 (g1): ``mcp_status`` (read after a reconnect or a switch)
+        # carries Claude Code's own error for a server that failed; the init
+        # frame never does.
+        error = one_line(item.get("error") or "", ERROR_CHARS) if item.get("error") else ""
+        out.append(_row(name, state, error if state in (FAILED, NEEDS_SIGN_IN) else "",
                         clip(str(item.get("source") or ""), 40)))
     return out
 
