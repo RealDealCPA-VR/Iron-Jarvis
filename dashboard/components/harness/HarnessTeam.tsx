@@ -27,6 +27,14 @@
  *    always in sight, every time the lead did a piece itself ("The team lead
  *    did this itself: <reason>") — never folded away.
  *
+ * v1.437.0 (the new-session box, HarnessStartComposer): `draft` is a team set
+ * BEFORE the session exists — the same chip and panel; a change goes to the
+ * box (`draft.onChange`), never to a session, and rides the one create
+ * (`team`). Untouched (`draft.team` undefined), the chip shows the folder's
+ * saved team, which the create applies by itself. Picking a model still makes
+ * (or reuses) its team member, as in a session: a member is the model team's,
+ * not the session's.
+ *
  * The panel is PORTALED to the page and fixed above its chip, always inside
  * the window (lib/buildAttempts `tryOnMenuPosition`, the "Try on…" menu's
  * rule): the session's columns clip what overflows them, and a phone has 16 px
@@ -99,11 +107,25 @@ export function memberWords(m: TeamMemberView, models: readonly CatalogRow[]): s
   return workerModelName(m.provider, m.model, models) || m.label || m.name;
 }
 
+/** What a pick made known about a member (v1.437.0: the new-session box keeps
+ *  only names, so the model a member runs on is remembered from its pick). */
+type KnownMembers = Readonly<Record<string, { provider: string; model: string; label: string }>>;
+
 /** The members a view lists — the team's own, or (a view that keeps only the
- *  names) the names with nothing known about them. */
-function membersOf(team: SessionTeam | null, names: TeamNames | null): { workers: TeamMemberView[]; reviewer: TeamMemberView | null } {
+ *  names) the names with nothing known about them beyond `known`. */
+function membersOf(
+  team: SessionTeam | null,
+  names: TeamNames | null,
+  known: KnownMembers = {},
+): { workers: TeamMemberView[]; reviewer: TeamMemberView | null } {
   if (team) return { workers: team.workers, reviewer: team.reviewer };
-  const blank = (name: string): TeamMemberView => ({ name, provider: "", model: "", label: "", state: "unknown" });
+  const blank = (name: string): TeamMemberView => ({
+    name,
+    provider: known[name]?.provider ?? "",
+    model: known[name]?.model ?? "",
+    label: known[name]?.label ?? "",
+    state: "unknown",
+  });
   return {
     workers: (names?.workers ?? []).map(blank),
     reviewer: names?.reviewer ? blank(names.reviewer) : null,
@@ -121,6 +143,7 @@ export function TeamControl({
   localOnly,
   disabled,
   onView,
+  draft,
 }: {
   threadId: string;
   /** The session's folder ("" for a session with no folder). */
@@ -137,6 +160,11 @@ export function TeamControl({
   disabled?: boolean;
   /** The session view the daemon answered a change with. */
   onView: (v: BuildSessionView) => void;
+  /** v1.437.0: a NEW session's team, set before the session exists (the
+   *  new-session box): `team` undefined = untouched (the folder's saved
+   *  team, which the create applies), null = work alone, names = this team.
+   *  A change calls `onChange` — never a session's PATCH. */
+  draft?: { team: TeamNames | null | undefined; onChange: (next: TeamNames | null) => void };
 }) {
   /** Does this Iron Jarvis have session teams? Unknown until its folder's
    *  team is read once; a 404 hides the control for good. */
@@ -147,6 +175,8 @@ export function TeamControl({
   const [picking, setPicking] = useState<Part | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** v1.437.0: in `draft`, what each pick made known about its member. */
+  const [known, setKnown] = useState<KnownMembers>({});
   const chipRef = useRef<HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const addRef = useRef<{ worker: HTMLButtonElement | null; reviewer: HTMLButtonElement | null }>({
@@ -177,8 +207,12 @@ export function TeamControl({
     };
   }, [folder]);
 
-  const current: TeamNames | null = teamNamesOf(team) ?? teamSetup ?? null;
-  const { workers, reviewer } = membersOf(team, team ? null : current);
+  const current: TeamNames | null = draft
+    ? draft.team === undefined
+      ? folderTeam
+      : draft.team
+    : (teamNamesOf(team) ?? teamSetup ?? null);
+  const { workers, reviewer } = membersOf(draft ? null : team, draft || !team ? current : null, draft ? known : {});
   const count = teamCount(current);
   const words = teamChipWords(count);
   const title = current
@@ -322,8 +356,13 @@ export function TeamControl({
     }
   };
 
-  /** Set the session's team; a 404 means this Iron Jarvis has none. */
+  /** Set the session's team; a 404 means this Iron Jarvis has none.
+   *  v1.437.0: in `draft`, the new-session box keeps it (no session yet). */
   async function save(next: TeamNames | null) {
+    if (draft) {
+      draft.onChange(teamPatch(next).team);
+      return;
+    }
     const v = await patchSession(threadId, teamPatch(next));
     if (v) onView(v);
   }
@@ -358,6 +397,9 @@ export function TeamControl({
         return;
       }
       const made = await memberFromModel(m.provider, m.model, part);
+      if (draft) {
+        setKnown((k) => ({ ...k, [made.name]: { provider: made.provider, model: made.model, label: made.label || label } }));
+      }
       const names = current ?? { workers: [], reviewer: "" };
       if (names.workers.includes(made.name)) {
         setError(`${label} is already a worker.`);
@@ -422,12 +464,16 @@ export function TeamControl({
         className="flex min-w-0 items-center gap-2 rounded-lg bg-white/[0.04] px-2 py-1 text-[12px]"
       >
         <span className="min-w-0 truncate text-zinc-200">{w}</span>
-        <span
-          data-testid="harness-team-state"
-          className={`shrink-0 text-[11px] ${warn ? "text-tone-warn" : "text-zinc-500"}`}
-        >
-          {memberStateWords(m.state)}
-        </span>
+        {/* v1.437.0: a new session's member has no state yet ("not known"
+            would be noise before the session exists). */}
+        {draft && m.state === "unknown" ? null : (
+          <span
+            data-testid="harness-team-state"
+            className={`shrink-0 text-[11px] ${warn ? "text-tone-warn" : "text-zinc-500"}`}
+          >
+            {memberStateWords(m.state)}
+          </span>
+        )}
         <button
           type="button"
           data-testid={part === "worker" ? "harness-team-remove-worker" : "harness-team-remove-reviewer"}
@@ -524,7 +570,7 @@ export function TeamControl({
     >
       <div className="grid min-h-0 gap-3 overflow-y-auto overscroll-contain px-1 pb-1">
         <section data-testid="harness-team-lead">
-          {heading(TEAM_LEAD_WORDS, "this session's own model")}
+          {heading(TEAM_LEAD_WORDS, draft ? "the new session's own model" : "this session's own model")}
           <p data-testid="harness-team-lead-model" className="mt-0.5 truncate text-[13px] text-zinc-200">
             {leadWords || team?.lead?.label || "This session's model"}
           </p>

@@ -20,6 +20,13 @@
  * v1.400.8: the list itself (picks, find box, provider rows, models) is
  * TryOnModels, shared with the Tonight form; this file is the menu around it.
  *
+ * v1.437.0 (the new-session box, HarnessStartComposer): `unavailable` says why
+ * Try on cannot be used there yet (no folder, a folder outside a git
+ * repository, a session that starts by planning). The chip stays in the row,
+ * focusable, named by its words, its tooltip saying why; a press opens the
+ * same box with that reason in place of the list — never a chip that silently
+ * does nothing.
+ *
  * The list is PORTALED to the page and fixed above the chip, always inside
  * the window (`tryOnMenuPosition`): the session's columns clip what overflows
  * them, and on a phone the chip sits mid-row. A provider's pop-out floats
@@ -68,6 +75,7 @@ export function TryOnControl({
   disabled,
   iconOnly = false,
   teamSet = false,
+  unavailable = "",
 }: {
   models: readonly (TryOnRow & CatalogRow)[];
   localOnly: boolean;
@@ -80,6 +88,8 @@ export function TryOnControl({
   iconOnly?: boolean;
   /** v1.403.0: the session has a team (the tooltip says Try on is not it). */
   teamSet?: boolean;
+  /** v1.437.0: why Try on cannot be used here, in words ("" = it can). */
+  unavailable?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<Place | null>(null);
@@ -88,6 +98,7 @@ export function TryOnControl({
   const [sub, setSub] = useState<string | null>(null);
   const chipRef = useRef<HTMLButtonElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const doneRef = useRef<HTMLButtonElement | null>(null);
   const groups = useMemo(() => tryOnGroups(models, localOnly), [models, localOnly]);
 
   // Each opening starts with every pop-out closed (and, TryOnModels mounting
@@ -121,6 +132,12 @@ export function TryOnControl({
   useLayoutEffect(() => {
     if (open) measure();
   }, [open, measure]);
+
+  // v1.437.0: with nothing to pick (`unavailable`), the focus goes into the
+  // box once per opening, on its only button.
+  useEffect(() => {
+    if (open && unavailable) doneRef.current?.focus({ preventScroll: true });
+  }, [open, unavailable]);
 
   useEffect(() => {
     if (!open) return;
@@ -198,28 +215,37 @@ export function TryOnControl({
       }}
       className="z-[60] flex flex-col rounded-xl border border-white/10 bg-zinc-900 p-2 shadow-xl shadow-black/40"
     >
-      <p className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
-        Pick up to {MAX_ATTEMPTS} models. Each tries your next message on its own branch; you keep one.
-        {localOnly ? " Local only: models on this PC or your network." : ""}
-        {teamSet ? " Each one works alone, without the team." : ""}
-      </p>
-      <TryOnModels
-        groups={groups}
-        picks={picks}
-        onChange={onChange}
-        localOnly={localOnly}
-        layout="pop-out"
-        openGroup={sub}
-        onOpenGroup={setSub}
-        refitKey={place}
-        // The focus goes into the list once per opening (it is at the page's
-        // end): the find box on a wide window, the first provider on a phone
-        // (a focused box there pops the keyboard over the list).
-        autoFocus={isPhone() ? "group" : "filter"}
-        className="flex min-h-0 flex-col"
-      />
+      {unavailable ? (
+        // v1.437.0: why it cannot be used here, in the list's place.
+        <p data-testid="harness-try-on-unavailable" className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
+          {unavailable}
+        </p>
+      ) : (
+        <>
+          <p className="shrink-0 px-1 pb-1 text-[12px] leading-5 text-zinc-400">
+            Pick up to {MAX_ATTEMPTS} models. Each tries your next message on its own branch; you keep one.
+            {localOnly ? " Local only: models on this PC or your network." : ""}
+            {teamSet ? " Each one works alone, without the team." : ""}
+          </p>
+          <TryOnModels
+            groups={groups}
+            picks={picks}
+            onChange={onChange}
+            localOnly={localOnly}
+            layout="pop-out"
+            openGroup={sub}
+            onOpenGroup={setSub}
+            refitKey={place}
+            // The focus goes into the list once per opening (it is at the page's
+            // end): the find box on a wide window, the first provider on a phone
+            // (a focused box there pops the keyboard over the list).
+            autoFocus={isPhone() ? "group" : "filter"}
+            className="flex min-h-0 flex-col"
+          />
+        </>
+      )}
       <div className="flex shrink-0 justify-end gap-1 pt-1">
-        {picks.length ? (
+        {picks.length && !unavailable ? (
           <button
             type="button"
             onClick={() => onChange([])}
@@ -230,6 +256,7 @@ export function TryOnControl({
         ) : null}
         <button
           type="button"
+          ref={doneRef}
           data-testid="harness-try-on-done"
           onClick={close}
           className="rounded-full bg-white/[0.08] px-3 py-1 text-[12px] text-zinc-200 hover:bg-white/[0.14]"
@@ -252,12 +279,19 @@ export function TryOnControl({
         onClick={() => setOpen((v) => !v)}
         // v1.400.0: its words were its name; in a toolbar out of room they go.
         aria-label={tryOnChipWords(picks)}
+        // v1.437.0: not usable here — still focusable, and it says why.
+        aria-disabled={unavailable ? true : undefined}
+        data-unavailable={unavailable ? "true" : undefined}
         title={
-          iconOnly
-            ? iconOnlyTitle(tryOnChipWords(picks), tryOnTitle(teamSet))
-            : tryOnTitle(teamSet)
+          unavailable
+            ? iconOnly
+              ? iconOnlyTitle(tryOnChipWords(picks), unavailable)
+              : unavailable
+            : iconOnly
+              ? iconOnlyTitle(tryOnChipWords(picks), tryOnTitle(teamSet))
+              : tryOnTitle(teamSet)
         }
-        className={`${composerChipClass(picks.length > 0)}${picks.length > 0 ? "" : ` ${fitIconChip("tryon")}`}`}
+        className={`${composerChipClass(picks.length > 0)}${picks.length > 0 ? "" : ` ${fitIconChip("tryon")}`}${unavailable ? " opacity-60" : ""}`}
       >
         <Layers size={14} aria-hidden className="shrink-0" />
         <span className={fitWords("tryon")}>{tryOnChipWords(picks)}</span>
@@ -265,7 +299,7 @@ export function TryOnControl({
             hue; the chip keeps the count, as the chat's tools chip does. */}
         {picks.length > 0 ? <span className={`hidden ${fitShows("tryon")}`}>{picks.length}</span> : null}
       </button>
-      {picks.length > 0 && !open ? (
+      {picks.length > 0 && !open && !unavailable ? (
         <button
           type="button"
           data-testid="harness-try-on-clear"
