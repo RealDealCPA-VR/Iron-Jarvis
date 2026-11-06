@@ -139,6 +139,11 @@ _RECORD_TOOLS: dict[str, frozenset[str]] = {
          "memory_write", "memory_propose", "ltm_append", "brain_save", "notebook"}
     ),
     "persona": frozenset({"persona_create", "persona_update", "persona_delete"}),
+    # v1.438.0 (Wave 4 group A, settings/records_build): the night shift and a
+    # folder's defaults and coding team for new coding sessions.
+    "night_task": frozenset({"night_task_add", "night_task_cancel", "night_task_move"}),
+    "coding_defaults": frozenset({"build_defaults_set", "build_defaults_clear"}),
+    "coding_team": frozenset({"build_team_set", "build_team_clear"}),
 }
 #: A record card's key starts with these (``records._card``).
 _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
@@ -154,6 +159,9 @@ _RECORD_CARD_PREFIX: dict[str, tuple[str, ...]] = {
     "agent": ("agent.",),
     "preference": ("preference.",),
     "persona": ("persona.",),
+    "night_task": ("night.",),
+    "coding_defaults": ("build_defaults.",),
+    "coding_team": ("build_team.",),
 }
 _APP_CONNECTORS = frozenset({"app_connect", "app_switch", "app_import", "channel_connect", "channel_toggle"})
 _APP_REMOVERS = frozenset({"app_disconnect", "app_switch", "app_import", "channel_remove", "channel_toggle"})
@@ -182,6 +190,9 @@ _RECORD_NOUN = {
     "app": "app",
     "preference": "preference",
     "persona": "persona",
+    "night_task": "night task",
+    "coding_defaults": "folder default for new coding sessions",
+    "coding_team": "coding team",
 }
 
 ON, OFF, CHANGE, CREATE, REMOVE, PAUSE, CONNECT, DISCONNECT, UNDO = (
@@ -200,6 +211,9 @@ _VERBS: dict[str, str] = {
     "disabled": OFF, "deactivated": OFF, "muted": OFF,
     "deleted": REMOVE, "removed": REMOVE, "archived": REMOVE, "cancelled": REMOVE,
     "canceled": REMOVE, "revoked": REMOVE, "forgotten": REMOVE, "erased": REMOVE,
+    "cleared": REMOVE,
+    # v1.438.0 (Wave 4 group A): "I've queued it for tonight".
+    "queued": CREATE,
     "paused": PAUSE, "resumed": PAUSE, "stopped": PAUSE, "restarted": PAUSE,
     "connected": CONNECT, "imported": CONNECT, "installed": CONNECT, "linked": CONNECT,
     "disconnected": DISCONNECT, "uninstalled": DISCONNECT, "unlinked": DISCONNECT,
@@ -279,7 +293,7 @@ _STATE_ON = frozenset({"on", "enabled", "active", "activated", "live", "running"
 _STATE_OFF = frozenset({"off", "disabled", "inactive", "deactivated", "muted"})
 _STATE_PAUSE = frozenset({"paused", "stopped", "resumed"})
 _STATE_REMOVE = frozenset({"deleted", "removed", "gone", "archived", "revoked", "cancelled", "canceled"})
-_STATE_CREATE = frozenset({"created", "scheduled", "saved", "added"})
+_STATE_CREATE = frozenset({"created", "scheduled", "saved", "added", "queued"})  # v1.438.0: "is now queued"
 
 #: Words after a record noun that make it code or a document ("the
 #: scheduler logic", "a workflow diagram", "the agent class").
@@ -508,6 +522,10 @@ _DONE_STATES = (
 _INLINE_CODE = re.compile(r"`[^`\n]{0,300}`")
 _STRAIGHT_QUOTE = re.compile(r'"[^"\n]{0,300}"')
 _CURLY_QUOTE = re.compile(r"“[^”\n]{0,300}”")
+#: v1.438.0 (Wave 4 group A): a full Windows path ("D:\\code\\shop") — one
+#: placeholder word, so its parts ("code", "docs") never read as the user's
+#: content.
+_WIN_PATH = re.compile(r"\b[A-Za-z]:[\\/][^\s,;()\"'“”]{0,240}")
 _FILE_NAME = re.compile(r"\b[\w-]{1,80}\.[A-Za-z0-9]{1,6}\b")
 _HYPHEN_IN_WORD = re.compile(r"(?<=[A-Za-z])-(?=[A-Za-z])")
 _SPACED_DASH = re.compile(r"\s[-–—]{1,3}\s|[–—]")
@@ -541,6 +559,7 @@ def _clean(text: str) -> str:
     out = _INLINE_CODE.sub(" ", out)
     out = _STRAIGHT_QUOTE.sub(" ", out)
     out = _CURLY_QUOTE.sub(" ", out)
+    out = _WIN_PATH.sub(" \x00folder ", out)
     out = _FILE_NAME.sub(" \x00file ", out)
     out = _HYPHEN_IN_WORD.sub(" ", out)
     return _SPACED_DASH.sub(" — ", out)
@@ -833,6 +852,72 @@ def _record_kind(np: list[str], rest: list[str], sentence_toks: list[str]) -> st
     return ""
 
 
+#: v1.438.0 (Wave 4 group A): a folder a coding default or team is kept for ("this repo", a full path).
+_FOLDER_WORDS = frozenset(
+    {"folder", "folder's", "repo", "repo's", "repository", "repository's", "codebase", "codebase's", "\x00folder"}
+)
+_CODING_KINDS = frozenset({"night_task", "coding_defaults", "coding_team"})
+#: The user's own lists, never tonight's ("three tasks on your to-do list
+#: for tonight").
+_OTHER_LISTS = frozenset({"do", "todo", "todos", "checklist", "calendar", "reminders", "reminder", "planner", "agenda",
+                          "notes", "board", "backlog", "sprint", "inbox", "spreadsheet", "sheet"})
+
+
+def _coding_kinds(phrase: list[str], verb_word: str) -> list[str]:
+    """The night shift's and a folder's coding records a claim's words name
+    (v1.438.0, Wave 4 group A): "I've queued it for tonight", "I added it to
+    tonight's list", "I set Codex as the default for this repo", "I stopped
+    using the team for D:\\code\\shop". Never a calendar's evening ("a meeting
+    for tonight") and never another company's team."""
+    toks = set(phrase)
+    out: list[str] = []
+    night = bool(toks & {"tonight", "tonight's", "overnight"}) or (
+        "night" in toks and bool(toks & {"shift", "list", "queue", "shift's"})
+    )
+    listed = bool(toks & {"queue", "queued", "task", "tasks", "shift", "list"})
+    # v1.438.0 review: "I've queued the print job for tonight", "I queued your
+    # email to send tonight" — another program's queue, never the night shift.
+    other_work = not listed and bool(toks & _NOT_NIGHT_WORK)
+    if night and not (_NOT_OUR_SCHEDULE & toks) and not (_OTHER_LISTS & toks) and not (_EXTERNAL & toks) and (
+        verb_word == "queued" or listed
+    ) and not other_work:
+        out.append("night_task")
+    folder = bool(toks & _FOLDER_WORDS)
+    if folder and _names_the_setting(phrase, {"default", "defaults"}):
+        out.append("coding_defaults")
+    if folder and _names_the_setting(phrase, {"team", "teams"}) and not (_EXTERNAL & toks):
+        out.append("coding_team")
+    return out
+
+
+#: v1.438.0 review: work the user queues in ANOTHER program for tonight.
+_NOT_NIGHT_WORK = frozenset(
+    {"job", "jobs", "print", "printer", "email", "emails", "mail", "message", "messages", "text", "texts", "song", "songs", "video",
+     "videos", "post", "posts", "tweet", "tweets", "order", "orders", "delivery", "payment", "payments",
+     "transfer", "transfers", "newsletter", "campaign", "broadcast", "upload", "uploads", "download",
+     "downloads", "backup", "backups", "episode", "episodes", "playlist", "reminder", "reminders"}
+)
+#: v1.438.0 review: after "team" / "defaults", a word that makes it a part of
+#: the user's own content ("the team section of the README", "the team
+#: roster", "the defaults section").
+_NOT_THE_SETTING_AFTER = _NOT_THE_RECORD_AFTER | frozenset(
+    {"roster", "rosters", "member", "members", "photo", "photos", "bio", "bios", "meeting", "meetings",
+     "channel", "chat", "lunch", "building", "heading", "paragraph", "block", "tab", "sheet", "slide"}
+)
+
+
+def _names_the_setting(phrase: list[str], words: "set[str]") -> bool:
+    """A setting word in *phrase* that is the thing itself, never followed by
+    a word that makes it the user's content ("team section", "defaults
+    file")."""
+    for i, t in enumerate(phrase):
+        if t in words:
+            nxt = phrase[i + 1] if i + 1 < len(phrase) else ""
+            if nxt not in _NOT_THE_SETTING_AFTER:
+                return True
+    return False
+
+
 def _records_in(phrase: list[str], verb_word: str, sentence_toks: list[str]) -> list[str]:
     """The record kinds *phrase* names (its head noun, with its guards)."""
     out: list[str] = []
@@ -962,6 +1047,11 @@ def _vetoed(keys: list[str], phrase: list[str]) -> list[str]:
 
 def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list[str]) -> None:
     claim.phrase = phrase
+    # v1.438.0 (Wave 4 group A): the night shift and a folder's coding records,
+    # read first — "I cancelled the README task on tonight's list" names a
+    # night task even though "README" reads as the user's content below.
+    coding = _coding_kinds(phrase, claim.word) if claim.verb in _KIND_VERBS["record"] else []
+    claim.records = list(coding)
     if _head(phrase) in _CONTENT_HEAD:
         return  # "I changed the email to ask first": the user's own content
     if {"preference", "preferences", "memory", "memories", "lesson", "lessons"}.intersection(phrase):
@@ -978,6 +1068,7 @@ def _fill(claim: Claim, phrase: list[str], phrase_text: str, sentence_toks: list
         claim.local_only = True
     if claim.verb in _KIND_VERBS["record"]:
         claim.records = _records_in(phrase, claim.word, sentence_toks)
+        claim.records += [k for k in coding if k not in claim.records]
     if claim.verb in _KIND_VERBS["app"] and phrase[:1] != ["to"]:
         # Review: the app is the claim's OBJECT ("I've connected GitHub"),
         # never a word further on ("enabled two-factor authentication on your
@@ -1267,7 +1358,7 @@ def _claims_in_sentence(sentence: str, after_done: bool = False) -> list[Claim]:
             continue
         _fill(claim, phrase, " ".join(phrase), toks)
         if content_sentence:
-            claim.records = []
+            claim.records = [r for r in claim.records if r in _CODING_KINDS]
         if claim.named():
             out.append(claim)
             used.update(range(start, k + 1))
@@ -1301,7 +1392,7 @@ def _claims_in_sentence(sentence: str, after_done: bool = False) -> list[Claim]:
             continue
         _fill(claim, obj, " ".join(obj), toks)
         if content_sentence:
-            claim.records = []
+            claim.records = [r for r in claim.records if r in _CODING_KINDS]
         if claim.named():
             out.append(claim)
         i = after
@@ -1588,6 +1679,22 @@ def _participle(claim: Claim) -> str:
     return _FAMILY_WORD.get(claim.verb, "changed")
 
 
+def _coding_sentence(claim: Claim) -> str:
+    """The note's sentence for a night task or a folder's coding record
+    (v1.438.0, Wave 4 group A) — said by what the claim did, never "created"
+    for "I set Codex as the default"."""
+    kind = claim.records[0]
+    if kind == "night_task":
+        if claim.verb == CREATE:
+            return f"No night task was queued {IN_THIS_REPLY}."
+        if claim.verb in (REMOVE, PAUSE, OFF):
+            return f"No night task was cancelled {IN_THIS_REPLY}."
+        return f"Tonight's list was not changed {IN_THIS_REPLY}."
+    if kind == "coding_defaults":
+        return f"No folder's defaults for new coding sessions were changed {IN_THIS_REPLY}."
+    return f"No folder's coding team was changed {IN_THIS_REPLY}."
+
+
 def sentence_for(claim: Claim, record: "TurnRecord | None" = None) -> str:
     """The note's one sentence for an unanswered *claim* — the record first
     (a record noun is the thing the clause is about), then an app, Local
@@ -1600,6 +1707,8 @@ def sentence_for(claim: Claim, record: "TurnRecord | None" = None) -> str:
         return (
             f"{name} is not connected yet: it waits for its key on the card {IN_THIS_REPLY}."
         )
+    if claim.records and claim.records[0] in _CODING_KINDS:
+        return _coding_sentence(claim)
     if claim.promise:
         label = _setting_label(claim)
         if label:

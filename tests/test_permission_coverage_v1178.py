@@ -59,6 +59,10 @@ _MUST_NEVER_BE_ALLOW = DENY_FLOOR_TOOLS | {"tool_create", "tool_delete", "create
     # or a chat persona, changed from chat — always a card quoting the words.
     "preference_edit", "preference_forget", "lesson_add",
     "persona_create", "persona_update", "persona_delete",
+    # v1.438.0 (chat-first plan Wave 4 group A): a night task queued,
+    # cancelled or moved, a folder's coding defaults or team changed from chat.
+    "night_task_add", "night_task_cancel", "night_task_move",
+    "build_defaults_set", "build_defaults_clear", "build_team_set", "build_team_clear",
 }
 
 

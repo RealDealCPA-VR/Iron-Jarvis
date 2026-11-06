@@ -124,6 +124,17 @@ RECORD_TOOL_TIERS: dict[str, str] = {
     "persona_create": "ask",
     "persona_update": "ask",
     "persona_delete": "ask",
+    # v1.438.0 (Wave 4 group A, settings/records_build): the night shift and a
+    # folder's coding-session defaults and team. Writers ask, readers allow.
+    "night_task_add": "ask",
+    "night_task_list": "allow",
+    "night_task_cancel": "ask",
+    "night_task_move": "ask",
+    "build_folder_show": "allow",
+    "build_defaults_set": "ask",
+    "build_defaults_clear": "ask",
+    "build_team_set": "ask",
+    "build_team_clear": "ask",
 }
 #: The create tools that gained an Undo (their own tiers are unchanged).
 RECORD_CREATE_TOOLS = frozenset({"schedule_create", "workflow_create", "webhook_add", "sentinel_add", "goal_add"})
@@ -503,9 +514,12 @@ def record_tools_for(text: str, *, workflow_names: "list[str] | tuple[str, ...]"
         out = [n for n in out if n in _RECORD_READERS]
     # v1.435.0 (Wave 3 group I): Local only for this chat and the change
     # history (settings.records_history) — it keeps its own question guard.
-    # v1.438.0 (Wave 4 group C): preferences, lessons and personas
-    # (settings.records_self) — its own question guard too.
-    return list(dict.fromkeys(out + _hist().history_tools_for(t) + _self().self_tools_for(t)))
+    # v1.438.0 (Wave 4 groups A and C): the night shift and a folder's coding
+    # defaults and team (settings.records_build); preferences, lessons and
+    # personas (settings.records_self). Each keeps its own question guard.
+    return list(dict.fromkeys(
+        out + _hist().history_tools_for(t) + _rb().build_tools_for(t) + _self().self_tools_for(t)
+    ))
 
 
 def _schedule_named(t: str) -> bool:
@@ -1642,6 +1656,21 @@ _APPS_KINDS = ("app_removed", "destination_removed", "destination_alerts", "app_
 _SNAP.update({k: _apps_snap(k) for k in _APPS_KINDS})
 
 
+def _rb() -> Any:
+    """v1.438.0 (Wave 4 group A): night tasks and a folder's coding settings
+    live in ``settings.records_build`` (imported late — it builds on this
+    module)."""
+    from . import records_build
+
+    return records_build
+
+
+#: v1.438.0 (Wave 4 group A): a night task, tonight's order, a folder's
+#: coding defaults and its coding team (settings/records_build).
+_BUILD_KINDS = ("night_task", "night_order", "build_defaults", "build_team")
+_SNAP.update({k: (lambda kind: lambda p, n: _rb().SNAP[kind](p, n))(k) for k in _BUILD_KINDS})
+
+
 def restore(platform: Any, desc: dict[str, Any]) -> str:
     """``POST /undo/{id}`` for a ``record_restore`` row. Blocking."""
     record = str(desc.get("record") or "")
@@ -1681,6 +1710,8 @@ def restore(platform: Any, desc: dict[str, Any]) -> str:
         return _hist().restore_chat_local_only(platform, name, prior)
     if record in ("preference", "persona"):
         return _self().restore_kind(platform, record, name, prior, desc)
+    if record in _BUILD_KINDS:
+        return _rb().restore_kind(platform, record, name, prior, desc)
     raise RecordError(f"unknown record kind {record!r}")
 
 
@@ -3288,6 +3319,8 @@ def record_tools(platform: Any) -> list[Tool]:
         *_hist().history_tools(platform),
         # v1.438.0 (Wave 4 group C): preferences, lessons and personas.
         *_self().self_tools(platform),
+        # v1.438.0 (Wave 4 group A): the night shift, a folder's coding settings.
+        *_rb().build_record_tools(platform),
     ]
 
 

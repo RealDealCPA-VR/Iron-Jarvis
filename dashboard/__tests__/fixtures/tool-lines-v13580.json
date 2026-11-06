@@ -136,6 +136,26 @@
       "ok": "used your browser",
       "failed": "tried a browser step and it failed"
     },
+    "build_defaults_clear": {
+      "ok": "cleared a folder's defaults for new coding sessions",
+      "failed": "tried a folder defaults and it failed"
+    },
+    "build_defaults_set": {
+      "ok": "set a folder's defaults for new coding sessions",
+      "failed": "tried a folder defaults and it failed"
+    },
+    "build_folder_show": {
+      "ok": "looked up a folder's coding settings",
+      "failed": "tried a folder settings lookup and it failed"
+    },
+    "build_team_clear": {
+      "ok": "stopped using a coding team in a folder",
+      "failed": "tried a folder team and it failed"
+    },
+    "build_team_set": {
+      "ok": "set a folder's coding team",
+      "failed": "tried a folder team and it failed"
+    },
     "capability_propose": {
       "ok": "suggested a new ability for Iron Jarvis",
       "failed": "tried an ability suggestion and it failed"
@@ -359,6 +379,22 @@
     "multi_edit": {
       "ok": "changed 1 file",
       "failed": "tried a file change and it failed"
+    },
+    "night_task_add": {
+      "ok": "queued a coding task for tonight",
+      "failed": "tried a night task and it failed"
+    },
+    "night_task_cancel": {
+      "ok": "cancelled a task queued for tonight",
+      "failed": "tried a night task cancel and it failed"
+    },
+    "night_task_list": {
+      "ok": "listed tonight's tasks",
+      "failed": "tried a night list and it failed"
+    },
+    "night_task_move": {
+      "ok": "changed the order of tonight's tasks",
+      "failed": "tried a night order and it failed"
     },
     "notebook_edit": {
       "ok": "changed 1 file",

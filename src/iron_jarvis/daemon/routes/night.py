@@ -1112,6 +1112,61 @@ def _picks(raw: "list[TryOnBody] | None") -> list[dict[str, str]]:
     return [{"provider": p.provider.strip(), "model": (p.model or "").strip()} for p in (raw or [])]
 
 
+async def add_night_task(d: Any, body: NightTaskBody) -> dict[str, Any]:
+    """``POST /build/night``'s body, lifted (v1.438.0, chat-first plan Wave 4
+    group A) so chat's ``night_task_add`` queues a task through THE same
+    checks: the folder (``fs_policy.root_problem`` and a repository that can
+    branch), the models, the account. Queues it LAST and wakes the loop.
+    Raises :class:`~iron_jarvis.harness.night.NightRefused` in words."""
+    folder = await _check_folder(body.folder)
+    picks = _picks(body.try_on)
+    await _check_models(d, body.provider.strip(), body.model.strip(), body.team, picks)
+    account = await _check_account(d, body.account, body.provider.strip(), body.model.strip(), picks)
+    task = await asyncio.to_thread(
+        N.add_task, d.platform.engine, folder=folder, words=body.words,
+        provider=body.provider.strip(), model=body.model.strip(), team=body.team, try_on=picks,
+        account=account,
+    )
+    wake_night_loop()
+    return task
+
+
+ALREADY_ENDED = "This task has already ended."
+
+
+def cancel_night_task(d: Any, task_id: str) -> dict[str, Any]:
+    """``POST /build/night/{id}/cancel``'s body, lifted (v1.438.0, Wave 4
+    group A; chat's ``night_task_cancel`` calls it): a queued task never
+    starts (stopped); a running one's turn — and its running step — is
+    stopped. Answers ``{task, stopped_turn}``. BLOCKING; raises
+    :class:`~iron_jarvis.harness.night.NightRefused` (404 / 409) in words."""
+    from ...core.turns import TURNS
+
+    engine = d.platform.engine
+    task = N.get_task(engine, task_id)
+    if task is None:
+        raise N.NightRefused(N.NOT_FOUND, 404)
+    if task["state"] == N.QUEUED and N.cancel_queued(engine, task_id):
+        return {"task": N.get_task(engine, task_id), "stopped_turn": ""}
+    task = N.get_task(engine, task_id) or task
+    if task["state"] != N.RUNNING:
+        raise N.NightRefused(ALREADY_ENDED, 409)
+    N.add_note(engine, task_id, "stopped", N.CANCELLED_RUNNING)
+    from .build import _running_turn
+
+    turn = _running_turn(d, task["thread_id"]) if task["thread_id"] else ""
+    if turn:
+        TURNS.stop(turn)
+        # v1.398.0 review: and its running step (a hung command ran on
+        # for its whole deadline after Stop).
+        from ...harness.stall import running_steps, stop_step
+
+        for call_id in running_steps(turn):
+            stop_step(turn, call_id)
+    wake_night_loop()
+    return {"task": N.get_task(engine, task_id), "stopped_turn": turn}
+
+
 def list_view(d: Any) -> dict[str, Any]:
     """``GET /build/night``. BLOCKING."""
     platform = d.platform
@@ -1148,19 +1203,9 @@ def register(app: FastAPI, d: Any) -> None:
     @app.post("/build/night", status_code=201)
     async def night_add(body: NightTaskBody) -> dict[str, Any]:
         try:
-            folder = await _check_folder(body.folder)
-            picks = _picks(body.try_on)
-            await _check_models(d, body.provider.strip(), body.model.strip(), body.team, picks)
-            account = await _check_account(d, body.account, body.provider.strip(), body.model.strip(), picks)
-            task = await asyncio.to_thread(
-                N.add_task, d.platform.engine, folder=folder, words=body.words,
-                provider=body.provider.strip(), model=body.model.strip(), team=body.team, try_on=picks,
-                account=account,
-            )
+            return await add_night_task(d, body)
         except N.NightRefused as exc:
             raise _refused(exc) from None
-        wake_night_loop()
-        return task
 
     @app.patch("/build/night/{task_id}")
     async def night_edit(task_id: str, body: NightTaskPatch) -> dict[str, Any]:
@@ -1220,35 +1265,15 @@ def register(app: FastAPI, d: Any) -> None:
     def night_cancel(task_id: str) -> dict[str, Any]:
         """A queued task never starts; a running one's turn is stopped (it
         settles as stopped, with what it got done)."""
-        from ...core.turns import TURNS
-
-        engine = d.platform.engine
-        task = N.get_task(engine, task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=N.NOT_FOUND)
-        if task["state"] == N.QUEUED and N.cancel_queued(engine, task_id):
-            return {"task": N.get_task(engine, task_id), "stopped_turn": ""}
-        task = N.get_task(engine, task_id) or task
-        if task["state"] != N.RUNNING:
-            raise HTTPException(status_code=409, detail="This task has already ended.")
-        N.add_note(engine, task_id, "stopped", N.CANCELLED_RUNNING)
-        from .build import _running_turn
-
-        turn = _running_turn(d, task["thread_id"]) if task["thread_id"] else ""
-        if turn:
-            TURNS.stop(turn)
-            # v1.398.0 review: and its running step (a hung command ran on
-            # for its whole deadline after Stop).
-            from ...harness.stall import running_steps, stop_step
-
-            for call_id in running_steps(turn):
-                stop_step(turn, call_id)
-        wake_night_loop()
-        return {"task": N.get_task(engine, task_id), "stopped_turn": turn}
+        try:
+            return cancel_night_task(d, task_id)
+        except N.NightRefused as exc:
+            raise _refused(exc) from None
 
 
 __all__ = [
-    "NightTaskBody", "NightTaskPatch", "OVERRUN_GRACE_S", "TEAM_NOTE", "TICK_S", "list_view",
+    "ALREADY_ENDED", "NightTaskBody", "NightTaskPatch", "OVERRUN_GRACE_S", "TEAM_NOTE", "TICK_S",
+    "add_night_task", "cancel_night_task", "list_view",
     "morning_pass", "night_loop", "night_pass", "register", "settle_running", "start_task",
     "summaries_view", "title_of", "wake_night_loop",
 ]

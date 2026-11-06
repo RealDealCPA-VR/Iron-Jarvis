@@ -558,6 +558,48 @@
       "kind": "table",
       "card": "remove or reset a chat persona",
       "desktop": "remove or reset a chat persona"
+    },
+    {
+      "tool": "night_task_add",
+      "kind": "table",
+      "card": "queue a coding task for tonight",
+      "desktop": "queue a coding task for tonight"
+    },
+    {
+      "tool": "night_task_cancel",
+      "kind": "table",
+      "card": "cancel a task queued for tonight",
+      "desktop": "cancel a task queued for tonight"
+    },
+    {
+      "tool": "night_task_move",
+      "kind": "table",
+      "card": "change the order of tonight's tasks",
+      "desktop": "change the order of tonight's tasks"
+    },
+    {
+      "tool": "build_defaults_set",
+      "kind": "table",
+      "card": "set a folder's defaults for new coding sessions",
+      "desktop": "set a folder's defaults for new coding sessions"
+    },
+    {
+      "tool": "build_defaults_clear",
+      "kind": "table",
+      "card": "clear a folder's defaults for new coding sessions",
+      "desktop": "clear a folder's defaults for new coding sessions"
+    },
+    {
+      "tool": "build_team_set",
+      "kind": "table",
+      "card": "set a folder's coding team",
+      "desktop": "set a folder's coding team"
+    },
+    {
+      "tool": "build_team_clear",
+      "kind": "table",
+      "card": "stop using a coding team in a folder",
+      "desktop": "stop using a coding team in a folder"
     }
   ]
 }

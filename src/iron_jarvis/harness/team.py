@@ -149,12 +149,17 @@ def _record(platform: Any, name: str) -> Any:
         return None
 
 
-def validate(platform: Any, raw: Any) -> "dict[str, Any] | None":
+def validate(platform: Any, raw: Any, *, pending: "frozenset[str]" = frozenset()) -> "dict[str, Any] | None":
     """The team a route may store, or :class:`TeamRefused` in one sentence:
     an unknown member, more than two workers, a worker without the Writing
     code role, a reviewer without the Reviewing role, a member named twice,
     or the same member as a worker and the reviewer. None (or no workers) is
-    a SOLO session — None. BLOCKING (registry reads)."""
+    a SOLO session — None. BLOCKING (registry reads).
+
+    ``pending`` (v1.438.0 review, chat's ``build_team_set``): seats that are
+    not members YET (a model a member will be made for) — every other rule
+    is checked, their record and role are not, so nothing is made for a team
+    that could never be saved."""
     from ..agents import model_team as MT
 
     if raw is None:
@@ -179,6 +184,8 @@ def validate(platform: Any, raw: Any) -> "dict[str, Any] | None":
         if name.casefold() in seen:
             raise TeamRefused(f"{name} is listed twice.")
         seen.add(name.casefold())
+        if name in pending:
+            continue
         rec = _record(platform, name)
         if rec is None or not MT.is_member(rec):
             raise TeamRefused(f"There is no member of your model team named {name}.")
@@ -193,10 +200,10 @@ def validate(platform: Any, raw: Any) -> "dict[str, Any] | None":
     if reviewer:
         if reviewer.casefold() in seen:
             raise TeamRefused(f"{reviewer} cannot be both a worker and the reviewer.")
-        rec = _record(platform, reviewer)
-        if rec is None or not MT.is_member(rec):
+        rec = None if reviewer in pending else _record(platform, reviewer)
+        if reviewer not in pending and (rec is None or not MT.is_member(rec)):
             raise TeamRefused(f"There is no member of your model team named {reviewer}.")
-        if REVIEWER_ROLE not in MT.roles_of(rec):
+        if rec is not None and REVIEWER_ROLE not in MT.roles_of(rec):
             raise TeamRefused(f"{reviewer} cannot be the reviewer: it does not hold the Reviewing a change role.")
     return {"workers": workers, "reviewer": reviewer}
 

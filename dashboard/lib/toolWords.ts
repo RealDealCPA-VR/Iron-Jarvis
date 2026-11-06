@@ -144,6 +144,16 @@ const WORDS: Record<string, string> = {
   persona_create: "make a chat persona",
   persona_update: "change a chat persona",
   persona_delete: "remove or reset a chat persona",
+  // v1.438.0 (chat-first plan Wave 4 group A): the night shift and a folder's
+  // coding settings (settings/records_build.py). desktop/main.js TOOL_WORDS
+  // and agents/mission.ASK_WORDS say the same (pinned equal).
+  night_task_add: "queue a coding task for tonight",
+  night_task_cancel: "cancel a task queued for tonight",
+  night_task_move: "change the order of tonight's tasks",
+  build_defaults_set: "set a folder's defaults for new coding sessions",
+  build_defaults_clear: "clear a folder's defaults for new coding sessions",
+  build_team_set: "set a folder's coding team",
+  build_team_clear: "stop using a coding team in a folder",
 };
 
 // The 15 built-in browser tools, by EXACT name (src/iron_jarvis/browser/
